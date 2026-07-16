@@ -87,3 +87,8 @@
 - إضافة إدارة احترافية لقواعد توزيع العملاء حسب القسم والفرع والمصدر والموظفين المؤهلين، مع التتابع وآخر/تالي مندوب وعدد التوزيعات والسجل.
 - توسيط شريط تبويبات الأنظمة الداخلي.
 - توحيد أكواد مصادر التكامل القديمة مثل installment-calculator مع المصدر المركزي بدون تغيير الاسم العربي المعروض.
+
+## v1.5.1 - Customer data form cleanup
+- Rebuilt the CRM customer data form to match the approved legacy field set exactly.
+- Removed user-visible extra fields without deleting legacy database columns or historical data.
+- Department transfer now resets the status and runs the centralized assignment logic for the target department.

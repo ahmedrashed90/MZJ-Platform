@@ -180,47 +180,137 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const body = parseBody(request);
   const id = clean(body.id || request.query.id);
   if (!id) return response.status(400).json({ ok: false, error: "رقم العميل مطلوب" });
-  const [before] = await sql<any[]>`select *, id::text, assigned_to::text, call_center_assigned_to::text from crm.leads where id = ${id}::uuid and is_deleted = false`;
+
+  const [before] = await sql<any[]>`
+    select l.*, l.id::text, l.assigned_to::text, l.call_center_assigned_to::text,
+      sales.full_name as assigned_name,
+      cc.full_name as call_center_name
+    from crm.leads l
+    left join core.users sales on sales.id = l.assigned_to
+    left join core.users cc on cc.id = l.call_center_assigned_to
+    where l.id = ${id}::uuid and l.is_deleted = false
+  `;
   if (!before) return response.status(404).json({ ok: false, error: "العميل غير موجود" });
+
   const scope = userScope(user);
-  const canEdit = scope.all || before.assigned_to === user.id || before.call_center_assigned_to === user.id || (scope.departmentCodes.includes(before.department_code) && (!scope.branchCodes.length || scope.branchCodes.includes(before.branch_code)));
+  const canEdit = scope.all
+    || before.assigned_to === user.id
+    || before.call_center_assigned_to === user.id
+    || (scope.departmentCodes.includes(before.department_code) && (!scope.branchCodes.length || scope.branchCodes.includes(before.branch_code)));
   if (!canEdit) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتعديل هذا العميل" });
 
   const input = leadPayload({ ...before, ...body });
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
+
+  const departmentChanged = clean(before.department_code) !== input.departmentCode;
+  if (departmentChanged) {
+    input.statusLabel = "عميل جديد";
+    input.statusCode = "";
+    input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+  }
+
+  if (input.phone && !input.phoneNormalized) {
+    return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
+  }
+  if (input.phoneNormalized) {
+    const [duplicate] = await sql<any[]>`
+      select id::text, customer_name
+      from crm.leads
+      where phone_normalized = ${input.phoneNormalized}
+        and id <> ${id}::uuid
+        and is_deleted = false
+      limit 1
+    `;
+    if (duplicate) {
+      return response.status(409).json({
+        ok: false,
+        error: `لا يمكن حفظ رقم الجوال لأنه مسجل عند العميل ${duplicate.customer_name || ""}`,
+        duplicate,
+      });
+    }
+  }
+
+  let assignedTo = clean(before.assigned_to) || null;
+  let assignedName = clean(before.assigned_name || before.responsible_name_snapshot);
+  let callCenterAssignedTo = clean(before.call_center_assigned_to) || null;
+  let callCenterName = clean(before.call_center_name || before.call_center_name_snapshot);
+
+  if (departmentChanged) {
+    const assignment = await chooseAssignment(input.serviceKey, input.branchCode, input.sourceCode);
+    input.branchCode = assignment.branchCode || branchForDepartment(input.serviceKey);
+    assignedTo = assignment.assignedTo;
+    assignedName = assignment.assignedName;
+
+    if (input.serviceKey === "finance") {
+      const callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
+      callCenterAssignedTo = callCenter.assignedTo;
+      callCenterName = callCenter.assignedName;
+    } else {
+      callCenterAssignedTo = null;
+      callCenterName = "";
+    }
+  }
+
   const completionPercent = calculateLeadCompletion(input);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
-  if (input.phone && !input.phoneNormalized) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
-  if (input.phoneNormalized) {
-    const [duplicate] = await sql<any[]>`select id::text, customer_name from crm.leads where phone_normalized = ${input.phoneNormalized} and id <> ${id}::uuid and is_deleted = false limit 1`;
-    if (duplicate) return response.status(409).json({ ok: false, error: `لا يمكن حفظ رقم الجوال لأنه مسجل عند العميل ${duplicate.customer_name || ""}`, duplicate });
-  }
+  const statusChanged = clean(before.status_label) !== input.statusLabel;
+  const branchChanged = clean(before.branch_code) !== input.branchCode;
 
   const [row] = await sql<any[]>`
     update crm.leads set
-      customer_name=${input.customerName || before.customer_name}, phone=${input.phone || null}, phone_normalized=${input.phoneNormalized || null},
-      source_code=${input.sourceCode || null}, source_name=${input.sourceName || null}, platform_code=${input.platformCode || null},
-      service_key=${input.serviceKey}, department_code=${input.departmentCode}, branch_code=${input.branchCode || null},
-      status_code=${input.statusCode || null}, status_label=${input.statusLabel}, payment_type=${input.paymentType || null},
-      car_name=${input.carName || null}, location=${input.location || null}, age=${input.age}, salary=${input.salary}, obligation=${input.obligation},
-      salary_bank=${input.salaryBank || null}, car_model=${input.carModel || null}, car_type=${input.carType || null}, color=${input.color || null},
-      finance_type=${input.financeType || null}, follow_up_at=${input.followUpAt}, campaign_name=${input.campaignName || null}, campaign_date=${input.campaignDate},
-      notes=${input.notes || null}, status_note=${input.statusNote || null},
-      completion_percent=${completionPercent}, credit_limit=${credit.amount}, credit_qualified=${credit.qualified},
-      assigned_to=${input.assignedTo || before.assigned_to}::uuid,
-      call_center_assigned_to=${input.callCenterAssignedTo || before.call_center_assigned_to}::uuid,
-      updated_by=${user.id}::uuid, updated_at=now()
+      customer_name=${input.customerName || before.customer_name},
+      phone=${input.phone || null},
+      phone_normalized=${input.phoneNormalized || null},
+      source_code=${input.sourceCode || null},
+      source_name=${input.sourceName || null},
+      platform_code=${input.platformCode || null},
+      service_key=${input.serviceKey},
+      department_code=${input.departmentCode},
+      branch_code=${input.branchCode || null},
+      status_code=${input.statusCode || null},
+      status_label=${input.statusLabel},
+      payment_type=${input.paymentType || null},
+      car_name=${input.carName || input.carType || null},
+      location=${input.location || null},
+      age=${input.age},
+      salary=${input.salary},
+      obligation=${input.obligation},
+      salary_bank=${input.salaryBank || null},
+      car_model=${input.carModel || null},
+      car_type=${input.carType || input.carName || null},
+      color=${input.color || null},
+      finance_type=${input.financeType || null},
+      follow_up_at=${input.followUpAt},
+      notes=${input.notes || null},
+      completion_percent=${completionPercent},
+      credit_limit=${credit.amount},
+      credit_qualified=${credit.qualified},
+      assigned_to=${assignedTo}::uuid,
+      call_center_assigned_to=${callCenterAssignedTo}::uuid,
+      responsible_name_snapshot=${assignedName || null},
+      call_center_name_snapshot=${callCenterName || null},
+      updated_by=${user.id}::uuid,
+      updated_at=now()
     where id=${id}::uuid
     returning *, id::text, assigned_to::text, call_center_assigned_to::text
   `;
 
-  const statusChanged = clean(before.status_label) !== input.statusLabel;
-  const departmentChanged = clean(before.department_code) !== input.departmentCode || clean(before.branch_code) !== input.branchCode;
   let statusMessage: any = null;
-  if (statusChanged || departmentChanged) {
+  if (statusChanged || departmentChanged || branchChanged) {
     const [event] = await sql<{ id: number }[]>`
-      insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,actor_role,note,details)
-      values (${id}::uuid,${statusChanged ? "status_change" : "department_transfer"},${before.status_label || null},${input.statusLabel || null},${before.department_code || null},${input.departmentCode || null},${before.branch_code || null},${input.branchCode || null},${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},${input.statusNote || body.note || null},${sql.json({ source: clean(body.source) || "crm" })})
+      insert into crm.lead_events(
+        lead_id,event_type,old_status,new_status,old_department,new_department,
+        old_branch,new_branch,actor_id,actor_name,actor_role,note,details
+      ) values (
+        ${id}::uuid,
+        ${departmentChanged || branchChanged ? "department_transfer" : "status_change"},
+        ${before.status_label || null},${input.statusLabel || null},
+        ${before.department_code || null},${input.departmentCode || null},
+        ${before.branch_code || null},${input.branchCode || null},
+        ${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},
+        ${clean(body.note) || null},
+        ${sql.json({ source: clean(body.source) || "crm", assignedTo, assignedName, callCenterAssignedTo, callCenterName })}
+      )
       returning id
     `;
     if (statusChanged) {
@@ -233,10 +323,14 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       }).catch((error: any) => ({ skipped: false, failed: true, error: error?.message || String(error) }));
     }
   }
+
   row.source_name = input.sourceName;
   row.completion_percent = completionPercent;
   row.credit_limit = credit.amount;
   row.credit_qualified = credit.qualified;
+  row.assigned_name = assignedName || null;
+  row.call_center_name = callCenterName || null;
+
   await audit(user, "lead_updated", "lead", id, row, before);
   return response.status(200).json({ ok: true, row, statusMessage });
 }
