@@ -170,7 +170,7 @@ export function SettingsPage() {
             </label>
             <label>
               <span>كلمة مرور مؤقتة</span>
-              <input required minLength={8} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
+              <input required minLength={10} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
             </label>
             <div className="form-row">
               <label>

@@ -4,3 +4,5 @@ compatibility_date = "2026-07-01"
 
 [vars]
 PLATFORM_API_BASE_URL = "https://YOUR-PLATFORM-DOMAIN/api"
+
+# Add GATEWAY_SECRET with: wrangler secret put GATEWAY_SECRET

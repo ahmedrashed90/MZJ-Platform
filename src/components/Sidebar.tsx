@@ -1,6 +1,5 @@
 import { NavLink } from "react-router-dom";
 import {
-  ArrowsClockwise,
   ChartBar,
   Database,
   Gear,
@@ -9,10 +8,11 @@ import {
   MapPin,
   Pulse,
   Question,
-  SignIn,
+  SignOut,
   SuitcaseSimple,
   UsersThree,
 } from "@phosphor-icons/react";
+import { useAuth } from "../auth/AuthContext";
 
 const items = [
   { href: "/", label: "الداش بورد", icon: House },
@@ -25,12 +25,14 @@ const items = [
 const supportItems = [
   { href: "/reports", label: "التقارير", icon: ChartBar },
   { href: "/database", label: "قاعدة البيانات", icon: Database },
-  { href: "/settings", label: "الإعدادات", icon: Gear },
+  { href: "/settings", label: "الإعدادات", icon: Gear, adminOnly: true },
   { href: "/activity", label: "سجل النشاط", icon: Pulse },
   { href: "/help", label: "المساعدة", icon: Question },
 ];
 
-function Item({ href, label, icon: Icon }: (typeof items)[number]) {
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean };
+
+function Item({ href, label, icon: Icon }: NavItem) {
   return (
     <NavLink
       to={href}
@@ -48,6 +50,11 @@ function Item({ href, label, icon: Icon }: (typeof items)[number]) {
 }
 
 export function Sidebar() {
+  const { user, logout } = useAuth();
+  const isAdmin = user?.roleCodes.includes("admin") ?? false;
+  const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
+  const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
+
   return (
     <aside className="sidebar">
       <div className="brand-block">
@@ -61,17 +68,19 @@ export function Sidebar() {
         </div>
         <div className="nav-separator" />
         <div className="nav-group">
-          {supportItems.map((item) => <Item key={item.href} {...item} />)}
+          {visibleSupport.map((item) => <Item key={item.href} {...item} />)}
         </div>
       </nav>
 
       <div className="sidebar-account" aria-label="الحساب">
-        <div className="account-avatar"><SignIn size={20} /></div>
+        <div className="account-avatar">{user?.fullName.trim().slice(0, 1) || "م"}</div>
         <div className="account-copy">
-          <strong>تسجيل الدخول</strong>
-          <span>لا يوجد مستخدم مسجل</span>
+          <strong>{user?.fullName}</strong>
+          <span>{roleText}</span>
         </div>
-        <ArrowsClockwise size={17} />
+        <button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج">
+          <SignOut size={18} />
+        </button>
       </div>
     </aside>
   );

@@ -1,10 +1,15 @@
 import { Route, Routes } from "react-router-dom";
+import { useAuth } from "./auth/AuthContext";
 import { Sidebar } from "./components/Sidebar";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DatabaseSetupPage } from "./pages/DatabaseSetupPage";
 import { EmptyModulePage } from "./pages/EmptyModulePage";
+import { FirstAdminSetupPage } from "./pages/FirstAdminSetupPage";
+import { LoginPage } from "./pages/LoginPage";
+import { PlatformLoadingPage } from "./pages/PlatformLoadingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
-export default function App() {
+function PlatformRoutes() {
   return (
     <div className="app-shell">
       <Sidebar />
@@ -24,4 +29,14 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+export default function App() {
+  const { loading, status, user } = useAuth();
+
+  if (loading) return <PlatformLoadingPage />;
+  if (!status?.databaseConfigured || !status.databaseReachable) return <DatabaseSetupPage />;
+  if (!status.schemaReady || !status.adminExists) return <FirstAdminSetupPage />;
+  if (!user) return <LoginPage />;
+  return <PlatformRoutes />;
 }

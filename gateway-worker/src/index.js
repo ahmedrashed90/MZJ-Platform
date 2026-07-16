@@ -34,6 +34,7 @@ export default {
       headers: {
         ...signatureHeaders,
         "x-mzj-source": source,
+        "x-mzj-gateway-secret": env.GATEWAY_SECRET || "",
         "content-type": request.headers.get("content-type") || "application/json",
       },
       body: request.method === "GET" || request.method === "HEAD" ? undefined : payload,
@@ -50,7 +51,7 @@ function corsHeaders() {
   return {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-webhook-secret,x-hub-signature-256",
+    "access-control-allow-headers": "content-type,authorization,x-webhook-secret,x-hub-signature-256,x-mzj-gateway-secret",
   };
 }
 

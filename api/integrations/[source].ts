@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import postgres from "postgres";
 import crypto from "node:crypto";
+import { safeSecretEquals } from "../_auth";
+import { getSql } from "../_db";
 
 const allowedSources = new Set([
   "facebook",
@@ -22,11 +23,13 @@ function bodyObject(request: VercelRequest) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
 
+  const configuredSecret = String(process.env.MZJ_GATEWAY_SECRET || "").trim();
+  const requestSecret = String(request.headers["x-mzj-gateway-secret"] || "").trim();
+  if (!configuredSecret) return response.status(503).json({ ok: false, error: "MZJ_GATEWAY_SECRET is not configured" });
+  if (!safeSecretEquals(requestSecret, configuredSecret)) return response.status(401).json({ ok: false, error: "Unauthorized gateway" });
+
   const source = String(request.query.source || request.headers["x-mzj-source"] || "").trim().toLowerCase();
   if (!allowedSources.has(source)) return response.status(400).json({ ok: false, error: "Unknown integration source" });
-
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) return response.status(503).json({ ok: false, error: "DATABASE_URL is not configured" });
 
   const payload = bodyObject(request);
   const rawKey = String(
@@ -36,7 +39,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const eventKey = rawKey || crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   const eventType = String(payload.type || payload.event || payload.action || "incoming").trim();
 
-  const sql = postgres(connectionString, { max: 1, prepare: false });
+  const sql = getSql();
   try {
     const [row] = await sql`
       insert into integrations.inbound_events(source, event_key, event_type, payload)
@@ -49,7 +52,5 @@ export default async function handler(request: VercelRequest, response: VercelRe
   } catch (error) {
     console.error(error);
     return response.status(500).json({ ok: false, error: "تعذر تسجيل حدث التكامل" });
-  } finally {
-    await sql.end({ timeout: 1 });
   }
 }

@@ -1,4 +1,4 @@
-import postgres from "postgres";
+import { getSql } from "./_db";
 import type { DashboardData } from "../src/types";
 
 const locationNames = [
@@ -59,15 +59,12 @@ function asNumber(value: unknown): number {
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) return emptyData();
-
-  const sql = postgres(connectionString, {
-    max: 1,
-    idle_timeout: 5,
-    connect_timeout: 5,
-    prepare: false,
-  });
+  let sql;
+  try {
+    sql = getSql();
+  } catch {
+    return emptyData();
+  }
 
   try {
     const [crmRow] = await sql<{
@@ -326,7 +323,5 @@ export async function getDashboardData(): Promise<DashboardData> {
   } catch (error) {
     console.error("Dashboard query failed", error);
     return emptyData();
-  } finally {
-    await sql.end({ timeout: 1 });
   }
 }

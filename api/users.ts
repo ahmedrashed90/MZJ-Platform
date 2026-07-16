@@ -1,15 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import postgres from "postgres";
+import { requireAdmin, requestIp } from "./_auth";
+import { getSql } from "./_db";
 
 function cleanText(value: unknown) {
   return String(value ?? "").trim();
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) return response.status(503).json({ ok: false, error: "DATABASE_URL is not configured" });
+  const currentUser = await requireAdmin(request, response);
+  if (!currentUser) return;
 
-  const sql = postgres(connectionString, { max: 1, prepare: false });
+  const sql = getSql();
   try {
     if (request.method === "GET") {
       const users = await sql`
@@ -55,25 +56,39 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       if (!fullName) return response.status(400).json({ ok: false, error: "اسم المستخدم مطلوب" });
       if (!email && !mobile) return response.status(400).json({ ok: false, error: "البريد أو رقم الجوال مطلوب" });
-      if (password.length < 8) return response.status(400).json({ ok: false, error: "كلمة المرور المؤقتة يجب ألا تقل عن 8 أحرف" });
+      if (password.length < 10) return response.status(400).json({ ok: false, error: "كلمة المرور المؤقتة يجب ألا تقل عن 10 أحرف" });
+      if (!roleId) return response.status(400).json({ ok: false, error: "اختر دور المستخدم" });
 
       const created = await sql.begin(async (tx) => {
         const [user] = await tx`
           insert into core.users (
             employee_no, full_name, email, mobile, password_hash,
-            can_receive_leads, can_receive_tasks
+            must_change_password, can_receive_leads, can_receive_tasks
           ) values (
             ${employeeNo}, ${fullName}, ${email}, ${mobile},
-            crypt(${password}, gen_salt('bf')),
+            crypt(${password}, gen_salt('bf')), true,
             ${canReceiveLeads}, ${canReceiveTasks}
           )
           returning id::text, employee_no, full_name, email, mobile, is_active,
                     can_receive_leads, can_receive_tasks, created_at
         `;
 
-        if (roleId) await tx`insert into core.user_roles(user_id, role_id) values (${user.id}::uuid, ${roleId}::uuid)`;
+        await tx`insert into core.user_roles(user_id, role_id) values (${user.id}::uuid, ${roleId}::uuid)`;
         if (departmentId) await tx`insert into core.user_departments(user_id, department_id, is_primary) values (${user.id}::uuid, ${departmentId}::uuid, true)`;
         if (branchId) await tx`insert into core.user_branches(user_id, branch_id, is_primary) values (${user.id}::uuid, ${branchId}::uuid, true)`;
+
+        await tx`
+          insert into audit.activity_log(user_id, system_code, action, entity_type, entity_id, after_data, ip_address)
+          values (
+            ${currentUser.id}::uuid,
+            'core',
+            'user_created',
+            'user',
+            ${user.id},
+            ${tx.json({ fullName, employeeNo, email, mobile, roleId, departmentId, branchId, canReceiveLeads, canReceiveTasks })},
+            ${requestIp(request)}
+          )
+        `;
 
         return user;
       });
@@ -85,8 +100,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   } catch (error: any) {
     console.error(error);
     if (error?.code === "23505") return response.status(409).json({ ok: false, error: "رقم الموظف أو البريد أو الجوال مستخدم بالفعل" });
+    if (error?.code === "23503") return response.status(400).json({ ok: false, error: "القسم أو الفرع أو الدور المحدد غير صحيح" });
     return response.status(500).json({ ok: false, error: "تعذر حفظ بيانات المستخدم" });
-  } finally {
-    await sql.end({ timeout: 1 });
   }
 }
