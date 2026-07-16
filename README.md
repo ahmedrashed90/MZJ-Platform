@@ -1,47 +1,61 @@
-# MZJ Platform v1.2
+# MZJ Platform v1.3 — CRM
 
-منصة React/Vite موحدة لمجموعة محمد بن ذعار العجمي، تعمل على Vercel مع PostgreSQL وتسجيل دخول حقيقي.
+منصة MZJ الموحدة المبنية بـ React/Vite على Vercel، مع PostgreSQL كمصدر البيانات الرئيسي. هذه النسخة تنقل وحدة CRM إلى المشروع الجديد بشكل منظم ومستقل، بدون بيانات عملاء أو أسماء أو أرقام تجريبية.
 
-## ما تم تنفيذه في هذه النسخة
+## وحدة CRM الموجودة في هذه النسخة
 
-- لا توجد أسماء أو أرقام أو حسابات تجريبية.
-- فحص تلقائي لاتصال PostgreSQL عند فتح المنصة.
-- تهيئة قاعدة البيانات من داخل المنصة لأول مرة.
-- إنشاء أول حساب «مدير النظام» بالبيانات التي يدخلها المستخدم فقط.
-- تسجيل دخول حقيقي بالبريد أو الجوال أو رقم الموظف.
-- جلسة دخول آمنة داخل Cookie من نوع HttpOnly.
-- حماية API الداش بورد والإعدادات والمستخدمين من الوصول بدون تسجيل دخول.
-- إدارة المستخدمين متاحة لمدير النظام فقط.
-- إنشاء المستخدمين مع القسم والفرع والدور وخيارات استقبال العملاء والتاسكات.
-- تسجيل عمليات التهيئة والدخول وإنشاء المستخدمين في سجل النشاط بقاعدة البيانات.
+- الداش بورد: مبيعات الكاش، مبيعات التمويل، وخدمة العملاء بالحالات المسجلة في الإدارة.
+- قاعدة البيانات: فلاتر، بحث، فتح وتعديل العميل، نقل العملاء، حذف إداري منطقي، تصدير CSV متوافق مع Excel، وطباعة PDF من المتصفح.
+- إضافة العملاء: منع التكرار برقم الجوال، وطلبات اعتماد التكرار من الإدارة.
+- سجل عملاء التمويل: خط زمني للحالات والملاحظات ومن قام بالتغيير بالتاريخ والوقت.
+- المحادثات: عرض الرسائل والمرفقات، غير المقروء، وإرسال النصوص والقوالب من نفس ملف العميل.
+- التقارير: المصدر، الأقسام، المناديب، الكول سنتر، وخدمة العملاء، مع إعدادات جودة التسويق والمبيعات من صفحة الإدارة.
+- تقييم المناديب KPI: الفترات، عدد المبيعات، الدرجات، والنتيجة النهائية.
+- وكيل صندوق الوارد: الإعدادات، الردود، كلمات الإيقاف، المديرون، وسجل الإجراءات.
+- إدارة CRM: الحالات، القوالب، ربط الحالات بالقوالب، الفروع، مؤشرات التقارير، وروابط التكامل.
+- المستخدمون والصلاحيات تظل في إدارة المنصة الموحدة، ولا يوجد نظام مستخدمين منفصل لـ CRM.
 
-## إعداد Vercel
+## قاعدة البيانات
 
-1. ارفع محتويات المشروع إلى جذر Repository.
-2. Framework Preset: `Vite`.
-3. Build Command: `npm run build`.
-4. Output Directory: `dist`.
-5. اربط PostgreSQL من Vercel Marketplace بنفس المشروع.
-6. تأكد من وجود `DATABASE_URL` في Environment Variables.
-7. أضف `MZJ_SETUP_KEY` بقيمة سرية طويلة من اختيارك.
-8. يمكن إضافة `MZJ_GATEWAY_SECRET` لاحقًا عند تشغيل الـWorker المركزي.
-9. اعمل Redeploy بدون Build Cache.
+أول طلب إلى أي API داخل CRM يشغّل Migration نظيفة وقابلة لإعادة المحاولة، ثم يسجل الإصدار `crm-v1.3` في `core.schema_migrations`. لا يتم إدخال أي عميل أو مستخدم تجريبي.
 
-## أول تشغيل
+## التكاملات والـWorker المركزي
 
-- لو PostgreSQL غير مربوطة ستظهر صفحة الربط فقط.
-- بعد ربطها ستظهر صفحة تهيئة المنصة.
-- أدخل بيانات مدير النظام ومفتاح `MZJ_SETUP_KEY`.
-- المنصة تنشئ الجداول والإعدادات الأساسية وأول حساب إداري ثم تسجل دخوله تلقائيًا.
+المجلد `gateway-worker` يحتوي Worker مركزي واحد بمسارات مستقلة للاستقبال والإرسال:
 
-## ملاحظات
+- `/webhooks/facebook`
+- `/webhooks/instagram`
+- `/webhooks/tiktok`
+- `/webhooks/whatsapp`
+- `/imports/tiktok-snapchat`
+- `/imports/installment-calculator`
+- `/send/facebook`
+- `/send/instagram`
+- `/send/tiktok`
+- `/send/whatsapp`
 
-- `database/seed.sql` يحتوي على الفروع والأقسام والأدوار الأساسية فقط، ولا ينشئ أي مستخدم أو بيانات عملاء أو سيارات.
-- لا تضع `DATABASE_URL` أو `MZJ_SETUP_KEY` داخل GitHub. ضعها في Vercel Environment Variables فقط.
+الـWorker يحول الأحداث إلى API المنصة، بينما PostgreSQL تنفذ منع التكرار والتوزيع وحفظ العملاء والمحادثات. إعدادات المنصات والمفاتيح لا توضع في GitHub.
 
-## v1.2.1 Vercel TypeScript fix
+## متغيرات Vercel
 
-- All relative imports inside `api/` use explicit `.js` extensions for Vercel's NodeNext compilation.
-- `tsconfig.node.json` now uses `module` and `moduleResolution` set to `NodeNext` so the same class of error is caught before deployment.
-- The build runs an API import validation before TypeScript and Vite.
-- The SPA rewrite excludes `/api/` routes.
+- `DATABASE_URL`
+- `MZJ_SETUP_KEY`
+- `MZJ_GATEWAY_SECRET`
+
+`MZJ_GATEWAY_SECRET` يجب أن يطابق `GATEWAY_SECRET` في Cloudflare Worker.
+
+## النشر على Vercel
+
+- Framework Preset: `Vite`
+- Install Command: `npm ci --registry=https://registry.npmjs.org/`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+
+## الاختبارات قبل التسليم
+
+أمر `npm run build` ينفذ:
+
+1. فحص امتدادات Imports الخاصة بـ Vercel NodeNext.
+2. فحص وجود ملفات CRM الأساسية والحالات المعتمدة وعدم وجود بيانات تجريبية.
+3. TypeScript build للواجهة والـAPI.
+4. Vite production build.

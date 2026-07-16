@@ -82,7 +82,7 @@ export async function getDashboardData(): Promise<DashboardData> {
         (select count(*) from crm.leads where is_deleted = false) as total_customers,
         (select count(*) from crm.conversations where status = 'open') as open_conversations,
         (select count(*) from crm.leads where status_label = 'محتمل' and is_deleted = false) as potential_customers,
-        (select count(*) from crm.leads where status_label in ('تم البيع', 'تم الانتهاء - إنشاء طلب البيع') and is_deleted = false) as sold,
+        (select count(*) from crm.leads where status_label in ('تم البيع', 'تم الانتهاء - إنشاء طلب البيع', 'تم الإنتهاء - إنشاء طلب البيع') and is_deleted = false) as sold,
         (select count(*) from crm.leads where department_code = 'cash_sales' and is_deleted = false) as cash_sales,
         (select count(*) from crm.leads where department_code = 'finance_sales' and is_deleted = false) as finance_sales,
         (select count(*) from crm.leads where department_code = 'customer_service' and is_deleted = false) as customer_service,
