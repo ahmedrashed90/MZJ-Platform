@@ -21,6 +21,7 @@ import crmTransferHandler from "../server/crm/transfer.js";
 import crmSettingsHandler from "../server/crm/settings.js";
 import crmInboxAgentHandler from "../server/crm/inbox-agent.js";
 import crmUnreadHandler from "../server/crm/unread.js";
+import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -45,6 +46,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/settings", crmSettingsHandler],
   ["crm/inbox-agent", crmInboxAgentHandler],
   ["crm/unread", crmUnreadHandler],
+  ["crm/mersal-templates", crmMersalTemplatesHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -64,7 +66,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.7.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.8.0" });
   }
 
   if (route.startsWith("integrations/")) {

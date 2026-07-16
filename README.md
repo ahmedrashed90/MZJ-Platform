@@ -112,3 +112,9 @@
 - الاستماع الحي إلى `collectionGroup(messages)` بترتيب `createdAt desc` واعتماد الرسائل ذات `direction = in` فقط.
 - حفظ حالة غير المقروءة في PostgreSQL بالحقول المتوافقة مع المرجع، وإزالتها عند فتح المحادثة وفق صلاحيات المستخدم الحالية.
 - توحيد منطق تعليم القراءة/عدم القراءة في خدمة خادم واحدة لمنع التكرار بين التكاملات ومستمع Firestore.
+
+
+## CRM settings v1.8.0
+- Full-width editors with full-width tables for statuses, customer fields, sources, templates/messages, and status-template mappings.
+- Server-side Mersal template synchronization using `MERSAL_TOKEN` and optional `MERSAL_API_ENDPOINT`.
+- Rebuilt customer distribution settings with ordered members, rule preview, rule cards, and full assignment log.
