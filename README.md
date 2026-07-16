@@ -118,3 +118,20 @@
 - Full-width editors with full-width tables for statuses, customer fields, sources, templates/messages, and status-template mappings.
 - Server-side Mersal template synchronization using `MERSAL_TOKEN` and optional `MERSAL_API_ENDPOINT`.
 - Rebuilt customer distribution settings with ordered members, rule preview, rule cards, and full assignment log.
+
+## WhatsApp / Mersal worker v1.8.1
+
+قوالب مرسال والإرسال لا يتصلان بمرسال مباشرة من Vercel. التوكن يبقى داخل Cloudflare Worker فقط.
+
+1. ارفع الملف الكامل `workers/MZJ-WhatsApp-Mersal-Worker-v1.0.0-FULL.txt` في Worker مستقل.
+2. أضف داخل Cloudflare Secrets:
+   - `MZJ_GATEWAY_SECRET`
+   - `MERSAL_TOKEN`
+3. داخل Vercel احتفظ بنفس قيمة `MZJ_GATEWAY_SECRET`.
+4. داخل الإعدادات > إعدادات CRM > Endpoints / Workers احفظ واتساب كالتالي:
+   - Send URL: `https://YOUR-WORKER/send/mersal`
+   - Health URL: `https://YOUR-WORKER/health`
+   - Secret name: `MZJ_GATEWAY_SECRET`
+5. زر مزامنة القوالب يشتق تلقائيًا `https://YOUR-WORKER/templates/mersal` من Send URL.
+
+يمكن استخدام `MERSAL_WORKER_URL` أو `MERSAL_WORKER_TEMPLATES_URL` كـ override اختياري في Vercel، لكنهما غير مطلوبين عند ضبط Send URL.

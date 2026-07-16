@@ -4,21 +4,30 @@ import { getSql } from "../_db.js";
 
 type MersalTemplate = Record<string, unknown>;
 
-type MersalResponse = {
+type MersalWorkerResponse = {
   ok?: boolean;
-  status?: string;
+  source?: string;
   templates?: MersalTemplate[];
   error?: string;
   message?: string;
-  raw?: string;
+  raw?: unknown;
+};
+
+type WorkerConfig = {
+  url: string;
+  secretName: string;
 };
 
 function parseComponents(value: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  }
   if (typeof value !== "string") return [];
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+      : [];
   } catch {
     return [];
   }
@@ -29,58 +38,103 @@ function componentBody(value: unknown) {
   return clean(body?.text);
 }
 
-function configuredBases() {
-  const configured = clean(process.env.MERSAL_API_ENDPOINT || "https://w-mersal.com").replace(/\/+$/, "");
-  return [...new Set([configured, "https://w-mersal.com", "https://api.w-mersal.com"].filter(Boolean))];
+function workerHeaders(secretName: string) {
+  const secret = clean(process.env[secretName] || process.env.MZJ_GATEWAY_SECRET);
+  if (!secret) throw new Error(`${secretName || "MZJ_GATEWAY_SECRET"} غير موجود في Environment Variables`);
+  return {
+    accept: "application/json",
+    "content-type": "application/json; charset=utf-8",
+    "x-mzj-gateway-secret": secret,
+  };
 }
 
-async function requestTemplates(token: string) {
-  let lastError = "فشل جلب القوالب من مرسال";
+function templateUrlFromSendUrl(sendUrl: string) {
+  const value = clean(sendUrl).replace(/\/+$/, "");
+  if (!value) return "";
+  if (/\/send\/mersal$/i.test(value)) return value.replace(/\/send\/mersal$/i, "/templates/mersal");
+  if (/\/send\/whatsapp$/i.test(value)) return value.replace(/\/send\/whatsapp$/i, "/templates/mersal");
+  try {
+    const parsed = new URL(value);
+    return `${parsed.origin}/templates/mersal`;
+  } catch {
+    return "";
+  }
+}
 
-  for (const base of configuredBases()) {
-    const url = `${base}/api/wpbox/getTemplates?token=${encodeURIComponent(token)}`;
-    try {
-      const upstream = await fetch(url, {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(20_000),
-      });
-      const text = await upstream.text();
-      let payload: MersalResponse;
-      try {
-        payload = JSON.parse(text) as MersalResponse;
-      } catch {
-        payload = { raw: text };
-      }
+async function resolveWorkerConfig(sql: ReturnType<typeof getSql>): Promise<WorkerConfig> {
+  const explicitTemplatesUrl = clean(process.env.MERSAL_WORKER_TEMPLATES_URL);
+  const explicitWorkerBase = clean(process.env.MERSAL_WORKER_URL).replace(/\/+$/, "");
+  const [endpoint] = await sql<any[]>`
+    select source_code,send_url,secret_name
+    from crm.integration_endpoints
+    where source_code=any(array['whatsapp','mersal']::text[]) and is_active=true
+    order by case when source_code='whatsapp' then 0 else 1 end
+    limit 1
+  `;
 
-      if (!upstream.ok) {
-        lastError = clean(payload.message || payload.error) || `HTTP ${upstream.status}`;
-        continue;
-      }
+  const url = explicitTemplatesUrl
+    || (explicitWorkerBase ? `${explicitWorkerBase}/templates/mersal` : "")
+    || templateUrlFromSendUrl(clean(endpoint?.send_url));
 
-      return {
-        source: base,
-        templates: Array.isArray(payload.templates) ? payload.templates : [],
-      };
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "فشل الاتصال بمرسال";
-    }
+  if (!url) {
+    throw new Error("أضف Send URL لواتساب في إعدادات CRM بصيغة https://WORKER/send/mersal قبل مزامنة القوالب");
   }
 
-  throw new Error(lastError);
+  return {
+    url,
+    secretName: clean(endpoint?.secret_name) || "MZJ_GATEWAY_SECRET",
+  };
+}
+
+function extractTemplates(payload: MersalWorkerResponse) {
+  if (Array.isArray(payload.templates)) return payload.templates;
+  if (payload.raw && typeof payload.raw === "object") {
+    const raw = payload.raw as Record<string, unknown>;
+    if (Array.isArray(raw.templates)) return raw.templates as MersalTemplate[];
+    if (Array.isArray(raw.data)) return raw.data as MersalTemplate[];
+  }
+  return [];
+}
+
+async function requestTemplates(config: WorkerConfig) {
+  const upstream = await fetch(config.url, {
+    method: "POST",
+    headers: workerHeaders(config.secretName),
+    body: JSON.stringify({ action: "sync_templates", source: "mzj-unified-platform" }),
+    signal: AbortSignal.timeout(25_000),
+  });
+  const text = await upstream.text();
+  let payload: MersalWorkerResponse;
+  try {
+    payload = text ? JSON.parse(text) as MersalWorkerResponse : {};
+  } catch {
+    payload = { raw: text };
+  }
+
+  if (!upstream.ok || payload.ok === false) {
+    throw new Error(clean(payload.error || payload.message) || `فشل وركر واتساب: HTTP ${upstream.status}`);
+  }
+
+  return {
+    source: clean(payload.source) || config.url,
+    templates: extractTemplates(payload),
+  };
 }
 
 function normalizedTemplate(template: MersalTemplate) {
-  const externalId = clean(template.id || template.name || template.templateName);
-  const name = clean(template.name || template.templateName);
+  const externalId = clean(template.id || template.name || template.templateName || template.template_name);
+  const name = clean(template.name || template.templateName || template.template_name);
   const status = (clean(template.status) || "APPROVED").toUpperCase();
-  const content = componentBody(template.components) || clean(template.body || template.content) || name;
+  const content = componentBody(template.components)
+    || clean(template.body || template.content || template.text)
+    || name;
 
   return {
     externalId,
     name,
-    displayName: name,
+    displayName: clean(template.displayName || template.display_name) || name,
     content,
-    languageCode: clean(template.language) || "ar",
+    languageCode: clean(template.language || template.language_code || template.template_language) || "ar",
     status,
     isActive: status === "APPROVED",
   };
@@ -89,15 +143,17 @@ function normalizedTemplate(template: MersalTemplate) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "مزامنة قوالب مرسال متاحة للإدارة فقط" });
-  if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
-
-  const token = clean(process.env.MERSAL_TOKEN || process.env.MERSAL_API_TOKEN);
-  if (!token) return response.status(500).json({ ok: false, error: "MERSAL_TOKEN غير موجود في Environment Variables" });
+  if (!isCrmManager(user)) {
+    return response.status(403).json({ ok: false, error: "مزامنة قوالب مرسال متاحة للإدارة فقط" });
+  }
+  if (request.method !== "POST") {
+    return response.status(405).json({ ok: false, error: "Method not allowed" });
+  }
 
   try {
     const sql = getSql();
-    const upstream = await requestTemplates(token);
+    const workerConfig = await resolveWorkerConfig(sql);
+    const upstream = await requestTemplates(workerConfig);
     let created = 0;
     let updated = 0;
     let skipped = 0;

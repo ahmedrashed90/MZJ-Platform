@@ -66,7 +66,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.8.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.8.1" });
   }
 
   if (route.startsWith("integrations/")) {
