@@ -38,8 +38,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const rows = await sql<any[]>`
     select l.id::text, l.customer_name, l.phone, l.phone_normalized, l.status_label, l.department_code, l.branch_code,
-      l.source_code, l.source_name, l.car_name, l.car_model, l.color, l.finance_type, l.age, l.salary, l.obligation, l.salary_bank,
-      l.location, l.campaign_name, l.notes, l.created_at, l.updated_at,
+      l.service_key, l.payment_type, l.source_code, l.source_name, l.car_name, l.car_type, l.car_model, l.color, l.finance_type,
+      l.age, l.salary, l.obligation, l.salary_bank, l.location, l.follow_up_at, l.campaign_name, l.notes, l.extra_data,
+      l.registered_at, l.created_at, l.updated_at,
       sales.full_name as assigned_name, cc.full_name as call_center_name, src.name as catalog_source_name,
       max(e.created_at) as last_event_at, count(e.id)::int as events_count
     from crm.leads l

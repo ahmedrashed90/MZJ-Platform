@@ -1,3 +1,23 @@
+
+export type CrmCustomerFieldOption = {
+  value: string;
+  label: string;
+};
+
+export type CrmCustomerField = {
+  id: string;
+  field_key: string;
+  label: string;
+  field_type: "text" | "phone" | "number" | "date" | "textarea" | "select" | "status" | "source" | "department" | "transfer";
+  sort_order: number;
+  department_keys: string[];
+  is_active: boolean;
+  is_required: boolean;
+  include_in_completion: boolean;
+  options: CrmCustomerFieldOption[];
+  is_system: boolean;
+  is_locked: boolean;
+};
 export type CrmStatus = {
   id: string;
   department_code: string;
@@ -30,6 +50,7 @@ export type CrmMeta = {
   mappings: Array<{ id: string; department_code: string; status_value: string; status_label: string; template_id: string; message_type: string }>;
   quality: Record<string, unknown> | null;
   endpoints: Array<Record<string, unknown>>;
+  customerFields: CrmCustomerField[];
 };
 
 export type CrmLead = {
@@ -63,6 +84,7 @@ export type CrmLead = {
   campaign_date?: string | null;
   notes?: string | null;
   status_note?: string | null;
+  extra_data?: Record<string, unknown> | null;
   completion_percent?: number | null;
   credit_limit?: number | string | null;
   credit_qualified?: boolean | null;

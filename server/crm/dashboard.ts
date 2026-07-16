@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
@@ -13,13 +14,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const branch = clean(request.query.branch);
   const status = clean(request.query.status);
 
+  const customerFields = await getCustomerFieldDefinitions();
+
   const rows = await sql<any[]>`
     select
       l.id::text, l.legacy_id, l.customer_name, l.phone, l.phone_normalized, l.source_code, l.source_name,
       l.platform_code, l.service_key, l.department_code, l.branch_code, l.status_code, l.status_label,
       l.payment_type, l.car_name, l.location, l.age, l.salary, l.obligation, l.salary_bank,
       l.car_model, l.car_type, l.color, l.finance_type, l.follow_up_at, l.campaign_name, l.campaign_date,
-      l.notes, l.status_note, l.completion_percent, l.credit_limit, l.credit_qualified, l.created_at, l.updated_at, l.registered_at,
+      l.notes, l.status_note, l.extra_data, l.completion_percent, l.credit_limit, l.credit_qualified, l.created_at, l.updated_at, l.registered_at,
       src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
@@ -55,7 +58,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   for (const row of rows) {
     row.source_name = row.catalog_source_name || sourceLabel(row.source_code || row.source_name);
-    row.completion_percent = calculateLeadCompletion(row);
+    row.completion_percent = calculateLeadCompletion(row, customerFields);
     delete row.catalog_source_name;
   }
 

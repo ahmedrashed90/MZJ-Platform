@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, branchForDepartment, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, requireCrmUser, resolveSourceName } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
@@ -56,7 +57,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
 
     if (!duplicate) {
-      const completionPercent = calculateLeadCompletion({ customerName, phone, sourceCode, statusLabel: 'عميل جديد', serviceKey, location: clean(body.location), carName: clean(body.carName) });
+      const customerFields = await getCustomerFieldDefinitions();
+      const completionPercent = calculateLeadCompletion({ customerName, phone, sourceCode, statusLabel: 'عميل جديد', serviceKey, location: clean(body.location), carName: clean(body.carName) }, customerFields);
       const [lead] = await sql<any[]>`
         insert into crm.leads(customer_name,phone,phone_normalized,source_code,source_name,service_key,department_code,branch_code,status_label,payment_type,car_name,location,notes,assigned_to,call_center_assigned_to,created_by,updated_by,registered_at,completion_percent)
         values (${customerName},${phone},${phoneNormalized},${sourceCode},${sourceName},${serviceKey},${departmentCode},${branchCode || null},'عميل جديد',${clean(body.paymentType) || (serviceKey==='finance'?'تمويل':serviceKey==='service'?'خدمة عملاء':'كاش')},${clean(body.carName)||null},${clean(body.location)||null},${clean(body.notes)||null},${assignedTo}::uuid,${callCenterTo}::uuid,${user.id}::uuid,${user.id}::uuid,now(),${completionPercent}) returning id::text

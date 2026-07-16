@@ -12,6 +12,7 @@ const requiredFiles = [
   "server/crm/kpi.ts",
   "server/crm/inbox-agent.ts",
   "server/crm/settings.ts",
+  "server/_crm-customer-fields.ts",
   "src/crm/pages/CrmDashboardPage.tsx",
   "src/crm/pages/CrmDatabasePage.tsx",
   "src/crm/pages/CrmManualLeadsPage.tsx",
@@ -43,6 +44,24 @@ const requiredStatuses = [
 ];
 for (const status of requiredStatuses) {
   if (!schema.includes(status)) throw new Error(`Missing CRM status: ${status}`);
+}
+
+const customerFieldsHelper = fs.readFileSync(path.join(root, "server/_crm-customer-fields.ts"), "utf8");
+const customerDrawer = fs.readFileSync(path.join(root, "src/crm/components/LeadDrawer.tsx"), "utf8");
+const crmSettings = fs.readFileSync(path.join(root, "server/crm/settings.ts"), "utf8");
+const crmLeads = fs.readFileSync(path.join(root, "server/crm/leads.ts"), "utf8");
+const crmDashboard = fs.readFileSync(path.join(root, "server/crm/dashboard.ts"), "utf8");
+const dynamicFieldChecks = [
+  [schema.includes("crm.customer_field_definitions"), "Missing customer field definitions migration"],
+  [customerFieldsHelper.includes("include_in_completion"), "Completion settings are not read from customer fields"],
+  [customerFieldsHelper.includes("department_keys.includes(department)"), "Completion does not respect department-specific fields"],
+  [customerDrawer.includes("meta?.customerFields"), "Customer drawer is not generated from field settings"],
+  [crmSettings.includes('section === "customer_field"'), "Customer field settings API is missing"],
+  [crmLeads.includes("sanitizeCustomFieldValues"), "Customer custom values are not persisted safely"],
+  [crmDashboard.includes("calculateLeadCompletion(row, customerFields)"), "Dashboard completion is not recalculated dynamically"],
+];
+for (const [passed, message] of dynamicFieldChecks) {
+  if (!passed) throw new Error(String(message));
 }
 
 const filesToScan = ["src", "api", "server", "database"];

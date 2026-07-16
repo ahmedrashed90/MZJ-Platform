@@ -11,6 +11,7 @@ import {
   resolveSourceName,
 } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
+import { getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
 
 function first(...values: unknown[]) {
   for (const value of values) {
@@ -167,6 +168,7 @@ function shouldCreateLead(routeSource: string, payload: any, serviceKey: string,
 
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
   const sql = getSql();
+  const customerFields = await getCustomerFieldDefinitions();
   const source = effectiveSource(routeSource, payload);
   const sourceName = await resolveSourceName(source);
   const data = sourceData(source, payload);
@@ -206,7 +208,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       const color = first(payload.color, payload.carColor);
       const financeType = first(payload.financeType, payload.finance_type);
       const location = first(payload.leadLocation, payload.location, payload.city);
-      const completionPercent = calculateLeadCompletion({ customerName: data.name, phone: data.phoneNormalized, sourceCode: source, statusLabel, serviceKey: serviceKey || "cash", age, salary, obligation, salaryBank, location, carName, carModel, color });
+      const completionPercent = calculateLeadCompletion({ customerName: data.name, phone: data.phoneNormalized, sourceCode: source, statusLabel, serviceKey: serviceKey || "cash", age, salary, obligation, salaryBank, location, carName, carModel, color }, customerFields);
       const credit = calculateCreditLimit(salary, obligation, financeType);
       const [created] = await sql<any[]>`
         insert into crm.leads(

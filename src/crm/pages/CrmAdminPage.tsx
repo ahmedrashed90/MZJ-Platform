@@ -14,6 +14,7 @@ import { sourceLabel } from "../sourceCatalog";
 
 const tabs = [
   { key: "statuses", label: "حالات العملاء" },
+  { key: "customer_fields", label: "بيانات العميل" },
   { key: "sources", label: "المصادر" },
   { key: "templates", label: "القوالب والرسائل" },
   { key: "mappings", label: "ربط الحالات بالقوالب" },
@@ -27,6 +28,7 @@ type Tab = typeof tabs[number]["key"];
 type Props = { embedded?: boolean };
 
 const blankStatus = { id: "", departmentCode: "cash", label: "", value: "", sortOrder: 10, isActive: true };
+const blankCustomerField = { id: "", fieldKey: "", label: "", fieldType: "text", sortOrder: 10, departmentKeys: [] as string[], isActive: true, isRequired: false, includeInCompletion: false, optionsText: "", isSystem: false, isLocked: false };
 const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", allowFreeText: false, isActive: true };
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
@@ -53,14 +55,32 @@ function departmentLabel(code: string) {
   return code;
 }
 
+
+function customerFieldTypeLabel(type: string) {
+  const labels: Record<string, string> = { text: "نص", phone: "رقم جوال", number: "رقم", date: "تاريخ", textarea: "ملاحظات كبيرة", select: "قائمة اختيارات", status: "حالات العملاء", source: "المصادر", department: "القسم", transfer: "تحويل القسم" };
+  return labels[type] || type;
+}
+
+function optionsTextToRows(text: string) {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [value, ...labelParts] = line.split("|");
+    return { value: value.trim(), label: (labelParts.join("|").trim() || value.trim()) };
+  }).filter((row) => row.value);
+}
+
+function optionsRowsToText(options: any[]) {
+  return (options || []).map((row) => `${row.value}|${row.label || row.value}`).join("\n");
+}
+
 function toggleList(list: string[], value: string) {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
 }
 
 export function CrmAdminPage({ embedded = false }: Props) {
   const [tab, setTab] = useState<Tab>("statuses");
-  const [data, setData] = useState<any>({ statuses: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
+  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
+  const [customerFieldForm, setCustomerFieldForm] = useState(blankCustomerField);
   const [sourceForm, setSourceForm] = useState(blankSource);
   const [templateForm, setTemplateForm] = useState(blankTemplate);
   const [mappingForm, setMappingForm] = useState(blankMapping);
@@ -130,6 +150,24 @@ export function CrmAdminPage({ embedded = false }: Props) {
     setQuality((current) => ({ ...current, [key]: toggleList(current[key] as string[], status) }));
   }
 
+
+  function editCustomerField(row: any) {
+    setCustomerFieldForm({
+      id: row.id,
+      fieldKey: row.field_key,
+      label: row.label,
+      fieldType: row.field_type,
+      sortOrder: Number(row.sort_order || 0),
+      departmentKeys: row.department_keys || [],
+      isActive: row.is_active !== false,
+      isRequired: row.is_required === true,
+      includeInCompletion: row.include_in_completion === true,
+      optionsText: optionsRowsToText(row.options || []),
+      isSystem: row.is_system === true,
+      isLocked: row.is_locked === true,
+    });
+  }
+
   function editRule(row: any) {
     setRuleForm({
       id: row.id,
@@ -176,6 +214,32 @@ export function CrmAdminPage({ embedded = false }: Props) {
             <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setStatusForm(blankStatus)}>جديد</button><button className="crm-primary-button" onClick={async () => { const id = statusForm.id || `${statusForm.departmentCode}-${Date.now()}`; if (await save("status", { ...statusForm, id })) setStatusForm(blankStatus); }}><FloppyDisk size={18} />حفظ الحالة</button></div>
           </section>
           <section className="crm-panel crm-list-panel"><header><h2>الحالات المسجلة</h2><span>{data.statuses.length}</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>القسم</th><th>اسم الكارت</th><th>قيمة الحالة</th><th>الترتيب</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.statuses.map((row: any) => <tr key={row.id}><td>{departmentLabel(row.department_code)}</td><td>{row.label}</td><td>{row.value}</td><td>{row.sort_order}</td><td>{row.is_active ? "نشطة" : "موقوفة"}</td><td><div className="crm-row-actions"><button onClick={() => setStatusForm({ id: row.id, departmentCode: row.department_code, label: row.label, value: row.value, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("status", row.id)}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section>
+        </div>
+      ) : null}
+
+
+      {tab === "customer_fields" ? (
+        <div className="crm-admin-split crm-customer-fields-settings">
+          <section className="crm-panel crm-form-panel">
+            <header><h2>{customerFieldForm.id ? "تعديل حقل بيانات" : "إضافة حقل بيانات"}</h2><p>النموذج ونسبة اكتمال الملف يعتمدان على هذه الإعدادات مباشرة.</p></header>
+            <div className="crm-form-grid">
+              <label><span>الكود الداخلي (اختياري)</span><input disabled={Boolean(customerFieldForm.id)} placeholder="يُنشأ تلقائيًا عند تركه فارغًا" value={customerFieldForm.fieldKey} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, fieldKey: event.target.value }))} /></label>
+              <label><span>اسم الحقل</span><input value={customerFieldForm.label} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, label: event.target.value }))} /></label>
+              <label><span>نوع الحقل</span><select disabled={customerFieldForm.isSystem} value={customerFieldForm.fieldType} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, fieldType: event.target.value }))}><option value="text">نص</option><option value="phone">رقم جوال</option><option value="number">رقم</option><option value="date">تاريخ</option><option value="textarea">ملاحظات كبيرة</option><option value="select">قائمة اختيارات</option>{customerFieldForm.isSystem ? <><option value="status">حالات العملاء</option><option value="source">المصادر</option><option value="department">القسم</option><option value="transfer">تحويل القسم</option></> : null}</select></label>
+              <label><span>ترتيب الظهور</span><input type="number" value={customerFieldForm.sortOrder} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
+              <div className="crm-field-wide"><span className="crm-field-caption">يظهر في الأقسام</span><p className="crm-field-help">عدم اختيار قسم يعني أن الحقل يظهر في كل الأقسام.</p><div className="crm-check-grid"><label><input type="checkbox" disabled={customerFieldForm.isLocked} checked={customerFieldForm.departmentKeys.includes("cash")} onChange={() => setCustomerFieldForm((current) => ({ ...current, departmentKeys: toggleList(current.departmentKeys, "cash") }))} />مبيعات الكاش</label><label><input type="checkbox" disabled={customerFieldForm.isLocked} checked={customerFieldForm.departmentKeys.includes("finance")} onChange={() => setCustomerFieldForm((current) => ({ ...current, departmentKeys: toggleList(current.departmentKeys, "finance") }))} />مبيعات التمويل</label><label><input type="checkbox" disabled={customerFieldForm.isLocked} checked={customerFieldForm.departmentKeys.includes("service")} onChange={() => setCustomerFieldForm((current) => ({ ...current, departmentKeys: toggleList(current.departmentKeys, "service") }))} />خدمة العملاء</label></div></div>
+              {customerFieldForm.fieldType === "select" ? <label className="crm-field-wide"><span>اختيارات القائمة</span><textarea rows={6} placeholder={"القيمة|الاسم الظاهر\nمثال: yes|نعم"} value={customerFieldForm.optionsText} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, optionsText: event.target.value }))} /></label> : null}
+              <label className="crm-switch-row"><input type="checkbox" disabled={customerFieldForm.isLocked} checked={customerFieldForm.isActive} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>الحقل ظاهر ونشط</span></label>
+              <label className="crm-switch-row"><input type="checkbox" disabled={customerFieldForm.isLocked} checked={customerFieldForm.isRequired} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, isRequired: event.target.checked }))} /><span>حقل إجباري عند الحفظ</span></label>
+              <label className="crm-switch-row"><input type="checkbox" checked={customerFieldForm.includeInCompletion} onChange={(event) => setCustomerFieldForm((current) => ({ ...current, includeInCompletion: event.target.checked }))} /><span>يدخل في نسبة اكتمال الملف</span></label>
+            </div>
+            {customerFieldForm.isSystem ? <div className="crm-system-field-note">هذا حقل أساسي مرتبط بالنظام. يمكن تعديل الاسم والترتيب والنسبة، ولا يمكن حذف بنيته.</div> : null}
+            <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setCustomerFieldForm(blankCustomerField)}><Plus size={18} />حقل جديد</button><button className="crm-primary-button" onClick={async () => { const payload = { ...customerFieldForm, options: optionsTextToRows(customerFieldForm.optionsText) }; if (await save("customer_field", payload)) setCustomerFieldForm(blankCustomerField); }}><FloppyDisk size={18} />حفظ الحقل</button></div>
+          </section>
+          <section className="crm-panel crm-list-panel">
+            <header><h2>حقول بيانات العميل</h2><span>{data.customerFields.length}</span></header>
+            <div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>الترتيب</th><th>اسم الحقل</th><th>النوع</th><th>الأقسام</th><th>في النسبة</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.customerFields.map((row: any) => <tr key={row.id} className={!row.is_active ? "crm-row-inactive" : ""}><td>{row.sort_order}</td><td><strong>{row.label}</strong><small>{row.is_system ? "حقل أساسي" : row.field_key}</small></td><td>{customerFieldTypeLabel(row.field_type)}</td><td>{(row.department_keys || []).length ? row.department_keys.map(departmentLabel).join("، ") : "كل الأقسام"}</td><td>{row.include_in_completion ? "نعم" : "لا"}</td><td>{row.is_active ? "نشط" : "موقوف"}</td><td><div className="crm-row-actions"><button onClick={() => editCustomerField(row)}><PencilSimple size={16} /></button>{!row.is_system ? <button onClick={() => void remove("customer_field", row.id)}><Trash size={16} /></button> : null}</div></td></tr>)}</tbody></table></div>
+          </section>
         </div>
       ) : null}
 

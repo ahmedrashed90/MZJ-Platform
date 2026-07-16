@@ -437,6 +437,55 @@ create index if not exists crm_assignment_logs_created_idx on crm.assignment_log
 insert into core.schema_migrations(version) values ('platform-settings-v1.5') on conflict (version) do nothing;
 `;
 
+
+
+const CRM_CUSTOMER_FIELDS_V16_SQL = String.raw`
+create table if not exists crm.customer_field_definitions (
+  id uuid primary key default gen_random_uuid(),
+  field_key text not null unique,
+  label text not null,
+  field_type text not null default 'text',
+  sort_order integer not null default 0,
+  department_keys text[] not null default '{}',
+  is_active boolean not null default true,
+  is_required boolean not null default false,
+  include_in_completion boolean not null default false,
+  options jsonb not null default '[]'::jsonb,
+  is_system boolean not null default false,
+  is_locked boolean not null default false,
+  created_by uuid references core.users(id),
+  updated_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists crm_customer_fields_order_idx on crm.customer_field_definitions(is_active,sort_order);
+
+insert into crm.customer_field_definitions(
+  field_key,label,field_type,sort_order,department_keys,is_active,is_required,include_in_completion,options,is_system,is_locked
+) values
+('status_label','حالة العميل','status',10,'{}',true,true,true,'[]'::jsonb,true,true),
+('follow_up_at','تاريخ المتابعة','date',20,'{}',true,false,false,'[]'::jsonb,true,false),
+('source_code','المصدر','source',30,'{}',true,true,true,'[]'::jsonb,true,true),
+('department_code','القسم','department',40,'{}',true,true,true,'[]'::jsonb,true,true),
+('department_transfer','تحويل لقسم آخر','transfer',50,'{}',true,false,false,'[]'::jsonb,true,true),
+('customer_name','اسم العميل','text',60,'{}',true,true,true,'[]'::jsonb,true,true),
+('phone','رقم الجوال','phone',70,'{}',true,true,true,'[]'::jsonb,true,true),
+('age','العمر','number',80,'{}',true,false,true,'[]'::jsonb,true,false),
+('salary','الراتب','number',90,'{}',true,false,true,'[]'::jsonb,true,true),
+('obligation','الالتزام إن وجد','number',100,'{}',true,false,true,'[]'::jsonb,true,true),
+('salary_bank','نزول الراتب على أي بنك','text',110,'{}',true,false,true,'[]'::jsonb,true,false),
+('location','المكان','text',120,'{}',true,false,true,'[]'::jsonb,true,false),
+('car_type','نوع السيارة','text',130,'{}',true,false,true,'[]'::jsonb,true,false),
+('car_model','الموديل','text',140,'{}',true,false,true,'[]'::jsonb,true,false),
+('color','اللون','text',150,'{}',true,false,true,'[]'::jsonb,true,false),
+('finance_type','نوع التمويل','select',160,array['finance'],true,false,false,
+ '[{"value":"general","label":"عام 45%"},{"value":"rate55","label":"55%"},{"value":"realEstate","label":"عقاري 65%"}]'::jsonb,true,true),
+('notes','ملاحظات','textarea',170,'{}',true,false,false,'[]'::jsonb,true,false)
+on conflict (field_key) do nothing;
+
+insert into core.schema_migrations(version) values ('crm-customer-fields-v1.6') on conflict (version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -455,6 +504,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'platform-settings-v1.5'
       `;
       if (!settingsMigration) await runSqlScript(CRM_SETTINGS_V15_SQL);
+      const [customerFieldsMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-customer-fields-v1.6'
+      `;
+      if (!customerFieldsMigration) await runSqlScript(CRM_CUSTOMER_FIELDS_V16_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { sendMappedStatusMessage } from "../_crm-messaging.js";
 
 function leadPayload(body: Record<string, any>) {
@@ -40,6 +41,7 @@ function leadPayload(body: Record<string, any>) {
     statusNote: clean(body.statusNote ?? body.status_note),
     assignedTo: clean(body.assignedTo ?? body.assigned_to) || null,
     callCenterAssignedTo: clean(body.callCenterAssignedTo ?? body.call_center_assigned_to) || null,
+    extraData: body.customFields ?? body.extraData ?? body.extra_data ?? {},
   };
 }
 
@@ -60,6 +62,8 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
   const to = clean(request.query.to);
   const limit = positiveInt(request.query.limit, 100, 500);
   const offset = Math.max(0, Number(request.query.offset || 0) || 0);
+
+  const customerFields = await getCustomerFieldDefinitions();
 
   const rows = await sql<any[]>`
     select l.*, l.id::text, l.assigned_to::text, l.call_center_assigned_to::text,
@@ -121,7 +125,7 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
   `;
   for (const row of rows) {
     row.source_name = row.catalog_source_name || sourceLabel(row.source_code || row.source_name);
-    row.completion_percent = calculateLeadCompletion(row);
+    row.completion_percent = calculateLeadCompletion(row, customerFields);
     delete row.catalog_source_name;
   }
   return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset });
@@ -131,9 +135,13 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   const sql = getSql();
   const body = parseBody(request);
   const input = leadPayload(body);
+  const customerFields = await getCustomerFieldDefinitions();
+  input.extraData = sanitizeCustomFieldValues(input.extraData, customerFields);
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
   if (!input.customerName) return response.status(400).json({ ok: false, error: "اسم العميل مطلوب" });
   if (!input.phoneNormalized) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
+  const missingRequired = missingRequiredCustomerFields(input, customerFields);
+  if (missingRequired.length) return response.status(400).json({ ok: false, error: `أكمل الحقول المطلوبة: ${missingRequired.map((field) => field.label).join("، ")}` });
 
   const [duplicate] = await sql<any[]>`select id::text, customer_name from crm.leads where phone_normalized = ${input.phoneNormalized} and is_deleted = false limit 1`;
   if (duplicate) return response.status(409).json({ ok: false, error: "رقم الجوال مسجل بالفعل", duplicate });
@@ -143,7 +151,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   let callCenter = { assignedTo: input.callCenterAssignedTo, assignedName: "" };
   if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
 
-  const completionPercent = calculateLeadCompletion(input);
+  const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
 
   const [row] = await sql<any[]>`
@@ -151,14 +159,14 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
       customer_name, phone, phone_normalized, source_code, source_name, platform_code,
       service_key, department_code, branch_code, status_code, status_label, payment_type,
       car_name, location, age, salary, obligation, salary_bank, car_model, car_type, color,
-      finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note,
+      finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
       assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
       responsible_name_snapshot, call_center_name_snapshot, completion_percent, credit_limit, credit_qualified
     ) values (
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
       ${input.carName || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
-      ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null},
+      ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
       ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
     ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
@@ -200,6 +208,11 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   if (!canEdit) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتعديل هذا العميل" });
 
   const input = leadPayload({ ...before, ...body });
+  const customerFields = await getCustomerFieldDefinitions();
+  input.extraData = {
+    ...((before.extra_data && typeof before.extra_data === "object") ? before.extra_data : {}),
+    ...sanitizeCustomFieldValues(body.customFields ?? body.extraData ?? body.extra_data ?? {}, customerFields),
+  };
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
 
   const departmentChanged = clean(before.department_code) !== input.departmentCode;
@@ -230,6 +243,9 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     }
   }
 
+  const missingRequired = missingRequiredCustomerFields(input, customerFields);
+  if (missingRequired.length) return response.status(400).json({ ok: false, error: `أكمل الحقول المطلوبة: ${missingRequired.map((field) => field.label).join("، ")}` });
+
   let assignedTo = clean(before.assigned_to) || null;
   let assignedName = clean(before.assigned_name || before.responsible_name_snapshot);
   let callCenterAssignedTo = clean(before.call_center_assigned_to) || null;
@@ -251,7 +267,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     }
   }
 
-  const completionPercent = calculateLeadCompletion(input);
+  const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
   const statusChanged = clean(before.status_label) !== input.statusLabel;
   const branchChanged = clean(before.branch_code) !== input.branchCode;
@@ -282,6 +298,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       finance_type=${input.financeType || null},
       follow_up_at=${input.followUpAt},
       notes=${input.notes || null},
+      extra_data=${sql.json(input.extraData)},
       completion_percent=${completionPercent},
       credit_limit=${credit.amount},
       credit_qualified=${credit.qualified},

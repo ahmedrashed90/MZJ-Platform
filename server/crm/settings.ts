@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { randomUUID } from "node:crypto";
 import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { normalizeCustomerFieldOptions } from "../_crm-customer-fields.js";
 
 function stringList(value: unknown) {
   return Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
@@ -13,7 +15,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [statuses, templates, mappings, quality, endpoints, branches, sources, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
+    const [statuses, templates, mappings, quality, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
       sql`
@@ -30,6 +32,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
           (select count(*)::int from crm.manual_lead_requests r where r.source_code=s.code) as request_usage_count
         from core.sources s
         order by s.sort_order,s.name
+      `,
+      sql`
+        select id::text,field_key,label,field_type,sort_order,department_keys,is_active,is_required,
+          include_in_completion,options,is_system,is_locked,created_at,updated_at
+        from crm.customer_field_definitions
+        order by sort_order,label
       `,
       sql`
         select r.*,r.id::text,
@@ -94,6 +102,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       endpoints,
       branches,
       sources,
+      customerFields,
       assignmentRules: rules,
       assignmentLogs,
       assignmentUsers,
@@ -151,6 +160,78 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     await audit(user, "source_saved", "source", code, row);
     return response.status(200).json({ ok: true, row });
+  }
+
+  if (section === "customer_field") {
+    const id = clean(body.id);
+    const requestedKey = clean(body.fieldKey || body.field_key).toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+    if (action === "delete") {
+      const [existing] = await sql<any[]>`select *,id::text from crm.customer_field_definitions where id=${id || null}::uuid or field_key=${requestedKey || null} limit 1`;
+      if (!existing) return response.status(404).json({ ok: false, error: "الحقل غير موجود" });
+      if (existing.is_locked || existing.is_system) return response.status(400).json({ ok: false, error: "هذا حقل أساسي مرتبط بمنطق النظام ولا يمكن حذفه" });
+      const [usage] = await sql<{ count: number }[]>`select count(*)::int as count from crm.leads where coalesce(extra_data,'{}'::jsonb) ? ${existing.field_key}`;
+      if (Number(usage?.count || 0) > 0) {
+        await sql`update crm.customer_field_definitions set is_active=false,include_in_completion=false,updated_by=${user.id}::uuid,updated_at=now() where id=${existing.id}::uuid`;
+        return response.status(200).json({ ok: true, deactivated: true, message: "الحقل مستخدم في بيانات سابقة، لذلك تم إيقافه مع الاحتفاظ بالقيم القديمة" });
+      }
+      await sql`delete from crm.customer_field_definitions where id=${existing.id}::uuid`;
+      await audit(user, "customer_field_deleted", "customer_field", existing.id, { fieldKey: existing.field_key });
+      return response.status(200).json({ ok: true, deleted: true });
+    }
+
+    const label = clean(body.label);
+    const fieldType = clean(body.fieldType || body.field_type) || "text";
+    const departmentKeys = stringList(body.departmentKeys || body.department_keys).filter((key) => ["cash", "finance", "service"].includes(key));
+    const options = normalizeCustomerFieldOptions(body.options);
+    if (!label) return response.status(400).json({ ok: false, error: "اسم الحقل مطلوب" });
+    if (!["text", "phone", "number", "date", "textarea", "select", "status", "source", "department", "transfer"].includes(fieldType)) {
+      return response.status(400).json({ ok: false, error: "نوع الحقل غير مدعوم" });
+    }
+    if (fieldType === "select" && !options.length) return response.status(400).json({ ok: false, error: "أضف اختيارات القائمة قبل الحفظ" });
+
+    let existing: any = null;
+    if (id) {
+      [existing] = await sql<any[]>`select *,id::text from crm.customer_field_definitions where id=${id}::uuid`;
+      if (!existing) return response.status(404).json({ ok: false, error: "الحقل غير موجود" });
+    }
+
+    const generatedKey = requestedKey || `custom_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    if (!existing) {
+      const [duplicate] = await sql<any[]>`select id::text from crm.customer_field_definitions where field_key=${generatedKey} limit 1`;
+      if (duplicate) return response.status(409).json({ ok: false, error: "كود الحقل مستخدم بالفعل" });
+    }
+
+    const fieldKey = existing?.field_key || generatedKey;
+    const locked = existing?.is_locked === true;
+    const isSystem = existing?.is_system === true;
+    const effectiveFieldType = isSystem ? existing.field_type : fieldType;
+    if (!isSystem && !["text", "phone", "number", "date", "textarea", "select"].includes(effectiveFieldType)) {
+      return response.status(400).json({ ok: false, error: "نوع الحقل المخصص غير مدعوم" });
+    }
+    const effectiveDepartments = locked ? (Array.isArray(existing.department_keys) ? existing.department_keys : []) : departmentKeys;
+    const effectiveOptions = effectiveFieldType === "select" ? options : [];
+    if (effectiveFieldType === "select" && !effectiveOptions.length) return response.status(400).json({ ok: false, error: "أضف اختيارات القائمة قبل الحفظ" });
+    const isActive = locked ? true : body.isActive !== false;
+    const isRequired = locked ? existing.is_required === true : body.isRequired === true;
+
+    const [row] = existing
+      ? await sql<any[]>`
+          update crm.customer_field_definitions set
+            label=${label},field_type=${effectiveFieldType},sort_order=${Number(body.sortOrder || 0)},department_keys=${effectiveDepartments},
+            is_active=${isActive},is_required=${isRequired},include_in_completion=${body.includeInCompletion === true},
+            options=${sql.json(effectiveOptions)},updated_by=${user.id}::uuid,updated_at=now()
+          where id=${existing.id}::uuid
+          returning *,id::text
+        `
+      : await sql<any[]>`
+          insert into crm.customer_field_definitions(
+            field_key,label,field_type,sort_order,department_keys,is_active,is_required,include_in_completion,options,is_system,is_locked,created_by,updated_by
+          ) values (
+            ${fieldKey},${label},${effectiveFieldType},${Number(body.sortOrder || 0)},${effectiveDepartments},${isActive},${isRequired},${body.includeInCompletion === true},${sql.json(effectiveOptions)},false,false,${user.id}::uuid,${user.id}::uuid
+          ) returning *,id::text
+        `;
+    await audit(user, "customer_field_saved", "customer_field", row.id, row, existing || undefined);
+    return response.status(200).json({ ok: true, row, message: isSystem ? "تم تحديث إعدادات الحقل الأساسي" : "تم حفظ حقل بيانات العميل" });
   }
 
   if (section === "template") {

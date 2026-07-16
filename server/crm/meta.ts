@@ -8,7 +8,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!user) return;
   const sql = getSql();
 
-  const [statuses, branches, users, sources, quality, endpoints, templates, mappings] = await Promise.all([
+  const [statuses, branches, users, sources, quality, endpoints, templates, mappings, customerFields] = await Promise.all([
     sql`select id, department_code, label, value, sort_order, is_active from crm.dashboard_statuses order by department_code, sort_order`,
     sql`select code, name, is_active, sort_order from core.branches where is_active = true order by sort_order, name`,
     sql`
@@ -34,8 +34,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     sql`select source_code, display_name, send_url, webhook_url, health_url, secret_name, is_active from crm.integration_endpoints order by display_name`,
     sql`select id::text,display_name,content,template_type,provider,departments from crm.message_templates where is_active=true order by display_name`,
     sql`select id::text,department_code,status_value,status_label,template_id::text,message_type from crm.status_template_mappings where is_active=true`,
+    sql`select id::text,field_key,label,field_type,sort_order,department_keys,is_active,is_required,include_in_completion,options,is_system,is_locked from crm.customer_field_definitions where is_active=true order by sort_order,label`,
   ]);
 
   response.setHeader("Cache-Control", "no-store");
-  return response.status(200).json({ ok: true, statuses, branches, users, sources, quality: quality[0] || null, endpoints, templates, mappings });
+  return response.status(200).json({ ok: true, statuses, branches, users, sources, quality: quality[0] || null, endpoints, templates, mappings, customerFields });
 }

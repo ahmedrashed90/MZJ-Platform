@@ -1250,3 +1250,9 @@ button.small-metric { cursor: pointer; }
   .crm-distribution-selector { grid-template-columns: 1fr; }
   .crm-member-picker { grid-template-columns: 1fr; }
 }
+
+.crm-required-mark { color: #b42318; font-weight: 800; }
+.crm-field-help { margin: 4px 0 10px; color: var(--muted); font-size: 11px; }
+.crm-system-field-note { margin-top: 12px; border: 1px solid #e6d9c8; background: #fffaf3; border-radius: 12px; padding: 11px 13px; color: #7a5533; font-size: 12px; }
+.crm-row-inactive { opacity: .58; }
+.crm-customer-fields-settings .crm-form-panel { align-self: start; }

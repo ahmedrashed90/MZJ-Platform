@@ -3,6 +3,7 @@ import type { SessionUser } from "./_auth.js";
 import { requireUser } from "./_auth.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { getSql } from "./_db.js";
+import { calculateLeadCompletion } from "./_crm-customer-fields.js";
 
 export function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -143,31 +144,7 @@ export async function resolveSourceName(sourceCode: string, fallback = "") {
   return clean(row?.name) || sourceLabel(code || fallback);
 }
 
-function filled(value: unknown) {
-  const text = clean(value);
-  return Boolean(text && text !== "-" && text !== "0" && text.toLowerCase() !== "null" && text.toLowerCase() !== "undefined");
-}
-
-/** نفس منطق اكتمال الملف القديم بعد استبعاد الملاحظات بالكامل. */
-export function calculateLeadCompletion(lead: Record<string, any>) {
-  const fields = [
-    lead.customerName ?? lead.customer_name,
-    lead.phone ?? lead.phone_normalized,
-    lead.sourceCode ?? lead.source_code ?? lead.sourceName ?? lead.source_name,
-    lead.statusLabel ?? lead.status_label,
-    lead.serviceKey ?? lead.service_key ?? lead.departmentCode ?? lead.department_code,
-    lead.age,
-    lead.salary,
-    lead.obligation,
-    lead.salaryBank ?? lead.salary_bank,
-    lead.location,
-    lead.carName ?? lead.car_name ?? lead.carType ?? lead.car_type,
-    lead.carModel ?? lead.car_model,
-    lead.color,
-  ];
-  const completed = fields.filter(filled).length;
-  return Math.max(0, Math.min(100, Math.round((completed / fields.length) * 100)));
-}
+export { calculateLeadCompletion };
 
 export function calculateCreditLimit(salaryValue: unknown, obligationValue: unknown, financeTypeValue: unknown) {
   const salary = Number(salaryValue || 0);
