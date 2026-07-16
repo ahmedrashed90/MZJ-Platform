@@ -20,13 +20,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
     select
       l.id::text, l.legacy_id, l.customer_name, l.phone, l.phone_normalized, l.source_code, l.source_name,
       l.platform_code, l.service_key, l.department_code, l.branch_code, l.status_code, l.status_label,
-      l.payment_type, l.car_name, l.location, l.age, l.salary, l.obligation, l.salary_bank,
+      l.payment_type, l.car_name, l.car_category, l.location, l.age, l.salary, l.obligation, l.salary_bank,
       l.car_model, l.car_type, l.color, l.finance_type, l.follow_up_at, l.campaign_name, l.campaign_date,
-      l.notes, l.status_note, l.extra_data, l.completion_percent, l.credit_limit, l.credit_qualified, l.created_at, l.updated_at, l.registered_at,
+      l.notes, l.status_note, l.extra_data, l.completion_percent, l.credit_limit, l.credit_qualified,
+      l.dashboard_unread, l.has_unread_message, l.has_unread_messages, l.message_unread, l.is_unread,
+      l.last_message_direction, l.last_incoming_message_at, l.dashboard_message_read_at,
+      l.created_at, l.updated_at, l.registered_at,
       src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
-      c.id::text as conversation_id, c.channel_code, c.preview_text, c.unread_count, c.last_message_at
+      c.id::text as conversation_id, c.legacy_id as conversation_legacy_id, c.channel_code, c.preview_text,
+      greatest(coalesce(l.unread_count,0),coalesce(c.unread_count,0))::int as unread_count,
+      greatest(l.last_message_at,c.last_message_at) as last_message_at
     from crm.leads l
     left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
@@ -51,8 +56,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       )
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
-      and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})
-    order by coalesce(c.last_message_at, l.updated_at, l.created_at) desc
+      and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})
+    order by coalesce(greatest(l.last_message_at,c.last_message_at), l.updated_at, l.created_at) desc
     limit 1000
   `;
 

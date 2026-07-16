@@ -25,6 +25,7 @@ function leadPayload(body: Record<string, any>) {
     statusCode: clean(body.statusCode ?? body.status_code),
     paymentType: clean(body.paymentType ?? body.payment_type) || (serviceKey === "finance" ? "تمويل" : serviceKey === "service" ? "خدمة عملاء" : "كاش"),
     carName: clean(body.carName ?? body.car_name ?? body.car),
+    carCategory: clean(body.carCategory ?? body.car_category ?? body.vehicleCategory ?? body.vehicle_category ?? body.carTrim ?? body.trim ?? body.variant ?? body.grade),
     location: clean(body.location ?? body.place),
     age: body.age === "" || body.age == null ? null : Number(body.age),
     salary: body.salary === "" || body.salary == null ? null : Number(body.salary),
@@ -69,7 +70,9 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
     select l.*, l.id::text, l.assigned_to::text, l.call_center_assigned_to::text,
       sales.full_name as assigned_name, cc.full_name as call_center_name,
       b.name as branch_name, src.name as catalog_source_name,
-      coalesce(c.id::text, '') as conversation_id, c.channel_code, c.preview_text, c.unread_count, c.last_message_at
+      coalesce(c.id::text, '') as conversation_id, c.legacy_id as conversation_legacy_id, c.channel_code, c.preview_text,
+      greatest(coalesce(l.unread_count,0),coalesce(c.unread_count,0))::int as unread_count,
+      greatest(l.last_message_at,c.last_message_at) as last_message_at
     from crm.leads l
     left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
@@ -85,7 +88,7 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
         or (not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
         or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
       )
-      and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
+      and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
       and (${source || null}::text is null or l.source_code = ${source || null} or l.source_name = ${source || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${department || null}::text is null or l.department_code = ${department || null} or l.service_key = ${department || null})
@@ -110,7 +113,7 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
         or (not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
         or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
       )
-      and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
+      and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
       and (${source || null}::text is null or l.source_code = ${source || null} or l.source_name = ${source || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${department || null}::text is null or l.department_code = ${department || null} or l.service_key = ${department || null})
@@ -158,14 +161,14 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
     insert into crm.leads(
       customer_name, phone, phone_normalized, source_code, source_name, platform_code,
       service_key, department_code, branch_code, status_code, status_label, payment_type,
-      car_name, location, age, salary, obligation, salary_bank, car_model, car_type, color,
+      car_name, car_category, location, age, salary, obligation, salary_bank, car_model, car_type, color,
       finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
       assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
       responsible_name_snapshot, call_center_name_snapshot, completion_percent, credit_limit, credit_qualified
     ) values (
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
-      ${input.carName || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
+      ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
       ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
       ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
@@ -287,6 +290,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       status_label=${input.statusLabel},
       payment_type=${input.paymentType || null},
       car_name=${input.carName || input.carType || null},
+      car_category=${input.carCategory || null},
       location=${input.location || null},
       age=${input.age},
       salary=${input.salary},

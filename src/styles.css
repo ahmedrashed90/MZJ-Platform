@@ -1256,3 +1256,64 @@ button.small-metric { cursor: pointer; }
 .crm-system-field-note { margin-top: 12px; border: 1px solid #e6d9c8; background: #fffaf3; border-radius: 12px; padding: 11px 13px; color: #7a5533; font-size: 12px; }
 .crm-row-inactive { opacity: .58; }
 .crm-customer-fields-settings .crm-form-panel { align-self: start; }
+
+/* CRM reference v27: unread state and finance history differences */
+.crm-unread-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  min-width: 12px;
+  border-radius: 999px;
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22,163,74,.14);
+  align-self: center;
+}
+.crm-unread-status-column > header { border-bottom-color: rgba(22,163,74,.22); }
+.crm-finance-history-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+.crm-finance-history-tabs button {
+  min-height: 39px;
+  padding: 0 17px;
+  border: 1px solid #ead8ce;
+  border-radius: 10px;
+  background: #fff;
+  color: #67463d;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.crm-finance-history-tabs button.active { background: #843c2f; border-color: #843c2f; color: #fff; }
+.crm-difference-filter-panel { grid-template-columns: repeat(2,minmax(0,220px)) auto; }
+.crm-difference-card > header { padding: 15px 17px; border-bottom: 1px solid var(--line); }
+.crm-difference-card > header h2 { margin: 0; font-size: 15px; }
+.crm-difference-card > header p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+.crm-difference-table td:first-child small { display: block; margin-top: 3px; color: var(--muted); font-size: 8px; }
+.crm-difference-table tr.changed { background: #fffaf7; }
+.crm-difference-result { display: inline-flex; align-items: center; gap: 5px; min-width: 98px; font-weight: 800; }
+.crm-difference-result.increase { color: #157a38; }
+.crm-difference-result.decrease { color: #b42318; }
+.crm-difference-result.same { color: var(--muted); }
+.crm-customer-name-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #7d352b;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (max-width: 760px) {
+  .crm-finance-history-tabs { justify-content: flex-start; overflow-x: auto; }
+  .crm-difference-filter-panel { grid-template-columns: 1fr; }
+}

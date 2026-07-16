@@ -1,24 +1,47 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   ChatCircleDots,
   ClockCounterClockwise,
   MagnifyingGlass,
+  Minus,
   NotePencil,
   UsersThree,
   X,
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate, queryString } from "../api";
-import { LeadDrawer } from "../components/LeadDrawer";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta } from "../types";
 
+type DifferenceRow = {
+  value: string;
+  label: string;
+  sort_order: number;
+  from: number;
+  to: number;
+  difference: number;
+};
+
+type DifferenceResponse = {
+  ok: boolean;
+  from: string;
+  to: string;
+  rows: DifferenceRow[];
+  totalFrom: number;
+  totalTo: number;
+  changedStatuses: number;
+};
+
 export function CrmFinanceHistoryPage() {
+  const [activeTab, setActiveTab] = useState<"history" | "differences">("history");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [filters, setFilters] = useState({ from: "", to: "", status: "", q: "" });
+  const [differenceDates, setDifferenceDates] = useState({ from: "", to: "" });
+  const [differences, setDifferences] = useState<DifferenceResponse | null>(null);
   const [rows, setRows] = useState<CrmLead[]>([]);
   const [selected, setSelected] = useState<{ lead: CrmLead; events: any[] } | null>(null);
-  const [conversationLead, setConversationLead] = useState<CrmLead | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -27,12 +50,23 @@ export function CrmFinanceHistoryPage() {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== "history") return;
     const timer = window.setTimeout(() => void loadRows(), 180);
     return () => window.clearTimeout(timer);
-  }, [filters]);
+  }, [activeTab, filters]);
+
+  useEffect(() => {
+    if (activeTab !== "differences" || !differenceDates.from || !differenceDates.to) {
+      setDifferences(null);
+      return;
+    }
+    const timer = window.setTimeout(() => void loadDifferences(), 180);
+    return () => window.clearTimeout(timer);
+  }, [activeTab, differenceDates]);
 
   async function loadRows() {
     setLoading(true);
+    setNotice("");
     try {
       const result = await crmFetch<{ ok: boolean; rows: CrmLead[] }>(`/api/crm/history${queryString(filters)}`);
       setRows(result.rows || []);
@@ -43,13 +77,33 @@ export function CrmFinanceHistoryPage() {
     }
   }
 
-  async function open(row: CrmLead) {
+  async function loadDifferences() {
+    setLoading(true);
+    setNotice("");
+    try {
+      const result = await crmFetch<DifferenceResponse>(`/api/crm/history${queryString({ mode: "differences", ...differenceDates })}`);
+      setDifferences(result);
+    } catch (error) {
+      setDifferences(null);
+      setNotice(error instanceof Error ? error.message : "تعذر حساب فروقات الحالات");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openHistory(row: CrmLead) {
     try {
       const result = await crmFetch<{ ok: boolean; lead: CrmLead; events: any[] }>(`/api/crm/history?leadId=${encodeURIComponent(row.id)}`);
       setSelected({ lead: result.lead, events: result.events || [] });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل سجل العميل");
     }
+  }
+
+  function openConversationInNewTab(row: CrmLead) {
+    const url = `/crm?lead=${encodeURIComponent(row.id)}&department=finance`;
+    const tab = window.open(url, "_blank", "noopener,noreferrer");
+    tab?.focus();
   }
 
   const statuses = useMemo(() => [...new Set((meta?.statuses || [])
@@ -61,6 +115,7 @@ export function CrmFinanceHistoryPage() {
   const statusChanges = selected?.events.filter((event) => event.event_type === "status_change").length || 0;
   const notesCount = selected?.events.filter((event) => Boolean(event.note)).length || 0;
   const currentStatuses = new Set(rows.map((row) => row.status_label || "عميل جديد")).size;
+  const differenceDatesInvalid = Boolean(differenceDates.from && differenceDates.to && differenceDates.from > differenceDates.to);
 
   return (
     <div className="crm-page crm-finance-history-page">
@@ -68,44 +123,100 @@ export function CrmFinanceHistoryPage() {
         <div><h1>سجل عملاء التمويل</h1><p>سجل كامل من لحظة دخول العميل، مع كل تغيير حالة والمستخدم والتاريخ والملاحظات.</p></div>
       </header>
 
-      <div className="crm-filter-panel history">
-        <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
-        <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
-        <label><span>الحالة الحالية</span><select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="">كل الحالات الحالية</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-        <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="اسم العميل أو الجوال أو الحالة أو الموظف" /></label>
-        <button className="crm-secondary-button" onClick={() => setFilters({ from: "", to: "", status: "", q: "" })}>مسح الفلاتر</button>
+      <div className="crm-inner-page-tabs crm-finance-history-tabs">
+        <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}>سجل العملاء</button>
+        <button type="button" className={activeTab === "differences" ? "active" : ""} onClick={() => setActiveTab("differences")}>فروقات حالات العملاء</button>
       </div>
 
-      <section className="crm-history-stats crm-history-stats-wide">
-        <article><UsersThree size={24} /><span>العملاء الظاهرون</span><strong>{rows.length.toLocaleString("ar-SA")}</strong></article>
-        <article><ClockCounterClockwise size={24} /><span>إجمالي الحركات</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
-        <article><ArrowRight size={24} /><span>الحالات الحالية</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
-      </section>
+      {activeTab === "history" ? (
+        <>
+          <div className="crm-filter-panel history">
+            <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
+            <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
+            <label><span>الحالة الحالية</span><select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="">كل الحالات الحالية</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+            <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="اسم العميل أو الجوال أو الحالة أو الموظف" /></label>
+            <button className="crm-secondary-button" onClick={() => setFilters({ from: "", to: "", status: "", q: "" })}>مسح الفلاتر</button>
+          </div>
+
+          <section className="crm-history-stats crm-history-stats-wide">
+            <article><UsersThree size={24} /><span>العملاء الظاهرون</span><strong>{rows.length.toLocaleString("ar-SA")}</strong></article>
+            <article><ClockCounterClockwise size={24} /><span>إجمالي الحركات</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
+            <article><ArrowRight size={24} /><span>الحالات الحالية</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
+          </section>
+
+          <div className="crm-finance-directory">
+            {rows.map((row: any) => (
+              <article key={row.id} className="crm-finance-record">
+                <div className="crm-finance-record-open" role="button" tabIndex={0} onClick={() => void openHistory(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openHistory(row); } }}>
+                  <div className="crm-finance-record-main">
+                    <button type="button" className="crm-customer-name-link" onClick={(event) => { event.stopPropagation(); openConversationInNewTab(row); }}>{row.customer_name || "عميل"}</button>
+                    <span>{row.phone || row.phone_normalized || "بدون رقم جوال"}</span>
+                    <small>آخر حركة: {formatDate(row.last_event_at || row.updated_at)}</small>
+                  </div>
+                  <div className="crm-finance-record-status"><b>{row.status_label || "عميل جديد"}</b><span>{row.events_count || 0} حركة</span></div>
+                  <div className="crm-finance-record-meta">
+                    <span>مسؤول المبيعات: <b>{row.assigned_name || "غير موزع"}</b></span>
+                    <span>الكول سنتر: <b>{row.call_center_name || "غير موزع"}</b></span>
+                    <span>المصدر: <b>{sourceLabel(row.source_code, row.source_name)}</b></span>
+                  </div>
+                </div>
+                <button type="button" className="crm-table-button crm-open-conversation-button" onClick={() => openConversationInNewTab(row)}><ChatCircleDots size={18} />فتح المحادثة</button>
+              </article>
+            ))}
+            {!loading && !rows.length ? <div className="crm-empty-state panel">لا يوجد عملاء مطابقون للفلاتر المحددة</div> : null}
+            {loading ? <div className="crm-loading-panel">جاري تحميل سجل العملاء...</div> : null}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="crm-filter-panel crm-difference-filter-panel">
+            <label><span>من تاريخ</span><input type="date" value={differenceDates.from} onChange={(event) => setDifferenceDates((current) => ({ ...current, from: event.target.value }))} /></label>
+            <label><span>إلى تاريخ</span><input type="date" value={differenceDates.to} onChange={(event) => setDifferenceDates((current) => ({ ...current, to: event.target.value }))} /></label>
+            <button className="crm-secondary-button" type="button" onClick={() => setDifferenceDates({ from: "", to: "" })}>مسح التاريخ</button>
+          </div>
+
+          {!differenceDates.from || !differenceDates.to ? <div className="crm-empty-state panel">حدد تاريخ البداية وتاريخ النهاية لعرض فروقات أعداد العملاء.</div> : null}
+          {differenceDatesInvalid ? <div className="crm-alert error">تاريخ البداية يجب أن يكون قبل تاريخ النهاية أو مساويًا له.</div> : null}
+          {loading ? <div className="crm-loading-panel">جاري حساب فروقات الحالات...</div> : null}
+
+          {!loading && differences && !differenceDatesInvalid ? (
+            <>
+              <section className="crm-history-stats crm-history-stats-wide crm-difference-stats">
+                <article><UsersThree size={24} /><span>إجمالي العملاء في تاريخ البداية</span><strong>{differences.totalFrom.toLocaleString("ar-SA")}</strong></article>
+                <article><UsersThree size={24} /><span>إجمالي العملاء في تاريخ النهاية</span><strong>{differences.totalTo.toLocaleString("ar-SA")}</strong></article>
+                <article><ClockCounterClockwise size={24} /><span>الحالات التي تغير عددها</span><strong>{differences.changedStatuses.toLocaleString("ar-SA")}</strong></article>
+              </section>
+
+              <section className="crm-panel crm-difference-card">
+                <header><div><h2>فروقات حالات العملاء</h2><p>مقارنة آخر حالة وصل إليها كل عميل حتى نهاية يوم {differences.from} مع نهاية يوم {differences.to}.</p></div></header>
+                <div className="crm-table-shell">
+                  <table className="crm-table crm-difference-table">
+                    <thead><tr><th>الحالة</th><th>عدد يوم البداية</th><th>عدد يوم النهاية</th><th>الفرق</th><th>النتيجة</th></tr></thead>
+                    <tbody>
+                      {differences.rows.map((row) => (
+                        <tr key={row.value} className={row.difference !== 0 ? "changed" : ""}>
+                          <td><strong>{row.label}</strong>{row.label !== row.value ? <small>{row.value}</small> : null}</td>
+                          <td>{row.from.toLocaleString("ar-SA")}</td>
+                          <td>{row.to.toLocaleString("ar-SA")}</td>
+                          <td><strong>{row.difference > 0 ? `+${row.difference}` : row.difference.toLocaleString("ar-SA")}</strong></td>
+                          <td>
+                            <span className={`crm-difference-result ${row.difference > 0 ? "increase" : row.difference < 0 ? "decrease" : "same"}`}>
+                              {row.difference > 0 ? <ArrowUp size={16} /> : row.difference < 0 ? <ArrowDown size={16} /> : <Minus size={16} />}
+                              {row.difference > 0 ? `زيادة ${Math.abs(row.difference).toLocaleString("ar-SA")}` : row.difference < 0 ? `انخفاض ${Math.abs(row.difference).toLocaleString("ar-SA")}` : "بدون تغيير"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          ) : null}
+        </>
+      )}
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
-
-      <div className="crm-finance-directory">
-        {rows.map((row: any) => (
-          <article key={row.id} className="crm-finance-record">
-            <button type="button" className="crm-finance-record-open" onClick={() => void open(row)}>
-              <div className="crm-finance-record-main">
-                <strong>{row.customer_name || "عميل"}</strong>
-                <span>{row.phone || row.phone_normalized || "بدون رقم جوال"}</span>
-                <small>آخر حركة: {formatDate(row.last_event_at || row.updated_at)}</small>
-              </div>
-              <div className="crm-finance-record-status"><b>{row.status_label || "عميل جديد"}</b><span>{row.events_count || 0} حركة</span></div>
-              <div className="crm-finance-record-meta">
-                <span>مسؤول المبيعات: <b>{row.assigned_name || "غير موزع"}</b></span>
-                <span>الكول سنتر: <b>{row.call_center_name || "غير موزع"}</b></span>
-                <span>المصدر: <b>{sourceLabel(row.source_code, row.source_name)}</b></span>
-              </div>
-            </button>
-            <button type="button" className="crm-table-button crm-open-conversation-button" onClick={() => setConversationLead(row)}><ChatCircleDots size={18} />فتح المحادثة</button>
-          </article>
-        ))}
-        {!loading && !rows.length ? <div className="crm-empty-state panel">لا يوجد عملاء مطابقون للفلاتر المحددة</div> : null}
-        {loading ? <div className="crm-loading-panel">جاري تحميل سجل العملاء...</div> : null}
-      </div>
 
       {selected ? (
         <div className="crm-modal-backdrop" onMouseDown={() => setSelected(null)}>
@@ -139,20 +250,10 @@ export function CrmFinanceHistoryPage() {
               ))}
               {!selected.events.length ? <div className="crm-empty-state">لا توجد حركات مسجلة</div> : null}
             </div>
-            <div className="crm-modal-actions"><button className="crm-primary-button" onClick={() => { setConversationLead(selected.lead); setSelected(null); }}><ChatCircleDots size={18} />فتح المحادثة</button></div>
+            <div className="crm-modal-actions"><button className="crm-primary-button" onClick={() => openConversationInNewTab(selected.lead)}><ChatCircleDots size={18} />فتح المحادثة</button></div>
           </div>
         </div>
       ) : null}
-
-      <LeadDrawer
-        lead={conversationLead}
-        meta={meta}
-        onClose={() => setConversationLead(null)}
-        onSaved={(updated) => {
-          setConversationLead((current) => current ? { ...current, ...updated } : current);
-          setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row));
-        }}
-      />
     </div>
   );
 }

@@ -14,6 +14,17 @@ alter table crm.leads add column if not exists obligation numeric(14,2);
 alter table crm.leads add column if not exists salary_bank text;
 alter table crm.leads add column if not exists car_model text;
 alter table crm.leads add column if not exists car_type text;
+alter table crm.leads add column if not exists car_category text;
+alter table crm.leads add column if not exists unread_count integer not null default 0;
+alter table crm.leads add column if not exists dashboard_unread boolean not null default false;
+alter table crm.leads add column if not exists has_unread_message boolean not null default false;
+alter table crm.leads add column if not exists has_unread_messages boolean not null default false;
+alter table crm.leads add column if not exists message_unread boolean not null default false;
+alter table crm.leads add column if not exists is_unread boolean not null default false;
+alter table crm.leads add column if not exists last_message_direction text;
+alter table crm.leads add column if not exists last_incoming_message_at timestamptz;
+alter table crm.leads add column if not exists last_message_at timestamptz;
+alter table crm.leads add column if not exists dashboard_message_read_at timestamptz;
 alter table crm.leads add column if not exists color text;
 alter table crm.leads add column if not exists finance_type text;
 alter table crm.leads add column if not exists follow_up_at timestamptz;
@@ -486,6 +497,30 @@ on conflict (field_key) do nothing;
 insert into core.schema_migrations(version) values ('crm-customer-fields-v1.6') on conflict (version) do nothing;
 `;
 
+
+const CRM_REFERENCE_V17_SQL = String.raw`
+alter table crm.leads add column if not exists car_category text;
+alter table crm.leads add column if not exists unread_count integer not null default 0;
+alter table crm.leads add column if not exists dashboard_unread boolean not null default false;
+alter table crm.leads add column if not exists has_unread_message boolean not null default false;
+alter table crm.leads add column if not exists has_unread_messages boolean not null default false;
+alter table crm.leads add column if not exists message_unread boolean not null default false;
+alter table crm.leads add column if not exists is_unread boolean not null default false;
+alter table crm.leads add column if not exists last_message_direction text;
+alter table crm.leads add column if not exists last_incoming_message_at timestamptz;
+alter table crm.leads add column if not exists last_message_at timestamptz;
+alter table crm.leads add column if not exists dashboard_message_read_at timestamptz;
+create index if not exists crm_leads_dashboard_unread_idx on crm.leads(department_code,dashboard_unread,last_incoming_message_at desc) where is_deleted=false;
+
+insert into crm.customer_field_definitions(
+  field_key,label,field_type,sort_order,department_keys,is_active,is_required,include_in_completion,options,is_system,is_locked
+) values ('car_category','الفئة','text',135,'{}',true,false,true,'[]'::jsonb,true,false)
+on conflict (field_key) do update set
+  label='الفئة',field_type='text',department_keys='{}',is_active=true,include_in_completion=true,is_system=true,updated_at=now();
+
+insert into core.schema_migrations(version) values ('crm-reference-v27-v1.7') on conflict (version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -508,6 +543,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-customer-fields-v1.6'
       `;
       if (!customerFieldsMigration) await runSqlScript(CRM_CUSTOMER_FIELDS_V16_SQL);
+      const [referenceV17Migration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-reference-v27-v1.7'
+      `;
+      if (!referenceV17Migration) await runSqlScript(CRM_REFERENCE_V17_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

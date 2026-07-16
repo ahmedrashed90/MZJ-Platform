@@ -29,6 +29,7 @@ const FALLBACK_COMPLETION_KEYS = [
   "salary_bank",
   "location",
   "car_type",
+  "car_category",
   "car_model",
   "color",
 ];
@@ -101,6 +102,7 @@ export function customerFieldValue(lead: Record<string, any>, fieldKey: string) 
     salary_bank: lead.salaryBank ?? lead.salary_bank,
     location: lead.location,
     car_type: lead.carType ?? lead.car_type ?? lead.carName ?? lead.car_name,
+    car_category: lead.carCategory ?? lead.car_category,
     car_model: lead.carModel ?? lead.car_model,
     color: lead.color,
     finance_type: lead.financeType ?? lead.finance_type,

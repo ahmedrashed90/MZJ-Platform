@@ -53,6 +53,7 @@ const fallbackFields: CrmCustomerField[] = [
   { id: "salary_bank", field_key: "salary_bank", label: "نزول الراتب على أي بنك", field_type: "text", sort_order: 110, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
   { id: "location", field_key: "location", label: "المكان", field_type: "text", sort_order: 120, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
   { id: "car_type", field_key: "car_type", label: "نوع السيارة", field_type: "text", sort_order: 130, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
+  { id: "car_category", field_key: "car_category", label: "الفئة", field_type: "text", sort_order: 135, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
   { id: "car_model", field_key: "car_model", label: "الموديل", field_type: "text", sort_order: 140, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
   { id: "color", field_key: "color", label: "اللون", field_type: "text", sort_order: 150, department_keys: [], is_active: true, is_required: false, include_in_completion: true, options: [], is_system: true, is_locked: false },
   { id: "finance_type", field_key: "finance_type", label: "نوع التمويل", field_type: "select", sort_order: 160, department_keys: ["finance"], is_active: true, is_required: false, include_in_completion: false, options: fallbackFinanceOptions, is_system: true, is_locked: true },
@@ -104,6 +105,7 @@ function leadCoreValues(lead: CrmLead, serviceKey: ServiceKey) {
     salary_bank: value(lead.salary_bank),
     location: value(lead.location),
     car_type: value(lead.car_type || lead.car_name),
+    car_category: value(lead.car_category),
     car_model: value(lead.car_model),
     color: value(lead.color),
     finance_type: value(lead.finance_type) || (serviceKey === "finance" ? "general" : ""),
@@ -145,6 +147,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setMessageText("");
     setNotice("");
     void loadConversation(lead.id, lead.conversation_id || "");
+    const readLead = {
+      ...lead,
+      unread_count: 0,
+      dashboard_unread: false,
+      has_unread_message: false,
+      has_unread_messages: false,
+      message_unread: false,
+      is_unread: false,
+      dashboard_message_read_at: new Date().toISOString(),
+    };
+    onSaved(readLead);
   }, [lead?.id]);
 
   async function loadConversation(leadId: string, preferredId = "") {
@@ -273,6 +286,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         salaryBank: activeForm.values.salary_bank,
         location: activeForm.values.location,
         carType: activeForm.values.car_type,
+        carCategory: activeForm.values.car_category,
         carName: activeForm.values.car_type,
         carModel: activeForm.values.car_model,
         color: activeForm.values.color,

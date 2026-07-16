@@ -11,6 +11,7 @@ import {
   resolveSourceName,
 } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
+import { markCrmLeadUnread } from "./_crm-unread-state.js";
 import { getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
 
 function first(...values: unknown[]) {
@@ -80,6 +81,20 @@ function attachmentData(payload: any) {
     mediaId,
     label: labels[type] || (hasAttachment ? fileName || "مرفق" : ""),
   };
+}
+
+function inboundMessageTime(payload: any) {
+  const raw = payload.createdAt ?? payload.created_at ?? payload.receivedAt ?? payload.received_at
+    ?? payload.timestamp ?? payload.messageTimestamp ?? payload.message_timestamp ?? whatsappMessage(payload)?.timestamp;
+  if (raw == null || raw === "") return new Date().toISOString();
+  if (typeof raw === "number") return new Date(raw < 1e12 ? raw * 1000 : raw).toISOString();
+  const text = String(raw).trim();
+  if (/^\d+$/.test(text)) {
+    const number = Number(text);
+    return new Date(number < 1e12 ? number * 1000 : number).toISOString();
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString();
 }
 
 function messageText(payload: any, attachment: ReturnType<typeof attachmentData>) {
@@ -178,8 +193,10 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const attachment = attachmentData(payload);
   const text = messageText(payload, attachment);
   const direction = first(payload.direction, payload.messageDirection, payload.message_direction, "in").toLowerCase() === "out" ? "out" : "in";
+  const messageAt = text || attachment.hasAttachment ? inboundMessageTime(payload) : null;
   const branchRequested = first(payload.branchId, payload.branch_id, payload.leadBranchId, payload.branchCode, payload.branch);
   const createLead = shouldCreateLead(routeSource, payload, serviceKey, data.phoneNormalized);
+  const incomingCarCategory = first(payload.carCategory, payload.car_category, payload.vehicleCategory, payload.vehicle_category, payload.carTrim, payload.trim, payload.variant, payload.grade);
 
   let lead: any = null;
   let assignment: any = null;
@@ -203,17 +220,18 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       const obligation = first(payload.obligation, payload.obligations, payload.commitment, payload.liability) ? Number(first(payload.obligation, payload.obligations, payload.commitment, payload.liability)) : null;
       const salaryBank = first(payload.salaryBank, payload.salary_bank, payload.bank);
       const carName = first(payload.leadCar, payload.car, payload.carName, payload.vehicleName);
+      const carCategory = incomingCarCategory;
       const carModel = first(payload.carModel, payload.model);
       const carType = first(payload.carType, payload.vehicleType);
       const color = first(payload.color, payload.carColor);
       const financeType = first(payload.financeType, payload.finance_type);
       const location = first(payload.leadLocation, payload.location, payload.city);
-      const completionPercent = calculateLeadCompletion({ customerName: data.name, phone: data.phoneNormalized, sourceCode: source, statusLabel, serviceKey: serviceKey || "cash", age, salary, obligation, salaryBank, location, carName, carModel, color }, customerFields);
+      const completionPercent = calculateLeadCompletion({ customerName: data.name, phone: data.phoneNormalized, sourceCode: source, statusLabel, serviceKey: serviceKey || "cash", age, salary, obligation, salaryBank, location, carName, carCategory, carModel, color }, customerFields);
       const credit = calculateCreditLimit(salary, obligation, financeType);
       const [created] = await sql<any[]>`
         insert into crm.leads(
           legacy_id, customer_name, phone, phone_normalized, source_code, source_name, platform_code,
-          service_key, department_code, branch_code, status_label, payment_type, car_name, location,
+          service_key, department_code, branch_code, status_label, payment_type, car_name, car_category, location,
           age, salary, obligation, salary_bank, car_model, car_type, color, finance_type,
           assigned_to, call_center_assigned_to, registered_at, responsible_name_snapshot,
           call_center_name_snapshot, source_history, extra_data, completion_percent, credit_limit, credit_qualified
@@ -222,7 +240,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
           ${source}, ${sourceName}, ${source}, ${serviceKey || "cash"}, ${departmentCode},
           ${assignment.branchCode || branchRequested || null}, ${statusLabel},
           ${first(payload.leadPayment, payload.payment) || ((serviceKey || "cash") === "finance" ? "تمويل" : (serviceKey || "cash") === "service" ? "خدمة عملاء" : "كاش")},
-          ${carName || null},
+          ${carName || null}, ${carCategory || null},
           ${location || null},
           ${age}, ${salary}, ${obligation}, ${salaryBank || null}, ${carModel || null}, ${carType || null}, ${color || null}, ${financeType || null},
           ${assignment.assignedTo}::uuid, ${callCenter?.assignedTo || null}::uuid, now(),
@@ -240,12 +258,15 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       `;
     } else {
       const historyItem = { source, at: new Date().toISOString() };
+      const completionPercent = calculateLeadCompletion({ ...lead, carCategory: incomingCarCategory || lead.car_category }, customerFields);
       await sql`
         update crm.leads set
           source_history=case
             when coalesce(source_history,'[]'::jsonb) @> ${sql.json([{ source }])}::jsonb then coalesce(source_history,'[]'::jsonb)
             else coalesce(source_history,'[]'::jsonb) || ${sql.json([historyItem])}::jsonb
           end,
+          car_category=coalesce(nullif(${incomingCarCategory},''),car_category),
+          completion_percent=${completionPercent},
           extra_data=coalesce(extra_data,'{}'::jsonb) || ${sql.json({ lastIntegrationEventId: eventId, lastSource: source, routeSource })}::jsonb,
           updated_at=now()
         where id=${lead.id}::uuid
@@ -265,8 +286,8 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
           service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,metadata
         ) values (
           ${data.conversationId},${lead?.id || null}::uuid,${source},${data.name},${data.participant || null},'open',
-          ${text || null},${direction === 'in' && (text || attachment.hasAttachment) ? 1 : 0},
-          ${text || attachment.hasAttachment ? new Date().toISOString() : null},${serviceKey || lead?.service_key || null},
+          ${text || null},0,
+          ${direction === 'out' ? messageAt : null},${serviceKey || lead?.service_key || null},
           ${lead?.department_code || null},${lead?.branch_code || null},${lead?.assigned_to || null}::uuid,
           ${lead?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${data.pageId || null},
           ${sql.json({ eventId, routeSource })}
@@ -279,8 +300,11 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
           lead_id=coalesce(${lead?.id || null}::uuid,lead_id),
           customer_name=coalesce(nullif(${data.name},''),customer_name),
           preview_text=coalesce(nullif(${text},''),preview_text),
-          unread_count=unread_count+${direction === 'in' && (text || attachment.hasAttachment) ? 1 : 0},
-          last_message_at=case when ${Boolean(text || attachment.hasAttachment)} then now() else last_message_at end,
+          unread_count=unread_count,
+          last_message_at=case
+            when ${direction === 'out' && Boolean(messageAt)} then greatest(coalesce(last_message_at,'epoch'::timestamptz),${messageAt}::timestamptz)
+            else last_message_at
+          end,
           service_key=coalesce(nullif(${serviceKey},''),service_key),
           department_code=coalesce(${lead?.department_code || null},department_code),
           branch_code=coalesce(${lead?.branch_code || null},branch_code),
@@ -318,6 +342,19 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         returning *, id::text
       `;
     }
+  }
+
+  if (lead?.id && direction === "in" && (text || attachment.hasAttachment)) {
+    const incomingAt = messageAt || inboundMessageTime(payload);
+    const unreadMessageKey = first(payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
+    await markCrmLeadUnread(sql, {
+      leadId: lead.id,
+      conversationId: conversation?.id || data.conversationId,
+      createdAt: incomingAt,
+      messageId: unreadMessageKey,
+      messagePath: "",
+      messageKey: unreadMessageKey,
+    });
   }
 
   await sql`

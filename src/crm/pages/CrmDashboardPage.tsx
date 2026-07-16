@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ArrowClockwise,
   ChatCircleDots,
@@ -10,6 +11,13 @@ import {
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate, queryString } from "../api";
 import { LeadDrawer } from "../components/LeadDrawer";
+import {
+  crmTimestampMs,
+  leadHasUnreadMessage,
+  messageMatchesLead,
+  subscribeToLegacyIncomingMessages,
+  type LegacyIncomingMessage,
+} from "../firestoreUnread";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta, CrmStatus } from "../types";
 
@@ -23,9 +31,44 @@ function leadStatus(lead: CrmLead) {
   return String(lead.status_label || lead.status_code || "عميل جديد").trim();
 }
 
+function unreadPatch(lead: CrmLead, message: LegacyIncomingMessage): CrmLead {
+  const currentIncomingAt = crmTimestampMs(lead.last_incoming_message_at || lead.last_message_at);
+  const extra = lead.extra_data && typeof lead.extra_data === "object" ? lead.extra_data : {};
+  const alreadyStored = [extra.lastUnreadMessageKey, extra.lastFirestoreMessageId].map((value) => String(value || "")).includes(message.messageId);
+  const isNewMessage = !alreadyStored && message.createdAtMs >= currentIncomingAt;
+  return {
+    ...lead,
+    unread_count: isNewMessage ? Number(lead.unread_count || 0) + 1 : Math.max(1, Number(lead.unread_count || 0)),
+    dashboard_unread: true,
+    has_unread_message: true,
+    has_unread_messages: true,
+    message_unread: true,
+    is_unread: true,
+    last_message_direction: "in",
+    last_incoming_message_at: message.createdAt,
+    last_message_at: message.createdAt,
+  };
+}
+
+function readPatch(lead: CrmLead): CrmLead {
+  return {
+    ...lead,
+    unread_count: 0,
+    dashboard_unread: false,
+    has_unread_message: false,
+    has_unread_messages: false,
+    message_unread: false,
+    is_unread: false,
+    dashboard_message_read_at: new Date().toISOString(),
+  };
+}
+
 export function CrmDashboardPage() {
+  const [searchParams] = useSearchParams();
+  const requestedLeadId = searchParams.get("lead") || "";
+  const requestedDepartment = searchParams.get("department") || "";
   const [meta, setMeta] = useState<CrmMeta | null>(null);
-  const [department, setDepartment] = useState("cash");
+  const [department, setDepartment] = useState(() => departments.some((item) => item.key === requestedDepartment) ? requestedDepartment : "cash");
   const [q, setQ] = useState("");
   const [branch, setBranch] = useState("");
   const [statuses, setStatuses] = useState<CrmStatus[]>([]);
@@ -33,12 +76,33 @@ export function CrmDashboardPage() {
   const [selected, setSelected] = useState<CrmLead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const leadsRef = useRef<CrmLead[]>([]);
+  const selectedRef = useRef<CrmLead | null>(null);
+  const openedRequestedLead = useRef("");
 
+  useEffect(() => { leadsRef.current = leads; }, [leads]);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { void loadMeta(); }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void loadDashboard(), 180);
     return () => window.clearTimeout(timer);
   }, [department, q, branch]);
+
+  useEffect(() => {
+    if (!requestedLeadId || loading || openedRequestedLead.current === requestedLeadId) return;
+    const requested = leads.find((lead) => lead.id === requestedLeadId || lead.legacy_id === requestedLeadId || lead.conversation_id === requestedLeadId);
+    if (!requested) return;
+    openedRequestedLead.current = requestedLeadId;
+    openLead(requested);
+  }, [requestedLeadId, loading, leads]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToLegacyIncomingMessages(
+      (message) => void handleIncomingMessage(message),
+      (failure) => console.warn("CRM Firestore messages listener stopped", failure),
+    );
+    return unsubscribe;
+  }, []);
 
   async function loadMeta() {
     try {
@@ -66,17 +130,109 @@ export function CrmDashboardPage() {
     }
   }
 
-  const groups = useMemo(() => statuses
-    .filter((status) => status.is_active !== false)
-    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
-    .map((status) => ({
-      ...status,
-      leads: leads.filter((lead) => leadStatus(lead) === String(status.value || status.label).trim()),
-    })), [statuses, leads]);
+  async function persistUnread(lead: CrmLead, message: LegacyIncomingMessage) {
+    await crmFetch("/api/crm/unread", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "mark_unread",
+        leadId: lead.id,
+        conversationId: message.conversationId,
+        phone: lead.phone_normalized || lead.phone || message.phone,
+        messageId: message.messageId,
+        messagePath: message.messagePath,
+        createdAt: message.createdAt,
+      }),
+    });
+  }
+
+  async function handleIncomingMessage(message: LegacyIncomingMessage) {
+    const matched = leadsRef.current.find((lead) => messageMatchesLead(lead, message));
+    if (!matched) {
+      try {
+        await crmFetch("/api/crm/unread", {
+          method: "POST",
+          body: JSON.stringify({
+            action: "mark_unread",
+            conversationId: message.conversationId,
+            phone: message.phone,
+            messageId: message.messageId,
+            messagePath: message.messagePath,
+            createdAt: message.createdAt,
+          }),
+        });
+      } catch {
+        // The message can belong to another user's scope or to a lead outside the current filtered board.
+      }
+      return;
+    }
+    const readAt = crmTimestampMs(matched.dashboard_message_read_at);
+    if (message.createdAtMs <= readAt) return;
+    if (selectedRef.current?.id === matched.id) {
+      await markLeadRead(matched, false);
+      return;
+    }
+    const patched = unreadPatch(matched, message);
+    setLeads((current) => current.map((lead) => lead.id === matched.id ? patched : lead));
+    setSelected((current) => current?.id === matched.id ? patched : current);
+    try {
+      await persistUnread(matched, message);
+    } catch (failure) {
+      console.warn("تعذر حفظ حالة الرسالة غير المقروءة", failure);
+    }
+  }
+
+  async function markLeadRead(lead: CrmLead, updateDrawer = true) {
+    const patched = readPatch(lead);
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
+    if (updateDrawer) setSelected(patched);
+    try {
+      await crmFetch("/api/crm/unread", {
+        method: "POST",
+        body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
+      });
+    } catch (failure) {
+      console.warn("تعذر حفظ قراءة محادثة العميل", failure);
+    }
+  }
+
+  function openLead(lead: CrmLead) {
+    const patched = readPatch(lead);
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
+    setSelected(patched);
+  }
+
+  const groups = useMemo(() => {
+    const originalOrder = new Map(leads.map((lead, index) => [lead.id, index]));
+    const byUnreadFirst = (left: CrmLead, right: CrmLead) => {
+      const unreadDifference = Number(leadHasUnreadMessage(right)) - Number(leadHasUnreadMessage(left));
+      return unreadDifference || Number(originalOrder.get(left.id) || 0) - Number(originalOrder.get(right.id) || 0);
+    };
+    const statusGroups = statuses
+      .filter((status) => status.is_active !== false)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+      .map((status) => ({
+        ...status,
+        unread_messages: false,
+        leads: leads.filter((lead) => leadStatus(lead) === String(status.value || status.label).trim()).sort(byUnreadFirst),
+      }));
+    return [
+      ...statusGroups,
+      {
+        id: `${department}-unread-messages`,
+        department_code: department,
+        label: "الرسائل غير المقروءة",
+        value: "__unread_messages__",
+        sort_order: Number.MAX_SAFE_INTEGER,
+        is_active: true,
+        unread_messages: true,
+        leads: leads.filter(leadHasUnreadMessage).sort(byUnreadFirst),
+      },
+    ];
+  }, [statuses, leads, department]);
 
   const summary = useMemo(() => {
     const newCount = leads.filter((lead) => leadStatus(lead) === "عميل جديد").length;
-    const unread = leads.reduce((sum, lead) => sum + Number(lead.unread_count || 0), 0);
+    const unread = leads.reduce((sum, lead) => sum + Math.max(Number(lead.unread_count || 0), leadHasUnreadMessage(lead) ? 1 : 0), 0);
     const assigned = leads.filter((lead) => Boolean(lead.assigned_to || lead.assigned_name)).length;
     const completed = leads.filter((lead) => ["تم البيع", "تم الانتهاء", "تم الإنتهاء - إنشاء طلب البيع", "تم الانتهاء - إنشاء طلب البيع"].includes(leadStatus(lead))).length;
     return { total: leads.length, newCount, unread, assigned, completed };
@@ -137,7 +293,7 @@ export function CrmDashboardPage() {
       {!loading ? (
         <div className="crm-board crm-board-five">
           {groups.map((group) => (
-            <section className="crm-status-column" key={group.id}>
+            <section className={`crm-status-column ${group.unread_messages ? "crm-unread-status-column" : ""}`} key={group.id}>
               <header>
                 <div><h2>{group.label}</h2></div>
                 <strong>{group.leads.length.toLocaleString("ar-SA")}</strong>
@@ -148,7 +304,7 @@ export function CrmDashboardPage() {
                     type="button"
                     key={lead.id}
                     className={`crm-lead-card ${leadStatus(lead).includes("غير مؤهل") ? "danger" : ""}`}
-                    onClick={() => setSelected(lead)}
+                    onClick={() => openLead(lead)}
                   >
                     <div className="crm-lead-card-head compact">
                       <div className="crm-lead-name-block">
@@ -156,13 +312,13 @@ export function CrmDashboardPage() {
                         <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
                       </div>
                       <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
-                      {lead.unread_count ? <b className="crm-unread-badge">{lead.unread_count}</b> : null}
+                      {leadHasUnreadMessage(lead) ? <span className="crm-unread-dot" aria-label="رسالة غير مقروءة" title="رسالة غير مقروءة" /> : null}
                     </div>
                     <div className="crm-lead-card-grid compact">
                       <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
                       {department === "finance" ? <span>الكول سنتر: <b>{lead.call_center_name || "غير موزع"}</b></span> : null}
                     </div>
-                    <footer><span>{lead.car_name || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
+                    <footer><span>{lead.car_name || lead.car_type || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
                   </button>
                 ))}
                 {!group.leads.length ? <div className="crm-column-empty">لا يوجد عملاء</div> : null}
