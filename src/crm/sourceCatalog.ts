@@ -110,8 +110,17 @@ export type MessagePolicy = {
   reason: string;
 };
 
-export function messagePolicyForLead(lead?: Pick<CrmLead, "source_code" | "source_name" | "platform_code" | "channel_code"> | null): MessagePolicy {
-  const source = sourceLabel(lead?.source_code || lead?.platform_code, lead?.source_name);
+export function messagePolicyForLead(
+  lead?: Pick<CrmLead, "source_code" | "source_name" | "platform_code" | "channel_code"> | null,
+  sourceConfig?: { name?: string; delivery_route?: "whatsapp" | "facebook" | "instagram" | "tiktok"; allow_free_text?: boolean } | null,
+): MessagePolicy {
+  const source = sourceLabel(lead?.source_code || lead?.platform_code, sourceConfig?.name || lead?.source_name);
+  if (sourceConfig?.delivery_route) {
+    const route = sourceConfig.delivery_route;
+    const allowFreeText = Boolean(sourceConfig.allow_free_text);
+    const routeLabel = route === "whatsapp" ? "واتساب" : route === "facebook" ? "فيسبوك" : route === "instagram" ? "إنستجرام" : "تيك توك";
+    return { route, routeLabel, templateOnly: !allowFreeText, allowFreeText, reason: route === "whatsapp" ? (allowFreeText ? "الإرسال عبر واتساب بنص حر أو قالب" : "الإرسال عبر واتساب باستخدام القوالب فقط") : `الإرسال عبر محادثة ${routeLabel}` };
+  }
   const channel = normalize(lead?.channel_code);
 
   const templateOnlySources = new Set([

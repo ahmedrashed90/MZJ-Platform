@@ -99,8 +99,9 @@ export async function audit(user: SessionUser, action: string, entityType: strin
   `.catch(() => undefined);
 }
 
-export function sourceLabel(source: string) {
+export function sourceLabel(source: string, fallback = "") {
   const raw = clean(source);
+  const fallbackRaw = clean(fallback);
   const key = raw
     .toLowerCase()
     .replace(/[أإآ]/g, "ا")
@@ -130,19 +131,128 @@ export function sourceLabel(source: string) {
   if (key.includes("whatsapp") || key.includes("mersal") || key.includes("واتساب")) return "واتساب";
   if (key.includes("installment") || key.includes("calculator") || key.includes("حاسبه_التقسيط")) return "حاسبة التقسيط";
   if (key.includes("manual") || key.includes("ادخال_يدوي")) return "إدخال يدوي";
+  if (fallbackRaw && fallbackRaw !== raw) return sourceLabel(fallbackRaw);
   return raw || "غير محدد";
 }
 
-export async function chooseAssignment(serviceKey: string, requestedBranch = "") {
+export async function resolveSourceName(sourceCode: string, fallback = "") {
+  const code = clean(sourceCode);
+  if (!code) return sourceLabel(fallback);
   const sql = getSql();
-  const department = departmentCodeFromKey(serviceKey);
-  const branch = requestedBranch || branchForDepartment(serviceKey);
+  const [row] = await sql<{ name: string }[]>`select name from core.sources where code=${code} limit 1`;
+  return clean(row?.name) || sourceLabel(code || fallback);
+}
 
+function filled(value: unknown) {
+  const text = clean(value);
+  return Boolean(text && text !== "-" && text !== "0" && text.toLowerCase() !== "null" && text.toLowerCase() !== "undefined");
+}
+
+/** نفس منطق اكتمال الملف القديم بعد استبعاد الملاحظات بالكامل. */
+export function calculateLeadCompletion(lead: Record<string, any>) {
+  const fields = [
+    lead.customerName ?? lead.customer_name,
+    lead.phone ?? lead.phone_normalized,
+    lead.sourceCode ?? lead.source_code ?? lead.sourceName ?? lead.source_name,
+    lead.statusLabel ?? lead.status_label,
+    lead.serviceKey ?? lead.service_key ?? lead.departmentCode ?? lead.department_code,
+    lead.age,
+    lead.salary,
+    lead.obligation,
+    lead.salaryBank ?? lead.salary_bank,
+    lead.location,
+    lead.carName ?? lead.car_name ?? lead.carType ?? lead.car_type,
+    lead.carModel ?? lead.car_model,
+    lead.color,
+  ];
+  const completed = fields.filter(filled).length;
+  return Math.max(0, Math.min(100, Math.round((completed / fields.length) * 100)));
+}
+
+export function calculateCreditLimit(salaryValue: unknown, obligationValue: unknown, financeTypeValue: unknown) {
+  const salary = Number(salaryValue || 0);
+  const obligation = Number(obligationValue || 0);
+  const financeType = clean(financeTypeValue);
+  const ratio = financeType === "rate55" || financeType === "55%" || financeType.includes("55")
+    ? 0.55
+    : financeType === "realEstate" || financeType.includes("65") || financeType.includes("عقاري")
+      ? 0.65
+      : financeType
+        ? 0.45
+        : 0;
+  if (!salary || !ratio) return { amount: null as number | null, qualified: null as boolean | null, ratio };
+  const amount = salary * ratio - obligation;
+  return { amount, qualified: amount >= 650, ratio };
+}
+
+type AssignmentResult = {
+  assignedTo: string | null;
+  assignedName: string;
+  branchCode: string;
+  ruleId?: string | null;
+  ruleName?: string;
+};
+
+async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string): Promise<AssignmentResult | null> {
+  const sql = getSql();
+  const [rule] = await sql<any[]>`
+    select r.*, r.id::text,
+      state.last_user_id::text,
+      state.updated_at as last_distribution_at
+    from crm.assignment_rules r
+    left join crm.assignment_state state on state.pool_key = concat('rule:', r.id::text)
+    where r.is_active = true
+      and r.department_code = ${departmentCode}
+      and (r.branch_code is null or r.branch_code = ${requestedBranch || null})
+      and (coalesce(array_length(r.source_codes, 1), 0) = 0 or ${sourceCode || ""} = any(r.source_codes))
+    order by
+      case when r.branch_code = ${requestedBranch || null} then 0 else 1 end,
+      case when coalesce(array_length(r.source_codes, 1), 0) > 0 then 0 else 1 end,
+      r.sort_order,
+      r.created_at
+    limit 1
+  `;
+  if (!rule) return null;
+
+  const candidates = await sql<any[]>`
+    select u.id::text, u.full_name, m.priority, m.assignment_count
+    from crm.assignment_rule_members m
+    join core.users u on u.id = m.user_id
+    where m.rule_id = ${rule.id}::uuid
+      and m.is_active = true
+      and u.is_active = true
+      and u.can_receive_leads = true
+    order by m.priority, u.full_name, u.id::text
+  `;
+  if (!candidates.length) return null;
+
+  const lastIndex = candidates.findIndex((candidate) => candidate.id === rule.last_user_id);
+  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
+  const poolKey = `rule:${rule.id}`;
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${poolKey},${selected.id}::uuid,${requestedBranch || null},now())
+    on conflict (pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    update crm.assignment_rule_members
+    set assignment_count=assignment_count+1,last_assigned_at=now(),updated_at=now()
+    where rule_id=${rule.id}::uuid and user_id=${selected.id}::uuid
+  `;
+  await sql`
+    insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
+    values (${rule.id}::uuid,${departmentCode},${requestedBranch || null},${sourceCode || null},${selected.id}::uuid,${selected.full_name},${rule.assignment_mode || "round_robin"})
+  `;
+  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: requestedBranch, ruleId: rule.id, ruleName: rule.name };
+}
+
+async function fallbackAssignment(departmentCode: string, branch: string, sourceCode: string): Promise<AssignmentResult> {
+  const sql = getSql();
   const candidates = await sql<{ id: string; full_name: string; branch_code: string | null }[]>`
     select u.id::text, u.full_name, min(b.code) as branch_code
     from core.users u
     join core.user_departments ud on ud.user_id = u.id
-    join core.departments d on d.id = ud.department_id and d.code = ${department}
+    join core.departments d on d.id = ud.department_id and d.code = ${departmentCode}
     left join core.user_branches ub on ub.user_id = u.id
     left join core.branches b on b.id = ub.branch_id
     where u.is_active = true and u.can_receive_leads = true
@@ -150,9 +260,8 @@ export async function chooseAssignment(serviceKey: string, requestedBranch = "")
     group by u.id
     order by u.full_name, u.id
   `;
-
   if (!candidates.length) return { assignedTo: null, assignedName: "", branchCode: branch };
-  const poolKey = `sales:${department}:${branch || "all"}`;
+  const poolKey = `sales:${departmentCode}:${branch || "all"}`;
   const [state] = await sql<{ last_user_id: string | null }[]>`select last_user_id::text from crm.assignment_state where pool_key = ${poolKey}`;
   const lastIndex = candidates.findIndex((candidate) => candidate.id === state?.last_user_id);
   const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
@@ -161,33 +270,22 @@ export async function chooseAssignment(serviceKey: string, requestedBranch = "")
     values (${poolKey}, ${selected.id}::uuid, ${selected.branch_code || branch || null}, now())
     on conflict (pool_key) do update set last_user_id = excluded.last_user_id, last_branch_code = excluded.last_branch_code, updated_at = now()
   `;
+  await sql`
+    insert into crm.assignment_logs(department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
+    values (${departmentCode},${selected.branch_code || branch || null},${sourceCode || null},${selected.id}::uuid,${selected.full_name},'round_robin')
+  `;
   return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: selected.branch_code || branch };
 }
 
-export async function chooseCallCenterAssignment() {
-  const sql = getSql();
-  const candidates = await sql<{ id: string; full_name: string }[]>`
-    select u.id::text as id, u.full_name
-    from core.users u
-    where u.is_active = true
-      and u.can_receive_leads = true
-      and exists (
-        select 1
-        from core.user_departments ud
-        join core.departments d on d.id = ud.department_id
-        where ud.user_id = u.id
-          and d.code = 'call_center'
-      )
-    order by u.full_name, u.id::text
-  `;
-  if (!candidates.length) return { assignedTo: null, assignedName: "" };
-  const [state] = await sql<{ last_user_id: string | null }[]>`select last_user_id::text from crm.assignment_state where pool_key = 'call_center'`;
-  const lastIndex = candidates.findIndex((candidate) => candidate.id === state?.last_user_id);
-  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
-  await sql`
-    insert into crm.assignment_state(pool_key, last_user_id, updated_at)
-    values ('call_center', ${selected.id}::uuid, now())
-    on conflict (pool_key) do update set last_user_id = excluded.last_user_id, updated_at = now()
-  `;
-  return { assignedTo: selected.id, assignedName: selected.full_name };
+export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {
+  const department = departmentCodeFromKey(serviceKey);
+  const branch = requestedBranch || branchForDepartment(serviceKey);
+  return (await chooseFromConfiguredRule(department, branch, sourceCode)) || fallbackAssignment(department, branch, sourceCode);
+}
+
+export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online") {
+  const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
+  if (configured) return configured;
+  const fallback = await fallbackAssignment("call_center", "", sourceCode);
+  return { assignedTo: fallback.assignedTo, assignedName: fallback.assignedName };
 }

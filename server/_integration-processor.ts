@@ -1,12 +1,14 @@
 import crypto from "node:crypto";
 import {
+  calculateCreditLimit,
+  calculateLeadCompletion,
   chooseAssignment,
   chooseCallCenterAssignment,
   clean,
   departmentCodeFromKey,
   departmentKey,
   normalizePhone,
-  sourceLabel,
+  resolveSourceName,
 } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 
@@ -32,7 +34,11 @@ function whatsappMessage(payload: any) {
 }
 
 function effectiveSource(routeSource: string, payload: any) {
-  if (routeSource !== "tiktok-snapchat") return routeSource;
+  if (routeSource === "installment-calculator") return "installment_calculator";
+  if (routeSource === "facebook-chat") return "facebook";
+  if (routeSource === "instagram-chat") return "instagram";
+  if (routeSource === "tiktok-chat") return "tiktok";
+  if (routeSource !== "tiktok-snapchat") return routeSource.replace(/-/g, "_");
   const source = first(payload.sourceCode, payload.source_code, payload.source, payload.platform, payload.channel).toLowerCase();
   if (source.includes("snap")) return "snapchat_lead";
   return "tiktok_lead";
@@ -162,6 +168,7 @@ function shouldCreateLead(routeSource: string, payload: any, serviceKey: string,
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
   const sql = getSql();
   const source = effectiveSource(routeSource, payload);
+  const sourceName = await resolveSourceName(source);
   const data = sourceData(source, payload);
   const explicitService = serviceFromPayload(payload);
   const paymentHint = first(payload.payment, payload.leadPayment, payload.paymentType, payload.payment_type);
@@ -185,33 +192,49 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     `;
 
     if (!lead) {
-      assignment = await chooseAssignment(serviceKey || "cash", branchRequested);
-      if ((serviceKey || "cash") === "finance") callCenter = await chooseCallCenterAssignment();
+      assignment = await chooseAssignment(serviceKey || "cash", branchRequested, source);
+      if ((serviceKey || "cash") === "finance") callCenter = await chooseCallCenterAssignment(source, branchRequested || "online");
       const departmentCode = departmentCodeFromKey(serviceKey || "cash");
+      const statusLabel = first(payload.leadStatus, payload.statusLabel, payload.status_label, "عميل جديد");
+      const age = first(payload.age) ? Number(first(payload.age)) : null;
+      const salary = first(payload.salary, payload.monthlySalary) ? Number(first(payload.salary, payload.monthlySalary)) : null;
+      const obligation = first(payload.obligation, payload.obligations, payload.commitment, payload.liability) ? Number(first(payload.obligation, payload.obligations, payload.commitment, payload.liability)) : null;
+      const salaryBank = first(payload.salaryBank, payload.salary_bank, payload.bank);
+      const carName = first(payload.leadCar, payload.car, payload.carName, payload.vehicleName);
+      const carModel = first(payload.carModel, payload.model);
+      const carType = first(payload.carType, payload.vehicleType);
+      const color = first(payload.color, payload.carColor);
+      const financeType = first(payload.financeType, payload.finance_type);
+      const location = first(payload.leadLocation, payload.location, payload.city);
+      const completionPercent = calculateLeadCompletion({ customerName: data.name, phone: data.phoneNormalized, sourceCode: source, statusLabel, serviceKey: serviceKey || "cash", age, salary, obligation, salaryBank, location, carName, carModel, color });
+      const credit = calculateCreditLimit(salary, obligation, financeType);
       const [created] = await sql<any[]>`
         insert into crm.leads(
           legacy_id, customer_name, phone, phone_normalized, source_code, source_name, platform_code,
           service_key, department_code, branch_code, status_label, payment_type, car_name, location,
+          age, salary, obligation, salary_bank, car_model, car_type, color, finance_type,
           assigned_to, call_center_assigned_to, registered_at, responsible_name_snapshot,
-          call_center_name_snapshot, source_history, extra_data
+          call_center_name_snapshot, source_history, extra_data, completion_percent, credit_limit, credit_qualified
         ) values (
           ${first(payload.leadId, payload.lead_id) || null}, ${data.name}, ${data.phoneRaw}, ${data.phoneNormalized},
-          ${source}, ${sourceLabel(source)}, ${source}, ${serviceKey || "cash"}, ${departmentCode},
-          ${assignment.branchCode || branchRequested || null}, ${first(payload.leadStatus, payload.statusLabel, payload.status_label, "عميل جديد")},
+          ${source}, ${sourceName}, ${source}, ${serviceKey || "cash"}, ${departmentCode},
+          ${assignment.branchCode || branchRequested || null}, ${statusLabel},
           ${first(payload.leadPayment, payload.payment) || ((serviceKey || "cash") === "finance" ? "تمويل" : (serviceKey || "cash") === "service" ? "خدمة عملاء" : "كاش")},
-          ${first(payload.leadCar, payload.car, payload.carName, payload.vehicleName) || null},
-          ${first(payload.leadLocation, payload.location, payload.city) || null},
+          ${carName || null},
+          ${location || null},
+          ${age}, ${salary}, ${obligation}, ${salaryBank || null}, ${carModel || null}, ${carType || null}, ${color || null}, ${financeType || null},
           ${assignment.assignedTo}::uuid, ${callCenter?.assignedTo || null}::uuid, now(),
           ${assignment.assignedName || null}, ${callCenter?.assignedName || null},
           ${sql.json([{ source, at: new Date().toISOString() }])},
-          ${sql.json({ integrationEventId: eventId, routeSource })}
+          ${sql.json({ integrationEventId: eventId, routeSource })},
+          ${completionPercent}, ${credit.amount}, ${credit.qualified}
         )
         returning *, id::text, assigned_to::text, call_center_assigned_to::text
       `;
       lead = created;
       await sql`
         insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_name,note,details)
-        values (${lead.id}::uuid,'integration_lead_created',${lead.status_label},${lead.department_code},${lead.branch_code},${sourceLabel(source)},'دخول العميل إلى النظام',${sql.json({ eventId, source, routeSource })})
+        values (${lead.id}::uuid,'integration_lead_created',${lead.status_label},${lead.department_code},${lead.branch_code},${sourceName},'دخول العميل إلى النظام',${sql.json({ eventId, source, routeSource })})
       `;
     } else {
       const historyItem = { source, at: new Date().toISOString() };

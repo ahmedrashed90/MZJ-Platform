@@ -1,25 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowClockwise, FloppyDisk, LinkSimple, PencilSimple, Plus, Trash, Users } from "@phosphor-icons/react";
-import { Link } from "react-router-dom";
-import { crmFetch } from "../api";
+import {
+  ArrowClockwise,
+  FloppyDisk,
+  LinkSimple,
+  PencilSimple,
+  Plus,
+  Shuffle,
+  Trash,
+  UsersThree,
+} from "@phosphor-icons/react";
+import { crmFetch, formatDate } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 
 const tabs = [
   { key: "statuses", label: "حالات العملاء" },
+  { key: "sources", label: "المصادر" },
   { key: "templates", label: "القوالب والرسائل" },
   { key: "mappings", label: "ربط الحالات بالقوالب" },
-  { key: "quality", label: "إعدادات مؤشرات التقارير" },
-  { key: "endpoints", label: "Endpoints / Workers المنصات" },
+  { key: "quality", label: "مؤشرات التقارير" },
+  { key: "endpoints", label: "Endpoints / Workers" },
   { key: "branches", label: "الفروع" },
-  { key: "users", label: "المستخدمين والصلاحيات" },
+  { key: "distribution", label: "توزيع العملاء" },
 ] as const;
+
 type Tab = typeof tabs[number]["key"];
+type Props = { embedded?: boolean };
 
 const blankStatus = { id: "", departmentCode: "cash", label: "", value: "", sortOrder: 10, isActive: true };
+const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", allowFreeText: false, isActive: true };
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
 const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", webhookUrl: "", healthUrl: "", secretName: "", isActive: true };
 const blankBranch = { code: "", name: "", sortOrder: 0, isActive: true };
+const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCode: "", sourceCodes: [] as string[], memberIds: [] as string[], sortOrder: 10, preventConsecutive: true, isActive: true };
 
 function dbToQuality(raw: any) {
   return {
@@ -32,59 +45,207 @@ function dbToQuality(raw: any) {
   };
 }
 
-export function CrmAdminPage() {
+function departmentLabel(code: string) {
+  if (code === "cash" || code === "cash_sales") return "مبيعات الكاش";
+  if (code === "finance" || code === "finance_sales") return "مبيعات التمويل";
+  if (code === "service" || code === "customer_service") return "خدمة العملاء";
+  if (code === "call_center") return "الكول سنتر";
+  return code;
+}
+
+function toggleList(list: string[], value: string) {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+}
+
+export function CrmAdminPage({ embedded = false }: Props) {
   const [tab, setTab] = useState<Tab>("statuses");
-  const [data, setData] = useState<any>({ statuses: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null });
+  const [data, setData] = useState<any>({ statuses: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
+  const [sourceForm, setSourceForm] = useState(blankSource);
   const [templateForm, setTemplateForm] = useState(blankTemplate);
   const [mappingForm, setMappingForm] = useState(blankMapping);
   const [endpointForm, setEndpointForm] = useState(blankEndpoint);
   const [branchForm, setBranchForm] = useState(blankBranch);
+  const [ruleForm, setRuleForm] = useState(blankRule);
   const [quality, setQuality] = useState(dbToQuality(null));
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => { void load(); }, []);
+
   async function load() {
     setLoading(true);
-    try { const result = await crmFetch<any>("/api/crm/settings"); setData(result); setQuality(dbToQuality(result.quality)); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "تعذر تحميل بيانات الإدارة"); }
-    finally { setLoading(false); }
+    try {
+      const result = await crmFetch<any>("/api/crm/settings");
+      setData(result);
+      setQuality(dbToQuality(result.quality));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تحميل إعدادات CRM");
+    } finally {
+      setLoading(false);
+    }
   }
+
   async function save(section: string, payload: any) {
-    try { await crmFetch("/api/crm/settings", { method: "POST", body: JSON.stringify({ section, ...payload }) }); setNotice("تم حفظ الإعدادات"); await load(); return true; }
-    catch (error) { setNotice(error instanceof Error ? error.message : "فشل الحفظ"); return false; }
+    try {
+      const result = await crmFetch<any>("/api/crm/settings", { method: "POST", body: JSON.stringify({ section, ...payload }) });
+      setNotice(result.message || "تم حفظ الإعدادات");
+      await load();
+      return true;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "فشل الحفظ");
+      return false;
+    }
   }
+
   async function remove(section: string, id: string, extra: any = {}) {
-    if (!confirm("متأكد من الحذف؟")) return;
-    try { await crmFetch("/api/crm/settings", { method: "DELETE", body: JSON.stringify({ section, id, action: "delete", ...extra }) }); setNotice("تم الحذف"); await load(); }
-    catch (error) { setNotice(error instanceof Error ? error.message : "تعذر الحذف"); }
+    if (!window.confirm("متأكد من تنفيذ الحذف؟")) return;
+    try {
+      const result = await crmFetch<any>("/api/crm/settings", { method: "DELETE", body: JSON.stringify({ section, id, action: "delete", ...extra }) });
+      setNotice(result.message || (result.deactivated ? "تم إيقاف العنصر لأنه مستخدم في بيانات سابقة" : "تم الحذف"));
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر الحذف");
+    }
   }
 
   const allStatusValues = useMemo(() => [...new Set((data.statuses || []).map((row: any) => row.value))] as string[], [data.statuses]);
+  const endpointSources = useMemo(() => {
+    const map = new Map<string, { code: string; name: string }>();
+    for (const row of data.sources || []) map.set(row.code, { code: row.code, name: row.name });
+    for (const row of data.endpoints || []) {
+      if (!map.has(row.source_code)) map.set(row.source_code, { code: row.source_code, name: sourceLabel(row.source_code, row.display_name) });
+    }
+    return [...map.values()];
+  }, [data.sources, data.endpoints]);
   const departmentStatuses = (departmentCode: string) => (data.statuses || []).filter((row: any) => row.department_code === (departmentCode === "cash_sales" ? "cash" : departmentCode === "finance_sales" ? "finance" : departmentCode === "customer_service" ? "service" : departmentCode));
-  function toggleQuality(key: keyof typeof quality, status: string) { setQuality((current) => { const list = current[key] as string[]; return { ...current, [key]: list.includes(status) ? list.filter((item) => item !== status) : [...list, status] }; }); }
+  const eligibleRuleUsers = useMemo(() => (data.assignmentUsers || []).filter((row: any) => {
+    if (!row.is_active || !row.can_receive_leads) return false;
+    if (!(row.department_codes || []).includes(ruleForm.departmentCode)) return false;
+    if (ruleForm.branchCode && !(row.branch_codes || []).includes(ruleForm.branchCode)) return false;
+    return true;
+  }), [data.assignmentUsers, ruleForm.departmentCode, ruleForm.branchCode]);
+
+  function toggleQuality(key: keyof typeof quality, status: string) {
+    setQuality((current) => ({ ...current, [key]: toggleList(current[key] as string[], status) }));
+  }
+
+  function editRule(row: any) {
+    setRuleForm({
+      id: row.id,
+      name: row.name,
+      departmentCode: row.department_code,
+      branchCode: row.branch_code || "",
+      sourceCodes: row.source_codes || [],
+      memberIds: (row.members || []).filter((member: any) => member.is_active).map((member: any) => member.user_id),
+      sortOrder: row.sort_order || 0,
+      preventConsecutive: row.prevent_consecutive !== false,
+      isActive: row.is_active !== false,
+    });
+  }
 
   return (
-    <div className="crm-page crm-admin-page">
-      <header className="crm-page-head"><div><h1>الإدارة</h1><p>إعدادات CRM التشغيلية بدون تعديل السورس.</p></div><button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />إعادة تحميل بيانات الإدارة</button></header>
+    <div className={`crm-page crm-admin-page ${embedded ? "embedded" : ""}`}>
+      {!embedded ? (
+        <header className="crm-page-head">
+          <div><h1>إعدادات CRM</h1><p>كل الإعدادات التشغيلية في مكان واحد بدون تعديل السورس.</p></div>
+          <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />إعادة تحميل</button>
+        </header>
+      ) : (
+        <div className="crm-embedded-settings-head">
+          <div><h2>إعدادات CRM</h2><p>الحالات والمصادر والقوالب والفروع والتوزيع والربط مع المنصات.</p></div>
+          <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
+        </div>
+      )}
+
       <div className="crm-admin-tabs">{tabs.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}>{item.label}</button>)}</div>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
-      {loading ? <div className="crm-loading-panel">جاري تحميل بيانات الإدارة...</div> : null}
+      {loading ? <div className="crm-loading-panel">جاري تحميل الإعدادات...</div> : null}
 
-      {tab === "statuses" ? <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>{statusForm.id ? "تعديل حالة" : "إضافة حالة جديدة"}</h2></header><div className="crm-form-grid"><label><span>القسم</span><select value={statusForm.departmentCode} onChange={(event) => setStatusForm((current) => ({ ...current, departmentCode: event.target.value }))}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label><label><span>اسم الحالة في الداش بورد</span><input placeholder="مثال: إجمالي العملاء" value={statusForm.label} onChange={(event) => setStatusForm((current) => ({ ...current, label: event.target.value }))} /></label><label><span>قيمة الحالة</span><input placeholder="مثال: عميل جديد" value={statusForm.value} onChange={(event) => setStatusForm((current) => ({ ...current, value: event.target.value }))} /></label><label><span>ترتيب الظهور</span><input type="number" value={statusForm.sortOrder} onChange={(event) => setStatusForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label><label className="crm-switch-row"><input type="checkbox" checked={statusForm.isActive} onChange={(event) => setStatusForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>نشطة</span></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setStatusForm(blankStatus)}>جديد</button><button className="crm-primary-button" onClick={async () => { const id = statusForm.id || `${statusForm.departmentCode}-${Date.now()}`; if (await save("status", { ...statusForm, id })) setStatusForm(blankStatus); }}><FloppyDisk size={18} />حفظ الحالة</button></div></section><section className="crm-panel crm-list-panel"><header><h2>الحالات المسجلة للداش بورد</h2><span>{data.statuses.length}</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>القسم</th><th>اسم الكارت</th><th>قيمة الحالة</th><th>الترتيب</th><th>نشطة</th><th>إجراءات</th></tr></thead><tbody>{data.statuses.map((row: any) => <tr key={row.id}><td>{row.department_code === "cash" ? "مبيعات الكاش" : row.department_code === "finance" ? "مبيعات التمويل" : "خدمة العملاء"}</td><td>{row.label}</td><td>{row.value}</td><td>{row.sort_order}</td><td>{row.is_active ? "نعم" : "لا"}</td><td><div className="crm-row-actions"><button onClick={() => setStatusForm({ id: row.id, departmentCode: row.department_code, label: row.label, value: row.value, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("status", row.id)}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section></div> : null}
+      {tab === "statuses" ? (
+        <div className="crm-admin-split">
+          <section className="crm-panel crm-form-panel">
+            <header><h2>{statusForm.id ? "تعديل حالة" : "إضافة حالة جديدة"}</h2><p>ترتيب الحالات هنا هو نفس ترتيب أعمدة الكانبان.</p></header>
+            <div className="crm-form-grid">
+              <label><span>القسم</span><select value={statusForm.departmentCode} onChange={(event) => setStatusForm((current) => ({ ...current, departmentCode: event.target.value }))}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label>
+              <label><span>اسم الحالة في الداش بورد</span><input value={statusForm.label} onChange={(event) => setStatusForm((current) => ({ ...current, label: event.target.value }))} /></label>
+              <label><span>قيمة الحالة</span><input value={statusForm.value} onChange={(event) => setStatusForm((current) => ({ ...current, value: event.target.value }))} /></label>
+              <label><span>ترتيب الظهور</span><input type="number" value={statusForm.sortOrder} onChange={(event) => setStatusForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
+              <label className="crm-switch-row"><input type="checkbox" checked={statusForm.isActive} onChange={(event) => setStatusForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>نشطة</span></label>
+            </div>
+            <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setStatusForm(blankStatus)}>جديد</button><button className="crm-primary-button" onClick={async () => { const id = statusForm.id || `${statusForm.departmentCode}-${Date.now()}`; if (await save("status", { ...statusForm, id })) setStatusForm(blankStatus); }}><FloppyDisk size={18} />حفظ الحالة</button></div>
+          </section>
+          <section className="crm-panel crm-list-panel"><header><h2>الحالات المسجلة</h2><span>{data.statuses.length}</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>القسم</th><th>اسم الكارت</th><th>قيمة الحالة</th><th>الترتيب</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.statuses.map((row: any) => <tr key={row.id}><td>{departmentLabel(row.department_code)}</td><td>{row.label}</td><td>{row.value}</td><td>{row.sort_order}</td><td>{row.is_active ? "نشطة" : "موقوفة"}</td><td><div className="crm-row-actions"><button onClick={() => setStatusForm({ id: row.id, departmentCode: row.department_code, label: row.label, value: row.value, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("status", row.id)}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section>
+        </div>
+      ) : null}
 
-      {tab === "templates" ? <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>إضافة رسالة يدوية</h2><p>اكتب رسالة واحفظها هنا، وبعدها اربطها بالقسم والحالة.</p></header><div className="crm-form-grid"><label><span>الاسم الظاهر</span><input placeholder="مثال: رسالة الترحيب" value={templateForm.displayName} onChange={(e) => setTemplateForm((c) => ({ ...c, displayName: e.target.value }))} /></label><label><span>النوع</span><select value={templateForm.templateType} onChange={(e) => setTemplateForm((c) => ({ ...c, templateType: e.target.value }))}><option value="quick_message">رسالة سريعة</option><option value="template">قالب مرسال</option></select></label><label><span>المزود</span><input value={templateForm.provider} onChange={(e) => setTemplateForm((c) => ({ ...c, provider: e.target.value }))} placeholder="مرسال" /></label><label><span>رقم القالب الخارجي</span><input value={templateForm.externalId} onChange={(e) => setTemplateForm((c) => ({ ...c, externalId: e.target.value }))} /></label><label className="crm-field-wide"><span>محتوى الرسالة</span><textarea rows={7} placeholder="يمكن استخدام {{name}} و {{phone}} و {{car}} و {{status}}" value={templateForm.content} onChange={(e) => setTemplateForm((c) => ({ ...c, content: e.target.value }))} /></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setTemplateForm(blankTemplate)}>إلغاء / جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("template", templateForm)) setTemplateForm(blankTemplate); }}><FloppyDisk size={18} />حفظ الرسالة</button></div></section><section className="crm-panel crm-list-panel"><header><h2>قوالب مرسال والرسائل المحفوظة في السيستم</h2><span>{data.templates.length}</span></header><div className="crm-template-list">{data.templates.map((row: any) => <article key={row.id}><div><strong>{row.display_name}</strong><span>{row.template_type === "template" ? "قالب مرسال" : "رسالة سريعة"}</span></div><p>{row.content}</p><footer><button onClick={() => setTemplateForm({ id: row.id, displayName: row.display_name, name: row.name, content: row.content, templateType: row.template_type, provider: row.provider || "", externalId: row.external_id || "", departments: row.departments || [], isActive: row.is_active })}><PencilSimple size={16} />تعديل</button><button onClick={() => void remove("template", row.id)}><Trash size={16} />حذف</button></footer></article>)}{!data.templates.length ? <div className="crm-empty-state">لا توجد رسائل محفوظة</div> : null}</div></section></div> : null}
+      {tab === "sources" ? (
+        <div className="crm-admin-split">
+          <section className="crm-panel crm-form-panel">
+            <header><h2>{sourceForm.code ? "تعديل المصدر" : "إضافة مصدر"}</h2><p>قائمة مركزية مشتركة بين CRM والتسويق وباقي أجزاء المنصة.</p></header>
+            <div className="crm-form-grid">
+              <label><span>كود المصدر</span><input disabled={Boolean(data.sources.find((row: any) => row.code === sourceForm.code))} placeholder="مثال: showroom_event" value={sourceForm.code} onChange={(event) => setSourceForm((current) => ({ ...current, code: event.target.value }))} /></label>
+              <label><span>اسم المصدر بالعربي</span><input placeholder="مثال: فعالية المعرض" value={sourceForm.name} onChange={(event) => setSourceForm((current) => ({ ...current, name: event.target.value }))} /></label>
+              <label><span>ترتيب الظهور</span><input type="number" value={sourceForm.sortOrder} onChange={(event) => setSourceForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
+              <label><span>قناة الإرسال</span><select value={sourceForm.deliveryRoute} onChange={(event) => setSourceForm((current) => ({ ...current, deliveryRoute: event.target.value }))}><option value="whatsapp">واتساب</option><option value="facebook">فيسبوك</option><option value="instagram">إنستجرام</option><option value="tiktok">تيك توك</option></select></label>
+              <label className="crm-switch-row"><input type="checkbox" checked={sourceForm.allowFreeText} onChange={(event) => setSourceForm((current) => ({ ...current, allowFreeText: event.target.checked }))} /><span>السماح بالنص الحر</span></label>
+              <label className="crm-switch-row"><input type="checkbox" checked={sourceForm.isActive} onChange={(event) => setSourceForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>المصدر نشط</span></label>
+              <div className="crm-field-wide"><span className="crm-field-caption">يُستخدم في</span><div className="crm-check-grid"><label><input type="checkbox" checked={sourceForm.systemCodes.includes("crm")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "crm") }))} />CRM</label><label><input type="checkbox" checked={sourceForm.systemCodes.includes("marketing")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "marketing") }))} />التسويق</label><label><input type="checkbox" checked={sourceForm.systemCodes.includes("operations")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "operations") }))} />العمليات</label><label><input type="checkbox" checked={sourceForm.systemCodes.includes("tracking")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "tracking") }))} />التتبع</label></div></div>
+            </div>
+            <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setSourceForm(blankSource)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("source", sourceForm)) setSourceForm(blankSource); }}><FloppyDisk size={18} />حفظ المصدر</button></div>
+          </section>
+          <section className="crm-panel crm-list-panel"><header><h2>المصادر الموحدة</h2><span>{data.sources.length}</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>المصدر</th><th>الكود</th><th>الأنظمة</th><th>الإرسال</th><th>الاستخدام</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.sources.map((row: any) => <tr key={row.code}><td><strong>{row.name}</strong></td><td>{row.code}</td><td>{(row.system_codes || []).map((code: string) => code === "crm" ? "CRM" : code === "marketing" ? "التسويق" : code === "operations" ? "العمليات" : "التتبع").join("، ")}</td><td>{row.delivery_route === "whatsapp" ? `واتساب ${row.allow_free_text ? "نص وقوالب" : "قوالب فقط"}` : sourceLabel(row.delivery_route)}</td><td>{Number(row.crm_usage_count || 0) + Number(row.request_usage_count || 0)}</td><td>{row.is_active ? "نشط" : "موقوف"}</td><td><div className="crm-row-actions"><button onClick={() => setSourceForm({ code: row.code, name: row.name, sortOrder: row.sort_order, systemCodes: row.system_codes || [], deliveryRoute: row.delivery_route || "whatsapp", allowFreeText: row.allow_free_text, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("source", "", { code: row.code })}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section>
+        </div>
+      ) : null}
 
-      {tab === "mappings" ? <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>ربط الحالات بالقوالب والرسائل</h2><p>لما المندوب يغير حالة العميل في الشات، السيستم يختار القالب المرتبط هنا مباشرة بدل البحث بالاسم.</p></header><div className="crm-form-grid"><label><span>القسم</span><select value={mappingForm.departmentCode} onChange={(e) => setMappingForm((c) => ({ ...c, departmentCode: e.target.value, statusValue: "", statusLabel: "" }))}><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option></select></label><label><span>اختار الحالة</span><select value={mappingForm.statusValue} onChange={(e) => setMappingForm((c) => ({ ...c, statusValue: e.target.value, statusLabel: e.target.value }))}><option value="">اختار الحالة</option>{departmentStatuses(mappingForm.departmentCode).map((status: any) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label><label><span>نوع الرسالة</span><select value={mappingForm.messageType} onChange={(e) => setMappingForm((c) => ({ ...c, messageType: e.target.value }))}><option value="template">قالب/رسالة جاهزة</option><option value="quick_message">رسالة سريعة</option></select></label><label><span>القالب أو الرسالة المرتبطة</span><select value={mappingForm.templateId} onChange={(e) => setMappingForm((c) => ({ ...c, templateId: e.target.value }))}><option value="">اختار القالب</option>{data.templates.map((template: any) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setMappingForm(blankMapping)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("mapping", mappingForm)) setMappingForm(blankMapping); }}><LinkSimple size={18} />حفظ الربط</button></div></section><section className="crm-panel crm-list-panel"><header><h2>الحالات المرتبطة بالقوالب</h2><span>{data.mappings.length}</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>القسم</th><th>الحالة</th><th>القالب/الرسالة</th><th>النوع</th><th>نشط</th><th>إجراءات</th></tr></thead><tbody>{data.mappings.map((row: any) => <tr key={row.id}><td>{row.department_code === "cash_sales" ? "مبيعات الكاش" : row.department_code === "finance_sales" ? "مبيعات التمويل" : row.department_code === "customer_service" ? "خدمة العملاء" : row.department_code}</td><td>{row.status_label}</td><td>{row.template_label}</td><td>{row.message_type === "template" ? "قالب" : "رسالة سريعة"}</td><td>{row.is_active ? "نعم" : "لا"}</td><td><div className="crm-row-actions"><button onClick={() => setMappingForm({ id: row.id, departmentCode: row.department_code, statusValue: row.status_value, statusLabel: row.status_label, templateId: row.template_id, messageType: row.message_type, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("mapping", row.id)}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section></div> : null}
+      {tab === "templates" ? (
+        <div className="crm-admin-split">
+          <section className="crm-panel crm-form-panel"><header><h2>{templateForm.id ? "تعديل الرسالة" : "إضافة رسالة يدوية"}</h2><p>الرسائل السريعة وقوالب مرسال المتزامنة.</p></header><div className="crm-form-grid"><label><span>الاسم الظاهر</span><input value={templateForm.displayName} onChange={(e) => setTemplateForm((c) => ({ ...c, displayName: e.target.value }))} /></label><label><span>النوع</span><select value={templateForm.templateType} onChange={(e) => setTemplateForm((c) => ({ ...c, templateType: e.target.value }))}><option value="quick_message">رسالة سريعة</option><option value="template">قالب مرسال</option></select></label><label><span>المزود</span><input value={templateForm.provider} onChange={(e) => setTemplateForm((c) => ({ ...c, provider: e.target.value }))} placeholder="مرسال" /></label><label><span>اسم/رقم القالب الخارجي</span><input value={templateForm.externalId} onChange={(e) => setTemplateForm((c) => ({ ...c, externalId: e.target.value }))} /></label><label className="crm-field-wide"><span>محتوى الرسالة</span><textarea rows={7} value={templateForm.content} onChange={(e) => setTemplateForm((c) => ({ ...c, content: e.target.value }))} /></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setTemplateForm(blankTemplate)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("template", templateForm)) setTemplateForm(blankTemplate); }}><FloppyDisk size={18} />حفظ الرسالة</button></div></section>
+          <section className="crm-panel crm-list-panel"><header><h2>القوالب والرسائل</h2><span>{data.templates.length}</span></header><div className="crm-template-list">{data.templates.map((row: any) => <article key={row.id}><div><strong>{row.display_name}</strong><span>{row.template_type === "template" ? "قالب مرسال" : "رسالة سريعة"}</span></div><p>{row.content}</p><footer><button onClick={() => setTemplateForm({ id: row.id, displayName: row.display_name, name: row.name, content: row.content, templateType: row.template_type, provider: row.provider || "", externalId: row.external_id || "", departments: row.departments || [], isActive: row.is_active })}><PencilSimple size={15} />تعديل</button><button onClick={() => void remove("template", row.id)}><Trash size={15} />حذف</button></footer></article>)}</div></section>
+        </div>
+      ) : null}
 
-      {tab === "quality" ? <div className="crm-quality-settings"><section className="crm-panel"><h2>إعدادات مؤشرات التقارير</h2><p>اختار الحالات التي تدخل في بسط ومقام كل نسبة. أي تعديل هنا ينعكس على صفحة التقارير بدون تعديل السورس.</p></section>{["marketing", "sales"].map((type) => { const marketing = type === "marketing"; const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses"; const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses"; const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode"; return <section className="crm-panel quality-card" key={type}><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><p>{marketing ? "النسبة = عدد العملاء الموجودين في حالات البسط ÷ المقام المحدد." : "النسبة = عدد العملاء الموجودين في حالات البيع المختارة ÷ المقام المحدد."}</p><strong>حالات البسط</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as any, status)} />{status}</label>)}</div><label className="crm-form-label"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(e) => setQuality((c) => ({ ...c, [modeKey]: e.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>{(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as any, status)} />{status}</label>)}</div></> : null}</section>; })}<button className="crm-primary-button" onClick={() => void save("quality", quality)}><FloppyDisk size={18} />حفظ إعدادات المؤشرات</button></div> : null}
+      {tab === "mappings" ? (
+        <div className="crm-admin-split">
+          <section className="crm-panel crm-form-panel"><header><h2>ربط الحالات بالقوالب</h2><p>اختيار الرسالة تلقائيًا عند تغيير حالة العميل.</p></header><div className="crm-form-grid"><label><span>القسم</span><select value={mappingForm.departmentCode} onChange={(e) => setMappingForm((c) => ({ ...c, departmentCode: e.target.value, statusValue: "", statusLabel: "" }))}><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option></select></label><label><span>الحالة</span><select value={mappingForm.statusValue} onChange={(e) => setMappingForm((c) => ({ ...c, statusValue: e.target.value, statusLabel: e.target.value }))}><option value="">اختار الحالة</option>{departmentStatuses(mappingForm.departmentCode).map((status: any) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label><label><span>نوع الرسالة</span><select value={mappingForm.messageType} onChange={(e) => setMappingForm((c) => ({ ...c, messageType: e.target.value }))}><option value="template">قالب</option><option value="quick_message">رسالة سريعة</option></select></label><label><span>القالب أو الرسالة</span><select value={mappingForm.templateId} onChange={(e) => setMappingForm((c) => ({ ...c, templateId: e.target.value }))}><option value="">اختار القالب</option>{data.templates.map((template: any) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setMappingForm(blankMapping)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("mapping", mappingForm)) setMappingForm(blankMapping); }}><LinkSimple size={18} />حفظ الربط</button></div></section>
+          <section className="crm-panel crm-list-panel"><header><h2>الروابط المسجلة</h2><span>{data.mappings.length}</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>القسم</th><th>الحالة</th><th>القالب</th><th>النوع</th><th>إجراءات</th></tr></thead><tbody>{data.mappings.map((row: any) => <tr key={row.id}><td>{departmentLabel(row.department_code)}</td><td>{row.status_label}</td><td>{row.template_label}</td><td>{row.message_type === "template" ? "قالب" : "رسالة سريعة"}</td><td><div className="crm-row-actions"><button onClick={() => setMappingForm({ id: row.id, departmentCode: row.department_code, statusValue: row.status_value, statusLabel: row.status_label, templateId: row.template_id, messageType: row.message_type, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("mapping", row.id)}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section>
+        </div>
+      ) : null}
 
-      {tab === "endpoints" ? <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>Endpoints / Workers المنصات</h2><p>Send للإرسال من CRM، و Webhook للاستقبال من المنصة.</p></header><div className="crm-form-grid"><label><span>المصدر</span><select value={endpointForm.sourceCode} onChange={(e) => { const row = data.endpoints.find((x: any) => x.source_code === e.target.value); setEndpointForm(row ? { sourceCode: row.source_code, displayName: row.display_name, sendUrl: row.send_url || "", webhookUrl: row.webhook_url || "", healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active } : { ...blankEndpoint, sourceCode: e.target.value }); }}><option value="">اختار المصدر</option>{data.endpoints.map((row: any) => <option key={row.source_code} value={row.source_code}>{sourceLabel(row.source_code, row.display_name)}</option>)}</select></label><label><span>الاسم الظاهر</span><input value={endpointForm.displayName} onChange={(e) => setEndpointForm((c) => ({ ...c, displayName: e.target.value }))} /></label><label className="crm-field-wide"><span>Send URL</span><input placeholder="https://worker.example.com/send" value={endpointForm.sendUrl} onChange={(e) => setEndpointForm((c) => ({ ...c, sendUrl: e.target.value }))} /></label><label className="crm-field-wide"><span>Webhook URL</span><input value={endpointForm.webhookUrl} onChange={(e) => setEndpointForm((c) => ({ ...c, webhookUrl: e.target.value }))} /></label><label className="crm-field-wide"><span>Health URL</span><input value={endpointForm.healthUrl} onChange={(e) => setEndpointForm((c) => ({ ...c, healthUrl: e.target.value }))} /></label><label className="crm-field-wide"><span>اسم متغير سر الاتصال في Vercel</span><input placeholder="MZJ_GATEWAY_SECRET" value={endpointForm.secretName} onChange={(e) => setEndpointForm((c) => ({ ...c, secretName: e.target.value }))} /></label></div><button className="crm-primary-button" onClick={() => void save("endpoint", endpointForm)}><FloppyDisk size={18} />حفظ Endpoint</button></section><section className="crm-panel crm-list-panel"><header><h2>المنصات المسجلة</h2></header><div className="crm-endpoint-list">{data.endpoints.map((row: any) => <button key={row.source_code} onClick={() => setEndpointForm({ sourceCode: row.source_code, displayName: row.display_name, sendUrl: row.send_url || "", webhookUrl: row.webhook_url || "", healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active })}><strong>{sourceLabel(row.source_code, row.display_name)}</strong><span>{row.send_url || "لم يتم إضافة Send URL"}</span></button>)}</div></section></div> : null}
+      {tab === "quality" ? (
+        <div className="crm-quality-settings"><section className="crm-panel"><h2>إعدادات مؤشرات التقارير</h2><p>المعادلات تتحكم بها الحالات المختارة هنا، بدون تعديل السورس.</p></section>{["marketing", "sales"].map((type) => { const marketing = type === "marketing"; const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses"; const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses"; const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode"; return <section className="crm-panel quality-card" key={type}><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><strong>حالات البسط</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div><label className="crm-form-label"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(e) => setQuality((c) => ({ ...c, [modeKey]: e.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>{(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}</section>; })}<button className="crm-primary-button" onClick={() => void save("quality", quality)}><FloppyDisk size={18} />حفظ إعدادات المؤشرات</button></div>
+      ) : null}
 
-      {tab === "branches" ? <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>{branchForm.code ? "تعديل فرع" : "إضافة فرع"}</h2></header><div className="crm-form-grid"><label><span>كود الفرع</span><input value={branchForm.code} onChange={(e) => setBranchForm((c) => ({ ...c, code: e.target.value }))} /></label><label><span>اسم الفرع</span><input placeholder="مثال: فرع الاونلاين" value={branchForm.name} onChange={(e) => setBranchForm((c) => ({ ...c, name: e.target.value }))} /></label><label><span>الترتيب</span><input type="number" value={branchForm.sortOrder} onChange={(e) => setBranchForm((c) => ({ ...c, sortOrder: Number(e.target.value) }))} /></label><label className="crm-switch-row"><input type="checkbox" checked={branchForm.isActive} onChange={(e) => setBranchForm((c) => ({ ...c, isActive: e.target.checked }))} /><span>نشط</span></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setBranchForm(blankBranch)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("branch", branchForm)) setBranchForm(blankBranch); }}><FloppyDisk size={18} />حفظ الفرع</button></div></section><section className="crm-panel crm-list-panel"><header><h2>الفروع المسجلة</h2></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>اسم الفرع</th><th>الكود</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.branches.map((row: any) => <tr key={row.code}><td>{row.name}</td><td>{row.code}</td><td>{row.is_active ? "نشط" : "غير نشط"}</td><td><div className="crm-row-actions"><button onClick={() => setBranchForm({ code: row.code, name: row.name, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("branch", "", { code: row.code })}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section></div> : null}
+      {tab === "endpoints" ? (
+        <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>Endpoints / Workers المنصات</h2><p>Send للإرسال وWebhook للاستقبال وHealth للفحص.</p></header><div className="crm-form-grid"><label><span>المصدر</span><select value={endpointForm.sourceCode} onChange={(e) => { const row = data.endpoints.find((x: any) => x.source_code === e.target.value); setEndpointForm(row ? { sourceCode: row.source_code, displayName: row.display_name, sendUrl: row.send_url || "", webhookUrl: row.webhook_url || "", healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active } : { ...blankEndpoint, sourceCode: e.target.value, displayName: data.sources.find((x: any) => x.code === e.target.value)?.name || "" }); }}><option value="">اختار المصدر</option>{endpointSources.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label><label><span>الاسم الظاهر</span><input value={endpointForm.displayName} onChange={(e) => setEndpointForm((c) => ({ ...c, displayName: e.target.value }))} /></label><label className="crm-field-wide"><span>Send URL</span><input value={endpointForm.sendUrl} onChange={(e) => setEndpointForm((c) => ({ ...c, sendUrl: e.target.value }))} /></label><label className="crm-field-wide"><span>Webhook URL</span><input value={endpointForm.webhookUrl} onChange={(e) => setEndpointForm((c) => ({ ...c, webhookUrl: e.target.value }))} /></label><label className="crm-field-wide"><span>Health URL</span><input value={endpointForm.healthUrl} onChange={(e) => setEndpointForm((c) => ({ ...c, healthUrl: e.target.value }))} /></label><label className="crm-field-wide"><span>اسم متغير السر في Vercel</span><input placeholder="MZJ_GATEWAY_SECRET" value={endpointForm.secretName} onChange={(e) => setEndpointForm((c) => ({ ...c, secretName: e.target.value }))} /></label></div><button className="crm-primary-button" onClick={() => void save("endpoint", endpointForm)}><FloppyDisk size={18} />حفظ Endpoint</button></section><section className="crm-panel crm-list-panel"><header><h2>المنصات المسجلة</h2><span>{data.endpoints.length}</span></header><div className="crm-endpoint-list">{data.endpoints.map((row: any) => <button key={row.source_code} onClick={() => setEndpointForm({ sourceCode: row.source_code, displayName: row.display_name, sendUrl: row.send_url || "", webhookUrl: row.webhook_url || "", healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active })}><strong>{sourceLabel(row.source_code, row.display_name)}</strong><span>{row.send_url || "لم يتم إضافة Send URL"}</span></button>)}</div></section></div>
+      ) : null}
 
-      {tab === "users" ? <section className="crm-panel crm-users-link"><Users size={42} weight="duotone" /><div><h2>المستخدمون والصلاحيات</h2><p>إدارة المستخدمين موحدة للمنصة كلها. أضف الحساب واربطه بالقسم والفرع والصلاحيات من صفحة الإعدادات المركزية.</p></div><Link className="crm-primary-button" to="/settings"><Plus size={18} />فتح إدارة المستخدمين</Link></section> : null}
+      {tab === "branches" ? (
+        <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>{branchForm.code ? "تعديل فرع" : "إضافة فرع"}</h2></header><div className="crm-form-grid"><label><span>كود الفرع</span><input value={branchForm.code} onChange={(e) => setBranchForm((c) => ({ ...c, code: e.target.value }))} /></label><label><span>اسم الفرع</span><input value={branchForm.name} onChange={(e) => setBranchForm((c) => ({ ...c, name: e.target.value }))} /></label><label><span>الترتيب</span><input type="number" value={branchForm.sortOrder} onChange={(e) => setBranchForm((c) => ({ ...c, sortOrder: Number(e.target.value) }))} /></label><label className="crm-switch-row"><input type="checkbox" checked={branchForm.isActive} onChange={(e) => setBranchForm((c) => ({ ...c, isActive: e.target.checked }))} /><span>نشط</span></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setBranchForm(blankBranch)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("branch", branchForm)) setBranchForm(blankBranch); }}><FloppyDisk size={18} />حفظ الفرع</button></div></section><section className="crm-panel crm-list-panel"><header><h2>الفروع المسجلة</h2></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>اسم الفرع</th><th>الكود</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.branches.map((row: any) => <tr key={row.code}><td>{row.name}</td><td>{row.code}</td><td>{row.is_active ? "نشط" : "غير نشط"}</td><td><div className="crm-row-actions"><button onClick={() => setBranchForm({ code: row.code, name: row.name, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("branch", "", { code: row.code })}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section></div>
+      ) : null}
+
+      {tab === "distribution" ? (
+        <div className="crm-distribution-settings">
+          <div className="crm-admin-split">
+            <section className="crm-panel crm-form-panel">
+              <header><h2>{ruleForm.id ? "تعديل قاعدة توزيع" : "إنشاء قاعدة توزيع"}</h2><p>التوزيع بالتتابع حسب القسم والفرع والمصدر والموظفين المختارين.</p></header>
+              <div className="crm-form-grid">
+                <label className="crm-field-wide"><span>اسم القاعدة</span><input placeholder="مثال: تمويل الأونلاين" value={ruleForm.name} onChange={(e) => setRuleForm((c) => ({ ...c, name: e.target.value }))} /></label>
+                <label><span>القسم</span><select value={ruleForm.departmentCode} onChange={(e) => setRuleForm((c) => ({ ...c, departmentCode: e.target.value, memberIds: [] }))}><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">الكول سنتر</option></select></label>
+                <label><span>الفرع</span><select value={ruleForm.branchCode} onChange={(e) => setRuleForm((c) => ({ ...c, branchCode: e.target.value, memberIds: [] }))}><option value="">كل الفروع</option>{data.branches.filter((row: any) => row.is_active).map((row: any) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
+                <label><span>ترتيب القاعدة</span><input type="number" value={ruleForm.sortOrder} onChange={(e) => setRuleForm((c) => ({ ...c, sortOrder: Number(e.target.value) }))} /></label>
+                <label className="crm-switch-row"><input type="checkbox" checked={ruleForm.preventConsecutive} onChange={(e) => setRuleForm((c) => ({ ...c, preventConsecutive: e.target.checked }))} /><span>منع تكرار نفس المندوب</span></label>
+                <label className="crm-switch-row"><input type="checkbox" checked={ruleForm.isActive} onChange={(e) => setRuleForm((c) => ({ ...c, isActive: e.target.checked }))} /><span>القاعدة نشطة</span></label>
+              </div>
+              <div className="crm-distribution-selector"><strong>المصادر</strong><p>اتركها كلها بدون اختيار لتطبيق القاعدة على كل المصادر.</p><div className="crm-check-grid">{data.sources.filter((row: any) => row.is_active).map((row: any) => <label key={row.code}><input type="checkbox" checked={ruleForm.sourceCodes.includes(row.code)} onChange={() => setRuleForm((c) => ({ ...c, sourceCodes: toggleList(c.sourceCodes, row.code) }))} />{row.name}</label>)}</div></div>
+              <div className="crm-distribution-selector"><strong>الموظفون المشاركون بالترتيب</strong><p>يظهر فقط الموظفون النشطون والمسموح لهم باستقبال عملاء والمربوطون بالقسم والفرع.</p><div className="crm-member-picker">{eligibleRuleUsers.map((row: any) => <label key={row.id} className={ruleForm.memberIds.includes(row.id) ? "selected" : ""}><input type="checkbox" checked={ruleForm.memberIds.includes(row.id)} onChange={() => setRuleForm((c) => ({ ...c, memberIds: toggleList(c.memberIds, row.id) }))} /><span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "كل الفروع"}</small></span></label>)}</div>{!eligibleRuleUsers.length ? <div className="crm-empty-state">لا يوجد موظفون مؤهلون لهذه القاعدة. فعّل استقبال العملاء واربط المستخدم بالقسم والفرع.</div> : null}</div>
+              <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setRuleForm(blankRule)}><Plus size={18} />قاعدة جديدة</button><button className="crm-primary-button" onClick={async () => { if (await save("assignment_rule", ruleForm)) setRuleForm(blankRule); }}><FloppyDisk size={18} />حفظ قاعدة التوزيع</button></div>
+            </section>
+            <section className="crm-panel crm-list-panel"><header><h2>قواعد التوزيع</h2><span>{data.assignmentRules.length}</span></header><div className="crm-rule-list">{data.assignmentRules.map((row: any) => <article key={row.id} className={!row.is_active ? "inactive" : ""}><header><div><strong>{row.name}</strong><span>{departmentLabel(row.department_code)} · {row.branch_name || "كل الفروع"}</span></div><b>{row.is_active ? "نشطة" : "موقوفة"}</b></header><div className="crm-rule-stats"><span><small>الموظفون</small><strong>{(row.members || []).filter((member: any) => member.is_active).length}</strong></span><span><small>آخر توزيع</small><strong>{row.last_user_name || "لا يوجد"}</strong></span><span><small>التالي</small><strong>{row.next_user_name || "لا يوجد"}</strong></span></div><p>المصادر: {(row.source_codes || []).length ? row.source_codes.map((code: string) => data.sources.find((source: any) => source.code === code)?.name || code).join("، ") : "كل المصادر"}</p><div className="crm-rule-members">{(row.members || []).map((member: any) => <span key={member.user_id}>{member.full_name}<b>{member.assignment_count || 0}</b></span>)}</div><footer><button onClick={() => editRule(row)}><PencilSimple size={16} />تعديل</button><button onClick={() => void remove("assignment_rule", row.id)}><Trash size={16} />إيقاف</button></footer></article>)}</div></section>
+          </div>
+          <section className="crm-panel crm-list-panel crm-assignment-log-panel"><header><h2>سجل التوزيع</h2><span>آخر 100 عملية</span></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>التاريخ</th><th>القاعدة</th><th>القسم</th><th>الفرع</th><th>المصدر</th><th>المندوب</th><th>العملية</th></tr></thead><tbody>{data.assignmentLogs.map((row: any) => <tr key={row.id}><td>{formatDate(row.created_at)}</td><td>{row.rule_name || "التوزيع الافتراضي"}</td><td>{departmentLabel(row.department_code)}</td><td>{data.branches.find((branch: any) => branch.code === row.branch_code)?.name || row.branch_code || "—"}</td><td>{data.sources.find((source: any) => source.code === row.source_code)?.name || sourceLabel(row.source_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.action === "automatic_assignment" ? "توزيع تلقائي" : row.action}</td></tr>)}</tbody></table></div></section>
+        </div>
+      ) : null}
     </div>
   );
 }

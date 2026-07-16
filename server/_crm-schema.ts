@@ -335,6 +335,108 @@ on conflict (id) do update set
 insert into core.schema_migrations(version) values ('crm-v1.3') on conflict (version) do nothing;
 `;
 
+
+const CRM_SETTINGS_V15_SQL = String.raw`
+alter table crm.leads add column if not exists credit_limit numeric(14,2);
+alter table crm.leads add column if not exists credit_qualified boolean;
+
+create table if not exists core.sources (
+  code text primary key,
+  name text not null,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  system_codes text[] not null default array['crm','marketing'],
+  delivery_route text not null default 'whatsapp',
+  allow_free_text boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into core.sources(code,name,sort_order,is_active)
+select code,name,sort_order,is_active from crm.sources
+on conflict (code) do update set name=excluded.name,sort_order=excluded.sort_order,is_active=excluded.is_active,updated_at=now();
+
+insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text) values
+('facebook','فيسبوك',10,true,array['crm','marketing'],'facebook',true),
+('instagram','إنستجرام',20,true,array['crm','marketing'],'instagram',true),
+('tiktok','تيك توك',30,true,array['crm','marketing'],'tiktok',true),
+('snapchat','سناب شات',40,true,array['crm','marketing'],'whatsapp',false),
+('whatsapp','واتساب',50,true,array['crm','marketing'],'whatsapp',true),
+('tiktok_lead','تيك توك ليد',60,true,array['crm','marketing'],'whatsapp',false),
+('snapchat_lead','سناب شات ليد',70,true,array['crm','marketing'],'whatsapp',false),
+('installment_calculator','حاسبة التقسيط',80,true,array['crm','marketing'],'whatsapp',false),
+('haraj','موقع حراج',90,true,array['crm','marketing'],'whatsapp',false),
+('other_website','موقع آخر',100,true,array['crm','marketing'],'whatsapp',false),
+('branch','خلال الفرع',110,true,array['crm','marketing'],'whatsapp',false),
+('friend','صديق',120,true,array['crm','marketing'],'whatsapp',false),
+('unified_number','اتصال الرقم الموحد',130,true,array['crm','marketing'],'whatsapp',false),
+('manual','إدخال يدوي',140,true,array['crm'],'whatsapp',false)
+on conflict (code) do update set
+  name=excluded.name,
+  sort_order=excluded.sort_order,
+  system_codes=excluded.system_codes,
+  delivery_route=excluded.delivery_route,
+  allow_free_text=excluded.allow_free_text,
+  updated_at=now();
+
+-- توحيد أكواد المصادر القديمة مع الأكواد المركزية بدون تغيير الاسم العربي المعروض.
+update crm.leads set source_code='installment_calculator', source_name='حاسبة التقسيط' where source_code in ('installment-calculator','installment');
+update crm.leads set source_code='facebook' where source_code in ('facebook-chat','facebook_chat','fb');
+update crm.leads set source_code='instagram' where source_code in ('instagram-chat','instagram_chat','ig');
+update crm.leads set source_code='tiktok' where source_code in ('tiktok-chat','tiktok_chat','tt');
+update crm.manual_lead_requests set source_code='installment_calculator' where source_code in ('installment-calculator','installment');
+
+create table if not exists crm.assignment_rules (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  department_code text not null,
+  branch_code text,
+  source_codes text[] not null default '{}',
+  assignment_mode text not null default 'round_robin',
+  prevent_consecutive boolean not null default true,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_by uuid references core.users(id),
+  updated_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists crm_assignment_rules_match_idx on crm.assignment_rules(department_code,branch_code,is_active,sort_order);
+
+create table if not exists crm.assignment_rule_members (
+  rule_id uuid not null references crm.assignment_rules(id) on delete cascade,
+  user_id uuid not null references core.users(id) on delete cascade,
+  priority integer not null default 100,
+  is_active boolean not null default true,
+  assignment_count integer not null default 0,
+  last_assigned_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key(rule_id,user_id)
+);
+
+create table if not exists crm.assignment_logs (
+  id bigserial primary key,
+  rule_id uuid references crm.assignment_rules(id) on delete set null,
+  lead_id uuid references crm.leads(id) on delete set null,
+  department_code text not null,
+  branch_code text,
+  source_code text,
+  assigned_to uuid references core.users(id) on delete set null,
+  assigned_name text,
+  previous_assigned_to uuid references core.users(id) on delete set null,
+  previous_assigned_name text,
+  assignment_mode text not null default 'round_robin',
+  action text not null default 'automatic_assignment',
+  actor_id uuid references core.users(id) on delete set null,
+  actor_name text,
+  created_at timestamptz not null default now()
+);
+create index if not exists crm_assignment_logs_created_idx on crm.assignment_logs(created_at desc);
+
+insert into core.schema_migrations(version) values ('platform-settings-v1.5') on conflict (version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -345,10 +447,14 @@ export async function ensureCrmSchema() {
           applied_at timestamptz not null default now()
         )
       `;
-      const [migration] = await sql<{ version: string }[]>`
+      const [baseMigration] = await sql<{ version: string }[]>`
         select version from core.schema_migrations where version = 'crm-v1.3'
       `;
-      if (!migration) await runSqlScript(CRM_SCHEMA_SQL);
+      if (!baseMigration) await runSqlScript(CRM_SCHEMA_SQL);
+      const [settingsMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'platform-settings-v1.5'
+      `;
+      if (!settingsMigration) await runSqlScript(CRM_SETTINGS_V15_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

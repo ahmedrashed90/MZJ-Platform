@@ -5,7 +5,6 @@ import {
   CheckCircle,
   MagnifyingGlass,
   PhoneCall,
-  UserCircle,
   UserPlus,
   UsersThree,
 } from "@phosphor-icons/react";
@@ -136,7 +135,7 @@ export function CrmDashboardPage() {
       {loading ? <div className="crm-loading-panel">جاري تحميل بيانات CRM...</div> : null}
 
       {!loading ? (
-        <div className="crm-board" style={{ gridTemplateColumns: `repeat(${Math.max(1, groups.length)}, minmax(282px, 1fr))` }}>
+        <div className="crm-board crm-board-five">
           {groups.map((group) => (
             <section className="crm-status-column" key={group.id}>
               <header>
@@ -151,19 +150,19 @@ export function CrmDashboardPage() {
                     className={`crm-lead-card ${leadStatus(lead).includes("غير مؤهل") ? "danger" : ""}`}
                     onClick={() => setSelected(lead)}
                   >
-                    <div className="crm-lead-card-head">
-                      <span className="crm-lead-avatar"><UserCircle size={25} /></span>
-                      <div><strong>{lead.customer_name || "عميل"}</strong><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small></div>
+                    <div className="crm-lead-card-head compact">
+                      <div className="crm-lead-name-block">
+                        <strong>{lead.customer_name || "عميل"}</strong>
+                        <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
+                      </div>
+                      <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
                       {lead.unread_count ? <b className="crm-unread-badge">{lead.unread_count}</b> : null}
                     </div>
-                    <div className="crm-lead-card-grid">
+                    <div className="crm-lead-card-grid compact">
                       <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
                       {department === "finance" ? <span>الكول سنتر: <b>{lead.call_center_name || "غير موزع"}</b></span> : null}
-                      <span>السيارة: <b>{lead.car_name || "—"}</b></span>
-                      <span>المصدر: <b>{sourceLabel(lead.source_code, lead.source_name)}</b></span>
                     </div>
-                    {lead.preview_text ? <p className="crm-lead-preview"><ChatCircleDots size={15} />{lead.preview_text}</p> : null}
-                    <footer><span>مكتمل {lead.completion_percent ?? "—"}%</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
+                    <footer><span>{lead.car_name || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
                   </button>
                 ))}
                 {!group.leads.length ? <div className="crm-column-empty">لا يوجد عملاء</div> : null}

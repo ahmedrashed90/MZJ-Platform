@@ -7,7 +7,6 @@ import {
   Gauge,
   PlusCircle,
   Robot,
-  SlidersHorizontal,
 } from "@phosphor-icons/react";
 
 const items = [
@@ -18,7 +17,6 @@ const items = [
   { href: "/crm/inbox-agent", label: "وكيل صندوق الوارد", icon: Robot },
   { href: "/crm/reports", label: "التقارير", icon: ChartBar },
   { href: "/crm/kpi", label: "تقييم المناديب KPI", icon: ChatCircleDots },
-  { href: "/crm/admin", label: "الإدارة", icon: SlidersHorizontal },
 ];
 
 export function CrmLayout() {

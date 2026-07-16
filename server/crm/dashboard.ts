@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, departmentKey, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -19,11 +19,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.platform_code, l.service_key, l.department_code, l.branch_code, l.status_code, l.status_label,
       l.payment_type, l.car_name, l.location, l.age, l.salary, l.obligation, l.salary_bank,
       l.car_model, l.car_type, l.color, l.finance_type, l.follow_up_at, l.campaign_name, l.campaign_date,
-      l.notes, l.status_note, l.completion_percent, l.created_at, l.updated_at, l.registered_at,
+      l.notes, l.status_note, l.completion_percent, l.credit_limit, l.credit_qualified, l.created_at, l.updated_at, l.registered_at,
+      src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
       c.id::text as conversation_id, c.channel_code, c.preview_text, c.unread_count, c.last_message_at
     from crm.leads l
+    left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
     left join core.users cc on cc.id = l.call_center_assigned_to
     left join lateral (
@@ -51,7 +53,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     limit 1000
   `;
 
-  for (const row of rows) row.source_name = sourceLabel(row.source_code || row.source_name);
+  for (const row of rows) {
+    row.source_name = row.catalog_source_name || sourceLabel(row.source_code || row.source_name);
+    row.completion_percent = calculateLeadCompletion(row);
+    delete row.catalog_source_name;
+  }
 
   const statuses = await sql<any[]>`
     select id, department_code, label, value, sort_order

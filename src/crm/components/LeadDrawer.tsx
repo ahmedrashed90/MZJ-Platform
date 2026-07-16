@@ -142,12 +142,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return { amount, qualified: amount >= 650 };
   }, [form.salary, form.obligation, form.financeType]);
 
+  const selectedSourceConfig = useMemo(
+    () => (meta?.sources || []).find((source) => source.code === (form.sourceCode || lead?.source_code)),
+    [meta, form.sourceCode, lead?.source_code],
+  );
+
   const policy = useMemo(() => messagePolicyForLead({
     source_code: form.sourceCode || lead?.source_code,
-    source_name: lead?.source_name,
+    source_name: selectedSourceConfig?.name || lead?.source_name,
     platform_code: lead?.platform_code,
     channel_code: conversationChannel || lead?.channel_code,
-  }), [form.sourceCode, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel]);
+  }, selectedSourceConfig), [form.sourceCode, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel, selectedSourceConfig]);
 
   const availableTemplates = useMemo(() => (meta?.templates || []).filter((template) => {
     if (!template.departments?.length) return true;
@@ -319,7 +324,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
               <label className="crm-field-wide"><span>ملاحظة تغيير الحالة</span><input value={form.statusNote || ""} onChange={(event) => set("statusNote", event.target.value)} /></label>
               <label className="crm-field-wide"><span>ملاحظات</span><textarea rows={4} value={form.notes || ""} onChange={(event) => set("notes", event.target.value)} /></label>
             </div>
-            {credit ? <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
+            {credit ? <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : department === "finance" ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
             <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>
           </section>

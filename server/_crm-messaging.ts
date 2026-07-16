@@ -56,8 +56,16 @@ function isLeadSource(value: string) {
   return text.includes("lead") || text.includes("ليد");
 }
 
-function resolveDeliveryPolicy(conversation: ConversationContext): DeliveryPolicy {
-  const sourceArabic = sourceLabel(conversation.source_code || conversation.source_name || conversation.platform_code || conversation.channel_code);
+async function resolveDeliveryPolicy(conversation: ConversationContext): Promise<DeliveryPolicy> {
+  const sql = getSql();
+  const sourceCode = clean(conversation.source_code);
+  const [sourceConfig] = sourceCode ? await sql<any[]>`select name,delivery_route,allow_free_text from core.sources where code=${sourceCode} limit 1` : [];
+  const sourceArabic = clean(sourceConfig?.name) || sourceLabel(conversation.source_code || conversation.source_name || conversation.platform_code || conversation.channel_code);
+  if (sourceConfig?.delivery_route) {
+    const route = sourceConfig.delivery_route as DeliveryRoute;
+    const templateOnly = !Boolean(sourceConfig.allow_free_text);
+    return { route, templateOnly, sourceArabic, reason: route === "whatsapp" ? (templateOnly ? "الإرسال عبر واتساب بالقوالب فقط" : "الإرسال عبر واتساب بنص حر أو قالب") : `الإرسال عبر Endpoint ${route === "facebook" ? "فيسبوك" : route === "instagram" ? "إنستجرام" : "تيك توك"}` };
+  }
   const raw = [
     conversation.source_code,
     conversation.source_name,
@@ -254,7 +262,7 @@ export async function deliverCrmMessage(input: {
   if (!finalText) throw new Error("اكتب الرسالة أو اختر قالبًا صالحًا");
 
   const conversation = input.conversation;
-  const policy = resolveDeliveryPolicy(conversation);
+  const policy = await resolveDeliveryPolicy(conversation);
   if (policy.templateOnly && !input.template) {
     throw new Error(`مصدر العميل «${policy.sourceArabic}» يسمح بالإرسال عن طريق واتساب بالقوالب فقط`);
   }

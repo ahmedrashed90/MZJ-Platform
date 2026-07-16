@@ -34,11 +34,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const leads = await sql<any[]>`
     select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,l.department_code,l.branch_code,
       l.status_label,l.car_name,l.notes,l.status_note,l.created_at,l.updated_at,l.assigned_to::text,l.call_center_assigned_to::text,
-      sales.full_name as assigned_name,cc.full_name as call_center_name,b.name as branch_name
+      sales.full_name as assigned_name,cc.full_name as call_center_name,b.name as branch_name,src.name as catalog_source_name
     from crm.leads l
     left join core.users sales on sales.id=l.assigned_to
     left join core.users cc on cc.id=l.call_center_assigned_to
     left join core.branches b on b.code=l.branch_code
+    left join core.sources src on src.code=l.source_code
     where l.is_deleted=false
       and (
         ${scope.all}::boolean
@@ -57,7 +58,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     order by l.updated_at desc
   `;
 
-  for (const lead of leads) lead.source_name = sourceLabel(lead.source_code || lead.source_name);
+  for (const lead of leads) { lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name); delete lead.catalog_source_name; }
 
   const [quality] = await sql<any[]>`select * from crm.report_quality_settings where id='default'`;
   const marketingNum = new Set<string>((quality?.marketing_numerator_statuses || ["مؤهل"]).map((value: unknown) => norm(value)));
@@ -93,7 +94,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "ar"));
   };
 
-  const sources = group((row) => sourceLabel(row.source_code || row.source_name));
+  const sources = group((row) => sourceLabel(row.source_code, row.source_name));
   const departments = group((row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`);
   const agents = group((row) => row.assigned_name || "غير موزع");
   const callCenterRows = group((row) => row.call_center_name || "غير موزع").filter((row) => row.name !== "غير موزع" || row.total > 0);

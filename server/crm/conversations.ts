@@ -17,10 +17,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (conversationId) {
       const [conversation] = await sql<any[]>`
         select c.*, c.id::text, c.lead_id::text,
-          l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.source_code,l.source_name,l.platform_code,l.service_key,
+          l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.source_code,coalesce(src.name,l.source_name) as source_name,l.platform_code,l.service_key,
           sales.full_name as assigned_name,cc.full_name as call_center_name
         from crm.conversations c
         left join crm.leads l on l.id=c.lead_id
+        left join core.sources src on src.code=l.source_code
         left join core.users sales on sales.id=c.assigned_to
         left join core.users cc on cc.id=c.call_center_assigned_to
         where c.id=${conversationId}::uuid
@@ -42,10 +43,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     let rows: any[] = [...await sql<any[]>`
       select c.*, c.id::text, c.lead_id::text, l.phone, l.phone_normalized, l.customer_name as lead_customer_name,
-        l.source_code,l.source_name,l.platform_code,l.service_key,
+        l.source_code,coalesce(src.name,l.source_name) as source_name,l.platform_code,l.service_key,
         sales.full_name as assigned_name, cc.full_name as call_center_name
       from crm.conversations c
       left join crm.leads l on l.id=c.lead_id
+      left join core.sources src on src.code=l.source_code
       left join core.users sales on sales.id=c.assigned_to
       left join core.users cc on cc.id=c.call_center_assigned_to
       where (${leadId || null}::uuid is null or c.lead_id=${leadId || null}::uuid)
@@ -108,8 +110,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     const [conversation] = await sql<any[]>`
       select c.*, c.id::text, c.lead_id::text, l.phone, l.phone_normalized, l.customer_name as lead_customer_name,
-        l.car_name,l.status_label,l.source_code,l.source_name,l.platform_code,l.service_key
+        l.car_name,l.status_label,l.source_code,coalesce(src.name,l.source_name) as source_name,l.platform_code,l.service_key
       from crm.conversations c left join crm.leads l on l.id=c.lead_id
+      left join core.sources src on src.code=l.source_code
       where c.id=${conversationId}::uuid
         and (
           ${scope.all}::boolean or c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid

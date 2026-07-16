@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, branchForDepartment, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { sendMappedStatusMessage } from "../_crm-messaging.js";
 
@@ -64,9 +64,10 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
   const rows = await sql<any[]>`
     select l.*, l.id::text, l.assigned_to::text, l.call_center_assigned_to::text,
       sales.full_name as assigned_name, cc.full_name as call_center_name,
-      b.name as branch_name,
+      b.name as branch_name, src.name as catalog_source_name,
       coalesce(c.id::text, '') as conversation_id, c.channel_code, c.preview_text, c.unread_count, c.last_message_at
     from crm.leads l
+    left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
     left join core.users cc on cc.id = l.call_center_assigned_to
     left join core.branches b on b.code = l.branch_code
@@ -118,7 +119,11 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       and (${from || null}::date is null or coalesce(l.registered_at,l.created_at)::date >= ${from || null}::date)
       and (${to || null}::date is null or coalesce(l.registered_at,l.created_at)::date <= ${to || null}::date)
   `;
-  for (const row of rows) row.source_name = sourceLabel(row.source_code || row.source_name);
+  for (const row of rows) {
+    row.source_name = row.catalog_source_name || sourceLabel(row.source_code || row.source_name);
+    row.completion_percent = calculateLeadCompletion(row);
+    delete row.catalog_source_name;
+  }
   return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset });
 }
 
@@ -126,6 +131,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   const sql = getSql();
   const body = parseBody(request);
   const input = leadPayload(body);
+  input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
   if (!input.customerName) return response.status(400).json({ ok: false, error: "اسم العميل مطلوب" });
   if (!input.phoneNormalized) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
 
@@ -133,9 +139,12 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   if (duplicate) return response.status(409).json({ ok: false, error: "رقم الجوال مسجل بالفعل", duplicate });
 
   let assignment = { assignedTo: input.assignedTo, assignedName: "", branchCode: input.branchCode };
-  if (!input.assignedTo) assignment = await chooseAssignment(input.serviceKey, input.branchCode);
+  if (!input.assignedTo) assignment = await chooseAssignment(input.serviceKey, input.branchCode, input.sourceCode);
   let callCenter = { assignedTo: input.callCenterAssignedTo, assignedName: "" };
-  if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment();
+  if (input.serviceKey === "finance" && !input.callCenterAssignedTo) callCenter = await chooseCallCenterAssignment(input.sourceCode, input.branchCode || "online");
+
+  const completionPercent = calculateLeadCompletion(input);
+  const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
 
   const [row] = await sql<any[]>`
     insert into crm.leads(
@@ -144,21 +153,24 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
       car_name, location, age, salary, obligation, salary_bank, car_model, car_type, color,
       finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note,
       assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
-      responsible_name_snapshot, call_center_name_snapshot
+      responsible_name_snapshot, call_center_name_snapshot, completion_percent, credit_limit, credit_qualified
     ) values (
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
       ${input.carName || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
       ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
-      ${assignment.assignedName || null}, ${callCenter.assignedName || null}
+      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
     ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
   `;
   await sql`
     insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,actor_role,note)
     values (${row.id}::uuid,'lead_created',${input.statusLabel},${input.departmentCode},${assignment.branchCode || input.branchCode || null},${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},'دخول العميل إلى النظام')
   `;
-  row.source_name = sourceLabel(row.source_code || row.source_name);
+  row.source_name = input.sourceName;
+  row.completion_percent = completionPercent;
+  row.credit_limit = credit.amount;
+  row.credit_qualified = credit.qualified;
   await audit(user, "lead_created", "lead", row.id, row);
   return response.status(201).json({ ok: true, row });
 }
@@ -175,6 +187,9 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   if (!canEdit) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتعديل هذا العميل" });
 
   const input = leadPayload({ ...before, ...body });
+  input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
+  const completionPercent = calculateLeadCompletion(input);
+  const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
   if (input.phone && !input.phoneNormalized) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
   if (input.phoneNormalized) {
     const [duplicate] = await sql<any[]>`select id::text, customer_name from crm.leads where phone_normalized = ${input.phoneNormalized} and id <> ${id}::uuid and is_deleted = false limit 1`;
@@ -191,6 +206,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       salary_bank=${input.salaryBank || null}, car_model=${input.carModel || null}, car_type=${input.carType || null}, color=${input.color || null},
       finance_type=${input.financeType || null}, follow_up_at=${input.followUpAt}, campaign_name=${input.campaignName || null}, campaign_date=${input.campaignDate},
       notes=${input.notes || null}, status_note=${input.statusNote || null},
+      completion_percent=${completionPercent}, credit_limit=${credit.amount}, credit_qualified=${credit.qualified},
       assigned_to=${input.assignedTo || before.assigned_to}::uuid,
       call_center_assigned_to=${input.callCenterAssignedTo || before.call_center_assigned_to}::uuid,
       updated_by=${user.id}::uuid, updated_at=now()
@@ -217,7 +233,10 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       }).catch((error: any) => ({ skipped: false, failed: true, error: error?.message || String(error) }));
     }
   }
-  row.source_name = sourceLabel(row.source_code || row.source_name);
+  row.source_name = input.sourceName;
+  row.completion_percent = completionPercent;
+  row.credit_limit = credit.amount;
+  row.credit_qualified = credit.qualified;
   await audit(user, "lead_updated", "lead", id, row, before);
   return response.status(200).json({ ok: true, row, statusMessage });
 }

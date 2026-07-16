@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Sidebar } from "./components/Sidebar";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -18,7 +18,6 @@ const CrmFinanceHistoryPage = lazy(() => import("./crm/pages/CrmFinanceHistoryPa
 const CrmInboxAgentPage = lazy(() => import("./crm/pages/CrmInboxAgentPage").then((module) => ({ default: module.CrmInboxAgentPage })));
 const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((module) => ({ default: module.CrmReportsPage })));
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
-const CrmAdminPage = lazy(() => import("./crm/pages/CrmAdminPage").then((module) => ({ default: module.CrmAdminPage })));
 
 function PlatformRoutes() {
   return (
@@ -36,7 +35,7 @@ function PlatformRoutes() {
             <Route path="inbox-agent" element={<CrmInboxAgentPage />} />
             <Route path="reports" element={<CrmReportsPage />} />
             <Route path="kpi" element={<CrmKpiPage />} />
-            <Route path="admin" element={<CrmAdminPage />} />
+            <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
           <Route path="/marketing" element={<EmptyModulePage title="التسويق" description="الحملات والأجندة والكرييتيف وجدول النشر والتقويم." />} />
           <Route path="/operations" element={<EmptyModulePage title="العمليات" description="المخزون والمواقع والحركة وطلبات النقل والموافقات ونواقص السيارات." />} />

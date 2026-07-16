@@ -2,6 +2,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
@@ -9,7 +13,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [statuses, templates, mappings, quality, endpoints, branches] = await Promise.all([
+    const [statuses, templates, mappings, quality, endpoints, branches, sources, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
       sql`
@@ -20,8 +24,80 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql`select * from crm.report_quality_settings where id='default'`,
       sql`select * from crm.integration_endpoints order by display_name`,
       sql`select code,name,is_active,sort_order from core.branches order by sort_order,name`,
+      sql`
+        select s.*,
+          (select count(*)::int from crm.leads l where l.is_deleted=false and l.source_code=s.code) as crm_usage_count,
+          (select count(*)::int from crm.manual_lead_requests r where r.source_code=s.code) as request_usage_count
+        from core.sources s
+        order by s.sort_order,s.name
+      `,
+      sql`
+        select r.*,r.id::text,
+          b.name as branch_name,
+          state.last_user_id::text,
+          state.updated_at as last_distribution_at,
+          last_user.full_name as last_user_name,
+          coalesce(json_agg(json_build_object(
+            'user_id',m.user_id::text,
+            'full_name',u.full_name,
+            'priority',m.priority,
+            'is_active',m.is_active,
+            'assignment_count',m.assignment_count,
+            'last_assigned_at',m.last_assigned_at
+          ) order by m.priority,u.full_name) filter (where m.user_id is not null),'[]'::json) as members
+        from crm.assignment_rules r
+        left join core.branches b on b.code=r.branch_code
+        left join crm.assignment_state state on state.pool_key=concat('rule:',r.id::text)
+        left join core.users last_user on last_user.id=state.last_user_id
+        left join crm.assignment_rule_members m on m.rule_id=r.id
+        left join core.users u on u.id=m.user_id
+        group by r.id,b.name,state.last_user_id,state.updated_at,last_user.full_name
+        order by r.sort_order,r.created_at
+      `,
+      sql`
+        select l.*,l.rule_id::text,l.lead_id::text,l.assigned_to::text,l.previous_assigned_to::text,
+          r.name as rule_name
+        from crm.assignment_logs l
+        left join crm.assignment_rules r on r.id=l.rule_id
+        order by l.created_at desc
+        limit 100
+      `,
+      sql`
+        select u.id::text,u.full_name,u.employee_no,u.is_active,u.can_receive_leads,
+          coalesce(array_agg(distinct d.code) filter (where d.code is not null),'{}') as department_codes,
+          coalesce(array_agg(distinct d.name) filter (where d.name is not null),'{}') as departments,
+          coalesce(array_agg(distinct b.code) filter (where b.code is not null),'{}') as branch_codes,
+          coalesce(array_agg(distinct b.name) filter (where b.name is not null),'{}') as branches
+        from core.users u
+        left join core.user_departments ud on ud.user_id=u.id
+        left join core.departments d on d.id=ud.department_id
+        left join core.user_branches ub on ub.user_id=u.id
+        left join core.branches b on b.id=ub.branch_id
+        group by u.id
+        order by u.full_name
+      `,
     ]);
-    return response.status(200).json({ ok: true, statuses, templates, mappings, quality: quality[0], endpoints, branches });
+
+    const rules = (assignmentRules as any[]).map((rule) => {
+      const activeMembers = (rule.members || []).filter((member: any) => member.is_active);
+      const currentIndex = activeMembers.findIndex((member: any) => member.user_id === rule.last_user_id);
+      const next = activeMembers.length ? activeMembers[(currentIndex + 1 + activeMembers.length) % activeMembers.length] : null;
+      return { ...rule, next_user_id: next?.user_id || null, next_user_name: next?.full_name || null };
+    });
+
+    return response.status(200).json({
+      ok: true,
+      statuses,
+      templates,
+      mappings,
+      quality: quality[0],
+      endpoints,
+      branches,
+      sources,
+      assignmentRules: rules,
+      assignmentLogs,
+      assignmentUsers,
+    });
   }
 
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method || "")) return response.status(405).json({ ok: false, error: "Method not allowed" });
@@ -47,6 +123,36 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({ ok: true, row });
   }
 
+  if (section === "source") {
+    const code = clean(body.code).toLowerCase().replace(/\s+/g, "_");
+    if (!code) return response.status(400).json({ ok: false, error: "كود المصدر مطلوب" });
+    if (action === "delete") {
+      const [usage] = await sql<{ count: number }[]>`
+        select (
+          (select count(*) from crm.leads where source_code=${code}) +
+          (select count(*) from crm.manual_lead_requests where source_code=${code})
+        )::int as count
+      `;
+      if (Number(usage?.count || 0) > 0) {
+        await sql`update core.sources set is_active=false,updated_at=now() where code=${code}`;
+        return response.status(200).json({ ok: true, deactivated: true, message: "المصدر مستخدم في بيانات سابقة، لذلك تم إيقافه بدل الحذف" });
+      }
+      await sql`delete from core.sources where code=${code}`;
+      return response.status(200).json({ ok: true, deleted: true });
+    }
+    const name = clean(body.name);
+    if (!name) return response.status(400).json({ ok: false, error: "اسم المصدر بالعربي مطلوب" });
+    const systems = stringList(body.systemCodes);
+    const [row] = await sql<any[]>`
+      insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,updated_at)
+      values (${code},${name},${Number(body.sortOrder||0)},${body.isActive!==false},${systems.length ? systems : ["crm","marketing"]},${clean(body.deliveryRoute)||"whatsapp"},${body.allowFreeText===true},now())
+      on conflict (code) do update set name=excluded.name,sort_order=excluded.sort_order,is_active=excluded.is_active,system_codes=excluded.system_codes,delivery_route=excluded.delivery_route,allow_free_text=excluded.allow_free_text,updated_at=now()
+      returning *
+    `;
+    await audit(user, "source_saved", "source", code, row);
+    return response.status(200).json({ ok: true, row });
+  }
+
   if (section === "template") {
     const id = clean(body.id);
     if (action === "delete") {
@@ -56,7 +162,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const displayName = clean(body.displayName || body.name);
     const content = clean(body.content);
     if (!displayName || !content) return response.status(400).json({ ok: false, error: "الاسم الظاهر ومحتوى الرسالة مطلوبان" });
-    const departments = Array.isArray(body.departments) ? body.departments.map(clean).filter(Boolean) : [];
+    const departments = stringList(body.departments);
     const [row] = id
       ? await sql<any[]>`
           update crm.message_templates set name=${clean(body.name)||displayName},display_name=${displayName},content=${content},template_type=${clean(body.templateType)||"quick_message"},provider=${clean(body.provider)||null},external_id=${clean(body.externalId)||null},language_code=${clean(body.languageCode)||null},departments=${departments},is_active=${body.isActive!==false},status=${clean(body.status)||"active"},updated_at=now() where id=${id}::uuid returning *,id::text
@@ -89,10 +195,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (section === "quality") {
-    const marketingNumeratorStatuses = Array.isArray(body.marketingNumeratorStatuses) ? body.marketingNumeratorStatuses.map(clean).filter(Boolean) : [];
-    const marketingDenominatorStatuses = Array.isArray(body.marketingDenominatorStatuses) ? body.marketingDenominatorStatuses.map(clean).filter(Boolean) : [];
-    const salesNumeratorStatuses = Array.isArray(body.salesNumeratorStatuses) ? body.salesNumeratorStatuses.map(clean).filter(Boolean) : [];
-    const salesDenominatorStatuses = Array.isArray(body.salesDenominatorStatuses) ? body.salesDenominatorStatuses.map(clean).filter(Boolean) : [];
+    const marketingNumeratorStatuses = stringList(body.marketingNumeratorStatuses);
+    const marketingDenominatorStatuses = stringList(body.marketingDenominatorStatuses);
+    const salesNumeratorStatuses = stringList(body.salesNumeratorStatuses);
+    const salesDenominatorStatuses = stringList(body.salesDenominatorStatuses);
     if (!marketingNumeratorStatuses.length || !salesNumeratorStatuses.length) return response.status(400).json({ ok: false, error: "اختار حالات البسط للمؤشرات" });
     const [row] = await sql<any[]>`
       update crm.report_quality_settings set
@@ -127,6 +233,51 @@ export default async function handler(request: VercelRequest, response: VercelRe
       on conflict (code) do update set name=excluded.name,is_active=excluded.is_active,sort_order=excluded.sort_order,updated_at=now() returning *
     `;
     return response.status(200).json({ ok: true, row });
+  }
+
+  if (section === "assignment_rule") {
+    const id = clean(body.id);
+    if (action === "delete") {
+      await sql`update crm.assignment_rules set is_active=false,updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+      return response.status(200).json({ ok: true });
+    }
+    const name = clean(body.name);
+    const departmentCode = clean(body.departmentCode);
+    const memberIds = stringList(body.memberIds);
+    if (!name || !departmentCode) return response.status(400).json({ ok: false, error: "اسم القاعدة والقسم مطلوبان" });
+    if (!memberIds.length) return response.status(400).json({ ok: false, error: "اختار موظفًا واحدًا على الأقل في قاعدة التوزيع" });
+    const sourceCodes = stringList(body.sourceCodes);
+    const [rule] = id
+      ? await sql<any[]>`
+          update crm.assignment_rules set name=${name},department_code=${departmentCode},branch_code=${clean(body.branchCode)||null},source_codes=${sourceCodes},assignment_mode='round_robin',prevent_consecutive=${body.preventConsecutive!==false},sort_order=${Number(body.sortOrder||0)},is_active=${body.isActive!==false},updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text
+        `
+      : await sql<any[]>`
+          insert into crm.assignment_rules(name,department_code,branch_code,source_codes,assignment_mode,prevent_consecutive,sort_order,is_active,created_by,updated_by)
+          values (${name},${departmentCode},${clean(body.branchCode)||null},${sourceCodes},'round_robin',${body.preventConsecutive!==false},${Number(body.sortOrder||0)},${body.isActive!==false},${user.id}::uuid,${user.id}::uuid) returning *,id::text
+        `;
+    await sql`delete from crm.assignment_rule_members where rule_id=${rule.id}::uuid and not (user_id = any(${memberIds}::uuid[]))`;
+    for (let index = 0; index < memberIds.length; index += 1) {
+      const memberId = memberIds[index];
+      await sql`
+        insert into crm.assignment_rule_members(rule_id,user_id,priority,is_active,updated_at)
+        values (${rule.id}::uuid,${memberId}::uuid,${(index+1)*10},true,now())
+        on conflict (rule_id,user_id) do update set priority=excluded.priority,is_active=true,updated_at=now()
+      `;
+    }
+    await audit(user, "assignment_rule_saved", "assignment_rule", rule.id, { ...rule, memberIds });
+    return response.status(200).json({ ok: true, row: rule });
+  }
+
+  if (section === "assignment_member") {
+    const ruleId = clean(body.ruleId);
+    const userId = clean(body.userId);
+    if (!ruleId || !userId) return response.status(400).json({ ok: false, error: "قاعدة التوزيع والموظف مطلوبان" });
+    await sql`
+      update crm.assignment_rule_members
+      set is_active=${body.isActive!==false},priority=${Number(body.priority||100)},updated_at=now()
+      where rule_id=${ruleId}::uuid and user_id=${userId}::uuid
+    `;
+    return response.status(200).json({ ok: true });
   }
 
   return response.status(400).json({ ok: false, error: "قسم الإعدادات غير معروف" });

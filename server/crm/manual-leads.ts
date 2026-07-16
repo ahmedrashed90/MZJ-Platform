@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, branchForDepartment, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, branchForDepartment, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, requireCrmUser, resolveSourceName } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -13,13 +13,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const rows = await sql<any[]>`
       select r.*,r.id::text,r.requested_by::text,r.reviewed_by::text,r.duplicate_lead_id::text,r.created_lead_id::text,
         req.full_name as requested_by_name,rev.full_name as reviewed_by_name,sales.full_name as requested_assigned_name,cc.full_name as requested_call_center_name,
-        dup.customer_name as duplicate_customer_name,dup.status_label as duplicate_status
+        dup.customer_name as duplicate_customer_name,dup.status_label as duplicate_status,src.name as source_name
       from crm.manual_lead_requests r
       left join core.users req on req.id=r.requested_by
       left join core.users rev on rev.id=r.reviewed_by
       left join core.users sales on sales.id=r.requested_assigned_to
       left join core.users cc on cc.id=r.requested_call_center_to
       left join crm.leads dup on dup.id=r.duplicate_lead_id
+      left join core.sources src on src.code=r.source_code
       where (${status || null}::text is null or r.approval_status=${status || null})
         and (${q || null}::text is null or concat_ws(' ',r.customer_name,r.phone,r.source_code,r.car_name,sales.full_name) ilike ${q ? `%${q}%` : null})
         and (${isCrmManager(user)}::boolean or r.requested_by=${user.id}::uuid)
@@ -41,28 +42,31 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const [duplicate] = await sql<any[]>`select id::text,customer_name from crm.leads where phone_normalized=${phoneNormalized} and is_deleted=false limit 1`;
     const status = duplicate ? "pending" : "approved";
 
+    const sourceCode = clean(body.sourceCode || "branch");
+    const sourceName = await resolveSourceName(sourceCode);
     let assignedTo = clean(body.assignedTo) || null;
     let callCenterTo = clean(body.callCenterAssignedTo) || null;
-    if (!assignedTo) assignedTo = (await chooseAssignment(serviceKey, branchCode)).assignedTo;
-    if (serviceKey === "finance" && !callCenterTo) callCenterTo = (await chooseCallCenterAssignment()).assignedTo;
+    if (!assignedTo) assignedTo = (await chooseAssignment(serviceKey, branchCode, sourceCode)).assignedTo;
+    if (serviceKey === "finance" && !callCenterTo) callCenterTo = (await chooseCallCenterAssignment(sourceCode, branchCode || "online")).assignedTo;
 
     const [requestRow] = await sql<any[]>`
       insert into crm.manual_lead_requests(customer_name,phone,phone_normalized,source_code,payment_type,service_key,department_code,branch_code,car_name,location,notes,requested_assigned_to,requested_call_center_to,duplicate_lead_id,approval_status,requested_by)
-      values (${customerName},${phone},${phoneNormalized},${clean(body.sourceCode || "branch")},${clean(body.paymentType)},${serviceKey},${departmentCode},${branchCode || null},${clean(body.carName) || null},${clean(body.location) || null},${clean(body.notes) || null},${assignedTo}::uuid,${callCenterTo}::uuid,${duplicate?.id || null}::uuid,${status},${user.id}::uuid)
+      values (${customerName},${phone},${phoneNormalized},${sourceCode},${clean(body.paymentType)},${serviceKey},${departmentCode},${branchCode || null},${clean(body.carName) || null},${clean(body.location) || null},${clean(body.notes) || null},${assignedTo}::uuid,${callCenterTo}::uuid,${duplicate?.id || null}::uuid,${status},${user.id}::uuid)
       returning *,id::text
     `;
 
     if (!duplicate) {
+      const completionPercent = calculateLeadCompletion({ customerName, phone, sourceCode, statusLabel: 'عميل جديد', serviceKey, location: clean(body.location), carName: clean(body.carName) });
       const [lead] = await sql<any[]>`
-        insert into crm.leads(customer_name,phone,phone_normalized,source_code,source_name,service_key,department_code,branch_code,status_label,payment_type,car_name,location,notes,assigned_to,call_center_assigned_to,created_by,updated_by,registered_at)
-        values (${customerName},${phone},${phoneNormalized},${clean(body.sourceCode || "branch")},${sourceLabel(clean(body.sourceCode || "branch"))},${serviceKey},${departmentCode},${branchCode || null},'عميل جديد',${clean(body.paymentType) || (serviceKey==='finance'?'تمويل':serviceKey==='service'?'خدمة عملاء':'كاش')},${clean(body.carName)||null},${clean(body.location)||null},${clean(body.notes)||null},${assignedTo}::uuid,${callCenterTo}::uuid,${user.id}::uuid,${user.id}::uuid,now()) returning id::text
+        insert into crm.leads(customer_name,phone,phone_normalized,source_code,source_name,service_key,department_code,branch_code,status_label,payment_type,car_name,location,notes,assigned_to,call_center_assigned_to,created_by,updated_by,registered_at,completion_percent)
+        values (${customerName},${phone},${phoneNormalized},${sourceCode},${sourceName},${serviceKey},${departmentCode},${branchCode || null},'عميل جديد',${clean(body.paymentType) || (serviceKey==='finance'?'تمويل':serviceKey==='service'?'خدمة عملاء':'كاش')},${clean(body.carName)||null},${clean(body.location)||null},${clean(body.notes)||null},${assignedTo}::uuid,${callCenterTo}::uuid,${user.id}::uuid,${user.id}::uuid,now(),${completionPercent}) returning id::text
       `;
       await sql`update crm.manual_lead_requests set created_lead_id=${lead.id}::uuid,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${requestRow.id}::uuid`;
       await sql`
         insert into crm.conversations(legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata)
         values (
           ${`crm-manual:${lead.id}`},${lead.id}::uuid,'whatsapp',${customerName},${assignedTo}::uuid,${callCenterTo}::uuid,
-          ${sql.json({ manualEntry: true, sourceCode: clean(body.sourceCode || "branch"), sourceName: sourceLabel(clean(body.sourceCode || "branch")) })}
+          ${sql.json({ manualEntry: true, sourceCode, sourceName })}
         )
         on conflict (legacy_id) do update set lead_id=excluded.lead_id,customer_name=excluded.customer_name,
           assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,metadata=excluded.metadata,updated_at=now()
