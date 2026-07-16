@@ -29,3 +29,9 @@ npm run dev
 - Framework Preset: Vite
 - Build Command: `npm run build`
 - Output Directory: `dist`
+
+## Vercel deployment
+- Node.js: 22.x
+- Install: `npm ci --registry=https://registry.npmjs.org/`
+- Build: `npm run build`
+- Output: `dist`
