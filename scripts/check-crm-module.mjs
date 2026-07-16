@@ -3,15 +3,15 @@ import path from "node:path";
 
 const root = process.cwd();
 const requiredFiles = [
-  "api/crm/dashboard.ts",
-  "api/crm/leads.ts",
-  "api/crm/conversations.ts",
-  "api/crm/manual-leads.ts",
-  "api/crm/history.ts",
-  "api/crm/reports.ts",
-  "api/crm/kpi.ts",
-  "api/crm/inbox-agent.ts",
-  "api/crm/settings.ts",
+  "server/crm/dashboard.ts",
+  "server/crm/leads.ts",
+  "server/crm/conversations.ts",
+  "server/crm/manual-leads.ts",
+  "server/crm/history.ts",
+  "server/crm/reports.ts",
+  "server/crm/kpi.ts",
+  "server/crm/inbox-agent.ts",
+  "server/crm/settings.ts",
   "src/crm/pages/CrmDashboardPage.tsx",
   "src/crm/pages/CrmDatabasePage.tsx",
   "src/crm/pages/CrmManualLeadsPage.tsx",
@@ -25,7 +25,7 @@ for (const file of requiredFiles) {
   if (!fs.existsSync(path.join(root, file))) throw new Error(`Missing CRM module file: ${file}`);
 }
 
-const schema = fs.readFileSync(path.join(root, "api/_crm-schema.ts"), "utf8");
+const schema = fs.readFileSync(path.join(root, "server/_crm-schema.ts"), "utf8");
 const requiredStatuses = [
   "عميل جديد",
   "تم الاتصال",
@@ -45,7 +45,7 @@ for (const status of requiredStatuses) {
   if (!schema.includes(status)) throw new Error(`Missing CRM status: ${status}`);
 }
 
-const filesToScan = ["src", "api", "database"];
+const filesToScan = ["src", "api", "server", "database"];
 const forbidden = ["أحمد محمد", "Ahmed Mohamed", "عميل تجريبي"];
 function walk(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {

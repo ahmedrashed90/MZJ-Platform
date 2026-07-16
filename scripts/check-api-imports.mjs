@@ -1,7 +1,7 @@
-import { readdir, readFile } from 'node:fs/promises';
-import path from 'node:path';
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 
-const apiDir = path.resolve('api');
+const roots = [path.resolve("api"), path.resolve("server")];
 const invalid = [];
 
 async function walk(directory) {
@@ -11,9 +11,9 @@ async function walk(directory) {
       await walk(fullPath);
       continue;
     }
-    if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
 
-    const source = await readFile(fullPath, 'utf8');
+    const source = await readFile(fullPath, "utf8");
     const importPattern = /(?:from\s+|import\s*)["'](\.\.?\/[^"']+)["']/g;
     for (const match of source.matchAll(importPattern)) {
       const specifier = match[1];
@@ -24,12 +24,12 @@ async function walk(directory) {
   }
 }
 
-await walk(apiDir);
+for (const root of roots) await walk(root);
 
 if (invalid.length) {
-  console.error('Vercel API imports must use explicit .js extensions:');
+  console.error("NodeNext imports must use explicit .js extensions:");
   for (const item of invalid) console.error(`- ${item}`);
   process.exit(1);
 }
 
-console.log('API import extension check passed.');
+console.log("API and server import extension check passed.");

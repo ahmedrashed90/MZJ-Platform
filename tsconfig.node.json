@@ -6,7 +6,14 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["vite.config.ts", "api/**/*.ts", "src/types.ts"]
+  "include": [
+    "vite.config.ts",
+    "api/**/*.ts",
+    "server/**/*.ts",
+    "src/types.ts"
+  ]
 }
