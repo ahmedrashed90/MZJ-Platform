@@ -38,3 +38,10 @@
 
 - `database/seed.sql` يحتوي على الفروع والأقسام والأدوار الأساسية فقط، ولا ينشئ أي مستخدم أو بيانات عملاء أو سيارات.
 - لا تضع `DATABASE_URL` أو `MZJ_SETUP_KEY` داخل GitHub. ضعها في Vercel Environment Variables فقط.
+
+## v1.2.1 Vercel TypeScript fix
+
+- All relative imports inside `api/` use explicit `.js` extensions for Vercel's NodeNext compilation.
+- `tsconfig.node.json` now uses `module` and `moduleResolution` set to `NodeNext` so the same class of error is caught before deployment.
+- The build runs an API import validation before TypeScript and Vite.
+- The SPA rewrite excludes `/api/` routes.

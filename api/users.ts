@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireAdmin, requestIp } from "./_auth";
-import { getSql } from "./_db";
+import { requireAdmin, requestIp } from "./_auth.js";
+import { getSql } from "./_db.js";
 
 function cleanText(value: unknown) {
   return String(value ?? "").trim();

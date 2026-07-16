@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { getSql } from "./_db";
+import { getSql } from "./_db.js";
 
 export const SESSION_COOKIE = "mzj_session";
 const SESSION_HOURS = 12;

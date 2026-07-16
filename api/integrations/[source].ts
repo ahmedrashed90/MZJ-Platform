@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "node:crypto";
-import { safeSecretEquals } from "../_auth";
-import { getSql } from "../_db";
+import { safeSecretEquals } from "../_auth.js";
+import { getSql } from "../_db.js";
 
 const allowedSources = new Set([
   "facebook",

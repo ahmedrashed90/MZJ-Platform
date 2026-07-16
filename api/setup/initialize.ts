@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createSession, requestIp, safeSecretEquals } from "../_auth";
-import { databaseConfigured, getSql, runSqlScript } from "../_db";
-import { SCHEMA_SQL, SEED_SQL } from "../_schema";
+import { createSession, requestIp, safeSecretEquals } from "../_auth.js";
+import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
+import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();

@@ -1,5 +1,5 @@
-import { getSql } from "./_db";
-import type { DashboardData } from "../src/types";
+import { getSql } from "./_db.js";
+import type { DashboardData } from "../src/types.js";
 
 const locationNames = [
   ["warehouse", "المستودع"],
