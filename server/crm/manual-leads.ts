@@ -58,6 +58,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
         values (${customerName},${phone},${phoneNormalized},${clean(body.sourceCode || "branch")},${sourceLabel(clean(body.sourceCode || "branch"))},${serviceKey},${departmentCode},${branchCode || null},'عميل جديد',${clean(body.paymentType) || (serviceKey==='finance'?'تمويل':serviceKey==='service'?'خدمة عملاء':'كاش')},${clean(body.carName)||null},${clean(body.location)||null},${clean(body.notes)||null},${assignedTo}::uuid,${callCenterTo}::uuid,${user.id}::uuid,${user.id}::uuid,now()) returning id::text
       `;
       await sql`update crm.manual_lead_requests set created_lead_id=${lead.id}::uuid,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${requestRow.id}::uuid`;
+      await sql`
+        insert into crm.conversations(legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata)
+        values (
+          ${`crm-manual:${lead.id}`},${lead.id}::uuid,'whatsapp',${customerName},${assignedTo}::uuid,${callCenterTo}::uuid,
+          ${sql.json({ manualEntry: true, sourceCode: clean(body.sourceCode || "branch"), sourceName: sourceLabel(clean(body.sourceCode || "branch")) })}
+        )
+        on conflict (legacy_id) do update set lead_id=excluded.lead_id,customer_name=excluded.customer_name,
+          assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,metadata=excluded.metadata,updated_at=now()
+      `;
       await sql`insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note) values (${lead.id}::uuid,'manual_lead_created','عميل جديد',${departmentCode},${branchCode||null},${user.id}::uuid,${user.fullName},'إضافة عميل يدوي')`;
     }
     await audit(user, "manual_lead_requested", "manual_lead_request", requestRow.id, requestRow);

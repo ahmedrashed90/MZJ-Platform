@@ -70,6 +70,8 @@ export type CrmLead = {
   call_center_name?: string | null;
   conversation_id?: string | null;
   channel_code?: string | null;
+  delivery_channel?: string | null;
+  message_policy?: "free_text_and_templates" | "templates_only" | null;
   preview_text?: string | null;
   unread_count?: number | null;
   last_message_at?: string | null;
@@ -83,6 +85,9 @@ export type CrmConversation = {
   lead_id?: string | null;
   legacy_id?: string | null;
   channel_code: string;
+  source_code?: string | null;
+  source_name?: string | null;
+  platform_code?: string | null;
   customer_name?: string | null;
   preview_text?: string | null;
   unread_count?: number;

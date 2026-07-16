@@ -8,12 +8,14 @@ function leadPayload(body: Record<string, any>) {
     body.serviceKey ?? body.service_key ?? body.departmentCode ?? body.department_code ?? body.paymentType ?? body.payment_type ?? "cash",
   );
   const phone = clean(body.phone ?? body.mobile ?? body.phone_number ?? body.phoneNumber);
+  const sourceCode = clean(body.sourceCode ?? body.source_code ?? body.source ?? "branch");
+  const suppliedSourceName = clean(body.sourceName ?? body.source_name);
   return {
     customerName: clean(body.customerName ?? body.customer_name ?? body.name ?? body.fullName ?? body.full_name),
     phone,
     phoneNormalized: normalizePhone(phone),
-    sourceCode: clean(body.sourceCode ?? body.source_code ?? body.source ?? "branch"),
-    sourceName: clean(body.sourceName ?? body.source_name) || sourceLabel(clean(body.sourceCode ?? body.source_code ?? body.source ?? "branch")),
+    sourceCode,
+    sourceName: sourceLabel(sourceCode || suppliedSourceName),
     platformCode: clean(body.platformCode ?? body.platform_code ?? body.platform),
     serviceKey,
     departmentCode: clean(body.departmentCode ?? body.department_code) || departmentCodeFromKey(serviceKey),
@@ -116,6 +118,7 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       and (${from || null}::date is null or coalesce(l.registered_at,l.created_at)::date >= ${from || null}::date)
       and (${to || null}::date is null or coalesce(l.registered_at,l.created_at)::date <= ${to || null}::date)
   `;
+  for (const row of rows) row.source_name = sourceLabel(row.source_code || row.source_name);
   return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset });
 }
 
@@ -155,6 +158,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
     insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,actor_role,note)
     values (${row.id}::uuid,'lead_created',${input.statusLabel},${input.departmentCode},${assignment.branchCode || input.branchCode || null},${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},'دخول العميل إلى النظام')
   `;
+  row.source_name = sourceLabel(row.source_code || row.source_name);
   await audit(user, "lead_created", "lead", row.id, row);
   return response.status(201).json({ ok: true, row });
 }
@@ -213,6 +217,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       }).catch((error: any) => ({ skipped: false, failed: true, error: error?.message || String(error) }));
     }
   }
+  row.source_name = sourceLabel(row.source_code || row.source_name);
   await audit(user, "lead_updated", "lead", id, row, before);
   return response.status(200).json({ ok: true, row, statusMessage });
 }

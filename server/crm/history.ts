@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, requireCrmUser, userScope } from "../_crm-utils.js";
+import { clean, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -31,12 +31,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const events = await sql<any[]>`
       select e.*, e.id::text from crm.lead_events e where e.lead_id=${leadId}::uuid order by e.created_at asc, e.id asc
     `;
+    lead.source_name = sourceLabel(lead.source_code || lead.source_name);
     return response.status(200).json({ ok: true, lead, events });
   }
 
   const rows = await sql<any[]>`
     select l.id::text, l.customer_name, l.phone, l.phone_normalized, l.status_label, l.department_code, l.branch_code,
-      l.source_name, l.car_name, l.car_model, l.color, l.finance_type, l.age, l.salary, l.obligation, l.salary_bank,
+      l.source_code, l.source_name, l.car_name, l.car_model, l.color, l.finance_type, l.age, l.salary, l.obligation, l.salary_bank,
       l.location, l.campaign_name, l.notes, l.created_at, l.updated_at,
       sales.full_name as assigned_name, cc.full_name as call_center_name,
       max(e.created_at) as last_event_at, count(e.id)::int as events_count
@@ -57,5 +58,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     order by max(e.created_at) desc nulls last,l.updated_at desc
     limit 500
   `;
+  for (const row of rows) row.source_name = sourceLabel(row.source_code || row.source_name);
   return response.status(200).json({ ok: true, rows });
 }

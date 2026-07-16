@@ -100,14 +100,37 @@ export async function audit(user: SessionUser, action: string, entityType: strin
 }
 
 export function sourceLabel(source: string) {
+  const raw = clean(source);
+  const key = raw
+    .toLowerCase()
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/[\s/\-]+/g, "_");
   const map: Record<string, string> = {
-    facebook: "فيسبوك", fb: "فيسبوك", meta: "فيسبوك",
-    instagram: "إنستجرام", ig: "إنستجرام",
-    tiktok: "تيك توك", tiktok_lead: "تيك توك ليد", snapchat: "سناب شات", snapchat_lead: "سناب شات ليد", whatsapp: "واتساب", mersal: "واتساب",
-    installment_calculator: "حاسبة التقسيط", calculator: "حاسبة التقسيط",
-    haraj: "موقع حراج", other_website: "موقع آخر", branch: "خلال الفرع", friend: "صديق", unified_number: "اتصال الرقم الموحد",
+    facebook: "فيسبوك", fb: "فيسبوك", meta: "فيسبوك", facebook_chat: "فيسبوك",
+    instagram: "إنستجرام", ig: "إنستجرام", insta: "إنستجرام", instagram_chat: "إنستجرام",
+    tiktok: "تيك توك", tt: "تيك توك", tik_tok: "تيك توك", tiktok_chat: "تيك توك", tiktok_snapchat: "تيك توك ليد وسناب شات ليد",
+    tiktok_lead: "تيك توك ليد", snapchat: "سناب شات", snap: "سناب شات", snapchat_lead: "سناب شات ليد",
+    whatsapp: "واتساب", wa: "واتساب", mersal: "واتساب",
+    installment_calculator: "حاسبة التقسيط", installment: "حاسبة التقسيط", calculator: "حاسبة التقسيط",
+    haraj: "موقع حراج", other_website: "موقع آخر", branch: "خلال الفرع", friend: "صديق",
+    unified_number: "اتصال الرقم الموحد", manual: "إدخال يدوي", manual_entry: "إدخال يدوي",
+    فيسبوك: "فيسبوك", فيس_بوك: "فيسبوك", انستجرام: "إنستجرام", انستغرام: "إنستجرام",
+    تيك_توك: "تيك توك", تيك_توك_ليد: "تيك توك ليد", سناب_شات: "سناب شات", سناب_شات_ليد: "سناب شات ليد",
+    واتساب: "واتساب", حاسبه_التقسيط: "حاسبة التقسيط", موقع_حراج: "موقع حراج", موقع_اخر: "موقع آخر",
+    خلال_الفرع: "خلال الفرع", صديق: "صديق", اتصال_الرقم_الموحد: "اتصال الرقم الموحد", ادخال_يدوي: "إدخال يدوي",
   };
-  return map[clean(source).toLowerCase()] || clean(source) || "غير محدد";
+  if (map[key]) return map[key];
+  if ((key.includes("tiktok") || key.includes("تيك_توك")) && (key.includes("lead") || key.includes("ليد"))) return "تيك توك ليد";
+  if ((key.includes("snap") || key.includes("سناب")) && (key.includes("lead") || key.includes("ليد"))) return "سناب شات ليد";
+  if (key.includes("facebook") || key.includes("فيسبوك") || key.includes("فيس_بوك")) return "فيسبوك";
+  if (key.includes("instagram") || key.includes("انستجرام") || key.includes("انستغرام")) return "إنستجرام";
+  if (key.includes("tiktok") || key.includes("تيك_توك")) return "تيك توك";
+  if (key.includes("snap") || key.includes("سناب")) return "سناب شات";
+  if (key.includes("whatsapp") || key.includes("mersal") || key.includes("واتساب")) return "واتساب";
+  if (key.includes("installment") || key.includes("calculator") || key.includes("حاسبه_التقسيط")) return "حاسبة التقسيط";
+  if (key.includes("manual") || key.includes("ادخال_يدوي")) return "إدخال يدوي";
+  return raw || "غير محدد";
 }
 
 export async function chooseAssignment(serviceKey: string, requestedBranch = "") {

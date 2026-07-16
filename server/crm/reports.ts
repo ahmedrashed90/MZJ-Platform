@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, departmentKey, requireCrmUser, userScope } from "../_crm-utils.js";
+import { clean, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function norm(value: unknown) {
@@ -25,6 +25,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const from = clean(request.query.from);
   const to = clean(request.query.to);
   const q = clean(request.query.q);
+  const department = clean(request.query.department);
+  const branch = clean(request.query.branch);
+  const agent = clean(request.query.agent);
+  const callCenter = clean(request.query.callCenter);
+  const source = clean(request.query.source);
 
   const leads = await sql<any[]>`
     select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,l.department_code,l.branch_code,
@@ -43,9 +48,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       )
       and (${from || null}::date is null or l.created_at::date >= ${from || null}::date)
       and (${to || null}::date is null or l.created_at::date <= ${to || null}::date)
-      and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.car_name,l.source_name,l.status_label,l.notes) ilike ${q ? `%${q}%` : null})
+      and (${department || null}::text is null or l.department_code=${department || null} or l.service_key=${department || null})
+      and (${branch || null}::text is null or l.branch_code=${branch || null})
+      and (${agent || null}::uuid is null or l.assigned_to=${agent || null}::uuid)
+      and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
+      and (${source || null}::text is null or l.source_code=${source || null})
+      and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,sales.full_name,cc.full_name,b.name) ilike ${q ? `%${q}%` : null})
     order by l.updated_at desc
   `;
+
+  for (const lead of leads) lead.source_name = sourceLabel(lead.source_code || lead.source_name);
 
   const [quality] = await sql<any[]>`select * from crm.report_quality_settings where id='default'`;
   const marketingNum = new Set<string>((quality?.marketing_numerator_statuses || ["مؤهل"]).map((value: unknown) => norm(value)));
@@ -59,10 +71,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const salesDen = quality?.sales_denominator_mode === "all" ? rows.length : count(salesDenStatuses);
     return {
       total: rows.length,
-      notQualified: rows.filter((l) => norm(l.status_label) === norm("غير مؤهل")).length,
-      qualified: rows.filter((l) => norm(l.status_label).startsWith(norm("مؤهل"))).length,
-      delayed: rows.filter((l) => norm(l.status_label) === norm("مؤجل")).length,
-      potential: rows.filter((l) => norm(l.status_label) === norm("محتمل")).length,
+      notQualified: rows.filter((lead) => norm(lead.status_label) === norm("غير مؤهل")).length,
+      qualified: rows.filter((lead) => norm(lead.status_label).startsWith(norm("مؤهل"))).length,
+      delayed: rows.filter((lead) => norm(lead.status_label) === norm("مؤجل")).length,
+      potential: rows.filter((lead) => norm(lead.status_label) === norm("محتمل")).length,
       sold: count(salesNum),
       marketingQuality: percent(count(marketingNum), marketingDen),
       salesQuality: percent(count(salesNum), salesDen),
@@ -76,20 +88,34 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (!map.has(name)) map.set(name, []);
       map.get(name)!.push(row);
     }
-    return [...map.entries()].map(([name, rows]) => ({ name, ...makeMetrics(rows), customers: rows })).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "ar"));
+    return [...map.entries()]
+      .map(([name, rows]) => ({ name, ...makeMetrics(rows), customers: rows }))
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "ar"));
   };
 
-  const sources = group((row) => row.source_name || row.source_code || "غير محدد");
+  const sources = group((row) => sourceLabel(row.source_code || row.source_name));
   const departments = group((row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`);
   const agents = group((row) => row.assigned_name || "غير موزع");
-  const callCenter = group((row) => row.call_center_name || "غير موزع").filter((row) => row.name !== "غير موزع" || row.total > 0);
+  const callCenterRows = group((row) => row.call_center_name || "غير موزع").filter((row) => row.name !== "غير موزع" || row.total > 0);
   const serviceRows = leads.filter((row) => row.department_code === "customer_service");
   const service = {
+    name: "خدمة العملاء",
     ...makeMetrics(serviceRows),
     working: serviceRows.filter((row) => norm(row.status_label) === norm("جاري العمل")).length,
     done: serviceRows.filter((row) => [norm("تم الانتهاء"), norm("تم الإنتهاء")].includes(norm(row.status_label))).length,
     customers: serviceRows,
   };
 
-  return response.status(200).json({ ok: true, filters: { from, to, q }, totals: makeMetrics(leads), sources, departments, agents, callCenter, service, customers: leads, quality });
+  return response.status(200).json({
+    ok: true,
+    filters: { from, to, q, department, branch, agent, callCenter, source },
+    totals: makeMetrics(leads),
+    sources,
+    departments,
+    agents,
+    callCenter: callCenterRows,
+    service,
+    customers: leads,
+    quality,
+  });
 }

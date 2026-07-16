@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, departmentKey, requireCrmUser, userScope } from "../_crm-utils.js";
+import { clean, departmentKey, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -50,6 +50,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     order by coalesce(c.last_message_at, l.updated_at, l.created_at) desc
     limit 1000
   `;
+
+  for (const row of rows) row.source_name = sourceLabel(row.source_code || row.source_name);
 
   const statuses = await sql<any[]>`
     select id, department_code, label, value, sort_order

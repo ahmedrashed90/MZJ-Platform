@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowClockwise, PaperPlaneTilt, X } from "@phosphor-icons/react";
+import {
+  ArrowClockwise,
+  CalendarBlank,
+  ChatCircleDots,
+  PaperPlaneTilt,
+  Phone,
+  UserCircle,
+  WhatsappLogo,
+  X,
+} from "@phosphor-icons/react";
 import { crmFetch, departmentKeyFromCode, formatDate } from "../api";
+import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMessage, CrmMeta } from "../types";
 
 type Props = {
@@ -12,14 +22,15 @@ type Props = {
 
 const emptyMessages: CrmMessage[] = [];
 
-function value(value: unknown) {
-  return value == null ? "" : String(value);
+function value(input: unknown) {
+  return input == null ? "" : String(input);
 }
 
 export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [form, setForm] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<CrmMessage[]>(emptyMessages);
   const [conversationId, setConversationId] = useState("");
+  const [conversationChannel, setConversationChannel] = useState("");
   const [messageText, setMessageText] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -59,6 +70,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     });
     setMessages([]);
     setConversationId(lead.conversation_id || "");
+    setConversationChannel(lead.channel_code || "");
+    setMessageText("");
     setNotice("");
     void loadConversation(lead.id, lead.conversation_id || "");
   }, [lead?.id]);
@@ -68,12 +81,18 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     try {
       let id = preferredId;
       if (!id) {
-        const result = await crmFetch<{ ok: boolean; rows: Array<{ id: string }> }>(`/api/crm/conversations?leadId=${encodeURIComponent(leadId)}&limit=1`);
+        const result = await crmFetch<{ ok: boolean; rows: Array<{ id: string; channel_code?: string | null }> }>(
+          `/api/crm/conversations?leadId=${encodeURIComponent(leadId)}&limit=1`,
+        );
         id = result.rows[0]?.id || "";
         setConversationId(id);
+        setConversationChannel(result.rows[0]?.channel_code || "");
       }
       if (id) {
-        const result = await crmFetch<{ ok: boolean; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(
+          `/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`,
+        );
+        setConversationChannel(result.conversation?.channel_code || conversationChannel);
         setMessages(result.messages || []);
       } else {
         setMessages([]);
@@ -87,7 +106,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
   const department = form.serviceKey || departmentKeyFromCode(form.departmentCode);
   const statuses = useMemo(
-    () => (meta?.statuses || []).filter((item) => item.department_code === department && item.is_active !== false),
+    () => (meta?.statuses || [])
+      .filter((item) => item.department_code === department && item.is_active !== false)
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)),
     [meta, department],
   );
   const salesUsers = useMemo(() => {
@@ -109,11 +130,30 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const credit = useMemo(() => {
     const salary = Number(form.salary || 0);
     const obligation = Number(form.obligation || 0);
-    const ratio = form.financeType === "rate55" || form.financeType === "55%" ? 0.55 : form.financeType === "realEstate" || form.financeType?.includes("65") ? 0.65 : form.financeType ? 0.45 : 0;
+    const ratio = form.financeType === "rate55" || form.financeType === "55%"
+      ? 0.55
+      : form.financeType === "realEstate" || form.financeType?.includes("65")
+        ? 0.65
+        : form.financeType
+          ? 0.45
+          : 0;
     if (!salary || !ratio) return null;
     const amount = salary * ratio - obligation;
     return { amount, qualified: amount >= 650 };
   }, [form.salary, form.obligation, form.financeType]);
+
+  const policy = useMemo(() => messagePolicyForLead({
+    source_code: form.sourceCode || lead?.source_code,
+    source_name: lead?.source_name,
+    platform_code: lead?.platform_code,
+    channel_code: conversationChannel || lead?.channel_code,
+  }), [form.sourceCode, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel]);
+
+  const availableTemplates = useMemo(() => (meta?.templates || []).filter((template) => {
+    if (!template.departments?.length) return true;
+    const departmentCode = department === "finance" ? "finance_sales" : department === "service" ? "customer_service" : "cash_sales";
+    return template.departments.includes(departmentCode) || template.departments.includes(department);
+  }), [meta, department]);
 
   if (!lead) return null;
 
@@ -140,7 +180,11 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
   async function sendMessage() {
     if (!conversationId) {
-      setNotice("لا توجد محادثة مرتبطة بهذا العميل");
+      setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
+      return;
+    }
+    if (policy.templateOnly && !selectedTemplate) {
+      setNotice("مصدر العميل يسمح بالإرسال عن طريق قالب واتساب فقط");
       return;
     }
     if (!messageText.trim() && !selectedTemplate) return;
@@ -149,9 +193,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     try {
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: messageText, templateId: selectedTemplate }),
+        body: JSON.stringify({ conversationId, text: policy.allowFreeText ? messageText : "", templateId: selectedTemplate }),
       });
-      setMessages((current) => [...current, result.message]);
+      if (result.message) setMessages((current) => [...current, result.message]);
       setMessageText("");
       setNotice(result.providerStatus === "queued" ? "تم حفظ الرسالة في قائمة الإرسال" : "تم إرسال الرسالة");
     } catch (error) {
@@ -162,23 +206,98 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   return (
-    <div className="crm-drawer-backdrop" onMouseDown={onClose}>
-      <aside className="crm-lead-drawer" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="crm-drawer-head">
-          <div>
-            <span>بيانات العميل</span>
-            <h2>{lead.customer_name || "عميل"}</h2>
-            <p>تاريخ دخول العميل السيستم: {formatDate(lead.registered_at || lead.created_at)}</p>
+    <div className="crm-drawer-backdrop crm-customer-workspace-backdrop" onMouseDown={onClose}>
+      <aside className="crm-lead-drawer crm-customer-workspace" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="crm-drawer-head crm-customer-workspace-head">
+          <div className="crm-customer-title">
+            <span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span>
+            <div>
+              <span>محادثة العميل</span>
+              <h2>{lead.customer_name || "عميل"}</h2>
+              <p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p>
+            </div>
+          </div>
+          <div className="crm-customer-head-meta">
+            <span><b>المسؤول:</b> {lead.assigned_name || "غير موزع"}</span>
+            {department === "finance" ? <span><b>الكول سنتر:</b> {lead.call_center_name || "غير موزع"}</span> : null}
+            <span><CalendarBlank size={14} /><b>دخول السيستم:</b> {formatDate(lead.registered_at || lead.created_at)}</span>
           </div>
           <button className="crm-icon-button" type="button" onClick={onClose}><X size={21} /></button>
         </header>
 
-        <div className="crm-drawer-grid">
-          <section className="crm-drawer-details">
+        <div className="crm-drawer-grid crm-customer-workspace-grid">
+          <section className="crm-conversation-panel crm-customer-conversation">
+            <header>
+              <div>
+                <span>المحادثة</span>
+                <strong>{policy.routeLabel}</strong>
+                <small>{policy.reason}</small>
+              </div>
+              <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId)}><ArrowClockwise size={18} /></button>
+            </header>
+
+            <div className="crm-messages-list">
+              {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
+              {!loadingMessages && !messages.length ? (
+                <div className="crm-empty-state crm-empty-conversation">
+                  <ChatCircleDots size={38} weight="duotone" />
+                  <strong>لا توجد رسائل مسجلة</strong>
+                  <span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span>
+                </div>
+              ) : null}
+              {messages.map((message) => (
+                <div key={message.id} className={`crm-message ${message.direction === "out" ? "out" : "in"}`}>
+                  {message.body ? <p>{message.body}</p> : null}
+                  {message.attachment_url ? <a href={message.attachment_url} target="_blank" rel="noreferrer">{message.file_name || "فتح المرفق"}</a> : null}
+                  <small>{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small>
+                </div>
+              ))}
+            </div>
+
+            <div className={`crm-message-composer ${policy.templateOnly ? "template-only" : ""}`}>
+              <div className="crm-message-route-note">
+                {policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}
+                <span>{policy.reason}</span>
+              </div>
+              <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)}>
+                <option value="">{policy.templateOnly ? "اختر قالب واتساب" : "رسالة بدون قالب"}</option>
+                {availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}
+              </select>
+              {policy.allowFreeText ? (
+                <textarea
+                  value={messageText}
+                  onChange={(event) => setMessageText(event.target.value)}
+                  placeholder="اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"
+                  rows={3}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendMessage();
+                    }
+                  }}
+                />
+              ) : (
+                <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار قالب واتساب معتمد ثم اضغط إرسال.</div>
+              )}
+              <button
+                type="button"
+                disabled={sending || (policy.templateOnly ? !selectedTemplate : (!messageText.trim() && !selectedTemplate))}
+                onClick={() => void sendMessage()}
+              >
+                <PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}
+              </button>
+            </div>
+          </section>
+
+          <section className="crm-drawer-details crm-customer-details-panel">
+            <header className="crm-customer-details-title">
+              <div><span>بيانات العميل</span><strong>{sourceLabel(form.sourceCode, lead.source_name)}</strong></div>
+              <small>تعديل البيانات لا يغيّر قناة الإرسال يدويًا؛ السيرفر يحددها من المصدر.</small>
+            </header>
             <div className="crm-form-grid">
               <label><span>حالة العميل</span><select value={form.statusLabel || ""} onChange={(event) => set("statusLabel", event.target.value)}>{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
               <label><span>تاريخ المتابعة</span><input type="datetime-local" value={form.followUpAt || ""} onChange={(event) => set("followUpAt", event.target.value)} /></label>
-              <label><span>المصدر</span><select value={form.sourceCode || ""} onChange={(event) => set("sourceCode", event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{source.name}</option>)}</select></label>
+              <label><span>المصدر</span><select value={form.sourceCode || ""} onChange={(event) => set("sourceCode", event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>
               <label><span>القسم</span><select value={department} onChange={(event) => { const key = event.target.value; set("serviceKey", key); set("departmentCode", key === "finance" ? "finance_sales" : key === "service" ? "customer_service" : "cash_sales"); set("branchCode", key === "finance" ? "online" : key === "service" ? "customer_service" : ""); }}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label>
               <label><span>الفرع</span><select value={form.branchCode || ""} onChange={(event) => set("branchCode", event.target.value)}><option value="">بدون فرع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
               <label><span>المسؤول</span><select value={form.assignedTo || ""} onChange={(event) => set("assignedTo", event.target.value)}><option value="">غير موزع</option>{salesUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
@@ -202,30 +321,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
             </div>
             {credit ? <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
-            <button className="crm-primary-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>
-          </section>
-
-          <section className="crm-conversation-panel">
-            <header>
-              <div><span>المحادثة</span><strong>{lead.channel_code || "غير مرتبطة"}</strong></div>
-              <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId)}><ArrowClockwise size={18} /></button>
-            </header>
-            <div className="crm-messages-list">
-              {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
-              {!loadingMessages && !messages.length ? <div className="crm-empty-state">لا توجد رسائل لهذه المحادثة</div> : null}
-              {messages.map((message) => (
-                <div key={message.id} className={`crm-message ${message.direction === "out" ? "out" : "in"}`}>
-                  {message.body ? <p>{message.body}</p> : null}
-                  {message.attachment_url ? <a href={message.attachment_url} target="_blank" rel="noreferrer">{message.file_name || "فتح المرفق"}</a> : null}
-                  <small>{formatDate(message.created_at)} {message.provider_status ? `• ${message.provider_status}` : ""}</small>
-                </div>
-              ))}
-            </div>
-            <div className="crm-message-composer">
-              <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)}><option value="">رسالة نصية</option>{(meta?.templates || []).map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select>
-              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد" rows={3} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
-            </div>
+            <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>
           </section>
         </div>
       </aside>
