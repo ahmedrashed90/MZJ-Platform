@@ -175,6 +175,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
         message: delivery.message,
         providerStatus: delivery.providerStatus,
         routing: delivery.routing,
+        workerRoute: delivery.workerRoute || undefined,
+        workerAttempts: delivery.workerAttempts || undefined,
+        providerResponse: delivery.providerStatus === "failed" ? delivery.providerResponse : undefined,
         error: delivery.errorMessage || undefined,
       });
     } catch (error: any) {

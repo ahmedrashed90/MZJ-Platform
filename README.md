@@ -193,3 +193,15 @@ Cloudflare secrets / variables المطلوبة:
 - تهيئة CRM تنظف صفوف `whatsapp` و`mersal` القديمة وتوحّد `send_url` و`text_send_url` و`template_send_url` على نفس المسار.
 - لم يتم تغيير Payload القالب: `waId`/`phone` مع `template_name` و`template_language` و`params`.
 - لا يحتاج Worker واتساب/مرسال إلى تعديل لهذه المشكلة.
+
+## v1.9.4 — Worker Route Discovery
+
+عند إرسال واتساب تبدأ المنصة بالمسار المحفوظ في إعدادات CRM. إذا أعاد الـWorker فقط `404/405 Not found`، تجرب المنصة تلقائيًا المسارات المتوافقة على نفس النطاق:
+
+- `/send/mersal`
+- `/outbound/whatsapp/v1/text`
+- `/outbound/whatsapp/v1/template`
+- `/outbound/whatsapp/v1/media`
+- `/send/whatsapp`
+
+لا يتم الانتقال لمسار آخر عند أخطاء الصلاحية أو التوكن أو أخطاء مرسال. عند الفشل يعرض رد API المسارات التي جُرّبت وحالة كل مسار بدون كشف أي سر.

@@ -119,11 +119,49 @@ function endpointCandidates(route: DeliveryRoute) {
   return ["tiktok", "tiktok-chat", "tiktok_chat"];
 }
 
-function unifiedWhatsappSendUrl(endpoint: Record<string, unknown>) {
-  // The active Mersal Worker exposes one CRM route (/send/mersal) for both
-  // free text and templates. Prefer that canonical route and ignore any stale
-  // legacy template-only URL that may still exist in the database.
-  return clean(endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url);
+function uniqueStrings(values: unknown[]) {
+  const seen = new Set<string>();
+  return values.map(clean).filter((value) => {
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function urlOrigin(value: unknown) {
+  try { return new URL(clean(value)).origin; } catch { return ""; }
+}
+
+function whatsappRouteCandidates(endpoint: Record<string, unknown>, kind: DeliveryKind) {
+  const configured = kind === "media"
+    ? [endpoint.media_send_url, endpoint.text_send_url, endpoint.send_url, endpoint.template_send_url]
+    : [endpoint.text_send_url, endpoint.send_url, endpoint.template_send_url];
+  const origins = uniqueStrings([
+    endpoint.health_url,
+    endpoint.text_send_url,
+    endpoint.send_url,
+    endpoint.template_send_url,
+    endpoint.media_send_url,
+  ].map(urlOrigin));
+  const routePaths = kind === "template"
+    ? ["/send/mersal", "/outbound/whatsapp/v1/template", "/send/whatsapp"]
+    : kind === "media"
+      ? ["/outbound/whatsapp/v1/media", "/send/mersal", "/send/whatsapp"]
+      : ["/send/mersal", "/outbound/whatsapp/v1/text", "/send/whatsapp"];
+  return uniqueStrings([
+    ...configured,
+    ...origins.flatMap((origin) => routePaths.map((path) => `${origin}${path}`)),
+  ]);
+}
+
+function endpointUrlCandidates(route: DeliveryRoute, kind: DeliveryKind, endpoint: Record<string, unknown>) {
+  if (route === "whatsapp") return whatsappRouteCandidates(endpoint, kind);
+  const url = kind === "template"
+    ? clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url)
+    : kind === "media"
+      ? clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url)
+      : clean(endpoint.text_send_url || endpoint.send_url);
+  return url ? [url] : [];
 }
 
 async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
@@ -135,22 +173,37 @@ async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
   `;
   const endpoint = rows[0];
   if (!endpoint) throw new Error(`لم يتم ضبط Endpoint فعال لقناة ${sourceLabel(route)}`);
+  const urls = endpointUrlCandidates(route, kind, endpoint);
+  if (!urls.length) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
+  return { endpoint, urls };
+}
 
-  let url = "";
-  if (route === "whatsapp") {
-    url = kind === "media"
-      ? clean(endpoint.media_send_url || unifiedWhatsappSendUrl(endpoint))
-      : unifiedWhatsappSendUrl(endpoint);
-  } else {
-    url = kind === "template"
-      ? clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url)
-      : kind === "media"
-        ? clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url)
-        : clean(endpoint.text_send_url || endpoint.send_url);
+function shouldTryNextWorkerRoute(status: number, response: any) {
+  const message = normalized(response?.error || response?.message || response?.raw || "");
+  return status === 404 || status === 405 || message === "not_found" || message.includes("route_not_found");
+}
+
+async function postToWorker(urls: string[], headers: Record<string, string>, payload: Record<string, unknown>) {
+  const attempts: Array<{ url: string; status: number; response: any }> = [];
+  for (const url of urls) {
+    try {
+      const provider = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+      const raw = await provider.text();
+      let response: any;
+      try { response = JSON.parse(raw); } catch { response = { raw }; }
+      attempts.push({ url, status: provider.status, response });
+      const ok = provider.ok && response?.ok !== false;
+      if (ok || !shouldTryNextWorkerRoute(provider.status, response)) {
+        return { ok, provider, response, usedUrl: url, attempts };
+      }
+    } catch (error: any) {
+      const response = { error: error?.message || String(error) };
+      attempts.push({ url, status: 0, response });
+      if (url === urls[urls.length - 1]) return { ok: false, provider: null, response, usedUrl: url, attempts };
+    }
   }
-
-  if (!url) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
-  return { endpoint, url };
+  const last = attempts[attempts.length - 1] || { url: urls[0] || "", status: 0, response: { error: "No worker route available" } };
+  return { ok: false, provider: null, response: last.response, usedUrl: last.url, attempts };
 }
 
 function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
@@ -179,7 +232,15 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
   if (input.template) {
     const templateName = clean(input.template.external_id || input.template.name);
     if (!templateName) throw new Error("قالب واتساب غير مربوط باسم قالب مرسال");
-    return { ...payload, template_name: templateName, template_language: clean(input.template.language_code) || "ar", params: extractNumberedTemplateParams(clean(input.template.content), input.text), text: input.text };
+    const params = extractNumberedTemplateParams(clean(input.template.content), input.text);
+    return {
+      ...payload,
+      template_name: templateName,
+      template_language: clean(input.template.language_code) || "ar",
+      params,
+      components: params.length ? [{ type: "body", parameters: params.map((value) => ({ type: "text", text: value })) }] : [],
+      text: input.text,
+    };
   }
   return { ...payload, message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
@@ -217,7 +278,7 @@ export async function deliverCrmMessage(input: {
   if (policy.templateOnly && !input.template && !input.media) throw new Error(`مصدر العميل «${policy.sourceArabic}» يسمح بالإرسال عن طريق واتساب بالقوالب فقط`);
   if (policy.templateOnly && input.template && !isMersalTemplate(input.template)) throw new Error("المصدر يسمح بقالب واتساب متزامن من مرسال فقط");
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";
-  const { endpoint, url } = await resolveEndpoint(policy.route, kind);
+  const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;
   const payload = deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer });
 
@@ -232,14 +293,16 @@ export async function deliverCrmMessage(input: {
     return { message: existing, providerStatus: job.status, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
   }
 
-  let providerStatus = "failed"; let providerResponse: any = null; let errorMessage = "";
-  try {
-    const provider = await fetch(url, { method: "POST", headers: gatewayHeaders(endpoint.secret_name), body: JSON.stringify(payload) });
-    const raw = await provider.text();
-    try { providerResponse = JSON.parse(raw); } catch { providerResponse = { raw }; }
-    providerStatus = provider.ok && providerResponse?.ok !== false ? (clean(providerResponse?.status) || "sent") : "failed";
-    if (providerStatus === "failed") errorMessage = clean(providerResponse?.error || providerResponse?.message || providerResponse?.raw) || `HTTP ${provider.status}`;
-  } catch (error: any) { errorMessage = error?.message || String(error); }
+  let providerStatus = "failed"; let providerResponse: any = null; let errorMessage = ""; let workerRoute = ""; let workerAttempts: any[] = [];
+  const delivery = await postToWorker(urls, gatewayHeaders(endpoint.secret_name), payload);
+  providerResponse = delivery.response;
+  workerRoute = delivery.usedUrl;
+  workerAttempts = delivery.attempts.map((attempt) => ({ url: attempt.url, status: attempt.status, error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null }));
+  providerStatus = delivery.ok ? (clean(providerResponse?.status) || "sent") : "failed";
+  if (providerStatus === "failed") {
+    errorMessage = clean(providerResponse?.error || providerResponse?.message || providerResponse?.raw)
+      || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر الوصول إلى مسار إرسال صالح في Worker");
+  }
 
   const [existingMessage] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
   let message = existingMessage;
@@ -251,14 +314,14 @@ export async function deliverCrmMessage(input: {
       ) values (
         ${conversation.id}::uuid,'out',${kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,300) : null},${input.media?.mediaType||null},
         ${input.media?.fileName||null},${input.media?.mimeType||null},${input.media?.fileSize||null},${input.media?.storageKey||null},${input.media ? providerStatus : null},
-        ${Boolean(input.media?.isSensitive)},${providerStatus},${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic })}
+        ${Boolean(input.media?.isSensitive)},${providerStatus},${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute, workerAttempts })}
       ) returning *,id::text,conversation_id::text
     `;
   }
   const nowField = senderType === "human" ? "last_human_reply_at" : "last_bot_reply_at";
   await sql.unsafe(`update crm.conversations set preview_text=$1,last_message_at=now(),updated_at=now(),unread_count=case when $3::boolean then 0 else unread_count end,${nowField}=now() where id=$2::uuid`, [finalText || input.media?.fileName || "مرفق", conversation.id, senderType === "human"]);
   await sql`update integrations.outbound_jobs set status=${providerStatus},attempts=attempts+1,response_payload=${providerResponse ? sql.json(providerResponse) : null},error_message=${errorMessage||null},processed_at=now() where id=${job.id}::uuid`;
-  return { message, providerStatus, providerResponse, errorMessage, jobId: job.id, routing: policy };
+  return { message, providerStatus, providerResponse, errorMessage, jobId: job.id, routing: policy, workerRoute, workerAttempts };
 }
 
 export async function deliverConversationMessage(input: Omit<Parameters<typeof deliverCrmMessage>[0],"conversation"> & { conversationId: string }) {
@@ -271,22 +334,20 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
   const sql = getSql();
   const phone = normalizePhone(input.phone);
   if (!phone) throw new Error("رقم واتساب للإشعار غير صالح");
-  const { endpoint, url } = await resolveEndpoint("whatsapp", input.template ? "template" : "text");
+  const { endpoint, urls } = await resolveEndpoint("whatsapp", input.template ? "template" : "text");
   const templateName = clean(input.template?.external_id || input.template?.name);
-  const payload = input.template ? { phone, waId: phone, template_name: templateName, template_language: clean(input.template.language_code)||"ar", params: extractNumberedTemplateParams(clean(input.template.content), input.text), text: input.text, agentAuto: true } : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
+  const templateParams = input.template ? extractNumberedTemplateParams(clean(input.template.content), input.text) : [];
+  const payload = input.template ? { phone, waId: phone, template_name: templateName, template_language: clean(input.template.language_code)||"ar", params: templateParams, components: templateParams.length ? [{ type: "body", parameters: templateParams.map((value) => ({ type: "text", text: value })) }] : [], text: input.text, agentAuto: true } : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
   const key = clean(input.idempotencyKey) || `direct-wa:${phone}:${crypto.randomUUID()}`;
   const [job] = await sql<any[]>`insert into integrations.outbound_jobs(source,idempotency_key,payload,status) values('whatsapp',${key},${sql.json(payload as any)},'queued') on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key returning *,id::text`;
   if (job.processed_at) return { ok: job.status !== "failed", status: job.status, response: job.response_payload };
-  try {
-    const response = await fetch(url,{method:"POST",headers:gatewayHeaders(endpoint.secret_name),body:JSON.stringify(payload)});
-    const raw = await response.text(); let data:any; try{data=JSON.parse(raw)}catch{data={raw}};
-    const status = response.ok && data?.ok !== false ? (clean(data?.status)||"sent") : "failed";
-    await sql`update integrations.outbound_jobs set status=${status},attempts=attempts+1,response_payload=${sql.json(data)},error_message=${status==='failed' ? clean(data?.error||data?.message||raw) : null},processed_at=now() where id=${job.id}::uuid`;
-    return { ok: status !== "failed", status, response: data };
-  } catch(error:any) {
-    await sql`update integrations.outbound_jobs set status='failed',attempts=attempts+1,error_message=${error?.message||String(error)},processed_at=now() where id=${job.id}::uuid`;
-    return { ok:false,status:"failed",error:error?.message||String(error) };
-  }
+  const delivery = await postToWorker(urls, gatewayHeaders(endpoint.secret_name), payload);
+  const data = delivery.response;
+  const status = delivery.ok ? (clean(data?.status)||"sent") : "failed";
+  const attempts = delivery.attempts.map((attempt) => ({ url: attempt.url, status: attempt.status, error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null }));
+  const error = status === "failed" ? clean(data?.error||data?.message||data?.raw) || "تعذر الوصول إلى مسار إرسال صالح في Worker" : "";
+  await sql`update integrations.outbound_jobs set status=${status},attempts=attempts+1,response_payload=${sql.json({ ...data, workerRoute: delivery.usedUrl, workerAttempts: attempts })},error_message=${error||null},processed_at=now() where id=${job.id}::uuid`;
+  return { ok: status !== "failed", status, response: data, workerRoute: delivery.usedUrl, workerAttempts: attempts, error: error || undefined };
 }
 
 export async function getMappedStatusDraft(input: { leadId: string; departmentCode: string; statusValue: string }) {
