@@ -1687,3 +1687,10 @@ button.small-metric { cursor: pointer; }
   .crm-filter-bar { align-items:stretch; flex-direction:column; }
 }
 
+
+/* CRM v1.11.4 conversations and Mersal attachment normalization */
+.crm-chat-media-open { display:block; width:fit-content; max-width:100%; border:0; padding:0; background:transparent; cursor:zoom-in; border-radius:10px; overflow:hidden; }
+.crm-chat-media-open:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+.crm-message small b { font-weight:900; }
+.crm-message.in small b { color:#6f352a; }
+.crm-message.out small b { color:inherit; }

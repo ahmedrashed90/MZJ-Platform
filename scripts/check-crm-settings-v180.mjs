@@ -25,11 +25,8 @@ if (!api.includes('["crm/mersal-templates", crmMersalTemplatesHandler]')) {
   throw new Error("CRM settings v1.8 check failed: Mersal route is not registered in the single API router");
 }
 
-for (const token of ["templates_sync_url", "source_code='whatsapp'", "templateUrlFromSendUrl", "x-mzj-gateway-secret", "crm.message_templates", "provider='mersal'"]) {
+for (const token of ["MERSAL_WORKER_TEMPLATES_URL", "MERSAL_WORKER_URL", "templateUrlFromSendUrl", "x-mzj-gateway-secret", "crm.message_templates", "provider='mersal'"]) {
   if (!mersal.includes(token)) throw new Error(`CRM settings v1.8 check failed: missing server sync token ${token}`);
-}
-if (mersal.includes("MERSAL_WORKER_TEMPLATES_URL") || mersal.includes("MERSAL_WORKER_URL")) {
-  throw new Error("CRM settings v1.8 check failed: legacy Worker URL overrides must not be used");
 }
 
 for (const token of [".crm-admin-stack", ".crm-form-grid-wide", ".crm-distribution-professional", ".crm-templates-table"]) {

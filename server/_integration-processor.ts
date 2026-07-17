@@ -4,6 +4,16 @@ import { getSql } from "./_db.js";
 import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService } from "./_crm-lifecycle.js";
 import { publishAutomationEvent } from "./_crm-automation.js";
 import { markCrmLeadUnread } from "./_crm-unread-state.js";
+import {
+  extractIntegrationDirection,
+  extractIntegrationMedia,
+  extractIntegrationMessageText,
+  extractIntegrationMessageType,
+  extractIntegrationSenderType,
+  extractStrongMessageKeys,
+  integrationMessageMetadata,
+  whatsappMessage,
+} from "./_message-media.js";
 
 function first(...values: unknown[]) {
   for (const value of values) {
@@ -19,10 +29,6 @@ function bool(value: unknown) {
 
 function nestedWhatsapp(payload: any) {
   return payload?.entry?.[0]?.changes?.[0]?.value || {};
-}
-
-function whatsappMessage(payload: any) {
-  return nestedWhatsapp(payload)?.messages?.[0] || {};
 }
 
 function routeSourceCode(routeSource: string, payload: any) {
@@ -43,50 +49,6 @@ function dateValue(payload: any) {
   }
   const parsed = Date.parse(text);
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString();
-}
-
-function mediaData(payload: any) {
-  const msg = whatsappMessage(payload);
-  const rawType = first(payload.mediaType, payload.media_type, payload.attachmentType, payload.attachment_type, payload.messageType, payload.message_type, msg?.type).toLowerCase();
-  const type = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
-  const nested = msg?.[rawType] || msg?.[type];
-  const storageKey = first(payload.storageKey, payload.storage_key);
-  const url = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
-  const fileName = first(payload.fileName, payload.file_name, nested?.filename);
-  const mimeType = first(payload.mimeType, payload.mime_type, nested?.mime_type);
-  const fileSize = Number(payload.fileSize ?? payload.file_size ?? 0) || null;
-  const hasAttachment = bool(payload.hasAttachment) || Boolean(storageKey || url || nested?.id || ["image", "audio", "video", "document", "sticker"].includes(type));
-  return {
-    hasAttachment,
-    type: type || (hasAttachment ? "document" : ""),
-    storageKey,
-    url,
-    fileName,
-    mimeType,
-    fileSize,
-    caption: first(payload.caption, nested?.caption),
-    isSensitive: bool(payload.isSensitive || payload.is_sensitive),
-    mediaId: first(payload.mediaId, payload.media_id, nested?.id),
-  };
-}
-
-function messageBody(payload: any, media: ReturnType<typeof mediaData>) {
-  const msg = whatsappMessage(payload);
-  return first(
-    payload.customer_message,
-    payload.last_input_text,
-    payload.lastTextInput,
-    payload.text,
-    payload.message,
-    payload.body,
-    payload.previewText,
-    msg?.text?.body,
-    msg?.button?.text,
-    msg?.interactive?.button_reply?.title,
-    msg?.interactive?.list_reply?.title,
-    media.caption,
-    media.hasAttachment ? media.fileName || ({ image: "صورة", audio: "رسالة صوتية", video: "فيديو", document: "ملف", sticker: "ملصق" } as Record<string, string>)[media.type] || "مرفق" : "",
-  );
 }
 
 function identityData(source: string, payload: any) {
@@ -112,15 +74,15 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const sql = getSql();
   const source = routeSourceCode(routeSource, payload);
   const identity = identityData(source, payload);
-  const media = mediaData(payload);
-  const text = messageBody(payload, media);
-  const waMessage = whatsappMessage(payload);
-  const isWhatsappCustomerMessage = source === "whatsapp" && Boolean(waMessage?.from) && Boolean(waMessage?.id || text || media.hasAttachment);
-  const declaredDirection = first(payload.direction, payload.messageDirection, payload.message_direction, "in").toLowerCase();
-  const direction = isWhatsappCustomerMessage ? "in" : (declaredDirection === "out" ? "out" : "in");
-  const senderType = direction === "in" ? "customer" : first(payload.senderType, payload.sender_type, "system");
-  const providerMessageId = first(payload.providerMessageId, payload.provider_message_id, payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
+  const media = extractIntegrationMedia(payload);
+  const text = extractIntegrationMessageText(payload, media);
+  const direction = extractIntegrationDirection(payload);
+  const senderType = extractIntegrationSenderType(payload, direction);
+  const messageType = extractIntegrationMessageType(payload, media);
+  const messageKeys = extractStrongMessageKeys(payload, eventId);
+  const providerMessageId = messageKeys[0] || eventId;
   const occurredAt = dateValue(payload);
+  const messageMetadata = integrationMessageMetadata(payload, media, source, routeSource, eventId, messageKeys);
 
   const { contact } = await ensureContactIdentity({
     channelCode: source,
@@ -171,7 +133,20 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   if (conversation) {
     [existingMessage] = await sql<any[]>`
       select *,id::text,conversation_id::text from crm.messages
-      where conversation_id=${conversation.id}::uuid and provider_message_id=${providerMessageId} limit 1
+      where conversation_id=${conversation.id}::uuid and (
+        provider_message_id=any(${messageKeys}::text[])
+        or legacy_id=any(${messageKeys}::text[])
+        or coalesce(metadata->>'eventId','')=any(${messageKeys}::text[])
+        or coalesce(metadata->>'mediaId','')=any(${messageKeys}::text[])
+        or coalesce(metadata->>'sha256','')=any(${messageKeys}::text[])
+        or coalesce(metadata->>'mersalMessageId','')=any(${messageKeys}::text[])
+        or coalesce(metadata->>'fbMessageId','')=any(${messageKeys}::text[])
+        or exists (
+          select 1 from jsonb_array_elements_text(coalesce(metadata->'messageKeys','[]'::jsonb)) as stored_key(value)
+          where stored_key.value=any(${messageKeys}::text[])
+        )
+      )
+      order by created_at asc limit 1
     `;
   }
 
@@ -182,7 +157,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,last_customer_message_at,metadata
       ) values(
         ${identity.conversationExternalId},${openRequest?.lead_id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
-        ${text || null},0,${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
+        ${text || null},${direction === "in" ? 1 : 0},${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
         ${openRequest?.assigned_to || null}::uuid,${openRequest?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${identity.pageId || null},
         ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}
       ) returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -196,7 +171,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         customer_name=coalesce(nullif(${identity.displayName},''),customer_name),
         participant_id=coalesce(nullif(${identity.participant || identity.externalId},''),participant_id),
         preview_text=coalesce(nullif(${text},''),preview_text),
-        unread_count=unread_count,
+        unread_count=unread_count+${direction === "in" ? 1 : 0},
         last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
         service_key=coalesce(${openRequest?.service_key || null},service_key),
         department_code=coalesce(${openRequest?.department_code || null},department_code),
@@ -215,12 +190,39 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   if (existingMessage) {
-    if (direction === "in") {
-      [existingMessage] = await sql<any[]>`
-        update crm.messages
-        set direction='in',provider_status='received',sender_type='customer'
-        where id=${existingMessage.id}::uuid
-        returning *,id::text,conversation_id::text
+    [existingMessage] = await sql<any[]>`
+      update crm.messages set
+        body=case
+          when nullif(${text},'') is not null and (body is null or body='' or body=any(array['صورة','رسالة صوتية','فيديو','ملف','ملصق','مرفق'])) then ${text}
+          else body
+        end,
+        message_type=case when ${media.hasAttachment}::boolean then ${messageType} else message_type end,
+        attachment_url=case
+          when nullif(${media.storageKey ? "" : media.url},'') is not null then ${media.storageKey ? "" : media.url}
+          when coalesce(attachment_url,'')~*'lookaside\.fbsbx\.com/whatsapp_business/attachments' then null
+          else attachment_url
+        end,
+        attachment_type=coalesce(nullif(${media.type},''),attachment_type),
+        file_name=coalesce(nullif(${media.fileName},''),file_name),
+        mime_type=coalesce(nullif(${media.mimeType},''),mime_type),
+        file_size=coalesce(${media.fileSize},file_size),
+        storage_key=coalesce(nullif(${media.storageKey},''),storage_key),
+        media_status=case when ${media.hasAttachment}::boolean then 'ready' else media_status end,
+        caption=coalesce(nullif(${media.caption},''),caption),
+        provider_status=case when direction='in' then 'received' else provider_status end,
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json(messageMetadata)}::jsonb,
+        created_at=least(created_at,${occurredAt}::timestamptz)
+      where id=${existingMessage.id}::uuid
+      returning *,id::text,conversation_id::text
+    `;
+    if (media.storageKey) {
+      await sql`
+        insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
+        values(${conversation.id}::uuid,${existingMessage.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
+        on conflict(storage_key) do update set
+          conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
+          media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
+          is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
       `;
     }
     await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
@@ -232,10 +234,24 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       conversation_id,legacy_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,is_sensitive,
       provider_status,provider_message_id,sender_type,caption,created_at,metadata
     ) values(
-      ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
+      ${conversation.id}::uuid,${providerMessageId},${direction},${messageType},${text || null},
       ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}
-    ) returning *,id::text,conversation_id::text
+      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json(messageMetadata)}
+    )
+    on conflict (conversation_id,provider_message_id) where provider_message_id is not null do update set
+      body=coalesce(nullif(excluded.body,''),crm.messages.body),
+      message_type=coalesce(nullif(excluded.message_type,''),crm.messages.message_type),
+      attachment_url=coalesce(nullif(excluded.attachment_url,''),crm.messages.attachment_url),
+      attachment_type=coalesce(nullif(excluded.attachment_type,''),crm.messages.attachment_type),
+      file_name=coalesce(nullif(excluded.file_name,''),crm.messages.file_name),
+      mime_type=coalesce(nullif(excluded.mime_type,''),crm.messages.mime_type),
+      file_size=coalesce(excluded.file_size,crm.messages.file_size),
+      storage_key=coalesce(nullif(excluded.storage_key,''),crm.messages.storage_key),
+      media_status=coalesce(nullif(excluded.media_status,''),crm.messages.media_status),
+      caption=coalesce(nullif(excluded.caption,''),crm.messages.caption),
+      metadata=coalesce(crm.messages.metadata,'{}'::jsonb)||excluded.metadata,
+      created_at=least(crm.messages.created_at,excluded.created_at)
+    returning *,id::text,conversation_id::text
   `;
 
   if (media.storageKey) {
@@ -258,59 +274,22 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
   }
 
-  if (direction === "in") {
-    if (conversation.lead_id) {
-      await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
-    } else {
-      await sql`
-        update crm.conversations set
-          unread_count=case when coalesce(metadata->>'lastUnreadMessageKey','')=${providerMessageId} then greatest(1,unread_count) else unread_count+1 end,
-          metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${providerMessageId}::text),true),
-          updated_at=now()
-        where id=${conversation.id}::uuid
-      `;
-    }
+  if (conversation.lead_id && direction === "in") {
+    await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
   }
 
-  // The inbound message is already persisted at this point. Automation is a secondary
-  // side effect and must never make the webhook fail or hide the customer reply.
-  let automation: any = null;
-  let automationError = "";
-  try {
-    automation = await publishAutomationEvent({
-      eventKey: `${source}:${eventId}:message`,
-      eventType: direction === "in" ? "message.received" : "message.sent",
-      source,
-      contactId: contact.id,
-      conversationId: conversation.id,
-      serviceRequestId: conversation.service_request_id || openRequest?.id || null,
-      leadId: conversation.lead_id || openRequest?.lead_id || null,
-      payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
-      actor: null,
-    });
-  } catch (error: any) {
-    automationError = error?.message || String(error);
-    console.error("Inbound message persisted; automation side effect failed", {
-      routeSource,
-      eventId,
-      conversationId: conversation.id,
-      messageId: message.id,
-      error: automationError,
-    });
-  }
+  const automation = await publishAutomationEvent({
+    eventKey: `${source}:${eventId}:message`,
+    eventType: direction === "in" ? "message.received" : "message.sent",
+    source,
+    contactId: contact.id,
+    conversationId: conversation.id,
+    serviceRequestId: conversation.service_request_id || openRequest?.id || null,
+    leadId: conversation.lead_id || openRequest?.lead_id || null,
+    payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
+    actor: null,
+  });
 
-  await sql`
-    update integrations.inbound_events
-    set status='processed',processed_at=now(),error_message=${automationError ? `automation: ${automationError}` : null}
-    where source=${routeSource} and event_key=${eventId}
-  `;
-  return {
-    lead: conversation.lead_id ? { id: conversation.lead_id } : null,
-    conversation,
-    message,
-    createLead: createdByKnownSource,
-    contact,
-    automation,
-    automationError: automationError || null,
-  };
+  await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
+  return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message, createLead: createdByKnownSource, contact, automation };
 }

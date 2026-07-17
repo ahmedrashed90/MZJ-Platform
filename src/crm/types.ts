@@ -130,11 +130,19 @@ export type CrmConversation = {
 
 export type CrmMessage = {
   id: string;
-  direction: "in" | "out";
+  legacy_id?: string | null;
+  provider_message_id?: string | null;
+  direction: "in" | "out" | string;
   message_type: string;
   body?: string | null;
+  text?: string | null;
+  message?: string | null;
   attachment_url?: string | null;
   attachment_type?: string | null;
+  media_url?: string | null;
+  file_url?: string | null;
+  mersal_media_url?: string | null;
+  whatsapp_media_url?: string | null;
   mime_type?: string | null;
   file_size?: number | null;
   storage_key?: string | null;
@@ -142,9 +150,13 @@ export type CrmMessage = {
   media_status?: string | null;
   is_sensitive?: boolean | null;
   caption?: string | null;
-  sender_type?: "customer" | "human" | "bot" | "system" | null;
+  sender_type?: "customer" | "human" | "bot" | "system" | string | null;
   file_name?: string | null;
   provider_status?: string | null;
   sent_by_name?: string | null;
   created_at: string;
+  metadata?: Record<string, unknown> | string | null;
+  hasAttachment?: boolean | null;
+  has_attachment?: boolean | null;
+  [key: string]: unknown;
 };
