@@ -447,16 +447,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
   }
 
-  function attachmentText(message: CrmMessage) {
-    if (message.file_name) return message.file_name;
-    const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image") return "صورة";
-    if (type === "audio") return "رسالة صوتية";
-    if (type === "video") return "فيديو";
-    if (type === "document") return "ملف";
-    return "مرفق";
-  }
-
   function renderMessageMedia(message: CrmMessage) {
     const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
@@ -553,11 +543,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
             <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
-              {messages.map((message) => {
-                const hasAttachment = Boolean(message.media_asset_id || message.attachment_url || message.storage_key || message.attachment_type);
-                const body = String(message.body || message.caption || "").trim() || (hasAttachment ? attachmentText(message) : "");
-                return <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{body ? <p>{body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {visibleProviderStatus(message) ? `• ${visibleProviderStatus(message)}` : ""}</small></div>;
-              })}
+              {messages.map((message) => <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {visibleProviderStatus(message) ? `• ${visibleProviderStatus(message)}` : ""}</small></div>)}
             </div>
             <div className="crm-message-composer">
               <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>

@@ -27,7 +27,6 @@ function whatsappMessage(payload: any) {
 
 function routeSourceCode(routeSource: string, payload: any) {
   if (routeSource === "installment-calculator") return "installment_calculator";
-  if (routeSource === "mersal") return "whatsapp";
   if (routeSource !== "tiktok-snapchat") return routeSource.replace(/-/g, "_");
   const source = first(payload.sourceCode, payload.source_code, payload.source, payload.platform, payload.channel).toLowerCase();
   return source.includes("snap") ? "snapchat_lead" : "tiktok_lead";
@@ -109,54 +108,6 @@ function trustedKnownService(routeSource: string, payload: any) {
   return "";
 }
 
-function phoneTail(value: unknown) {
-  const normalized = normalizePhone(value);
-  return normalized ? normalized.slice(-9) : "";
-}
-
-async function findLeadByWhatsappPhone(sql: ReturnType<typeof getSql>, normalizedPhone: string) {
-  if (!normalizedPhone) return null;
-  const [lead] = await sql<any[]>`
-    select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text
-    from crm.leads l
-    where l.is_deleted=false
-      and right(regexp_replace(coalesce(nullif(l.phone_normalized,''),l.phone,''),'\\D','','g'),9)=right(${normalizedPhone},9)
-    order by
-      case when regexp_replace(coalesce(l.phone_normalized,''),'\\D','','g')=${normalizedPhone} then 0 else 1 end,
-      case when l.current_request_id is not null then 0 else 1 end,
-      l.updated_at desc,l.created_at desc
-    limit 1
-  `;
-  return lead || null;
-}
-
-async function findOpenRequestForLead(sql: ReturnType<typeof getSql>, leadId: string) {
-  if (!leadId) return null;
-  const [request] = await sql<any[]>`
-    select r.*,r.id::text,r.contact_id::text,r.lead_id::text,r.conversation_id::text,r.assigned_to::text,r.call_center_assigned_to::text
-    from crm.service_requests r
-    where r.lead_id=${leadId}::uuid and r.request_state='open'
-    order by r.opened_at desc limit 1
-  `;
-  return request || null;
-}
-
-function attachmentMetadata(media: ReturnType<typeof mediaData>, providerMessageId: string) {
-  return {
-    hasAttachment: media.hasAttachment,
-    attachmentType: media.type || null,
-    mediaType: media.type || null,
-    mediaUrl: media.url || null,
-    fileUrl: media.url || null,
-    attachmentUrl: media.url || null,
-    fileName: media.fileName || null,
-    mimeType: media.mimeType || null,
-    caption: media.caption || null,
-    mediaId: media.mediaId || null,
-    providerMessageId: providerMessageId || null,
-  };
-}
-
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
   const sql = getSql();
   const source = routeSourceCode(routeSource, payload);
@@ -180,77 +131,78 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     displayName: identity.displayName,
     metadata: { routeSource, lastEventId: eventId },
   });
+  let openRequest = await findOpenServiceRequest(contact.id);
+  let matchedLead: any = null;
 
-  const isWhatsapp = source === "whatsapp";
-  const matchedLead = isWhatsapp ? await findLeadByWhatsappPhone(sql, identity.phoneNormalized) : null;
-  if (matchedLead?.id && !matchedLead.contact_id) {
-    await sql`update crm.leads set contact_id=${contact.id}::uuid,updated_at=now() where id=${matchedLead.id}::uuid and contact_id is null`;
-    matchedLead.contact_id = contact.id;
+  // Mersal currently sends the WhatsApp phone number in conversationId. That value
+  // identifies the provider contact, not necessarily the PostgreSQL conversation UUID.
+  // Resolve the CRM lead and its existing conversation first so inbound replies stay in
+  // the same dashboard chat. The provider conversationId remains a final fallback only.
+  if (source === "whatsapp" && identity.phoneNormalized) {
+    [matchedLead] = await sql<any[]>`
+      select l.*,l.id::text,l.contact_id::text,l.current_request_id::text
+      from crm.leads l
+      where l.is_deleted=false
+        and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
+      order by
+        (l.current_request_id is not null) desc,
+        exists(
+          select 1 from crm.conversations c
+          where c.lead_id=l.id and c.channel_code in ('whatsapp','mersal')
+        ) desc,
+        l.updated_at desc,
+        l.created_at desc
+      limit 1
+    `;
+
+    if (matchedLead && (!openRequest || openRequest.lead_id !== matchedLead.id)) {
+      const [leadRequest] = await sql<any[]>`
+        select r.*,r.id::text,r.contact_id::text,r.lead_id::text,r.conversation_id::text,
+          r.assigned_to::text,r.call_center_assigned_to::text,
+          sales.full_name as assigned_name,cc.full_name as call_center_name
+        from crm.service_requests r
+        left join core.users sales on sales.id=r.assigned_to
+        left join core.users cc on cc.id=r.call_center_assigned_to
+        where r.lead_id=${matchedLead.id}::uuid and r.request_state='open'
+        order by r.opened_at desc limit 1
+      `;
+      openRequest = leadRequest || null;
+    }
   }
-  let openRequest = matchedLead?.id
-    ? await findOpenRequestForLead(sql, matchedLead.id)
-    : await findOpenServiceRequest(contact.id);
-  if (!openRequest && matchedLead?.contact_id) openRequest = await findOpenServiceRequest(matchedLead.contact_id);
 
   let conversation: any = null;
 
-  if (!isWhatsapp) {
-    [conversation] = await sql<any[]>`
-      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
-      from crm.conversations where legacy_id=${identity.conversationExternalId} limit 1
-    `;
-  }
-
-  // WhatsApp/Mersal must be attached to the CRM conversation that already owns the
-  // lead/phone. A provider conversationId that is merely the phone is never allowed
-  // to win over that PostgreSQL relationship.
-  if (!conversation && isWhatsapp && matchedLead?.id) {
+  if (source === "whatsapp" && openRequest?.conversation_id) {
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations
-      where lead_id=${matchedLead.id}::uuid and channel_code in ('whatsapp','mersal')
-      order by
-        case when right(regexp_replace(coalesce(legacy_id,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9) then 1 else 0 end,
-        case when service_request_id is not null then 0 else 1 end,
-        last_message_at desc nulls last,updated_at desc
+      where id=${openRequest.conversation_id}::uuid and channel_code in ('whatsapp','mersal')
       limit 1
     `;
   }
 
-  if (!conversation && isWhatsapp && openRequest?.lead_id) {
+  if (!conversation && source === "whatsapp" && (matchedLead?.id || openRequest?.lead_id)) {
+    const resolvedLeadId = matchedLead?.id || openRequest?.lead_id;
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations
-      where lead_id=${openRequest.lead_id}::uuid and channel_code in ('whatsapp','mersal')
+      where lead_id=${resolvedLeadId}::uuid and channel_code in ('whatsapp','mersal')
       order by last_message_at desc nulls last,updated_at desc limit 1
     `;
   }
 
-  if (!conversation && isWhatsapp && identity.phoneNormalized) {
+  if (!conversation && source === "whatsapp" && identity.phoneNormalized) {
     [conversation] = await sql<any[]>`
       select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
       from crm.conversations c
       join crm.leads l on l.id=c.lead_id
       where c.channel_code in ('whatsapp','mersal')
-        and l.is_deleted=false
-        and right(regexp_replace(coalesce(nullif(l.phone_normalized,''),l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
-      order by
-        case when right(regexp_replace(coalesce(c.legacy_id,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9) then 1 else 0 end,
-        c.last_message_at desc nulls last,c.updated_at desc
-      limit 1
+        and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
+      order by c.last_message_at desc nulls last,c.updated_at desc limit 1
     `;
   }
 
-  if (!conversation && isWhatsapp && matchedLead?.contact_id) {
-    [conversation] = await sql<any[]>`
-      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
-      from crm.conversations
-      where contact_id=${matchedLead.contact_id}::uuid and channel_code in ('whatsapp','mersal')
-      order by last_message_at desc nulls last,updated_at desc limit 1
-    `;
-  }
-
-  if (!conversation && isWhatsapp) {
+  if (!conversation && source === "whatsapp") {
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations
@@ -259,20 +211,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     `;
   }
 
-  if (!conversation && isWhatsapp && identity.phoneNormalized) {
-    [conversation] = await sql<any[]>`
-      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
-      from crm.conversations
-      where channel_code in ('whatsapp','mersal')
-        and right(regexp_replace(coalesce(participant_id,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
-      order by last_message_at desc nulls last,updated_at desc limit 1
-    `;
-  }
-
-  // Only after all lead/contact/phone relationships fail do we reuse the provider
-  // legacy id. This avoids duplicate inserts while ensuring a phone-valued id never
-  // overrides the CRM conversation that already belongs to the customer.
-  if (!conversation && identity.conversationExternalId) {
+  if (!conversation) {
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations where legacy_id=${identity.conversationExternalId} limit 1
@@ -293,16 +232,16 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,status,preview_text,unread_count,last_message_at,
         service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,last_customer_message_at,metadata
       ) values(
-        ${identity.conversationExternalId},${openRequest?.lead_id || matchedLead?.id || null}::uuid,${matchedLead?.contact_id || contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
+        ${identity.conversationExternalId},${openRequest?.lead_id || matchedLead?.id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
         ${text || null},0,${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
         ${openRequest?.assigned_to || null}::uuid,${openRequest?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${identity.pageId || null},
-        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, phoneNormalized: identity.phoneNormalized || null })}
+        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}
       ) returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
     `;
   } else if (!existingMessage) {
     [conversation] = await sql<any[]>`
       update crm.conversations set
-        contact_id=coalesce(${matchedLead?.contact_id || contact.id}::uuid,contact_id),
+        contact_id=${contact.id}::uuid,
         lead_id=coalesce(${openRequest?.lead_id || matchedLead?.id || null}::uuid,lead_id),
         service_request_id=coalesce(${openRequest?.id || null}::uuid,service_request_id),
         customer_name=coalesce(nullif(${identity.displayName},''),customer_name),
@@ -319,7 +258,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
         last_customer_message_at=case when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
         last_human_reply_at=case when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, phoneNormalized: identity.phoneNormalized || null })}::jsonb,
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}::jsonb,
         updated_at=now()
       where id=${conversation.id}::uuid
       returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -330,18 +269,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     if (direction === "in") {
       [existingMessage] = await sql<any[]>`
         update crm.messages
-        set direction='in',provider_status='received',sender_type='customer',
-          message_type=case when ${media.hasAttachment} then ${media.type || 'document'} else message_type end,
-          body=coalesce(nullif(${text},''),body),
-          attachment_url=coalesce(nullif(${media.storageKey ? '' : media.url},''),attachment_url),
-          attachment_type=coalesce(nullif(${media.type},''),attachment_type),
-          file_name=coalesce(nullif(${media.fileName},''),file_name),
-          mime_type=coalesce(nullif(${media.mimeType},''),mime_type),
-          file_size=coalesce(${media.fileSize},file_size),
-          storage_key=coalesce(nullif(${media.storageKey},''),storage_key),
-          media_status=case when ${media.hasAttachment} then 'ready' else media_status end,
-          caption=coalesce(nullif(${media.caption},''),caption),
-          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ source, channel: source, platform: source, provider: first(payload.provider, routeSource), routeSource, eventId, direction, senderType, ...attachmentMetadata(media, providerMessageId) })}::jsonb
+        set direction='in',provider_status='received',sender_type='customer'
         where id=${existingMessage.id}::uuid
         returning *,id::text,conversation_id::text
       `;
@@ -357,7 +285,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     ) values(
       ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
       ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, channel: source, platform: source, provider: first(payload.provider, routeSource), routeSource, eventId, direction, senderType, ...attachmentMetadata(media, providerMessageId) })}
+      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}
     ) returning *,id::text,conversation_id::text
   `;
 
