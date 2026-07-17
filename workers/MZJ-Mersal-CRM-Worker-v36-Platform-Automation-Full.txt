@@ -1,0 +1,769 @@
+/*
+ * MZJ CRM WhatsApp / Mersal Worker v36
+ * Clean PostgreSQL transport for MZJ Unified Platform.
+ *
+ * Routes:
+ *   GET  /                 health
+ *   GET  /debug/last       last webhook payload when DEBUG_KV is bound
+ *   POST /send/mersal      outbound text, template, and media
+ *   POST /webhook/mersal   inbound text, template replies, and media
+ *
+ * Required secrets / variables:
+ *   MZJ_GATEWAY_SECRET
+ *    *   MERSAL_TOKEN               outbound sending token
+ *   MERSAL_API_TOKEN           GetConversations / GetMessages token
+ *   MERSAL_API_ENDPOINT        https://w-mersal.com
+ *   MERSAL_SEND_URL            https://w-mersal.com/api/wpbox/sendmessage
+ *   MERSAL_TEMPLATE_URL        https://w-mersal.com/api/wpbox/sendtemplatemessage
+ *   MERSAL_MEDIA_SEND_URL      https://w-mersal.com/api/wpbox/sendmedia
+ *
+ * Optional binding:
+ *   DEBUG_KV
+ *
+ * This worker is transport-only. It has no CRM storage, no Firebase, and no Queue binding.
+ * The unified platform owns PostgreSQL storage, unread state, assignment, and automation.
+ */
+
+const VERSION = "mzj-mersal-platform-automation-v36";
+const PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
+const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return new Response("", { status: 204, headers: corsHeaders() });
+    }
+
+    if (request.method === "GET" && url.pathname === "/") {
+      return json({ ok: true, service: "mersal-crm", version: VERSION }, 200);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/last") {
+      const inbound = await kvGetJson(env, "DEBUG_LAST_PAYLOAD");
+      const forward = await kvGetJson(env, "DEBUG_LAST_FORWARD");
+      return json({ ok: true, inbound: inbound || null, forward: forward || null }, 200);
+    }
+
+    if (request.method === "POST" && url.pathname === "/send/mersal") {
+      if (!gatewayAuthorized(request, env)) {
+        return json({ ok: false, error: "Unauthorized gateway request", version: VERSION }, 401);
+      }
+      return handleSendMersal(await safeJson(request), env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/webhook/mersal") {
+      const incoming = await safeJson(request);
+      if (ctx?.waitUntil) ctx.waitUntil(kvPutJson(env, "DEBUG_LAST_PAYLOAD", incoming));
+      try {
+        const result = await processInboundWebhook(incoming, env);
+        if (ctx?.waitUntil) ctx.waitUntil(kvPutJson(env, "DEBUG_LAST_FORWARD", result));
+        return json({ ok: true, accepted: true, processed: result.processed, forwarded: result.forwarded, version: VERSION }, 200);
+      } catch (error) {
+        console.error("Inbound WhatsApp processing failed", error);
+        return json({ ok: false, error: errorMessage(error), version: VERSION }, 502);
+      }
+    }
+
+    return json({ ok: false, error: "Not found", version: VERSION }, 404);
+  },
+};
+
+function validateOutbound(body) {
+  const phone = normalizePhone(body?.phone || body?.waId || body?.wa_id);
+  if (!phone) return { ok: false, error: "missing phone/waId" };
+  const templateName = clean(body?.template_name || body?.templateName || body?.template?.name);
+  const mediaUrl = clean(body?.mediaUrl || body?.media_url || body?.fileUrl || body?.file_url || body?.attachmentUrl || body?.attachment_url);
+  const text = clean(body?.text || body?.message || body?.caption);
+  if (templateName) return { ok: true, phone, messageType: "template" };
+  if (mediaUrl) return { ok: true, phone, messageType: normalizeMediaType(body?.mediaType || body?.media_type || body?.attachmentType || body?.attachment_type || "document") };
+  if (text) return { ok: true, phone, messageType: "text" };
+  return { ok: false, error: "missing text, template, or media" };
+}
+
+async function handleSendMersal(body, env) {
+  const validation = validateOutbound(body);
+  if (!validation.ok) return json({ ok: false, error: validation.error, version: VERSION }, 400);
+  const startedAt = Date.now();
+  let result;
+
+  const templateName = clean(body?.template_name || body?.templateName || body?.template?.name);
+  const mediaUrl = clean(body?.mediaUrl || body?.media_url || body?.fileUrl || body?.file_url || body?.attachmentUrl || body?.attachment_url);
+  if (templateName) {
+    result = await sendMersalTemplate(env, {
+      phone: validation.phone,
+      templateName,
+      language: clean(body?.template_language || body?.templateLanguage || body?.templateLang || body?.template?.language || "ar") || "ar",
+      components: templateComponents(body),
+    });
+  } else if (mediaUrl) {
+    result = await sendMersalMedia(env, {
+      phone: validation.phone,
+      mediaUrl,
+      mediaType: normalizeMediaType(body?.mediaType || body?.media_type || body?.attachmentType || body?.attachment_type || "document"),
+      caption: clean(body?.caption || body?.text || body?.message),
+      fileName: clean(body?.fileName || body?.file_name),
+    });
+  } else {
+    result = await sendMersalText(env, {
+      phone: validation.phone,
+      message: clean(body?.text || body?.message),
+      header: body?.header,
+      footer: body?.footer,
+      buttons: body?.buttons,
+    });
+  }
+
+  const response = {
+    ...result,
+    service: "mzj-whatsapp-mersal",
+    version: VERSION,
+    provider: "mersal",
+    messageType: validation.messageType,
+    phone: validation.phone,
+    durationMs: Date.now() - startedAt,
+  };
+  return json(response, result?.ok ? 200 : 502);
+}
+
+async function sendMersalText(env, input) {
+  const token = clean(env?.MERSAL_TOKEN);
+  if (!token) return { ok: false, status: "error", error: "Missing MERSAL_TOKEN" };
+  const base = mersalBase(env);
+  const url = clean(env?.MERSAL_SEND_URL) || `${base}/api/wpbox/sendmessage`;
+  const payload = { token, phone: normalizePhone(input.phone), message: clean(input.message) };
+  if (Array.isArray(input.buttons) && input.buttons.length) {
+    payload.buttons = input.buttons;
+    if (input.header) payload.header = String(input.header);
+    if (input.footer) payload.footer = String(input.footer);
+  }
+  return postMersalProvider(url, payload);
+}
+
+async function sendMersalTemplate(env, input) {
+  const token = clean(env?.MERSAL_TOKEN);
+  if (!token) return { ok: false, status: "error", error: "Missing MERSAL_TOKEN" };
+  const base = mersalBase(env);
+  const url = clean(env?.MERSAL_TEMPLATE_URL) || `${base}/api/wpbox/sendtemplatemessage`;
+  const payload = {
+    token,
+    phone: normalizePhone(input.phone),
+    template_name: clean(input.templateName),
+    template_language: clean(input.language) || "ar",
+  };
+  if (Array.isArray(input.components) && input.components.length) payload.components = input.components;
+  return postMersalProvider(url, payload);
+}
+
+async function sendMersalMedia(env, input) {
+  const token = clean(env?.MERSAL_TOKEN);
+  if (!token) return { ok: false, status: "error", error: "Missing MERSAL_TOKEN" };
+  const base = mersalBase(env);
+  const url = clean(env?.MERSAL_MEDIA_SEND_URL) || `${base}/api/wpbox/sendmedia`;
+  const type = normalizeMediaType(input.mediaType);
+  const payload = {
+    token,
+    phone: normalizePhone(input.phone),
+    type,
+    media_url: clean(input.mediaUrl),
+  };
+  if (clean(input.caption)) payload.caption = clean(input.caption);
+  if (type === "document" && clean(input.fileName)) payload.filename = clean(input.fileName);
+  return postMersalProvider(url, payload);
+}
+
+async function postMersalProvider(url, payload) {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const rawText = await response.text();
+    const raw = parseJson(rawText);
+    const status = clean(raw?.status || raw?.data?.status).toLowerCase();
+    const explicitFailure = ["error", "failed", "failure", "rejected"].includes(status) || raw?.ok === false || raw?.success === false;
+    const ok = response.ok && !explicitFailure;
+    return {
+      ok,
+      status: ok ? "success" : "error",
+      httpStatus: response.status,
+      raw,
+      error: ok ? "" : first(raw?.message, raw?.error, rawText, `HTTP ${response.status}`),
+      providerMessageId: first(raw?.message_wamid, raw?.message_id, raw?.data?.message_wamid, raw?.data?.message_id),
+    };
+  } catch (error) {
+    return { ok: false, status: "error", error: errorMessage(error) };
+  }
+}
+
+function templateComponents(body) {
+  if (Array.isArray(body?.components)) return body.components;
+  if (Array.isArray(body?.template?.components)) return body.template.components;
+  const params = Array.isArray(body?.params)
+    ? body.params
+    : Array.isArray(body?.parameters)
+      ? body.parameters
+      : Array.isArray(body?.template?.params)
+        ? body.template.params
+        : [];
+  if (!params.length) return [];
+  return [{ type: "body", parameters: params.map((value) => ({ type: "text", text: String(value ?? "") })) }];
+}
+
+async function processInboundWebhook(incoming, env) {
+  const normalizedMessages = normalizeWebhookMessages(incoming);
+  if (!normalizedMessages.length) return { processed: 0, forwarded: [] };
+  const forwarded = [];
+  for (const item of normalizedMessages) forwarded.push(await forwardInboundMessage(item, env));
+  return { processed: normalizedMessages.length, forwarded };
+}
+
+function normalizeWebhookMessages(incoming) {
+  const roots = [incoming, incoming?.data, incoming?.body, incoming?.payload, incoming?.event]
+    .filter((value) => value && typeof value === "object");
+  const values = [];
+
+  for (const root of roots) {
+    const entries = Array.isArray(root?.entry) ? root.entry : [];
+    for (const entry of entries) {
+      const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+      if (changes.length) {
+        for (const change of changes) if (change?.value && typeof change.value === "object") values.push(change.value);
+      } else if (entry && typeof entry === "object") values.push(entry);
+    }
+    if (root?.value && typeof root.value === "object") values.push(root.value);
+    values.push(root);
+  }
+
+  const normalized = [];
+  for (const value of values) {
+    const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+    const messageList = Array.isArray(value?.messages)
+      ? value.messages
+      : value?.message && typeof value.message === "object"
+        ? [value.message]
+        : value?.data?.message && typeof value.data.message === "object"
+          ? [value.data.message]
+          : [];
+
+    for (let index = 0; index < messageList.length; index += 1) {
+      const message = messageList[index] || {};
+      const direction = clean(message?.direction || value?.direction || "in").toLowerCase();
+      const isContactMessage = message?.is_message_by_contact ?? message?.isMessageByContact ?? value?.is_message_by_contact ?? value?.isMessageByContact;
+      if (["out", "outbound", "sent"].includes(direction) || Number(isContactMessage) === 0) continue;
+      const contact = contacts[index] || contacts[0] || value?.contact || {};
+      const phone = normalizePhone(first(message?.from, message?.wa_id, contact?.wa_id, contact?.phone, value?.waId, value?.phone, value?.from));
+      if (!phone) continue;
+      const messageType = clean(message?.type || value?.messageType || value?.message_type || "text").toLowerCase();
+      normalized.push({
+        raw: incoming,
+        message,
+        phone,
+        displayName: first(contact?.profile?.name, contact?.name, value?.customerName, value?.displayName, value?.name, "عميل"),
+        messageId: first(message?.id, message?.message_id, message?.fb_message_id, value?.messageId, value?.message_id, value?.eventId, crypto.randomUUID()),
+        timestamp: message?.timestamp || message?.created_at || value?.timestamp || value?.createdAt || Date.now(),
+        messageType,
+        text: extractInboundText(message) || first(message?.last_input_text, message?.customer_message, message?.body, value?.last_input_text, value?.customer_message),
+        attachment: extractInboundAttachment(message) || genericAttachment(message) || genericAttachment(value),
+      });
+    }
+  }
+
+  if (!normalized.length) {
+    const generic = roots[0] || {};
+    const direction = clean(generic?.direction || "in").toLowerCase();
+    const isContactMessage = generic?.is_message_by_contact ?? generic?.isMessageByContact;
+    const genericPhone = normalizePhone(first(generic?.waId, generic?.wa_id, generic?.phone, generic?.from, generic?.sender, generic?.contact?.phone));
+    const genericText = first(generic?.text, generic?.body, generic?.last_input_text, generic?.customer_message, typeof generic?.message === "string" ? generic.message : "");
+    if (genericPhone && !["out", "outbound", "sent"].includes(direction) && Number(isContactMessage) !== 0 && (genericText || generic?.mediaUrl || generic?.attachmentUrl)) {
+      normalized.push({
+        raw: incoming,
+        message: generic,
+        phone: genericPhone,
+        displayName: first(generic?.customerName, generic?.displayName, generic?.name, "عميل"),
+        messageId: first(generic?.messageId, generic?.message_id, generic?.eventId, generic?.id, crypto.randomUUID()),
+        timestamp: generic?.timestamp || generic?.createdAt || Date.now(),
+        messageType: normalizeMediaType(first(generic?.messageType, generic?.message_type, generic?.type, generic?.attachmentType, "text")),
+        text: genericText,
+        attachment: genericAttachment(generic),
+      });
+    }
+  }
+
+  const seen = new Set();
+  return normalized.filter((item) => {
+    const key = `${item.messageId}:${item.phone}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function forwardInboundMessage(item, env) {
+  let attachment = item.attachment;
+  if (attachment?.mediaUrl) {
+    const normalizedUrl = normalizeMersalMediaUrl(attachment.mediaUrl, mersalBase(env));
+    attachment = { ...attachment, mediaUrl: normalizedUrl, fileUrl: normalizedUrl, attachmentUrl: normalizedUrl };
+  }
+  if (attachment?.mediaUrl && isProtectedWhatsappMediaUrl(attachment.mediaUrl)) {
+    attachment = { ...attachment, mediaUrl: "", fileUrl: "", attachmentUrl: "" };
+  }
+
+  if (attachment?.hasAttachment) {
+    const resolved = await resolveMersalMediaForIncomingMessage(env, {
+      phone: item.phone,
+      providerMessageId: item.messageId,
+      mediaId: attachment.mediaId,
+      messageType: item.messageType,
+    });
+    if (resolved?.url) {
+      attachment = {
+        ...attachment,
+        mediaUrl: resolved.url,
+        fileUrl: resolved.url,
+        attachmentUrl: resolved.url,
+        attachmentType: resolved.attachmentType || attachment.attachmentType,
+        mimeType: attachment.mimeType || resolved.mimeType || guessMimeType(resolved.url, resolved.attachmentType),
+        fileName: attachment.fileName || resolved.fileName || fileNameFromUrl(resolved.url) || buildMediaFileName(resolved.attachmentType, attachment.mediaId, resolved.mimeType),
+      };
+    }
+  }
+
+  const messageText = item.text || attachment?.caption || (attachment?.hasAttachment ? attachmentLabel(attachment.attachmentType) : "");
+  const event = {
+    eventId: item.messageId,
+    type: "incoming_message",
+    eventType: "incoming_message",
+    direction: "in",
+    senderType: "customer",
+    provider: "mersal",
+    platform: "whatsapp",
+    channel: "whatsapp",
+    waId: item.phone,
+    phone: item.phone,
+    participantId: item.phone,
+    conversationId: item.phone,
+    customerName: item.displayName,
+    messageId: item.messageId,
+    providerMessageId: item.messageId,
+    text: messageText,
+    message: messageText,
+    messageType: attachment?.hasAttachment ? attachment.attachmentType : item.messageType || "text",
+    timestamp: item.timestamp,
+    hasAttachment: Boolean(attachment?.hasAttachment),
+    attachmentType: attachment?.attachmentType || "",
+    mediaType: attachment?.attachmentType || "",
+    mediaUrl: attachment?.mediaUrl || "",
+    fileUrl: attachment?.fileUrl || attachment?.mediaUrl || "",
+    attachmentUrl: attachment?.attachmentUrl || attachment?.mediaUrl || "",
+    storageKey: "",
+    fileName: attachment?.fileName || "",
+    mimeType: attachment?.mimeType || "",
+    fileSize: null,
+    caption: attachment?.caption || "",
+    mediaId: attachment?.mediaId || "",
+  };
+
+  const response = await postPlatformEvent(env, "whatsapp", event);
+  if (!response.ok) throw new Error(`Platform inbound endpoint rejected message: ${response.status} ${response.error || ""}`);
+  return { eventId: event.eventId, phone: item.phone, status: response.status, conversationId: response.data?.result?.conversationId || null, messageId: response.data?.result?.messageId || null };
+}
+
+async function resolveMersalMediaForIncomingMessage(env, input) {
+  const token = clean(env?.MERSAL_API_TOKEN);
+  if (!token) return { ok: false, error: "Missing MERSAL_API_TOKEN" };
+  const contactId = await findMersalContactId(env, token, input.phone);
+  if (!contactId) return { ok: false, error: "Mersal contact not found" };
+
+  const delays = [0, 700, 1400, 2400, 3500];
+  for (const delay of delays) {
+    if (delay) await sleep(delay);
+    const payload = await getMersalMessages(env, token, contactId);
+    const rows = normalizeMersalRows(payload);
+    const media = findMersalMedia(rows, {
+      providerMessageId: input.providerMessageId,
+      mediaId: input.mediaId,
+      messageType: input.messageType,
+      contactId,
+      mediaBase: mersalBase(env),
+    });
+    if (media?.url) return { ok: true, contactId, ...media };
+  }
+  return { ok: false, error: "Mersal media URL not found", contactId };
+}
+
+async function findMersalContactId(env, token, phone) {
+  const payload = await mersalApiPost(`${mersalBase(env)}/api/wpbox/getConversations/none?mobile_api=true`, { token });
+  const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+  const normalized = normalizePhone(phone);
+  const found = rows.find((row) => {
+    const rowPhone = normalizePhone(row?.phone || row?.name || row?.mobile);
+    return rowPhone === normalized || (rowPhone.length >= 9 && normalized.length >= 9 && rowPhone.endsWith(normalized.slice(-9)));
+  });
+  return first(found?.id, found?.contact_id);
+}
+
+async function getMersalMessages(env, token, contactId) {
+  return mersalApiPost(`${mersalBase(env)}/api/wpbox/getMessages`, { token, contact_id: contactId });
+}
+
+async function mersalApiPost(url, body) {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = parseJson(await response.text());
+    if (response.ok && !isInvalidToken(payload)) return payload;
+  } catch {}
+
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(body || {})) form.set(key, String(value ?? ""));
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
+  return parseJson(await response.text());
+}
+
+function normalizeMersalRows(payload) {
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.messages)
+        ? payload.messages
+        : Array.isArray(payload?.data?.messages)
+          ? payload.data.messages
+          : Array.isArray(payload?.data?.data)
+            ? payload.data.data
+            : [];
+  return rows.slice().sort((left, right) => timestampMs(right?.created_at || right?.createdAt || right?.timestamp) - timestampMs(left?.created_at || left?.createdAt || left?.timestamp));
+}
+
+function findMersalMedia(rows, input) {
+  const targetId = clean(input.providerMessageId);
+  const targetMediaId = clean(input.mediaId);
+  const wantedType = normalizeMediaType(input.messageType);
+
+  if (targetId) {
+    const exact = rows.find((row) => first(row?.fb_message_id, row?.message_wamid, row?.wamid, row?.message_id) === targetId);
+    const media = mediaFromMersalRow(exact, input.contactId, input.mediaBase);
+    if (media?.url) return media;
+  }
+
+  if (targetMediaId) {
+    const byMediaId = rows.map((row) => mediaFromMersalRow(row, input.contactId, input.mediaBase)).find((media) => media?.url && (media.url.includes(targetMediaId) || clean(media.fileName).includes(targetMediaId)));
+    if (byMediaId?.url) return byMediaId;
+  }
+
+  const incoming = rows
+    .filter((row) => Number(row?.is_message_by_contact || row?.isMessageByContact || 0) === 1)
+    .map((row) => mediaFromMersalRow(row, input.contactId, input.mediaBase))
+    .filter((media) => media?.url);
+  const sameType = incoming.find((media) => normalizeMediaType(media.attachmentType) === wantedType);
+  return sameType || incoming[0] || null;
+}
+
+function mediaFromMersalRow(row, contactId, mediaBase) {
+  if (!row) return null;
+  const image = clean(row?.header_image || row?.image || row?.image_url || row?.media_image);
+  const audio = clean(row?.header_audio || row?.audio || row?.audio_url || row?.voice || row?.voice_url || row?.media_audio);
+  const video = clean(row?.header_video || row?.video || row?.video_url || row?.media_video);
+  const documentUrl = clean(row?.header_document || row?.document || row?.document_url || row?.file || row?.file_url || row?.media_document);
+  let url = "";
+  let attachmentType = "";
+  if (image) { url = image; attachmentType = "image"; }
+  else if (audio) { url = audio; attachmentType = "audio"; }
+  else if (video) { url = video; attachmentType = "video"; }
+  else if (documentUrl) { url = documentUrl; attachmentType = "document"; }
+  url = normalizeMersalMediaUrl(url, mediaBase);
+  if (!url) return null;
+  return {
+    url,
+    attachmentType,
+    contactId: contactId || first(row?.contact_id),
+    providerMessageId: first(row?.fb_message_id, row?.message_wamid, row?.wamid, row?.message_id),
+    mimeType: guessMimeType(url, attachmentType),
+    fileName: fileNameFromUrl(url),
+  };
+}
+
+function extractInboundText(message) {
+  return first(
+    message?.text?.body,
+    message?.button?.text,
+    message?.interactive?.button_reply?.title,
+    message?.interactive?.list_reply?.title,
+    message?.image?.caption,
+    message?.video?.caption,
+    message?.document?.caption,
+  );
+}
+
+function extractInboundAttachment(message) {
+  const type = clean(message?.type).toLowerCase();
+  const normalizedType = normalizeMediaType(type);
+  const media = message?.[type] || message?.[normalizedType];
+  if (!media || !["image", "audio", "video", "document", "sticker"].includes(normalizedType)) return null;
+  const directUrl = clean(media?.url || media?.link || media?.href);
+  const mimeType = clean(media?.mime_type || media?.mimeType);
+  const mediaId = clean(media?.id);
+  return {
+    hasAttachment: true,
+    attachmentType: normalizedType,
+    mediaId,
+    mediaUrl: directUrl,
+    fileUrl: directUrl,
+    attachmentUrl: directUrl,
+    fileName: clean(media?.filename || media?.fileName || media?.name) || buildMediaFileName(normalizedType, mediaId, mimeType),
+    mimeType,
+    caption: clean(media?.caption),
+  };
+}
+
+function genericAttachment(payload) {
+  const url = first(payload?.mediaUrl, payload?.media_url, payload?.attachmentUrl, payload?.attachment_url, payload?.fileUrl, payload?.file_url);
+  if (!url) return null;
+  const type = normalizeMediaType(first(payload?.mediaType, payload?.media_type, payload?.attachmentType, payload?.attachment_type, "document"));
+  return {
+    hasAttachment: true,
+    attachmentType: type,
+    mediaId: first(payload?.mediaId, payload?.media_id),
+    mediaUrl: url,
+    fileUrl: url,
+    attachmentUrl: url,
+    fileName: first(payload?.fileName, payload?.file_name, fileNameFromUrl(url)),
+    mimeType: first(payload?.mimeType, payload?.mime_type, guessMimeType(url, type)),
+    caption: first(payload?.caption),
+  };
+}
+
+async function postPlatformEvent(env, _source, payload) {
+  const secret = clean(env?.MZJ_GATEWAY_SECRET);
+  const endpoint = PLATFORM_INBOUND_URL;
+  if (!secret) return { ok: false, status: 0, error: "Missing MZJ_GATEWAY_SECRET" };
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "x-mzj-gateway-secret": secret,
+      },
+      body: JSON.stringify(payload),
+    });
+    const rawText = await response.text();
+    const data = parseJson(rawText);
+    return { ok: response.ok && data?.ok !== false, status: response.status, data, error: response.ok ? "" : first(data?.error, rawText) };
+  } catch (error) {
+    return { ok: false, status: 0, error: errorMessage(error) };
+  }
+}
+
+function gatewayAuthorized(request, env) {
+  const configured = clean(env?.MZJ_GATEWAY_SECRET);
+  const provided = clean(request.headers.get("x-mzj-gateway-secret"));
+  if (!configured || !provided || configured.length !== provided.length) return false;
+  let difference = 0;
+  for (let index = 0; index < configured.length; index += 1) difference |= configured.charCodeAt(index) ^ provided.charCodeAt(index);
+  return difference === 0;
+}
+
+function mersalBase(env) {
+  return clean(env?.MERSAL_API_ENDPOINT || DEFAULT_MERSAL_BASE).replace(/\/+$/, "");
+}
+
+function isProtectedWhatsappMediaUrl(url) {
+  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(clean(url));
+}
+
+function normalizeMersalMediaUrl(value, mediaBase = DEFAULT_MERSAL_BASE) {
+  let url = clean(value).replace(/\\\//g, "/").replace(/&amp;/gi, "&");
+  if (!url) return "";
+  if (url.startsWith("//")) url = `https:${url}`;
+  else if (url.startsWith("/")) url = `${clean(mediaBase).replace(/\/+$/, "")}${url}`;
+  else if (/^(?:uploads?|storage|media|files?|documents?|public)\//i.test(url)) url = `${clean(mediaBase).replace(/\/+$/, "")}/${url.replace(/^\/+/, "")}`;
+  else if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && /^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(url)) url = `https://${url}`;
+  return /^https?:\/\//i.test(url) ? url : "";
+}
+
+function normalizeMediaType(value) {
+  const type = clean(value).toLowerCase();
+  if (type === "photo" || type === "picture") return "image";
+  if (type === "voice" || type === "ptt") return "audio";
+  if (type === "file") return "document";
+  return type || "document";
+}
+
+function attachmentLabel(type) {
+  const normalized = normalizeMediaType(type);
+  if (normalized === "image") return "صورة من العميل";
+  if (normalized === "audio") return "رسالة صوتية من العميل";
+  if (normalized === "video") return "فيديو من العميل";
+  if (normalized === "document") return "ملف من العميل";
+  if (normalized === "sticker") return "ملصق من العميل";
+  return "مرفق من العميل";
+}
+
+function buildMediaFileName(type, id, mimeType) {
+  const extension = extensionFromMime(mimeType, type);
+  const safeType = clean(type || "media").replace(/[^\w.-]/g, "") || "media";
+  const safeId = clean(id || Date.now()).replace(/[^\w.-]/g, "").slice(0, 48) || String(Date.now());
+  return `${safeType}-${safeId}${extension}`;
+}
+
+function fileNameFromUrl(url) {
+  try {
+    return decodeURIComponent(new URL(String(url || "")).pathname.split("/").pop() || "");
+  } catch {
+    return "";
+  }
+}
+
+function guessMimeType(url, type) {
+  const lower = clean(url).toLowerCase().split("?")[0];
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".ogg") || lower.endsWith(".opus")) return "audio/ogg";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".aac")) return "audio/aac";
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".doc")) return "application/msword";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const normalized = normalizeMediaType(type);
+  if (normalized === "image") return "image/jpeg";
+  if (normalized === "audio") return "audio/mpeg";
+  if (normalized === "video") return "video/mp4";
+  if (normalized === "sticker") return "image/webp";
+  return "application/octet-stream";
+}
+
+function extensionFromMime(mimeType, type) {
+  const mime = clean(mimeType).toLowerCase();
+  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
+  if (mime.includes("png")) return ".png";
+  if (mime.includes("webp")) return ".webp";
+  if (mime.includes("gif")) return ".gif";
+  if (mime.includes("pdf")) return ".pdf";
+  if (mime.includes("mp4")) return ".mp4";
+  if (mime.includes("mpeg")) return ".mp3";
+  if (mime.includes("ogg") || mime.includes("opus")) return ".ogg";
+  if (mime.includes("wav")) return ".wav";
+  if (mime.includes("aac")) return ".aac";
+  if (mime.includes("wordprocessingml")) return ".docx";
+  if (mime.includes("msword")) return ".doc";
+  if (mime.includes("spreadsheetml")) return ".xlsx";
+  const normalized = normalizeMediaType(type);
+  if (normalized === "image") return ".jpg";
+  if (normalized === "audio") return ".mp3";
+  if (normalized === "video") return ".mp4";
+  if (normalized === "sticker") return ".webp";
+  return ".bin";
+}
+
+function isInvalidToken(payload) {
+  return clean(payload?.status).toLowerCase() === "error" && clean(payload?.message || payload?.error).toLowerCase().includes("invalid token");
+}
+
+function normalizePhone(value) {
+  let digits = arabicDigitsToEnglish(String(value ?? "")).replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("05") && digits.length === 10) digits = `966${digits.slice(1)}`;
+  if (digits.startsWith("5") && digits.length === 9) digits = `966${digits}`;
+  return digits;
+}
+
+function arabicDigitsToEnglish(value) {
+  const map = { "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4", "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9", "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4", "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9" };
+  return String(value || "").replace(/[٠-٩۰-۹]/g, (digit) => map[digit] ?? digit);
+}
+
+function timestampMs(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value < 1e12 ? value * 1000 : value;
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) {
+    const numeric = Number(text);
+    return numeric < 1e12 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
+function first(...values) {
+  for (const value of values) {
+    const text = clean(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function parseJson(text) {
+  try {
+    return JSON.parse(String(text || ""));
+  } catch {
+    return { raw: String(text || "") };
+  }
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error || "Unknown error");
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function safeJson(request) {
+  try {
+    return await request.json();
+  } catch {
+    return {};
+  }
+}
+
+async function kvPutJson(env, key, value) {
+  try {
+    if (env?.DEBUG_KV) await env.DEBUG_KV.put(key, JSON.stringify(value), { expirationTtl: 86400 });
+  } catch {}
+}
+
+async function kvGetJson(env, key) {
+  try {
+    if (!env?.DEBUG_KV) return null;
+    const raw = await env.DEBUG_KV.get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function corsHeaders() {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,x-mzj-gateway-secret",
+    "cache-control": "no-store",
+  };
+}
+
+function json(payload, status = 200) {
+  return new Response(JSON.stringify(payload, null, 2), {
+    status,
+    headers: { ...corsHeaders(), "content-type": "application/json; charset=utf-8" },
+  });
+}

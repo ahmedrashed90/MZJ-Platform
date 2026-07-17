@@ -35,10 +35,28 @@ export default async function handler(request: VercelRequest, response: VercelRe
       returning id::text,status,received_at
     `;
     const result = await processIntegrationEvent(source,eventKey,payload);
-    return response.status(202).json({ ok:true,source,eventKey,event,result:{leadId:result.lead?.id||null,conversationId:result.conversation?.id||null,messageId:result.message?.id||null,createdLead:result.createLead} });
+    return response.status(200).json({
+      ok: true,
+      source,
+      eventKey,
+      event,
+      result: {
+        leadId: result.lead?.id || null,
+        conversationId: result.conversation?.id || null,
+        messageId: result.message?.id || null,
+        createdLead: result.createLead,
+        automation: result.automation || null,
+      },
+    });
   } catch (error: any) {
     console.error("Integration processing failed", error);
     await sql`update integrations.inbound_events set status='failed',error_message=${error?.message||String(error)} where source=${source} and event_key=${eventKey}`.catch(()=>undefined);
-    return response.status(500).json({ ok:false,error:"تعذر معالجة حدث التكامل" });
+    return response.status(500).json({
+      ok: false,
+      error: "تعذر معالجة حدث التكامل",
+      detail: error?.message || String(error),
+      source,
+      eventKey,
+    });
   }
 }

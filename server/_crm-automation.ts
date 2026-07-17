@@ -20,6 +20,13 @@ function normalizedText(value: unknown) {
   return clean(value).toLowerCase().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/[\s_-]+/g, " ");
 }
 
+function configuredMessageText(value: unknown) {
+  return clean(value)
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n");
+}
+
 async function loadContext(event: any) {
   const sql = getSql();
   const [conversation] = event.conversation_id ? await sql<any[]>`
@@ -70,7 +77,7 @@ export function detectServiceChoice(text: unknown, options: any[]) {
     const aliases = [option?.key, option?.label, ...(Array.isArray(option?.aliases) ? option.aliases : [])]
       .map(normalizedText)
       .filter(Boolean);
-    if (aliases.some((alias) => normalized === alias || normalized.includes(alias))) {
+    if (aliases.some((alias) => /^\d+$/.test(alias) ? normalized === alias : normalized === alias || normalized.includes(alias))) {
       return departmentKey(option?.key || option?.label);
     }
   }
@@ -85,30 +92,59 @@ async function sendServiceSelection(event: any, context: any) {
   if (context.conversation?.hasOpenRequest || context.conversation?.serviceSelectionSent) {
     return { skipped: true, reason: "already_classified_or_sent" };
   }
-  const text = clean(settings.service_selection_message);
+
+  const text = configuredMessageText(settings.service_selection_message);
   if (!text) return { skipped: true, reason: "empty_selection_message" };
-  const options = Array.isArray(settings.service_options) ? settings.service_options : [];
-  const buttons = options.slice(0, 3)
-    .map((option: any) => ({ id: clean(option?.key), title: clean(option?.label) }))
-    .filter((button: any) => button.id && button.title);
-  const result = await deliverConversationMessage({
-    conversationId: event.conversation_id,
-    text,
-    senderType: "bot",
-    idempotencyKey: `service-selection:${event.conversation_id}:${event.id}`,
-    reason: "service_selection",
-    buttons,
-  });
+
   const sql = getSql();
-  await sql`
-    update crm.conversations set
+  const [claim] = await sql<any[]>`
+    update crm.conversations c set
       classification_state='awaiting_service',
       service_selection_sent_at=now(),
       service_selection_version=service_selection_version+1,
       updated_at=now()
-    where id=${event.conversation_id}::uuid
+    where c.id=${event.conversation_id}::uuid
+      and c.service_selection_sent_at is null
+      and not exists (
+        select 1 from crm.service_requests r
+        where r.contact_id=c.contact_id and r.request_state='open'
+      )
+    returning c.service_selection_version
   `;
-  return { ok: true, providerStatus: result.providerStatus };
+  if (!claim) return { skipped: true, reason: "selection_already_claimed_or_customer_classified" };
+
+  const options = Array.isArray(settings.service_options) ? settings.service_options : [];
+  const buttons = options.slice(0, 3)
+    .map((option: any) => ({ id: clean(option?.key), title: clean(option?.label) }))
+    .filter((button: any) => button.id && button.title);
+  const idempotencyKey = `service-selection:${event.conversation_id}:${claim.service_selection_version}`;
+
+  try {
+    const result = await deliverConversationMessage({
+      conversationId: event.conversation_id,
+      text,
+      senderType: "bot",
+      idempotencyKey,
+      reason: "service_selection",
+      buttons,
+    });
+    return { ok: true, providerStatus: result.providerStatus, version: claim.service_selection_version };
+  } catch (error) {
+    const [job] = await sql<any[]>`
+      select id::text from integrations.outbound_jobs where idempotency_key=${idempotencyKey} limit 1
+    `;
+    if (!job) {
+      await sql`
+        update crm.conversations set
+          classification_state=case when service_request_id is null then 'new' else classification_state end,
+          service_selection_sent_at=null,
+          updated_at=now()
+        where id=${event.conversation_id}::uuid
+          and service_selection_version=${claim.service_selection_version}
+      `;
+    }
+    throw error;
+  }
 }
 
 async function classifyFromMessage(event: any, context: any, actor?: SessionUser | null) {

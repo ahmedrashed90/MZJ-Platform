@@ -172,78 +172,60 @@ type BackgroundDeliveryInput = {
   hasMedia?: boolean;
 };
 
-function jsonSafe(value: unknown) {
-  try { return JSON.parse(JSON.stringify(value ?? null)); }
-  catch { return { value: clean(value) }; }
-}
-
-function deliveryState(delivery: Awaited<ReturnType<typeof postToWorker>>) {
-  const data = delivery.response;
-  const rawStatus = normalized(data?.status || data?.providerStatus || data?.raw?.status || "");
-  const explicitFailure = ["error", "failed", "failure", "rejected"].includes(rawStatus) || data?.ok === false || data?.success === false;
-  if (delivery.ok && !explicitFailure) return "sent" as const;
-  const httpStatus = Number(delivery.provider?.status || delivery.attempts?.[0]?.status || 0);
-  if (httpStatus >= 400 || explicitFailure) return "failed" as const;
-  return "queued" as const;
-}
-
 async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
   const sql = getSql();
-  const delivery = await postToWorker(input.urls, input.headers, input.payload);
-  const data = jsonSafe(delivery.response) as any;
-  const providerStatus = deliveryState(delivery);
-  const providerMessageId = clean(
-    data?.providerMessageId || data?.provider_message_id || data?.message_wamid || data?.messageWamid || data?.message_id ||
-    data?.raw?.message_wamid || data?.raw?.wamid || data?.raw?.message_id || data?.raw?.id || "",
-  );
-  const attempts = delivery.attempts.map((attempt) => ({
-    url: attempt.url,
-    status: attempt.status,
-    error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null,
-  }));
-  const errorMessage = providerStatus === "sent"
-    ? ""
-    : clean(data?.error || data?.message || data?.raw?.message || data?.raw?.error || data?.raw) || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر تأكيد رد Worker الإرسال");
-  const confirmedAt = new Date().toISOString();
+  try {
+    const delivery = await postToWorker(input.urls, input.headers, input.payload);
+    const data = delivery.response;
+    const rawStatus = normalized(data?.status || data?.providerStatus || data?.raw?.status || "");
+    const providerStatus = delivery.ok && !["error", "failed", "failure", "rejected"].includes(rawStatus) ? "sent" : "failed";
+    const providerMessageId = clean(
+      data?.providerMessageId || data?.provider_message_id || data?.message_wamid || data?.messageWamid || data?.message_id ||
+      data?.raw?.message_wamid || data?.raw?.wamid || data?.raw?.message_id || data?.raw?.id || "",
+    );
+    const attempts = delivery.attempts.map((attempt) => ({
+      url: attempt.url,
+      status: attempt.status,
+      error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null,
+    }));
+    const errorMessage = providerStatus === "failed"
+      ? clean(data?.error || data?.message || data?.raw?.message || data?.raw?.error || data?.raw) || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر الوصول إلى Worker الإرسال")
+      : "";
 
-  if (input.messageId) {
-    try {
+    if (input.messageId) {
       await sql`
         update crm.messages set
           provider_status=${providerStatus},
           provider_message_id=coalesce(nullif(${providerMessageId},''),provider_message_id),
-          media_status=case when storage_key is not null then ${providerStatus} else media_status end
+          media_status=case when storage_key is not null then ${providerStatus} else media_status end,
+          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ workerRoute: delivery.usedUrl, workerAttempts: attempts, providerResult: data, providerConfirmedAt: new Date().toISOString(), providerError: errorMessage || null })}::jsonb
         where id=${input.messageId}::uuid
       `;
-    } catch (error) {
-      console.error("Unable to persist provider status for CRM message", input.messageId, error);
     }
 
-    try {
-      await sql`
-        update crm.messages set
-          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ workerRoute: delivery.usedUrl, workerAttempts: attempts, providerResult: data, providerConfirmedAt: confirmedAt, providerError: errorMessage || null })}::jsonb
-        where id=${input.messageId}::uuid
-      `;
-    } catch (error) {
-      console.error("Unable to persist provider metadata for CRM message", input.messageId, error);
-    }
-  }
-
-  try {
     await sql`
       update integrations.outbound_jobs set
-        status=${providerStatus},attempts=attempts+1,response_payload=${sql.json(data)},
-        error_message=${errorMessage || null},processed_at=case when ${providerStatus !== "queued"} then now() else null end
+        status=${providerStatus},attempts=attempts+1,response_payload=${data ? sql.json(data) : null},
+        error_message=${errorMessage || null},processed_at=now()
       where id=${input.jobId}::uuid
     `;
-  } catch (error) {
-    console.error("Unable to persist outbound job result", input.jobId, error);
-  }
 
-  if (input.conversationId) {
-    try { await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`; }
-    catch (error) { console.error("Unable to touch CRM conversation after delivery", input.conversationId, error); }
+    if (input.conversationId) await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
+  } catch (error: any) {
+    const errorMessage = clean(error?.message || error) || "تعذر إكمال إرسال الرسالة";
+    if (input.messageId) {
+      await sql`
+        update crm.messages set
+          provider_status='failed',
+          media_status=case when storage_key is not null then 'failed' else media_status end,
+          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ providerError: errorMessage, providerConfirmedAt: new Date().toISOString() })}::jsonb
+        where id=${input.messageId}::uuid
+      `.catch(()=>undefined);
+    }
+    await sql`
+      update integrations.outbound_jobs set status='failed',attempts=attempts+1,error_message=${errorMessage},processed_at=now()
+      where id=${input.jobId}::uuid
+    `.catch(()=>undefined);
   }
 }
 
