@@ -117,9 +117,9 @@ export function messagePolicyForLead(
   const source = sourceLabel(lead?.source_code || lead?.platform_code, sourceConfig?.name || lead?.source_name);
   if (sourceConfig?.delivery_route) {
     const route = sourceConfig.delivery_route;
-    const allowFreeText = Boolean(sourceConfig.allow_free_text);
+    const allowFreeText = route === "whatsapp" ? true : Boolean(sourceConfig.allow_free_text);
     const routeLabel = route === "whatsapp" ? "واتساب" : route === "facebook" ? "فيسبوك" : route === "instagram" ? "إنستجرام" : "تيك توك";
-    return { route, routeLabel, templateOnly: !allowFreeText, allowFreeText, reason: route === "whatsapp" ? (allowFreeText ? "الإرسال عبر واتساب بنص حر أو قالب" : "الإرسال عبر واتساب باستخدام القوالب فقط") : `الإرسال عبر محادثة ${routeLabel}` };
+    return { route, routeLabel, templateOnly: false, allowFreeText, reason: route === "whatsapp" ? "الإرسال عبر واتساب بنص حر أو قالب" : `الإرسال عبر محادثة ${routeLabel}` };
   }
   const channel = normalize(lead?.channel_code);
 
@@ -136,7 +136,7 @@ export function messagePolicyForLead(
     "إدخال يدوي",
   ]);
   if (templateOnlySources.has(source)) {
-    return { route: "whatsapp", routeLabel: "واتساب", templateOnly: true, allowFreeText: false, reason: "الإرسال عبر واتساب باستخدام القوالب فقط" };
+    return { route: "whatsapp", routeLabel: "واتساب", templateOnly: false, allowFreeText: true, reason: "الإرسال عبر واتساب بنص حر أو قالب" };
   }
 
   if (source === "فيسبوك" || channel.includes("facebook")) {
@@ -171,9 +171,9 @@ export function channelLabel(value?: string | null) {
 export function providerStatusLabel(value?: string | null) {
   const key = normalize(value);
   const map: Record<string, string> = {
-    sending: "جاري الإرسال",
     queued: "بانتظار الإرسال",
-    pending_confirmation: "قيد التأكيد — لا تعِد الإرسال",
+    sending: "جاري الإرسال",
+    success: "تم الإرسال",
     sent: "تم الإرسال",
     delivered: "تم التسليم",
     read: "تمت القراءة",

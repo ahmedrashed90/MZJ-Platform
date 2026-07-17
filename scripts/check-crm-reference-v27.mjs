@@ -25,8 +25,8 @@ const drawer = read("src/crm/components/LeadDrawer.tsx");
 const styles = read("src/styles.css");
 
 assert(firestore.includes('collectionGroup(firestore, "messages")'), "collectionGroup(messages) listener is missing");
-assert(firestore.includes('orderBy("createdAt", "desc")'), "createdAt descending query is missing");
-assert(firestore.includes('asText(data.direction).toLowerCase() !== "in"'), "incoming messages must require direction=in");
+assert(firestore.includes('data.receivedAt || data.createdAt') && firestore.includes('collectionGroup(firestore, "messages")'), "incoming message timestamp compatibility is missing");
+assert(firestore.includes('messageDirection(data as Record<string, unknown>) !== "in"'), "incoming messages must require an inbound direction");
 assert(!dashboard.includes("setInterval("), "dashboard must not poll messages periodically");
 assert(dashboard.includes('label: "الرسائل غير المقروءة"'), "unread Kanban card is missing");
 assert(dashboard.indexOf('...statusGroups') < dashboard.indexOf('label: "الرسائل غير المقروءة"'), "unread Kanban card must be appended after status cards");

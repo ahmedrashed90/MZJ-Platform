@@ -32,7 +32,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     sql`select code,name,sort_order,system_codes,delivery_route,allow_free_text from core.sources where is_active=true order by sort_order,name`,
     sql`select * from crm.report_quality_settings where id = 'default'`,
     sql`select source_code, display_name, send_url, webhook_url, health_url, secret_name, is_active from crm.integration_endpoints order by display_name`,
-    sql`select id::text,display_name,content,template_type,provider,departments from crm.message_templates where is_active=true order by display_name`,
+    sql`select id::text,external_id,name,display_name,content,template_type,provider,language_code,departments from crm.message_templates where is_active=true order by display_name`,
     sql`select id::text,department_code,status_value,status_label,template_id::text,message_type from crm.status_template_mappings where is_active=true`,
     sql`select id::text,field_key,label,field_type,sort_order,department_keys,is_active,is_required,include_in_completion,options,is_system,is_locked from crm.customer_field_definitions where is_active=true order by sort_order,label`,
   ]);

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, normalizePhone, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
-import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
+import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
+import { deliverCrmMessage, recordDeliveredCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead } from "../_crm-unread-state.js";
@@ -75,17 +75,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
           )
       `;
       if (lead?.phone_normalized || lead?.phone) {
-        const whatsappId = normalizePhone(lead.phone_normalized || lead.phone);
+        const legacyId = `crm-manual:${lead.id}`;
         const [created] = await sql<any[]>`
           insert into crm.conversations(
-            legacy_id,lead_id,channel_code,customer_name,participant_id,assigned_to,call_center_assigned_to,provider,metadata,last_message_at
+            legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata,last_message_at
           ) values (
-            ${whatsappId},${lead.id}::uuid,'whatsapp',${lead.customer_name || "عميل"},${whatsappId},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,'mersal',
+            ${legacyId},${lead.id}::uuid,'whatsapp',${lead.customer_name || "عميل"},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,
             ${sql.json({ manualEntry: Boolean(lead.is_manual_entry), sourceCode: lead.source_code, sourceName: lead.source_name, autoCreated: true })},null
           )
           on conflict (legacy_id) do update set
-            lead_id=excluded.lead_id,participant_id=excluded.participant_id,assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,
-            customer_name=excluded.customer_name,provider='mersal',updated_at=now()
+            lead_id=excluded.lead_id,assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,
+            customer_name=excluded.customer_name,updated_at=now()
           returning *,id::text,lead_id::text
         `;
         rows = [{
@@ -142,6 +142,45 @@ export default async function handler(request: VercelRequest, response: VercelRe
       await sql`update crm.media_assets set status='ready',updated_at=now() where id=${media.id}::uuid`;
     }
 
+    if (body.providerDelivered === true) {
+      try {
+        const delivery = await recordDeliveredCrmMessage({
+          conversation,
+          text: finalText,
+          template,
+          media: null,
+          actor: user,
+          senderType: "human",
+          reason: "manual",
+          idempotencyKey: `crm-direct:${conversationId}:${clean(body.clientMessageId) || clean(body.providerMessageId)}`,
+          clientMessageId: clean(body.clientMessageId),
+          providerStatus: "sent",
+          providerResponse: body.providerResponse && typeof body.providerResponse === "object" ? body.providerResponse : {},
+          workerRoute: clean(body.workerRoute),
+        });
+        await publishAutomationEvent({
+          eventKey: `crm-message-sent:${delivery.message?.id || delivery.jobId}`,
+          eventType: "message.sent",
+          source: conversation.channel_code,
+          contactId: conversation.contact_id || null,
+          conversationId,
+          serviceRequestId: conversation.service_request_id || null,
+          leadId: conversation.lead_id || null,
+          payload: { direction: "out", senderType: "human", text: finalText, messageId: delivery.message?.id || null, providerStatus: delivery.providerStatus },
+          actor: user,
+        });
+        await audit(user, "message_sent", "conversation", conversationId, {
+          channel: delivery.routing?.route || conversation.channel_code,
+          source: delivery.routing?.sourceArabic || conversation.source_name,
+          providerStatus: delivery.providerStatus,
+          directMersal: true,
+        });
+        return response.status(201).json({ ok: true, message: delivery.message, providerStatus: delivery.providerStatus });
+      } catch (error: any) {
+        return response.status(400).json({ ok: false, error: error?.message || "تعذر حفظ الرسالة المرسلة" });
+      }
+    }
+
     try {
       const delivery = await deliverCrmMessage({
         conversation,
@@ -170,8 +209,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         providerStatus: delivery.providerStatus,
         templateOnly: delivery.routing?.templateOnly,
       });
-      const responseStatus = delivery.providerStatus === "failed" ? 502 : delivery.providerStatus === "pending_confirmation" ? 202 : 201;
-      return response.status(responseStatus).json({
+      return response.status(delivery.providerStatus === "failed" ? 502 : 201).json({
         ok: delivery.providerStatus !== "failed",
         message: delivery.message,
         providerStatus: delivery.providerStatus,
@@ -179,7 +217,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         workerRoute: delivery.workerRoute || undefined,
         workerAttempts: delivery.workerAttempts || undefined,
         providerResponse: delivery.providerStatus === "failed" ? delivery.providerResponse : undefined,
-        error: delivery.providerStatus === "failed" ? delivery.errorMessage || undefined : undefined,
+        error: delivery.errorMessage || undefined,
       });
     } catch (error: any) {
       return response.status(400).json({ ok: false, error: error?.message || "فشل إرسال الرسالة" });

@@ -16,6 +16,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { crmFetch, departmentKeyFromCode, departmentLabel, formatDate } from "../api";
+import { loadLegacyConversationMessages, mergeCrmMessages, saveLegacyOutgoingMessage, subscribeToLegacyConversationMessages } from "../firestoreUnread";
+import { sendMersalDirect, templateTextMatches } from "../mersalDirect";
 import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
 import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta } from "../types";
 
@@ -188,16 +190,24 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }, [lead?.id, onClose]);
 
   useEffect(() => {
-    if (loadingMessages) return;
-    const frame = window.requestAnimationFrame(() => {
-      const list = messagesListRef.current;
-      if (list) list.scrollTop = list.scrollHeight;
-    });
+    if (!lead) return;
+    return subscribeToLegacyConversationMessages(
+      lead,
+      (legacyMessages) => setMessages((current) => mergeCrmMessages(current, legacyMessages)),
+      (failure) => console.warn("تعذر تشغيل استقبال محادثة واتساب", failure),
+    );
+  }, [lead?.id]);
+
+  useEffect(() => {
+    const list = messagesListRef.current;
+    if (!list) return;
+    const frame = window.requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
     return () => window.cancelAnimationFrame(frame);
-  }, [conversationId, loadingMessages, messages]);
+  }, [messages.length, loadingMessages]);
 
   async function loadConversation(leadId: string, preferredId = "") {
     setLoadingMessages(true);
+    const activeLead = lead;
     try {
       let id = preferredId;
       if (!id) {
@@ -206,11 +216,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         setConversationId(id);
         setConversationChannel(result.rows[0]?.channel_code || "");
       }
+      const legacyPromise = activeLead ? loadLegacyConversationMessages(activeLead, 300).catch(() => []) : Promise.resolve([] as CrmMessage[]);
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const [result, legacyMessages] = await Promise.all([
+          crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`),
+          legacyPromise,
+        ]);
         setConversationChannel(result.conversation?.channel_code || "");
-        setMessages(result.messages || []);
-      } else setMessages([]);
+        setMessages(mergeCrmMessages(result.messages || [], legacyMessages));
+      } else {
+        setMessages(await legacyPromise);
+      }
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل المحادثة");
     } finally {
@@ -297,19 +313,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }, [form?.values.salary, form?.values.obligation, form?.values.finance_type, form?.serviceKey, configuredFields]);
 
   const selectedSourceConfig = useMemo(() => (meta?.sources || []).find((source) => source.code === (form?.values.source_code || lead?.source_code)), [meta, form?.values.source_code, lead?.source_code]);
-  const hasCustomerReply = useMemo(() => messages.some((message) => !isOutboundMessage(message)), [messages]);
-  const policy = useMemo(() => {
-    const base = messagePolicyForLead({
-      source_code: form?.values.source_code || lead?.source_code,
-      source_name: selectedSourceConfig?.name || lead?.source_name,
-      platform_code: lead?.platform_code,
-      channel_code: conversationChannel || lead?.channel_code,
-    }, selectedSourceConfig);
-    if (base.route === "whatsapp" && base.templateOnly && hasCustomerReply) {
-      return { ...base, templateOnly: false, allowFreeText: true, reason: "العميل رد داخل المحادثة؛ النص الحر متاح عبر واتساب" };
-    }
-    return base;
-  }, [form?.values.source_code, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel, selectedSourceConfig, hasCustomerReply]);
+  const policy = useMemo(() => messagePolicyForLead({
+    source_code: form?.values.source_code || lead?.source_code,
+    source_name: selectedSourceConfig?.name || lead?.source_name,
+    platform_code: lead?.platform_code,
+    channel_code: conversationChannel || lead?.channel_code,
+  }, selectedSourceConfig), [form?.values.source_code, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel, selectedSourceConfig]);
 
 
 
@@ -431,27 +440,25 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   async function sendMessage() {
-    if (!conversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
-    if (policy.templateOnly && !selectedTemplate && !pendingFile) return setNotice("مصدر العميل يسمح بالإرسال عن طريق قالب واتساب فقط");
+    if (!conversationId || !lead) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
     if (!messageText.trim() && !selectedTemplate && !pendingFile) return;
 
-    const draftText = messageText;
-    const draftTemplate = selectedTemplate;
-    const draftFile = pendingFile;
-    const optimisticId = `local_${Date.now()}`;
-    const optimisticText = draftText.trim() || mappedTemplate?.content || draftFile?.name || "رسالة";
-    const optimisticType = draftFile ? mediaTypeForFile(draftFile) : draftTemplate ? "template" : "text";
-    const optimisticMessage: CrmMessage = {
-      id: optimisticId,
+    const draft = messageText.trim();
+    const templateId = selectedTemplate;
+    const template = templateId ? (meta?.templates || []).find((row) => row.id === templateId) || null : null;
+    const file = pendingFile;
+    const clientMessageId = `crm_out_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const sentText = draft || (template ? renderTemplateInComposer(template) : "مرفق");
+    const optimistic: CrmMessage = {
+      id: clientMessageId,
       direction: "out",
-      message_type: optimisticType,
-      body: optimisticText,
-      attachment_type: draftFile ? optimisticType : null,
-      file_name: draftFile?.name || null,
-      mime_type: draftFile?.type || null,
-      file_size: draftFile?.size || null,
-      sender_type: "human",
+      message_type: file ? mediaTypeForFile(file) : template ? "template" : "text",
+      body: sentText,
       provider_status: "sending",
+      sender_type: "human",
+      file_name: file?.name || null,
+      mime_type: file?.type || null,
+      file_size: file?.size || null,
       created_at: new Date().toISOString(),
     };
 
@@ -460,34 +467,65 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setMessageText("");
     setSelectedTemplate("");
     setPendingFile(null);
-    setMessages((current) => [...current, optimisticMessage]);
+    setMessages((current) => mergeCrmMessages(current, [optimistic]));
 
     try {
-      const mediaAssetId = draftFile ? await uploadPendingFile(draftFile) : "";
+      if (policy.route === "whatsapp" && !file) {
+        const renderedTemplateBody = template ? renderTemplateInComposer(template) : "";
+        const delivery = await sendMersalDirect({
+          meta,
+          lead,
+          conversationId,
+          text: sentText,
+          template,
+          renderedTemplateBody,
+        });
+        setMessages((current) => current.map((row) => row.id === clientMessageId
+          ? { ...row, provider_status: "sent", provider_message_id: delivery.providerMessageId || row.provider_message_id }
+          : row));
+        setNotice("تم إرسال الرسالة");
+
+        void saveLegacyOutgoingMessage({
+          lead,
+          clientMessageId,
+          text: sentText,
+          messageType: template ? "template" : "text",
+          templateName: template?.name || template?.external_id || "",
+          providerResponse: delivery.response,
+          providerMessageId: delivery.providerMessageId,
+        }).catch((failure) => console.warn("تم الإرسال لكن تعذر حفظ الرسالة في Firebase", failure));
+
+        void crmFetch<{ ok: boolean; message?: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
+          method: "POST",
+          body: JSON.stringify({
+            conversationId,
+            text: sentText,
+            templateId,
+            providerDelivered: true,
+            providerResponse: delivery.response,
+            providerMessageId: delivery.providerMessageId,
+            workerRoute: delivery.workerUrl,
+            clientMessageId,
+          }),
+        }).then((saved) => {
+          if (saved.message) setMessages((current) => mergeCrmMessages(current, [saved.message!]));
+        }).catch((failure) => console.warn("تم الإرسال لكن تعذر حفظ الرسالة في قاعدة المنصة", failure));
+        return;
+      }
+
+      const mediaAssetId = file ? await uploadPendingFile(file) : "";
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
+        body: JSON.stringify({ conversationId, text: sentText, templateId, mediaAssetId }),
       });
-      setMessages((current) => current.map((message) => message.id === optimisticId
-        ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
-        : message));
-      setNotice(
-        result.providerStatus === "queued"
-          ? "تم حفظ الرسالة في قائمة الإرسال"
-          : result.providerStatus === "pending_confirmation"
-            ? "تم تنفيذ الإرسال وجارٍ تأكيد النتيجة — لا تعِد الإرسال"
-            : "تم إرسال الرسالة",
-      );
+      if (result.message) setMessages((current) => mergeCrmMessages(current.filter((row) => row.id !== clientMessageId), [{ ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }]));
+      setNotice(result.providerStatus === "queued" ? "تم حفظ الرسالة في قائمة الإرسال" : "تم إرسال الرسالة");
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "فشل إرسال الرسالة";
-      setMessages((current) => current.map((message) => message.id === optimisticId
-        ? { ...message, provider_status: "failed", body: `${optimisticText}
-[فشل الإرسال: ${errorMessage}]` }
-        : message));
-      setMessageText(draftText);
-      setSelectedTemplate(draftTemplate);
-      setPendingFile(draftFile);
-      setNotice(errorMessage);
+      setMessageText(draft);
+      setSelectedTemplate(templateId);
+      setPendingFile(file);
+      setMessages((current) => current.map((row) => row.id === clientMessageId ? { ...row, provider_status: "failed" } : row));
+      setNotice(error instanceof Error ? error.message : "فشل إرسال الرسالة");
     } finally {
       setSending(false);
     }
@@ -520,17 +558,24 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         <div className="crm-drawer-grid crm-customer-workspace-grid">
           <section className="crm-conversation-panel crm-customer-conversation">
             <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId)}><ArrowClockwise size={18} /></button></header>
-            <div ref={messagesListRef} className="crm-messages-list">
+            <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
               {messages.map((message) => <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small></div>)}
             </div>
-            <div className={`crm-message-composer ${policy.templateOnly ? "template-only" : ""}`}>
+            <div className="crm-message-composer">
               <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>
               {mappedTemplate ? <div className="crm-linked-template-note"><strong>القالب المرتبط بالحالة</strong><span>{mappedTemplate.display_name || "قالب واتساب"}</span></div> : null}
-              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : policy.templateOnly ? "اختار حالة مرتبطة بقالب واتساب ليظهر القالب هنا" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} disabled={policy.templateOnly && !selectedTemplate && !pendingFile} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <textarea value={messageText} onChange={(event) => {
+                const next = event.target.value;
+                setMessageText(next);
+                if (selectedTemplate) {
+                  const template = (meta?.templates || []).find((row) => row.id === selectedTemplate);
+                  const pattern = template ? renderTemplateInComposer(template) : "";
+                  if (pattern && !templateTextMatches(pattern, next)) setSelectedTemplate("");
+                }
+              }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
-              {policy.templateOnly && !selectedTemplate && !pendingFile ? <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار حالة مرتبطة بقالب واتساب من بيانات العميل ليظهر القالب داخل مربع الكتابة.</div> : null}
               <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section>
