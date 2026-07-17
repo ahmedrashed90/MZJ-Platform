@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, normalizePhone, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
@@ -75,8 +75,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           )
       `;
       if (lead?.phone_normalized || lead?.phone) {
-        const legacyId = normalizePhone(lead.phone_normalized || lead.phone);
-        if (!legacyId) return response.status(400).json({ ok: false, error: "رقم واتساب غير صالح" });
+        const legacyId = `crm-manual:${lead.id}`;
         const [created] = await sql<any[]>`
           insert into crm.conversations(
             legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata,last_message_at
@@ -107,11 +106,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (request.method === "POST") {
     const body = parseBody(request);
+    const action = clean(body.action);
     const conversationId = clean(body.conversationId);
     const text = clean(body.text || body.message);
     const templateId = clean(body.templateId);
     const mediaAssetId = clean(body.mediaAssetId);
-    const clientMessageId = clean(body.clientMessageId);
     if (!conversationId) return response.status(400).json({ ok: false, error: "المحادثة مطلوبة" });
     if (!text && !templateId && !mediaAssetId) return response.status(400).json({ ok: false, error: "اكتب الرسالة أو اختر القالب أو أرفق ملفًا" });
 
@@ -138,6 +137,52 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (/{{\s*[^}]+\s*}}/.test(finalText)) return response.status(400).json({ ok: false, error: "استكمل متغيرات القالب الظاهرة داخل مكان الكتابة قبل الإرسال" });
     }
 
+    if (action === "record_outgoing") {
+      const clientMessageId = clean(body.clientMessageId) || `direct-${Date.now()}`;
+      const providerMessageId = clean(body.providerMessageId) || clientMessageId;
+      const sentAtInput = clean(body.sentAt);
+      const sentAt = Number.isFinite(Date.parse(sentAtInput)) ? new Date(sentAtInput).toISOString() : new Date().toISOString();
+      const providerResponse = body.providerResponse && typeof body.providerResponse === "object" ? body.providerResponse : {};
+      const [message] = await sql<any[]>`
+        insert into crm.messages(
+          conversation_id,legacy_id,direction,message_type,body,provider_status,provider_message_id,sent_by,sender_type,created_at,metadata
+        ) values (
+          ${conversationId}::uuid,${clientMessageId},'out',${template ? "template" : "text"},${finalText || null},'sent',${providerMessageId},
+          ${user.id}::uuid,'human',${sentAt}::timestamptz,${sql.json({ directMersal: true, clientMessageId, templateId: template?.id || null, providerResponse })}
+        )
+        on conflict (conversation_id,provider_message_id) where provider_message_id is not null do update set
+          body=excluded.body,message_type=excluded.message_type,provider_status='sent',sent_by=excluded.sent_by,sender_type='human',
+          metadata=crm.messages.metadata||excluded.metadata
+        returning *,id::text,conversation_id::text
+      `;
+      await sql`
+        update crm.conversations set preview_text=${finalText || null},last_message_at=greatest(coalesce(last_message_at,'epoch'),${sentAt}::timestamptz),
+          last_human_reply_at=greatest(coalesce(last_human_reply_at,'epoch'),${sentAt}::timestamptz),unread_count=0,updated_at=now()
+        where id=${conversationId}::uuid
+      `;
+      if (conversation.lead_id) {
+        await sql`update crm.leads set last_message_direction='out',last_message_at=greatest(coalesce(last_message_at,'epoch'),${sentAt}::timestamptz),updated_at=now() where id=${conversation.lead_id}::uuid`;
+      }
+      await publishAutomationEvent({
+        eventKey: `crm-message-sent:${message.id}`,
+        eventType: "message.sent",
+        source: conversation.channel_code,
+        contactId: conversation.contact_id || null,
+        conversationId,
+        serviceRequestId: conversation.service_request_id || null,
+        leadId: conversation.lead_id || null,
+        payload: { direction: "out", senderType: "human", text: finalText, messageId: message.id, providerMessageId, providerStatus: "sent" },
+        actor: user,
+      });
+      await audit(user, "message_sent", "conversation", conversationId, {
+        channel: conversation.channel_code,
+        source: conversation.source_name,
+        providerStatus: "sent",
+        directMersal: true,
+      });
+      return response.status(201).json({ ok: true, message, providerStatus: "sent" });
+    }
+
     if (mediaAssetId) {
       [media] = await sql<any[]>`select *,id::text,conversation_id::text from crm.media_assets where id=${mediaAssetId}::uuid and conversation_id=${conversationId}::uuid and status in ('uploading','ready')`;
       if (!media) return response.status(404).json({ ok: false, error: "المرفق غير موجود" });
@@ -153,28 +198,25 @@ export default async function handler(request: VercelRequest, response: VercelRe
         actor: user,
         senderType: "human",
         reason: "manual",
-        idempotencyKey: clientMessageId ? `crm-ui:${conversationId}:${clientMessageId}` : undefined,
       });
       if (media && delivery.message?.id) await sql`update crm.media_assets set message_id=${delivery.message.id}::uuid,status='ready',updated_at=now() where id=${media.id}::uuid`;
-      await Promise.all([
-        publishAutomationEvent({
-          eventKey: `crm-message-sent:${delivery.message?.id || delivery.jobId}`,
-          eventType: "message.sent",
-          source: conversation.channel_code,
-          contactId: conversation.contact_id || null,
-          conversationId,
-          serviceRequestId: conversation.service_request_id || null,
-          leadId: conversation.lead_id || null,
-          payload: { direction: "out", senderType: "human", text: finalText, messageId: delivery.message?.id || null, providerStatus: delivery.providerStatus },
-          actor: user,
-        }),
-        audit(user, "message_sent", "conversation", conversationId, {
-          channel: delivery.routing?.route || conversation.channel_code,
-          source: delivery.routing?.sourceArabic || conversation.source_name,
-          providerStatus: delivery.providerStatus,
-          templateOnly: delivery.routing?.templateOnly,
-        }),
-      ]);
+      await publishAutomationEvent({
+        eventKey: `crm-message-sent:${delivery.message?.id || delivery.jobId}`,
+        eventType: "message.sent",
+        source: conversation.channel_code,
+        contactId: conversation.contact_id || null,
+        conversationId,
+        serviceRequestId: conversation.service_request_id || null,
+        leadId: conversation.lead_id || null,
+        payload: { direction: "out", senderType: "human", text: finalText, messageId: delivery.message?.id || null, providerStatus: delivery.providerStatus },
+        actor: user,
+      });
+      await audit(user, "message_sent", "conversation", conversationId, {
+        channel: delivery.routing?.route || conversation.channel_code,
+        source: delivery.routing?.sourceArabic || conversation.source_name,
+        providerStatus: delivery.providerStatus,
+        templateOnly: delivery.routing?.templateOnly,
+      });
       return response.status(delivery.providerStatus === "failed" ? 502 : 201).json({
         ok: delivery.providerStatus !== "failed",
         message: delivery.message,

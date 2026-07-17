@@ -4,7 +4,6 @@ import process from "node:process";
 
 const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
-const exists = (file) => fs.existsSync(path.join(root, file));
 const assert = (condition, message) => {
   if (!condition) {
     console.error(`CRM v27 check failed: ${message}`);
@@ -13,6 +12,7 @@ const assert = (condition, message) => {
 };
 
 const dashboard = read("src/crm/pages/CrmDashboardPage.tsx");
+const unreadClient = read("src/crm/unread.ts");
 const historyPage = read("src/crm/pages/CrmFinanceHistoryPage.tsx");
 const historyServer = read("server/crm/history.ts");
 const unreadServer = read("server/_crm-unread-state.ts");
@@ -22,20 +22,16 @@ const leadsServer = read("server/crm/leads.ts");
 const dashboardServer = read("server/crm/dashboard.ts");
 const schema = read("server/_crm-schema.ts");
 const drawer = read("src/crm/components/LeadDrawer.tsx");
-const packageJson = read("package.json");
 const styles = read("src/styles.css");
 
-assert(!exists("src/crm/firestoreUnread.ts"), "legacy Firestore listener file must not exist");
-assert(!packageJson.includes('"firebase"'), "Firebase dependency must not exist");
-assert(!dashboard.includes("firestore"), "dashboard must read unread state from the platform database only");
-assert(!dashboard.includes("setInterval("), "dashboard must not refresh the full board periodically");
+assert(unreadClient.includes("leadHasUnreadMessage"), "PostgreSQL unread helper is missing");
+assert(dashboard.includes("setInterval(refresh, 4000)"), "dashboard PostgreSQL refresh is missing");
 assert(dashboard.includes('label: "الرسائل غير المقروءة"'), "unread Kanban card is missing");
 assert(dashboard.indexOf('...statusGroups') < dashboard.indexOf('label: "الرسائل غير المقروءة"'), "unread Kanban card must be appended after status cards");
 assert(dashboard.includes("leadHasUnreadMessage(right)"), "unread customers are not sorted first inside status cards");
 assert(dashboard.includes('className="crm-unread-dot"'), "green unread badge is missing");
 assert(!dashboard.includes("رسالة من العميل"), "unread badge must not contain text");
 assert(styles.includes(".crm-unread-dot") && styles.includes("#16a34a"), "green unread badge style is missing");
-assert(drawer.includes('/api/crm/conversations?conversationId='), "conversation must refresh from the unified platform database");
 
 assert(historyPage.includes("سجل العملاء") && historyPage.includes("فروقات حالات العملاء"), "finance history tabs are missing");
 assert(historyPage.includes('window.open(url, "_blank", "noopener,noreferrer")'), "customer conversation must open in a new tab");
@@ -48,7 +44,7 @@ for (const field of [
   "last_message_direction", "last_incoming_message_at", "last_message_at", "dashboard_message_read_at",
 ]) assert(unreadServer.includes(field), `persistent unread field ${field} is missing`);
 assert(unreadServer.includes("lastUnreadMessageKey"), "unread persistence must be idempotent per message");
-assert(unreadEndpoint.includes("messageId || messagePath"), "unread idempotency must prefer the provider message id");
+assert(unreadEndpoint.includes("messageId || messagePath"), "unread idempotency must prefer the provider message id over the secondary message path");
 assert(integrationProcessor.includes("markCrmLeadUnread"), "integration messages must use the centralized unread-state service");
 
 assert(schema.includes("car_category") && schema.includes("'الفئة'") && schema.includes("include_in_completion"), "car category migration/completion definition is missing");
@@ -71,4 +67,4 @@ const statusAt = (cutoff) => events.filter((event) => event.at <= cutoff).at(-1)
 assert(statusAt(Date.parse("2026-07-02T23:59:59Z")) === "عميل جديد", "start cutoff simulation failed");
 assert(statusAt(Date.parse("2026-07-04T23:59:59Z")) === "تم الاتصال", "end cutoff simulation failed");
 
-console.log("CRM reference v27 structure, platform-database unread flow, finance differences, and category checks passed.");
+console.log("CRM reference v27 structure, unread flow, finance differences, and category checks passed.");

@@ -40,13 +40,25 @@ export type CrmUserOption = {
   can_receive_leads?: boolean;
 };
 
+export type CrmMessageTemplate = {
+  id: string;
+  name: string;
+  display_name: string;
+  content: string;
+  template_type: string;
+  provider?: string | null;
+  external_id?: string | null;
+  language_code?: string | null;
+  departments: string[];
+};
+
 export type CrmMeta = {
   ok: boolean;
   statuses: CrmStatus[];
   branches: Array<{ code: string; name: string; sort_order: number }>;
   users: CrmUserOption[];
   sources: Array<{ code: string; name: string; sort_order?: number; system_codes?: string[]; delivery_route?: "whatsapp" | "facebook" | "instagram" | "tiktok"; allow_free_text?: boolean }>;
-  templates: Array<{ id: string; external_id?: string | null; name?: string | null; display_name: string; content: string; template_type: string; provider?: string | null; language_code?: string | null; departments: string[] }>;
+  templates: CrmMessageTemplate[];
   mappings: Array<{ id: string; department_code: string; status_value: string; status_label: string; template_id: string; message_type: string }>;
   quality: Record<string, unknown> | null;
   endpoints: Array<Record<string, unknown>>;

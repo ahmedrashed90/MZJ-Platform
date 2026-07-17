@@ -943,9 +943,6 @@ button.small-metric { cursor: pointer; }
 .crm-empty-conversation span { color: var(--muted); font-size: 9px; }
 .crm-message-composer,.crm-message-composer.template-only { grid-template-columns: minmax(0,1fr) minmax(110px,auto) auto; }
 .crm-message-route-note { grid-column: 1/-1; min-height: 34px; padding: 7px 9px; border-radius: 9px; background: #f7eee9; color: var(--brand); display: flex; align-items: center; gap: 7px; font-size: 9px; font-weight: 800; }
-.crm-linked-template-note { grid-column: 1/-1; min-height: 42px; padding: 9px 11px; border: 1px solid #dfc4b7; border-radius: 10px; background: #fff8f4; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.crm-linked-template-note strong { color: #69443a; font-size: 10px; }
-.crm-linked-template-note span { color: var(--brand); font-size: 11px; font-weight: 800; }
 .crm-template-only-warning { grid-column: 1/-1; }
 .crm-template-only-warning { min-height: 58px; padding: 10px 12px; border: 1px dashed #d4a995; border-radius: 10px; background: #fff8f3; color: #793d30; display: flex; align-items: center; line-height: 1.7; font-size: 9px; }
 .crm-save-customer-button { width: 100%; min-height: 46px; margin-top: 13px; justify-content: center; }

@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate, queryString } from "../api";
 import { LeadDrawer } from "../components/LeadDrawer";
+import { leadHasUnreadMessage } from "../unread";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta, CrmStatus } from "../types";
 
@@ -24,14 +25,6 @@ function leadStatus(lead: CrmLead) {
   return String(lead.status_label || lead.status_code || "عميل جديد").trim();
 }
 
-function leadHasUnreadMessage(lead: CrmLead) {
-  return Number(lead.unread_count || 0) > 0
-    || lead.dashboard_unread === true
-    || lead.has_unread_message === true
-    || lead.has_unread_messages === true
-    || lead.message_unread === true
-    || lead.is_unread === true;
-}
 
 function readPatch(lead: CrmLead): CrmLead {
   return {
@@ -63,7 +56,7 @@ export function CrmDashboardPage() {
 
   useEffect(() => { void loadMeta(); }, []);
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadDashboard(), 180);
+    const timer = window.setTimeout(() => void loadDashboard(false), 180);
     return () => window.clearTimeout(timer);
   }, [department, q, branch]);
 
@@ -75,6 +68,19 @@ export function CrmDashboardPage() {
     openLead(requested);
   }, [requestedLeadId, loading, leads]);
 
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") void loadDashboard(true);
+    };
+    const timer = window.setInterval(refresh, 4000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [department, q, branch]);
+
   async function loadMeta() {
     try {
       const result = await crmFetch<CrmMeta>("/api/crm/meta");
@@ -85,8 +91,10 @@ export function CrmDashboardPage() {
   }
 
   async function loadDashboard(silent = false) {
-    if (!silent) setLoading(true);
-    setError("");
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const result = await crmFetch<{ ok: boolean; statuses: CrmStatus[]; leads: CrmLead[] }>(
         `/api/crm/dashboard${queryString({ department, q, branch })}`,
@@ -95,12 +103,11 @@ export function CrmDashboardPage() {
       setLeads(result.leads || []);
       setSelected((current) => current ? (result.leads.find((lead) => lead.id === current.id) || current) : null);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
+      if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
     } finally {
       if (!silent) setLoading(false);
     }
   }
-
 
   async function markLeadRead(lead: CrmLead, updateDrawer = true) {
     const patched = readPatch(lead);
@@ -173,7 +180,7 @@ export function CrmDashboardPage() {
           <h1>الداش بورد</h1>
           <p>متابعة العملاء والمحادثات حسب القسم والحالة، بنفس ترتيب الحالات المحفوظ في الإدارة.</p>
         </div>
-        <button className="crm-secondary-button" type="button" onClick={() => void loadDashboard()}>
+        <button className="crm-secondary-button" type="button" onClick={() => void loadDashboard(false)}>
           <ArrowClockwise size={18} />تحديث البيانات
         </button>
       </header>
