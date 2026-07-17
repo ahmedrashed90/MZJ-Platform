@@ -171,7 +171,8 @@ create table if not exists crm.integration_endpoints (
   source_code text primary key,
   display_name text not null,
   send_url text,
-  webhook_url text,
+  templates_sync_url text,
+  inbound_webhook_url text,
   health_url text,
   secret_name text,
   is_active boolean not null default true,
@@ -552,28 +553,9 @@ create table if not exists crm.contact_identities (
 );
 create index if not exists crm_contact_identities_contact_idx on crm.contact_identities(contact_id,channel_code);
 
-alter table crm.integration_endpoints add column if not exists text_send_url text;
-alter table crm.integration_endpoints add column if not exists template_send_url text;
-alter table crm.integration_endpoints add column if not exists media_send_url text;
 alter table crm.integration_endpoints add column if not exists templates_sync_url text;
 alter table crm.integration_endpoints add column if not exists inbound_webhook_url text;
-update crm.integration_endpoints set text_send_url=coalesce(text_send_url,send_url),inbound_webhook_url=coalesce(inbound_webhook_url,webhook_url)
-where text_send_url is null or inbound_webhook_url is null;
-
--- WhatsApp/Mersal uses one CRM send route for both free text and templates.
--- Normalize old rows that still contain a separate legacy template route.
-update crm.integration_endpoints
-set send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
-    text_send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
-    template_send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
-    updated_at=now()
-where source_code in ('whatsapp','mersal')
-  and coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) is not null
-  and (
-    send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) or
-    text_send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) or
-    template_send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,''))
-  );
+update crm.conversations set channel_code='whatsapp' where channel_code='mersal';
 
 alter table crm.leads add column if not exists contact_id uuid references crm.contacts(id) on delete set null;
 

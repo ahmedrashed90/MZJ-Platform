@@ -39,8 +39,8 @@ function componentBody(value: unknown) {
 }
 
 function workerHeaders(secretName: string) {
-  const secret = clean(process.env[secretName] || process.env.MZJ_GATEWAY_SECRET);
-  if (!secret) throw new Error(`${secretName || "MZJ_GATEWAY_SECRET"} غير موجود في Environment Variables`);
+  const secret = clean(process.env[secretName]);
+  if (!secret) throw new Error(`${secretName} غير موجود في Environment Variables`);
   return {
     accept: "application/json",
     "content-type": "application/json; charset=utf-8",
@@ -48,38 +48,18 @@ function workerHeaders(secretName: string) {
   };
 }
 
-function templateUrlFromSendUrl(sendUrl: string) {
-  const value = clean(sendUrl).replace(/\/+$/, "");
-  if (!value) return "";
-  if (/\/outbound\/whatsapp\/v1\/(?:text|template|media)$/i.test(value)) return value.replace(/\/outbound\/whatsapp\/v1\/(?:text|template|media)$/i, "/templates/mersal/v1/sync");
-  if (/\/send\/mersal$/i.test(value)) return value.replace(/\/send\/mersal$/i, "/templates/mersal");
-  try { const parsed = new URL(value); return `${parsed.origin}/templates/mersal/v1/sync`; } catch { return ""; }
-}
-
 async function resolveWorkerConfig(sql: ReturnType<typeof getSql>): Promise<WorkerConfig> {
-  const explicitTemplatesUrl = clean(process.env.MERSAL_WORKER_TEMPLATES_URL);
-  const explicitWorkerBase = clean(process.env.MERSAL_WORKER_URL).replace(/\/+$/, "");
   const [endpoint] = await sql<any[]>`
-    select source_code,send_url,text_send_url,templates_sync_url,secret_name
+    select templates_sync_url,secret_name
     from crm.integration_endpoints
-    where source_code=any(array['whatsapp','mersal']::text[]) and is_active=true
-    order by case when source_code='whatsapp' then 0 else 1 end
+    where source_code='whatsapp' and is_active=true
     limit 1
   `;
-
-  const url = explicitTemplatesUrl
-    || clean(endpoint?.templates_sync_url)
-    || (explicitWorkerBase ? `${explicitWorkerBase}/templates/mersal/v1/sync` : "")
-    || templateUrlFromSendUrl(clean(endpoint?.text_send_url || endpoint?.send_url));
-
-  if (!url) {
-    throw new Error("أضف مسار مزامنة القوالب أو مسار إرسال واتساب في إعدادات CRM قبل مزامنة القوالب");
-  }
-
-  return {
-    url,
-    secretName: clean(endpoint?.secret_name) || "MZJ_GATEWAY_SECRET",
-  };
+  const url = clean(endpoint?.templates_sync_url);
+  if (!url) throw new Error("أضف مسار مزامنة قوالب مرسال في إعدادات CRM");
+  const secretName = clean(endpoint?.secret_name);
+  if (!secretName) throw new Error("أضف اسم متغير سر الـGateway في إعدادات CRM");
+  return { url, secretName };
 }
 
 function extractTemplates(payload: MersalWorkerResponse) {
@@ -97,7 +77,7 @@ async function requestTemplates(config: WorkerConfig) {
     method: "POST",
     headers: workerHeaders(config.secretName),
     body: JSON.stringify({ action: "sync_templates", source: "mzj-unified-platform" }),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(90_000),
   });
   const text = await upstream.text();
   let payload: MersalWorkerResponse;

@@ -1,39 +1,71 @@
-# MZJ Integration Gateway
+# MZJ Integration Gateway v1.12.0
 
-Worker مركزي واحد لاستقبال Webhooks وإرسال رسائل CRM.
+وركر النقل الخاص بالمنصة الموحدة. لا يحفظ بيانات CRM؛ الحفظ الوحيد في PostgreSQL داخل المنصة، والوسائط تحفظ في R2.
 
-## المتغيرات الأساسية
+## مسارات مرسال الثابتة
 
-- `PLATFORM_API_BASE_URL=https://YOUR-DOMAIN/api`
-- Secret باسم `GATEWAY_SECRET` ويطابق `MZJ_GATEWAY_SECRET` في Vercel.
-- `INBOUND_SHARED_SECRET` أو Secret منفصل لكل مصدر مثل `INSTAGRAM_WEBHOOK_SECRET`.
+- `POST /send/mersal`: إرسال النص الحر أو القالب أو الوسائط.
+- `POST /webhook/mersal`: استقبال رسائل العملاء من مرسال.
+- `POST /templates/mersal`: سحب القوالب المعتمدة.
+- `GET /`: فحص حالة الوركر وعرض المسارات الفعالة.
 
-## Facebook
+لا توجد أسماء بديلة لمسارات واتساب، ولا اختيار تلقائي لرابط إرسال آخر.
 
-- `FB_VERIFY_TOKEN`
-- `FB_APP_SECRET`
-- `FB_PAGE_ACCESS_TOKEN`
-- `MANYCHAT_FACEBOOK_TOKEN` أو `MANYCHAT_API_TOKEN`
+## عقد الإرسال من المنصة إلى الوركر
 
-## Instagram
+### نص حر
 
-- `INSTAGRAM_WEBHOOK_SECRET`
-- `MANYCHAT_INSTAGRAM_TOKEN` أو `MANYCHAT_API_TOKEN`
+```json
+{
+  "type": "text",
+  "phone": "9665XXXXXXXX",
+  "template_name": "",
+  "message": "نص الرسالة"
+}
+```
 
-## TikTok
+### قالب
 
-- `TIKTOK_WEBHOOK_SECRET`
-- `MANYCHAT_TIKTOK_TOKEN` أو `MANYCHAT_API_KEY`
-- `MANYCHAT_MESSAGE_FIELD_ID`
-- `MANYCHAT_TRIGGER_TAG_ID`
+```json
+{
+  "type": "template",
+  "phone": "9665XXXXXXXX",
+  "template_name": "approved_template_name",
+  "template_language": "ar",
+  "components": []
+}
+```
 
-## WhatsApp / Mersal
+### وسائط
 
-- `WHATSAPP_WEBHOOK_SECRET`
-- `WA_TOKEN` أو `MERSAL_TOKEN` أو `MERSAL_API_TOKEN`
-- اختياريًا: `MERSAL_API_ENDPOINT`, `MERSAL_SEND_URL`, `MERSAL_TEMPLATE_URL`
+```json
+{
+  "type": "media",
+  "phone": "9665XXXXXXXX",
+  "template_name": "",
+  "media_url": "https://signed-r2-url.example/file",
+  "media_type": "image",
+  "file_name": "file.jpg",
+  "caption": ""
+}
+```
 
-## Imports
+الوركر يرفض أي نوع غير `text` أو `template` أو `media`، ويرفض خلط اسم قالب مع النص الحر أو الوسائط.
 
-- `TIKTOK_SNAPCHAT_WEBHOOK_SECRET`
-- `INSTALLMENT_CALCULATOR_WEBHOOK_SECRET`
+## متغيرات Cloudflare Worker
+
+المتغيرات العامة موضحة في `wrangler.toml` و`.dev.vars.example`. الأسرار الإلزامية:
+
+- `GATEWAY_SECRET`: يطابق قيمة متغير Vercel المسجل اسمه في إعدادات Endpoint.
+- `MERSAL_TOKEN`: إرسال النص والقالب والوسائط.
+- `MERSAL_API_TOKEN`: قراءة محادثات ورسائل مرسال وحل روابط الوسائط ومزامنة القوالب.
+
+يجب ضبط `MERSAL_TEMPLATES_URL` على Endpoint القوالب المعتمدة الخاص بحساب مرسال.
+
+## استقبال الوسائط
+
+1. يستقبل الوركر رسالة مرسال بالـMessage ID الأصلي.
+2. يحل رابط الوسائط من مرسال عند كون الرابط محميًا أو غير موجود في الـWebhook.
+3. ينقل الملف إلى R2 بحد أقصى 50MB.
+4. يرسل الحدث إلى `/api/integrations/whatsapp` مع `storageKey`.
+5. المنصة تسجل الرسالة والوسيط في PostgreSQL مرة واحدة باستخدام هوية الرسالة الأصلية.

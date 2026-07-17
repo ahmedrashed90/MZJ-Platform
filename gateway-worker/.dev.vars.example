@@ -1,0 +1,14 @@
+# Secrets
+GATEWAY_SECRET=
+MERSAL_TOKEN=
+MERSAL_API_TOKEN=
+
+# Public configuration
+PLATFORM_API_BASE_URL=https://mzj-platform.vercel.app/api
+MERSAL_SEND_URL=https://w-mersal.com/api/wpbox/sendmessage
+MERSAL_TEMPLATE_URL=https://w-mersal.com/api/wpbox/sendtemplatemessage
+MERSAL_MEDIA_SEND_URL=https://w-mersal.com/api/wpbox/sendmedia
+MERSAL_CONVERSATIONS_URL=https://w-mersal.com/api/wpbox/getConversations/none?mobile_api=true
+MERSAL_MESSAGES_URL=https://w-mersal.com/api/wpbox/getMessages
+MERSAL_TEMPLATES_URL=
+MERSAL_MEDIA_BASE_URL=https://w-mersal.com

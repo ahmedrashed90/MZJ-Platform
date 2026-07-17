@@ -3,6 +3,16 @@ main = "src/index.js"
 compatibility_date = "2026-07-01"
 
 [vars]
-PLATFORM_API_BASE_URL = "https://YOUR-PLATFORM-DOMAIN/api"
+PLATFORM_API_BASE_URL = "https://mzj-platform.vercel.app/api"
+MERSAL_SEND_URL = "https://w-mersal.com/api/wpbox/sendmessage"
+MERSAL_TEMPLATE_URL = "https://w-mersal.com/api/wpbox/sendtemplatemessage"
+MERSAL_MEDIA_SEND_URL = "https://w-mersal.com/api/wpbox/sendmedia"
+MERSAL_CONVERSATIONS_URL = "https://w-mersal.com/api/wpbox/getConversations/none?mobile_api=true"
+MERSAL_MESSAGES_URL = "https://w-mersal.com/api/wpbox/getMessages"
+MERSAL_MEDIA_BASE_URL = "https://w-mersal.com"
 
-# Add GATEWAY_SECRET with: wrangler secret put GATEWAY_SECRET
+# Configure MERSAL_TEMPLATES_URL with the exact approved-templates endpoint for the account.
+# Add secrets with:
+#   wrangler secret put GATEWAY_SECRET
+#   wrangler secret put MERSAL_TOKEN
+#   wrangler secret put MERSAL_API_TOKEN
