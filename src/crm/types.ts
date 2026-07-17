@@ -145,8 +145,6 @@ export type CrmMessage = {
   sender_type?: "customer" | "human" | "bot" | "system" | null;
   file_name?: string | null;
   provider_status?: string | null;
-  provider_message_id?: string | null;
-  legacy_path?: string | null;
   sent_by_name?: string | null;
   created_at: string;
 };

@@ -1,6 +1,15 @@
-# MZJ Platform v1.7.0
+# MZJ Platform v1.9.9
 
 منصة React/Vite موحدة لمجموعة محمد بن ذعار العجمي، تعمل على Vercel مع PostgreSQL وتسجيل دخول حقيقي.
+
+
+## واتساب / مرسال في النسخة الحالية
+
+- الإرسال يخرج من API المنصة على Vercel إلى Worker مرسال؛ المتصفح لا يتصل بالـWorker ولا يحمل السر.
+- النص الحر والقوالب يستخدمان مسارًا واحدًا فقط: `/send/mersal`.
+- استقبال مرسال يدخل من `/webhook/mersal` ثم يُحفظ في PostgreSQL من خلال `/api/integrations/whatsapp`.
+- لا يستخدم هذا المسار Firebase أو `wa_conversations`.
+- ملف الـWorker المعتمد: `workers/MZJ-Mersal-CRM-Worker-v31-Platform-Database.txt`.
 
 ## ما تم تنفيذه في هذه النسخة
 
@@ -65,10 +74,9 @@
 - إعادة بناء عرض داش بورد CRM للأقسام الثلاثة، مع ترتيب الحالات من إعدادات الإدارة وفتح ملف العميل والمحادثة من الكارت.
 - توحيد عرض أسماء المصادر بالعربي في الداش بورد وقاعدة البيانات والإضافة اليدوية والسجل والتقارير والتصدير.
 - إضافة خدمة إرسال مركزية في السيرفر تختار قناة الإرسال تلقائيًا من مصدر العميل، بدون اختيار Endpoint من الواجهة:
-  - واتساب: نص حر أو قالب.
+  - واتساب: نص حر أو قالب لكل مصادر العملاء.
   - فيسبوك / إنستجرام / تيك توك محادثات: Endpoint المنصة نفسها.
-  - تيك توك ليد / سناب شات ليد / حاسبة التقسيط / العميل اليدوي: واتساب بقوالب مرسال فقط.
-- التحقق من رقم واتساب السعودي ومنع النص الحر للمصادر المقيدة بالقوالب على مستوى السيرفر والواجهة.
+- التحقق من رقم واتساب السعودي على مستوى السيرفر والواجهة.
 - شاشة عميل موحدة تضم المحادثة وبيانات العميل والمسؤول والكول سنتر والمصدر والحالة وكامل بيانات التمويل.
 - صفحة إضافة العملاء أصبحت تحتوي على تبويبي الإضافة والعملاء المسجلين داخل نفس الصفحة.
 - تطوير سجل عملاء التمويل مع الفلاتر والإحصاءات والخط الزمني وفتح المحادثة.
@@ -109,9 +117,8 @@
 - فتح محادثة العميل من سجل التمويل في تبويب متصفح جديد مع بقاء الصفحة والفلاتر كما هي.
 - إضافة حقل «الفئة» كحقل مستقل لكل أقسام CRM وإدخاله ضمن نسبة اكتمال ملف العميل.
 - إضافة كارت «الرسائل غير المقروءة» كآخر كارت في كل قسم، مع بقاء العميل في كارت حالته وترتيبه أولًا داخل الحالة عند وجود رسالة غير مقروءة.
-- الاستماع الحي إلى `collectionGroup(messages)` بترتيب `createdAt desc` واعتماد الرسائل ذات `direction = in` فقط.
-- حفظ حالة غير المقروءة في PostgreSQL بالحقول المتوافقة مع المرجع، وإزالتها عند فتح المحادثة وفق صلاحيات المستخدم الحالية.
-- توحيد منطق تعليم القراءة/عدم القراءة في خدمة خادم واحدة لمنع التكرار بين التكاملات ومستمع Firestore.
+- استقبال الرسائل الواردة وحالة غير المقروءة من PostgreSQL فقط، وإزالتها عند فتح المحادثة وفق صلاحيات المستخدم الحالية.
+- توحيد منطق تعليم القراءة وعدم القراءة داخل خدمات المنصة الحالية.
 
 
 ## CRM settings v1.8.0
@@ -119,22 +126,24 @@
 - Server-side Mersal template synchronization using `MERSAL_TOKEN` and optional `MERSAL_API_ENDPOINT`.
 - Rebuilt customer distribution settings with ordered members, rule preview, rule cards, and full assignment log.
 
-## WhatsApp / Mersal worker v1.8.1
+## WhatsApp / Mersal Worker
 
-قوالب مرسال والإرسال لا يتصلان بمرسال مباشرة من Vercel. التوكن يبقى داخل Cloudflare Worker فقط.
+ارفع الملف الكامل:
 
-1. ارفع الملف الكامل `workers/MZJ-WhatsApp-Mersal-Worker-v1.0.0-FULL.txt` في Worker مستقل.
-2. أضف داخل Cloudflare Secrets:
-   - `MZJ_GATEWAY_SECRET`
-   - `MERSAL_TOKEN`
-3. داخل Vercel احتفظ بنفس قيمة `MZJ_GATEWAY_SECRET`.
-4. داخل الإعدادات > إعدادات CRM > Endpoints / Workers احفظ واتساب كالتالي:
-   - Send URL: `https://YOUR-WORKER/send/mersal`
-   - Health URL: `https://YOUR-WORKER/health`
-   - Secret name: `MZJ_GATEWAY_SECRET`
-5. زر مزامنة القوالب يشتق تلقائيًا `https://YOUR-WORKER/templates/mersal` من Send URL.
+`workers/MZJ-Mersal-CRM-Worker-v31-Platform-Database.txt`
 
-يمكن استخدام `MERSAL_WORKER_URL` أو `MERSAL_WORKER_TEMPLATES_URL` كـ override اختياري في Vercel، لكنهما غير مطلوبين عند ضبط Send URL.
+Cloudflare secrets / variables المطلوبة:
+
+- `MZJ_GATEWAY_SECRET` بنفس القيمة الموجودة في Vercel.
+- `WA_TOKEN` أو `MERSAL_TOKEN`.
+- `MERSAL_API_TOKEN` عند استقبال وسائط تحتاج جلب بياناتها من مرسال.
+- `MZJ_PLATFORM_INBOUND_URL` وقيمته الافتراضية `https://mzj-platform.vercel.app/api/integrations/whatsapp`.
+
+المسارات المعتمدة فقط:
+
+- إرسال النص الحر والقوالب: `/send/mersal`
+- استقبال مرسال: `/webhook/mersal`
+- فحص الخدمة: `/`
 
 ## v1.9.1 - Unified CRM automation core and transport-only channel Workers
 
@@ -147,31 +156,6 @@
 - دعم الصور والصوت والفيديو وPDF واردًا وصادرًا مع تخزين R2 خاص وروابط مؤقتة وسجل تحميل حسب صلاحيات المستخدم.
 - القالب المرتبط بالحالة يظهر داخل مكان الكتابة للمراجعة واستكمال المتغيرات قبل الإرسال.
 - اتجاه المحادثة ثابت: رسالة العميل يسار، ورسالة مستخدم CRM أو الوكيل يمين.
-
-### WhatsApp / Mersal Worker v2.0.0
-
-ارفع الملف الكامل:
-
-`workers/MZJ-WhatsApp-Mersal-Gateway-v2.0.0-FULL.txt`
-
-Cloudflare secrets / variables المطلوبة:
-
-- `MZJ_GATEWAY_SECRET`
-- `MERSAL_TOKEN`
-- `MZJ_PLATFORM_URL`
-- `MERSAL_API_TOKEN` للوسائط عند الحاجة
-
-المسارات المعتمدة:
-
-- Inbound Webhook: `/webhooks/mersal/v1/messages`
-- Text: `/outbound/whatsapp/v1/text`
-- Template: `/outbound/whatsapp/v1/template`
-- Media: `/outbound/whatsapp/v1/media`
-- Template Sync: `/templates/mersal/v1/sync`
-- Health: `/health`
-
-تظل المسارات القديمة `/webhook/mersal` و`/send/mersal` و`/templates/mersal` متاحة مؤقتًا أثناء الانتقال فقط.
-
 
 ## Automation scheduling without Vercel Cron
 
@@ -186,22 +170,10 @@ Cloudflare secrets / variables المطلوبة:
 - Secret باسم `AUTOMATION_SCHEDULER_SECRET`
 - Queue binding باسم `AUTOMATION_QUEUE`
 
-## v1.9.3 - WhatsApp/Mersal unified send route fix
+## v1.9.9 - Clean Mersal send and receive
 
-- واتساب/مرسال يعتمد مسار CRM واحدًا للنص الحر والقوالب: `/send/mersal`.
-- عند إرسال قالب واتساب، المنصة تفضّل `text_send_url` ثم `send_url`، ولا تستخدم مسار قالب قديم منفصل إذا كان ما زال محفوظًا من نسخة سابقة.
-- تهيئة CRM تنظف صفوف `whatsapp` و`mersal` القديمة وتوحّد `send_url` و`text_send_url` و`template_send_url` على نفس المسار.
-- لم يتم تغيير Payload القالب: `waId`/`phone` مع `template_name` و`template_language` و`params`.
-- لا يحتاج Worker واتساب/مرسال إلى تعديل لهذه المشكلة.
-
-## v1.9.4 — Worker Route Discovery
-
-عند إرسال واتساب تبدأ المنصة بالمسار المحفوظ في إعدادات CRM. إذا أعاد الـWorker فقط `404/405 Not found`، تجرب المنصة تلقائيًا المسارات المتوافقة على نفس النطاق:
-
-- `/send/mersal`
-- `/outbound/whatsapp/v1/text`
-- `/outbound/whatsapp/v1/template`
-- `/outbound/whatsapp/v1/media`
-- `/send/whatsapp`
-
-لا يتم الانتقال لمسار آخر عند أخطاء الصلاحية أو التوكن أو أخطاء مرسال. عند الفشل يعرض رد API المسارات التي جُرّبت وحالة كل مسار بدون كشف أي سر.
+- إرسال واتساب يمر من API المنصة إلى Endpoint واحد محفوظ في الإعدادات، مع `MZJ_GATEWAY_SECRET` من السيرفر فقط.
+- النص الحر والقوالب يرسلان عبر `/send/mersal`، والقالب يرسل باسم مرسال الحقيقي ثم متغيراته.
+- مكان الكتابة متاح دائمًا، والرسالة تظهر فور الضغط على إرسال ثم تُستبدل بنتيجة PostgreSQL المؤكدة.
+- استقبال `/webhook/mersal` يُحوّل الرسالة إلى `/api/integrations/whatsapp` ويحفظها في PostgreSQL ويربطها بالمحادثة عن طريق رقم الجوال الموحّد.
+- لا توجد اتصالات Firebase أو `wa_conversations` في مسار CRM.

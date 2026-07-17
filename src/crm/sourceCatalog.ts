@@ -172,8 +172,6 @@ export function providerStatusLabel(value?: string | null) {
   const key = normalize(value);
   const map: Record<string, string> = {
     queued: "بانتظار الإرسال",
-    sending: "جاري الإرسال",
-    success: "تم الإرسال",
     sent: "تم الإرسال",
     delivered: "تم التسليم",
     read: "تمت القراءة",

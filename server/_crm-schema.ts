@@ -780,6 +780,29 @@ from crm.leads l where c.lead_id=l.id and c.contact_id is null;
 insert into core.schema_migrations(version) values('crm-entry-distribution-v1.9.2') on conflict(version) do nothing;
 `;
 
+const CRM_MERSAL_PLATFORM_DB_V199_SQL = String.raw`
+with normalized as (
+  select c.id, l.phone_normalized as phone_key
+  from crm.conversations c
+  join crm.leads l on l.id=c.lead_id
+  where c.channel_code in ('whatsapp','mersal')
+    and nullif(l.phone_normalized,'') is not null
+), eligible as (
+  select n.id,n.phone_key
+  from normalized n
+  where not exists (
+    select 1 from crm.conversations other
+    where other.id<>n.id and other.legacy_id=n.phone_key
+  )
+)
+update crm.conversations c
+set legacy_id=e.phone_key,participant_id=coalesce(nullif(c.participant_id,''),e.phone_key),updated_at=now()
+from eligible e
+where c.id=e.id and c.legacy_id is distinct from e.phone_key;
+
+insert into core.schema_migrations(version) values('crm-mersal-platform-db-v1.9.9') on conflict(version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -810,6 +833,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-entry-distribution-v1.9.2'
       `;
       if (!automationV19Migration) await runSqlScript(CRM_AUTOMATION_CORE_V19_SQL);
+      const [mersalPlatformDbV199Migration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-mersal-platform-db-v1.9.9'
+      `;
+      if (!mersalPlatformDbV199Migration) await runSqlScript(CRM_MERSAL_PLATFORM_DB_V199_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

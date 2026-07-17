@@ -11,13 +11,6 @@ import {
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate, queryString } from "../api";
 import { LeadDrawer } from "../components/LeadDrawer";
-import {
-  crmTimestampMs,
-  leadHasUnreadMessage,
-  messageMatchesLead,
-  subscribeToLegacyIncomingMessages,
-  type LegacyIncomingMessage,
-} from "../firestoreUnread";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta, CrmStatus } from "../types";
 
@@ -31,23 +24,13 @@ function leadStatus(lead: CrmLead) {
   return String(lead.status_label || lead.status_code || "عميل جديد").trim();
 }
 
-function unreadPatch(lead: CrmLead, message: LegacyIncomingMessage): CrmLead {
-  const currentIncomingAt = crmTimestampMs(lead.last_incoming_message_at || lead.last_message_at);
-  const extra = lead.extra_data && typeof lead.extra_data === "object" ? lead.extra_data : {};
-  const alreadyStored = [extra.lastUnreadMessageKey, extra.lastFirestoreMessageId].map((value) => String(value || "")).includes(message.messageId);
-  const isNewMessage = !alreadyStored && message.createdAtMs >= currentIncomingAt;
-  return {
-    ...lead,
-    unread_count: isNewMessage ? Number(lead.unread_count || 0) + 1 : Math.max(1, Number(lead.unread_count || 0)),
-    dashboard_unread: true,
-    has_unread_message: true,
-    has_unread_messages: true,
-    message_unread: true,
-    is_unread: true,
-    last_message_direction: "in",
-    last_incoming_message_at: message.createdAt,
-    last_message_at: message.createdAt,
-  };
+function leadHasUnreadMessage(lead: CrmLead) {
+  return Number(lead.unread_count || 0) > 0
+    || lead.dashboard_unread === true
+    || lead.has_unread_message === true
+    || lead.has_unread_messages === true
+    || lead.message_unread === true
+    || lead.is_unread === true;
 }
 
 function readPatch(lead: CrmLead): CrmLead {
@@ -76,12 +59,8 @@ export function CrmDashboardPage() {
   const [selected, setSelected] = useState<CrmLead | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const leadsRef = useRef<CrmLead[]>([]);
-  const selectedRef = useRef<CrmLead | null>(null);
   const openedRequestedLead = useRef("");
 
-  useEffect(() => { leadsRef.current = leads; }, [leads]);
-  useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { void loadMeta(); }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void loadDashboard(), 180);
@@ -96,14 +75,6 @@ export function CrmDashboardPage() {
     openLead(requested);
   }, [requestedLeadId, loading, leads]);
 
-  useEffect(() => {
-    const unsubscribe = subscribeToLegacyIncomingMessages(
-      (message) => void handleIncomingMessage(message),
-      (failure) => console.warn("CRM Firestore messages listener stopped", failure),
-    );
-    return unsubscribe;
-  }, []);
-
   async function loadMeta() {
     try {
       const result = await crmFetch<CrmMeta>("/api/crm/meta");
@@ -113,8 +84,8 @@ export function CrmDashboardPage() {
     }
   }
 
-  async function loadDashboard() {
-    setLoading(true);
+  async function loadDashboard(silent = false) {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const result = await crmFetch<{ ok: boolean; statuses: CrmStatus[]; leads: CrmLead[] }>(
@@ -126,60 +97,10 @@ export function CrmDashboardPage() {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
-  async function persistUnread(lead: CrmLead, message: LegacyIncomingMessage) {
-    await crmFetch("/api/crm/unread", {
-      method: "POST",
-      body: JSON.stringify({
-        action: "mark_unread",
-        leadId: lead.id,
-        conversationId: message.conversationId,
-        phone: lead.phone_normalized || lead.phone || message.phone,
-        messageId: message.messageId,
-        messagePath: message.messagePath,
-        createdAt: message.createdAt,
-      }),
-    });
-  }
-
-  async function handleIncomingMessage(message: LegacyIncomingMessage) {
-    const matched = leadsRef.current.find((lead) => messageMatchesLead(lead, message));
-    if (!matched) {
-      try {
-        await crmFetch("/api/crm/unread", {
-          method: "POST",
-          body: JSON.stringify({
-            action: "mark_unread",
-            conversationId: message.conversationId,
-            phone: message.phone,
-            messageId: message.messageId,
-            messagePath: message.messagePath,
-            createdAt: message.createdAt,
-          }),
-        });
-      } catch {
-        // The message can belong to another user's scope or to a lead outside the current filtered board.
-      }
-      return;
-    }
-    const readAt = crmTimestampMs(matched.dashboard_message_read_at);
-    if (message.createdAtMs <= readAt) return;
-    if (selectedRef.current?.id === matched.id) {
-      await markLeadRead(matched, false);
-      return;
-    }
-    const patched = unreadPatch(matched, message);
-    setLeads((current) => current.map((lead) => lead.id === matched.id ? patched : lead));
-    setSelected((current) => current?.id === matched.id ? patched : current);
-    try {
-      await persistUnread(matched, message);
-    } catch (failure) {
-      console.warn("تعذر حفظ حالة الرسالة غير المقروءة", failure);
-    }
-  }
 
   async function markLeadRead(lead: CrmLead, updateDrawer = true) {
     const patched = readPatch(lead);
