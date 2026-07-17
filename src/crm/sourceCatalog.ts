@@ -164,5 +164,5 @@ export function providerStatusLabel(value?: string | null) {
     failed: "",
     received: "تم الاستلام",
   };
-  return map[key] || String(value || "");
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : String(value || "");
 }

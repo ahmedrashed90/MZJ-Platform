@@ -114,8 +114,11 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const identity = identityData(source, payload);
   const media = mediaData(payload);
   const text = messageBody(payload, media);
-  const direction = first(payload.direction, payload.messageDirection, payload.message_direction, "in").toLowerCase() === "out" ? "out" : "in";
-  const senderType = first(payload.senderType, payload.sender_type, direction === "in" ? "customer" : "system");
+  const waMessage = whatsappMessage(payload);
+  const isWhatsappCustomerMessage = source === "whatsapp" && Boolean(waMessage?.from) && Boolean(waMessage?.id || text || media.hasAttachment);
+  const declaredDirection = first(payload.direction, payload.messageDirection, payload.message_direction, "in").toLowerCase();
+  const direction = isWhatsappCustomerMessage ? "in" : (declaredDirection === "out" ? "out" : "in");
+  const senderType = direction === "in" ? "customer" : first(payload.senderType, payload.sender_type, "system");
   const providerMessageId = first(payload.providerMessageId, payload.provider_message_id, payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
   const occurredAt = dateValue(payload);
 
@@ -212,6 +215,14 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   if (existingMessage) {
+    if (direction === "in") {
+      [existingMessage] = await sql<any[]>`
+        update crm.messages
+        set direction='in',provider_status='received',sender_type='customer'
+        where id=${existingMessage.id}::uuid
+        returning *,id::text,conversation_id::text
+      `;
+    }
     await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
     return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
   }
