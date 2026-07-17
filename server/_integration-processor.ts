@@ -261,18 +261,45 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     }
   }
 
-  const automation = await publishAutomationEvent({
-    eventKey: `${source}:${eventId}:message`,
-    eventType: direction === "in" ? "message.received" : "message.sent",
-    source,
-    contactId: contact.id,
-    conversationId: conversation.id,
-    serviceRequestId: conversation.service_request_id || openRequest?.id || null,
-    leadId: conversation.lead_id || openRequest?.lead_id || null,
-    payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
-    actor: null,
-  });
+  // The inbound message is already persisted at this point. Automation is a secondary
+  // side effect and must never make the webhook fail or hide the customer reply.
+  let automation: any = null;
+  let automationError = "";
+  try {
+    automation = await publishAutomationEvent({
+      eventKey: `${source}:${eventId}:message`,
+      eventType: direction === "in" ? "message.received" : "message.sent",
+      source,
+      contactId: contact.id,
+      conversationId: conversation.id,
+      serviceRequestId: conversation.service_request_id || openRequest?.id || null,
+      leadId: conversation.lead_id || openRequest?.lead_id || null,
+      payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
+      actor: null,
+    });
+  } catch (error: any) {
+    automationError = error?.message || String(error);
+    console.error("Inbound message persisted; automation side effect failed", {
+      routeSource,
+      eventId,
+      conversationId: conversation.id,
+      messageId: message.id,
+      error: automationError,
+    });
+  }
 
-  await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
-  return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message, createLead: createdByKnownSource, contact, automation };
+  await sql`
+    update integrations.inbound_events
+    set status='processed',processed_at=now(),error_message=${automationError ? `automation: ${automationError}` : null}
+    where source=${routeSource} and event_key=${eventId}
+  `;
+  return {
+    lead: conversation.lead_id ? { id: conversation.lead_id } : null,
+    conversation,
+    message,
+    createLead: createdByKnownSource,
+    contact,
+    automation,
+    automationError: automationError || null,
+  };
 }
