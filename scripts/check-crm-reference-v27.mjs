@@ -12,7 +12,7 @@ const assert = (condition, message) => {
 };
 
 const dashboard = read("src/crm/pages/CrmDashboardPage.tsx");
-const unreadClient = read("src/crm/unread.ts");
+const unreadState = read("src/crm/unreadState.ts");
 const historyPage = read("src/crm/pages/CrmFinanceHistoryPage.tsx");
 const historyServer = read("server/crm/history.ts");
 const unreadServer = read("server/_crm-unread-state.ts");
@@ -24,8 +24,9 @@ const schema = read("server/_crm-schema.ts");
 const drawer = read("src/crm/components/LeadDrawer.tsx");
 const styles = read("src/styles.css");
 
-assert(unreadClient.includes("leadHasUnreadMessage"), "PostgreSQL unread helper is missing");
-assert(dashboard.includes("setInterval(refresh, 4000)"), "dashboard PostgreSQL refresh is missing");
+assert(unreadState.includes("leadHasUnreadMessage"), "PostgreSQL unread-state helper is missing");
+assert(!dashboard.includes("firestoreUnread") && !dashboard.includes("subscribeToLegacyIncomingMessages"), "dashboard must not depend on Firebase listeners");
+assert(dashboard.includes("window.setInterval") && dashboard.includes("10000"), "dashboard PostgreSQL refresh interval is missing");
 assert(dashboard.includes('label: "الرسائل غير المقروءة"'), "unread Kanban card is missing");
 assert(dashboard.indexOf('...statusGroups') < dashboard.indexOf('label: "الرسائل غير المقروءة"'), "unread Kanban card must be appended after status cards");
 assert(dashboard.includes("leadHasUnreadMessage(right)"), "unread customers are not sorted first inside status cards");
@@ -44,7 +45,7 @@ for (const field of [
   "last_message_direction", "last_incoming_message_at", "last_message_at", "dashboard_message_read_at",
 ]) assert(unreadServer.includes(field), `persistent unread field ${field} is missing`);
 assert(unreadServer.includes("lastUnreadMessageKey"), "unread persistence must be idempotent per message");
-assert(unreadEndpoint.includes("messageId || messagePath"), "unread idempotency must prefer the provider message id over the secondary message path");
+assert(unreadEndpoint.includes("messageId || messagePath"), "unread idempotency must prefer the provider message id over the Firestore path");
 assert(integrationProcessor.includes("markCrmLeadUnread"), "integration messages must use the centralized unread-state service");
 
 assert(schema.includes("car_category") && schema.includes("'الفئة'") && schema.includes("include_in_completion"), "car category migration/completion definition is missing");

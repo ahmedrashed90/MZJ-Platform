@@ -1,17 +1,18 @@
 {
   "name": "mzj-platform",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-direct-mersal-postgres-v110.mjs && tsc -b",
+    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && tsc -b",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "check:crm": "node scripts/check-crm-module.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
+    "@vercel/functions": "^3.7.5",
     "postgres": "^3.4.7",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

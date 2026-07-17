@@ -418,14 +418,14 @@ export function CrmAdminPage({ embedded = false }: Props) {
       {tab === "endpoints" ? (
         <div className="crm-admin-split">
           <section className="crm-panel crm-form-panel">
-            <header><h2>إعدادات ربط المنصات والـ Workers</h2><p>اختار المنصة ثم أضف مساراتها. واتساب/مرسال يستخدم نفس مسار الإرسال للنص الحر والقوالب، ويحدد النوع من بيانات الطلب.</p></header>
+            <header><h2>إعدادات ربط المنصات والـ Workers</h2><p>اختار المنصة ثم أضف مساراتها. واتساب/مرسال يستخدم نفس مسار الإرسال للنص الحر والقوالب والوسائط، ويحدد النوع من بيانات الطلب.</p></header>
             <div className="crm-form-grid">
               <label><span>المصدر</span><select value={endpointForm.sourceCode} onChange={(event) => {
                 const row = data.endpoints.find((item: any) => item.source_code === event.target.value);
                 setEndpointForm(row ? {
                   sourceCode: row.source_code, displayName: row.display_name,
                   sendUrl: row.text_send_url || row.template_send_url || row.send_url || "",
-                  mediaSendUrl: row.media_send_url || "",
+                  mediaSendUrl: row.text_send_url || row.template_send_url || row.send_url || "",
                   templatesSyncUrl: row.templates_sync_url || "",
                   inboundWebhookUrl: row.inbound_webhook_url || row.webhook_url || "",
                   healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active,
@@ -433,20 +433,20 @@ export function CrmAdminPage({ embedded = false }: Props) {
               }}><option value="">اختار المصدر</option>{endpointSources.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
               <label><span>الاسم الظاهر</span><input value={endpointForm.displayName} onChange={(event) => setEndpointForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
               <label className="crm-field-wide"><span>مسار إرسال النص والقوالب</span><input placeholder="https://worker.example.com/send/mersal" value={endpointForm.sendUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, sendUrl: event.target.value }))} /></label>
-              <label className="crm-field-wide"><span>مسار إرسال الوسائط</span><input placeholder="مسار إرسال الوسائط عند تفعيله" value={endpointForm.mediaSendUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, mediaSendUrl: event.target.value }))} /></label>
+              <div className="crm-field-wide crm-system-field-note">النص الحر والقوالب والصور والصوت والفيديو والملفات تستخدم مسار واتساب الواحد <b>/send/mersal</b>.</div>
               <label className="crm-field-wide"><span>مسار مزامنة القوالب</span><input placeholder="https://worker.example.com/templates/mersal" value={endpointForm.templatesSyncUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, templatesSyncUrl: event.target.value }))} /></label>
               <label className="crm-field-wide"><span>مسار استقبال الـ Webhook</span><input placeholder="https://worker.example.com/webhook/mersal" value={endpointForm.inboundWebhookUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, inboundWebhookUrl: event.target.value }))} /></label>
               <label className="crm-field-wide"><span>Health URL</span><input value={endpointForm.healthUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, healthUrl: event.target.value }))} /></label>
               <label className="crm-field-wide"><span>اسم متغير السر في Vercel</span><input placeholder="MZJ_GATEWAY_SECRET" value={endpointForm.secretName} onChange={(event) => setEndpointForm((current) => ({ ...current, secretName: event.target.value }))} /></label>
               <label className="crm-switch-row"><input type="checkbox" checked={endpointForm.isActive} onChange={(event) => setEndpointForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>المسارات نشطة</span></label>
             </div>
-            <button className="crm-primary-button" onClick={() => void save("endpoint", { ...endpointForm, textSendUrl: endpointForm.sendUrl, templateSendUrl: endpointForm.sendUrl })}><FloppyDisk size={18} />حفظ إعدادات المنصة</button>
+            <button className="crm-primary-button" onClick={() => void save("endpoint", { ...endpointForm, mediaSendUrl: endpointForm.sendUrl, textSendUrl: endpointForm.sendUrl, templateSendUrl: endpointForm.sendUrl })}><FloppyDisk size={18} />حفظ إعدادات المنصة</button>
           </section>
           <section className="crm-panel crm-list-panel">
             <header><h2>المنصات المسجلة</h2><span>{data.endpoints.length}</span></header>
             <div className="crm-endpoint-list">{data.endpoints.map((row: any) => <button key={row.source_code} onClick={() => setEndpointForm({
               sourceCode: row.source_code, displayName: row.display_name,
-              sendUrl: row.text_send_url || row.template_send_url || row.send_url || "", mediaSendUrl: row.media_send_url || "",
+              sendUrl: row.text_send_url || row.template_send_url || row.send_url || "", mediaSendUrl: row.text_send_url || row.template_send_url || row.send_url || "",
               templatesSyncUrl: row.templates_sync_url || "", inboundWebhookUrl: row.inbound_webhook_url || row.webhook_url || "",
               healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active,
             })}><strong>{sourceLabel(row.source_code, row.display_name)}</strong><span>{row.text_send_url || row.template_send_url || row.send_url || "لم يتم إضافة مسار إرسال"}</span></button>)}</div>

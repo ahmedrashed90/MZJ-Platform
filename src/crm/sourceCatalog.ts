@@ -115,13 +115,17 @@ export function messagePolicyForLead(
   sourceConfig?: { name?: string; delivery_route?: "whatsapp" | "facebook" | "instagram" | "tiktok"; allow_free_text?: boolean } | null,
 ): MessagePolicy {
   const source = sourceLabel(lead?.source_code || lead?.platform_code, sourceConfig?.name || lead?.source_name);
-  const channel = normalize(lead?.channel_code);
-  const configuredRoute = sourceConfig?.delivery_route;
-
-  if (configuredRoute && configuredRoute !== "whatsapp") {
-    const routeLabel = configuredRoute === "facebook" ? "فيسبوك" : configuredRoute === "instagram" ? "إنستجرام" : "تيك توك";
-    return { route: configuredRoute, routeLabel, templateOnly: false, allowFreeText: true, reason: `الإرسال عبر محادثة ${routeLabel}` };
+  if (sourceConfig?.delivery_route) {
+    const route = sourceConfig.delivery_route;
+    const allowFreeText = route === "whatsapp" ? true : Boolean(sourceConfig.allow_free_text);
+    const routeLabel = route === "whatsapp" ? "واتساب" : route === "facebook" ? "فيسبوك" : route === "instagram" ? "إنستجرام" : "تيك توك";
+    return { route, routeLabel, templateOnly: false, allowFreeText, reason: route === "whatsapp" ? "الإرسال عبر واتساب بنص حر أو قالب أو مرفق" : `الإرسال عبر محادثة ${routeLabel}` };
   }
+  const channel = normalize(lead?.channel_code);
+
+  // واتساب في المنصة الموحدة يظل مفتوحًا للنص الحر والقوالب والمرفقات.
+
+
   if (source === "فيسبوك" || channel.includes("facebook")) {
     return { route: "facebook", routeLabel: "فيسبوك", templateOnly: false, allowFreeText: true, reason: "الإرسال عبر محادثة فيسبوك" };
   }
@@ -131,12 +135,13 @@ export function messagePolicyForLead(
   if (source === "تيك توك" || channel.includes("tiktok")) {
     return { route: "tiktok", routeLabel: "تيك توك", templateOnly: false, allowFreeText: true, reason: "الإرسال عبر محادثة تيك توك" };
   }
+
   return {
     route: "whatsapp",
     routeLabel: "واتساب",
     templateOnly: false,
     allowFreeText: true,
-    reason: "الإرسال عبر واتساب بنص حر أو قالب",
+    reason: "الإرسال عبر واتساب بنص حر أو قالب أو مرفق",
   };
 }
 
@@ -152,7 +157,6 @@ export function channelLabel(value?: string | null) {
 export function providerStatusLabel(value?: string | null) {
   const key = normalize(value);
   const map: Record<string, string> = {
-    sending: "جاري الإرسال",
     queued: "بانتظار الإرسال",
     sent: "تم الإرسال",
     delivered: "تم التسليم",

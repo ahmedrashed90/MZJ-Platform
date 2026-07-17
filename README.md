@@ -1,4 +1,4 @@
-# MZJ Platform v1.10.0
+# MZJ Platform v1.7.0
 
 منصة React/Vite موحدة لمجموعة محمد بن ذعار العجمي، تعمل على Vercel مع PostgreSQL وتسجيل دخول حقيقي.
 
@@ -109,7 +109,9 @@
 - فتح محادثة العميل من سجل التمويل في تبويب متصفح جديد مع بقاء الصفحة والفلاتر كما هي.
 - إضافة حقل «الفئة» كحقل مستقل لكل أقسام CRM وإدخاله ضمن نسبة اكتمال ملف العميل.
 - إضافة كارت «الرسائل غير المقروءة» كآخر كارت في كل قسم، مع بقاء العميل في كارت حالته وترتيبه أولًا داخل الحالة عند وجود رسالة غير مقروءة.
-- حفظ الرسائل الواردة وحالة غير المقروءة داخل PostgreSQL فقط، وإزالتها عند فتح المحادثة وفق صلاحيات المستخدم الحالية.
+- الاستماع الحي إلى `collectionGroup(messages)` بترتيب `createdAt desc` واعتماد الرسائل ذات `direction = in` فقط.
+- حفظ حالة غير المقروءة في PostgreSQL بالحقول المتوافقة مع المرجع، وإزالتها عند فتح المحادثة وفق صلاحيات المستخدم الحالية.
+- توحيد منطق تعليم القراءة/عدم القراءة في خدمة خادم واحدة لمنع التكرار بين التكاملات ومستمع Firestore.
 
 
 ## CRM settings v1.8.0
@@ -117,28 +119,59 @@
 - Server-side Mersal template synchronization using `MERSAL_TOKEN` and optional `MERSAL_API_ENDPOINT`.
 - Rebuilt customer distribution settings with ordered members, rule preview, rule cards, and full assignment log.
 
-## WhatsApp / Mersal — v1.10.0
+## WhatsApp / Mersal worker v1.8.1
 
-الإرسال النصي والقوالب يخرجان مباشرة من واجهة CRM إلى Worker `mersal-crm` عبر المسار الوحيد `/send/mersal`، بنفس دورة النظام القديم؛ لذلك لا ينتظر المستخدم عمليات الحفظ والأوتوميشن داخل Vercel. بعد نجاح مرسال، يحفظ سجل الرسالة في PostgreSQL بشكل مستقل ولا يتحول نجاح واتساب إلى فشل بسبب تأخر الحفظ.
+قوالب مرسال والإرسال لا يتصلان بمرسال مباشرة من Vercel. التوكن يبقى داخل Cloudflare Worker فقط.
 
-الاستقبال يدخل من مرسال إلى `/webhook/mersal` في نفس Worker، ثم يرسل الحدث إلى قاعدة المنصة الحالية عبر:
+1. ارفع الملف الكامل `workers/MZJ-WhatsApp-Mersal-Worker-v1.0.0-FULL.txt` في Worker مستقل.
+2. أضف داخل Cloudflare Secrets:
+   - `MZJ_GATEWAY_SECRET`
+   - `MERSAL_TOKEN`
+3. داخل Vercel احتفظ بنفس قيمة `MZJ_GATEWAY_SECRET`.
+4. داخل الإعدادات > إعدادات CRM > Endpoints / Workers احفظ واتساب كالتالي:
+   - Send URL: `https://YOUR-WORKER/send/mersal`
+   - Health URL: `https://YOUR-WORKER/health`
+   - Secret name: `MZJ_GATEWAY_SECRET`
+5. زر مزامنة القوالب يشتق تلقائيًا `https://YOUR-WORKER/templates/mersal` من Send URL.
 
-`https://mzj-platform.vercel.app/api/integrations/whatsapp`
+يمكن استخدام `MERSAL_WORKER_URL` أو `MERSAL_WORKER_TEMPLATES_URL` كـ override اختياري في Vercel، لكنهما غير مطلوبين عند ضبط Send URL.
 
-ارفع الملف الكامل `workers/mersal-crm-postgres.js` داخل Worker `mersal-crm` نفسه، واضبط داخله:
+## v1.9.1 - Unified CRM automation core and transport-only channel Workers
 
-- `MERSAL_TOKEN` أو `WA_TOKEN`
-- `MERSAL_API_TOKEN` عند الحاجة إلى حل روابط الوسائط الواردة
-- `MZJ_PLATFORM_INBOUND_URL=https://mzj-platform.vercel.app/api/integrations/whatsapp`
-- `MZJ_GATEWAY_SECRET` بنفس القيمة الموجودة في Vercel
+- أُعيد بناء دورة المحادثة حول `Contact` واحد دائمًا، مع `Service Request` مستقل لكل طلب كاش أو تمويل أو خدمة عملاء.
+- الرسالة الأولى تُحفظ كجهة اتصال ومحادثة ورسالة فقط، ولا يتم إنشاء ليد أو توزيعه قبل تحديد الخدمة، إلا للمصادر الموثوقة المعروفة مسبقًا مثل حاسبة التقسيط.
+- رسالة اختيار الخدمة ونصها وترتيب الاختيارات والكلمات المقبولة والحالات النهائية تُدار من صفحة «قواعد الأوتوميشن»، بدون سؤال العميل عن الفرع.
+- إضافة محرك قواعد مركزي مع Idempotency وسجل تشغيل ومهام مؤجلة، ونقل قرار وكيل صندوق الوارد والتصعيد من Worker إلى المنصة.
+- إضافة سجل ملكية العميل: المسؤول السابق والجديد، القسم والفرع، السبب، المنفذ، والتاريخ، مع صفحة «عملاء تم نقلهم مني».
+- فصل مسارات القناة إلى استقبال، نص، قالب، وسائط، ومزامنة قوالب. Worker واتساب/مرسال أصبح Transport فقط ولا يحتوي على توزيع أو حالات أو أوتوميشن.
+- دعم الصور والصوت والفيديو وPDF واردًا وصادرًا مع تخزين R2 خاص وروابط مؤقتة وسجل تحميل حسب صلاحيات المستخدم.
+- القالب المرتبط بالحالة يظهر داخل مكان الكتابة للمراجعة واستكمال المتغيرات قبل الإرسال.
+- اتجاه المحادثة ثابت: رسالة العميل يسار، ورسالة مستخدم CRM أو الوكيل يمين.
 
-المسارات المعتمدة فقط:
+### WhatsApp / Mersal Worker v2.0.0
 
-- إرسال نص حر أو قالب: `/send/mersal`
-- استقبال رسائل واتساب: `/webhook/mersal`
-- الفحص: `/`
+ارفع الملف الكامل:
 
-لا يعتمد التشغيل على Firebase أو `wa_conversations`. الرسائل والمحادثات وغير المقروء محفوظة داخل PostgreSQL. مكان الكتابة مفتوح للنص الحر حتى عند وجود قالب حالة، ولا يظهر بلوك مستقل للقالب المرتبط بالحالة.
+`workers/MZJ-WhatsApp-Mersal-Gateway-v2.0.0-FULL.txt`
+
+Cloudflare secrets / variables المطلوبة:
+
+- `MZJ_GATEWAY_SECRET`
+- `MERSAL_TOKEN`
+- `MZJ_PLATFORM_URL`
+- `MERSAL_API_TOKEN` للوسائط عند الحاجة
+
+المسارات المعتمدة:
+
+- Inbound Webhook: `/webhooks/mersal/v1/messages`
+- Text: `/outbound/whatsapp/v1/text`
+- Template: `/outbound/whatsapp/v1/template`
+- Media: `/outbound/whatsapp/v1/media`
+- Template Sync: `/templates/mersal/v1/sync`
+- Health: `/health`
+
+تظل المسارات القديمة `/webhook/mersal` و`/send/mersal` و`/templates/mersal` متاحة مؤقتًا أثناء الانتقال فقط.
+
 
 ## Automation scheduling without Vercel Cron
 
@@ -152,3 +185,23 @@
 - `PLATFORM_AUTOMATION_CALLBACK_URL`
 - Secret باسم `AUTOMATION_SCHEDULER_SECRET`
 - Queue binding باسم `AUTOMATION_QUEUE`
+
+## v1.9.3 - WhatsApp/Mersal unified send route fix
+
+- واتساب/مرسال يعتمد مسار CRM واحدًا للنص الحر والقوالب: `/send/mersal`.
+- عند إرسال قالب واتساب، المنصة تفضّل `text_send_url` ثم `send_url`، ولا تستخدم مسار قالب قديم منفصل إذا كان ما زال محفوظًا من نسخة سابقة.
+- تهيئة CRM تنظف صفوف `whatsapp` و`mersal` القديمة وتوحّد `send_url` و`text_send_url` و`template_send_url` على نفس المسار.
+- لم يتم تغيير Payload القالب: `waId`/`phone` مع `template_name` و`template_language` و`params`.
+- لا يحتاج Worker واتساب/مرسال إلى تعديل لهذه المشكلة.
+
+## v1.9.4 — Worker Route Discovery
+
+عند إرسال واتساب تبدأ المنصة بالمسار المحفوظ في إعدادات CRM. إذا أعاد الـWorker فقط `404/405 Not found`، تجرب المنصة تلقائيًا المسارات المتوافقة على نفس النطاق:
+
+- `/send/mersal`
+- `/outbound/whatsapp/v1/text`
+- `/outbound/whatsapp/v1/template`
+- `/outbound/whatsapp/v1/media`
+- `/send/whatsapp`
+
+لا يتم الانتقال لمسار آخر عند أخطاء الصلاحية أو التوكن أو أخطاء مرسال. عند الفشل يعرض رد API المسارات التي جُرّبت وحالة كل مسار بدون كشف أي سر.

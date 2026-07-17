@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { waitUntil } from "@vercel/functions";
 import type { SessionUser } from "./_auth.js";
 import { clean, normalizePhone, sourceLabel } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
@@ -59,18 +60,18 @@ function isLeadSource(value: string) { const text = normalized(value); return te
 async function resolveDeliveryPolicy(conversation: ConversationContext): Promise<DeliveryPolicy> {
   const sql = getSql();
   const sourceCode = clean(conversation.source_code);
-  const [sourceConfig] = sourceCode ? await sql<any[]>`select name,delivery_route from core.sources where code=${sourceCode} limit 1` : [];
+  const [sourceConfig] = sourceCode ? await sql<any[]>`select name,delivery_route,allow_free_text from core.sources where code=${sourceCode} limit 1` : [];
   const sourceArabic = clean(sourceConfig?.name) || sourceLabel(conversation.source_code || conversation.source_name || conversation.platform_code || conversation.channel_code);
-  if (sourceConfig?.delivery_route && sourceConfig.delivery_route !== "whatsapp") {
+  if (sourceConfig?.delivery_route) {
     const route = sourceConfig.delivery_route as DeliveryRoute;
-    return { route, templateOnly: false, sourceArabic, reason: `الإرسال عبر ${sourceLabel(route)}` };
+    return { route, templateOnly: false, sourceArabic, reason: route === "whatsapp" ? "الإرسال عبر واتساب بنص حر أو قالب أو مرفق" : `الإرسال عبر ${sourceLabel(route)}` };
   }
   const raw = [conversation.source_code, conversation.source_name, conversation.platform_code, conversation.channel_code, conversation.legacy_id].map(clean).filter(Boolean).join(" ");
   const key = normalized(raw);
   if ((key.includes("facebook") || key.includes("فيسبوك")) && !isLeadSource(`${raw} ${sourceArabic}`)) return { route: "facebook", templateOnly: false, sourceArabic, reason: "الإرسال عبر فيسبوك" };
   if ((key.includes("instagram") || key.includes("انستجرام") || key.includes("انستغرام")) && !isLeadSource(`${raw} ${sourceArabic}`)) return { route: "instagram", templateOnly: false, sourceArabic, reason: "الإرسال عبر إنستجرام" };
   if ((key.includes("tiktok") || key.includes("تيك_توك") || key.includes("تيك")) && !isLeadSource(`${raw} ${sourceArabic}`)) return { route: "tiktok", templateOnly: false, sourceArabic, reason: "الإرسال عبر تيك توك" };
-  return { route: "whatsapp", templateOnly: false, sourceArabic, reason: "الإرسال عبر واتساب بنص أو قالب أو وسيط" };
+  return { route: "whatsapp", templateOnly: false, sourceArabic, reason: "الإرسال عبر واتساب بنص حر أو قالب أو مرفق" };
 }
 
 export function renderCrmTemplate(content: string, conversation: ConversationContext) {
@@ -85,7 +86,8 @@ function gatewayHeaders(secretName: string | null | undefined) {
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8", accept: "application/json" };
   const configuredName = clean(secretName) || "MZJ_GATEWAY_SECRET";
   const secretValue = clean(process.env[configuredName]);
-  if (secretValue) headers["x-mzj-gateway-secret"] = secretValue;
+  if (!secretValue) throw new Error(`متغير السر ${configuredName} غير موجود في Vercel`);
+  headers["x-mzj-gateway-secret"] = secretValue;
   return headers;
 }
 
@@ -115,10 +117,19 @@ function endpointCandidates(route: DeliveryRoute) {
   return ["tiktok", "tiktok-chat", "tiktok_chat"];
 }
 
-function endpointUrl(route: DeliveryRoute, kind: DeliveryKind, endpoint: Record<string, unknown>) {
-  if (kind === "template") return clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url);
-  if (kind === "media") return clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url);
-  return clean(endpoint.text_send_url || endpoint.send_url);
+function whatsappRouteCandidates(endpoint: Record<string, unknown>, _kind: DeliveryKind) {
+  const configured = clean(endpoint.text_send_url || endpoint.send_url);
+  return configured ? [configured] : [];
+}
+
+function endpointUrlCandidates(route: DeliveryRoute, kind: DeliveryKind, endpoint: Record<string, unknown>) {
+  if (route === "whatsapp") return whatsappRouteCandidates(endpoint, kind);
+  const url = kind === "template"
+    ? clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url)
+    : kind === "media"
+      ? clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url)
+      : clean(endpoint.text_send_url || endpoint.send_url);
+  return url ? [url] : [];
 }
 
 async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
@@ -130,25 +141,96 @@ async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
   `;
   const endpoint = rows[0];
   if (!endpoint) throw new Error(`لم يتم ضبط Endpoint فعال لقناة ${sourceLabel(route)}`);
-  const url = endpointUrl(route, kind, endpoint);
-  if (!url) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
-  return { endpoint, urls: [url] };
+  const urls = endpointUrlCandidates(route, kind, endpoint);
+  if (!urls.length) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
+  return { endpoint, urls };
 }
 
 async function postToWorker(urls: string[], headers: Record<string, string>, payload: Record<string, unknown>) {
   const url = clean(urls[0]);
-  if (!url) return { ok: false, provider: null, response: { error: "Worker URL is missing" }, usedUrl: "", attempts: [] as Array<{ url: string; status: number; response: any }> };
+  if (!url) return { ok: false, provider: null, response: { error: "No worker route configured" }, usedUrl: "", attempts: [] as Array<{ url: string; status: number; response: any }> };
   try {
     const provider = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
     const raw = await provider.text();
     let response: any;
     try { response = JSON.parse(raw); } catch { response = { raw }; }
-    const attempts = [{ url, status: provider.status, response }];
-    return { ok: provider.ok && response?.ok !== false, provider, response, usedUrl: url, attempts };
+    const ok = provider.ok && response?.ok !== false;
+    return { ok, provider, response, usedUrl: url, attempts: [{ url, status: provider.status, response }] };
   } catch (error: any) {
     const response = { error: error?.message || String(error) };
     return { ok: false, provider: null, response, usedUrl: url, attempts: [{ url, status: 0, response }] };
   }
+}
+
+type BackgroundDeliveryInput = {
+  urls: string[];
+  headers: Record<string, string>;
+  payload: Record<string, unknown>;
+  jobId: string;
+  messageId?: string | null;
+  conversationId?: string | null;
+  hasMedia?: boolean;
+};
+
+async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
+  const sql = getSql();
+  try {
+    const delivery = await postToWorker(input.urls, input.headers, input.payload);
+    const data = delivery.response;
+    const rawStatus = normalized(data?.status || data?.providerStatus || data?.raw?.status || "");
+    const providerStatus = delivery.ok && !["error", "failed", "failure", "rejected"].includes(rawStatus) ? "sent" : "failed";
+    const providerMessageId = clean(
+      data?.providerMessageId || data?.provider_message_id || data?.message_wamid || data?.messageWamid || data?.message_id ||
+      data?.raw?.message_wamid || data?.raw?.wamid || data?.raw?.message_id || data?.raw?.id || "",
+    );
+    const attempts = delivery.attempts.map((attempt) => ({
+      url: attempt.url,
+      status: attempt.status,
+      error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null,
+    }));
+    const errorMessage = providerStatus === "failed"
+      ? clean(data?.error || data?.message || data?.raw?.message || data?.raw?.error || data?.raw) || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر الوصول إلى Worker الإرسال")
+      : "";
+
+    if (input.messageId) {
+      await sql`
+        update crm.messages set
+          provider_status=${providerStatus},
+          provider_message_id=coalesce(nullif(${providerMessageId},''),provider_message_id),
+          media_status=case when storage_key is not null then ${providerStatus} else media_status end,
+          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ workerRoute: delivery.usedUrl, workerAttempts: attempts, providerResult: data, providerConfirmedAt: new Date().toISOString(), providerError: errorMessage || null })}::jsonb
+        where id=${input.messageId}::uuid
+      `;
+    }
+
+    await sql`
+      update integrations.outbound_jobs set
+        status=${providerStatus},attempts=attempts+1,response_payload=${data ? sql.json(data) : null},
+        error_message=${errorMessage || null},processed_at=now()
+      where id=${input.jobId}::uuid
+    `;
+
+    if (input.conversationId) await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
+  } catch (error: any) {
+    const errorMessage = clean(error?.message || error) || "تعذر إكمال إرسال الرسالة";
+    if (input.messageId) {
+      await sql`
+        update crm.messages set
+          provider_status='failed',
+          media_status=case when storage_key is not null then 'failed' else media_status end,
+          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ providerError: errorMessage, providerConfirmedAt: new Date().toISOString() })}::jsonb
+        where id=${input.messageId}::uuid
+      `.catch(()=>undefined);
+    }
+    await sql`
+      update integrations.outbound_jobs set status='failed',attempts=attempts+1,error_message=${errorMessage},processed_at=now()
+      where id=${input.jobId}::uuid
+    `.catch(()=>undefined);
+  }
+}
+
+function startWorkerDelivery(input: BackgroundDeliveryInput) {
+  waitUntil(finishWorkerDelivery(input));
 }
 
 function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
@@ -175,7 +257,7 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
     return { ...payload, mediaUrl, fileUrl: mediaUrl, mediaType: input.media.mediaType, attachmentType: input.media.mediaType, fileName: input.media.fileName || "", mimeType: input.media.mimeType || "", fileSize: input.media.fileSize || null, caption: input.media.caption || input.text || "" };
   }
   if (input.template) {
-    const templateName = clean(input.template.name);
+    const templateName = clean(input.template.name || input.template.external_id);
     if (!templateName) throw new Error("قالب واتساب غير مربوط باسم قالب مرسال");
     const params = extractNumberedTemplateParams(clean(input.template.content), input.text);
     return {
@@ -218,55 +300,72 @@ export async function deliverCrmMessage(input: {
   const senderType = input.senderType || (input.actor ? "human" : "bot");
   const finalText = clean(input.text || input.media?.caption || input.template?.content);
   if (!finalText && !input.media) throw new Error("اكتب الرسالة أو اختر قالبًا أو ملفًا صالحًا");
+
   const conversation = input.conversation;
   const policy = await resolveDeliveryPolicy(conversation);
-  if (policy.templateOnly && !input.template && !input.media) throw new Error(`مصدر العميل «${policy.sourceArabic}» يسمح بالإرسال عن طريق واتساب بالقوالب فقط`);
-  if (policy.templateOnly && input.template && !isMersalTemplate(input.template)) throw new Error("المصدر يسمح بقالب واتساب متزامن من مرسال فقط");
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";
   const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;
-  const payload = deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer });
+  const proposedJobId = crypto.randomUUID();
+  const baseWorkerPayload = deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer });
 
   const [job] = await sql<any[]>`
-    insert into integrations.outbound_jobs(source,idempotency_key,conversation_id,lead_id,payload,status,created_by)
-    values (${policy.route},${idempotencyKey},${conversation.id}::uuid,${conversation.lead_id||null}::uuid,${sql.json(payload as any)},'queued',${input.actor?.id||null}::uuid)
+    insert into integrations.outbound_jobs(id,source,idempotency_key,conversation_id,lead_id,payload,status,created_by)
+    values (${proposedJobId}::uuid,${policy.route},${idempotencyKey},${conversation.id}::uuid,${conversation.lead_id||null}::uuid,${sql.json(baseWorkerPayload as any)},'queued',${input.actor?.id||null}::uuid)
     on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key
     returning *,id::text
   `;
+
   if (job.status !== "queued" && job.processed_at) {
     const [existing] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
     return { message: existing, providerStatus: job.status, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
   }
 
-  let providerStatus = "failed"; let providerResponse: any = null; let errorMessage = ""; let workerRoute = ""; let workerAttempts: any[] = [];
-  const delivery = await postToWorker(urls, gatewayHeaders(endpoint.secret_name), payload);
-  providerResponse = delivery.response;
-  workerRoute = delivery.usedUrl;
-  workerAttempts = delivery.attempts.map((attempt) => ({ url: attempt.url, status: attempt.status, error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null }));
-  providerStatus = delivery.ok ? (clean(providerResponse?.status) || "sent") : "failed";
-  if (providerStatus === "failed") {
-    errorMessage = clean(providerResponse?.error || providerResponse?.message || providerResponse?.raw)
-      || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر الوصول إلى مسار إرسال صالح في Worker");
-  }
+  const payload = {
+    ...baseWorkerPayload,
+    jobId: job.id,
+    idempotencyKey,
+  };
+  await sql`update integrations.outbound_jobs set payload=${sql.json(payload as any)} where id=${job.id}::uuid`;
 
-  const [existingMessage] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
-  let message = existingMessage;
+  let [message] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
   if (!message) {
     [message] = await sql<any[]>`
       insert into crm.messages(
         conversation_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,
         is_sensitive,provider_status,sent_by,sender_type,metadata
       ) values (
-        ${conversation.id}::uuid,'out',${kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,300) : null},${input.media?.mediaType||null},
-        ${input.media?.fileName||null},${input.media?.mimeType||null},${input.media?.fileSize||null},${input.media?.storageKey||null},${input.media ? providerStatus : null},
-        ${Boolean(input.media?.isSensitive)},${providerStatus},${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute, workerAttempts })}
+        ${conversation.id}::uuid,'out',${kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,900) : null},${input.media?.mediaType||null},
+        ${input.media?.fileName||null},${input.media?.mimeType||null},${input.media?.fileSize||null},${input.media?.storageKey||null},${input.media ? 'queued' : null},
+        ${Boolean(input.media?.isSensitive)},'queued',${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute: urls[0] || "" })}
       ) returning *,id::text,conversation_id::text
     `;
   }
+
   const nowField = senderType === "human" ? "last_human_reply_at" : "last_bot_reply_at";
   await sql.unsafe(`update crm.conversations set preview_text=$1,last_message_at=now(),updated_at=now(),unread_count=case when $3::boolean then 0 else unread_count end,${nowField}=now() where id=$2::uuid`, [finalText || input.media?.fileName || "مرفق", conversation.id, senderType === "human"]);
-  await sql`update integrations.outbound_jobs set status=${providerStatus},attempts=attempts+1,response_payload=${providerResponse ? sql.json(providerResponse) : null},error_message=${errorMessage||null},processed_at=now() where id=${job.id}::uuid`;
-  return { message, providerStatus, providerResponse, errorMessage, jobId: job.id, routing: policy, workerRoute, workerAttempts };
+
+  const headers = gatewayHeaders(endpoint.secret_name);
+  startWorkerDelivery({
+    urls,
+    headers,
+    payload,
+    jobId: job.id,
+    messageId: message.id,
+    conversationId: conversation.id,
+    hasMedia: Boolean(input.media),
+  });
+
+  return {
+    message: { ...message, provider_status: "queued", media_status: input.media ? "queued" : message.media_status },
+    providerStatus: "queued",
+    providerResponse: { ok: true, accepted: true, status: "queued" },
+    errorMessage: "",
+    jobId: job.id,
+    routing: policy,
+    workerRoute: urls[0] || "",
+    workerAttempts: [],
+  };
 }
 
 export async function deliverConversationMessage(input: Omit<Parameters<typeof deliverCrmMessage>[0],"conversation"> & { conversationId: string }) {
@@ -279,20 +378,39 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
   const sql = getSql();
   const phone = normalizePhone(input.phone);
   if (!phone) throw new Error("رقم واتساب للإشعار غير صالح");
-  const { endpoint, urls } = await resolveEndpoint("whatsapp", input.template ? "template" : "text");
-  const templateName = clean(input.template?.name);
+
+  const kind: DeliveryKind = input.template ? "template" : "text";
+  const { endpoint, urls } = await resolveEndpoint("whatsapp", kind);
+  const templateName = clean(input.template?.name || input.template?.external_id);
+  if (input.template && !templateName) throw new Error("قالب واتساب غير مربوط باسم قالب مرسال");
   const templateParams = input.template ? extractNumberedTemplateParams(clean(input.template.content), input.text) : [];
-  const payload = input.template ? { phone, waId: phone, template_name: templateName, template_language: clean(input.template.language_code)||"ar", params: templateParams, components: templateParams.length ? [{ type: "body", parameters: templateParams.map((value) => ({ type: "text", text: value })) }] : [], text: input.text, agentAuto: true } : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
+  const jobId = crypto.randomUUID();
   const key = clean(input.idempotencyKey) || `direct-wa:${phone}:${crypto.randomUUID()}`;
-  const [job] = await sql<any[]>`insert into integrations.outbound_jobs(source,idempotency_key,payload,status) values('whatsapp',${key},${sql.json(payload as any)},'queued') on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key returning *,id::text`;
+  const payload: Record<string, unknown> = input.template
+    ? {
+        phone,
+        waId: phone,
+        template_name: templateName,
+        template_language: clean(input.template.language_code) || "ar",
+        params: templateParams,
+        components: templateParams.length ? [{ type: "body", parameters: templateParams.map((value) => ({ type: "text", text: value })) }] : [],
+        text: input.text,
+        agentAuto: true,
+      }
+    : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
+  const workerPayload = { ...payload, jobId, idempotencyKey: key, reason: input.reason || "automation" };
+
+  const [job] = await sql<any[]>`
+    insert into integrations.outbound_jobs(id,source,idempotency_key,payload,status)
+    values(${jobId}::uuid,'whatsapp',${key},${sql.json(workerPayload as any)},'queued')
+    on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key
+    returning *,id::text
+  `;
   if (job.processed_at) return { ok: job.status !== "failed", status: job.status, response: job.response_payload };
-  const delivery = await postToWorker(urls, gatewayHeaders(endpoint.secret_name), payload);
-  const data = delivery.response;
-  const status = delivery.ok ? (clean(data?.status)||"sent") : "failed";
-  const attempts = delivery.attempts.map((attempt) => ({ url: attempt.url, status: attempt.status, error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null }));
-  const error = status === "failed" ? clean(data?.error||data?.message||data?.raw) || "تعذر الوصول إلى مسار إرسال صالح في Worker" : "";
-  await sql`update integrations.outbound_jobs set status=${status},attempts=attempts+1,response_payload=${sql.json({ ...data, workerRoute: delivery.usedUrl, workerAttempts: attempts })},error_message=${error||null},processed_at=now() where id=${job.id}::uuid`;
-  return { ok: status !== "failed", status, response: data, workerRoute: delivery.usedUrl, workerAttempts: attempts, error: error || undefined };
+
+  const headers = gatewayHeaders(endpoint.secret_name);
+  startWorkerDelivery({ urls, headers, payload: workerPayload, jobId: job.id });
+  return { ok: true, status: "queued", response: { ok: true, accepted: true, status: "queued" }, workerRoute: urls[0] || "", workerAttempts: [] };
 }
 
 export async function getMappedStatusDraft(input: { leadId: string; departmentCode: string; statusValue: string }) {
