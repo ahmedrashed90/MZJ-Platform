@@ -245,6 +245,22 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
   return { ...payload, message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
 
+async function hasInboundCustomerReply(conversationId: string) {
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    select exists(
+      select 1
+      from crm.messages m
+      where m.conversation_id=${conversationId}::uuid
+        and (
+          lower(coalesce(m.direction::text,'')) in ('in','inbound','received','receive')
+          or lower(coalesce(m.sender_type::text,''))='customer'
+        )
+    ) as has_inbound_reply
+  `;
+  return Boolean(row?.has_inbound_reply);
+}
+
 async function loadConversation(conversationId: string): Promise<ConversationContext | null> {
   const sql = getSql();
   const [row] = await sql<any[]>`
@@ -274,7 +290,10 @@ export async function deliverCrmMessage(input: {
   const finalText = clean(input.text || input.media?.caption || input.template?.content);
   if (!finalText && !input.media) throw new Error("اكتب الرسالة أو اختر قالبًا أو ملفًا صالحًا");
   const conversation = input.conversation;
-  const policy = await resolveDeliveryPolicy(conversation);
+  let policy = await resolveDeliveryPolicy(conversation);
+  if (policy.route === "whatsapp" && policy.templateOnly && await hasInboundCustomerReply(conversation.id)) {
+    policy = { ...policy, templateOnly: false, reason: "العميل رد داخل المحادثة؛ النص الحر متاح عبر واتساب" };
+  }
   if (policy.templateOnly && !input.template && !input.media) throw new Error(`مصدر العميل «${policy.sourceArabic}» يسمح بالإرسال عن طريق واتساب بالقوالب فقط`);
   if (policy.templateOnly && input.template && !isMersalTemplate(input.template)) throw new Error("المصدر يسمح بقالب واتساب متزامن من مرسال فقط");
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";

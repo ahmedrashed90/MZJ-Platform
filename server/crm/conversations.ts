@@ -34,15 +34,28 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
+        with recent_messages as (
+          select m.id
+          from crm.messages m
+          where m.conversation_id=${conversationId}::uuid
+          order by m.created_at desc, m.id desc
+          limit ${limit}
+        )
         select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
-        from crm.messages m left join core.users u on u.id=m.sent_by
+        from recent_messages recent
+        join crm.messages m on m.id=recent.id
+        left join core.users u on u.id=m.sent_by
         left join crm.media_assets a on a.message_id=m.id
-        where m.conversation_id=${conversationId}::uuid
-        order by m.created_at asc limit ${limit}
+        order by m.created_at asc, m.id asc
       `;
+      const hasInboundCustomerReply = messages.some((message) => {
+        const direction = String(message.direction || "").trim().toLowerCase();
+        const senderType = String(message.sender_type || "").trim().toLowerCase();
+        return ["in", "inbound", "received", "receive"].includes(direction) || senderType === "customer";
+      });
       if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
       else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
-      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
+      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0, has_inbound_customer_reply: hasInboundCustomerReply }, messages });
     }
 
     let rows: any[] = [...await sql<any[]>`

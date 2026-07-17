@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
   CalendarBlank,
@@ -139,6 +139,21 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [notice, setNotice] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
+  const [hasInboundCustomerReply, setHasInboundCustomerReply] = useState(false);
+  const messagesListRef = useRef<HTMLDivElement | null>(null);
+
+  function scrollMessagesToBottom(behavior: ScrollBehavior = "auto") {
+    requestAnimationFrame(() => {
+      const list = messagesListRef.current;
+      if (!list) return;
+      list.scrollTo({ top: list.scrollHeight, behavior });
+    });
+  }
+
+  useEffect(() => {
+    if (loadingMessages) return;
+    scrollMessagesToBottom("auto");
+  }, [loadingMessages, messages.length, conversationId]);
 
   useEffect(() => {
     if (!lead) {
@@ -163,6 +178,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setNotice("");
     setPendingFile(null);
     setMediaUrls({});
+    setHasInboundCustomerReply(false);
     void loadConversation(lead.id, lead.conversation_id || "");
     const readLead = {
       ...lead,
@@ -197,8 +213,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         setConversationChannel(result.rows[0]?.channel_code || "");
       }
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null; has_inbound_customer_reply?: boolean }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
+        setHasInboundCustomerReply(Boolean(result.conversation?.has_inbound_customer_reply));
         setMessages(result.messages || []);
       } else setMessages([]);
     } catch (error) {
@@ -293,6 +310,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     platform_code: lead?.platform_code,
     channel_code: conversationChannel || lead?.channel_code,
   }, selectedSourceConfig), [form?.values.source_code, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel, selectedSourceConfig]);
+  const composerTemplateOnly = policy.templateOnly && !hasInboundCustomerReply;
 
 
 
@@ -403,9 +421,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   function renderMessageMedia(message: CrmMessage) {
     const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
+    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} onLoad={() => scrollMessagesToBottom("auto")} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
-    if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
+    if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} onLoadedMetadata={() => scrollMessagesToBottom("auto")} />;
     if (message.media_asset_id || message.attachment_url || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
       return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
@@ -414,23 +432,51 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   async function sendMessage() {
+    if (sending) return;
     if (!conversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
-    if (policy.templateOnly && !selectedTemplate && !pendingFile) return setNotice("مصدر العميل يسمح بالإرسال عن طريق قالب واتساب فقط");
+    if (composerTemplateOnly && !selectedTemplate && !pendingFile) return setNotice("مصدر العميل يسمح بالإرسال عن طريق قالب واتساب فقط حتى يرد العميل");
     if (!messageText.trim() && !selectedTemplate && !pendingFile) return;
+
+    const draftText = messageText;
+    const draftTemplate = selectedTemplate;
+    const draftFile = pendingFile;
+    const optimisticId = `sending-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const optimisticMessage: CrmMessage = {
+      id: optimisticId,
+      direction: "out",
+      message_type: draftFile ? mediaTypeForFile(draftFile) : draftTemplate ? "template" : "text",
+      body: draftText || null,
+      attachment_type: draftFile ? mediaTypeForFile(draftFile) : null,
+      file_name: draftFile?.name || null,
+      mime_type: draftFile?.type || null,
+      file_size: draftFile?.size || null,
+      provider_status: "sending",
+      sender_type: "human",
+      created_at: new Date().toISOString(),
+    };
+
+    setMessageText("");
+    setSelectedTemplate("");
+    setPendingFile(null);
+    setMessages((current) => [...current, optimisticMessage]);
     setSending(true);
     setNotice("");
+
     try {
-      const mediaAssetId = pendingFile ? await uploadPendingFile(pendingFile) : "";
+      const mediaAssetId = draftFile ? await uploadPendingFile(draftFile) : "";
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: messageText, templateId: selectedTemplate, mediaAssetId }),
+        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
       });
-      if (result.message) setMessages((current) => [...current, { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }]);
-      setMessageText("");
-      setSelectedTemplate("");
-      setPendingFile(null);
+      setMessages((current) => current.map((message) => message.id === optimisticId
+        ? (result.message ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id } : { ...message, provider_status: result.providerStatus || "sent" })
+        : message));
       setNotice(result.providerStatus === "queued" ? "تم حفظ الرسالة في قائمة الإرسال" : "تم إرسال الرسالة");
     } catch (error) {
+      setMessages((current) => current.map((message) => message.id === optimisticId ? { ...message, provider_status: "failed" } : message));
+      setMessageText(draftText);
+      setSelectedTemplate(draftTemplate);
+      setPendingFile(draftFile);
       setNotice(error instanceof Error ? error.message : "فشل إرسال الرسالة");
     } finally {
       setSending(false);
@@ -464,17 +510,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         <div className="crm-drawer-grid crm-customer-workspace-grid">
           <section className="crm-conversation-panel crm-customer-conversation">
             <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId)}><ArrowClockwise size={18} /></button></header>
-            <div className="crm-messages-list">
+            <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
               {messages.map((message) => <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small></div>)}
             </div>
-            <div className={`crm-message-composer ${policy.templateOnly ? "template-only" : ""}`}>
+            <div className={`crm-message-composer ${composerTemplateOnly ? "template-only" : ""}`}>
               <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>
               {mappedTemplate ? <div className="crm-linked-template-note"><strong>القالب المرتبط بالحالة</strong><span>{mappedTemplate.display_name || "قالب واتساب"}</span></div> : null}
-              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : policy.templateOnly ? "اختار حالة مرتبطة بقالب واتساب ليظهر القالب هنا" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} disabled={policy.templateOnly && !selectedTemplate && !pendingFile} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : composerTemplateOnly ? "اختار حالة مرتبطة بقالب واتساب ليظهر القالب هنا" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} disabled={composerTemplateOnly && !selectedTemplate && !pendingFile} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
-              {policy.templateOnly && !selectedTemplate && !pendingFile ? <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار حالة مرتبطة بقالب واتساب من بيانات العميل ليظهر القالب داخل مربع الكتابة.</div> : null}
+              {composerTemplateOnly && !selectedTemplate && !pendingFile ? <div className="crm-template-only-warning">النص الحر غير متاح قبل أول رد من العميل. اختار حالة مرتبطة بقالب واتساب ليظهر القالب، وبعد رد العميل يصبح مربع الكتابة متاحًا للنص الحر.</div> : null}
               <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section>

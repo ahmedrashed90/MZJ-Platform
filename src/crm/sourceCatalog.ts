@@ -171,6 +171,7 @@ export function channelLabel(value?: string | null) {
 export function providerStatusLabel(value?: string | null) {
   const key = normalize(value);
   const map: Record<string, string> = {
+    sending: "جاري الإرسال",
     queued: "بانتظار الإرسال",
     sent: "تم الإرسال",
     delivered: "تم التسليم",
