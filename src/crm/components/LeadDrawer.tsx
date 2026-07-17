@@ -471,7 +471,13 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       setMessages((current) => current.map((message) => message.id === optimisticId
         ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
         : message));
-      setNotice(result.providerStatus === "queued" ? "تم حفظ الرسالة في قائمة الإرسال" : "تم إرسال الرسالة");
+      setNotice(
+        result.providerStatus === "queued"
+          ? "تم حفظ الرسالة في قائمة الإرسال"
+          : result.providerStatus === "pending_confirmation"
+            ? "تم تنفيذ الإرسال وجارٍ تأكيد النتيجة — لا تعِد الإرسال"
+            : "تم إرسال الرسالة",
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "فشل إرسال الرسالة";
       setMessages((current) => current.map((message) => message.id === optimisticId

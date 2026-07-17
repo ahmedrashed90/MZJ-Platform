@@ -264,6 +264,24 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
   return { ...payload, message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
 
+function hasDefinitiveProviderRejection(delivery: { provider: Response | null; response: any }) {
+  const response = delivery.response || {};
+  const workerStatus = Number(delivery.provider?.status || 0);
+  const upstreamHttpStatus = Number(response?.httpStatus || 0);
+  const providerStatus = normalized(response?.status);
+  const rawProviderStatus = normalized(response?.raw?.status || response?.providerResponse?.raw?.status);
+
+  if (workerStatus >= 400 && workerStatus < 500) return true;
+  if (rawProviderStatus === "error") return true;
+  if (upstreamHttpStatus > 0 && upstreamHttpStatus < 500 && providerStatus === "error") return true;
+  return false;
+}
+
+function providerStatusFromDelivery(delivery: { ok: boolean; provider: Response | null; response: any }) {
+  if (delivery.ok) return clean(delivery.response?.status) || "sent";
+  return hasDefinitiveProviderRejection(delivery) ? "failed" : "pending_confirmation";
+}
+
 async function loadConversation(conversationId: string): Promise<ConversationContext | null> {
   const sql = getSql();
   const [row] = await sql<any[]>`
@@ -317,10 +335,10 @@ export async function deliverCrmMessage(input: {
   providerResponse = delivery.response;
   workerRoute = delivery.usedUrl;
   workerAttempts = delivery.attempts.map((attempt) => ({ url: attempt.url, status: attempt.status, error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null }));
-  providerStatus = delivery.ok ? (clean(providerResponse?.status) || "sent") : "failed";
-  if (providerStatus === "failed") {
+  providerStatus = providerStatusFromDelivery(delivery);
+  if (providerStatus !== "sent" && providerStatus !== "success" && providerStatus !== "delivered") {
     errorMessage = clean(providerResponse?.error || providerResponse?.message || providerResponse?.raw)
-      || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر الوصول إلى مسار إرسال صالح في Worker");
+      || (delivery.provider ? `HTTP ${delivery.provider.status}` : "تعذر تأكيد نتيجة الإرسال من Worker");
   }
 
   const [existingMessage] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
@@ -362,9 +380,13 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
   if (job.processed_at) return { ok: job.status !== "failed", status: job.status, response: job.response_payload };
   const delivery = await postToWorker(url, gatewayHeaders(endpoint.secret_name), payload);
   const data = delivery.response;
-  const status = delivery.ok ? (clean(data?.status)||"sent") : "failed";
+  const status = providerStatusFromDelivery(delivery);
   const attempts = delivery.attempts.map((attempt) => ({ url: attempt.url, status: attempt.status, error: clean(attempt.response?.error || attempt.response?.message || attempt.response?.raw) || null }));
-  const error = status === "failed" ? clean(data?.error||data?.message||data?.raw) || "تعذر الوصول إلى مسار إرسال صالح في Worker" : "";
+  const error = status === "failed"
+    ? clean(data?.error||data?.message||data?.raw) || "تعذر الوصول إلى مسار إرسال صالح في Worker"
+    : status === "pending_confirmation"
+      ? clean(data?.error||data?.message||data?.raw) || "تعذر تأكيد نتيجة الإرسال من Worker"
+      : "";
   await sql`update integrations.outbound_jobs set status=${status},attempts=attempts+1,response_payload=${sql.json({ ...data, workerRoute: delivery.usedUrl, workerAttempts: attempts })},error_message=${error||null},processed_at=now() where id=${job.id}::uuid`;
   return { ok: status !== "failed", status, response: data, workerRoute: delivery.usedUrl, workerAttempts: attempts, error: error || undefined };
 }

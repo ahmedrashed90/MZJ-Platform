@@ -170,7 +170,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         providerStatus: delivery.providerStatus,
         templateOnly: delivery.routing?.templateOnly,
       });
-      return response.status(delivery.providerStatus === "failed" ? 502 : 201).json({
+      const responseStatus = delivery.providerStatus === "failed" ? 502 : delivery.providerStatus === "pending_confirmation" ? 202 : 201;
+      return response.status(responseStatus).json({
         ok: delivery.providerStatus !== "failed",
         message: delivery.message,
         providerStatus: delivery.providerStatus,
@@ -178,7 +179,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         workerRoute: delivery.workerRoute || undefined,
         workerAttempts: delivery.workerAttempts || undefined,
         providerResponse: delivery.providerStatus === "failed" ? delivery.providerResponse : undefined,
-        error: delivery.errorMessage || undefined,
+        error: delivery.providerStatus === "failed" ? delivery.errorMessage || undefined : undefined,
       });
     } catch (error: any) {
       return response.status(400).json({ ok: false, error: error?.message || "فشل إرسال الرسالة" });

@@ -13,6 +13,8 @@ const checks = [
   ["WhatsApp conversation identity is the normalized phone", messaging.includes('conversationId: phone, convId: phone') && conversations.includes('const whatsappId = normalizePhone')],
   ["Inbound WhatsApp reuses the existing lead conversation by phone", processor.includes("l.phone_normalized=${identity.phoneNormalized}") && processor.includes("ct.primary_phone_normalized=${identity.phoneNormalized}")],
   ["Customer reply enables free text", messaging.includes('العميل رد داخل المحادثة؛ النص الحر متاح عبر واتساب')],
+  ["Indeterminate worker responses are not reported as failed", messaging.includes('return hasDefinitiveProviderRejection(delivery) ? "failed" : "pending_confirmation"')],
+  ["Timeout handling is structural, not a request.timeout string patch", !messaging.includes('request.timeout')],
 ];
 
 const failed = checks.filter(([, ok]) => !ok);

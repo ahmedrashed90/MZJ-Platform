@@ -173,6 +173,7 @@ export function providerStatusLabel(value?: string | null) {
   const map: Record<string, string> = {
     sending: "جاري الإرسال",
     queued: "بانتظار الإرسال",
+    pending_confirmation: "قيد التأكيد — لا تعِد الإرسال",
     sent: "تم الإرسال",
     delivered: "تم التسليم",
     read: "تمت القراءة",

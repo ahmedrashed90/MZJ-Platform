@@ -1,11 +1,11 @@
 {
   "name": "mzj-platform",
-  "version": "1.9.6",
+  "version": "1.9.7",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-mersal-direct-send-receive-v196.mjs && tsc -b",
+    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-mersal-direct-send-receive-v197.mjs && tsc -b",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "check:crm": "node scripts/check-crm-module.mjs"
