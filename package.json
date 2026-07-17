@@ -1,12 +1,12 @@
 {
   "name": "mzj-platform",
-  "version": "1.11.2",
+  "version": "1.11.3",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && tsc -b",
-    "build": "npm run typecheck && vite build",
+    "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "check:crm": "node scripts/check-crm-module.mjs"
   },
@@ -31,5 +31,5 @@
   "engines": {
     "node": "22.x"
   },
-  "packageManager": "npm@10.9.2"
+  "packageManager": "pnpm@9.15.9"
 }
