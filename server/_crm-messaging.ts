@@ -119,6 +119,13 @@ function endpointCandidates(route: DeliveryRoute) {
   return ["tiktok", "tiktok-chat", "tiktok_chat"];
 }
 
+function unifiedWhatsappSendUrl(endpoint: Record<string, unknown>) {
+  // The active Mersal Worker exposes one CRM route (/send/mersal) for both
+  // free text and templates. Prefer that canonical route and ignore any stale
+  // legacy template-only URL that may still exist in the database.
+  return clean(endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url);
+}
+
 async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
   const sql = getSql();
   const candidates = endpointCandidates(route);
@@ -128,11 +135,20 @@ async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
   `;
   const endpoint = rows[0];
   if (!endpoint) throw new Error(`لم يتم ضبط Endpoint فعال لقناة ${sourceLabel(route)}`);
-  const url = kind === "template"
-    ? clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url)
-    : kind === "media"
-      ? clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url)
-      : clean(endpoint.text_send_url || endpoint.send_url);
+
+  let url = "";
+  if (route === "whatsapp") {
+    url = kind === "media"
+      ? clean(endpoint.media_send_url || unifiedWhatsappSendUrl(endpoint))
+      : unifiedWhatsappSendUrl(endpoint);
+  } else {
+    url = kind === "template"
+      ? clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url)
+      : kind === "media"
+        ? clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url)
+        : clean(endpoint.text_send_url || endpoint.send_url);
+  }
+
   if (!url) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
   return { endpoint, url };
 }

@@ -560,6 +560,21 @@ alter table crm.integration_endpoints add column if not exists inbound_webhook_u
 update crm.integration_endpoints set text_send_url=coalesce(text_send_url,send_url),inbound_webhook_url=coalesce(inbound_webhook_url,webhook_url)
 where text_send_url is null or inbound_webhook_url is null;
 
+-- WhatsApp/Mersal uses one CRM send route for both free text and templates.
+-- Normalize old rows that still contain a separate legacy template route.
+update crm.integration_endpoints
+set send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
+    text_send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
+    template_send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
+    updated_at=now()
+where source_code in ('whatsapp','mersal')
+  and coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) is not null
+  and (
+    send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) or
+    text_send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) or
+    template_send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,''))
+  );
+
 alter table crm.leads add column if not exists contact_id uuid references crm.contacts(id) on delete set null;
 
 create table if not exists crm.service_requests (
