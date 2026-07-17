@@ -161,7 +161,7 @@ export function providerStatusLabel(value?: string | null) {
     sent: "تم الإرسال",
     delivered: "تم التسليم",
     read: "تمت القراءة",
-    failed: "فشل الإرسال",
+    failed: "",
     received: "تم الاستلام",
   };
   return map[key] || String(value || "");
