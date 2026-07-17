@@ -1,7 +1,6 @@
-import crypto from "node:crypto";
 import type { SessionUser } from "./_auth.js";
 import { clean, departmentKey, normalizePhone } from "./_crm-utils.js";
-import { classifyConversationService, closeCurrentServiceRequest } from "./_crm-lifecycle.js";
+import { classifyConversationService } from "./_crm-lifecycle.js";
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 import { getSql } from "./_db.js";
 
@@ -17,248 +16,281 @@ export type AutomationEventInput = {
   actor?: SessionUser | null;
 };
 
-type Rule = { id:string; rule_key:string; name:string; trigger_event:string; priority:number; is_active:boolean; run_mode:string; conditions:any[]; actions:any[]; stop_after_match:boolean; max_runs_per_entity:number };
-
-function valueAt(context: any, path: string) {
-  return String(path || "").split(".").reduce((value, key) => value == null ? undefined : value[key], context);
+function normalizedText(value: unknown) {
+  return clean(value).toLowerCase().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/[\s_-]+/g, " ");
 }
-function normalizedText(value: unknown) { return clean(value).toLowerCase().replace(/[أإآ]/g,"ا").replace(/ة/g,"ه").replace(/[\s_-]+/g," "); }
-function equals(a: unknown,b: unknown) { if(typeof b === "boolean") return Boolean(a)===b; if(typeof b === "number") return Number(a)===b; return normalizedText(a)===normalizedText(b); }
-function conditionMatches(condition: any, context: any) {
-  const actual = valueAt(context, clean(condition?.field)); const expected = condition?.value; const op=clean(condition?.operator||"eq");
-  if(op==="eq") return equals(actual,expected);
-  if(op==="neq") return !equals(actual,expected);
-  if(op==="exists") return expected === false ? actual == null || actual === "" : actual != null && actual !== "";
-  if(op==="in") return Array.isArray(expected) && expected.some((item)=>equals(actual,item));
-  if(op==="contains") return normalizedText(actual).includes(normalizedText(expected));
-  if(op==="gt") return Number(actual)>Number(expected);
-  if(op==="gte") return Number(actual)>=Number(expected);
-  return false;
-}
-function conditionsMatch(conditions: any[], context: any) { return !Array.isArray(conditions) || conditions.every((condition)=>conditionMatches(condition,context)); }
 
 async function loadContext(event: any) {
-  const sql=getSql();
-  const [conversation]=event.conversation_id ? await sql<any[]>`
+  const sql = getSql();
+  const [conversation] = event.conversation_id ? await sql<any[]>`
     select c.*,c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
       exists(select 1 from crm.service_requests r where r.contact_id=c.contact_id and r.request_state='open') as has_open_request,
       l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.status_label,l.source_code,l.source_name,l.platform_code,
       u.full_name as assigned_name
-    from crm.conversations c left join crm.leads l on l.id=c.lead_id left join core.users u on u.id=c.assigned_to
+    from crm.conversations c
+    left join crm.leads l on l.id=c.lead_id
+    left join core.users u on u.id=c.assigned_to
     where c.id=${event.conversation_id}::uuid limit 1
   ` : [];
-  const [request]=event.service_request_id ? await sql<any[]>`select *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text from crm.service_requests where id=${event.service_request_id}::uuid` : conversation?.contact_id ? await sql<any[]>`select *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text from crm.service_requests where contact_id=${conversation.contact_id}::uuid and request_state='open' order by opened_at desc limit 1` : [];
-  const payload=event.payload||{};
+  const [request] = event.service_request_id
+    ? await sql<any[]>`select *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text from crm.service_requests where id=${event.service_request_id}::uuid`
+    : conversation?.contact_id
+      ? await sql<any[]>`select *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text from crm.service_requests where contact_id=${conversation.contact_id}::uuid and request_state='open' order by opened_at desc limit 1`
+      : [];
+  const payload = event.payload || {};
   return {
-    event:{...payload,type:event.event_type,direction:payload.direction||"",senderType:payload.senderType||payload.sender_type||"",text:payload.text||payload.body||""},
-    conversation: conversation ? {...conversation,hasOpenRequest:Boolean(conversation.has_open_request),serviceSelectionSent:Boolean(conversation.service_selection_sent_at),classificationState:conversation.classification_state} : {hasOpenRequest:false,serviceSelectionSent:false,classificationState:""},
-    request:request||null,
+    event: {
+      ...payload,
+      type: event.event_type,
+      direction: payload.direction || "",
+      senderType: payload.senderType || payload.sender_type || "",
+      text: payload.text || payload.body || "",
+    },
+    conversation: conversation ? {
+      ...conversation,
+      hasOpenRequest: Boolean(conversation.has_open_request),
+      serviceSelectionSent: Boolean(conversation.service_selection_sent_at),
+      classificationState: conversation.classification_state,
+    } : { hasOpenRequest: false, serviceSelectionSent: false, classificationState: "" },
+    request: request || null,
     payload,
   };
 }
 
-async function getAutomationSettings() {
-  const sql=getSql();
-  const [settings]=await sql<any[]>`select * from crm.automation_settings where id='default'`;
-  return settings||{};
+async function getEntryRoutingSettings() {
+  const sql = getSql();
+  const [settings] = await sql<any[]>`select * from crm.automation_settings where id='default'`;
+  return settings || {};
 }
 
 export function detectServiceChoice(text: unknown, options: any[]) {
-  const normalized=normalizedText(text);
-  if(!normalized) return "";
-  for(const option of Array.isArray(options)?options:[]) {
-    const aliases=[option?.key,option?.label,...(Array.isArray(option?.aliases)?option.aliases:[])].map(normalizedText).filter(Boolean);
-    if(aliases.some((alias)=>normalized===alias || normalized.includes(alias))) return departmentKey(option?.key||option?.label);
+  const normalized = normalizedText(text);
+  if (!normalized) return "";
+  for (const option of Array.isArray(options) ? options : []) {
+    const aliases = [option?.key, option?.label, ...(Array.isArray(option?.aliases) ? option.aliases : [])]
+      .map(normalizedText)
+      .filter(Boolean);
+    if (aliases.some((alias) => normalized === alias || normalized.includes(alias))) {
+      return departmentKey(option?.key || option?.label);
+    }
   }
   return "";
 }
 
-async function sendServiceSelection(event:any, context:any) {
-  const settings=await getAutomationSettings();
-  if(settings.service_selection_enabled===false || !event.conversation_id) return {skipped:true,reason:"selection_disabled_or_no_conversation"};
-  if(context.conversation?.hasOpenRequest || context.conversation?.serviceSelectionSent) return {skipped:true,reason:"already_classified_or_sent"};
-  const text=clean(settings.service_selection_message);
-  if(!text) return {skipped:true,reason:"empty_selection_message"};
-  const options=Array.isArray(settings.service_options)?settings.service_options:[];
-  const buttons=options.slice(0,3).map((option:any)=>({id:clean(option?.key),title:clean(option?.label)})).filter((button:any)=>button.id&&button.title);
-  const result=await deliverConversationMessage({conversationId:event.conversation_id,text,senderType:"bot",idempotencyKey:`service-selection:${event.conversation_id}:${event.id}`,reason:"service_selection",buttons});
-  const sql=getSql();
-  await sql`update crm.conversations set classification_state='awaiting_service',service_selection_sent_at=now(),service_selection_version=service_selection_version+1,updated_at=now() where id=${event.conversation_id}::uuid`;
-  return {ok:true,providerStatus:result.providerStatus};
+async function sendServiceSelection(event: any, context: any) {
+  const settings = await getEntryRoutingSettings();
+  if (settings.service_selection_enabled === false || !event.conversation_id) {
+    return { skipped: true, reason: "selection_disabled_or_no_conversation" };
+  }
+  if (context.conversation?.hasOpenRequest || context.conversation?.serviceSelectionSent) {
+    return { skipped: true, reason: "already_classified_or_sent" };
+  }
+  const text = clean(settings.service_selection_message);
+  if (!text) return { skipped: true, reason: "empty_selection_message" };
+  const options = Array.isArray(settings.service_options) ? settings.service_options : [];
+  const buttons = options.slice(0, 3)
+    .map((option: any) => ({ id: clean(option?.key), title: clean(option?.label) }))
+    .filter((button: any) => button.id && button.title);
+  const result = await deliverConversationMessage({
+    conversationId: event.conversation_id,
+    text,
+    senderType: "bot",
+    idempotencyKey: `service-selection:${event.conversation_id}:${event.id}`,
+    reason: "service_selection",
+    buttons,
+  });
+  const sql = getSql();
+  await sql`
+    update crm.conversations set
+      classification_state='awaiting_service',
+      service_selection_sent_at=now(),
+      service_selection_version=service_selection_version+1,
+      updated_at=now()
+    where id=${event.conversation_id}::uuid
+  `;
+  return { ok: true, providerStatus: result.providerStatus };
 }
 
-async function classifyFromMessage(event:any,context:any,actor?:SessionUser|null) {
-  if(!event.conversation_id) return {skipped:true,reason:"no_conversation"};
-  const settings=await getAutomationSettings();
-  const choice=detectServiceChoice(context.event.text,settings.service_options||[]);
-  if(!choice) return {skipped:true,reason:"no_service_match"};
-  const result=await classifyConversationService({conversationId:event.conversation_id,serviceKey:choice,sourceCode:event.source||context.conversation?.channel_code,classificationMethod:"customer_selection",actor,eventKey:event.event_key});
-  return {ok:true,serviceKey:choice,reused:result.reused,requestId:result.request?.id,leadId:result.leadId};
+async function classifyFromMessage(event: any, context: any, actor?: SessionUser | null) {
+  if (!event.conversation_id) return { skipped: true, reason: "no_conversation" };
+  const settings = await getEntryRoutingSettings();
+  const choice = detectServiceChoice(context.event.text, settings.service_options || []);
+  if (!choice) return { skipped: true, reason: "no_service_match" };
+  const result = await classifyConversationService({
+    conversationId: event.conversation_id,
+    serviceKey: choice,
+    sourceCode: event.source || context.conversation?.channel_code,
+    classificationMethod: "customer_selection",
+    actor,
+    eventKey: event.event_key,
+  });
+  return { ok: true, serviceKey: choice, reused: result.reused, requestId: result.request?.id, leadId: result.leadId };
 }
 
-function jobKey(type:string,conversationId:string,messageId:string,attempt:number) { return `${type}:${conversationId}:${messageId}:${attempt}`; }
+function jobKey(type: string, conversationId: string, messageId: string, attempt: number) {
+  return `${type}:${conversationId}:${messageId}:${attempt}`;
+}
 
 type AutomationJobRow = {
-  id:string;
-  idempotency_key:string;
-  job_type:string;
-  status:string;
-  due_at:string|Date;
-  scheduler_status?:string|null;
-  processed_at?:string|Date|null;
-  [key:string]:unknown;
+  id: string;
+  idempotency_key: string;
+  job_type: string;
+  status: string;
+  due_at: string | Date;
+  scheduler_status?: string | null;
+  processed_at?: string | Date | null;
+  [key: string]: unknown;
 };
 
-function schedulerUrl() { return clean(process.env.AUTOMATION_SCHEDULER_URL).replace(/\/+$/,""); }
+function schedulerUrl() { return clean(process.env.AUTOMATION_SCHEDULER_URL).replace(/\/+$/, ""); }
 function schedulerSecret() { return clean(process.env.AUTOMATION_SCHEDULER_SECRET); }
 
-async function scheduleAutomationWakeup(job:AutomationJobRow) {
-  if(!job?.id) throw new Error("automation_job_id_missing");
-  if(job.status!=="queued") return {skipped:true,reason:"job_not_queued"};
-  const base=schedulerUrl();
-  const secret=schedulerSecret();
-  if(!base||!secret) {
-    const sql=getSql();
+async function scheduleAutomationWakeup(job: AutomationJobRow) {
+  if (!job?.id) throw new Error("automation_job_id_missing");
+  if (job.status !== "queued") return { skipped: true, reason: "job_not_queued" };
+  const base = schedulerUrl();
+  const secret = schedulerSecret();
+  if (!base || !secret) {
+    const sql = getSql();
     await sql`update crm.automation_jobs set scheduler_status='failed',scheduler_error='AUTOMATION_SCHEDULER_URL/AUTOMATION_SCHEDULER_SECRET missing',updated_at=now() where id=${job.id}::uuid`;
     throw new Error("AUTOMATION_SCHEDULER_URL و AUTOMATION_SCHEDULER_SECRET مطلوبان لتشغيل المهام المؤجلة بدون Vercel Cron");
   }
-  const dueAt=new Date(job.due_at);
-  if(Number.isNaN(dueAt.getTime())) throw new Error("automation_job_due_at_invalid");
-  const payload={jobId:job.id,dueAt:dueAt.toISOString(),eventId:`automation-job:${job.id}:${dueAt.toISOString()}`};
+  const dueAt = new Date(job.due_at);
+  if (Number.isNaN(dueAt.getTime())) throw new Error("automation_job_due_at_invalid");
+  const payload = { jobId: job.id, dueAt: dueAt.toISOString(), eventId: `automation-job:${job.id}:${dueAt.toISOString()}` };
   try {
-    const response=await fetch(`${base}/schedule`,{
-      method:"POST",
-      headers:{"content-type":"application/json","x-mzj-automation-secret":secret},
-      body:JSON.stringify(payload),
+    const response = await fetch(`${base}/schedule`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-mzj-automation-secret": secret },
+      body: JSON.stringify(payload),
     });
-    const raw=await response.text();
-    let data:any;try{data=JSON.parse(raw)}catch{data={raw}}
-    if(!response.ok||data?.ok===false) throw new Error(clean(data?.error||data?.message||raw)||`scheduler_http_${response.status}`);
-    const sql=getSql();
-    await sql`update crm.automation_jobs set scheduler_status='scheduled',scheduler_message_id=${clean(data?.messageId||data?.eventId)||payload.eventId},scheduler_error=null,scheduled_at=now(),updated_at=now() where id=${job.id}::uuid`;
-    return {ok:true,eventId:data?.eventId||payload.eventId,dueAt:payload.dueAt};
-  } catch(error:any) {
-    const message=error?.message||String(error);
-    const sql=getSql();
+    const raw = await response.text();
+    let data: any;
+    try { data = JSON.parse(raw); } catch { data = { raw }; }
+    if (!response.ok || data?.ok === false) throw new Error(clean(data?.error || data?.message || raw) || `scheduler_http_${response.status}`);
+    const sql = getSql();
+    await sql`update crm.automation_jobs set scheduler_status='scheduled',scheduler_message_id=${clean(data?.messageId || data?.eventId) || payload.eventId},scheduler_error=null,scheduled_at=now(),updated_at=now() where id=${job.id}::uuid`;
+    return { ok: true, eventId: data?.eventId || payload.eventId, dueAt: payload.dueAt };
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    const sql = getSql();
     await sql`update crm.automation_jobs set scheduler_status='failed',scheduler_error=${message},updated_at=now() where id=${job.id}::uuid`;
     throw error;
   }
 }
 
-async function loadAutomationJob(jobId:string) {
-  const sql=getSql();
-  const [job]=await sql<AutomationJobRow[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.automation_jobs where id=${jobId}::uuid limit 1`;
-  return job||null;
+async function loadAutomationJob(jobId: string) {
+  const sql = getSql();
+  const [job] = await sql<AutomationJobRow[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.automation_jobs where id=${jobId}::uuid limit 1`;
+  return job || null;
 }
 
-async function createAndScheduleJob(input:{
-  idempotencyKey:string;jobType:string;contactId?:string|null;conversationId?:string|null;serviceRequestId?:string|null;leadId?:string|null;triggerMessageId?:string|null;attempt?:number;delaySeconds:number;payload?:Record<string,unknown>;
+async function createAndScheduleJob(input: {
+  idempotencyKey: string;
+  jobType: string;
+  contactId?: string | null;
+  conversationId?: string | null;
+  serviceRequestId?: string | null;
+  leadId?: string | null;
+  triggerMessageId?: string | null;
+  attempt?: number;
+  delaySeconds: number;
+  payload?: Record<string, unknown>;
 }) {
-  const sql=getSql();
-  const delay=Math.max(60,Math.round(Number(input.delaySeconds||60)));
-  const [job]=await sql<AutomationJobRow[]>`
+  const sql = getSql();
+  const delay = Math.max(60, Math.round(Number(input.delaySeconds || 60)));
+  const [job] = await sql<AutomationJobRow[]>`
     insert into crm.automation_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload,scheduler_status)
-    values (${input.idempotencyKey},${input.jobType},${input.contactId||null}::uuid,${input.conversationId||null}::uuid,${input.serviceRequestId||null}::uuid,${input.leadId||null}::uuid,${input.triggerMessageId||null}::uuid,'queued',${Math.max(1,Number(input.attempt||1))},now()+(${delay}||' seconds')::interval,${sql.json((input.payload||{}) as any)},'pending')
+    values (${input.idempotencyKey},${input.jobType},${input.contactId || null}::uuid,${input.conversationId || null}::uuid,${input.serviceRequestId || null}::uuid,${input.leadId || null}::uuid,${input.triggerMessageId || null}::uuid,'queued',${Math.max(1, Number(input.attempt || 1))},now()+(${delay}||' seconds')::interval,${sql.json((input.payload || {}) as any)},'pending')
     on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key
     returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text
   `;
-  if(job?.status==="queued"&&!job.processed_at&&job.scheduler_status!=="scheduled") await scheduleAutomationWakeup(job);
+  if (job?.status === "queued" && !job.processed_at && job.scheduler_status !== "scheduled") await scheduleAutomationWakeup(job);
   return job;
 }
 
-async function scheduleInboxAgent(event:any,context:any) {
-  const sql=getSql();
-  const conversationId=clean(event.conversation_id); const messageId=clean(event.payload?.messageId||event.payload?.message_id);
-  if(!conversationId||!messageId) return {skipped:true,reason:"missing_conversation_or_message"};
-  const [settings]=await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`;
-  if(!settings?.enabled) return {skipped:true,reason:"agent_disabled"};
-  const channel=clean(context.conversation?.channel_code||event.source);
-  if(channel!=="whatsapp") {
-    const platforms=Array.isArray(settings.social_platforms)?settings.social_platforms:[];
-    if(!settings.social_enabled || !platforms.includes(channel)) return {skipped:true,reason:"channel_not_enabled"};
+async function scheduleInboxAgent(event: any, context: any) {
+  const sql = getSql();
+  const conversationId = clean(event.conversation_id);
+  const messageId = clean(event.payload?.messageId || event.payload?.message_id);
+  if (!conversationId || !messageId) return { skipped: true, reason: "missing_conversation_or_message" };
+  const [settings] = await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`;
+  if (!settings?.enabled) return { skipped: true, reason: "agent_disabled" };
+  const channel = clean(context.conversation?.channel_code || event.source);
+  if (channel !== "whatsapp") {
+    const platforms = Array.isArray(settings.social_platforms) ? settings.social_platforms : [];
+    if (!settings.social_enabled || !platforms.includes(channel)) return { skipped: true, reason: "channel_not_enabled" };
   }
-  const delay=Math.max(60,Number(settings.first_delay_seconds||240));
-  const idempotency=jobKey("inbox_agent",conversationId,messageId,1);
-  const job=await createAndScheduleJob({
-    idempotencyKey:idempotency,
-    jobType:"inbox_agent_check",
-    contactId:context.conversation?.contact_id||event.contact_id||null,
+  const delay = Math.max(60, Number(settings.first_delay_seconds || 240));
+  const idempotency = jobKey("inbox_agent", conversationId, messageId, 1);
+  const job = await createAndScheduleJob({
+    idempotencyKey: idempotency,
+    jobType: "inbox_agent_check",
+    contactId: context.conversation?.contact_id || event.contact_id || null,
     conversationId,
-    serviceRequestId:context.request?.id||event.service_request_id||null,
-    leadId:context.request?.lead_id||event.lead_id||null,
-    triggerMessageId:messageId,
-    attempt:1,
-    delaySeconds:delay,
-    payload:{customerMessageAt:event.payload?.createdAt||event.payload?.receivedAt||new Date().toISOString(),sourceEventKey:event.event_key},
+    serviceRequestId: context.request?.id || event.service_request_id || null,
+    leadId: context.request?.lead_id || event.lead_id || null,
+    triggerMessageId: messageId,
+    attempt: 1,
+    delaySeconds: delay,
+    payload: { customerMessageAt: event.payload?.createdAt || event.payload?.receivedAt || new Date().toISOString(), sourceEventKey: event.event_key },
   });
-  return {ok:true,jobId:job?.id,dueInSeconds:delay};
+  return { ok: true, jobId: job?.id, dueInSeconds: delay };
 }
 
-async function cancelInboxAgent(event:any) {
-  if(!event.conversation_id) return {skipped:true,reason:"no_conversation"};
-  const sql=getSql();
-  const rows=await sql<any[]>`update crm.automation_jobs set status='cancelled',scheduler_status='cancelled',processed_at=now(),updated_at=now() where conversation_id=${event.conversation_id}::uuid and job_type like 'inbox_agent%' and status='queued' returning id::text`;
-  return {ok:true,cancelled:rows.length};
+async function cancelInboxAgent(event: any) {
+  if (!event.conversation_id) return { skipped: true, reason: "no_conversation" };
+  const sql = getSql();
+  const rows = await sql<any[]>`update crm.automation_jobs set status='cancelled',scheduler_status='cancelled',processed_at=now(),updated_at=now() where conversation_id=${event.conversation_id}::uuid and job_type like 'inbox_agent%' and status='queued' returning id::text`;
+  return { ok: true, cancelled: rows.length };
 }
 
-async function setConversationState(event:any,action:any) {
-  if(!event.conversation_id) return {skipped:true,reason:"no_conversation"};
-  const sql=getSql();
-  await sql`update crm.conversations set classification_state=${clean(action?.state)||"new"},updated_at=now() where id=${event.conversation_id}::uuid`;
-  return {ok:true,state:clean(action?.state)};
-}
+export async function publishAutomationEvent(input: AutomationEventInput) {
+  const sql = getSql();
+  const eventKey = clean(input.eventKey);
+  if (!eventKey) throw new Error("eventKey مطلوب لمنع تكرار معالجة الحدث");
 
-async function closeIfFinal(event:any,actor?:SessionUser|null) {
-  const leadId=clean(event.lead_id||event.payload?.leadId); const status=clean(event.payload?.newStatus||event.payload?.statusLabel||event.payload?.status);
-  if(!leadId||!status) return {skipped:true,reason:"missing_lead_or_status"};
-  return closeCurrentServiceRequest({leadId,statusLabel:status,actor,reason:status});
-}
-
-async function executeAction(action:any,event:any,context:any,actor?:SessionUser|null) {
-  switch(clean(action?.type)) {
-    case "send_service_selection": return sendServiceSelection(event,context);
-    case "set_conversation_state": return setConversationState(event,action);
-    case "classify_service_from_message": return classifyFromMessage(event,context,actor);
-    case "schedule_inbox_agent": return scheduleInboxAgent(event,await loadContext(event));
-    case "cancel_inbox_agent": return cancelInboxAgent(event);
-    case "close_request_if_final": return closeIfFinal(event,actor);
-    default:return {skipped:true,reason:`unknown_action:${clean(action?.type)}`};
-  }
-}
-
-export async function publishAutomationEvent(input:AutomationEventInput) {
-  const sql=getSql();
-  const eventKey=clean(input.eventKey); if(!eventKey) throw new Error("eventKey مطلوب لمنع تكرار الأوتوميشن");
-  const [event]=await sql<any[]>`
+  const [event] = await sql<any[]>`
     insert into crm.automation_events(event_key,event_type,source,contact_id,conversation_id,service_request_id,lead_id,payload,status)
-    values (${eventKey},${clean(input.eventType)},${clean(input.source)||null},${input.contactId||null}::uuid,${input.conversationId||null}::uuid,
-      ${input.serviceRequestId||null}::uuid,${input.leadId||null}::uuid,${sql.json((input.payload||{}) as any)},'received')
+    values (${eventKey},${clean(input.eventType)},${clean(input.source) || null},${input.contactId || null}::uuid,${input.conversationId || null}::uuid,
+      ${input.serviceRequestId || null}::uuid,${input.leadId || null}::uuid,${sql.json((input.payload || {}) as any)},'received')
     on conflict(event_key) do update set event_key=excluded.event_key
     returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
   `;
-  if(event.status==="processed") return {ok:true,duplicate:true,eventId:event.id,runs:[]};
-  const rules=await sql<Rule[]>`select *,id::text from crm.automation_rules where is_active=true and trigger_event=${event.event_type} order by priority,created_at`;
-  const runs:any[]=[];
-  for(const rule of rules) {
-    const context=await loadContext(event);
-    if(!conditionsMatch(rule.conditions,context)) { runs.push({ruleKey:rule.rule_key,status:"skipped",reason:"conditions_not_matched"}); continue; }
-    const idempotency=`${event.event_key}:${rule.rule_key}`;
-    const [run]=await sql<any[]>`
-      insert into crm.automation_runs(idempotency_key,event_id,rule_id,contact_id,conversation_id,service_request_id,lead_id,status,trigger_payload)
-      values (${idempotency},${event.id}::uuid,${rule.id}::uuid,${event.contact_id||null}::uuid,${event.conversation_id||null}::uuid,${event.service_request_id||null}::uuid,${event.lead_id||null}::uuid,'running',${sql.json(event.payload||{})})
-      on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key returning *,id::text
-    `;
-    if(run.status!=="running" && run.finished_at) { runs.push({ruleKey:rule.rule_key,status:run.status,duplicate:true}); continue; }
-    const results:any[]=[]; let status="success"; let errorMessage="";
-    try {
-      for(const action of Array.isArray(rule.actions)?rule.actions:[]) results.push({type:action?.type,...(await executeAction(action,event,context,input.actor))});
-    } catch(error:any) { status="failed"; errorMessage=error?.message||String(error); }
-    await sql`update crm.automation_runs set status=${status},action_results=${sql.json(results)},error_message=${errorMessage||null},finished_at=now() where id=${run.id}::uuid`;
-    runs.push({ruleKey:rule.rule_key,status,results,error:errorMessage||undefined});
-    if(status==="success" && rule.stop_after_match) break;
+
+  if (event.status === "processed") return { ok: true, duplicate: true, eventId: event.id, actions: [] };
+
+  const context = await loadContext(event);
+  const actions: any[] = [];
+  const direction = clean(context.event.direction).toLowerCase();
+  const senderType = clean(context.event.senderType).toLowerCase();
+
+  try {
+    if (event.event_type === "message.received" && direction === "in") {
+      if (context.conversation?.hasOpenRequest) {
+        actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
+      } else if (context.conversation?.classificationState === "awaiting_service") {
+        const classification = await classifyFromMessage(event, context, input.actor);
+        actions.push({ type: "classify_service", ...classification });
+        if (classification.ok) {
+          actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, await loadContext(event))) });
+        }
+      } else {
+        actions.push({ type: "service_selection", ...(await sendServiceSelection(event, context)) });
+      }
+    } else if (event.event_type === "message.sent" && senderType === "human") {
+      actions.push({ type: "cancel_inbox_agent", ...(await cancelInboxAgent(event)) });
+    } else {
+      actions.push({ type: "no_entry_action", skipped: true, reason: "event_outside_entry_distribution_scope" });
+    }
+
+    await sql`update crm.automation_events set status='processed',processed_at=now(),payload=payload||${sql.json({ actionResults: actions })}::jsonb where id=${event.id}::uuid`;
+    return { ok: true, eventId: event.id, actions };
+  } catch (error: any) {
+    const message = error?.message || String(error);
+    await sql`update crm.automation_events set status='failed',processed_at=now(),payload=payload||${sql.json({ error: message, actionResults: actions })}::jsonb where id=${event.id}::uuid`;
+    throw error;
   }
-  await sql`update crm.automation_events set status='processed',processed_at=now() where id=${event.id}::uuid`;
-  return {ok:true,eventId:event.id,runs};
 }
 
 function withinBusinessHours(settings:any,date=new Date()) {
@@ -406,10 +438,4 @@ export async function retryAutomationJobSchedule(jobId:string) {
   if(job.status!=="queued") return {ok:false,reason:`job_${job.status}`};
   const result=await scheduleAutomationWakeup({...job,scheduler_status:"pending"});
   return {ok:true,result};
-}
-
-export async function previewAutomationRule(input:{ruleId?:string;eventType?:string;payload?:Record<string,unknown>;conversationId?:string}) {
-  const sql=getSql(); const rules=input.ruleId?await sql<Rule[]>`select *,id::text from crm.automation_rules where id=${input.ruleId}::uuid`:await sql<Rule[]>`select *,id::text from crm.automation_rules where trigger_event=${clean(input.eventType)} order by priority`;
-  const fake={event_type:clean(input.eventType),conversation_id:input.conversationId||null,payload:input.payload||{}}; const context=await loadContext(fake);
-  return rules.map((rule)=>({id:rule.id,ruleKey:rule.rule_key,name:rule.name,matches:conditionsMatch(rule.conditions,context),conditions:rule.conditions,actions:rule.actions}));
 }

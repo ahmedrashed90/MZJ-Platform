@@ -70,6 +70,13 @@ function value(input: unknown) {
   return input == null ? "" : String(input);
 }
 
+function isOutboundMessage(message: CrmMessage) {
+  const direction = String(message.direction || "").trim().toLowerCase();
+  if (["out", "outbound", "sent", "send"].includes(direction)) return true;
+  if (["in", "inbound", "received", "receive"].includes(direction)) return false;
+  return ["human", "agent", "bot", "system"].includes(String(message.sender_type || "").trim().toLowerCase());
+}
+
 function departmentCodeFor(key: ServiceKey) {
   if (key === "finance") return "finance_sales";
   if (key === "service") return "customer_service";
@@ -170,6 +177,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     onSaved(readLead);
   }, [lead?.id]);
 
+  useEffect(() => {
+    if (!lead) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lead?.id, onClose]);
+
   async function loadConversation(leadId: string, preferredId = "") {
     setLoadingMessages(true);
     try {
@@ -231,8 +247,13 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   useEffect(() => {
-    setSelectedTemplate(mappedTemplate?.id || "");
-    if (mappedTemplate?.id) setMessageText(renderTemplateInComposer(mappedTemplate));
+    if (mappedTemplate?.id) {
+      setSelectedTemplate(mappedTemplate.id);
+      setMessageText(renderTemplateInComposer(mappedTemplate));
+      return;
+    }
+    setSelectedTemplate("");
+    setMessageText("");
   }, [mappedTemplate?.id]);
 
   useEffect(() => {
@@ -273,11 +294,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     channel_code: conversationChannel || lead?.channel_code,
   }, selectedSourceConfig), [form?.values.source_code, lead?.source_code, lead?.source_name, lead?.platform_code, lead?.channel_code, conversationChannel, selectedSourceConfig]);
 
-  const availableTemplates = useMemo(() => (meta?.templates || []).filter((template) => {
-    if (!template.departments?.length) return true;
-    const code = departmentCodeFor(department);
-    return template.departments.includes(code) || template.departments.includes(department);
-  }), [meta, department]);
+
 
   if (!lead || !form) return null;
   const activeForm = form;
@@ -450,14 +467,14 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
             <div className="crm-messages-list">
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
-              {messages.map((message) => <div key={message.id} className={`crm-message ${message.direction === "out" ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small></div>)}
+              {messages.map((message) => <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small></div>)}
             </div>
             <div className={`crm-message-composer ${policy.templateOnly ? "template-only" : ""}`}>
               <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>
-              <select value={selectedTemplate} onChange={(event) => { const id = event.target.value; setSelectedTemplate(id); const template = availableTemplates.find((item) => item.id === id); setMessageText(template ? renderTemplateInComposer(template) : ""); }}><option value="">{policy.templateOnly ? "اختر قالب واتساب" : "رسالة بدون قالب"}</option>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select>
-              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={3} disabled={policy.templateOnly && !selectedTemplate && !pendingFile} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              {mappedTemplate ? <div className="crm-linked-template-note"><strong>القالب المرتبط بالحالة</strong><span>{mappedTemplate.display_name || "قالب واتساب"}</span></div> : null}
+              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : policy.templateOnly ? "اختار حالة مرتبطة بقالب واتساب ليظهر القالب هنا" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} disabled={policy.templateOnly && !selectedTemplate && !pendingFile} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
-              {policy.templateOnly && !selectedTemplate && !pendingFile ? <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار قالب واتساب معتمد أو أرفق ملفًا مسموحًا.</div> : null}
+              {policy.templateOnly && !selectedTemplate && !pendingFile ? <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار حالة مرتبطة بقالب واتساب من بيانات العميل ليظهر القالب داخل مربع الكتابة.</div> : null}
               <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section>

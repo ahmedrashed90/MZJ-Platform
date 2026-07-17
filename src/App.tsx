@@ -19,7 +19,6 @@ const CrmInboxAgentPage = lazy(() => import("./crm/pages/CrmInboxAgentPage").the
 const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((module) => ({ default: module.CrmReportsPage })));
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
-const CrmAutomationsPage = lazy(() => import("./crm/pages/CrmAutomationsPage").then((module) => ({ default: module.CrmAutomationsPage })));
 const CrmOwnershipPage = lazy(() => import("./crm/pages/CrmOwnershipPage").then((module) => ({ default: module.CrmOwnershipPage })));
 
 function PlatformRoutes() {
@@ -37,7 +36,6 @@ function PlatformRoutes() {
             <Route path="finance-history" element={<CrmFinanceHistoryPage />} />
             <Route path="inbox" element={<CrmInboxPage />} />
             <Route path="inbox-agent" element={<CrmInboxAgentPage />} />
-            <Route path="automations" element={<CrmAutomationsPage />} />
             <Route path="ownership" element={<CrmOwnershipPage />} />
             <Route path="reports" element={<CrmReportsPage />} />
             <Route path="kpi" element={<CrmKpiPage />} />

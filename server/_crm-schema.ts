@@ -675,26 +675,6 @@ create table if not exists crm.automation_settings (
 );
 insert into crm.automation_settings(id) values('default') on conflict(id) do nothing;
 
-create table if not exists crm.automation_rules (
-  id uuid primary key default gen_random_uuid(),
-  rule_key text not null unique,
-  name text not null,
-  description text,
-  trigger_event text not null,
-  priority integer not null default 100,
-  is_active boolean not null default true,
-  run_mode text not null default 'automatic',
-  conditions jsonb not null default '[]'::jsonb,
-  actions jsonb not null default '[]'::jsonb,
-  stop_after_match boolean not null default false,
-  max_runs_per_entity integer not null default 1,
-  created_by uuid references core.users(id) on delete set null,
-  updated_by uuid references core.users(id) on delete set null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-create index if not exists crm_automation_rules_trigger_idx on crm.automation_rules(trigger_event,is_active,priority);
-
 create table if not exists crm.automation_events (
   id uuid primary key default gen_random_uuid(),
   event_key text not null unique,
@@ -709,24 +689,6 @@ create table if not exists crm.automation_events (
   received_at timestamptz not null default now(),
   processed_at timestamptz
 );
-
-create table if not exists crm.automation_runs (
-  id uuid primary key default gen_random_uuid(),
-  idempotency_key text not null unique,
-  event_id uuid references crm.automation_events(id) on delete set null,
-  rule_id uuid references crm.automation_rules(id) on delete set null,
-  contact_id uuid references crm.contacts(id) on delete set null,
-  conversation_id uuid references crm.conversations(id) on delete set null,
-  service_request_id uuid references crm.service_requests(id) on delete set null,
-  lead_id uuid references crm.leads(id) on delete set null,
-  status text not null default 'running',
-  trigger_payload jsonb not null default '{}'::jsonb,
-  action_results jsonb not null default '[]'::jsonb,
-  error_message text,
-  started_at timestamptz not null default now(),
-  finished_at timestamptz
-);
-create index if not exists crm_automation_runs_created_idx on crm.automation_runs(started_at desc);
 
 create table if not exists crm.automation_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -753,23 +715,9 @@ alter table crm.automation_jobs add column if not exists scheduled_at timestampt
 create index if not exists crm_automation_jobs_due_idx on crm.automation_jobs(status,due_at);
 create index if not exists crm_automation_jobs_scheduler_idx on crm.automation_jobs(scheduler_status,status,due_at);
 
-insert into crm.automation_rules(rule_key,name,description,trigger_event,priority,conditions,actions,stop_after_match,max_runs_per_entity) values
-('service-selection-new-conversation','اختيار الخدمة للعميل الجديد','يرسل رسالة اختيار الخدمة مرة واحدة عندما لا يوجد طلب مفتوح.','message.received',10,
- '[{"field":"event.direction","operator":"eq","value":"in"},{"field":"conversation.hasOpenRequest","operator":"eq","value":false},{"field":"conversation.serviceSelectionSent","operator":"eq","value":false}]'::jsonb,
- '[{"type":"send_service_selection"},{"type":"set_conversation_state","state":"awaiting_service"}]'::jsonb,false,1000),
-('classify-service-reply','تصنيف رد اختيار الخدمة','يقرأ رد العميل أثناء انتظار اختيار الخدمة وينشئ طلب الخدمة المناسب.','message.received',20,
- '[{"field":"event.direction","operator":"eq","value":"in"},{"field":"conversation.classificationState","operator":"eq","value":"awaiting_service"}]'::jsonb,
- '[{"type":"classify_service_from_message"},{"type":"schedule_inbox_agent"}]'::jsonb,true,1000),
-('inbox-agent-start','بدء وكيل صندوق الوارد','يبدأ عداد عدم الرد البشري بعد كل رسالة مرتبطة بطلب مفتوح.','message.received',30,
- '[{"field":"event.direction","operator":"eq","value":"in"},{"field":"conversation.hasOpenRequest","operator":"eq","value":true}]'::jsonb,
- '[{"type":"schedule_inbox_agent"}]'::jsonb,false,100000),
-('inbox-agent-cancel','إيقاف وكيل صندوق الوارد عند الرد','يلغي مهام الوكيل المعلقة عند إرسال رد بشري.','message.sent',10,
- '[{"field":"event.senderType","operator":"eq","value":"human"}]'::jsonb,
- '[{"type":"cancel_inbox_agent"}]'::jsonb,false,100000),
-('close-request-final-status','إغلاق الطلب عند الحالة النهائية','يغلق طلب الخدمة عند الوصول لحالة نهائية معتمدة.','lead.status_changed',10,'[]'::jsonb,
- '[{"type":"close_request_if_final"}]'::jsonb,false,100000)
-on conflict(rule_key) do nothing;
-
+-- Entry and distribution are deterministic platform flows. Remove the obsolete generic rule-builder tables from v1.9.1.
+drop table if exists crm.automation_runs;
+drop table if exists crm.automation_rules;
 update crm.inbox_agent_settings set replies=array_replace(replies,'فضلاً اكتب لنا المدينة أو الفرع الأقرب لك، وسيقوم أحد المختصين بالتواصل معك في أقرب وقت.','تم تصعيد طلبك للمسؤول لضمان الرد عليك في أقرب وقت، ونقدّر انتظارك.');
 
 alter table crm.inbox_agent_settings drop column if exists social_worker_url;
@@ -814,7 +762,7 @@ update crm.conversations c set contact_id=l.contact_id,service_request_id=l.curr
   classification_state=case when l.current_request_id is null then 'new' else 'classified' end
 from crm.leads l where c.lead_id=l.id and c.contact_id is null;
 
-insert into core.schema_migrations(version) values('crm-automation-core-v1.9.1-queue') on conflict(version) do nothing;
+insert into core.schema_migrations(version) values('crm-entry-distribution-v1.9.2') on conflict(version) do nothing;
 `;
 
 export async function ensureCrmSchema() {
@@ -844,7 +792,7 @@ export async function ensureCrmSchema() {
       `;
       if (!referenceV17Migration) await runSqlScript(CRM_REFERENCE_V17_SQL);
       const [automationV19Migration] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-automation-core-v1.9.1-queue'
+        select version from core.schema_migrations where version = 'crm-entry-distribution-v1.9.2'
       `;
       if (!automationV19Migration) await runSqlScript(CRM_AUTOMATION_CORE_V19_SQL);
     })().catch((error) => {
