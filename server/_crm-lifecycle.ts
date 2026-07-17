@@ -1,0 +1,296 @@
+import crypto from "node:crypto";
+import type { SessionUser } from "./_auth.js";
+import {
+  branchForDepartment,
+  chooseAssignment,
+  chooseCallCenterAssignment,
+  clean,
+  departmentCodeFromKey,
+  departmentKey,
+  normalizePhone,
+  resolveSourceName,
+} from "./_crm-utils.js";
+import { getSql } from "./_db.js";
+
+export type ContactIdentityInput = {
+  channelCode: string;
+  externalId: string;
+  participantId?: string;
+  pageId?: string;
+  phone?: string;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+};
+
+function contactKey(phoneNormalized: string, channelCode: string, externalId: string) {
+  if (phoneNormalized) return `phone:${phoneNormalized}`;
+  return `identity:${channelCode}:${externalId || crypto.randomUUID()}`;
+}
+
+export async function ensureContactIdentity(input: ContactIdentityInput) {
+  const sql = getSql();
+  const channelCode = clean(input.channelCode).toLowerCase() || "unknown";
+  const externalId = clean(input.externalId);
+  if (!externalId) throw new Error("معرف العميل الخارجي مطلوب");
+  const phoneNormalized = normalizePhone(input.phone);
+
+  const [identity] = await sql<any[]>`
+    select i.*,i.id::text,i.contact_id::text,c.contact_key,c.display_name as contact_display_name,
+      c.primary_phone,c.primary_phone_normalized
+    from crm.contact_identities i join crm.contacts c on c.id=i.contact_id
+    where i.channel_code=${channelCode} and i.external_id=${externalId} limit 1
+  `;
+  let contact: any = identity ? {
+    id: identity.contact_id,
+    contact_key: identity.contact_key,
+    display_name: identity.contact_display_name,
+    primary_phone: identity.primary_phone,
+    primary_phone_normalized: identity.primary_phone_normalized,
+  } : null;
+
+  if (!contact && phoneNormalized) {
+    [contact] = await sql<any[]>`select *,id::text from crm.contacts where primary_phone_normalized=${phoneNormalized} limit 1`;
+  }
+  if (!contact) {
+    [contact] = await sql<any[]>`
+      insert into crm.contacts(contact_key,display_name,primary_phone,primary_phone_normalized,metadata)
+      values (${contactKey(phoneNormalized,channelCode,externalId)},${clean(input.displayName)||"عميل"},${clean(input.phone)||null},${phoneNormalized||null},${sql.json((input.metadata || {}) as any)})
+      returning *,id::text
+    `;
+  } else {
+    [contact] = await sql<any[]>`
+      update crm.contacts set display_name=coalesce(nullif(${clean(input.displayName)},''),display_name),
+        primary_phone=coalesce(nullif(${clean(input.phone)},''),primary_phone),
+        primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json((input.metadata || {}) as any)}::jsonb,updated_at=now()
+      where id=${contact.id}::uuid returning *,id::text
+    `;
+  }
+
+  const [savedIdentity] = await sql<any[]>`
+    insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
+    values (${contact.id}::uuid,${channelCode},${externalId},${clean(input.participantId)||null},${clean(input.pageId)||null},${clean(input.displayName)||null},${sql.json((input.metadata || {}) as any)})
+    on conflict(channel_code,external_id) do update set
+      contact_id=excluded.contact_id,participant_id=coalesce(excluded.participant_id,crm.contact_identities.participant_id),
+      page_id=coalesce(excluded.page_id,crm.contact_identities.page_id),display_name=coalesce(excluded.display_name,crm.contact_identities.display_name),
+      metadata=crm.contact_identities.metadata||excluded.metadata,updated_at=now()
+    returning *,id::text,contact_id::text
+  `;
+  return { contact, identity: savedIdentity };
+}
+
+export async function findOpenServiceRequest(contactId: string) {
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    select r.*,r.id::text,r.contact_id::text,r.lead_id::text,r.conversation_id::text,r.assigned_to::text,r.call_center_assigned_to::text,
+      sales.full_name as assigned_name,cc.full_name as call_center_name
+    from crm.service_requests r
+    left join core.users sales on sales.id=r.assigned_to
+    left join core.users cc on cc.id=r.call_center_assigned_to
+    where r.contact_id=${contactId}::uuid and r.request_state='open'
+    order by r.opened_at desc limit 1
+  `;
+  return row || null;
+}
+
+async function ensureLeadForContact(input: {
+  contactId: string; displayName: string; phone: string; phoneNormalized: string;
+  sourceCode: string; sourceName: string; platformCode: string;
+}) {
+  const sql = getSql();
+  const [existing] = await sql<any[]>`
+    select *,id::text,assigned_to::text,call_center_assigned_to::text from crm.leads
+    where contact_id=${input.contactId}::uuid and is_deleted=false order by created_at limit 1
+  `;
+  if (existing) return existing;
+  const [lead] = await sql<any[]>`
+    insert into crm.leads(
+      contact_id,customer_name,phone,phone_normalized,source_code,source_name,platform_code,service_key,department_code,
+      status_label,payment_type,registered_at,source_history,extra_data,completion_percent
+    ) values (
+      ${input.contactId}::uuid,${input.displayName||"عميل"},${input.phone||input.phoneNormalized},${input.phoneNormalized||null},
+      ${input.sourceCode},${input.sourceName},${input.platformCode},'cash','cash_sales','عميل جديد','كاش',now(),
+      ${sql.json([{ source: input.sourceCode, at: new Date().toISOString() }])},${sql.json({ contactModel: true })},0
+    ) returning *,id::text
+  `;
+  return lead;
+}
+
+export async function recordOwnershipEvent(input: {
+  contactId?: string | null; requestId?: string | null; leadId?: string | null;
+  previousAssignedTo?: string | null; previousAssignedName?: string | null;
+  newAssignedTo?: string | null; newAssignedName?: string | null;
+  previousDepartmentCode?: string | null; newDepartmentCode?: string | null;
+  previousBranchCode?: string | null; newBranchCode?: string | null;
+  actor?: SessionUser | null; actorType?: string; reason?: string; metadata?: Record<string,unknown>;
+}) {
+  const sql = getSql();
+  await sql`
+    insert into crm.ownership_events(
+      contact_id,service_request_id,lead_id,previous_assigned_to,previous_assigned_name,new_assigned_to,new_assigned_name,
+      previous_department_code,new_department_code,previous_branch_code,new_branch_code,actor_id,actor_name,actor_type,reason,metadata
+    ) values (
+      ${input.contactId||null}::uuid,${input.requestId||null}::uuid,${input.leadId||null}::uuid,
+      ${input.previousAssignedTo||null}::uuid,${input.previousAssignedName||null},${input.newAssignedTo||null}::uuid,${input.newAssignedName||null},
+      ${input.previousDepartmentCode||null},${input.newDepartmentCode||null},${input.previousBranchCode||null},${input.newBranchCode||null},
+      ${input.actor?.id||null}::uuid,${input.actor?.fullName||"Automation Engine"},${input.actorType||"automation"},${input.reason||null},${sql.json((input.metadata || {}) as any)}
+    )
+  `;
+}
+
+export async function classifyConversationService(input: {
+  conversationId: string; serviceKey: string; sourceCode?: string; classificationMethod: string;
+  actor?: SessionUser | null; eventKey?: string;
+}) {
+  const sql = getSql();
+  const serviceKey = departmentKey(input.serviceKey);
+  const [conversation] = await sql<any[]>`
+    select c.*,c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
+      ct.display_name,ct.primary_phone,ct.primary_phone_normalized
+    from crm.conversations c join crm.contacts ct on ct.id=c.contact_id
+    where c.id=${input.conversationId}::uuid limit 1
+  `;
+  if (!conversation) throw new Error("المحادثة غير موجودة");
+  const existing = await findOpenServiceRequest(conversation.contact_id);
+  if (existing) {
+    await sql`
+      update crm.conversations set service_request_id=${existing.id}::uuid,lead_id=${existing.lead_id||null}::uuid,
+        service_key=${existing.service_key},department_code=${existing.department_code},branch_code=${existing.branch_code},
+        assigned_to=${existing.assigned_to||null}::uuid,call_center_assigned_to=${existing.call_center_assigned_to||null}::uuid,
+        classification_state='classified',updated_at=now() where id=${conversation.id}::uuid
+    `;
+    return { request: existing, leadId: existing.lead_id, reused: true };
+  }
+
+  const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
+  const sourceName = await resolveSourceName(sourceCode);
+  const assignment = await chooseAssignment(serviceKey, branchForDepartment(serviceKey), sourceCode);
+  const callCenter = serviceKey === "finance" ? await chooseCallCenterAssignment(sourceCode, "online") : { assignedTo: null, assignedName: "" };
+  const departmentCode = departmentCodeFromKey(serviceKey);
+  const branchCode = assignment.branchCode || branchForDepartment(serviceKey) || null;
+  const lead = await ensureLeadForContact({
+    contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
+    phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
+    sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
+  });
+
+  const [request] = await sql<any[]>`
+    insert into crm.service_requests(
+      contact_id,lead_id,conversation_id,service_key,department_code,branch_code,status_label,request_state,source_code,
+      classification_method,assigned_to,call_center_assigned_to,metadata
+    ) values (
+      ${conversation.contact_id}::uuid,${lead.id}::uuid,${conversation.id}::uuid,${serviceKey},${departmentCode},${branchCode},'عميل جديد','open',
+      ${sourceCode},${input.classificationMethod},${assignment.assignedTo}::uuid,${callCenter.assignedTo}::uuid,${sql.json({ eventKey: input.eventKey || null })}
+    ) returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
+  `;
+  await sql`
+    update crm.leads set contact_id=${conversation.contact_id}::uuid,current_request_id=${request.id}::uuid,service_key=${serviceKey},
+      department_code=${departmentCode},branch_code=${branchCode},status_label='عميل جديد',
+      payment_type=${serviceKey === "finance" ? "تمويل" : serviceKey === "service" ? "خدمة عملاء" : "كاش"},
+      source_code=${sourceCode},source_name=${sourceName},platform_code=${conversation.channel_code || sourceCode},
+      assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
+      unread_count=greatest(coalesce(unread_count,0),${Number(conversation.unread_count||0)}),
+      dashboard_unread=${Number(conversation.unread_count||0)>0},has_unread_message=${Number(conversation.unread_count||0)>0},has_unread_messages=${Number(conversation.unread_count||0)>0},
+      last_incoming_message_at=coalesce(${conversation.last_customer_message_at||null}::timestamptz,last_incoming_message_at),last_message_at=greatest(coalesce(last_message_at,'epoch'),coalesce(${conversation.last_message_at||null}::timestamptz,'epoch')),
+      responsible_name_snapshot=${assignment.assignedName||null},call_center_name_snapshot=${callCenter.assignedName||null},updated_at=now()
+    where id=${lead.id}::uuid
+  `;
+  await sql`
+    update crm.conversations set lead_id=${lead.id}::uuid,service_request_id=${request.id}::uuid,service_key=${serviceKey},
+      department_code=${departmentCode},branch_code=${branchCode},assigned_to=${assignment.assignedTo}::uuid,
+      call_center_assigned_to=${callCenter.assignedTo}::uuid,classification_state='classified',closed_at=null,updated_at=now()
+    where id=${conversation.id}::uuid
+  `;
+  await sql`
+    insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note,details)
+    values (${lead.id}::uuid,'service_request_created','عميل جديد',${departmentCode},${branchCode},${input.actor?.id||null}::uuid,
+      ${input.actor?.fullName||"Automation Engine"},'تم إنشاء طلب خدمة وتصنيف المحادثة',${sql.json({ requestId: request.id, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null })})
+  `;
+  await recordOwnershipEvent({
+    contactId: conversation.contact_id, requestId: request.id, leadId: lead.id,
+    newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
+    newDepartmentCode: departmentCode, newBranchCode: branchCode,
+    actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "توزيع طلب خدمة جديد",
+    metadata: { classificationMethod: input.classificationMethod, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
+  });
+  return { request, leadId: lead.id, reused: false, assignment, callCenter };
+}
+
+export async function closeCurrentServiceRequest(input: { leadId: string; statusLabel: string; actor?: SessionUser | null; reason?: string }) {
+  const sql = getSql();
+  const [settings] = await sql<any[]>`select closed_statuses from crm.automation_settings where id='default'`;
+  const [lead] = await sql<any[]>`select *,id::text,current_request_id::text from crm.leads where id=${input.leadId}::uuid`;
+  if (!lead?.current_request_id) return { closed: false, reason: "no_open_request" };
+  const key = departmentKey(lead.service_key || lead.department_code);
+  const closedStatuses = Array.isArray(settings?.closed_statuses?.[key]) ? settings.closed_statuses[key].map(clean) : [];
+  if (!closedStatuses.includes(clean(input.statusLabel))) return { closed: false, reason: "status_not_final" };
+  const [request] = await sql<any[]>`
+    update crm.service_requests set request_state='closed',status_label=${input.statusLabel},closed_at=now(),closed_by=${input.actor?.id||null}::uuid,
+      closure_reason=${input.reason||input.statusLabel},updated_at=now()
+    where id=${lead.current_request_id}::uuid and request_state='open' returning *,id::text,contact_id::text,lead_id::text
+  `;
+  if (!request) return { closed: false, reason: "already_closed" };
+  await sql`update crm.leads set current_request_id=null,updated_at=now() where id=${lead.id}::uuid`;
+  await sql`
+    update crm.conversations set service_request_id=null,classification_state='closed',service_selection_sent_at=null,closed_at=now(),updated_at=now()
+    where service_request_id=${request.id}::uuid
+  `;
+  return { closed: true, request };
+}
+
+export async function attachLeadToContactAndOpenRequest(input: { leadId: string; actor?: SessionUser | null; classificationMethod?: string }) {
+  const sql = getSql();
+  const [lead] = await sql<any[]>`
+    select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
+      sales.full_name as assigned_name,cc.full_name as call_center_name
+    from crm.leads l
+    left join core.users sales on sales.id=l.assigned_to
+    left join core.users cc on cc.id=l.call_center_assigned_to
+    where l.id=${input.leadId}::uuid and l.is_deleted=false limit 1
+  `;
+  if (!lead) throw new Error("العميل غير موجود");
+  const { contact } = await ensureContactIdentity({
+    channelCode: "crm_manual",
+    externalId: `lead:${lead.id}`,
+    participantId: lead.phone_normalized || lead.phone || lead.id,
+    phone: lead.phone || lead.phone_normalized || "",
+    displayName: lead.customer_name || "عميل",
+    metadata: { leadId: lead.id, origin: "crm" },
+  });
+  let request = await findOpenServiceRequest(contact.id);
+  const serviceKey = departmentKey(lead.service_key || lead.department_code);
+  const departmentCode = departmentCodeFromKey(serviceKey);
+  const branchCode = lead.branch_code || branchForDepartment(serviceKey) || null;
+  let [conversation] = await sql<any[]>`select *,id::text from crm.conversations where legacy_id=${`crm-manual:${lead.id}`} limit 1`;
+  if (!conversation) {
+    [conversation] = await sql<any[]>`
+      insert into crm.conversations(legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,assigned_to,call_center_assigned_to,
+        service_key,department_code,branch_code,classification_state,metadata)
+      values(${`crm-manual:${lead.id}`},${lead.id}::uuid,${contact.id}::uuid,${request?.id||null}::uuid,'whatsapp',${lead.customer_name||"عميل"},
+        ${lead.assigned_to||null}::uuid,${lead.call_center_assigned_to||null}::uuid,${serviceKey},${departmentCode},${branchCode},'classified',${sql.json({manualEntry:true,sourceCode:lead.source_code||"branch"})})
+      returning *,id::text
+    `;
+  }
+  if (!request) {
+    [request] = await sql<any[]>`
+      insert into crm.service_requests(contact_id,lead_id,conversation_id,service_key,department_code,branch_code,status_label,request_state,source_code,
+        classification_method,assigned_to,call_center_assigned_to,metadata)
+      values(${contact.id}::uuid,${lead.id}::uuid,${conversation.id}::uuid,${serviceKey},${departmentCode},${branchCode},${lead.status_label||"عميل جديد"},'open',
+        ${lead.source_code||"branch"},${input.classificationMethod||"manual"},${lead.assigned_to||null}::uuid,${lead.call_center_assigned_to||null}::uuid,${sql.json({createdFromLead:true})})
+      returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
+    `;
+    await recordOwnershipEvent({
+      contactId: contact.id, requestId: request.id, leadId: lead.id,
+      newAssignedTo: lead.assigned_to, newAssignedName: lead.assigned_name,
+      newDepartmentCode: departmentCode, newBranchCode: branchCode,
+      actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "إنشاء طلب عميل من داخل CRM",
+      metadata: { classificationMethod: input.classificationMethod || "manual" },
+    });
+  }
+  await sql`update crm.leads set contact_id=${contact.id}::uuid,current_request_id=${request.id}::uuid,updated_at=now() where id=${lead.id}::uuid`;
+  await sql`update crm.conversations set lead_id=${lead.id}::uuid,contact_id=${contact.id}::uuid,service_request_id=${request.id}::uuid,
+    service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},assigned_to=${lead.assigned_to||null}::uuid,
+    call_center_assigned_to=${lead.call_center_assigned_to||null}::uuid,classification_state='classified',updated_at=now() where id=${conversation.id}::uuid`;
+  await sql`update crm.service_requests set conversation_id=coalesce(conversation_id,${conversation.id}::uuid),lead_id=${lead.id}::uuid,updated_at=now() where id=${request.id}::uuid`;
+  return { contact, request, conversation };
+}

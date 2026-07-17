@@ -45,8 +45,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         sales_manager_name=${clean(body.salesManagerName)||null},sales_manager_phone=${clean(body.salesManagerPhone)||null},fallback_phone=${clean(body.fallbackPhone)||null},
         business_hours_only=${Boolean(body.businessHoursOnly)},business_start=${clean(body.businessStart)||"09:00"}::time,business_end=${clean(body.businessEnd)||"22:00"}::time,
         stop_keywords=${stopKeywords.length?stopKeywords:["إلغاء","خلاص","لا تتواصلون"]},replies=${replies.length?replies:["أهلًا بك، تم استلام رسالتك وجاري تحويل طلبك للمختص. يسعدنا خدمتك."]},
-        branch_escalation_template=${clean(body.branchEscalationTemplate)||null},social_enabled=${Boolean(body.socialEnabled)},social_worker_url=${clean(body.socialWorkerUrl)||null},
-        social_conversation_limit=${Number(body.socialConversationLimit||50)},social_message_limit=${Number(body.socialMessageLimit||30)},social_platforms=${socialPlatforms.length?socialPlatforms:["instagram","facebook","tiktok"]},
+        branch_escalation_template=${clean(body.branchEscalationTemplate)||null},social_enabled=${Boolean(body.socialEnabled)},
+        social_platforms=${socialPlatforms.length?socialPlatforms:["instagram","facebook","tiktok"]},
         updated_by=${user.id}::uuid,updated_at=now()
       where id='default' returning *
     `;

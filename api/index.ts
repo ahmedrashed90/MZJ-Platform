@@ -9,6 +9,7 @@ import meHandler from "../server/auth/me.js";
 import setupStatusHandler from "../server/setup/status.js";
 import setupInitializeHandler from "../server/setup/initialize.js";
 import integrationHandler from "../server/integrations/[source].js";
+import integrationMediaHandler from "../server/integrations/media.js";
 import crmMetaHandler from "../server/crm/meta.js";
 import crmDashboardHandler from "../server/crm/dashboard.js";
 import crmLeadsHandler from "../server/crm/leads.js";
@@ -22,6 +23,11 @@ import crmSettingsHandler from "../server/crm/settings.js";
 import crmInboxAgentHandler from "../server/crm/inbox-agent.js";
 import crmUnreadHandler from "../server/crm/unread.js";
 import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
+import crmAutomationsHandler from "../server/crm/automations.js";
+import crmInboxHandler from "../server/crm/inbox.js";
+import crmOwnershipHandler from "../server/crm/ownership.js";
+import crmMediaHandler from "../server/crm/media.js";
+import cronAutomationHandler from "../server/cron/automation.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -47,6 +53,12 @@ const routes = new Map<string, ApiHandler>([
   ["crm/inbox-agent", crmInboxAgentHandler],
   ["crm/unread", crmUnreadHandler],
   ["crm/mersal-templates", crmMersalTemplatesHandler],
+  ["crm/automations", crmAutomationsHandler],
+  ["crm/inbox", crmInboxHandler],
+  ["crm/ownership", crmOwnershipHandler],
+  ["crm/media", crmMediaHandler],
+  ["integrations/media", integrationMediaHandler],
+  ["cron/automation", cronAutomationHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -66,7 +78,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.8.1" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.9.0" });
+  }
+
+  if (route === "integrations/media") {
+    return integrationMediaHandler(request, response);
   }
 
   if (route.startsWith("integrations/")) {

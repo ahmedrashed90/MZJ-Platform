@@ -135,3 +135,39 @@
 5. زر مزامنة القوالب يشتق تلقائيًا `https://YOUR-WORKER/templates/mersal` من Send URL.
 
 يمكن استخدام `MERSAL_WORKER_URL` أو `MERSAL_WORKER_TEMPLATES_URL` كـ override اختياري في Vercel، لكنهما غير مطلوبين عند ضبط Send URL.
+
+## v1.9.0 - Unified CRM automation core and transport-only channel Workers
+
+- أُعيد بناء دورة المحادثة حول `Contact` واحد دائمًا، مع `Service Request` مستقل لكل طلب كاش أو تمويل أو خدمة عملاء.
+- الرسالة الأولى تُحفظ كجهة اتصال ومحادثة ورسالة فقط، ولا يتم إنشاء ليد أو توزيعه قبل تحديد الخدمة، إلا للمصادر الموثوقة المعروفة مسبقًا مثل حاسبة التقسيط.
+- رسالة اختيار الخدمة ونصها وترتيب الاختيارات والكلمات المقبولة والحالات النهائية تُدار من صفحة «قواعد الأوتوميشن»، بدون سؤال العميل عن الفرع.
+- إضافة محرك قواعد مركزي مع Idempotency وسجل تشغيل ومهام مؤجلة، ونقل قرار وكيل صندوق الوارد والتصعيد من Worker إلى المنصة.
+- إضافة سجل ملكية العميل: المسؤول السابق والجديد، القسم والفرع، السبب، المنفذ، والتاريخ، مع صفحة «عملاء تم نقلهم مني».
+- فصل مسارات القناة إلى استقبال، نص، قالب، وسائط، ومزامنة قوالب. Worker واتساب/مرسال أصبح Transport فقط ولا يحتوي على توزيع أو حالات أو أوتوميشن.
+- دعم الصور والصوت والفيديو وPDF واردًا وصادرًا مع تخزين R2 خاص وروابط مؤقتة وسجل تحميل حسب صلاحيات المستخدم.
+- القالب المرتبط بالحالة يظهر داخل مكان الكتابة للمراجعة واستكمال المتغيرات قبل الإرسال.
+- اتجاه المحادثة ثابت: رسالة العميل يسار، ورسالة مستخدم CRM أو الوكيل يمين.
+
+### WhatsApp / Mersal Worker v2.0.0
+
+ارفع الملف الكامل:
+
+`workers/MZJ-WhatsApp-Mersal-Gateway-v2.0.0-FULL.txt`
+
+Cloudflare secrets / variables المطلوبة:
+
+- `MZJ_GATEWAY_SECRET`
+- `MERSAL_TOKEN`
+- `MZJ_PLATFORM_URL`
+- `MERSAL_API_TOKEN` للوسائط عند الحاجة
+
+المسارات المعتمدة:
+
+- Inbound Webhook: `/webhooks/mersal/v1/messages`
+- Text: `/outbound/whatsapp/v1/text`
+- Template: `/outbound/whatsapp/v1/template`
+- Media: `/outbound/whatsapp/v1/media`
+- Template Sync: `/templates/mersal/v1/sync`
+- Health: `/health`
+
+تظل المسارات القديمة `/webhook/mersal` و`/send/mersal` و`/templates/mersal` متاحة مؤقتًا أثناء الانتقال فقط.

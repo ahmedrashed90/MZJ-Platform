@@ -4,6 +4,12 @@ import {
   CalendarBlank,
   ChatCircleDots,
   PaperPlaneTilt,
+  Paperclip,
+  DownloadSimple,
+  FilePdf,
+  ImageSquare,
+  FileAudio,
+  FileVideo,
   Phone,
   UserCircle,
   WhatsappLogo,
@@ -124,6 +130,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!lead) {
@@ -146,6 +154,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setConversationChannel(lead.channel_code || "");
     setMessageText("");
     setNotice("");
+    setPendingFile(null);
+    setMediaUrls({});
     void loadConversation(lead.id, lead.conversation_id || "");
     const readLead = {
       ...lead,
@@ -200,7 +210,46 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return mapping ? (meta?.templates || []).find((template) => template.id === mapping.template_id) : undefined;
   }, [meta, form?.serviceKey, form?.values.status_label]);
 
-  useEffect(() => { setSelectedTemplate(mappedTemplate?.id || ""); }, [mappedTemplate?.id]);
+  function renderTemplateInComposer(template: { content?: string | null } | undefined) {
+    if (!template?.content || !form) return "";
+    const values: Record<string, string> = {
+      customer_name: form.values.customer_name || lead?.customer_name || "",
+      customerName: form.values.customer_name || lead?.customer_name || "",
+      name: form.values.customer_name || lead?.customer_name || "",
+      phone: form.values.phone || lead?.phone || lead?.phone_normalized || "",
+      car: form.values.car_type || lead?.car_name || "",
+      car_name: form.values.car_type || lead?.car_name || "",
+      carType: form.values.car_type || lead?.car_type || lead?.car_name || "",
+      category: form.values.car_category || lead?.car_category || "",
+      model: form.values.car_model || lead?.car_model || "",
+      color: form.values.color || lead?.color || "",
+      status: form.values.status_label || lead?.status_label || "",
+      agent_name: lead?.assigned_name || "",
+      agentName: lead?.assigned_name || "",
+    };
+    return String(template.content).replace(/{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g, (match, key) => values[key] || match);
+  }
+
+  useEffect(() => {
+    setSelectedTemplate(mappedTemplate?.id || "");
+    if (mappedTemplate?.id) setMessageText(renderTemplateInComposer(mappedTemplate));
+  }, [mappedTemplate?.id]);
+
+  useEffect(() => {
+    const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
+    if (!missing.length) return;
+    let cancelled = false;
+    Promise.all(missing.map(async (message) => {
+      try {
+        const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id || "")}`);
+        return [message.media_asset_id || "", result.url] as const;
+      } catch { return [message.media_asset_id || "", ""] as const; }
+    })).then((entries) => {
+      if (cancelled) return;
+      setMediaUrls((current) => ({ ...current, ...Object.fromEntries(entries.filter((entry) => entry[0] && entry[1])) }));
+    });
+    return () => { cancelled = true; };
+  }, [messages, mediaUrls]);
 
   const credit = useMemo(() => {
     if (!form || form.serviceKey !== "finance") return null;
@@ -304,19 +353,65 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
   }
 
+  function mediaTypeForFile(file: File) {
+    if (file.type.startsWith("image/")) return "image";
+    if (file.type.startsWith("audio/")) return "audio";
+    if (file.type.startsWith("video/")) return "video";
+    return "document";
+  }
+
+  async function uploadPendingFile(file: File) {
+    const prepared = await crmFetch<{ ok: boolean; assetId: string; uploadUrl: string }>("/api/crm/media", {
+      method: "POST",
+      body: JSON.stringify({ action: "prepare_upload", conversationId, mediaType: mediaTypeForFile(file), fileName: file.name, mimeType: file.type || "application/octet-stream", fileSize: file.size, isSensitive: true }),
+    });
+    const upload = await fetch(prepared.uploadUrl, { method: "PUT", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
+    if (!upload.ok) throw new Error("فشل رفع الملف إلى التخزين الآمن");
+    await crmFetch("/api/crm/media", { method: "POST", body: JSON.stringify({ action: "mark_ready", assetId: prepared.assetId }) });
+    return prepared.assetId;
+  }
+
+  async function openMedia(message: CrmMessage) {
+    if (!message.media_asset_id) {
+      if (message.attachment_url) window.open(message.attachment_url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
+      setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
+      window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
+  }
+
+  function renderMessageMedia(message: CrmMessage) {
+    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
+    const type = String(message.attachment_type || message.message_type || "").toLowerCase();
+    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
+    if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
+    if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
+    if (message.media_asset_id || message.attachment_url || message.storage_key) {
+      const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
+      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
+    }
+    return null;
+  }
+
   async function sendMessage() {
     if (!conversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
-    if (policy.templateOnly && !selectedTemplate) return setNotice("مصدر العميل يسمح بالإرسال عن طريق قالب واتساب فقط");
-    if (!messageText.trim() && !selectedTemplate) return;
+    if (policy.templateOnly && !selectedTemplate && !pendingFile) return setNotice("مصدر العميل يسمح بالإرسال عن طريق قالب واتساب فقط");
+    if (!messageText.trim() && !selectedTemplate && !pendingFile) return;
     setSending(true);
     setNotice("");
     try {
+      const mediaAssetId = pendingFile ? await uploadPendingFile(pendingFile) : "";
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: policy.allowFreeText ? messageText : "", templateId: selectedTemplate }),
+        body: JSON.stringify({ conversationId, text: messageText, templateId: selectedTemplate, mediaAssetId }),
       });
-      if (result.message) setMessages((current) => [...current, result.message]);
+      if (result.message) setMessages((current) => [...current, { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }]);
       setMessageText("");
+      setSelectedTemplate("");
+      setPendingFile(null);
       setNotice(result.providerStatus === "queued" ? "تم حفظ الرسالة في قائمة الإرسال" : "تم إرسال الرسالة");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "فشل إرسال الرسالة");
@@ -355,13 +450,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
             <div className="crm-messages-list">
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
-              {messages.map((message) => <div key={message.id} className={`crm-message ${message.direction === "out" ? "out" : "in"}`}>{message.body ? <p>{message.body}</p> : null}{message.attachment_url ? <a href={message.attachment_url} target="_blank" rel="noreferrer">{message.file_name || "فتح المرفق"}</a> : null}<small>{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small></div>)}
+              {messages.map((message) => <div key={message.id} className={`crm-message ${message.direction === "out" ? "out" : "in"}`}>{renderMessageMedia(message)}{message.body ? <p>{message.body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(message.provider_status)}` : ""}</small></div>)}
             </div>
             <div className={`crm-message-composer ${policy.templateOnly ? "template-only" : ""}`}>
               <div className="crm-message-route-note">{policy.route === "whatsapp" ? <WhatsappLogo size={19} weight="fill" /> : <ChatCircleDots size={19} />}<span>{policy.reason}</span></div>
-              <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)}><option value="">{policy.templateOnly ? "اختر قالب واتساب" : "رسالة بدون قالب"}</option>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select>
-              {policy.allowFreeText ? <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder="اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد" rows={3} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} /> : <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار قالب واتساب معتمد ثم اضغط إرسال.</div>}
-              <button type="button" disabled={sending || (policy.templateOnly ? !selectedTemplate : (!messageText.trim() && !selectedTemplate))} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+              <select value={selectedTemplate} onChange={(event) => { const id = event.target.value; setSelectedTemplate(id); const template = availableTemplates.find((item) => item.id === id); setMessageText(template ? renderTemplateInComposer(template) : ""); }}><option value="">{policy.templateOnly ? "اختر قالب واتساب" : "رسالة بدون قالب"}</option>{availableTemplates.map((template) => <option key={template.id} value={template.id}>{template.display_name}</option>)}</select>
+              <textarea value={messageText} onChange={(event) => setMessageText(event.target.value)} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة قبل الإرسال" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={3} disabled={policy.templateOnly && !selectedTemplate && !pendingFile} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
+              {policy.templateOnly && !selectedTemplate && !pendingFile ? <div className="crm-template-only-warning">النص الحر غير متاح لهذا المصدر. اختار قالب واتساب معتمد أو أرفق ملفًا مسموحًا.</div> : null}
+              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section>
 

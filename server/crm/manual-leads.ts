@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, branchForDepartment, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, requireCrmUser, resolveSourceName } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
+import { attachLeadToContactAndOpenRequest } from "../_crm-lifecycle.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
@@ -64,15 +65,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         values (${customerName},${phone},${phoneNormalized},${sourceCode},${sourceName},${serviceKey},${departmentCode},${branchCode || null},'عميل جديد',${clean(body.paymentType) || (serviceKey==='finance'?'تمويل':serviceKey==='service'?'خدمة عملاء':'كاش')},${clean(body.carName)||null},${clean(body.location)||null},${clean(body.notes)||null},${assignedTo}::uuid,${callCenterTo}::uuid,${user.id}::uuid,${user.id}::uuid,now(),${completionPercent}) returning id::text
       `;
       await sql`update crm.manual_lead_requests set created_lead_id=${lead.id}::uuid,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${requestRow.id}::uuid`;
-      await sql`
-        insert into crm.conversations(legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata)
-        values (
-          ${`crm-manual:${lead.id}`},${lead.id}::uuid,'whatsapp',${customerName},${assignedTo}::uuid,${callCenterTo}::uuid,
-          ${sql.json({ manualEntry: true, sourceCode, sourceName })}
-        )
-        on conflict (legacy_id) do update set lead_id=excluded.lead_id,customer_name=excluded.customer_name,
-          assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,metadata=excluded.metadata,updated_at=now()
-      `;
+      await attachLeadToContactAndOpenRequest({ leadId: lead.id, actor: user, classificationMethod: "manual" });
       await sql`insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note) values (${lead.id}::uuid,'manual_lead_created','عميل جديد',${departmentCode},${branchCode||null},${user.id}::uuid,${user.fullName},'إضافة عميل يدوي')`;
     }
     await audit(user, "manual_lead_requested", "manual_lead_request", requestRow.id, requestRow);
@@ -106,6 +99,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where id=${targetId}::uuid returning id::text
     `;
     await sql`update crm.manual_lead_requests set approval_status='approved',approval_note=${clean(body.note)||null},reviewed_by=${user.id}::uuid,reviewed_at=now(),created_lead_id=${targetId}::uuid,updated_at=now() where id=${id}::uuid`;
+    await attachLeadToContactAndOpenRequest({ leadId: targetId, actor: user, classificationMethod: "manual_duplicate" });
     await sql`insert into crm.lead_events(lead_id,event_type,actor_id,actor_name,note,details) values (${targetId}::uuid,'manual_duplicate_approved',${user.id}::uuid,${user.fullName},'تمت الموافقة وتحديث العميل الأصلي بدون تكرار',${sql.json({ requestId:id })})`;
     return response.status(200).json({ ok: true, leadId: lead?.id || targetId });
   }

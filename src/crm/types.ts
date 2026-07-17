@@ -134,6 +134,15 @@ export type CrmMessage = {
   message_type: string;
   body?: string | null;
   attachment_url?: string | null;
+  attachment_type?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+  storage_key?: string | null;
+  media_asset_id?: string | null;
+  media_status?: string | null;
+  is_sensitive?: boolean | null;
+  caption?: string | null;
+  sender_type?: "customer" | "human" | "bot" | "system" | null;
   file_name?: string | null;
   provider_status?: string | null;
   sent_by_name?: string | null;

@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
-import { sendMappedStatusMessage } from "../_crm-messaging.js";
+import { publishAutomationEvent } from "../_crm-automation.js";
+import { attachLeadToContactAndOpenRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
 
 function leadPayload(body: Record<string, any>) {
   const serviceKey = departmentKey(
@@ -178,6 +179,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
     insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,actor_role,note)
     values (${row.id}::uuid,'lead_created',${input.statusLabel},${input.departmentCode},${assignment.branchCode || input.branchCode || null},${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},'دخول العميل إلى النظام')
   `;
+  await attachLeadToContactAndOpenRequest({ leadId: row.id, actor: user, classificationMethod: "manual" });
   row.source_name = input.sourceName;
   row.completion_percent = completionPercent;
   row.credit_limit = credit.amount;
@@ -316,7 +318,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     returning *, id::text, assigned_to::text, call_center_assigned_to::text
   `;
 
-  let statusMessage: any = null;
+  let automationResult: any = null;
   if (statusChanged || departmentChanged || branchChanged) {
     const [event] = await sql<{ id: number }[]>`
       insert into crm.lead_events(
@@ -334,14 +336,46 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       )
       returning id
     `;
-    if (statusChanged) {
-      statusMessage = await sendMappedStatusMessage({
+
+    if (before.current_request_id) {
+      await sql`
+        update crm.service_requests set status_label=${input.statusLabel},service_key=${input.serviceKey},department_code=${input.departmentCode},
+          branch_code=${input.branchCode || null},assigned_to=${assignedTo}::uuid,call_center_assigned_to=${callCenterAssignedTo}::uuid,updated_at=now()
+        where id=${before.current_request_id}::uuid and request_state='open'
+      `;
+    }
+
+    if (departmentChanged || branchChanged || clean(before.assigned_to) !== clean(assignedTo)) {
+      await recordOwnershipEvent({
+        contactId: before.contact_id || null,
+        requestId: before.current_request_id || null,
         leadId: id,
-        departmentCode: input.departmentCode,
-        statusValue: input.statusLabel,
+        previousAssignedTo: before.assigned_to || null,
+        previousAssignedName: before.assigned_name || before.responsible_name_snapshot || null,
+        newAssignedTo: assignedTo,
+        newAssignedName: assignedName,
+        previousDepartmentCode: before.department_code,
+        newDepartmentCode: input.departmentCode,
+        previousBranchCode: before.branch_code,
+        newBranchCode: input.branchCode,
         actor: user,
-        eventId: event?.id,
-      }).catch((error: any) => ({ skipped: false, failed: true, error: error?.message || String(error) }));
+        actorType: "user",
+        reason: clean(body.note) || (departmentChanged ? "تحويل العميل إلى قسم آخر" : "تغيير مسؤول أو فرع العميل"),
+      });
+    }
+
+    if (statusChanged) {
+      automationResult = await publishAutomationEvent({
+        eventKey: `lead-status:${id}:${event?.id || Date.now()}`,
+        eventType: "lead.status_changed",
+        source: "crm",
+        contactId: before.contact_id || null,
+        conversationId: before.conversation_id || null,
+        serviceRequestId: before.current_request_id || null,
+        leadId: id,
+        payload: { oldStatus: before.status_label, newStatus: input.statusLabel, statusLabel: input.statusLabel, departmentCode: input.departmentCode },
+        actor: user,
+      }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
     }
   }
 
@@ -353,7 +387,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   row.call_center_name = callCenterName || null;
 
   await audit(user, "lead_updated", "lead", id, row, before);
-  return response.status(200).json({ ok: true, row, statusMessage });
+  return response.status(200).json({ ok: true, row, automationResult });
 }
 
 async function remove(request: VercelRequest, response: VercelResponse, user: any) {

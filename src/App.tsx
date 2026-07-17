@@ -18,6 +18,9 @@ const CrmFinanceHistoryPage = lazy(() => import("./crm/pages/CrmFinanceHistoryPa
 const CrmInboxAgentPage = lazy(() => import("./crm/pages/CrmInboxAgentPage").then((module) => ({ default: module.CrmInboxAgentPage })));
 const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((module) => ({ default: module.CrmReportsPage })));
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
+const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
+const CrmAutomationsPage = lazy(() => import("./crm/pages/CrmAutomationsPage").then((module) => ({ default: module.CrmAutomationsPage })));
+const CrmOwnershipPage = lazy(() => import("./crm/pages/CrmOwnershipPage").then((module) => ({ default: module.CrmOwnershipPage })));
 
 function PlatformRoutes() {
   return (
@@ -32,7 +35,10 @@ function PlatformRoutes() {
             <Route path="database" element={<CrmDatabasePage />} />
             <Route path="manual-leads" element={<CrmManualLeadsPage />} />
             <Route path="finance-history" element={<CrmFinanceHistoryPage />} />
+            <Route path="inbox" element={<CrmInboxPage />} />
             <Route path="inbox-agent" element={<CrmInboxAgentPage />} />
+            <Route path="automations" element={<CrmAutomationsPage />} />
+            <Route path="ownership" element={<CrmOwnershipPage />} />
             <Route path="reports" element={<CrmReportsPage />} />
             <Route path="kpi" element={<CrmKpiPage />} />
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />

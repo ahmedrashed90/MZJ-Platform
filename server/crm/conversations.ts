@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
+import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead } from "../_crm-unread-state.js";
 
@@ -33,8 +34,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
-        select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name
+        select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
         from crm.messages m left join core.users u on u.id=m.sent_by
+        left join crm.media_assets a on a.message_id=m.id
         where m.conversation_id=${conversationId}::uuid
         order by m.created_at asc limit ${limit}
       `;
@@ -107,8 +109,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const conversationId = clean(body.conversationId);
     const text = clean(body.text || body.message);
     const templateId = clean(body.templateId);
+    const mediaAssetId = clean(body.mediaAssetId);
     if (!conversationId) return response.status(400).json({ ok: false, error: "المحادثة مطلوبة" });
-    if (!text && !templateId) return response.status(400).json({ ok: false, error: "اكتب الرسالة أو اختر القالب" });
+    if (!text && !templateId && !mediaAssetId) return response.status(400).json({ ok: false, error: "اكتب الرسالة أو اختر القالب أو أرفق ملفًا" });
 
     const [conversation] = await sql<any[]>`
       select c.*, c.id::text, c.lead_id::text, l.phone, l.phone_normalized, l.customer_name as lead_customer_name,
@@ -125,14 +128,42 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     let finalText = text;
     let template: any = null;
+    let media: any = null;
     if (templateId) {
       [template] = await sql<any[]>`select *,id::text from crm.message_templates where id=${templateId}::uuid and is_active=true`;
       if (!template) return response.status(404).json({ ok: false, error: "القالب غير موجود" });
-      finalText = renderCrmTemplate(String(template.content || ""), conversation);
+      finalText = text || renderCrmTemplate(String(template.content || ""), conversation);
+      if (/{{\s*[^}]+\s*}}/.test(finalText)) return response.status(400).json({ ok: false, error: "استكمل متغيرات القالب الظاهرة داخل مكان الكتابة قبل الإرسال" });
+    }
+
+    if (mediaAssetId) {
+      [media] = await sql<any[]>`select *,id::text,conversation_id::text from crm.media_assets where id=${mediaAssetId}::uuid and conversation_id=${conversationId}::uuid and status in ('uploading','ready')`;
+      if (!media) return response.status(404).json({ ok: false, error: "المرفق غير موجود" });
+      await sql`update crm.media_assets set status='ready',updated_at=now() where id=${media.id}::uuid`;
     }
 
     try {
-      const delivery = await deliverCrmMessage({ conversation, text: finalText, template, actor: user, reason: "manual" });
+      const delivery = await deliverCrmMessage({
+        conversation,
+        text: finalText,
+        template,
+        media: media ? { storageKey: media.storage_key, mediaType: media.media_type, fileName: media.original_name, mimeType: media.mime_type, fileSize: media.file_size, caption: finalText, isSensitive: media.is_sensitive } : null,
+        actor: user,
+        senderType: "human",
+        reason: "manual",
+      });
+      if (media && delivery.message?.id) await sql`update crm.media_assets set message_id=${delivery.message.id}::uuid,status='ready',updated_at=now() where id=${media.id}::uuid`;
+      await publishAutomationEvent({
+        eventKey: `crm-message-sent:${delivery.message?.id || delivery.jobId}`,
+        eventType: "message.sent",
+        source: conversation.channel_code,
+        contactId: conversation.contact_id || null,
+        conversationId,
+        serviceRequestId: conversation.service_request_id || null,
+        leadId: conversation.lead_id || null,
+        payload: { direction: "out", senderType: "human", text: finalText, messageId: delivery.message?.id || null, providerStatus: delivery.providerStatus },
+        actor: user,
+      });
       await audit(user, "message_sent", "conversation", conversationId, {
         channel: delivery.routing?.route || conversation.channel_code,
         source: delivery.routing?.sourceArabic || conversation.source_name,
