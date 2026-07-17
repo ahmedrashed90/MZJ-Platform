@@ -34,17 +34,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
-        select recent.*, u.full_name as sent_by_name, a.id::text as media_asset_id
-        from (
-          select m.*, m.id::text, m.conversation_id::text
-          from crm.messages m
-          where m.conversation_id=${conversationId}::uuid
-          order by m.created_at desc, m.id desc
-          limit ${limit}
-        ) recent
-        left join core.users u on u.id=recent.sent_by
-        left join crm.media_assets a on a.message_id=recent.id
-        order by recent.created_at asc, recent.id asc
+        select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
+        from crm.messages m left join core.users u on u.id=m.sent_by
+        left join crm.media_assets a on a.message_id=m.id
+        where m.conversation_id=${conversationId}::uuid
+        order by m.created_at asc limit ${limit}
       `;
       if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
       else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;

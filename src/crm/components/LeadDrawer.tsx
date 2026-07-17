@@ -18,16 +18,6 @@ import {
 import { crmFetch, departmentKeyFromCode, departmentLabel, formatDate } from "../api";
 import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
 import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta } from "../types";
-import {
-  isOutboundChatMessage,
-  messageDisplayText,
-  messageFileName,
-  messageHasAttachment,
-  messageMediaType,
-  messageMediaUrl,
-  messageMimeType,
-  prepareChatMessages,
-} from "../messageMedia";
 
 type Props = {
   lead: CrmLead | null;
@@ -81,7 +71,17 @@ function value(input: unknown) {
 }
 
 function isOutboundMessage(message: CrmMessage) {
-  return isOutboundChatMessage(message);
+  const senderType = String(message.sender_type || "").trim().toLowerCase();
+  const providerStatus = String(message.provider_status || "").trim().toLowerCase();
+  if (senderType === "customer" || providerStatus === "received") return false;
+  const direction = String(message.direction || "").trim().toLowerCase();
+  if (["in", "inbound", "received", "receive"].includes(direction)) return false;
+  if (["out", "outbound", "sent", "send"].includes(direction)) return true;
+  return ["human", "agent", "bot", "system"].includes(senderType);
+}
+
+function visibleProviderStatus(message: CrmMessage) {
+  return isOutboundMessage(message) ? providerStatusLabel(message.provider_status) : "";
 }
 
 function departmentCodeFor(key: ServiceKey) {
@@ -226,7 +226,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       if (id) {
         const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
-        setMessages(prepareChatMessages(result.messages || [], 300));
+        setMessages(result.messages || []);
       } else if (!silent) {
         setMessages([]);
       }
@@ -435,67 +435,37 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return prepared.assetId;
   }
 
-  function resolvedMediaUrl(message: CrmMessage) {
-    return (message.media_asset_id && mediaUrls[message.media_asset_id]) || messageMediaUrl(message);
-  }
-
-  async function mediaUrlForAction(message: CrmMessage) {
-    if (!message.media_asset_id) return messageMediaUrl(message);
-    const cached = mediaUrls[message.media_asset_id];
-    if (cached) return cached;
-    const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
-    setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
-    return result.url;
-  }
-
   async function openMedia(message: CrmMessage) {
-    try {
-      const url = await mediaUrlForAction(message);
-      if (!url) throw new Error("رابط المرفق غير متاح");
-      window.open(url, "_blank", "noopener,noreferrer");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر فتح الملف");
+    if (!message.media_asset_id) {
+      if (message.attachment_url) window.open(message.attachment_url, "_blank", "noopener,noreferrer");
+      return;
     }
+    try {
+      const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
+      setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
+      window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
   }
 
-  async function downloadMedia(message: CrmMessage) {
-    try {
-      const url = await mediaUrlForAction(message);
-      if (!url) throw new Error("رابط المرفق غير متاح");
-      const fileName = messageFileName(message);
-      try {
-        const result = await fetch(url, { cache: "no-store" });
-        if (!result.ok) throw new Error(`HTTP ${result.status}`);
-        const blob = await result.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = objectUrl;
-        anchor.download = fileName;
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      } catch {
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر تحميل الملف");
-    }
+  function attachmentText(message: CrmMessage) {
+    if (message.file_name) return message.file_name;
+    const type = String(message.attachment_type || message.message_type || "").toLowerCase();
+    if (type === "image") return "صورة";
+    if (type === "audio") return "رسالة صوتية";
+    if (type === "video") return "فيديو";
+    if (type === "document") return "ملف";
+    return "مرفق";
   }
 
   function renderMessageMedia(message: CrmMessage) {
-    const url = resolvedMediaUrl(message);
-    const type = messageMediaType(message);
-    const fileName = messageFileName(message);
-    const mimeType = messageMimeType(message);
-    if ((type === "image" || type === "sticker") && url) {
-      return <button type="button" className="crm-chat-media-open" onClick={() => void openMedia(message)}><img className="crm-chat-media-image" src={url} alt={fileName || "صورة العميل"} /></button>;
-    }
+    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
+    const type = String(message.attachment_type || message.message_type || "").toLowerCase();
+    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
-    if (messageHasAttachment(message)) {
-      const Icon = type === "image" || type === "sticker" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
-      return <button type="button" className="crm-chat-file-card" onClick={() => void downloadMedia(message)}><Icon size={24} /><span><strong>{fileName}</strong><small>{mimeType || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(Number(message.file_size) / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
+    if (message.media_asset_id || message.attachment_url || message.storage_key) {
+      const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
+      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
     }
     return null;
   }
@@ -525,7 +495,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setMessageText("");
     setSelectedTemplate("");
     setPendingFile(null);
-    setMessages((current) => prepareChatMessages([...current, tempMessage], 300));
+    setMessages((current) => [...current, tempMessage]);
     setSending(true);
     setNotice("");
 
@@ -535,9 +505,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         method: "POST",
         body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
       });
-      setMessages((current) => prepareChatMessages(current.map((message) => message.id === tempId
+      setMessages((current) => current.map((message) => message.id === tempId
         ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
-        : message), 300));
+        : message));
       setNotice(result.providerStatus === "queued" ? "تم تسليم الرسالة للإرسال" : "تم إرسال الرسالة");
       window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 1200);
       window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 3500);
@@ -584,10 +554,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
               {messages.map((message) => {
-                const outbound = isOutboundMessage(message);
-                const displayText = messageDisplayText(message);
-                const senderLabel = message.sender_type === "bot" ? "وكيل صندوق الوارد" : outbound ? (message.sent_by_name || "المندوب") : "العميل";
-                return <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{displayText ? <p>{displayText}</p> : null}<small><b>{senderLabel}</b> • {formatDate(message.created_at)} {message.provider_status ? `• ${providerStatusLabel(String(message.provider_status))}` : ""}</small></div>;
+                const hasAttachment = Boolean(message.media_asset_id || message.attachment_url || message.storage_key || message.attachment_type);
+                const body = String(message.body || message.caption || "").trim() || (hasAttachment ? attachmentText(message) : "");
+                return <div key={message.id} className={`crm-message ${isOutboundMessage(message) ? "out" : "in"}`}>{renderMessageMedia(message)}{body ? <p>{body}</p> : null}<small>{message.sender_type === "bot" ? "وكيل صندوق الوارد • " : ""}{formatDate(message.created_at)} {visibleProviderStatus(message) ? `• ${visibleProviderStatus(message)}` : ""}</small></div>;
               })}
             </div>
             <div className="crm-message-composer">

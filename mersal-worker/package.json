@@ -1,0 +1,13 @@
+{
+  "name": "mzj-mersal-postgres-worker",
+  "version": "1.11.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/index.js",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

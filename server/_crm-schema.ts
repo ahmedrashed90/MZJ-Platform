@@ -780,6 +780,16 @@ from crm.leads l where c.lead_id=l.id and c.contact_id is null;
 insert into core.schema_migrations(version) values('crm-entry-distribution-v1.9.2') on conflict(version) do nothing;
 `;
 
+
+const CRM_INBOUND_DIRECTION_FIX_V1117_SQL = String.raw`
+update crm.messages
+set direction='in',provider_status='received'
+where lower(coalesce(sender_type,''))='customer'
+  and (direction<>'in' or provider_status<>'received');
+
+insert into core.schema_migrations(version) values('crm-inbound-direction-v1.11.7') on conflict(version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -810,6 +820,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-entry-distribution-v1.9.2'
       `;
       if (!automationV19Migration) await runSqlScript(CRM_AUTOMATION_CORE_V19_SQL);
+      const [inboundDirectionFix] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-inbound-direction-v1.11.7'
+      `;
+      if (!inboundDirectionFix) await runSqlScript(CRM_INBOUND_DIRECTION_FIX_V1117_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

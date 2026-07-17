@@ -5,7 +5,7 @@ import { ensureCrmSchema } from "../_crm-schema.js";
 import { processIntegrationEvent } from "../_integration-processor.js";
 import { getSql } from "../_db.js";
 
-const allowedSources = new Set(["facebook","instagram","tiktok","whatsapp","tiktok-snapchat","installment-calculator"]);
+const allowedSources = new Set(["facebook","instagram","tiktok","whatsapp","mersal","tiktok-snapchat","installment-calculator"]);
 
 function bodyObject(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body;

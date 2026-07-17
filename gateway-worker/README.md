@@ -27,14 +27,11 @@ Worker مركزي واحد لاستقبال Webhooks وإرسال رسائل CRM
 - `MANYCHAT_MESSAGE_FIELD_ID`
 - `MANYCHAT_TRIGGER_TAG_ID`
 
-## WhatsApp / Mersal
-
-- `WHATSAPP_WEBHOOK_SECRET`
-- `WA_TOKEN` أو `MERSAL_TOKEN` للإرسال.
-- `MERSAL_API_TOKEN` مطلوب لجلب روابط الصور والصوت والفيديو وملفات PDF من GetConversations/GetMessages.
-- اختياريًا: `MERSAL_API_ENDPOINT`, `MERSAL_SEND_URL`, `MERSAL_TEMPLATE_URL`
-
 ## Imports
 
 - `TIKTOK_SNAPCHAT_WEBHOOK_SECRET`
 - `INSTALLMENT_CALCULATOR_WEBHOOK_SECRET`
+
+## WhatsApp / Mersal
+
+واتساب لا يمر من هذا الـGateway. استخدم الوركر المستقل داخل `mersal-worker/` بالمسارين `/send/mersal` و`/webhook/mersal`.

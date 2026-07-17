@@ -50,26 +50,18 @@ function workerHeaders(secretName: string) {
 
 function templateUrlFromSendUrl(sendUrl: string) {
   const value = clean(sendUrl).replace(/\/+$/, "");
-  if (!value) return "";
-  if (/\/outbound\/whatsapp\/v1\/(?:text|template|media)$/i.test(value)) return value.replace(/\/outbound\/whatsapp\/v1\/(?:text|template|media)$/i, "/templates/mersal/v1/sync");
-  if (/\/send\/mersal$/i.test(value)) return value.replace(/\/send\/mersal$/i, "/templates/mersal");
-  try { const parsed = new URL(value); return `${parsed.origin}/templates/mersal/v1/sync`; } catch { return ""; }
+  return /\/send\/mersal$/i.test(value) ? value.replace(/\/send\/mersal$/i, "/templates/mersal") : "";
 }
 
 async function resolveWorkerConfig(sql: ReturnType<typeof getSql>): Promise<WorkerConfig> {
-  const explicitTemplatesUrl = clean(process.env.MERSAL_WORKER_TEMPLATES_URL);
-  const explicitWorkerBase = clean(process.env.MERSAL_WORKER_URL).replace(/\/+$/, "");
   const [endpoint] = await sql<any[]>`
     select source_code,send_url,text_send_url,templates_sync_url,secret_name
     from crm.integration_endpoints
-    where source_code=any(array['whatsapp','mersal']::text[]) and is_active=true
-    order by case when source_code='whatsapp' then 0 else 1 end
+    where source_code='whatsapp' and is_active=true
     limit 1
   `;
 
-  const url = explicitTemplatesUrl
-    || clean(endpoint?.templates_sync_url)
-    || (explicitWorkerBase ? `${explicitWorkerBase}/templates/mersal/v1/sync` : "")
+  const url = clean(endpoint?.templates_sync_url)
     || templateUrlFromSendUrl(clean(endpoint?.text_send_url || endpoint?.send_url));
 
   if (!url) {

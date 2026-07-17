@@ -2,7 +2,6 @@ const INBOUND_ROUTES = new Map([
   ["/webhooks/facebook", "facebook"],
   ["/webhooks/instagram", "instagram"],
   ["/webhooks/tiktok", "tiktok"],
-  ["/webhooks/whatsapp", "whatsapp"],
   ["/imports/tiktok-snapchat", "tiktok-snapchat"],
   ["/imports/installment-calculator", "installment-calculator"],
 ]);
@@ -11,7 +10,6 @@ const OUTBOUND_ROUTES = new Map([
   ["/send/facebook", "facebook"],
   ["/send/instagram", "instagram"],
   ["/send/tiktok", "tiktok"],
-  ["/send/whatsapp", "whatsapp"],
 ]);
 
 export default {
@@ -66,20 +64,6 @@ async function handleInbound(request, env, routeSource) {
     const results = [];
     for (const event of events) {
       results.push(await forwardToPlatform(env, routeSource, event.payload, event.eventId));
-    }
-    return aggregateResponse(routeSource, results);
-  }
-
-  if (routeSource === "whatsapp") {
-    const events = normalizeWhatsappEvents(payload);
-    const results = [];
-    for (const event of events) {
-      const enrichedPayload = await enrichWhatsappMediaPayload(event.payload, env).catch((error) => ({
-        ...event.payload,
-        mersalMediaResolved: false,
-        mersalMediaError: String(error?.message || error || "media resolution failed"),
-      }));
-      results.push(await forwardToPlatform(env, routeSource, enrichedPayload, event.eventId));
     }
     return aggregateResponse(routeSource, results);
   }
@@ -179,277 +163,6 @@ function normalizeFacebookEvents(payload) {
   return events;
 }
 
-function normalizeWhatsappEvents(payload) {
-  const output = [];
-  const entries = payload?.entry || [];
-  for (const entry of entries) {
-    for (const change of entry?.changes || []) {
-      const value = change?.value || {};
-      const messages = value?.messages || [];
-      if (!messages.length) {
-        output.push({ eventId: hashText(JSON.stringify(change)), payload: { entry: [{ ...entry, changes: [{ ...change, value }] }] } });
-        continue;
-      }
-      for (const message of messages) {
-        output.push({
-          eventId: String(message?.id || hashText(JSON.stringify(message))),
-          payload: {
-            entry: [{ ...entry, changes: [{ ...change, value: { ...value, messages: [message] } }] }],
-          },
-        });
-      }
-    }
-  }
-  if (!output.length) output.push({ eventId: hashText(JSON.stringify(payload)), payload });
-  return output;
-}
-
-
-function whatsappAttachment(message) {
-  const type = String(message?.type || "").toLowerCase();
-  const media = ["image", "audio", "video", "document", "sticker"].includes(type) ? message?.[type] : null;
-  if (!media) return null;
-  return {
-    hasAttachment: true,
-    type,
-    mediaId: String(media?.id || "").trim(),
-    mimeType: String(media?.mime_type || media?.mimeType || "").trim(),
-    fileName: String(media?.filename || media?.fileName || media?.name || "").trim(),
-    caption: String(media?.caption || "").trim(),
-    whatsappMediaUrl: String(media?.url || media?.link || media?.href || "").trim(),
-    sha256: String(media?.sha256 || "").trim(),
-  };
-}
-
-async function enrichWhatsappMediaPayload(payload, env) {
-  const value = payload?.entry?.[0]?.changes?.[0]?.value || {};
-  const message = value?.messages?.[0] || {};
-  const attachment = whatsappAttachment(message);
-  if (!attachment) return payload;
-
-  const phone = normalizePhone(message?.from || value?.contacts?.[0]?.wa_id || payload?.waId || payload?.phone || "");
-  const resolved = await resolveMersalIncomingMedia(env, {
-    phone,
-    messageId: String(message?.id || payload?.messageId || payload?.message_id || "").trim(),
-    mediaId: attachment.mediaId,
-    type: attachment.type,
-  });
-
-  const mediaUrl = resolved?.url || normalizeMersalMediaUrl(attachment.whatsappMediaUrl);
-  return {
-    ...payload,
-    hasAttachment: true,
-    attachmentType: resolved?.attachmentType || attachment.type,
-    mediaType: resolved?.attachmentType || attachment.type,
-    mediaId: attachment.mediaId,
-    mimeType: attachment.mimeType || resolved?.mimeType || guessMimeType(mediaUrl, attachment.type),
-    fileName: attachment.fileName || resolved?.fileName || fileNameFromUrl(mediaUrl) || buildMediaFileName(attachment.type, attachment.mediaId, attachment.mimeType),
-    caption: attachment.caption,
-    sha256: attachment.sha256,
-    whatsappMediaUrl: attachment.whatsappMediaUrl,
-    mersalMediaResolved: Boolean(resolved?.url),
-    mersalMediaError: resolved?.url ? "" : resolved?.error || "mersal media not found",
-    mersalMessageId: resolved?.mersalMessageId || "",
-    mersalContactId: resolved?.contactId || "",
-    mersalMediaUrl: resolved?.url || "",
-    mediaUrl,
-    fileUrl: mediaUrl,
-    attachmentUrl: mediaUrl,
-  };
-}
-
-async function resolveMersalIncomingMedia(env, { phone, messageId, mediaId, type }) {
-  const token = String(env.MERSAL_API_TOKEN || "").trim();
-  if (!token) return { ok: false, error: "MERSAL_API_TOKEN is not configured" };
-  if (!phone) return { ok: false, error: "WhatsApp phone is missing" };
-  const contactId = await mersalFindContactId(env, token, phone);
-  if (!contactId) return { ok: false, error: "Mersal contact_id was not found" };
-
-  const attempts = [0, 900, 1600, 2500, 3500];
-  let messagesChecked = 0;
-  for (const delay of attempts) {
-    if (delay) await sleep(delay);
-    const response = await mersalGetMessages(env, token, contactId);
-    const messages = normalizeMersalRows(response);
-    messagesChecked = messages.length;
-    const found = findMersalMedia(messages, { messageId, mediaId, type, contactId });
-    if (found?.url) return { ok: true, contactId, ...found };
-  }
-  return { ok: false, contactId, messagesChecked, error: "Mersal media URL was not found" };
-}
-
-async function mersalFindContactId(env, token, phone) {
-  const response = await mersalPost(env, `${mersalBaseUrl(env)}/api/wpbox/getConversations/none?mobile_api=true`, { token });
-  const rows = Array.isArray(response?.data) ? response.data : [];
-  const normalized = normalizePhone(phone);
-  const found = rows.find((row) => {
-    const rowPhone = normalizePhone(row?.phone || row?.name || "");
-    return rowPhone === normalized || (rowPhone && normalized && rowPhone.endsWith(normalized.slice(-9)));
-  });
-  return String(found?.id || found?.contact_id || "").trim();
-}
-
-async function mersalGetMessages(env, token, contactId) {
-  return mersalPost(env, `${mersalBaseUrl(env)}/api/wpbox/getMessages`, { token, contact_id: contactId });
-}
-
-function mersalBaseUrl(env) {
-  return String(env.MERSAL_API_ENDPOINT || "https://w-mersal.com").replace(/\/+$/, "");
-}
-
-async function mersalPost(env, url, body) {
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    const data = parseJson(await response.text());
-    if (response.ok && !isMersalInvalidToken(data)) return data;
-  } catch {}
-
-  const form = new URLSearchParams();
-  for (const [key, value] of Object.entries(body || {})) form.set(key, String(value ?? ""));
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
-    body: form.toString(),
-  });
-  return parseJson(await response.text());
-}
-
-function isMersalInvalidToken(data) {
-  return String(data?.status || "").toLowerCase() === "error" && String(data?.message || data?.errMsg || "").toLowerCase().includes("invalid token");
-}
-
-function normalizeMersalRows(payload) {
-  const rows = Array.isArray(payload) ? payload
-    : Array.isArray(payload?.data) ? payload.data
-      : Array.isArray(payload?.messages) ? payload.messages
-        : Array.isArray(payload?.data?.messages) ? payload.data.messages
-          : Array.isArray(payload?.data?.data) ? payload.data.data : [];
-  return [...rows].sort((left, right) => timestampMs(right?.created_at || right?.createdAt || right?.updated_at || right?.updatedAt || right?.timestamp) - timestampMs(left?.created_at || left?.createdAt || left?.updated_at || left?.updatedAt || left?.timestamp));
-}
-
-function findMersalMedia(rows, { messageId, mediaId, type, contactId }) {
-  if (messageId) {
-    const exact = rows.find((row) => String(row?.fb_message_id || row?.message_wamid || row?.wamid || row?.message_id || "").trim() === messageId);
-    const media = mersalMediaFromRow(exact, contactId);
-    if (media?.url) return media;
-  }
-  if (mediaId) {
-    const match = rows.map((row) => mersalMediaFromRow(row, contactId)).find((media) => media?.url && (String(media.url).includes(mediaId) || String(media.fileName || "").includes(mediaId)));
-    if (match?.url) return match;
-  }
-  const inbound = rows
-    .filter((row) => Number(row?.is_message_by_contact || row?.isMessageByContact || 0) === 1)
-    .map((row) => mersalMediaFromRow(row, contactId))
-    .filter((media) => media?.url);
-  const wanted = normalizeMediaType(type);
-  return inbound.find((media) => normalizeMediaType(media.attachmentType) === wanted) || inbound[0] || null;
-}
-
-function mersalMediaFromRow(row, contactId) {
-  if (!row) return null;
-  const candidates = [
-    [row?.header_image || row?.image || row?.image_url || row?.media_image, "image"],
-    [row?.header_audio || row?.audio || row?.audio_url || row?.voice || row?.voice_url || row?.media_audio, "audio"],
-    [row?.header_video || row?.video || row?.video_url || row?.media_video, "video"],
-    [row?.header_document || row?.document || row?.document_url || row?.file || row?.file_url || row?.media_document, "document"],
-  ];
-  const selected = candidates.find(([url]) => String(url || "").trim());
-  if (!selected) return null;
-  const url = normalizeMersalMediaUrl(selected[0]);
-  if (!url) return null;
-  return {
-    url,
-    attachmentType: selected[1],
-    mersalMessageId: String(row?.id || ""),
-    contactId: String(contactId || row?.contact_id || ""),
-    mimeType: guessMimeType(url, selected[1]),
-    fileName: fileNameFromUrl(url),
-  };
-}
-
-function normalizeMersalMediaUrl(value) {
-  let url = String(value || "").trim().replace(/\\\//g, "/").replace(/&amp;/g, "&");
-  if (!url || /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(url)) return "";
-  if (url.startsWith("//")) url = `https:${url}`;
-  if (/^https?:\/\//i.test(url)) return url;
-  if (url.startsWith("/")) return `https://w-mersal.com${url}`;
-  if (/^(uploads?|storage|media|files?)\//i.test(url)) return `https://w-mersal.com/${url.replace(/^\/+/, "")}`;
-  if (/^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(url)) return `https://${url}`;
-  return "";
-}
-
-function normalizeMediaType(value) {
-  const type = String(value || "").trim().toLowerCase();
-  if (["photo", "picture"].includes(type)) return "image";
-  if (["voice", "ptt"].includes(type)) return "audio";
-  if (type === "file") return "document";
-  return type;
-}
-
-function fileNameFromUrl(url) {
-  try {
-    return decodeURIComponent(new URL(String(url || "")).pathname.split("/").pop() || "");
-  } catch {
-    return "";
-  }
-}
-
-function buildMediaFileName(type, mediaId, mimeType) {
-  const extension = extensionFromMime(mimeType, type);
-  const safeType = String(type || "media").replace(/[^\w.-]/g, "") || "media";
-  const safeId = String(mediaId || Date.now()).replace(/[^\w.-]/g, "").slice(0, 40);
-  return `${safeType}-${safeId}${extension}`;
-}
-
-function extensionFromMime(mimeType, type) {
-  const mime = String(mimeType || "").toLowerCase();
-  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
-  if (mime.includes("png")) return ".png";
-  if (mime.includes("webp")) return ".webp";
-  if (mime.includes("gif")) return ".gif";
-  if (mime.includes("pdf")) return ".pdf";
-  if (mime.includes("mp4")) return ".mp4";
-  if (mime.includes("mpeg")) return ".mp3";
-  if (mime.includes("ogg") || mime.includes("opus")) return ".ogg";
-  if (mime.includes("wav")) return ".wav";
-  if (mime.includes("aac")) return ".aac";
-  if (type === "image") return ".jpg";
-  if (type === "audio") return ".mp3";
-  if (type === "video") return ".mp4";
-  if (type === "sticker") return ".webp";
-  return ".bin";
-}
-
-function guessMimeType(url, type) {
-  const value = String(url || "").toLowerCase().split(/[?#]/)[0];
-  if (/\.jpe?g$/.test(value)) return "image/jpeg";
-  if (/\.png$/.test(value)) return "image/png";
-  if (/\.webp$/.test(value)) return "image/webp";
-  if (/\.gif$/.test(value)) return "image/gif";
-  if (/\.mp3$/.test(value)) return "audio/mpeg";
-  if (/\.(ogg|opus)$/.test(value)) return "audio/ogg";
-  if (/\.wav$/.test(value)) return "audio/wav";
-  if (/\.aac$/.test(value)) return "audio/aac";
-  if (/\.mp4$/.test(value)) return "video/mp4";
-  if (/\.pdf$/.test(value)) return "application/pdf";
-  const normalized = normalizeMediaType(type);
-  if (normalized === "image" || normalized === "sticker") return normalized === "sticker" ? "image/webp" : "image/jpeg";
-  if (normalized === "audio") return "audio/mpeg";
-  if (normalized === "video") return "video/mp4";
-  return "application/octet-stream";
-}
-
-function timestampMs(value) {
-  if (!value) return 0;
-  if (typeof value === "number") return value < 1e12 ? value * 1000 : value;
-  const parsed = Date.parse(String(value));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 async function sendOutbound(source, payload, env) {
   if (source === "instagram") return responseFromResult(await sendManyChat(payload, env.MANYCHAT_INSTAGRAM_TOKEN || env.MANYCHAT_API_TOKEN));
   if (source === "facebook") {
@@ -458,7 +171,6 @@ async function sendOutbound(source, payload, env) {
     return responseFromResult(await sendFacebookGraph(payload, env.FB_PAGE_ACCESS_TOKEN));
   }
   if (source === "tiktok") return responseFromResult(await sendTikTok(payload, env));
-  if (source === "whatsapp") return responseFromResult(await sendMersal(payload, env));
   return json({ ok: false, error: "Unknown send source" }, 400);
 }
 
@@ -509,24 +221,6 @@ async function callManyChat(url, headers, payload) {
   const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
   const result = await providerResult(response, "manychat");
   return { ok: result.ok, status: result.httpStatus, response: result.raw };
-}
-
-async function sendMersal(payload, env) {
-  const phone = normalizePhone(payload?.phone || payload?.waId || "");
-  if (!phone) return { ok: false, error: "Valid phone is required" };
-  const token = env.WA_TOKEN || env.MERSAL_TOKEN || env.MERSAL_API_TOKEN || "";
-  if (!token) return { ok: false, error: "Mersal token is not configured" };
-  const base = String(env.MERSAL_API_ENDPOINT || "https://w-mersal.com").replace(/\/$/, "");
-  const templateName = String(payload?.templateName || payload?.template_name || "").trim();
-  const isTemplate = Boolean(templateName);
-  const url = isTemplate
-    ? env.MERSAL_TEMPLATE_URL || `${base}/api/wpbox/sendtemplatemessage`
-    : env.MERSAL_SEND_URL || `${base}/api/wpbox/sendmessage`;
-  const body = isTemplate
-    ? { token, phone, template_name: templateName, template_language: payload?.templateLanguage || payload?.template_language || "ar", components: payload?.components || [] }
-    : { token, phone, message: String(payload?.message || payload?.text || "") };
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  return providerResult(response, "mersal");
 }
 
 async function providerResult(response, provider) {

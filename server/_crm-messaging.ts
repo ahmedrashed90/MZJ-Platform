@@ -117,8 +117,12 @@ function endpointCandidates(route: DeliveryRoute) {
   return ["tiktok", "tiktok-chat", "tiktok_chat"];
 }
 
+function unifiedWhatsappSendUrl(endpoint: Record<string, unknown>) {
+  return clean(endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url);
+}
+
 function whatsappRouteCandidates(endpoint: Record<string, unknown>, _kind: DeliveryKind) {
-  const configured = clean(endpoint.text_send_url || endpoint.send_url);
+  const configured = unifiedWhatsappSendUrl(endpoint);
   return configured ? [configured] : [];
 }
 
@@ -154,12 +158,32 @@ async function postToWorker(urls: string[], headers: Record<string, string>, pay
     const raw = await provider.text();
     let response: any;
     try { response = JSON.parse(raw); } catch { response = { raw }; }
-    const ok = provider.ok && response?.ok !== false;
-    return { ok, provider, response, usedUrl: url, attempts: [{ url, status: provider.status, response }] };
+    return { ok: provider.ok, provider, response, usedUrl: url, attempts: [{ url, status: provider.status, response }] };
   } catch (error: any) {
     const response = { error: error?.message || String(error) };
     return { ok: false, provider: null, response, usedUrl: url, attempts: [{ url, status: 0, response }] };
   }
+}
+
+function providerMessageIdFrom(data: any) {
+  return clean(
+    data?.provider_message_id || data?.providerMessageId || data?.message_wamid || data?.messageWamid || data?.wamid || data?.message_id ||
+    data?.raw?.provider_message_id || data?.raw?.providerMessageId || data?.raw?.message_wamid || data?.raw?.messageWamid || data?.raw?.wamid || data?.raw?.message_id ||
+    data?.raw?.data?.provider_message_id || data?.raw?.data?.providerMessageId || data?.raw?.data?.message_wamid || data?.raw?.data?.messageWamid || data?.raw?.data?.wamid || data?.raw?.data?.message_id ||
+    data?.data?.provider_message_id || data?.data?.providerMessageId || data?.data?.message_wamid || data?.data?.messageWamid || data?.data?.wamid || data?.data?.message_id || "",
+  );
+}
+
+function workerAccepted(delivery: Awaited<ReturnType<typeof postToWorker>>, data: any, providerMessageId: string) {
+  const rawStatus = normalized(data?.provider_status || data?.providerStatus || data?.status || data?.raw?.status || data?.raw?.data?.status || "");
+  const failed = ["error", "failed", "failure", "rejected", "invalid"].includes(rawStatus);
+  const succeeded = ["ok", "success", "sent", "queued", "accepted", "submitted", "delivered", "processing"].includes(rawStatus);
+  const explicitFailure = data?.ok === false || data?.success === false || data?.raw?.ok === false || data?.raw?.success === false || failed;
+  const explicitSuccess = data?.ok === true || data?.success === true || data?.raw?.ok === true || data?.raw?.success === true || succeeded;
+
+  // Mersal may return a non-2xx HTTP status after accepting the template. A real
+  // WhatsApp message id is the definitive acceptance signal and must not be shown as failed.
+  return Boolean(providerMessageId) || explicitSuccess || (Boolean(delivery.provider?.ok) && !explicitFailure);
 }
 
 type BackgroundDeliveryInput = {
@@ -177,12 +201,8 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
   try {
     const delivery = await postToWorker(input.urls, input.headers, input.payload);
     const data = delivery.response;
-    const rawStatus = normalized(data?.status || data?.providerStatus || data?.raw?.status || "");
-    const providerStatus = delivery.ok && !["error", "failed", "failure", "rejected"].includes(rawStatus) ? "sent" : "failed";
-    const providerMessageId = clean(
-      data?.providerMessageId || data?.provider_message_id || data?.message_wamid || data?.messageWamid || data?.message_id ||
-      data?.raw?.message_wamid || data?.raw?.wamid || data?.raw?.message_id || data?.raw?.id || "",
-    );
+    const providerMessageId = providerMessageIdFrom(data);
+    const providerStatus = workerAccepted(delivery, data, providerMessageId) ? "sent" : "failed";
     const attempts = delivery.attempts.map((attempt) => ({
       url: attempt.url,
       status: attempt.status,
@@ -254,7 +274,7 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
   const payload: Record<string,unknown> = { ...basePayload(input.route, input.conversation), source: input.policy.sourceArabic, deliveryChannel: input.route, saveMessage: false };
   if (input.media) {
     const mediaUrl = createDownloadUrl(input.media.storageKey, 900);
-    return { ...payload, type: input.media.mediaType, messageType: input.media.mediaType, mediaUrl, fileUrl: mediaUrl, mediaType: input.media.mediaType, attachmentType: input.media.mediaType, fileName: input.media.fileName || "", mimeType: input.media.mimeType || "", fileSize: input.media.fileSize || null, caption: input.media.caption || input.text || "" };
+    return { ...payload, type: "media", media_url: mediaUrl, mediaUrl, file_url: mediaUrl, fileUrl: mediaUrl, media_type: input.media.mediaType, mediaType: input.media.mediaType, attachmentType: input.media.mediaType, file_name: input.media.fileName || "", fileName: input.media.fileName || "", mimeType: input.media.mimeType || "", fileSize: input.media.fileSize || null, caption: input.media.caption || input.text || "" };
   }
   if (input.template) {
     const templateName = clean(input.template.name || input.template.external_id);
@@ -263,7 +283,6 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
     return {
       ...payload,
       type: "template",
-      messageType: "template",
       template_name: templateName,
       template_language: clean(input.template.language_code) || "ar",
       params,
@@ -271,7 +290,7 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
       text: input.text,
     };
   }
-  return { ...payload, type: "text", messageType: "text", message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
+  return { ...payload, type: "text", message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
 
 async function loadConversation(conversationId: string): Promise<ConversationContext | null> {
@@ -337,7 +356,7 @@ export async function deliverCrmMessage(input: {
         conversation_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,
         is_sensitive,provider_status,sent_by,sender_type,metadata
       ) values (
-        ${conversation.id}::uuid,'out',${input.media?.mediaType || kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,900) : null},${input.media?.mediaType||null},
+        ${conversation.id}::uuid,'out',${kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,900) : null},${input.media?.mediaType||null},
         ${input.media?.fileName||null},${input.media?.mimeType||null},${input.media?.fileSize||null},${input.media?.storageKey||null},${input.media ? 'queued' : null},
         ${Boolean(input.media?.isSensitive)},'queued',${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute: urls[0] || "" })}
       ) returning *,id::text,conversation_id::text
@@ -392,6 +411,7 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
     ? {
         phone,
         waId: phone,
+        type: "template",
         template_name: templateName,
         template_language: clean(input.template.language_code) || "ar",
         params: templateParams,
@@ -399,7 +419,7 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
         text: input.text,
         agentAuto: true,
       }
-    : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
+    : { phone, waId: phone, type: "text", text: input.text, message: input.text, agentAuto: true };
   const workerPayload = { ...payload, jobId, idempotencyKey: key, reason: input.reason || "automation" };
 
   const [job] = await sql<any[]>`
