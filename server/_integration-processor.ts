@@ -42,11 +42,14 @@ function identityData(source:string,payload:any){
   const wa=nestedWhatsapp(payload),msg=wa?.messages?.[0]||{},contact=wa?.contacts?.[0]||{};
   const participant=first(payload.participantId,payload.participant_id,payload.subscriber_id,payload.subscriberId,payload.contact_id,payload.contactId,payload.user_id,payload.userId,payload.igId,payload.tiktokId,payload.fbId,payload.waId,msg?.from,contact?.wa_id);
   const pageId=first(payload.pageId,payload.page_id);
-  const externalId=participant||first(payload.externalCustomerId,payload.external_customer_id,payload.conversationId,payload.conversation_id,payload.convId)||crypto.randomUUID();
-  const conversationExternalId=first(payload.conversationId,payload.conversation_id,payload.convId)||(source==="whatsapp"?externalId:`${source}:${pageId||"default"}:${externalId}`);
   const phone=first(payload.phone,payload.mobile,payload.phoneNumber,payload.clientNumber,payload.leadPhone,msg?.from,contact?.wa_id);
+  const phoneNormalized=normalizePhone(phone);
+  const externalId=participant||phoneNormalized||first(payload.externalCustomerId,payload.external_customer_id,payload.conversationId,payload.conversation_id,payload.convId)||crypto.randomUUID();
+  const conversationExternalId=source==="whatsapp"
+    ? phoneNormalized||externalId
+    : first(payload.conversationId,payload.conversation_id,payload.convId)||`${source}:${pageId||"default"}:${externalId}`;
   const displayName=first(payload.customerName,payload.displayName,payload.full_name,payload.fullName,payload.leadName,payload.name,contact?.profile?.name,"عميل");
-  return {participant,pageId,externalId,conversationExternalId,phone,phoneNormalized:normalizePhone(phone),displayName};
+  return {participant,pageId,externalId,conversationExternalId,phone,phoneNormalized,displayName};
 }
 function trustedKnownService(routeSource:string,payload:any){
   if(["installment-calculator","tiktok-snapchat"].includes(routeSource))return "finance";
@@ -62,26 +65,66 @@ export async function processIntegrationEvent(routeSource:string,eventId:string,
   const occurredAt=dateValue(payload);
   const {contact}=await ensureContactIdentity({channelCode:source,externalId:identity.externalId,participantId:identity.participant,pageId:identity.pageId,phone:identity.phone,displayName:identity.displayName,metadata:{routeSource,lastEventId:eventId}});
   let openRequest=await findOpenServiceRequest(contact.id);
+  let matchedLead:any=null;
+  if(!openRequest&&source==="whatsapp"&&identity.phoneNormalized){
+    [matchedLead]=await sql<any[]>`
+      select *,id::text,assigned_to::text,call_center_assigned_to::text,current_request_id::text
+      from crm.leads where phone_normalized=${identity.phoneNormalized} and is_deleted=false
+      order by registered_at desc nulls last,created_at desc limit 1
+    `;
+    if(matchedLead){
+      await sql`update crm.leads set contact_id=coalesce(contact_id,${contact.id}::uuid),updated_at=now() where id=${matchedLead.id}::uuid`;
+      if(matchedLead.current_request_id){
+        [openRequest]=await sql<any[]>`
+          select *,id::text,lead_id::text,contact_id::text,assigned_to::text,call_center_assigned_to::text
+          from crm.service_requests where id=${matchedLead.current_request_id}::uuid and request_state='open' limit 1
+        `;
+      }
+    }
+  }
+
+  const linkedLeadId=openRequest?.lead_id||matchedLead?.id||null;
+  const linkedServiceKey=openRequest?.service_key||matchedLead?.service_key||null;
+  const linkedDepartment=openRequest?.department_code||matchedLead?.department_code||null;
+  const linkedBranch=openRequest?.branch_code||matchedLead?.branch_code||null;
+  const linkedAssigned=openRequest?.assigned_to||matchedLead?.assigned_to||null;
+  const linkedCallCenter=openRequest?.call_center_assigned_to||matchedLead?.call_center_assigned_to||null;
 
   let [conversation]=await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where legacy_id=${identity.conversationExternalId} limit 1`;
+  if(!conversation&&source==="whatsapp"&&identity.phoneNormalized){
+    [conversation]=await sql<any[]>`
+      select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
+      from crm.conversations c
+      left join crm.leads l on l.id=c.lead_id
+      left join crm.contacts ct on ct.id=c.contact_id
+      where c.channel_code='whatsapp' and (
+        c.participant_id=${identity.phoneNormalized}
+        or l.phone_normalized=${identity.phoneNormalized}
+        or ct.primary_phone_normalized=${identity.phoneNormalized}
+      )
+      order by c.last_message_at desc nulls last,c.updated_at desc limit 1
+    `;
+  }
   if(!conversation){
     [conversation]=await sql<any[]>`
       insert into crm.conversations(legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,status,preview_text,unread_count,last_message_at,
         service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,last_customer_message_at,metadata)
-      values(${identity.conversationExternalId},${openRequest?.lead_id||null}::uuid,${contact.id}::uuid,${openRequest?.id||null}::uuid,${source},${identity.displayName},${identity.participant||identity.externalId},'open',
-        ${text||null},${direction==="in"?1:0},${occurredAt}::timestamptz,${openRequest?.service_key||null},${openRequest?.department_code||null},${openRequest?.branch_code||null},
-        ${openRequest?.assigned_to||null}::uuid,${openRequest?.call_center_assigned_to||null}::uuid,${first(payload.provider,routeSource)},${identity.pageId||null},
-        ${openRequest?'classified':'new'},${direction==="in"?occurredAt:null}::timestamptz,${sql.json({routeSource,lastEventId:eventId})})
+      values(${identity.conversationExternalId},${linkedLeadId}::uuid,${contact.id}::uuid,${openRequest?.id||null}::uuid,${source},${identity.displayName},${identity.phoneNormalized||identity.participant||identity.externalId},'open',
+        ${text||null},${direction==="in"?1:0},${occurredAt}::timestamptz,${linkedServiceKey},${linkedDepartment},${linkedBranch},
+        ${linkedAssigned}::uuid,${linkedCallCenter}::uuid,${first(payload.provider,routeSource)},${identity.pageId||null},
+        ${linkedLeadId?'classified':'new'},${direction==="in"?occurredAt:null}::timestamptz,${sql.json({routeSource,lastEventId:eventId})})
       returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
     `;
   } else {
     [conversation]=await sql<any[]>`
-      update crm.conversations set contact_id=${contact.id}::uuid,lead_id=coalesce(${openRequest?.lead_id||null}::uuid,lead_id),service_request_id=coalesce(${openRequest?.id||null}::uuid,service_request_id),
-        customer_name=coalesce(nullif(${identity.displayName},''),customer_name),participant_id=coalesce(nullif(${identity.participant||identity.externalId},''),participant_id),
+      update crm.conversations set
+        legacy_id=case when ${source}='whatsapp' then ${identity.conversationExternalId} else legacy_id end,
+        contact_id=${contact.id}::uuid,lead_id=coalesce(${linkedLeadId}::uuid,lead_id),service_request_id=coalesce(${openRequest?.id||null}::uuid,service_request_id),
+        customer_name=coalesce(nullif(${identity.displayName},''),customer_name),participant_id=coalesce(nullif(${identity.phoneNormalized||identity.participant||identity.externalId},''),participant_id),
         preview_text=coalesce(nullif(${text},''),preview_text),unread_count=unread_count+${direction==="in"?1:0},last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
-        service_key=coalesce(${openRequest?.service_key||null},service_key),department_code=coalesce(${openRequest?.department_code||null},department_code),branch_code=coalesce(${openRequest?.branch_code||null},branch_code),
-        assigned_to=coalesce(${openRequest?.assigned_to||null}::uuid,assigned_to),call_center_assigned_to=coalesce(${openRequest?.call_center_assigned_to||null}::uuid,call_center_assigned_to),
-        classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
+        service_key=coalesce(${linkedServiceKey},service_key),department_code=coalesce(${linkedDepartment},department_code),branch_code=coalesce(${linkedBranch},branch_code),
+        assigned_to=coalesce(${linkedAssigned}::uuid,assigned_to),call_center_assigned_to=coalesce(${linkedCallCenter}::uuid,call_center_assigned_to),
+        classification_state=case when ${Boolean(linkedLeadId)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
         last_customer_message_at=case when ${direction==="in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
         last_human_reply_at=case when ${direction==="out"&&senderType==="human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
         metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({routeSource,lastEventId:eventId})}::jsonb,updated_at=now()

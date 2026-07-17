@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
+import { audit, clean, normalizePhone, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
@@ -34,28 +34,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
-        with recent_messages as (
-          select m.id
-          from crm.messages m
-          where m.conversation_id=${conversationId}::uuid
-          order by m.created_at desc, m.id desc
-          limit ${limit}
-        )
         select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
-        from recent_messages recent
-        join crm.messages m on m.id=recent.id
-        left join core.users u on u.id=m.sent_by
+        from crm.messages m left join core.users u on u.id=m.sent_by
         left join crm.media_assets a on a.message_id=m.id
-        order by m.created_at asc, m.id asc
+        where m.conversation_id=${conversationId}::uuid
+        order by m.created_at asc limit ${limit}
       `;
-      const hasInboundCustomerReply = messages.some((message) => {
-        const direction = String(message.direction || "").trim().toLowerCase();
-        const senderType = String(message.sender_type || "").trim().toLowerCase();
-        return ["in", "inbound", "received", "receive"].includes(direction) || senderType === "customer";
-      });
       if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
       else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
-      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0, has_inbound_customer_reply: hasInboundCustomerReply }, messages });
+      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
     }
 
     let rows: any[] = [...await sql<any[]>`
@@ -88,17 +75,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
           )
       `;
       if (lead?.phone_normalized || lead?.phone) {
-        const legacyId = `crm-manual:${lead.id}`;
+        const whatsappId = normalizePhone(lead.phone_normalized || lead.phone);
         const [created] = await sql<any[]>`
           insert into crm.conversations(
-            legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata,last_message_at
+            legacy_id,lead_id,channel_code,customer_name,participant_id,assigned_to,call_center_assigned_to,provider,metadata,last_message_at
           ) values (
-            ${legacyId},${lead.id}::uuid,'whatsapp',${lead.customer_name || "عميل"},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,
+            ${whatsappId},${lead.id}::uuid,'whatsapp',${lead.customer_name || "عميل"},${whatsappId},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,'mersal',
             ${sql.json({ manualEntry: Boolean(lead.is_manual_entry), sourceCode: lead.source_code, sourceName: lead.source_name, autoCreated: true })},null
           )
           on conflict (legacy_id) do update set
-            lead_id=excluded.lead_id,assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,
-            customer_name=excluded.customer_name,updated_at=now()
+            lead_id=excluded.lead_id,participant_id=excluded.participant_id,assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,
+            customer_name=excluded.customer_name,provider='mersal',updated_at=now()
           returning *,id::text,lead_id::text
         `;
         rows = [{
