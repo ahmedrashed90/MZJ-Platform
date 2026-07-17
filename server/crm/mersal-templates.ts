@@ -39,6 +39,7 @@ function componentBody(value: unknown) {
 }
 
 function workerHeaders(secretName: string) {
+  if (!secretName) throw new Error("اسم متغير سر Worker غير مضبوط في إعدادات CRM");
   const secret = clean(process.env[secretName]);
   if (!secret) throw new Error(`${secretName} غير موجود في Environment Variables`);
   return {
@@ -50,16 +51,19 @@ function workerHeaders(secretName: string) {
 
 async function resolveWorkerConfig(sql: ReturnType<typeof getSql>): Promise<WorkerConfig> {
   const [endpoint] = await sql<any[]>`
-    select templates_sync_url,secret_name
+    select source_code,templates_sync_url,secret_name
     from crm.integration_endpoints
     where source_code='whatsapp' and is_active=true
     limit 1
   `;
+
   const url = clean(endpoint?.templates_sync_url);
-  if (!url) throw new Error("أضف مسار مزامنة قوالب مرسال في إعدادات CRM");
-  const secretName = clean(endpoint?.secret_name);
-  if (!secretName) throw new Error("أضف اسم متغير سر الـGateway في إعدادات CRM");
-  return { url, secretName };
+  if (!url) throw new Error("أضف مسار /templates/mersal في إعدادات واتساب قبل مزامنة القوالب");
+
+  return {
+    url,
+    secretName: clean(endpoint?.secret_name),
+  };
 }
 
 function extractTemplates(payload: MersalWorkerResponse) {
@@ -77,7 +81,7 @@ async function requestTemplates(config: WorkerConfig) {
     method: "POST",
     headers: workerHeaders(config.secretName),
     body: JSON.stringify({ action: "sync_templates", source: "mzj-unified-platform" }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(25_000),
   });
   const text = await upstream.text();
   let payload: MersalWorkerResponse;

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { clean, departmentKey, normalizePhone } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService } from "./_crm-lifecycle.js";
@@ -94,13 +95,9 @@ function identityData(source: string, payload: any) {
   const contact = wa?.contacts?.[0] || {};
   const participant = first(payload.participantId, payload.participant_id, payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId, payload.user_id, payload.userId, payload.igId, payload.tiktokId, payload.fbId, payload.waId, msg?.from, contact?.wa_id);
   const pageId = first(payload.pageId, payload.page_id);
-  const explicitExternalId = first(payload.externalCustomerId, payload.external_customer_id, payload.conversationId, payload.conversation_id, payload.convId);
-  const externalId = participant || explicitExternalId;
-  if (!externalId) throw new Error("معرف العميل الخارجي غير موجود في حدث الاستقبال");
-  const conversationExternalId = first(payload.conversationId, payload.conversation_id, payload.convId)
-    || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`);
+  const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, payload.conversationId, payload.conversation_id, payload.convId) || crypto.randomUUID();
+  const conversationExternalId = first(payload.conversationId, payload.conversation_id, payload.convId) || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`);
   const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.clientNumber, payload.leadPhone, msg?.from, contact?.wa_id);
-  if (source === "whatsapp" && !normalizePhone(phone)) throw new Error("رقم واتساب غير صالح في حدث الاستقبال");
   const displayName = first(payload.customerName, payload.displayName, payload.full_name, payload.fullName, payload.leadName, payload.name, contact?.profile?.name, "عميل");
   return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName };
 }
@@ -120,7 +117,6 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const direction = first(payload.direction, payload.messageDirection, payload.message_direction, "in").toLowerCase() === "out" ? "out" : "in";
   const senderType = first(payload.senderType, payload.sender_type, direction === "in" ? "customer" : "system");
   const providerMessageId = first(payload.providerMessageId, payload.provider_message_id, payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
-  if (!providerMessageId) throw new Error("معرف الرسالة غير موجود في حدث الاستقبال");
   const occurredAt = dateValue(payload);
 
   const { contact } = await ensureContactIdentity({
@@ -134,27 +130,47 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   });
   let openRequest = await findOpenServiceRequest(contact.id);
 
-  const channel = source;
   let [conversation] = await sql<any[]>`
-    select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
-    from crm.conversations c
-    left join crm.leads l on l.id=c.lead_id
-    where
-      (c.contact_id=${contact.id}::uuid and c.channel_code=${channel})
-      or c.legacy_id=${identity.conversationExternalId}
-      or (${openRequest?.lead_id || null}::uuid is not null and c.lead_id=${openRequest?.lead_id || null}::uuid and c.channel_code=${channel})
-      or (${identity.phoneNormalized || null}::text is not null and c.channel_code=${channel}
-          and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized || null},9))
-    order by
-      case
-        when c.contact_id=${contact.id}::uuid and c.channel_code=${channel} then 0
-        when c.legacy_id=${identity.conversationExternalId} then 1
-        when ${openRequest?.lead_id || null}::uuid is not null and c.lead_id=${openRequest?.lead_id || null}::uuid then 2
-        else 3
-      end,
-      c.last_message_at desc nulls last,c.updated_at desc
-    limit 1
+    select *,id::text,lead_id::text,contact_id::text,service_request_id::text
+    from crm.conversations where legacy_id=${identity.conversationExternalId} limit 1
   `;
+
+  if (!conversation && source === "whatsapp" && openRequest?.lead_id) {
+    [conversation] = await sql<any[]>`
+      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
+      from crm.conversations
+      where lead_id=${openRequest.lead_id}::uuid and channel_code='whatsapp'
+      order by last_message_at desc nulls last,updated_at desc limit 1
+    `;
+  }
+
+  if (!conversation && source === "whatsapp" && identity.phoneNormalized) {
+    [conversation] = await sql<any[]>`
+      select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
+      from crm.conversations c
+      join crm.leads l on l.id=c.lead_id
+      where c.channel_code='whatsapp'
+        and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
+      order by c.last_message_at desc nulls last,c.updated_at desc limit 1
+    `;
+  }
+
+  if (!conversation && source === "whatsapp") {
+    [conversation] = await sql<any[]>`
+      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
+      from crm.conversations
+      where contact_id=${contact.id}::uuid and channel_code='whatsapp'
+      order by last_message_at desc nulls last,updated_at desc limit 1
+    `;
+  }
+
+  let existingMessage: any = null;
+  if (conversation) {
+    [existingMessage] = await sql<any[]>`
+      select *,id::text,conversation_id::text from crm.messages
+      where conversation_id=${conversation.id}::uuid and provider_message_id=${providerMessageId} limit 1
+    `;
+  }
 
   if (!conversation) {
     [conversation] = await sql<any[]>`
@@ -162,74 +178,62 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,status,preview_text,unread_count,last_message_at,
         service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,last_customer_message_at,metadata
       ) values(
-        ${identity.conversationExternalId},${openRequest?.lead_id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${channel},${identity.displayName},${identity.participant || identity.externalId},'open',
-        null,0,null,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
+        ${identity.conversationExternalId},${openRequest?.lead_id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
+        ${text || null},${direction === "in" ? 1 : 0},${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
         ${openRequest?.assigned_to || null}::uuid,${openRequest?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${identity.pageId || null},
-        ${openRequest ? 'classified' : 'new'},null,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}
-      )
-      on conflict(legacy_id) do update set updated_at=now()
+        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}
+      ) returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
+    `;
+  } else if (!existingMessage) {
+    [conversation] = await sql<any[]>`
+      update crm.conversations set
+        contact_id=${contact.id}::uuid,
+        lead_id=coalesce(${openRequest?.lead_id || null}::uuid,lead_id),
+        service_request_id=coalesce(${openRequest?.id || null}::uuid,service_request_id),
+        customer_name=coalesce(nullif(${identity.displayName},''),customer_name),
+        participant_id=coalesce(nullif(${identity.participant || identity.externalId},''),participant_id),
+        preview_text=coalesce(nullif(${text},''),preview_text),
+        unread_count=unread_count+${direction === "in" ? 1 : 0},
+        last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
+        service_key=coalesce(${openRequest?.service_key || null},service_key),
+        department_code=coalesce(${openRequest?.department_code || null},department_code),
+        branch_code=coalesce(${openRequest?.branch_code || null},branch_code),
+        assigned_to=coalesce(${openRequest?.assigned_to || null}::uuid,assigned_to),
+        call_center_assigned_to=coalesce(${openRequest?.call_center_assigned_to || null}::uuid,call_center_assigned_to),
+        provider=coalesce(nullif(${first(payload.provider, routeSource)},''),provider),
+        classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
+        last_customer_message_at=case when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
+        last_human_reply_at=case when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}::jsonb,
+        updated_at=now()
+      where id=${conversation.id}::uuid
       returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
     `;
   }
 
-  const messageType = media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text");
+  if (existingMessage) {
+    await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
+    return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
+  }
+
   let [message] = await sql<any[]>`
     insert into crm.messages(
       conversation_id,legacy_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,is_sensitive,
       provider_status,provider_message_id,sender_type,caption,created_at,metadata
     ) values(
-      ${conversation.id}::uuid,${providerMessageId},${direction},${messageType},${text || null},
+      ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
       ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,
-      ${sql.json({ source: channel, routeSource, eventId, mediaId: media.mediaId || null, provider: first(payload.provider, routeSource) })}
-    )
-    on conflict do nothing
-    returning *,id::text,conversation_id::text
-  `;
-
-  if (!message) {
-    [message] = await sql<any[]>`
-      select *,id::text,conversation_id::text from crm.messages
-      where conversation_id=${conversation.id}::uuid and provider_message_id=${providerMessageId}
-      limit 1
-    `;
-    await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
-    return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message, createLead: false, contact, automation: null, duplicate: true };
-  }
-
-  [conversation] = await sql<any[]>`
-    update crm.conversations set
-      contact_id=${contact.id}::uuid,
-      lead_id=coalesce(${openRequest?.lead_id || null}::uuid,lead_id),
-      service_request_id=coalesce(${openRequest?.id || null}::uuid,service_request_id),
-      customer_name=coalesce(nullif(${identity.displayName},''),customer_name),
-      participant_id=coalesce(nullif(${identity.participant || identity.externalId},''),participant_id),
-      preview_text=coalesce(nullif(${text},''),preview_text),
-      unread_count=unread_count,
-      last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
-      service_key=coalesce(${openRequest?.service_key || null},service_key),
-      department_code=coalesce(${openRequest?.department_code || null},department_code),
-      branch_code=coalesce(${openRequest?.branch_code || null},branch_code),
-      assigned_to=coalesce(${openRequest?.assigned_to || null}::uuid,assigned_to),
-      call_center_assigned_to=coalesce(${openRequest?.call_center_assigned_to || null}::uuid,call_center_assigned_to),
-      provider=${first(payload.provider, routeSource)},
-      page_id=coalesce(nullif(${identity.pageId},''),page_id),
-      classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
-      last_customer_message_at=case when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
-      last_human_reply_at=case when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
-      metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}::jsonb,
-      updated_at=now()
-    where id=${conversation.id}::uuid
-    returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
+      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}
+    ) returning *,id::text,conversation_id::text
   `;
 
   if (media.storageKey) {
     await sql`
       insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
-      values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source: channel, eventId })})
+      values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
       on conflict(storage_key) do update set
-        conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=excluded.original_name,
-        media_type=excluded.media_type,mime_type=excluded.mime_type,file_size=excluded.file_size,
+        conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
+        media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
         is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
     `;
   }
@@ -237,30 +241,20 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const knownService = trustedKnownService(routeSource, payload);
   let createdByKnownSource = false;
   if (!openRequest && knownService) {
-    const classified = await classifyConversationService({ conversationId: conversation.id, serviceKey: knownService, sourceCode: channel, classificationMethod: "source_mapping", eventKey: eventId });
+    const classified = await classifyConversationService({ conversationId: conversation.id, serviceKey: knownService, sourceCode: source, classificationMethod: "source_mapping", eventKey: eventId });
     openRequest = classified.request;
     createdByKnownSource = classified.reused !== true;
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
   }
 
-  if (direction === "in") {
-    if (conversation.lead_id) {
-      await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
-    } else {
-      await sql`
-        update crm.conversations set
-          unread_count=case when coalesce(metadata->>'lastUnreadMessageKey','')=${providerMessageId} then unread_count else unread_count+1 end,
-          metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${providerMessageId}::text),true),
-          updated_at=now()
-        where id=${conversation.id}::uuid
-      `;
-    }
+  if (conversation.lead_id && direction === "in") {
+    await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
   }
 
   const automation = await publishAutomationEvent({
-    eventKey: `${channel}:${eventId}:message`,
+    eventKey: `${source}:${eventId}:message`,
     eventType: direction === "in" ? "message.received" : "message.sent",
-    source: channel,
+    source,
     contactId: contact.id,
     conversationId: conversation.id,
     serviceRequestId: conversation.service_request_id || openRequest?.id || null,
@@ -270,6 +264,5 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   });
 
   await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
-  return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message, createLead: createdByKnownSource, contact, automation, duplicate: false };
+  return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message, createLead: createdByKnownSource, contact, automation };
 }
-

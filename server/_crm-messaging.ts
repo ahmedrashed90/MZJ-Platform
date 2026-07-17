@@ -55,27 +55,23 @@ type DeliveryPolicy = { route: DeliveryRoute; templateOnly: boolean; sourceArabi
 function normalized(value: unknown) {
   return clean(value).toLowerCase().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/[\s/]+/g, "_");
 }
+function isLeadSource(value: string) { const text = normalized(value); return text.includes("lead") || text.includes("ليد"); }
+
 async function resolveDeliveryPolicy(conversation: ConversationContext): Promise<DeliveryPolicy> {
   const sql = getSql();
   const sourceCode = clean(conversation.source_code);
-  const [sourceConfig] = sourceCode
-    ? await sql<any[]>`select name,delivery_route,allow_free_text from core.sources where code=${sourceCode} limit 1`
-    : [];
-  const channelRoute = clean(conversation.channel_code).toLowerCase();
-  if (sourceCode && !sourceConfig) throw new Error(`المصدر ${sourceCode} غير مضبوط في إعدادات CRM`);
-  const route = (sourceCode ? clean(sourceConfig.delivery_route).toLowerCase() : channelRoute) as DeliveryRoute;
-  if (!["whatsapp", "facebook", "instagram", "tiktok"].includes(route)) {
-    throw new Error("قناة الإرسال غير مضبوطة لهذا العميل");
+  const [sourceConfig] = sourceCode ? await sql<any[]>`select name,delivery_route,allow_free_text from core.sources where code=${sourceCode} limit 1` : [];
+  const sourceArabic = clean(sourceConfig?.name) || sourceLabel(conversation.source_code || conversation.source_name || conversation.platform_code || conversation.channel_code);
+  if (sourceConfig?.delivery_route) {
+    const route = sourceConfig.delivery_route as DeliveryRoute;
+    return { route, templateOnly: false, sourceArabic, reason: route === "whatsapp" ? "الإرسال عبر واتساب بنص حر أو قالب أو مرفق" : `الإرسال عبر ${sourceLabel(route)}` };
   }
-  const sourceArabic = clean(sourceConfig?.name)
-    || sourceLabel(conversation.source_code || conversation.source_name || conversation.platform_code || route);
-  const templateOnly = sourceConfig ? sourceConfig.allow_free_text === false : false;
-  return {
-    route,
-    templateOnly,
-    sourceArabic,
-    reason: route === "whatsapp" ? "الإرسال عبر مرسال" : `الإرسال عبر ${sourceLabel(route)}`,
-  };
+  const raw = [conversation.source_code, conversation.source_name, conversation.platform_code, conversation.channel_code, conversation.legacy_id].map(clean).filter(Boolean).join(" ");
+  const key = normalized(raw);
+  if ((key.includes("facebook") || key.includes("فيسبوك")) && !isLeadSource(`${raw} ${sourceArabic}`)) return { route: "facebook", templateOnly: false, sourceArabic, reason: "الإرسال عبر فيسبوك" };
+  if ((key.includes("instagram") || key.includes("انستجرام") || key.includes("انستغرام")) && !isLeadSource(`${raw} ${sourceArabic}`)) return { route: "instagram", templateOnly: false, sourceArabic, reason: "الإرسال عبر إنستجرام" };
+  if ((key.includes("tiktok") || key.includes("تيك_توك") || key.includes("تيك")) && !isLeadSource(`${raw} ${sourceArabic}`)) return { route: "tiktok", templateOnly: false, sourceArabic, reason: "الإرسال عبر تيك توك" };
+  return { route: "whatsapp", templateOnly: false, sourceArabic, reason: "الإرسال عبر واتساب بنص حر أو قالب أو مرفق" };
 }
 
 export function renderCrmTemplate(content: string, conversation: ConversationContext) {
@@ -89,7 +85,7 @@ export function renderCrmTemplate(content: string, conversation: ConversationCon
 function gatewayHeaders(secretName: string | null | undefined) {
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8", accept: "application/json" };
   const configuredName = clean(secretName);
-  if (!configuredName) throw new Error("اسم متغير سر الـGateway غير مضبوط في Endpoint");
+  if (!configuredName) throw new Error("اسم متغير سر Worker غير مضبوط في إعدادات CRM");
   const secretValue = clean(process.env[configuredName]);
   if (!secretValue) throw new Error(`متغير السر ${configuredName} غير موجود في Vercel`);
   headers["x-mzj-gateway-secret"] = secretValue;
@@ -115,27 +111,55 @@ function extractNumberedTemplateParams(templateBody: string, renderedText: strin
   return Object.keys(values).map(Number).sort((a,b)=>a-b).map((position)=>values[position]);
 }
 
-async function resolveEndpoint(route: DeliveryRoute) {
-  const sql = getSql();
-  const [endpoint] = await sql<any[]>`
-    select * from crm.integration_endpoints
-    where is_active=true and source_code=${route}
-    limit 1
-  `;
-  if (!endpoint) throw new Error(`لم يتم ضبط Endpoint فعال لقناة ${sourceLabel(route)}`);
-  const url = clean(endpoint.send_url);
-  if (!url) throw new Error(`لم يتم ضبط مسار الإرسال لقناة ${sourceLabel(route)}`);
-  return { endpoint, url };
+function whatsappRouteCandidates(endpoint: Record<string, unknown>, _kind: DeliveryKind) {
+  const configured = clean(endpoint.text_send_url);
+  return configured ? [configured] : [];
 }
 
-async function postToWorker(url: string, headers: Record<string, string>, payload: Record<string, unknown>) {
-  if (!clean(url)) throw new Error("Worker route is not configured");
+function endpointUrlCandidates(route: DeliveryRoute, kind: DeliveryKind, endpoint: Record<string, unknown>) {
+  if (route === "whatsapp") return whatsappRouteCandidates(endpoint, kind);
+  const url = kind === "template"
+    ? clean(endpoint.template_send_url || endpoint.text_send_url || endpoint.send_url)
+    : kind === "media"
+      ? clean(endpoint.media_send_url || endpoint.text_send_url || endpoint.send_url)
+      : clean(endpoint.text_send_url || endpoint.send_url);
+  return url ? [url] : [];
+}
+
+async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
+  const sql = getSql();
+  const [endpoint] = await sql<any[]>`
+    select * from crm.integration_endpoints where is_active=true and source_code=${route} limit 1
+  `;
+  if (!endpoint) throw new Error(`لم يتم ضبط Endpoint فعال لقناة ${sourceLabel(route)}`);
+  const urls = endpointUrlCandidates(route, kind, endpoint);
+  if (!urls.length) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
+  return { endpoint, urls };
+}
+
+function workerAccepted(httpOk: boolean, response: any) {
+  const rawStatus = normalized(response?.providerStatus || response?.status || response?.raw?.status || response?.raw?.data?.status || "");
+  const providerMessageId = clean(
+    response?.providerMessageId || response?.provider_message_id || response?.message_wamid || response?.message_id || response?.wamid ||
+    response?.raw?.message_wamid || response?.raw?.message_id || response?.raw?.wamid || response?.raw?.id ||
+    response?.raw?.data?.message_wamid || response?.raw?.data?.message_id || response?.raw?.data?.wamid || response?.raw?.data?.id || "",
+  );
+  const acceptedStatuses = new Set(["success", "sent", "delivered", "queued", "accepted", "submitted", "processing"]);
+  const failedStatuses = new Set(["error", "failed", "failure", "rejected", "invalid"]);
+  if (providerMessageId || response?.ok === true || response?.success === true || acceptedStatuses.has(rawStatus)) return true;
+  if (response?.ok === false || response?.success === false || failedStatuses.has(rawStatus)) return false;
+  return httpOk;
+}
+
+async function postToWorker(urls: string[], headers: Record<string, string>, payload: Record<string, unknown>) {
+  const url = clean(urls[0]);
+  if (!url) return { ok: false, provider: null, response: { error: "No worker route configured" }, usedUrl: "", attempts: [] as Array<{ url: string; status: number; response: any }> };
   try {
     const provider = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
     const raw = await provider.text();
     let response: any;
     try { response = JSON.parse(raw); } catch { response = { raw }; }
-    const ok = provider.ok && response?.ok !== false;
+    const ok = workerAccepted(provider.ok, response);
     return { ok, provider, response, usedUrl: url, attempts: [{ url, status: provider.status, response }] };
   } catch (error: any) {
     const response = { error: error?.message || String(error) };
@@ -144,7 +168,7 @@ async function postToWorker(url: string, headers: Record<string, string>, payloa
 }
 
 type BackgroundDeliveryInput = {
-  url: string;
+  urls: string[];
   headers: Record<string, string>;
   payload: Record<string, unknown>;
   jobId: string;
@@ -156,11 +180,14 @@ type BackgroundDeliveryInput = {
 async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
   const sql = getSql();
   try {
-    const delivery = await postToWorker(input.url, input.headers, input.payload);
+    const delivery = await postToWorker(input.urls, input.headers, input.payload);
     const data = delivery.response;
-    const rawStatus = normalized(data?.status || "");
-    const providerStatus = delivery.ok && rawStatus !== "error" ? "sent" : "failed";
-    const providerMessageId = clean(data?.provider_message_id);
+    const providerStatus = delivery.ok ? "sent" : "failed";
+    const providerMessageId = clean(
+      data?.providerMessageId || data?.provider_message_id || data?.message_wamid || data?.messageWamid || data?.message_id ||
+      data?.raw?.message_wamid || data?.raw?.wamid || data?.raw?.message_id || data?.raw?.id ||
+      data?.raw?.data?.message_wamid || data?.raw?.data?.wamid || data?.raw?.data?.message_id || data?.raw?.data?.id || "",
+    );
     const attempts = delivery.attempts.map((attempt) => ({
       url: attempt.url,
       status: attempt.status,
@@ -218,7 +245,7 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
   if (route === "whatsapp") {
     const phone = normalizePhone(conversation.phone_normalized || conversation.phone || participantId);
     if (!phone) throw new Error("رقم واتساب غير موجود أو غير صالح");
-    return { phone };
+    return { phone, waId: phone, conversationId: conversationId || phone, convId: conversationId || phone, leadId: conversation.lead_id || "", contactId: conversation.contact_id || "", serviceRequestId: conversation.service_request_id || "" };
   }
   if (route === "tiktok") {
     const subscriber = participantId || conversationId.replace(/^tiktok[_:]/i, "");
@@ -229,53 +256,25 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
 }
 
 function deliveryPayload(input: { route: DeliveryRoute; conversation: ConversationContext; text: string; template?: TemplateRow | null; media?: MediaDelivery | null; policy: DeliveryPolicy; buttons?: unknown[]; header?: string; footer?: string }) {
-  const base = basePayload(input.route, input.conversation);
-  if (input.route === "whatsapp") {
-    if (input.media) {
-      return {
-        ...base,
-        type: "media",
-        template_name: "",
-        media_url: createDownloadUrl(input.media.storageKey, 900),
-        media_type: input.media.mediaType,
-        file_name: input.media.fileName || "",
-        mime_type: input.media.mimeType || "",
-        file_size: input.media.fileSize || null,
-        caption: input.media.caption || input.text || "",
-      };
-    }
-    if (input.template) {
-      const templateName = clean(input.template.name || input.template.external_id);
-      if (!templateName) throw new Error("قالب واتساب غير مربوط باسم قالب مرسال");
-      const params = extractNumberedTemplateParams(clean(input.template.content), input.text);
-      return {
-        ...base,
-        type: "template",
-        template_name: templateName,
-        template_language: clean(input.template.language_code) || "ar",
-        components: params.length ? [{ type: "body", parameters: params.map((value) => ({ type: "text", text: value })) }] : [],
-      };
-    }
+  const payload: Record<string,unknown> = { ...basePayload(input.route, input.conversation), source: input.policy.sourceArabic, deliveryChannel: input.route, saveMessage: false };
+  if (input.media) {
+    const mediaUrl = createDownloadUrl(input.media.storageKey, 900);
+    return { ...payload, mediaUrl, fileUrl: mediaUrl, mediaType: input.media.mediaType, attachmentType: input.media.mediaType, fileName: input.media.fileName || "", mimeType: input.media.mimeType || "", fileSize: input.media.fileSize || null, caption: input.media.caption || input.text || "" };
+  }
+  if (input.template) {
+    const templateName = clean(input.template.name || input.template.external_id);
+    if (!templateName) throw new Error("قالب واتساب غير مربوط باسم قالب مرسال");
+    const params = extractNumberedTemplateParams(clean(input.template.content), input.text);
     return {
-      ...base,
-      type: "text",
-      template_name: "",
-      message: input.text,
-      ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}),
+      ...payload,
+      template_name: templateName,
+      template_language: clean(input.template.language_code) || "ar",
+      params,
+      components: params.length ? [{ type: "body", parameters: params.map((value) => ({ type: "text", text: value })) }] : [],
+      text: input.text,
     };
   }
-
-  const common = {
-    ...base,
-    source: input.policy.sourceArabic,
-    deliveryChannel: input.route,
-    platform: input.route,
-    channelCode: input.route,
-    provider: input.route,
-    direction: "out",
-    saveMessage: false,
-  };
-  return { ...common, type: input.media ? "media" : input.template ? "template" : "text", message: input.text };
+  return { ...payload, message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
 
 async function loadConversation(conversationId: string): Promise<ConversationContext | null> {
@@ -310,11 +309,7 @@ export async function deliverCrmMessage(input: {
   const conversation = input.conversation;
   const policy = await resolveDeliveryPolicy(conversation);
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";
-  if (policy.templateOnly && kind === "text") throw new Error("هذا المصدر يسمح بالإرسال بالقوالب فقط");
-  if (input.template && policy.route !== "whatsapp" && isMersalTemplate(input.template)) {
-    throw new Error("قالب مرسال لا يمكن إرساله عبر قناة أخرى");
-  }
-  const { endpoint, url } = await resolveEndpoint(policy.route);
+  const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;
   const proposedJobId = crypto.randomUUID();
   const baseWorkerPayload = deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer });
@@ -347,7 +342,7 @@ export async function deliverCrmMessage(input: {
       ) values (
         ${conversation.id}::uuid,'out',${kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,900) : null},${input.media?.mediaType||null},
         ${input.media?.fileName||null},${input.media?.mimeType||null},${input.media?.fileSize||null},${input.media?.storageKey||null},${input.media ? 'queued' : null},
-        ${Boolean(input.media?.isSensitive)},'queued',${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute: url })}
+        ${Boolean(input.media?.isSensitive)},'queued',${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute: urls[0] || "" })}
       ) returning *,id::text,conversation_id::text
     `;
   }
@@ -357,7 +352,7 @@ export async function deliverCrmMessage(input: {
 
   const headers = gatewayHeaders(endpoint.secret_name);
   startWorkerDelivery({
-    url,
+    urls,
     headers,
     payload,
     jobId: job.id,
@@ -373,7 +368,7 @@ export async function deliverCrmMessage(input: {
     errorMessage: "",
     jobId: job.id,
     routing: policy,
-    workerRoute: url,
+    workerRoute: urls[0] || "",
     workerAttempts: [],
   };
 }
@@ -390,7 +385,7 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
   if (!phone) throw new Error("رقم واتساب للإشعار غير صالح");
 
   const kind: DeliveryKind = input.template ? "template" : "text";
-  const { endpoint, url } = await resolveEndpoint("whatsapp");
+  const { endpoint, urls } = await resolveEndpoint("whatsapp", kind);
   const templateName = clean(input.template?.name || input.template?.external_id);
   if (input.template && !templateName) throw new Error("قالب واتساب غير مربوط باسم قالب مرسال");
   const templateParams = input.template ? extractNumberedTemplateParams(clean(input.template.content), input.text) : [];
@@ -398,18 +393,16 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
   const key = clean(input.idempotencyKey) || `direct-wa:${phone}:${crypto.randomUUID()}`;
   const payload: Record<string, unknown> = input.template
     ? {
-        type: "template",
         phone,
+        waId: phone,
         template_name: templateName,
         template_language: clean(input.template.language_code) || "ar",
+        params: templateParams,
         components: templateParams.length ? [{ type: "body", parameters: templateParams.map((value) => ({ type: "text", text: value })) }] : [],
+        text: input.text,
+        agentAuto: true,
       }
-    : {
-        type: "text",
-        phone,
-        template_name: "",
-        message: input.text,
-      };
+    : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
   const workerPayload = { ...payload, jobId, idempotencyKey: key, reason: input.reason || "automation" };
 
   const [job] = await sql<any[]>`
@@ -421,8 +414,8 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
   if (job.processed_at) return { ok: job.status !== "failed", status: job.status, response: job.response_payload };
 
   const headers = gatewayHeaders(endpoint.secret_name);
-  startWorkerDelivery({ url, headers, payload: workerPayload, jobId: job.id });
-  return { ok: true, status: "queued", response: { ok: true, accepted: true, status: "queued" }, workerRoute: url, workerAttempts: [] };
+  startWorkerDelivery({ urls, headers, payload: workerPayload, jobId: job.id });
+  return { ok: true, status: "queued", response: { ok: true, accepted: true, status: "queued" }, workerRoute: urls[0] || "", workerAttempts: [] };
 }
 
 export async function getMappedStatusDraft(input: { leadId: string; departmentCode: string; statusValue: string }) {

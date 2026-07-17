@@ -293,30 +293,28 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (section === "endpoint") {
     const sourceCode = clean(body.sourceCode);
     if (!sourceCode) return response.status(400).json({ ok: false, error: "المصدر مطلوب" });
-    const sendUrl = clean(body.sendUrl);
+    const textSendUrl = clean(body.textSendUrl || body.sendUrl);
+    const isWhatsapp = sourceCode === "whatsapp";
+    const templateSendUrl = isWhatsapp ? textSendUrl : clean(body.templateSendUrl);
+    const mediaSendUrl = isWhatsapp ? textSendUrl : clean(body.mediaSendUrl);
     const templatesSyncUrl = clean(body.templatesSyncUrl);
-    const inboundWebhookUrl = clean(body.inboundWebhookUrl);
-    const secretName = clean(body.secretName);
-    const validHttpUrl = (value: string) => {
-      try { return ["http:", "https:"].includes(new URL(value).protocol); } catch { return false; }
-    };
-    if (!sendUrl || !validHttpUrl(sendUrl)) return response.status(400).json({ ok: false, error: "مسار الإرسال HTTP/HTTPS صالح مطلوب" });
-    if (!secretName) return response.status(400).json({ ok: false, error: "اسم متغير سر الـGateway مطلوب" });
-    if (templatesSyncUrl && !validHttpUrl(templatesSyncUrl)) return response.status(400).json({ ok: false, error: "مسار مزامنة القوالب غير صالح" });
-    if (inboundWebhookUrl && !validHttpUrl(inboundWebhookUrl)) return response.status(400).json({ ok: false, error: "مسار استقبال الـWebhook غير صالح" });
-    if (sourceCode === "whatsapp") {
-      if (!/\/send\/mersal\/?$/i.test(sendUrl)) return response.status(400).json({ ok: false, error: "مسار إرسال واتساب يجب أن ينتهي بـ /send/mersal" });
-      if (!templatesSyncUrl || !/\/templates\/mersal\/?$/i.test(templatesSyncUrl)) return response.status(400).json({ ok: false, error: "مسار مزامنة قوالب واتساب يجب أن ينتهي بـ /templates/mersal" });
-      if (!inboundWebhookUrl || !/\/webhook\/mersal\/?$/i.test(inboundWebhookUrl)) return response.status(400).json({ ok: false, error: "مسار استقبال واتساب يجب أن ينتهي بـ /webhook/mersal" });
+    const inboundWebhookUrl = clean(body.inboundWebhookUrl || body.webhookUrl);
+    if (isWhatsapp) {
+      if (!/\/send\/mersal\/?$/i.test(textSendUrl)) return response.status(400).json({ ok: false, error: "مسار إرسال واتساب يجب أن ينتهي بـ /send/mersal" });
+      if (!/\/templates\/mersal\/?$/i.test(templatesSyncUrl)) return response.status(400).json({ ok: false, error: "مسار مزامنة قوالب واتساب يجب أن ينتهي بـ /templates/mersal" });
+      if (!/\/webhook\/mersal\/?$/i.test(inboundWebhookUrl)) return response.status(400).json({ ok: false, error: "مسار استقبال واتساب يجب أن ينتهي بـ /webhook/mersal" });
+      if (!clean(body.secretName)) return response.status(400).json({ ok: false, error: "اسم متغير سر Worker مطلوب لواتساب" });
     }
     const [row] = await sql<any[]>`
       insert into crm.integration_endpoints(
-        source_code,display_name,send_url,templates_sync_url,inbound_webhook_url,health_url,secret_name,is_active,updated_by,updated_at
+        source_code,display_name,send_url,webhook_url,text_send_url,template_send_url,media_send_url,templates_sync_url,inbound_webhook_url,
+        health_url,secret_name,is_active,updated_by,updated_at
       ) values (
-        ${sourceCode},${clean(body.displayName)||sourceCode},${sendUrl},${templatesSyncUrl||null},${inboundWebhookUrl||null},
-        ${clean(body.healthUrl)||null},${secretName},${body.isActive!==false},${user.id}::uuid,now()
+        ${sourceCode},${clean(body.displayName)||sourceCode},${textSendUrl||null},${inboundWebhookUrl||null},${textSendUrl||null},${templateSendUrl||null},
+        ${mediaSendUrl||null},${templatesSyncUrl||null},${inboundWebhookUrl||null},${clean(body.healthUrl)||null},${clean(body.secretName)||null},${body.isActive!==false},${user.id}::uuid,now()
       )
-      on conflict (source_code) do update set display_name=excluded.display_name,send_url=excluded.send_url,
+      on conflict (source_code) do update set display_name=excluded.display_name,send_url=excluded.send_url,webhook_url=excluded.webhook_url,
+        text_send_url=excluded.text_send_url,template_send_url=excluded.template_send_url,media_send_url=excluded.media_send_url,
         templates_sync_url=excluded.templates_sync_url,inbound_webhook_url=excluded.inbound_webhook_url,health_url=excluded.health_url,
         secret_name=excluded.secret_name,is_active=excluded.is_active,updated_by=excluded.updated_by,updated_at=now()
       returning *

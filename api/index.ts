@@ -78,7 +78,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.12.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.11.4" });
   }
 
   if (route === "integrations/media") {
