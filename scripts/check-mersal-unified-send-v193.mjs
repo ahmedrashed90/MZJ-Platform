@@ -8,7 +8,7 @@ const checks = [
   ['WhatsApp has one canonical send URL selector', messaging.includes('function unifiedWhatsappSendUrl')],
   ['WhatsApp templates use the canonical text/send route', messaging.includes('route === "whatsapp"') && messaging.includes('unifiedWhatsappSendUrl(endpoint)')],
   ['Legacy WhatsApp template URL is not preferred over text/send URL', messaging.includes('endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url')],
-  ['CRM schema keeps one exact WhatsApp endpoint row', schema.includes("where source_code='whatsapp'") && schema.includes('template_send_url=coalesce')],
+  ['CRM schema normalizes old WhatsApp/Mersal endpoint rows', schema.includes("where source_code in ('whatsapp','mersal')") && schema.includes('template_send_url=coalesce')],
   ['Admin UI exposes one text-and-template send field', admin.includes('مسار إرسال النص والقوالب') && !admin.includes('مسار إرسال القالب</span>')],
 ];
 

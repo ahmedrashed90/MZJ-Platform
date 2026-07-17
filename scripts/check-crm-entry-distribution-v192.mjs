@@ -117,7 +117,7 @@ for (const token of [
 ]) {
   if (!messaging.includes(token)) throw new Error(`Mersal payload check failed: missing ${token}`);
 }
-if (!settingsApi.includes('const isWhatsapp = sourceCode === "whatsapp"') || !settingsApi.includes('const templateSendUrl = isWhatsapp ? textSendUrl : clean(body.templateSendUrl)')) throw new Error('WhatsApp must use the single exact send URL');
+if (!settingsApi.includes('const templateSendUrl = clean(body.templateSendUrl) || (["whatsapp", "mersal"].includes(sourceCode) ? textSendUrl : "")')) throw new Error('WhatsApp template URL must fall back to the shared send URL');
 if (!conversations.includes('استكمل متغيرات القالب')) throw new Error('Template variables must be validated before manual send');
 
 for (const token of ['["crm/entry-routing", crmEntryRoutingHandler]', '["internal/automation-job", internalAutomationJobHandler]']) {

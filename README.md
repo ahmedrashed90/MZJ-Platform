@@ -111,7 +111,7 @@
 - إضافة كارت «الرسائل غير المقروءة» كآخر كارت في كل قسم، مع بقاء العميل في كارت حالته وترتيبه أولًا داخل الحالة عند وجود رسالة غير مقروءة.
 - الاستماع الحي إلى `collectionGroup(messages)` بترتيب `createdAt desc` واعتماد الرسائل ذات `direction = in` فقط.
 - حفظ حالة غير المقروءة في PostgreSQL بالحقول المتوافقة مع المرجع، وإزالتها عند فتح المحادثة وفق صلاحيات المستخدم الحالية.
-- توحيد منطق تعليم القراءة/عدم القراءة في خدمة خادم واحدة لمنع التكرار بين أحداث التكامل الواردة.
+- توحيد منطق تعليم القراءة/عدم القراءة في خدمة خادم واحدة لمنع التكرار بين التكاملات ومستمع Firestore.
 
 
 ## CRM settings v1.8.0
@@ -134,7 +134,6 @@
    - Secret name: `MZJ_GATEWAY_SECRET`
 5. زر مزامنة القوالب يشتق تلقائيًا `https://YOUR-WORKER/templates/mersal` من Send URL.
 
-يتم ضبط مسارات مرسال الثلاثة مباشرة من إعدادات CRM: `/send/mersal` و`/templates/mersal` و`/webhook/mersal`.
 
 ## v1.9.1 - Unified CRM automation core and transport-only channel Workers
 
@@ -148,30 +147,16 @@
 - القالب المرتبط بالحالة يظهر داخل مكان الكتابة للمراجعة واستكمال المتغيرات قبل الإرسال.
 - اتجاه المحادثة ثابت: رسالة العميل يسار، ورسالة مستخدم CRM أو الوكيل يمين.
 
-### WhatsApp / Mersal Worker v2.0.0
+### WhatsApp / Mersal Worker الحالي
 
-ارفع الملف الكامل:
+استخدم الوركر الكامل داخل `workers/MZJ-Mersal-CRM-Worker-v1.11.4-Postgres-FULL.txt`.
 
-`workers/MZJ-WhatsApp-Mersal-Gateway-v2.0.0-FULL.txt`
+المسارات المعتمدة فقط:
 
-Cloudflare secrets / variables المطلوبة:
-
-- `MZJ_GATEWAY_SECRET`
-- `MERSAL_TOKEN`
-- `MZJ_PLATFORM_URL`
-- `MERSAL_API_TOKEN` للوسائط عند الحاجة
-
-المسارات المعتمدة:
-
-- Inbound Webhook: `/webhooks/mersal/v1/messages`
-- Text: `/outbound/whatsapp/v1/text`
-- Template: `/outbound/whatsapp/v1/template`
-- Media: `/outbound/whatsapp/v1/media`
-- Template Sync: `/templates/mersal/v1/sync`
+- Inbound Webhook: `/webhook/mersal`
+- Send text/template/media: `/send/mersal`
+- Template Sync: `/templates/mersal`
 - Health: `/health`
-
-تظل المسارات القديمة `/webhook/mersal` و`/send/mersal` و`/templates/mersal` متاحة مؤقتًا أثناء الانتقال فقط.
-
 
 ## Automation scheduling without Vercel Cron
 
@@ -194,14 +179,10 @@ Cloudflare secrets / variables المطلوبة:
 - لم يتم تغيير Payload القالب: `waId`/`phone` مع `template_name` و`template_language` و`params`.
 - لا يحتاج Worker واتساب/مرسال إلى تعديل لهذه المشكلة.
 
-## v1.9.4 — Worker Route Discovery
+## v1.11.4 — إصلاح الإرسال والاستقبال الحالي لمرسال
 
-عند إرسال واتساب تبدأ المنصة بالمسار المحفوظ في إعدادات CRM. إذا أعاد الـWorker فقط `404/405 Not found`، تجرب المنصة تلقائيًا المسارات المتوافقة على نفس النطاق:
-
-- `/send/mersal`
-- `/outbound/whatsapp/v1/text`
-- `/outbound/whatsapp/v1/template`
-- `/outbound/whatsapp/v1/media`
-- `/send/whatsapp`
-
-لا يتم الانتقال لمسار آخر عند أخطاء الصلاحية أو التوكن أو أخطاء مرسال. عند الفشل يعرض رد API المسارات التي جُرّبت وحالة كل مسار بدون كشف أي سر.
+- القالب الذي تقبله مرسال ويحمل `message_wamid` يظهر «تم الإرسال» حتى لو رجع HTTP غير متوقع.
+- النص الحر يرسل من نفس المسار `/send/mersal` بعقد واضح `type=text` بدون خلطه بالقالب.
+- الرد القادم من الهاتف عبر `/webhook/mersal` ينتقل إلى `/api/integrations/whatsapp` ويتخزن في PostgreSQL داخل نفس محادثة العميل.
+- الوركر الكامل موجود في `workers/MZJ-Mersal-CRM-Worker-v1.11.4-Postgres-FULL.txt` ومجلد `mersal-worker/`.
+- لا توجد كتابة Firebase أو Firestore داخل وركر مرسال.

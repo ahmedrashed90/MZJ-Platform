@@ -25,7 +25,7 @@ const drawer = read("src/crm/components/LeadDrawer.tsx");
 const styles = read("src/styles.css");
 
 assert(unreadState.includes("leadHasUnreadMessage"), "PostgreSQL unread-state helper is missing");
-assert(!dashboard.includes("subscribeToLegacyIncomingMessages"), "dashboard must not depend on legacy live listeners");
+assert(!dashboard.includes("firestoreUnread") && !dashboard.includes("subscribeToLegacyIncomingMessages"), "dashboard must not depend on Firebase listeners");
 assert(dashboard.includes("window.setInterval") && dashboard.includes("10000"), "dashboard PostgreSQL refresh interval is missing");
 assert(dashboard.includes('label: "الرسائل غير المقروءة"'), "unread Kanban card is missing");
 assert(dashboard.indexOf('...statusGroups') < dashboard.indexOf('label: "الرسائل غير المقروءة"'), "unread Kanban card must be appended after status cards");
@@ -45,7 +45,7 @@ for (const field of [
   "last_message_direction", "last_incoming_message_at", "last_message_at", "dashboard_message_read_at",
 ]) assert(unreadServer.includes(field), `persistent unread field ${field} is missing`);
 assert(unreadServer.includes("lastUnreadMessageKey"), "unread persistence must be idempotent per message");
-assert(unreadEndpoint.includes("messageId || messagePath"), "unread idempotency must prefer the provider message id over the provider path");
+assert(unreadEndpoint.includes("messageId || messagePath"), "unread idempotency must prefer the provider message id over the Firestore path");
 assert(integrationProcessor.includes("markCrmLeadUnread"), "integration messages must use the centralized unread-state service");
 
 assert(schema.includes("car_category") && schema.includes("'الفئة'") && schema.includes("include_in_completion"), "car category migration/completion definition is missing");

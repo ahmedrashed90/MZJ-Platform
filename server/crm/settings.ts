@@ -294,17 +294,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const sourceCode = clean(body.sourceCode);
     if (!sourceCode) return response.status(400).json({ ok: false, error: "المصدر مطلوب" });
     const textSendUrl = clean(body.textSendUrl || body.sendUrl);
-    const isWhatsapp = sourceCode === "whatsapp";
-    const templateSendUrl = isWhatsapp ? textSendUrl : clean(body.templateSendUrl);
-    const mediaSendUrl = isWhatsapp ? textSendUrl : clean(body.mediaSendUrl);
+    const templateSendUrl = clean(body.templateSendUrl) || (["whatsapp", "mersal"].includes(sourceCode) ? textSendUrl : "");
+    const mediaSendUrl = ["whatsapp", "mersal"].includes(sourceCode) ? textSendUrl : clean(body.mediaSendUrl);
     const templatesSyncUrl = clean(body.templatesSyncUrl);
     const inboundWebhookUrl = clean(body.inboundWebhookUrl || body.webhookUrl);
-    if (isWhatsapp) {
-      if (!/\/send\/mersal\/?$/i.test(textSendUrl)) return response.status(400).json({ ok: false, error: "مسار إرسال واتساب يجب أن ينتهي بـ /send/mersal" });
-      if (!/\/templates\/mersal\/?$/i.test(templatesSyncUrl)) return response.status(400).json({ ok: false, error: "مسار مزامنة قوالب واتساب يجب أن ينتهي بـ /templates/mersal" });
-      if (!/\/webhook\/mersal\/?$/i.test(inboundWebhookUrl)) return response.status(400).json({ ok: false, error: "مسار استقبال واتساب يجب أن ينتهي بـ /webhook/mersal" });
-      if (!clean(body.secretName)) return response.status(400).json({ ok: false, error: "اسم متغير سر Worker مطلوب لواتساب" });
-    }
     const [row] = await sql<any[]>`
       insert into crm.integration_endpoints(
         source_code,display_name,send_url,webhook_url,text_send_url,template_send_url,media_send_url,templates_sync_url,inbound_webhook_url,

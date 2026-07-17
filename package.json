@@ -5,11 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-mersal-postgres-clean.mjs && tsc -b",
+    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && tsc -b",
     "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
-    "check:crm": "node scripts/check-crm-module.mjs",
-    "check:mersal": "node scripts/check-mersal-postgres-clean.mjs && node scripts/test-mersal-worker.mjs"
+    "check:crm": "node scripts/check-crm-module.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

@@ -84,8 +84,7 @@ export function renderCrmTemplate(content: string, conversation: ConversationCon
 
 function gatewayHeaders(secretName: string | null | undefined) {
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8", accept: "application/json" };
-  const configuredName = clean(secretName);
-  if (!configuredName) throw new Error("اسم متغير سر Worker غير مضبوط في إعدادات CRM");
+  const configuredName = clean(secretName) || "MZJ_GATEWAY_SECRET";
   const secretValue = clean(process.env[configuredName]);
   if (!secretValue) throw new Error(`متغير السر ${configuredName} غير موجود في Vercel`);
   headers["x-mzj-gateway-secret"] = secretValue;
@@ -111,8 +110,19 @@ function extractNumberedTemplateParams(templateBody: string, renderedText: strin
   return Object.keys(values).map(Number).sort((a,b)=>a-b).map((position)=>values[position]);
 }
 
+function endpointCandidates(route: DeliveryRoute) {
+  if (route === "whatsapp") return ["whatsapp", "mersal"];
+  if (route === "facebook") return ["facebook", "facebook-chat", "facebook_chat"];
+  if (route === "instagram") return ["instagram", "instagram-chat", "instagram_chat"];
+  return ["tiktok", "tiktok-chat", "tiktok_chat"];
+}
+
+function unifiedWhatsappSendUrl(endpoint: Record<string, unknown>) {
+  return clean(endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url);
+}
+
 function whatsappRouteCandidates(endpoint: Record<string, unknown>, _kind: DeliveryKind) {
-  const configured = clean(endpoint.text_send_url);
+  const configured = unifiedWhatsappSendUrl(endpoint);
   return configured ? [configured] : [];
 }
 
@@ -128,27 +138,16 @@ function endpointUrlCandidates(route: DeliveryRoute, kind: DeliveryKind, endpoin
 
 async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
   const sql = getSql();
-  const [endpoint] = await sql<any[]>`
-    select * from crm.integration_endpoints where is_active=true and source_code=${route} limit 1
+  const candidates = endpointCandidates(route);
+  const rows = await sql<any[]>`
+    select * from crm.integration_endpoints where is_active=true and source_code = any(${candidates})
+    order by case source_code when ${candidates[0]} then 0 else 1 end
   `;
+  const endpoint = rows[0];
   if (!endpoint) throw new Error(`لم يتم ضبط Endpoint فعال لقناة ${sourceLabel(route)}`);
   const urls = endpointUrlCandidates(route, kind, endpoint);
   if (!urls.length) throw new Error(`لم يتم ضبط مسار ${kind === "template" ? "القوالب" : kind === "media" ? "الوسائط" : "النص"} لقناة ${sourceLabel(route)}`);
   return { endpoint, urls };
-}
-
-function workerAccepted(httpOk: boolean, response: any) {
-  const rawStatus = normalized(response?.providerStatus || response?.status || response?.raw?.status || response?.raw?.data?.status || "");
-  const providerMessageId = clean(
-    response?.providerMessageId || response?.provider_message_id || response?.message_wamid || response?.message_id || response?.wamid ||
-    response?.raw?.message_wamid || response?.raw?.message_id || response?.raw?.wamid || response?.raw?.id ||
-    response?.raw?.data?.message_wamid || response?.raw?.data?.message_id || response?.raw?.data?.wamid || response?.raw?.data?.id || "",
-  );
-  const acceptedStatuses = new Set(["success", "sent", "delivered", "queued", "accepted", "submitted", "processing"]);
-  const failedStatuses = new Set(["error", "failed", "failure", "rejected", "invalid"]);
-  if (providerMessageId || response?.ok === true || response?.success === true || acceptedStatuses.has(rawStatus)) return true;
-  if (response?.ok === false || response?.success === false || failedStatuses.has(rawStatus)) return false;
-  return httpOk;
 }
 
 async function postToWorker(urls: string[], headers: Record<string, string>, payload: Record<string, unknown>) {
@@ -159,12 +158,32 @@ async function postToWorker(urls: string[], headers: Record<string, string>, pay
     const raw = await provider.text();
     let response: any;
     try { response = JSON.parse(raw); } catch { response = { raw }; }
-    const ok = workerAccepted(provider.ok, response);
-    return { ok, provider, response, usedUrl: url, attempts: [{ url, status: provider.status, response }] };
+    return { ok: provider.ok, provider, response, usedUrl: url, attempts: [{ url, status: provider.status, response }] };
   } catch (error: any) {
     const response = { error: error?.message || String(error) };
     return { ok: false, provider: null, response, usedUrl: url, attempts: [{ url, status: 0, response }] };
   }
+}
+
+function providerMessageIdFrom(data: any) {
+  return clean(
+    data?.provider_message_id || data?.providerMessageId || data?.message_wamid || data?.messageWamid || data?.wamid || data?.message_id ||
+    data?.raw?.provider_message_id || data?.raw?.providerMessageId || data?.raw?.message_wamid || data?.raw?.messageWamid || data?.raw?.wamid || data?.raw?.message_id ||
+    data?.raw?.data?.provider_message_id || data?.raw?.data?.providerMessageId || data?.raw?.data?.message_wamid || data?.raw?.data?.messageWamid || data?.raw?.data?.wamid || data?.raw?.data?.message_id ||
+    data?.data?.provider_message_id || data?.data?.providerMessageId || data?.data?.message_wamid || data?.data?.messageWamid || data?.data?.wamid || data?.data?.message_id || "",
+  );
+}
+
+function workerAccepted(delivery: Awaited<ReturnType<typeof postToWorker>>, data: any, providerMessageId: string) {
+  const rawStatus = normalized(data?.provider_status || data?.providerStatus || data?.status || data?.raw?.status || data?.raw?.data?.status || "");
+  const failed = ["error", "failed", "failure", "rejected", "invalid"].includes(rawStatus);
+  const succeeded = ["ok", "success", "sent", "queued", "accepted", "submitted", "delivered", "processing"].includes(rawStatus);
+  const explicitFailure = data?.ok === false || data?.success === false || data?.raw?.ok === false || data?.raw?.success === false || failed;
+  const explicitSuccess = data?.ok === true || data?.success === true || data?.raw?.ok === true || data?.raw?.success === true || succeeded;
+
+  // Mersal may return a non-2xx HTTP status after accepting the template. A real
+  // WhatsApp message id is the definitive acceptance signal and must not be shown as failed.
+  return Boolean(providerMessageId) || explicitSuccess || (Boolean(delivery.provider?.ok) && !explicitFailure);
 }
 
 type BackgroundDeliveryInput = {
@@ -182,12 +201,8 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
   try {
     const delivery = await postToWorker(input.urls, input.headers, input.payload);
     const data = delivery.response;
-    const providerStatus = delivery.ok ? "sent" : "failed";
-    const providerMessageId = clean(
-      data?.providerMessageId || data?.provider_message_id || data?.message_wamid || data?.messageWamid || data?.message_id ||
-      data?.raw?.message_wamid || data?.raw?.wamid || data?.raw?.message_id || data?.raw?.id ||
-      data?.raw?.data?.message_wamid || data?.raw?.data?.wamid || data?.raw?.data?.message_id || data?.raw?.data?.id || "",
-    );
+    const providerMessageId = providerMessageIdFrom(data);
+    const providerStatus = workerAccepted(delivery, data, providerMessageId) ? "sent" : "failed";
     const attempts = delivery.attempts.map((attempt) => ({
       url: attempt.url,
       status: attempt.status,
@@ -259,7 +274,7 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
   const payload: Record<string,unknown> = { ...basePayload(input.route, input.conversation), source: input.policy.sourceArabic, deliveryChannel: input.route, saveMessage: false };
   if (input.media) {
     const mediaUrl = createDownloadUrl(input.media.storageKey, 900);
-    return { ...payload, mediaUrl, fileUrl: mediaUrl, mediaType: input.media.mediaType, attachmentType: input.media.mediaType, fileName: input.media.fileName || "", mimeType: input.media.mimeType || "", fileSize: input.media.fileSize || null, caption: input.media.caption || input.text || "" };
+    return { ...payload, type: "media", media_url: mediaUrl, mediaUrl, file_url: mediaUrl, fileUrl: mediaUrl, media_type: input.media.mediaType, mediaType: input.media.mediaType, attachmentType: input.media.mediaType, file_name: input.media.fileName || "", fileName: input.media.fileName || "", mimeType: input.media.mimeType || "", fileSize: input.media.fileSize || null, caption: input.media.caption || input.text || "" };
   }
   if (input.template) {
     const templateName = clean(input.template.name || input.template.external_id);
@@ -267,6 +282,7 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
     const params = extractNumberedTemplateParams(clean(input.template.content), input.text);
     return {
       ...payload,
+      type: "template",
       template_name: templateName,
       template_language: clean(input.template.language_code) || "ar",
       params,
@@ -274,7 +290,7 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
       text: input.text,
     };
   }
-  return { ...payload, message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
+  return { ...payload, type: "text", message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
 
 async function loadConversation(conversationId: string): Promise<ConversationContext | null> {
@@ -395,6 +411,7 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
     ? {
         phone,
         waId: phone,
+        type: "template",
         template_name: templateName,
         template_language: clean(input.template.language_code) || "ar",
         params: templateParams,
@@ -402,7 +419,7 @@ export async function deliverDirectWhatsapp(input: { phone: string; text: string
         text: input.text,
         agentAuto: true,
       }
-    : { phone, waId: phone, text: input.text, message: input.text, agentAuto: true };
+    : { phone, waId: phone, type: "text", text: input.text, message: input.text, agentAuto: true };
   const workerPayload = { ...payload, jobId, idempotencyKey: key, reason: input.reason || "automation" };
 
   const [job] = await sql<any[]>`

@@ -567,7 +567,7 @@ set send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(templa
     text_send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
     template_send_url=coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')),
     updated_at=now()
-where source_code='whatsapp'
+where source_code in ('whatsapp','mersal')
   and coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) is not null
   and (
     send_url is distinct from coalesce(nullif(text_send_url,''),nullif(send_url,''),nullif(template_send_url,'')) or

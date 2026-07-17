@@ -139,7 +139,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations
-      where lead_id=${openRequest.lead_id}::uuid and channel_code='whatsapp'
+      where lead_id=${openRequest.lead_id}::uuid and channel_code in ('whatsapp','mersal')
       order by last_message_at desc nulls last,updated_at desc limit 1
     `;
   }
@@ -149,7 +149,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
       from crm.conversations c
       join crm.leads l on l.id=c.lead_id
-      where c.channel_code='whatsapp'
+      where c.channel_code in ('whatsapp','mersal')
         and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
       order by c.last_message_at desc nulls last,c.updated_at desc limit 1
     `;
@@ -159,7 +159,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations
-      where contact_id=${contact.id}::uuid and channel_code='whatsapp'
+      where contact_id=${contact.id}::uuid and channel_code in ('whatsapp','mersal')
       order by last_message_at desc nulls last,updated_at desc limit 1
     `;
   }
@@ -179,7 +179,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,last_customer_message_at,metadata
       ) values(
         ${identity.conversationExternalId},${openRequest?.lead_id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
-        ${text || null},${direction === "in" ? 1 : 0},${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
+        ${text || null},0,${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
         ${openRequest?.assigned_to || null}::uuid,${openRequest?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${identity.pageId || null},
         ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}
       ) returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -193,7 +193,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         customer_name=coalesce(nullif(${identity.displayName},''),customer_name),
         participant_id=coalesce(nullif(${identity.participant || identity.externalId},''),participant_id),
         preview_text=coalesce(nullif(${text},''),preview_text),
-        unread_count=unread_count+${direction === "in" ? 1 : 0},
+        unread_count=unread_count,
         last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
         service_key=coalesce(${openRequest?.service_key || null},service_key),
         department_code=coalesce(${openRequest?.department_code || null},department_code),
@@ -247,8 +247,18 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
   }
 
-  if (conversation.lead_id && direction === "in") {
-    await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
+  if (direction === "in") {
+    if (conversation.lead_id) {
+      await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
+    } else {
+      await sql`
+        update crm.conversations set
+          unread_count=case when coalesce(metadata->>'lastUnreadMessageKey','')=${providerMessageId} then greatest(1,unread_count) else unread_count+1 end,
+          metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${providerMessageId}::text),true),
+          updated_at=now()
+        where id=${conversation.id}::uuid
+      `;
+    }
   }
 
   const automation = await publishAutomationEvent({

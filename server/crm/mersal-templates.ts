@@ -39,9 +39,8 @@ function componentBody(value: unknown) {
 }
 
 function workerHeaders(secretName: string) {
-  if (!secretName) throw new Error("اسم متغير سر Worker غير مضبوط في إعدادات CRM");
-  const secret = clean(process.env[secretName]);
-  if (!secret) throw new Error(`${secretName} غير موجود في Environment Variables`);
+  const secret = clean(process.env[secretName] || process.env.MZJ_GATEWAY_SECRET);
+  if (!secret) throw new Error(`${secretName || "MZJ_GATEWAY_SECRET"} غير موجود في Environment Variables`);
   return {
     accept: "application/json",
     "content-type": "application/json; charset=utf-8",
@@ -49,20 +48,29 @@ function workerHeaders(secretName: string) {
   };
 }
 
+function templateUrlFromSendUrl(sendUrl: string) {
+  const value = clean(sendUrl).replace(/\/+$/, "");
+  return /\/send\/mersal$/i.test(value) ? value.replace(/\/send\/mersal$/i, "/templates/mersal") : "";
+}
+
 async function resolveWorkerConfig(sql: ReturnType<typeof getSql>): Promise<WorkerConfig> {
   const [endpoint] = await sql<any[]>`
-    select source_code,templates_sync_url,secret_name
+    select source_code,send_url,text_send_url,templates_sync_url,secret_name
     from crm.integration_endpoints
     where source_code='whatsapp' and is_active=true
     limit 1
   `;
 
-  const url = clean(endpoint?.templates_sync_url);
-  if (!url) throw new Error("أضف مسار /templates/mersal في إعدادات واتساب قبل مزامنة القوالب");
+  const url = clean(endpoint?.templates_sync_url)
+    || templateUrlFromSendUrl(clean(endpoint?.text_send_url || endpoint?.send_url));
+
+  if (!url) {
+    throw new Error("أضف مسار مزامنة القوالب أو مسار إرسال واتساب في إعدادات CRM قبل مزامنة القوالب");
+  }
 
   return {
     url,
-    secretName: clean(endpoint?.secret_name),
+    secretName: clean(endpoint?.secret_name) || "MZJ_GATEWAY_SECRET",
   };
 }
 
