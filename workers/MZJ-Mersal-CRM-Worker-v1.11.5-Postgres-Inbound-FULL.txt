@@ -28,8 +28,9 @@
  * unread state, assignments, and automations are owned by PostgreSQL in the platform.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.11.4";
+const VERSION = "mzj-mersal-postgres-v1.11.5";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
+const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
 const SUCCESS_STATUSES = new Set(["ok", "success", "sent", "queued", "accepted", "submitted", "delivered", "processing"]);
 
@@ -480,7 +481,7 @@ async function buildPlatformInboundPayload(event, env) {
 }
 
 async function forwardToPlatform(payload, env) {
-  const endpoint = clean(env?.PLATFORM_INBOUND_URL);
+  const endpoint = clean(env?.PLATFORM_INBOUND_URL) || DEFAULT_PLATFORM_INBOUND_URL;
   const secret = clean(env?.MZJ_GATEWAY_SECRET);
   if (!endpoint) return { ok: false, status: 0, error: "Missing PLATFORM_INBOUND_URL" };
   if (!secret) return { ok: false, status: 0, error: "Missing MZJ_GATEWAY_SECRET" };

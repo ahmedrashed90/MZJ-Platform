@@ -149,7 +149,7 @@
 
 ### WhatsApp / Mersal Worker الحالي
 
-استخدم الوركر الكامل داخل `workers/MZJ-Mersal-CRM-Worker-v1.11.4-Postgres-FULL.txt`.
+استخدم الوركر الكامل داخل `workers/MZJ-Mersal-CRM-Worker-v1.11.5-Postgres-Inbound-FULL.txt`.
 
 المسارات المعتمدة فقط:
 
@@ -184,5 +184,15 @@
 - القالب الذي تقبله مرسال ويحمل `message_wamid` يظهر «تم الإرسال» حتى لو رجع HTTP غير متوقع.
 - النص الحر يرسل من نفس المسار `/send/mersal` بعقد واضح `type=text` بدون خلطه بالقالب.
 - الرد القادم من الهاتف عبر `/webhook/mersal` ينتقل إلى `/api/integrations/whatsapp` ويتخزن في PostgreSQL داخل نفس محادثة العميل.
-- الوركر الكامل موجود في `workers/MZJ-Mersal-CRM-Worker-v1.11.4-Postgres-FULL.txt` ومجلد `mersal-worker/`.
+- الوركر الكامل موجود في `workers/MZJ-Mersal-CRM-Worker-v1.11.5-Postgres-Inbound-FULL.txt` ومجلد `mersal-worker/`.
 - لا توجد كتابة Firebase أو Firestore داخل وركر مرسال.
+
+
+## v1.11.5 — إظهار رد العميل داخل الشات
+
+- `/webhook/mersal` لا يكتب رسائل العميل في Firebase أو Firestore.
+- كل رسالة واردة تُرسل مباشرة إلى `/api/integrations/whatsapp`.
+- المنصة تحفظ الرسالة في PostgreSQL داخل `crm.messages` وتربطها بالمحادثة الموجودة حسب رقم العميل.
+- لو PostgreSQL لم يقبل الرسالة، الوركر يعيد HTTP 502 حتى لا تضيع الرسالة بصمت.
+- رابط المنصة الافتراضي داخل الوركر هو `https://mzj-platform.vercel.app/api/integrations/whatsapp`.
+- يجب أن تكون قيمة `MZJ_GATEWAY_SECRET` واحدة في Vercel وCloudflare Worker.
