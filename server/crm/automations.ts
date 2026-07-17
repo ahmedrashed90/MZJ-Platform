@@ -2,7 +2,7 @@ import type { VercelRequest,VercelResponse } from "@vercel/node";
 import crypto from "node:crypto";
 import { audit,clean,isCrmManager,parseBody,requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
-import { previewAutomationRule,processDueAutomationJobs,publishAutomationEvent } from "../_crm-automation.js";
+import { previewAutomationRule,processDueAutomationJobs,publishAutomationEvent,retryAutomationJobSchedule } from "../_crm-automation.js";
 
 function array(value:unknown){return Array.isArray(value)?value:[];}
 export default async function handler(request:VercelRequest,response:VercelResponse){
@@ -19,6 +19,7 @@ export default async function handler(request:VercelRequest,response:VercelRespo
   const body=parseBody(request),action=clean(body.action),section=clean(body.section);
   if(request.method==="POST"&&action==="preview")return response.status(200).json({ok:true,rows:await previewAutomationRule({ruleId:clean(body.ruleId)||undefined,eventType:clean(body.eventType)||undefined,payload:body.payload||{},conversationId:clean(body.conversationId)||undefined})});
   if(request.method==="POST"&&action==="process_due")return response.status(200).json({ok:true,...await processDueAutomationJobs(100)});
+  if(request.method==="POST"&&action==="retry_schedule")return response.status(200).json(await retryAutomationJobSchedule(clean(body.jobId||body.id)));
   if(request.method==="POST"&&action==="test_event")return response.status(200).json(await publishAutomationEvent({eventKey:`manual-test:${crypto.randomUUID()}`,eventType:clean(body.eventType),source:"manual_test",conversationId:clean(body.conversationId)||null,leadId:clean(body.leadId)||null,payload:body.payload||{},actor:user}));
   if(section==="settings"&&["PUT","PATCH","POST"].includes(request.method||"")){
     const serviceOptions=array(body.serviceOptions).map((item:any)=>({key:clean(item.key),label:clean(item.label),aliases:array(item.aliases).map(clean).filter(Boolean)})).filter((item:any)=>item.key&&item.label);

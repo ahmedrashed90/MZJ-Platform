@@ -98,6 +98,74 @@ async function classifyFromMessage(event:any,context:any,actor?:SessionUser|null
 
 function jobKey(type:string,conversationId:string,messageId:string,attempt:number) { return `${type}:${conversationId}:${messageId}:${attempt}`; }
 
+type AutomationJobRow = {
+  id:string;
+  idempotency_key:string;
+  job_type:string;
+  status:string;
+  due_at:string|Date;
+  scheduler_status?:string|null;
+  processed_at?:string|Date|null;
+  [key:string]:unknown;
+};
+
+function schedulerUrl() { return clean(process.env.AUTOMATION_SCHEDULER_URL).replace(/\/+$/,""); }
+function schedulerSecret() { return clean(process.env.AUTOMATION_SCHEDULER_SECRET); }
+
+async function scheduleAutomationWakeup(job:AutomationJobRow) {
+  if(!job?.id) throw new Error("automation_job_id_missing");
+  if(job.status!=="queued") return {skipped:true,reason:"job_not_queued"};
+  const base=schedulerUrl();
+  const secret=schedulerSecret();
+  if(!base||!secret) {
+    const sql=getSql();
+    await sql`update crm.automation_jobs set scheduler_status='failed',scheduler_error='AUTOMATION_SCHEDULER_URL/AUTOMATION_SCHEDULER_SECRET missing',updated_at=now() where id=${job.id}::uuid`;
+    throw new Error("AUTOMATION_SCHEDULER_URL و AUTOMATION_SCHEDULER_SECRET مطلوبان لتشغيل المهام المؤجلة بدون Vercel Cron");
+  }
+  const dueAt=new Date(job.due_at);
+  if(Number.isNaN(dueAt.getTime())) throw new Error("automation_job_due_at_invalid");
+  const payload={jobId:job.id,dueAt:dueAt.toISOString(),eventId:`automation-job:${job.id}:${dueAt.toISOString()}`};
+  try {
+    const response=await fetch(`${base}/schedule`,{
+      method:"POST",
+      headers:{"content-type":"application/json","x-mzj-automation-secret":secret},
+      body:JSON.stringify(payload),
+    });
+    const raw=await response.text();
+    let data:any;try{data=JSON.parse(raw)}catch{data={raw}}
+    if(!response.ok||data?.ok===false) throw new Error(clean(data?.error||data?.message||raw)||`scheduler_http_${response.status}`);
+    const sql=getSql();
+    await sql`update crm.automation_jobs set scheduler_status='scheduled',scheduler_message_id=${clean(data?.messageId||data?.eventId)||payload.eventId},scheduler_error=null,scheduled_at=now(),updated_at=now() where id=${job.id}::uuid`;
+    return {ok:true,eventId:data?.eventId||payload.eventId,dueAt:payload.dueAt};
+  } catch(error:any) {
+    const message=error?.message||String(error);
+    const sql=getSql();
+    await sql`update crm.automation_jobs set scheduler_status='failed',scheduler_error=${message},updated_at=now() where id=${job.id}::uuid`;
+    throw error;
+  }
+}
+
+async function loadAutomationJob(jobId:string) {
+  const sql=getSql();
+  const [job]=await sql<AutomationJobRow[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.automation_jobs where id=${jobId}::uuid limit 1`;
+  return job||null;
+}
+
+async function createAndScheduleJob(input:{
+  idempotencyKey:string;jobType:string;contactId?:string|null;conversationId?:string|null;serviceRequestId?:string|null;leadId?:string|null;triggerMessageId?:string|null;attempt?:number;delaySeconds:number;payload?:Record<string,unknown>;
+}) {
+  const sql=getSql();
+  const delay=Math.max(60,Math.round(Number(input.delaySeconds||60)));
+  const [job]=await sql<AutomationJobRow[]>`
+    insert into crm.automation_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload,scheduler_status)
+    values (${input.idempotencyKey},${input.jobType},${input.contactId||null}::uuid,${input.conversationId||null}::uuid,${input.serviceRequestId||null}::uuid,${input.leadId||null}::uuid,${input.triggerMessageId||null}::uuid,'queued',${Math.max(1,Number(input.attempt||1))},now()+(${delay}||' seconds')::interval,${sql.json((input.payload||{}) as any)},'pending')
+    on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key
+    returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text
+  `;
+  if(job?.status==="queued"&&!job.processed_at&&job.scheduler_status!=="scheduled") await scheduleAutomationWakeup(job);
+  return job;
+}
+
 async function scheduleInboxAgent(event:any,context:any) {
   const sql=getSql();
   const conversationId=clean(event.conversation_id); const messageId=clean(event.payload?.messageId||event.payload?.message_id);
@@ -111,20 +179,25 @@ async function scheduleInboxAgent(event:any,context:any) {
   }
   const delay=Math.max(60,Number(settings.first_delay_seconds||240));
   const idempotency=jobKey("inbox_agent",conversationId,messageId,1);
-  await sql`
-    insert into crm.automation_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload)
-    values (${idempotency},'inbox_agent_check',${context.conversation?.contact_id||event.contact_id||null}::uuid,${conversationId}::uuid,
-      ${context.request?.id||event.service_request_id||null}::uuid,${context.request?.lead_id||event.lead_id||null}::uuid,${messageId}::uuid,'queued',1,now()+(${delay}||' seconds')::interval,
-      ${sql.json({customerMessageAt:event.payload?.createdAt||event.payload?.receivedAt||new Date().toISOString(),sourceEventKey:event.event_key})})
-    on conflict(idempotency_key) do nothing
-  `;
-  return {ok:true,dueInSeconds:delay};
+  const job=await createAndScheduleJob({
+    idempotencyKey:idempotency,
+    jobType:"inbox_agent_check",
+    contactId:context.conversation?.contact_id||event.contact_id||null,
+    conversationId,
+    serviceRequestId:context.request?.id||event.service_request_id||null,
+    leadId:context.request?.lead_id||event.lead_id||null,
+    triggerMessageId:messageId,
+    attempt:1,
+    delaySeconds:delay,
+    payload:{customerMessageAt:event.payload?.createdAt||event.payload?.receivedAt||new Date().toISOString(),sourceEventKey:event.event_key},
+  });
+  return {ok:true,jobId:job?.id,dueInSeconds:delay};
 }
 
 async function cancelInboxAgent(event:any) {
   if(!event.conversation_id) return {skipped:true,reason:"no_conversation"};
   const sql=getSql();
-  const rows=await sql<any[]>`update crm.automation_jobs set status='cancelled',processed_at=now(),updated_at=now() where conversation_id=${event.conversation_id}::uuid and job_type like 'inbox_agent%' and status='queued' returning id::text`;
+  const rows=await sql<any[]>`update crm.automation_jobs set status='cancelled',scheduler_status='cancelled',processed_at=now(),updated_at=now() where conversation_id=${event.conversation_id}::uuid and job_type like 'inbox_agent%' and status='queued' returning id::text`;
   return {ok:true,cancelled:rows.length};
 }
 
@@ -227,8 +300,13 @@ function renderAgentAlert(template:any,fallback:string,conversation:any) {
   return raw.replace(/{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g,(match:string,key:string)=>values[key]||match);
 }
 
-async function rescheduleJob(job:any,dueSeconds:number,payload:any={}) { const sql=getSql(); await sql`update crm.automation_jobs set status='queued',due_at=now()+(${Math.max(60,dueSeconds)}||' seconds')::interval,payload=coalesce(payload,'{}'::jsonb)||${sql.json(payload)},updated_at=now() where id=${job.id}::uuid`; }
-async function finishJob(job:any,status:string,error?:string) { const sql=getSql(); await sql`update crm.automation_jobs set status=${status},error_message=${error||null},processed_at=now(),updated_at=now() where id=${job.id}::uuid`; }
+async function rescheduleJob(job:any,dueSeconds:number,payload:any={}) {
+  const sql=getSql();
+  const [updated]=await sql<AutomationJobRow[]>`update crm.automation_jobs set status='queued',scheduler_status='pending',scheduler_error=null,due_at=now()+(${Math.max(60,dueSeconds)}||' seconds')::interval,payload=coalesce(payload,'{}'::jsonb)||${sql.json(payload)},updated_at=now() where id=${job.id}::uuid returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text`;
+  if(updated) await scheduleAutomationWakeup(updated);
+}
+
+async function finishJob(job:any,status:string,error?:string) { const sql=getSql(); await sql`update crm.automation_jobs set status=${status},scheduler_status=${status},error_message=${error||null},processed_at=now(),updated_at=now() where id=${job.id}::uuid`; }
 
 async function processInboxAgentJob(job:any) {
   const sql=getSql(); const [settings]=await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`; const conversation=await conversationForJob(job);
@@ -252,7 +330,7 @@ async function processInboxAgentJob(job:any) {
     await addAgentLog({conversationId:conversation.id,leadId:conversation.lead_id,action:"bot_reply",reason:"no_human_reply_after_delay",messageText:text,customerName:conversation.lead_customer_name||conversation.customer_name,customerPhone:conversation.phone||conversation.phone_normalized,branchCode:conversation.request_branch_code||conversation.branch_code,assignedName:conversation.assigned_name,metadata:{attempt,providerStatus:result.providerStatus}});
     await finishJob(job,"processed");
     const delay=Math.max(60,Number(settings.between_replies_seconds||120)); const nextAttempt=attempt+1; const key=jobKey("inbox_agent",conversation.id,job.trigger_message_id,nextAttempt);
-    await sql`insert into crm.automation_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload) values(${key},'inbox_agent_check',${conversation.contact_id||null}::uuid,${conversation.id}::uuid,${conversation.service_request_id||null}::uuid,${conversation.lead_id||null}::uuid,${job.trigger_message_id||null}::uuid,'queued',${nextAttempt},now()+(${delay}||' seconds')::interval,${sql.json(job.payload||{})}) on conflict(idempotency_key) do nothing`;
+    await createAndScheduleJob({idempotencyKey:key,jobType:"inbox_agent_check",contactId:conversation.contact_id||null,conversationId:conversation.id,serviceRequestId:conversation.service_request_id||null,leadId:conversation.lead_id||null,triggerMessageId:job.trigger_message_id||null,attempt:nextAttempt,delaySeconds:delay,payload:job.payload||{}});
     return;
   }
   if(settings.escalate_to_branch_manager!==false) {
@@ -270,7 +348,7 @@ async function processInboxAgentJob(job:any) {
   await finishJob(job,"processed");
   if(settings.escalate_to_sales_manager!==false&&normalizePhone(settings.sales_manager_phone)) {
     const delay=Math.max(60,Number(settings.sales_manager_delay_seconds||300));
-    await sql`insert into crm.automation_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload) values(${`inbox-sales-escalation:${job.trigger_message_id}`},'inbox_agent_sales_escalation',${conversation.contact_id||null}::uuid,${conversation.id}::uuid,${conversation.service_request_id||null}::uuid,${conversation.lead_id||null}::uuid,${job.trigger_message_id||null}::uuid,'queued',1,now()+(${delay}||' seconds')::interval,${sql.json(job.payload||{})}) on conflict(idempotency_key) do nothing`;
+    await createAndScheduleJob({idempotencyKey:`inbox-sales-escalation:${job.trigger_message_id}`,jobType:"inbox_agent_sales_escalation",contactId:conversation.contact_id||null,conversationId:conversation.id,serviceRequestId:conversation.service_request_id||null,leadId:conversation.lead_id||null,triggerMessageId:job.trigger_message_id||null,attempt:1,delaySeconds:delay,payload:job.payload||{}});
   }
 }
 
@@ -287,16 +365,47 @@ async function processSalesEscalation(job:any) {
   await finishJob(job,"processed");
 }
 
+async function executeAutomationJob(job:any) {
+  const sql=getSql();
+  const claimed=await sql<any[]>`update crm.automation_jobs set status='processing',scheduler_status='processing',updated_at=now() where id=${job.id}::uuid and status='queued' returning id::text`;
+  if(!claimed.length) return {id:job.id,status:"skipped",reason:"already_claimed_or_finished"};
+  try {
+    if(job.job_type==="inbox_agent_check") await processInboxAgentJob(job);
+    else if(job.job_type==="inbox_agent_sales_escalation") await processSalesEscalation(job);
+    else await finishJob(job,"skipped","unknown_job_type");
+    return {id:job.id,status:"ok"};
+  } catch(error:any) {
+    await finishJob(job,"failed",error?.message||String(error));
+    return {id:job.id,status:"failed",error:error?.message||String(error)};
+  }
+}
+
+export async function processAutomationJobById(jobId:string) {
+  const job=await loadAutomationJob(clean(jobId));
+  if(!job) return {processed:0,status:"skipped",reason:"job_not_found"};
+  if(job.status!=="queued") return {processed:0,status:"skipped",reason:`job_${job.status}`};
+  const dueAt=new Date(job.due_at).getTime();
+  if(Number.isFinite(dueAt)&&dueAt>Date.now()+1500) {
+    await scheduleAutomationWakeup({...job,scheduler_status:"pending"});
+    return {processed:0,status:"rescheduled",reason:"job_not_due",dueAt:new Date(dueAt).toISOString()};
+  }
+  return {processed:1,result:await executeAutomationJob(job)};
+}
+
 export async function processDueAutomationJobs(limit=50) {
   const sql=getSql();
   const jobs=await sql<any[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.automation_jobs where status='queued' and due_at<=now() order by due_at for update skip locked limit ${Math.max(1,Math.min(200,limit))}`;
   const results:any[]=[];
-  for(const job of jobs) {
-    await sql`update crm.automation_jobs set status='processing',updated_at=now() where id=${job.id}::uuid and status='queued'`;
-    try { if(job.job_type==="inbox_agent_check") await processInboxAgentJob(job); else if(job.job_type==="inbox_agent_sales_escalation") await processSalesEscalation(job); else await finishJob(job,"skipped","unknown_job_type"); results.push({id:job.id,status:"ok"}); }
-    catch(error:any){await finishJob(job,"failed",error?.message||String(error));results.push({id:job.id,status:"failed",error:error?.message||String(error)});}
-  }
+  for(const job of jobs) results.push(await executeAutomationJob(job));
   return {processed:jobs.length,results};
+}
+
+export async function retryAutomationJobSchedule(jobId:string) {
+  const job=await loadAutomationJob(clean(jobId));
+  if(!job) return {ok:false,reason:"job_not_found"};
+  if(job.status!=="queued") return {ok:false,reason:`job_${job.status}`};
+  const result=await scheduleAutomationWakeup({...job,scheduler_status:"pending"});
+  return {ok:true,result};
 }
 
 export async function previewAutomationRule(input:{ruleId?:string;eventType?:string;payload?:Record<string,unknown>;conversationId?:string}) {

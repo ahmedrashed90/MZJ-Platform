@@ -4,12 +4,6 @@
   "installCommand": "npm ci --registry=https://registry.npmjs.org/",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "crons": [
-    {
-      "path": "/api/cron/automation",
-      "schedule": "* * * * *"
-    }
-  ],
   "rewrites": [
     {
       "source": "/api/:path*",

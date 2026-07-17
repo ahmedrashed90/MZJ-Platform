@@ -136,7 +136,7 @@
 
 يمكن استخدام `MERSAL_WORKER_URL` أو `MERSAL_WORKER_TEMPLATES_URL` كـ override اختياري في Vercel، لكنهما غير مطلوبين عند ضبط Send URL.
 
-## v1.9.0 - Unified CRM automation core and transport-only channel Workers
+## v1.9.1 - Unified CRM automation core and transport-only channel Workers
 
 - أُعيد بناء دورة المحادثة حول `Contact` واحد دائمًا، مع `Service Request` مستقل لكل طلب كاش أو تمويل أو خدمة عملاء.
 - الرسالة الأولى تُحفظ كجهة اتصال ومحادثة ورسالة فقط، ولا يتم إنشاء ليد أو توزيعه قبل تحديد الخدمة، إلا للمصادر الموثوقة المعروفة مسبقًا مثل حاسبة التقسيط.
@@ -171,3 +171,17 @@ Cloudflare secrets / variables المطلوبة:
 - Health: `/health`
 
 تظل المسارات القديمة `/webhook/mersal` و`/send/mersal` و`/templates/mersal` متاحة مؤقتًا أثناء الانتقال فقط.
+
+
+## Automation scheduling without Vercel Cron
+
+هذه النسخة لا تستخدم Vercel Cron. المهام المؤجلة يتم تسجيلها داخل PostgreSQL ثم إرسال وقت الاستيقاظ إلى Cloudflare Queue عبر Worker مستقل. عند حلول الموعد، يستدعي Worker المسار الداخلي `/api/internal/automation-job`، والمنصة نفسها هي التي تفحص الشروط وتنفذ منطق الأوتوميشن.
+
+متغيرات Vercel المطلوبة:
+- `AUTOMATION_SCHEDULER_URL`
+- `AUTOMATION_SCHEDULER_SECRET`
+
+متغيرات Worker المجدول:
+- `PLATFORM_AUTOMATION_CALLBACK_URL`
+- Secret باسم `AUTOMATION_SCHEDULER_SECRET`
+- Queue binding باسم `AUTOMATION_QUEUE`

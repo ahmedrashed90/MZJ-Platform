@@ -27,7 +27,7 @@ import crmAutomationsHandler from "../server/crm/automations.js";
 import crmInboxHandler from "../server/crm/inbox.js";
 import crmOwnershipHandler from "../server/crm/ownership.js";
 import crmMediaHandler from "../server/crm/media.js";
-import cronAutomationHandler from "../server/cron/automation.js";
+import internalAutomationJobHandler from "../server/internal/automation-job.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -58,7 +58,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/ownership", crmOwnershipHandler],
   ["crm/media", crmMediaHandler],
   ["integrations/media", integrationMediaHandler],
-  ["cron/automation", cronAutomationHandler],
+  ["internal/automation-job", internalAutomationJobHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -78,7 +78,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.9.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.9.1" });
   }
 
   if (route === "integrations/media") {

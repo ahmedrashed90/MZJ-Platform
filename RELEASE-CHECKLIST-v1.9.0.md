@@ -3,7 +3,7 @@
 ## قبل الرفع
 
 - احتفظ بنسخة قاعدة بيانات قبل تطبيق Migration v1.9.
-- أضف في Vercel: `DATABASE_URL`, `MZJ_SETUP_KEY`, `MZJ_GATEWAY_SECRET`, `CRON_SECRET`.
+- أضف في Vercel: `DATABASE_URL`, `MZJ_SETUP_KEY`, `MZJ_GATEWAY_SECRET`, `AUTOMATION_SCHEDULER_SECRET`.
 - أضف بيانات R2 الخاصة: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 - لا تضف `MERSAL_TOKEN` داخل Vercel.
 

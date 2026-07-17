@@ -746,7 +746,12 @@ create table if not exists crm.automation_jobs (
   updated_at timestamptz not null default now(),
   processed_at timestamptz
 );
+alter table crm.automation_jobs add column if not exists scheduler_status text not null default 'pending';
+alter table crm.automation_jobs add column if not exists scheduler_message_id text;
+alter table crm.automation_jobs add column if not exists scheduler_error text;
+alter table crm.automation_jobs add column if not exists scheduled_at timestamptz;
 create index if not exists crm_automation_jobs_due_idx on crm.automation_jobs(status,due_at);
+create index if not exists crm_automation_jobs_scheduler_idx on crm.automation_jobs(scheduler_status,status,due_at);
 
 insert into crm.automation_rules(rule_key,name,description,trigger_event,priority,conditions,actions,stop_after_match,max_runs_per_entity) values
 ('service-selection-new-conversation','اختيار الخدمة للعميل الجديد','يرسل رسالة اختيار الخدمة مرة واحدة عندما لا يوجد طلب مفتوح.','message.received',10,
@@ -809,7 +814,7 @@ update crm.conversations c set contact_id=l.contact_id,service_request_id=l.curr
   classification_state=case when l.current_request_id is null then 'new' else 'classified' end
 from crm.leads l where c.lead_id=l.id and c.contact_id is null;
 
-insert into core.schema_migrations(version) values('crm-automation-core-v1.9') on conflict(version) do nothing;
+insert into core.schema_migrations(version) values('crm-automation-core-v1.9.1-queue') on conflict(version) do nothing;
 `;
 
 export async function ensureCrmSchema() {
@@ -839,7 +844,7 @@ export async function ensureCrmSchema() {
       `;
       if (!referenceV17Migration) await runSqlScript(CRM_REFERENCE_V17_SQL);
       const [automationV19Migration] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-automation-core-v1.9'
+        select version from core.schema_migrations where version = 'crm-automation-core-v1.9.1-queue'
       `;
       if (!automationV19Migration) await runSqlScript(CRM_AUTOMATION_CORE_V19_SQL);
     })().catch((error) => {
