@@ -17,33 +17,6 @@ function bool(value: unknown) {
   return value === true || value === 1 || ["true", "1", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
-function isProtectedWhatsappMediaUrl(url: unknown) {
-  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(clean(url));
-}
-
-function fileNameFromUrl(url: unknown) {
-  try { return decodeURIComponent(new URL(clean(url)).pathname.split("/").pop() || ""); }
-  catch { return ""; }
-}
-
-function normalizedMediaType(rawValue: unknown, mimeValue: unknown, fileNameValue: unknown, urlValue: unknown) {
-  const mime = clean(mimeValue).toLowerCase();
-  const name = clean(fileNameValue).toLowerCase().split("?")[0];
-  const url = clean(urlValue).toLowerCase().split("?")[0];
-  const raw = clean(rawValue).toLowerCase();
-  if (/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/.test(name) || /\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/.test(url)) return "document";
-  if (/\.(mp3|ogg|opus|wav|m4a|aac)$/.test(name) || /\.(mp3|ogg|opus|wav|m4a|aac)$/.test(url)) return "audio";
-  if (/\.(mp4|mov|webm|mkv)$/.test(name) || /\.(mp4|mov|webm|mkv)$/.test(url)) return "video";
-  if (/\.(jpe?g|png|webp|gif|bmp|heic)$/.test(name) || /\.(jpe?g|png|webp|gif|bmp|heic)$/.test(url)) return "image";
-  if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("audio/")) return "audio";
-  if (mime.startsWith("video/")) return "video";
-  if (mime === "application/pdf" || mime.includes("word") || mime.includes("document") || mime.includes("sheet") || mime.includes("presentation")) return "document";
-  if (raw === "file") return "document";
-  if (raw === "voice" || raw === "ptt") return "audio";
-  return raw;
-}
-
 function nestedWhatsapp(payload: any) {
   return payload?.entry?.[0]?.changes?.[0]?.value || {};
 }
@@ -72,19 +45,24 @@ function dateValue(payload: any) {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString();
 }
 
+function isTemporaryProtectedMediaUrl(value: unknown) {
+  const url = first(value);
+  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(url);
+}
+
 function mediaData(payload: any) {
   const msg = whatsappMessage(payload);
   const rawType = first(payload.mediaType, payload.media_type, payload.attachmentType, payload.attachment_type, payload.messageType, payload.message_type, msg?.type).toLowerCase();
-  const rawNormalized = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
-  const nested = msg?.[rawType] || msg?.[rawNormalized];
+  const type = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
+  const nested = msg?.[rawType] || msg?.[type];
   const storageKey = first(payload.storageKey, payload.storage_key);
-  const rawUrl = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
-  const url = isProtectedWhatsappMediaUrl(rawUrl) ? "" : rawUrl;
+  const candidateUrl = first(payload.permanentUrl, payload.permanent_url, payload.platformMediaUrl, payload.platform_media_url, payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
+  const url = isTemporaryProtectedMediaUrl(candidateUrl) ? "" : candidateUrl;
+  const fileName = first(payload.fileName, payload.file_name, nested?.filename);
   const mimeType = first(payload.mimeType, payload.mime_type, nested?.mime_type);
-  const fileName = first(payload.fileName, payload.file_name, nested?.filename, fileNameFromUrl(url));
-  const type = normalizedMediaType(rawNormalized, mimeType, fileName, url);
   const fileSize = Number(payload.fileSize ?? payload.file_size ?? 0) || null;
-  const hasAttachment = bool(payload.hasAttachment) || Boolean(storageKey || rawUrl || nested?.id || ["image", "audio", "video", "document", "sticker"].includes(type));
+  const mediaId = first(payload.mediaId, payload.media_id, nested?.id);
+  const hasAttachment = bool(payload.hasAttachment) || Boolean(storageKey || url || mediaId || ["image", "audio", "video", "document", "sticker"].includes(type));
   return {
     hasAttachment,
     type: type || (hasAttachment ? "document" : ""),
@@ -95,7 +73,8 @@ function mediaData(payload: any) {
     fileSize,
     caption: first(payload.caption, nested?.caption),
     isSensitive: bool(payload.isSensitive || payload.is_sensitive),
-    mediaId: first(payload.mediaId, payload.media_id, nested?.id),
+    mediaId,
+    mediaAssetId: first(payload.mediaAssetId, payload.media_asset_id, payload.assetId, payload.asset_id),
   };
 }
 
@@ -174,6 +153,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       where l.is_deleted=false
         and right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g'),9)=right(${identity.phoneNormalized},9)
       order by
+        (regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\\D','','g')=${identity.phoneNormalized}) desc,
         (l.current_request_id is not null) desc,
         exists(
           select 1 from crm.conversations c
@@ -298,10 +278,28 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     if (direction === "in") {
       [existingMessage] = await sql<any[]>`
         update crm.messages
-        set direction='in',provider_status='received',sender_type='customer'
+        set direction='in',provider_status='received',sender_type='customer',
+            message_type=case when ${media.hasAttachment} then ${media.type || "document"} else message_type end,
+            body=coalesce(nullif(${text},''),body),
+            attachment_url=coalesce(nullif(${media.url},''),attachment_url),
+            attachment_type=coalesce(nullif(${media.type},''),attachment_type),
+            file_name=coalesce(nullif(${media.fileName},''),file_name),
+            mime_type=coalesce(nullif(${media.mimeType},''),mime_type),
+            file_size=coalesce(${media.fileSize},file_size),
+            storage_key=coalesce(nullif(${media.storageKey},''),storage_key),
+            media_status=case when ${Boolean(media.storageKey)} then 'ready' else media_status end,
+            caption=coalesce(nullif(${media.caption},''),caption),
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ hasAttachment: media.hasAttachment, attachmentType: media.type || null, mediaType: media.type || null, mediaUrl: media.url || null, fileUrl: media.url || null, attachmentUrl: media.url || null, storageKey: media.storageKey || null, fileName: media.fileName || null, mimeType: media.mimeType || null, caption: media.caption || null, mediaId: media.mediaId || null, providerMessageId, fileSize: media.fileSize })}::jsonb
         where id=${existingMessage.id}::uuid
         returning *,id::text,conversation_id::text
       `;
+      if (media.storageKey) {
+        await sql`
+          insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
+          values(${conversation.id}::uuid,${existingMessage.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId, providerMessageId, mediaId: media.mediaId || null, permanentUrl: media.url || null })})
+          on conflict(storage_key) do update set conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),status='ready',metadata=crm.media_assets.metadata||excluded.metadata,updated_at=now()
+        `;
+      }
     }
     await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
     return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
@@ -313,15 +311,15 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       provider_status,provider_message_id,sender_type,caption,created_at,metadata
     ) values(
       ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
-      ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}
+      ${media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? (media.storageKey ? 'ready' : 'unavailable') : null},${media.isSensitive},
+      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, hasAttachment: media.hasAttachment, attachmentType: media.type || null, mediaType: media.type || null, mediaUrl: media.url || null, fileUrl: media.url || null, attachmentUrl: media.url || null, storageKey: media.storageKey || null, fileName: media.fileName || null, mimeType: media.mimeType || null, caption: media.caption || null, mediaId: media.mediaId || null, providerMessageId, fileSize: media.fileSize, mediaAssetId: media.mediaAssetId || null })}
     ) returning *,id::text,conversation_id::text
   `;
 
   if (media.storageKey) {
     await sql`
       insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
-      values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
+      values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId, providerMessageId, mediaId: media.mediaId || null, permanentUrl: media.url || null, mediaAssetId: media.mediaAssetId || null })})
       on conflict(storage_key) do update set
         conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
         media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),

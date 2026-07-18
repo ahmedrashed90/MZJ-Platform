@@ -36,7 +36,9 @@ export default async function handler(request:VercelRequest,response:VercelRespo
     const [asset]=await sql<any[]>`select *,id::text,conversation_id::text from crm.media_assets where id=${assetId}::uuid`;
     if(!asset||!asset.conversation_id||!(await canAccessConversation(user,asset.conversation_id)))return response.status(404).json({ok:false,error:"الملف غير موجود أو غير مسموح"});
     await sql`insert into crm.media_access_logs(asset_id,user_id,action,ip_address,user_agent) values(${assetId}::uuid,${user.id}::uuid,'download',${clean(request.headers['x-forwarded-for'])||null},${clean(request.headers['user-agent'])||null})`;
-    return response.status(200).json({ok:true,url:createDownloadUrl(asset.storage_key,300),asset:{id:asset.id,fileName:asset.original_name,mediaType:asset.media_type,mimeType:asset.mime_type,fileSize:asset.file_size,isSensitive:asset.is_sensitive}});
+    const signedUrl=createDownloadUrl(asset.storage_key,300);
+    if(clean(request.query.download)==="1")return response.redirect(302,signedUrl);
+    return response.status(200).json({ok:true,url:signedUrl,asset:{id:asset.id,fileName:asset.original_name,mediaType:asset.media_type,mimeType:asset.mime_type,fileSize:asset.file_size,isSensitive:asset.is_sensitive}});
   }
   return response.status(405).json({ok:false,error:"Method not allowed"});
 }

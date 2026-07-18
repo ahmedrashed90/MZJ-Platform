@@ -34,15 +34,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
-        select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
-        from crm.messages m left join core.users u on u.id=m.sent_by
-        left join crm.media_assets a on a.message_id=m.id
-        where m.conversation_id=${conversationId}::uuid
-        order by m.created_at asc limit ${limit}
+        select * from (
+          select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
+          from crm.messages m left join core.users u on u.id=m.sent_by
+          left join crm.media_assets a on a.message_id=m.id
+          where m.conversation_id=${conversationId}::uuid
+          order by m.created_at desc limit ${limit}
+        ) recent order by recent.created_at asc
       `;
-      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
-      else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
-      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
+      const latestVisibleInbound = [...messages].reverse().find((message) => message.direction === "in")?.created_at;
+      const readThroughAt = latestVisibleInbound || conversation.last_customer_message_at || conversation.last_message_at || new Date().toISOString();
+      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id, { conversationId, readThroughAt });
+      else await sql`update crm.conversations set unread_count=case when last_customer_message_at is null or last_customer_message_at<=${readThroughAt}::timestamptz then 0 else unread_count end, updated_at=now() where id=${conversationId}::uuid`;
+      const stillUnread = conversation.last_customer_message_at && Date.parse(conversation.last_customer_message_at) > Date.parse(readThroughAt);
+      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: stillUnread ? conversation.unread_count : 0 }, messages, readThroughAt });
     }
 
     let rows: any[] = [...await sql<any[]>`
