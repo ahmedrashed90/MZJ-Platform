@@ -17,13 +17,14 @@ function bool(value: unknown) {
   return value === true || value === 1 || ["true", "1", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
-function isProtectedWhatsappMediaUrl(value: unknown) {
-  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(clean(value));
-}
-
-function safeInboundMediaUrl(...values: unknown[]) {
-  const candidate = first(...values);
-  return candidate && !isProtectedWhatsappMediaUrl(candidate) ? candidate : "";
+function normalizeInboundMediaUrl(value: unknown) {
+  let url = clean(value).replace(/\\\//g, "/").replace(/&amp;/gi, "&");
+  if (!url || /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(url)) return "";
+  if (url.startsWith("//")) url = `https:${url}`;
+  else if (url.startsWith("/")) url = `https://w-mersal.com${url}`;
+  else if (/^(?:uploads?|storage|media|files?|documents?|public)\//i.test(url)) url = `https://w-mersal.com/${url.replace(/^\/+/, "")}`;
+  else if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && /^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(url)) url = `https://${url}`;
+  return /^https?:\/\//i.test(url) && !/lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(url) ? url : "";
 }
 
 function nestedWhatsapp(payload: any) {
@@ -60,13 +61,11 @@ function mediaData(payload: any) {
   const type = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
   const nested = msg?.[rawType] || msg?.[type];
   const storageKey = first(payload.storageKey, payload.storage_key);
-  const url = safeInboundMediaUrl(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
+  const url = normalizeInboundMediaUrl(first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link));
   const fileName = first(payload.fileName, payload.file_name, nested?.filename);
   const mimeType = first(payload.mimeType, payload.mime_type, nested?.mime_type);
   const fileSize = Number(payload.fileSize ?? payload.file_size ?? 0) || null;
   const hasAttachment = bool(payload.hasAttachment) || Boolean(storageKey || url || nested?.id || ["image", "audio", "video", "document", "sticker"].includes(type));
-  const requestedStatus = first(payload.mediaStatus, payload.media_status).toLowerCase();
-  const status = !hasAttachment ? "" : storageKey ? "ready" : requestedStatus || (url ? "ready" : "pending");
   return {
     hasAttachment,
     type: type || (hasAttachment ? "document" : ""),
@@ -75,7 +74,6 @@ function mediaData(payload: any) {
     fileName,
     mimeType,
     fileSize,
-    status,
     caption: first(payload.caption, nested?.caption),
     isSensitive: bool(payload.isSensitive || payload.is_sensitive),
     mediaId: first(payload.mediaId, payload.media_id, nested?.id),
@@ -118,19 +116,6 @@ function trustedKnownService(routeSource: string, payload: any) {
   if (["installment-calculator", "tiktok-snapchat"].includes(routeSource)) return "finance";
   if (bool(payload.trustedServiceClassification || payload.trusted_service_classification)) return departmentKey(first(payload.serviceKey, payload.service_key));
   return "";
-}
-
-
-async function upsertStoredInboundMedia(sql: any, input: { conversationId: string; messageId: string; source: string; eventId: string; media: ReturnType<typeof mediaData> }) {
-  if (!input.media.storageKey) return;
-  await sql`
-    insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
-    values(${input.conversationId}::uuid,${input.messageId}::uuid,${input.media.storageKey},${input.media.fileName || null},${input.media.type || 'document'},${input.media.mimeType || null},${input.media.fileSize},${input.media.isSensitive},'ready',${sql.json({ source: input.source, eventId: input.eventId })})
-    on conflict(storage_key) do update set
-      conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
-      media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
-      is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
-  `;
 }
 
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
@@ -291,32 +276,44 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   if (existingMessage) {
+    const hasResolvedMedia = media.hasAttachment && Boolean(media.storageKey || media.url);
     [existingMessage] = await sql<any[]>`
-      update crm.messages
-      set
+      update crm.messages set
         direction=case when ${direction === "in"} then 'in' else direction end,
         provider_status=case when ${direction === "in"} then 'received' else provider_status end,
         sender_type=case when ${direction === "in"} then 'customer' else sender_type end,
-        message_type=case when ${media.hasAttachment} then coalesce(nullif(${media.type},''),message_type) else message_type end,
-        attachment_type=case when ${media.hasAttachment} then coalesce(nullif(${media.type},''),attachment_type) else attachment_type end,
+        message_type=case when ${hasResolvedMedia} then ${media.type || existingMessage.message_type || "document"} else message_type end,
+        body=coalesce(nullif(${text},''),body),
         attachment_url=case
-          when ${Boolean(media.storageKey)} then null
-          when ${media.hasAttachment} and nullif(${media.url},'') is not null then ${media.url}
-          when ${media.hasAttachment} and coalesce(attachment_url,'') ~* 'lookaside\.fbsbx\.com/whatsapp_business/attachments' then null
+          when ${hasResolvedMedia} and nullif(${media.storageKey},'') is not null then null
+          when ${hasResolvedMedia} then nullif(${media.url},'')
           else attachment_url
         end,
-        file_name=case when ${media.hasAttachment} then coalesce(nullif(${media.fileName},''),file_name) else file_name end,
-        mime_type=case when ${media.hasAttachment} then coalesce(nullif(${media.mimeType},''),mime_type) else mime_type end,
-        file_size=case when ${media.hasAttachment} then coalesce(${media.fileSize},file_size) else file_size end,
-        storage_key=case when ${media.hasAttachment} then coalesce(nullif(${media.storageKey},''),storage_key) else storage_key end,
-        media_status=case when ${media.hasAttachment} then coalesce(nullif(${media.status},''),media_status,'pending') else media_status end,
-        is_sensitive=case when ${media.hasAttachment} then ${media.isSensitive} else is_sensitive end,
-        caption=case when ${media.hasAttachment} then coalesce(nullif(${media.caption},''),caption) else caption end,
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}::jsonb
+        attachment_type=case when ${hasResolvedMedia} then nullif(${media.type},'') else attachment_type end,
+        file_name=case when ${hasResolvedMedia} then coalesce(nullif(${media.fileName},''),file_name) else file_name end,
+        mime_type=case when ${hasResolvedMedia} then coalesce(nullif(${media.mimeType},''),mime_type) else mime_type end,
+        file_size=case when ${hasResolvedMedia} then coalesce(${media.fileSize},file_size) else file_size end,
+        storage_key=case when ${hasResolvedMedia} then coalesce(nullif(${media.storageKey},''),storage_key) else storage_key end,
+        media_status=case when ${hasResolvedMedia} then 'ready' else media_status end,
+        is_sensitive=case when ${hasResolvedMedia} then ${media.isSensitive} else is_sensitive end,
+        caption=coalesce(nullif(${media.caption},''),caption),
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, mediaEnriched: hasResolvedMedia })}::jsonb
       where id=${existingMessage.id}::uuid
       returning *,id::text,conversation_id::text
     `;
-    await upsertStoredInboundMedia(sql, { conversationId: conversation.id, messageId: existingMessage.id, source, eventId, media });
+
+    if (hasResolvedMedia && media.storageKey) {
+      await sql`
+        insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
+        values(${conversation.id}::uuid,${existingMessage.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId, enriched: true })})
+        on conflict(storage_key) do update set
+          conversation_id=excluded.conversation_id,message_id=excluded.message_id,
+          original_name=coalesce(excluded.original_name,crm.media_assets.original_name),media_type=excluded.media_type,
+          mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
+          is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
+      `;
+    }
+
     await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
     return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
   }
@@ -327,12 +324,21 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       provider_status,provider_message_id,sender_type,caption,created_at,metadata
     ) values(
       ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
-      ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.status || null},${media.isSensitive},
+      ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? (media.storageKey || media.url ? 'ready' : 'pending') : null},${media.isSensitive},
       ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}
     ) returning *,id::text,conversation_id::text
   `;
 
-  await upsertStoredInboundMedia(sql, { conversationId: conversation.id, messageId: message.id, source, eventId, media });
+  if (media.storageKey) {
+    await sql`
+      insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
+      values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
+      on conflict(storage_key) do update set
+        conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
+        media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
+        is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
+    `;
+  }
 
   const knownService = trustedKnownService(routeSource, payload);
   let createdByKnownSource = false;

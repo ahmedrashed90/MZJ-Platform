@@ -3,6 +3,7 @@ import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-util
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
+import { markCrmLeadRead } from "../_crm-unread-state.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
@@ -39,6 +40,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         where m.conversation_id=${conversationId}::uuid
         order by m.created_at asc limit ${limit}
       `;
+      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
+      else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
       return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
     }
 
