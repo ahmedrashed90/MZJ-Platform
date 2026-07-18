@@ -795,21 +795,8 @@ const CRM_OLD_MEDIA_UNREAD_FIX_V1118_SQL = String.raw`
 alter table crm.leads add column if not exists extra_data jsonb default '{}'::jsonb;
 alter table crm.leads add column if not exists source_history jsonb default '[]'::jsonb;
 
-create or replace function crm.guard_lead_json_fields()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.extra_data := coalesce(new.extra_data,'{}'::jsonb);
-  new.source_history := coalesce(new.source_history,'[]'::jsonb);
-  return new;
-end;
-$$;
-
 drop trigger if exists crm_leads_json_guard on crm.leads;
-create trigger crm_leads_json_guard
-before insert or update on crm.leads
-for each row execute function crm.guard_lead_json_fields();
+drop function if exists crm.guard_lead_json_fields();
 
 update crm.leads
 set extra_data=coalesce(extra_data,'{}'::jsonb),
