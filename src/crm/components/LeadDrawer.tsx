@@ -4,7 +4,6 @@ import {
   CalendarBlank,
   ChatCircleDots,
   PaperPlaneTilt,
-  Paperclip,
   DownloadSimple,
   FilePdf,
   ImageSquare,
@@ -82,26 +81,6 @@ function isOutboundMessage(message: CrmMessage) {
 
 function visibleProviderStatus(message: CrmMessage) {
   return isOutboundMessage(message) ? providerStatusLabel(message.provider_status) : "";
-}
-
-function isProtectedWhatsappMediaUrl(url: unknown) {
-  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(String(url || ""));
-}
-
-function safeExternalAttachmentUrl(url: unknown) {
-  const value = String(url || "").trim();
-  if (!value || isProtectedWhatsappMediaUrl(value)) return "";
-  return value;
-}
-
-function assetStreamUrl(assetId: unknown) {
-  const value = String(assetId || "").trim();
-  return value ? `/api/crm/media?assetId=${encodeURIComponent(value)}&stream=1` : "";
-}
-
-function assetDownloadUrl(assetId: unknown) {
-  const value = String(assetId || "").trim();
-  return value ? `/api/crm/media?assetId=${encodeURIComponent(value)}&download=1` : "";
 }
 
 function departmentCodeFor(key: ServiceKey) {
@@ -183,9 +162,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
-  const lastTemplateStatusRef = useRef<{ leadId: string; status: string }>({ leadId: "", status: "" });
+  const previousStatusRef = useRef("");
 
   useEffect(() => {
     if (!lead) {
@@ -207,22 +186,11 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setConversationId(lead.conversation_id || "");
     setConversationChannel(lead.channel_code || "");
     setMessageText("");
+    setSelectedTemplate("");
     setNotice("");
-    setPendingFile(null);
-    lastTemplateStatusRef.current = { leadId: lead.id, status: String(lead.status_label || lead.status_code || "عميل جديد") };
-    void loadConversation(lead.id, lead.conversation_id || "", false, true);
-    const readLead = {
-      ...lead,
-      unread_count: 0,
-      effective_unread: false,
-      dashboard_unread: false,
-      has_unread_message: false,
-      has_unread_messages: false,
-      message_unread: false,
-      is_unread: false,
-      dashboard_message_read_at: new Date().toISOString(),
-    };
-    onSaved(readLead);
+    setMediaUrls({});
+    previousStatusRef.current = value(lead.status_label || "عميل جديد");
+    void loadConversation(lead.id, lead.conversation_id || "", false);
   }, [lead?.id]);
 
   useEffect(() => {
@@ -234,7 +202,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [lead?.id, onClose]);
 
-  async function loadConversation(leadId: string, preferredId = "", silent = false, markRead = false) {
+  async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
     try {
       let id = preferredId;
@@ -245,7 +213,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         setConversationChannel(result.rows[0]?.channel_code || "");
       }
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300&markRead=${markRead ? "1" : "0"}`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
         setMessages(result.messages || []);
       } else if (!silent) {
@@ -261,7 +229,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   useEffect(() => {
     if (!lead || !conversationId) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadConversation(activeForm.id, conversationId, true, false);
+      if (document.visibilityState === "visible") void loadConversation(activeForm.id, conversationId, true);
     }, 5000);
     return () => window.clearInterval(timer);
   }, [lead?.id, conversationId]);
@@ -315,17 +283,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   useEffect(() => {
-    if (!lead || !form) return;
-    const currentStatus = String(form.values.status_label || "");
-    const previous = lastTemplateStatusRef.current;
-    if (previous.leadId !== lead.id) {
-      lastTemplateStatusRef.current = { leadId: lead.id, status: currentStatus };
-      setSelectedTemplate("");
-      setMessageText("");
+    if (!form) return;
+    const currentStatus = value(form.values.status_label || "عميل جديد");
+    const previousStatus = previousStatusRef.current;
+    if (!previousStatus) {
+      previousStatusRef.current = currentStatus;
       return;
     }
-    if (previous.status === currentStatus) return;
-    lastTemplateStatusRef.current = { leadId: lead.id, status: currentStatus };
+    if (currentStatus === previousStatus) return;
+    previousStatusRef.current = currentStatus;
     if (mappedTemplate?.id) {
       setSelectedTemplate(mappedTemplate.id);
       setMessageText(renderTemplateInComposer(mappedTemplate));
@@ -333,8 +299,23 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
     setSelectedTemplate("");
     setMessageText("");
-  }, [lead?.id, form?.values.status_label, mappedTemplate?.id]);
+  }, [form?.values.status_label, mappedTemplate?.id]);
 
+  useEffect(() => {
+    const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
+    if (!missing.length) return;
+    let cancelled = false;
+    Promise.all(missing.map(async (message) => {
+      try {
+        const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id || "")}`);
+        return [message.media_asset_id || "", result.url] as const;
+      } catch { return [message.media_asset_id || "", ""] as const; }
+    })).then((entries) => {
+      if (cancelled) return;
+      setMediaUrls((current) => ({ ...current, ...Object.fromEntries(entries.filter((entry) => entry[0] && entry[1])) }));
+    });
+    return () => { cancelled = true; };
+  }, [messages, mediaUrls]);
 
   const credit = useMemo(() => {
     if (!form || form.serviceKey !== "finance") return null;
@@ -434,57 +415,25 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
   }
 
-  function mediaTypeForFile(file: File) {
-    if (file.type.startsWith("image/")) return "image";
-    if (file.type.startsWith("audio/")) return "audio";
-    if (file.type.startsWith("video/")) return "video";
-    return "document";
-  }
-
-  async function uploadPendingFile(file: File) {
-    const response = await fetch(`/api/crm/media?action=upload_binary`, {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: {
-        "content-type": file.type || "application/octet-stream",
-        "x-mzj-upload-mode": "binary",
-        "x-mzj-conversation-id": conversationId,
-        "x-mzj-media-type": mediaTypeForFile(file),
-        "x-mzj-file-name": encodeURIComponent(file.name || "attachment.bin"),
-        "x-mzj-mime-type": encodeURIComponent(file.type || "application/octet-stream"),
-        "x-mzj-file-size": String(file.size || 0),
-      },
-      body: file,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload?.ok === false || !payload?.assetId) {
-      throw new Error(payload?.error || `فشل رفع الملف إلى التخزين الآمن (${response.status})`);
-    }
-    return String(payload.assetId);
-  }
-
   async function openMedia(message: CrmMessage) {
-    const internalUrl = assetDownloadUrl(message.media_asset_id);
-    if (internalUrl) {
-      window.open(internalUrl, "_blank", "noopener,noreferrer");
+    if (!message.media_asset_id) {
+      if (message.attachment_url) window.open(message.attachment_url, "_blank", "noopener,noreferrer");
       return;
     }
-    const externalUrl = safeExternalAttachmentUrl(message.attachment_url);
-    if (externalUrl) {
-      window.open(externalUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
-    setNotice("المرفق لم يكتمل رفعه إلى التخزين بعد");
+    try {
+      const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
+      setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
+      window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
   }
 
   function renderMessageMedia(message: CrmMessage) {
-    const url = assetStreamUrl(message.media_asset_id) || safeExternalAttachmentUrl(message.attachment_url);
+    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} loading="lazy" />;
+    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
-    if (message.media_asset_id || safeExternalAttachmentUrl(message.attachment_url) || message.storage_key) {
+    if (message.media_asset_id || message.attachment_url || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
       return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
     }
@@ -493,21 +442,16 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
   async function sendMessage() {
     if (!conversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
-    if (!messageText.trim() && !selectedTemplate && !pendingFile) return;
+    if (!messageText.trim() && !selectedTemplate) return;
 
     const draftText = messageText;
     const draftTemplate = selectedTemplate;
-    const draftFile = pendingFile;
     const tempId = `temp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const tempMessage: CrmMessage = {
       id: tempId,
       direction: "out",
-      message_type: draftFile ? mediaTypeForFile(draftFile) : draftTemplate ? "template" : "text",
+      message_type: draftTemplate ? "template" : "text",
       body: draftText || null,
-      attachment_type: draftFile ? mediaTypeForFile(draftFile) : null,
-      file_name: draftFile?.name || null,
-      mime_type: draftFile?.type || null,
-      file_size: draftFile?.size || null,
       provider_status: "queued",
       sender_type: "human",
       created_at: new Date().toISOString(),
@@ -515,28 +459,23 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
     setMessageText("");
     setSelectedTemplate("");
-    setPendingFile(null);
     setMessages((current) => [...current, tempMessage]);
     setSending(true);
     setNotice("");
 
     try {
-      const mediaAssetId = draftFile ? await uploadPendingFile(draftFile) : "";
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
+        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate }),
       });
-      setMessages((current) => current.map((message) => message.id === tempId
-        ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
-        : message));
+      setMessages((current) => current.map((message) => message.id === tempId ? result.message : message));
       setNotice(result.providerStatus === "queued" ? "تم تسليم الرسالة للإرسال" : "تم إرسال الرسالة");
-      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true, false), 1200);
-      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true, false), 3500);
+      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 1200);
+      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 3500);
     } catch (error) {
       setMessages((current) => current.filter((message) => message.id !== tempId));
       setMessageText((current) => current.trim() ? current : draftText);
       setSelectedTemplate((current) => current || draftTemplate);
-      setPendingFile((current) => current || draftFile);
       setNotice(error instanceof Error ? error.message : "فشل إرسال الرسالة");
     } finally {
       setSending(false);
@@ -570,7 +509,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
         <div className="crm-drawer-grid crm-customer-workspace-grid">
           <section className="crm-conversation-panel crm-customer-conversation">
-            <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false, true)}><ArrowClockwise size={18} /></button></header>
+            <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)}><ArrowClockwise size={18} /></button></header>
             <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
@@ -587,8 +526,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
                   if (!editedTextStillMatchesTemplate(rendered, nextText)) setSelectedTemplate("");
                 }
               }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
-              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section>
 

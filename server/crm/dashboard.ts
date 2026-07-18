@@ -31,19 +31,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
       c.id::text as conversation_id, c.legacy_id as conversation_legacy_id, c.channel_code, c.preview_text,
       greatest(coalesce(l.unread_count,0),coalesce(c.unread_count,0))::int as unread_count,
-      (
-        greatest(coalesce(l.unread_count,0),coalesce(c.unread_count,0)) > 0
-        or coalesce(l.dashboard_unread,false)
-        or coalesce(l.has_unread_message,false)
-        or coalesce(l.has_unread_messages,false)
-        or coalesce(l.message_unread,false)
-        or coalesce(l.is_unread,false)
-        or (
-          coalesce(l.last_message_direction,'')='in'
-          and greatest(coalesce(l.last_incoming_message_at,'epoch'::timestamptz),coalesce(c.last_customer_message_at,'epoch'::timestamptz))
-            > coalesce(l.dashboard_message_read_at,'epoch'::timestamptz)
-        )
-      ) as effective_unread,
       greatest(l.last_message_at,c.last_message_at) as last_message_at
     from crm.leads l
     left join core.sources src on src.code = l.source_code

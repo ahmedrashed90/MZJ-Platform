@@ -790,17 +790,52 @@ where lower(coalesce(sender_type,''))='customer'
 insert into core.schema_migrations(version) values('crm-inbound-direction-v1.11.7') on conflict(version) do nothing;
 `;
 
-const CRM_MEDIA_UNREAD_HARDENING_V1120_SQL = String.raw`
-drop trigger if exists crm_leads_extra_data_not_null on crm.leads;
-drop function if exists crm.guard_lead_extra_data_not_null();
-alter table crm.leads add column if not exists extra_data jsonb;
-update crm.leads set extra_data='{}'::jsonb where extra_data is null;
+
+const CRM_OLD_MEDIA_UNREAD_FIX_V1118_SQL = String.raw`
+alter table crm.leads add column if not exists extra_data jsonb default '{}'::jsonb;
+alter table crm.leads add column if not exists source_history jsonb default '[]'::jsonb;
+
+create or replace function crm.guard_lead_json_fields()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.extra_data := coalesce(new.extra_data,'{}'::jsonb);
+  new.source_history := coalesce(new.source_history,'[]'::jsonb);
+  return new;
+end;
+$$;
+
+drop trigger if exists crm_leads_json_guard on crm.leads;
+create trigger crm_leads_json_guard
+before insert or update on crm.leads
+for each row execute function crm.guard_lead_json_fields();
+
+update crm.leads
+set extra_data=coalesce(extra_data,'{}'::jsonb),
+    source_history=coalesce(source_history,'[]'::jsonb)
+where extra_data is null or source_history is null;
 alter table crm.leads alter column extra_data set default '{}'::jsonb;
 alter table crm.leads alter column extra_data set not null;
-update crm.conversations set metadata='{}'::jsonb where metadata is null;
-alter table crm.conversations alter column metadata set default '{}'::jsonb;
-alter table crm.conversations alter column metadata set not null;
-insert into core.schema_migrations(version) values('crm-media-unread-hardening-v1.12.0') on conflict(version) do nothing;
+alter table crm.leads alter column source_history set default '[]'::jsonb;
+alter table crm.leads alter column source_history set not null;
+
+update crm.messages
+set attachment_url=null
+where attachment_url ~* 'lookaside\.fbsbx\.com/whatsapp_business/attachments';
+
+update crm.messages
+set body=coalesce(nullif(body,''),nullif(file_name,''),
+  case lower(coalesce(attachment_type,message_type,''))
+    when 'image' then 'صورة من العميل'
+    when 'audio' then 'رسالة صوتية من العميل'
+    when 'video' then 'فيديو من العميل'
+    when 'document' then 'ملف من العميل'
+    else 'مرفق من العميل'
+  end)
+where coalesce(attachment_type,message_type,'') in ('image','audio','video','document','file','voice','ptt');
+
+insert into core.schema_migrations(version) values('crm-old-media-unread-v1.11.8') on conflict(version) do nothing;
 `;
 
 export async function ensureCrmSchema() {
@@ -837,10 +872,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-inbound-direction-v1.11.7'
       `;
       if (!inboundDirectionFix) await runSqlScript(CRM_INBOUND_DIRECTION_FIX_V1117_SQL);
-      const [mediaUnreadHardening] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-media-unread-hardening-v1.12.0'
+      const [oldMediaUnreadFix] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-old-media-unread-v1.11.8'
       `;
-      if (!mediaUnreadHardening) await runSqlScript(CRM_MEDIA_UNREAD_HARDENING_V1120_SQL);
+      if (!oldMediaUnreadFix) await runSqlScript(CRM_OLD_MEDIA_UNREAD_FIX_V1118_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

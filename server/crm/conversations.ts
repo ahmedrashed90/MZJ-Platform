@@ -15,7 +15,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const leadId = clean(request.query.leadId);
     const conversationId = clean(request.query.conversationId);
     const limit = Math.min(300, Math.max(1, Number(request.query.limit || 100)));
-    const markRead = ["1","true","yes"].includes(clean(request.query.markRead).toLowerCase());
 
     if (conversationId) {
       const [conversation] = await sql<any[]>`
@@ -36,41 +35,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
         select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
-        from crm.messages m
-        left join core.users u on u.id=m.sent_by
-        left join lateral (
-          select asset.id
-          from crm.media_assets asset
-          where asset.message_id=m.id
-             or (m.storage_key is not null and asset.storage_key=m.storage_key)
-             or (coalesce(m.metadata->>'mediaAssetId','')<>'' and asset.id::text=m.metadata->>'mediaAssetId')
-          order by case when asset.message_id=m.id then 0 when asset.id::text=m.metadata->>'mediaAssetId' then 1 else 2 end,asset.updated_at desc nulls last,asset.created_at desc
-          limit 1
-        ) a on true
+        from crm.messages m left join core.users u on u.id=m.sent_by
+        left join crm.media_assets a on a.message_id=m.id
         where m.conversation_id=${conversationId}::uuid
         order by m.created_at asc limit ${limit}
       `;
-      for (const message of messages) {
-        if (/lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(String(message.attachment_url || ""))) {
-          message.attachment_url = null;
-        }
-      }
-      let returnedUnreadCount = Number(conversation.unread_count || 0);
-      if (markRead) {
-        const readThrough = messages.length ? String(messages[messages.length - 1]?.created_at || new Date().toISOString()) : new Date().toISOString();
-        if (conversation.lead_id) {
-          const readLead = await markCrmLeadRead(sql, conversation.lead_id, { conversationId, readThrough });
-          if (readLead) returnedUnreadCount = 0;
-        } else {
-          const [readConversation] = await sql<any[]>`
-            update crm.conversations set unread_count=0,updated_at=now()
-            where id=${conversationId}::uuid and (last_customer_message_at is null or last_customer_message_at<=${readThrough}::timestamptz)
-            returning unread_count
-          `;
-          if (readConversation) returnedUnreadCount = 0;
-        }
-      }
-      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: returnedUnreadCount }, messages });
+      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
+      else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
+      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
     }
 
     let rows: any[] = [...await sql<any[]>`

@@ -1,6 +1,6 @@
 {
   "name": "mzj-platform",
-  "version": "1.12.2",
+  "version": "1.11.8",
   "private": true,
   "type": "module",
   "scripts": {

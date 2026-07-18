@@ -29,7 +29,6 @@ function readPatch(lead: CrmLead): CrmLead {
   return {
     ...lead,
     unread_count: 0,
-    effective_unread: false,
     dashboard_unread: false,
     has_unread_message: false,
     has_unread_messages: false,
@@ -103,24 +102,33 @@ export function CrmDashboardPage() {
     }
   }
 
-  async function markLeadRead(lead: CrmLead, updateDrawer = true) {
-    const patched = readPatch(lead);
-    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
-    if (updateDrawer) setSelected(patched);
+  async function markLeadRead(lead: CrmLead) {
+    const readThroughAt = lead.last_incoming_message_at || lead.last_message_at || new Date().toISOString();
+    const readThroughMessageKey = String(lead.extra_data?.lastUnreadMessageKey || "").trim();
     try {
-      await crmFetch("/api/crm/unread", {
+      const result = await crmFetch<{ ok: boolean; row?: CrmLead | null; cleared?: boolean }>("/api/crm/unread", {
         method: "POST",
-        body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
+        body: JSON.stringify({
+          action: "mark_read",
+          leadId: lead.id,
+          conversationId: lead.conversation_id,
+          readThroughAt,
+          readThroughMessageKey,
+        }),
       });
+      const next = result.cleared === false
+        ? { ...lead, ...(result.row || {}) }
+        : { ...readPatch(lead), ...(result.row || {}) };
+      setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...next } : item));
+      setSelected((current) => current?.id === lead.id ? { ...current, ...next } : current);
     } catch (failure) {
       console.warn("تعذر حفظ قراءة محادثة العميل", failure);
     }
   }
 
   function openLead(lead: CrmLead) {
-    const patched = readPatch(lead);
-    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
-    setSelected(patched);
+    setSelected(lead);
+    if (leadHasUnreadMessage(lead)) void markLeadRead(lead);
   }
 
   const groups = useMemo(() => {

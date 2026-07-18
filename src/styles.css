@@ -793,7 +793,7 @@ button.small-metric { cursor: pointer; }
 .crm-message p { margin: 0; white-space: pre-wrap; line-height: 1.7; font-size: 11px; }
 .crm-message a { display: inline-block; margin-top: 7px; text-decoration: underline; font-size: 10px; }
 .crm-message small { display: block; margin-top: 6px; opacity: .7; font-size: 8px; }
-.crm-message-composer { padding: 11px; border-top: 1px solid var(--line); background: #fff; display: grid; grid-template-columns: minmax(0,1fr) minmax(110px,auto) auto; gap: 8px; align-items: end; }
+.crm-message-composer { padding: 11px; border-top: 1px solid var(--line); background: #fff; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: end; }
 .crm-message-composer textarea { min-height: 168px; border: 1px solid var(--line); border-radius: 10px; padding: 12px; outline: none; resize: vertical; line-height: 1.8; }
 .crm-message-composer button { min-height: 42px; border: 0; border-radius: 10px; background: var(--brand); color: #fff; padding: 0 14px; display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .crm-credit-result { margin: 12px 0; padding: 11px 13px; border-radius: 11px; font-weight: 800; font-size: 11px; }
@@ -941,7 +941,7 @@ button.small-metric { cursor: pointer; }
 .crm-empty-conversation { min-height: 220px; align-content: center; justify-items: center; text-align: center; gap: 7px; }
 .crm-empty-conversation strong { font-size: 13px; }
 .crm-empty-conversation span { color: var(--muted); font-size: 9px; }
-.crm-message-composer,.crm-message-composer.template-only { grid-template-columns: minmax(0,1fr) minmax(110px,auto) auto; }
+.crm-message-composer,.crm-message-composer.template-only { grid-template-columns: minmax(0,1fr) auto; }
 .crm-message-route-note { grid-column: 1/-1; min-height: 34px; padding: 7px 9px; border-radius: 9px; background: #f7eee9; color: var(--brand); display: flex; align-items: center; gap: 7px; font-size: 9px; font-weight: 800; }
 .crm-linked-template-note { grid-column: 1/-1; min-height: 42px; padding: 9px 11px; border: 1px solid #dfc4b7; border-radius: 10px; background: #fff8f4; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .crm-linked-template-note strong { color: #69443a; font-size: 10px; }
@@ -1642,7 +1642,7 @@ button.small-metric { cursor: pointer; }
 }
 
 /* CRM v1.9.2 unified inbox, entry routing and secure media */
-.crm-message-composer,.crm-message-composer.template-only { grid-template-columns: minmax(0,1fr) minmax(110px,auto) auto; }
+.crm-message-composer,.crm-message-composer.template-only { grid-template-columns: minmax(0,1fr) auto; }
 .crm-attachment-button { min-height:42px; max-width:220px; border:1px dashed var(--line); border-radius:10px; padding:0 10px; display:flex; align-items:center; gap:7px; color:var(--brand); background:#fffaf7; cursor:pointer; font-size:10px; font-weight:800; overflow:hidden; }
 .crm-attachment-button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .crm-attachment-button input { display:none; }

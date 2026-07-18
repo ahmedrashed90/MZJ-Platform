@@ -13,7 +13,6 @@ export function crmTimestampMs(value: unknown): number {
 }
 
 export function leadHasUnreadMessage(lead: CrmLead) {
-  if (lead.effective_unread === true) return true;
   if (Number(lead.unread_count || 0) > 0) return true;
   if (lead.dashboard_unread === true || lead.has_unread_message === true || lead.has_unread_messages === true || lead.message_unread === true || lead.is_unread === true) return true;
   const direction = text(lead.last_message_direction).toLowerCase();

@@ -121,16 +121,9 @@ function unifiedWhatsappSendUrl(endpoint: Record<string, unknown>) {
   return clean(endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url);
 }
 
-function whatsappRouteCandidates(endpoint: Record<string, unknown>, kind: DeliveryKind) {
+function whatsappRouteCandidates(endpoint: Record<string, unknown>, _kind: DeliveryKind) {
   const configured = unifiedWhatsappSendUrl(endpoint);
-  if (kind !== "media") return configured ? [configured] : [];
-
-  const explicitMedia = clean(endpoint.media_send_url);
-  if (explicitMedia && explicitMedia !== configured) return [explicitMedia];
-  if (/\/send\/mersal\/?$/i.test(configured)) {
-    return [configured.replace(/\/send\/mersal\/?$/i, "/send/mersal-media")];
-  }
-  return explicitMedia ? [explicitMedia] : configured ? [configured] : [];
+  return configured ? [configured] : [];
 }
 
 function endpointUrlCandidates(route: DeliveryRoute, kind: DeliveryKind, endpoint: Record<string, unknown>) {
@@ -363,7 +356,7 @@ export async function deliverCrmMessage(input: {
         conversation_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,
         is_sensitive,provider_status,sent_by,sender_type,metadata
       ) values (
-        ${conversation.id}::uuid,'out',${kind},${finalText||null},${null},${input.media?.mediaType||null},
+        ${conversation.id}::uuid,'out',${kind},${finalText||null},${input.media ? createDownloadUrl(input.media.storageKey,900) : null},${input.media?.mediaType||null},
         ${input.media?.fileName||null},${input.media?.mimeType||null},${input.media?.fileSize||null},${input.media?.storageKey||null},${input.media ? 'queued' : null},
         ${Boolean(input.media?.isSensitive)},'queued',${input.actor?.id||null}::uuid,${senderType},${sql.json({ jobId: job.id, templateId: input.template?.id || null, reason: input.reason || "manual", deliveryRoute: policy.route, sourceArabic: policy.sourceArabic, workerRoute: urls[0] || "" })}
       ) returning *,id::text,conversation_id::text
