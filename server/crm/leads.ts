@@ -4,6 +4,21 @@ import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
 
+
+function riyadhNoteTimestamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("day")}/${part("month")}/${part("year")} ${part("hour")}:${part("minute")}`;
+}
+
 function leadPayload(body: Record<string, any>) {
   const serviceKey = departmentKey(
     body.serviceKey ?? body.service_key ?? body.departmentCode ?? body.department_code ?? body.paymentType ?? body.payment_type ?? "cash",
@@ -218,6 +233,11 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     ...sanitizeCustomFieldValues(body.customFields ?? body.extraData ?? body.extra_data ?? {}, customerFields),
   };
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
+  const newNote = clean(body.newNote ?? body.new_note);
+  if (newNote) {
+    const noteEntry = `[${riyadhNoteTimestamp()}] ${newNote}`;
+    input.notes = [clean(before.notes), noteEntry].filter(Boolean).join("\n\n");
+  }
 
   const departmentChanged = clean(before.department_code) !== input.departmentCode;
   if (departmentChanged) {

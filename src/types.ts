@@ -19,6 +19,8 @@ export type DashboardData = {
       preview: string;
       time: string;
       unreadCount: number;
+      leadId: string;
+      department: "cash" | "finance" | "service";
     }>;
     newCustomersSeries: Array<{ label: string; value: number }>;
   };

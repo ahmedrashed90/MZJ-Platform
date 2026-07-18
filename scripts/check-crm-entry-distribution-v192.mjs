@@ -52,14 +52,15 @@ for (const forbidden of [
 for (const token of [
   'function isOutboundMessage',
   'isOutboundMessage(message) ? "out" : "in"',
-  'event.key === "Escape"',
-  'mappedTemplate',
+  'useEscapeToClose(Boolean(lead), onClose)',
+  'applyStatusTemplate',
   'renderTemplateInComposer',
   'rows={9}',
 ]) {
   if (!drawer.includes(token)) throw new Error(`Customer workspace check failed: missing ${token}`);
 }
 if (drawer.includes('اختر قالب واتساب')) throw new Error('Manual WhatsApp template selector must not exist in the composer');
+if (drawer.includes('const mappedTemplate')) throw new Error('A mapped status template must not auto-fill when opening an existing customer');
 
 for (const token of [
   '.crm-message.in { align-self: flex-start',

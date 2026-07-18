@@ -95,6 +95,7 @@ export type CrmLead = {
   call_center_name?: string | null;
   conversation_id?: string | null;
   conversation_legacy_id?: string | null;
+  conversation_status?: string | null;
   channel_code?: string | null;
   delivery_channel?: string | null;
   message_policy?: "free_text_and_templates" | "templates_only" | null;

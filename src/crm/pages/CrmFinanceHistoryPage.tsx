@@ -11,6 +11,7 @@ import {
   UsersThree,
   X,
 } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta } from "../types";
@@ -44,6 +45,8 @@ export function CrmFinanceHistoryPage() {
   const [selected, setSelected] = useState<{ lead: CrmLead; events: any[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
+
+  useEscapeToClose(Boolean(selected), () => setSelected(null));
 
   useEffect(() => {
     void crmFetch<CrmMeta>("/api/crm/meta").then(setMeta).catch((error) => setNotice(error.message));

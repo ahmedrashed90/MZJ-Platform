@@ -15,6 +15,7 @@ import {
   WhatsappLogo,
   X,
 } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentKeyFromCode, departmentLabel, formatDate } from "../api";
 import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
 import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta } from "../types";
@@ -24,6 +25,7 @@ type Props = {
   meta: CrmMeta | null;
   onClose: () => void;
   onSaved: (lead: CrmLead) => void;
+  onRead?: (lead: CrmLead) => void;
 };
 
 type ServiceKey = "cash" | "finance" | "service";
@@ -152,12 +154,13 @@ function editedTextStillMatchesTemplate(renderedTemplate: string, editedText: st
   return new RegExp(pattern, "i").test(String(editedText || "").trim());
 }
 
-export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
+export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
   const [form, setForm] = useState<CustomerForm | null>(null);
   const [messages, setMessages] = useState<CrmMessage[]>(emptyMessages);
   const [conversationId, setConversationId] = useState("");
   const [conversationChannel, setConversationChannel] = useState("");
   const [messageText, setMessageText] = useState("");
+  const [noteDraft, setNoteDraft] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -187,6 +190,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setConversationId(lead.conversation_id || "");
     setConversationChannel(lead.channel_code || "");
     setMessageText("");
+    setSelectedTemplate("");
+    setNoteDraft("");
     setNotice("");
     setPendingFile(null);
     setMediaUrls({});
@@ -201,17 +206,14 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       is_unread: false,
       dashboard_message_read_at: new Date().toISOString(),
     };
-    onSaved(readLead);
+    onRead?.(readLead);
+    void crmFetch("/api/crm/unread", {
+      method: "POST",
+      body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
+    }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
   }, [lead?.id]);
 
-  useEffect(() => {
-    if (!lead) return;
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [lead?.id, onClose]);
+  useEscapeToClose(Boolean(lead), onClose);
 
   async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
@@ -267,41 +269,40 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
   }, [meta?.customerFields, department, form?.values.status_label]);
 
-  const mappedTemplate = useMemo(() => {
-    if (!form) return undefined;
-    const mapping = (meta?.mappings || []).find((item) => item.department_code === departmentCodeFor(form.serviceKey) && item.status_value === form.values.status_label);
-    return mapping ? (meta?.templates || []).find((template) => template.id === mapping.template_id) : undefined;
-  }, [meta, form?.serviceKey, form?.values.status_label]);
-
-  function renderTemplateInComposer(template: { content?: string | null } | undefined) {
-    if (!template?.content || !form) return "";
+  function renderTemplateInComposer(template: { content?: string | null } | undefined, sourceForm: CustomerForm | null = form) {
+    if (!template?.content || !sourceForm) return "";
     const values: Record<string, string> = {
-      customer_name: form.values.customer_name || lead?.customer_name || "",
-      customerName: form.values.customer_name || lead?.customer_name || "",
-      name: form.values.customer_name || lead?.customer_name || "",
-      phone: form.values.phone || lead?.phone || lead?.phone_normalized || "",
-      car: form.values.car_type || lead?.car_name || "",
-      car_name: form.values.car_type || lead?.car_name || "",
-      carType: form.values.car_type || lead?.car_type || lead?.car_name || "",
-      category: form.values.car_category || lead?.car_category || "",
-      model: form.values.car_model || lead?.car_model || "",
-      color: form.values.color || lead?.color || "",
-      status: form.values.status_label || lead?.status_label || "",
+      customer_name: sourceForm.values.customer_name || lead?.customer_name || "",
+      customerName: sourceForm.values.customer_name || lead?.customer_name || "",
+      name: sourceForm.values.customer_name || lead?.customer_name || "",
+      phone: sourceForm.values.phone || lead?.phone || lead?.phone_normalized || "",
+      car: sourceForm.values.car_type || lead?.car_name || "",
+      car_name: sourceForm.values.car_type || lead?.car_name || "",
+      carType: sourceForm.values.car_type || lead?.car_type || lead?.car_name || "",
+      category: sourceForm.values.car_category || lead?.car_category || "",
+      model: sourceForm.values.car_model || lead?.car_model || "",
+      color: sourceForm.values.color || lead?.color || "",
+      status: sourceForm.values.status_label || lead?.status_label || "",
       agent_name: lead?.assigned_name || "",
       agentName: lead?.assigned_name || "",
     };
     return String(template.content).replace(/{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g, (match, key) => values[key] || match);
   }
 
-  useEffect(() => {
-    if (mappedTemplate?.id) {
-      setSelectedTemplate(mappedTemplate.id);
-      setMessageText(renderTemplateInComposer(mappedTemplate));
+  function applyStatusTemplate(sourceForm: CustomerForm) {
+    const mapping = (meta?.mappings || []).find((item) =>
+      item.department_code === departmentCodeFor(sourceForm.serviceKey)
+      && item.status_value === sourceForm.values.status_label,
+    );
+    const template = mapping ? (meta?.templates || []).find((item) => item.id === mapping.template_id) : undefined;
+    if (template?.id) {
+      setSelectedTemplate(template.id);
+      setMessageText(renderTemplateInComposer(template, sourceForm));
       return;
     }
+    if (selectedTemplate) setMessageText("");
     setSelectedTemplate("");
-    setMessageText("");
-  }, [mappedTemplate?.id]);
+  }
 
   useEffect(() => {
     const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
@@ -353,6 +354,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   function setField(field: CrmCustomerField, next: string) {
+    if (field.field_key === "status_label") {
+      const nextForm = { ...activeForm, values: { ...activeForm.values, status_label: next } };
+      setForm(nextForm);
+      applyStatusTemplate(nextForm);
+      return;
+    }
     setForm((current) => {
       if (!current) return current;
       if (field.field_key === "department_transfer") return changeDepartmentState(current, next as ServiceKey);
@@ -404,10 +411,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         carModel: activeForm.values.car_model,
         color: activeForm.values.color,
         financeType: activeForm.values.finance_type,
-        notes: activeForm.values.notes,
+        newNote: noteDraft.trim(),
         customFields: activeForm.customFields,
       };
       const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
+      setForm((current) => current ? { ...current, values: { ...current.values, notes: value(result.row.notes) } } : current);
+      setNoteDraft("");
       onSaved(result.row);
       setNotice("تم حفظ بيانات العميل");
     } catch (error) {
@@ -558,6 +567,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     if (field.field_type === "source") return <label key={field.id}>{label}<select value={currentValue} onChange={(event) => setField(field, event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>;
     if (field.field_type === "department") return <label key={field.id}>{label}<input value={departmentLabel(activeForm.departmentCode)} readOnly /></label>;
     if (field.field_type === "transfer") return <label key={field.id}>{label}<select value={activeForm.serviceKey} onChange={(event) => setField(field, event.target.value)}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label>;
+    if (field.field_type === "textarea" && field.field_key === "notes") return <label key={field.id} className="crm-field-wide crm-notes-field">{label}{currentValue ? <div className="crm-notes-history">{currentValue}</div> : <div className="crm-notes-history empty">لا توجد ملاحظات محفوظة</div>}<textarea rows={4} value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="اكتب ملاحظة جديدة، وسيتم حفظها بتاريخ اليوم عند الضغط على حفظ بيانات العميل" /></label>;
     if (field.field_type === "textarea") return <label key={field.id} className="crm-field-wide">{label}<textarea rows={4} value={currentValue} onChange={(event) => setField(field, event.target.value)} /></label>;
     if (field.field_type === "select") {
       const options = normalizeOptions(field);

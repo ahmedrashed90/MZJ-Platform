@@ -9,6 +9,7 @@ import {
   Plus,
   X,
 } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, queryString } from "../api";
 import type { CrmMeta } from "../types";
 
@@ -124,6 +125,8 @@ export function CrmKpiPage() {
     const lastDay = new Date(year, month, 0).getDate();
     return { from: `${filters.month}-01`, to: `${filters.month}-${String(lastDay).padStart(2, "0")}` };
   }, [filters.month, filters.from, filters.to]);
+
+  useEscapeToClose(modal, () => setModal(false));
 
   useEffect(() => {
     void crmFetch<CrmMeta>("/api/crm/meta").then(setMeta).catch(() => undefined);

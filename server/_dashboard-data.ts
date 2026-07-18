@@ -96,12 +96,17 @@ export async function getDashboardData(): Promise<DashboardData> {
       preview_text: string;
       last_message_at: Date;
       unread_count: number;
+      lead_id: string;
+      department_code: string;
     }[]>`
-      select id::text, coalesce(customer_name, 'عميل') as customer_name,
-             coalesce(preview_text, '') as preview_text,
-             last_message_at, coalesce(unread_count, 0) as unread_count
-      from crm.conversations
-      order by last_message_at desc nulls last
+      select c.id::text, coalesce(c.customer_name, l.customer_name, 'عميل') as customer_name,
+             coalesce(c.preview_text, '') as preview_text,
+             c.last_message_at, coalesce(c.unread_count, 0) as unread_count,
+             coalesce(c.lead_id::text, '') as lead_id,
+             coalesce(l.department_code, '') as department_code
+      from crm.conversations c
+      left join crm.leads l on l.id = c.lead_id and l.is_deleted = false
+      order by c.last_message_at desc nulls last
       limit 5
     `;
 
@@ -271,6 +276,8 @@ export async function getDashboardData(): Promise<DashboardData> {
           preview: row.preview_text,
           time: row.last_message_at ? new Date(row.last_message_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "",
           unreadCount: asNumber(row.unread_count),
+          leadId: row.lead_id,
+          department: row.department_code === "finance_sales" || row.department_code === "call_center" ? "finance" : row.department_code === "customer_service" ? "service" : "cash",
         })),
         newCustomersSeries: series.map((row) => ({ label: row.label, value: asNumber(row.value) })),
       },

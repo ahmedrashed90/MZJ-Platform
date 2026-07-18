@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Briefcase,
@@ -36,6 +36,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useNavigate } from "react-router-dom";
+import { useEscapeToClose } from "../components/useEscapeToClose";
+import { crmFetch, formatDate } from "../crm/api";
+import type { CrmLead } from "../crm/types";
 import type { DashboardData, NullableNumber } from "../types";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
@@ -48,13 +52,22 @@ function Value({ value, className = "" }: { value: NullableNumber; className?: s
   return <span className={className}>{valueText(value)}</span>;
 }
 
+type DashboardLeadItem = {
+  lead: CrmLead;
+  department: "cash" | "finance" | "service";
+};
+
 type DetailPayload = {
   title: string;
   subtitle?: string;
-  rows: Array<{ label: string; value: NullableNumber }>;
+  rows?: Array<{ label: string; value: NullableNumber }>;
+  leads?: DashboardLeadItem[];
+  loading?: boolean;
+  error?: string;
 };
 
-function DetailsDrawer({ details, onClose }: { details: DetailPayload | null; onClose: () => void }) {
+function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayload | null; onClose: () => void; onLeadOpen: (item: DashboardLeadItem) => void }) {
+  useEscapeToClose(Boolean(details), onClose);
   if (!details) return null;
 
   return (
@@ -71,12 +84,25 @@ function DetailsDrawer({ details, onClose }: { details: DetailPayload | null; on
           </button>
         </header>
         <div className="drawer-body">
-          {details.rows.map((row) => (
-            <button className="drawer-row" key={row.label} type="button">
+          {(details.rows || []).map((row) => (
+            <div className="drawer-row" key={row.label}>
               <span>{row.label}</span>
               <Value value={row.value} className="drawer-value" />
-            </button>
+            </div>
           ))}
+          {details.loading ? <div className="drawer-loading">جاري تحميل العملاء...</div> : null}
+          {details.error ? <div className="drawer-error">{details.error}</div> : null}
+          {(details.leads || []).map((item) => {
+            const lead = item.lead;
+            const unread = Math.max(0, Number(lead.unread_count || 0));
+            return (
+              <button className="drawer-customer-row" key={lead.id} type="button" onClick={() => onLeadOpen(item)}>
+                <div><strong>{lead.customer_name || "عميل"}</strong><span>{lead.status_label || "عميل جديد"} · {item.department === "finance" ? "مبيعات التمويل" : item.department === "service" ? "خدمة العملاء" : "مبيعات الكاش"}</span><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}{lead.preview_text ? ` · ${lead.preview_text}` : ""}</small></div>
+                <div className="drawer-customer-meta">{unread > 0 ? <b>{unread.toLocaleString("ar-SA")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at || lead.created_at)}</time></div>
+              </button>
+            );
+          })}
+          {!details.loading && !details.error && details.leads && !details.leads.length ? <div className="drawer-empty">لا توجد بيانات داخل هذا الكارت</div> : null}
         </div>
       </aside>
     </div>
@@ -195,10 +221,38 @@ function EmptyChart({ label }: { label: string }) {
   );
 }
 
+function dashboardDepartment(lead: CrmLead): "cash" | "finance" | "service" {
+  const code = String(lead.department_code || lead.service_key || "").toLowerCase();
+  if (code.includes("finance") || code.includes("call_center")) return "finance";
+  if (code.includes("service")) return "service";
+  return "cash";
+}
+
+function leadStatus(lead: CrmLead) {
+  return String(lead.status_label || lead.status_code || "عميل جديد").trim();
+}
+
+function startOfCurrentWeekMs() {
+  const date = new Date();
+  const daysSinceMonday = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - daysSinceMonday);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function isToday(value: unknown) {
+  const date = new Date(String(value || ""));
+  if (!Number.isFinite(date.getTime())) return false;
+  const today = new Date();
+  return date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+}
+
 export function DashboardPage() {
+  const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const detailsRequestId = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -226,7 +280,33 @@ export function DashboardPage() {
     ].filter((item) => item.value > 0);
   }, [current]);
 
-  const open = (title: string, rows: DetailPayload["rows"], subtitle?: string) => setDetails({ title, rows, subtitle });
+  const open = (title: string, rows: NonNullable<DetailPayload["rows"]>, subtitle?: string) => setDetails({ title, rows, subtitle });
+
+  async function allVisibleCrmLeads() {
+    const departments = ["cash", "finance", "service"] as const;
+    const results = await Promise.all(departments.map((department) => crmFetch<{ ok: boolean; leads: CrmLead[] }>(`/api/crm/dashboard?department=${department}`)));
+    const unique = new Map<string, CrmLead>();
+    results.flatMap((result) => result.leads || []).forEach((lead) => unique.set(lead.id, lead));
+    return [...unique.values()];
+  }
+
+  async function openCrmList(title: string, subtitle: string, predicate: (lead: CrmLead) => boolean) {
+    const requestId = ++detailsRequestId.current;
+    setDetails({ title, subtitle, loading: true, leads: [] });
+    try {
+      const leads = (await allVisibleCrmLeads()).filter(predicate);
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle, leads: leads.map((lead) => ({ lead, department: dashboardDepartment(lead) })) });
+    } catch (failure) {
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle, leads: [], error: failure instanceof Error ? failure.message : "تعذر تحميل تفاصيل العملاء" });
+    }
+  }
+
+  function openCrmLead(item: DashboardLeadItem) {
+    setDetails(null);
+    navigate(`/crm?department=${item.department}&lead=${encodeURIComponent(item.lead.id)}`);
+  }
 
   const disconnected = !loading && !current?.connected;
   const crm = current?.crm;
@@ -256,10 +336,10 @@ export function DashboardPage() {
         ) : null}
 
         <section className="kpi-grid">
-          <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => open("إجمالي العملاء", [{ label: "إجمالي العملاء", value: crm?.totalCustomers ?? null }])} />
-          <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => open("المحادثات المفتوحة", [{ label: "المحادثات المفتوحة", value: crm?.openConversations ?? null }])} />
-          <KpiCard title="العملاء المحتملون" value={crm?.potentialCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => open("العملاء المحتملون", [{ label: "العملاء المحتملون", value: crm?.potentialCustomers ?? null }])} />
-          <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => open("تم البيع", [{ label: "تم البيع", value: crm?.sold ?? null }])} />
+          <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />
+          <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")}  />
+          <KpiCard title="العملاء المحتملون" value={crm?.potentialCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("العملاء المحتملون", "العملاء الموجودون في حالة محتمل", (lead) => leadStatus(lead) === "محتمل")} />
+          <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => ["تم البيع", "تم الانتهاء - إنشاء طلب البيع", "تم الإنتهاء - إنشاء طلب البيع"].includes(leadStatus(lead)))} />
         </section>
 
         <section className="analytics-grid">
@@ -285,8 +365,8 @@ export function DashboardPage() {
                   </ResponsiveContainer>
                 </div>
                 <div className="chart-summary">
-                  <SmallMetric label="جدد هذا الأسبوع" value={crm?.newThisWeek ?? null} onClick={() => open("جدد هذا الأسبوع", [{ label: "جدد هذا الأسبوع", value: crm?.newThisWeek ?? null }])} />
-                  <SmallMetric label="جدد اليوم" value={crm?.newToday ?? null} onClick={() => open("جدد اليوم", [{ label: "جدد اليوم", value: crm?.newToday ?? null }])} />
+                  <SmallMetric label="جدد هذا الأسبوع" value={crm?.newThisWeek ?? null} onClick={() => void openCrmList("جدد هذا الأسبوع", "العملاء المسجلون منذ بداية الأسبوع الحالي", (lead) => Date.parse(String(lead.created_at || lead.registered_at || 0)) >= startOfCurrentWeekMs())} />
+                  <SmallMetric label="جدد اليوم" value={crm?.newToday ?? null} onClick={() => void openCrmList("جدد اليوم", "العملاء المسجلون اليوم", (lead) => isToday(lead.created_at || lead.registered_at))} />
                 </div>
               </>
             ) : <EmptyChart label="العملاء الجدد" />}
@@ -297,7 +377,7 @@ export function DashboardPage() {
             {current?.connected && (crm?.recentConversations.length ?? 0) > 0 ? (
               <div className="conversation-list">
                 {crm?.recentConversations.map((conversation) => (
-                  <button type="button" className="conversation-row" key={conversation.id} onClick={() => open(conversation.customerName, [{ label: "رسائل غير مقروءة", value: conversation.unreadCount }], conversation.preview)}>
+                  <button type="button" className="conversation-row" key={conversation.id} onClick={() => navigate(`/crm?department=${conversation.department}&lead=${encodeURIComponent(conversation.leadId || conversation.id)}`)}>
                     <div className="conversation-avatar"><UserCircle size={27} weight="duotone" /></div>
                     <div className="conversation-copy"><strong>{conversation.customerName}</strong><span>{conversation.preview || "بدون نص"}</span></div>
                     <div className="conversation-meta"><span>{conversation.time}</span>{conversation.unreadCount > 0 ? <b>{conversation.unreadCount}</b> : null}</div>
@@ -323,7 +403,7 @@ export function DashboardPage() {
                 </div>
                 <div className="distribution-legend">
                   {pieData.map((entry, index) => (
-                    <button type="button" key={entry.name} onClick={() => open(entry.name, [{ label: entry.name, value: entry.value }])}>
+                    <button type="button" key={entry.name} onClick={() => void openCrmList(entry.name, `عملاء ${entry.name}`, (lead) => dashboardDepartment(lead) === (entry.name === "مبيعات التمويل" ? "finance" : entry.name === "خدمة العملاء" ? "service" : "cash"))}>
                       <i style={{ background: ["#5b291f", "#e88b63", "#c3a28d"][index] }} />
                       <span>{entry.name}</span>
                       <strong>{numberFormatter.format(entry.value)}</strong>
@@ -342,17 +422,17 @@ export function DashboardPage() {
               { label: "العملاء", value: crm?.cashSales ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
               { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
-            ]} onOpen={() => open("مبيعات الكاش", [{ label: "العملاء", value: crm?.cashSales ?? null }, { label: "تم البيع", value: crm?.sold ?? null }])} />
+            ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
             <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
               { label: "العملاء", value: crm?.financeSales ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
               { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
-            ]} onOpen={() => open("مبيعات التمويل", [{ label: "العملاء", value: crm?.financeSales ?? null }, { label: "تم البيع", value: crm?.sold ?? null }])} />
+            ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
             <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
               { label: "العملاء", value: crm?.customerService ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
               { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
-            ]} onOpen={() => open("خدمة العملاء", [{ label: "العملاء", value: crm?.customerService ?? null }, { label: "محادثات مفتوحة", value: crm?.openConversations ?? null }])} />
+            ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
             <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
               { label: "الحملات", value: marketing?.campaigns ?? null },
               { label: "مجدولة", value: marketing?.scheduled ?? null },
@@ -480,7 +560,7 @@ export function DashboardPage() {
           </div>
         </section>
       </div>
-      <DetailsDrawer details={details} onClose={() => setDetails(null)} />
+      <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />
     </>
   );
 }

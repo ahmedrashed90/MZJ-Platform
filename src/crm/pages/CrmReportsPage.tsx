@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, FilePdf, FileXls, MagnifyingGlass, Users, X } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, downloadCsv, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmMeta } from "../types";
@@ -44,6 +45,8 @@ export function CrmReportsPage() {
   const [popupQ, setPopupQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+
+  useEscapeToClose(Boolean(popup), () => setPopup(null));
 
   useEffect(() => {
     void crmFetch<CrmMeta>("/api/crm/meta").then(setMeta).catch((error) => setNotice(error.message));

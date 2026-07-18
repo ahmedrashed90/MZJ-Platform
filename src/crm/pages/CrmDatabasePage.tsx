@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, Car, FilePdf, FileXls, MagnifyingGlass, PencilSimple, Trash, UsersThree, X } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentLabel, downloadCsv, formatDate, queryString } from "../api";
 import { LeadDrawer } from "../components/LeadDrawer";
 import { sourceLabel } from "../sourceCatalog";
@@ -20,6 +21,9 @@ export function CrmDatabasePage() {
   const [newAgentId, setNewAgentId] = useState("");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+
+  useEscapeToClose(Boolean(vehicle), () => setVehicle(null));
+  useEscapeToClose(transferOpen, () => setTransferOpen(false));
 
   useEffect(() => { void loadMeta(); }, []);
   useEffect(() => { const timer = window.setTimeout(() => void loadRows(), 220); return () => window.clearTimeout(timer); }, [filters, limit]);
@@ -121,7 +125,7 @@ export function CrmDatabasePage() {
       </div>
       {rows.length < total ? <button className="crm-secondary-button crm-load-more" onClick={() => setLimit((current) => current + 50)}>تحميل 50 عميل بعدهم</button> : null}
 
-      <LeadDrawer lead={selected} meta={meta} onClose={() => setSelected(null)} onSaved={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected(null); }} />
+      <LeadDrawer lead={selected} meta={meta} onClose={() => setSelected(null)} onRead={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected((current) => current?.id === updated.id ? { ...current, ...updated } : current); }} onSaved={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected(null); }} />
 
       {vehicle ? <div className="crm-modal-backdrop" onMouseDown={() => setVehicle(null)}><div className="crm-modal-card small" onMouseDown={(event) => event.stopPropagation()}><header><h2>بيانات السيارة</h2><button className="crm-icon-button" onClick={() => setVehicle(null)}><X size={18} /></button></header><div className="crm-detail-list"><span><b>اسم السيارة</b>{vehicle.car_name || "—"}</span><span><b>الموديل</b>{vehicle.car_model || "—"}</span><span><b>نوع السيارة</b>{vehicle.car_type || "—"}</span><span><b>اللون</b>{vehicle.color || "—"}</span><span><b>ملاحظات السيارة</b>{vehicle.notes || "—"}</span></div></div></div> : null}
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, Check, MagnifyingGlass, PencilSimple, PlusCircle, Trash, UsersThree, X } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmMeta } from "../types";
@@ -29,6 +30,8 @@ export function CrmManualLeadsPage() {
   const [notice, setNotice] = useState("");
   const [approval, setApproval] = useState<any | null>(null);
   const [approvalAgent, setApprovalAgent] = useState("");
+
+  useEscapeToClose(Boolean(approval), () => setApproval(null));
 
   useEffect(() => { void loadMeta(); }, []);
   useEffect(() => {

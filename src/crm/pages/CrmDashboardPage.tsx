@@ -8,7 +8,9 @@ import {
   PhoneCall,
   UserPlus,
   UsersThree,
+  X,
 } from "@phosphor-icons/react";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { LeadDrawer } from "../components/LeadDrawer";
 import { leadHasUnreadMessage } from "../unreadState";
@@ -20,6 +22,17 @@ const departments = [
   { key: "finance", label: "مبيعات التمويل" },
   { key: "service", label: "خدمة العملاء" },
 ];
+
+const departmentStorageKey = "mzj.crm.dashboard.department";
+
+function initialDepartment(requestedDepartment: string) {
+  if (departments.some((item) => item.key === requestedDepartment)) return requestedDepartment;
+  try {
+    const stored = window.sessionStorage.getItem(departmentStorageKey) || "";
+    if (departments.some((item) => item.key === stored)) return stored;
+  } catch {}
+  return "cash";
+}
 
 function leadStatus(lead: CrmLead) {
   return String(lead.status_label || lead.status_code || "عميل جديد").trim();
@@ -39,21 +52,30 @@ function readPatch(lead: CrmLead): CrmLead {
 }
 
 export function CrmDashboardPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const requestedLeadId = searchParams.get("lead") || "";
   const requestedDepartment = searchParams.get("department") || "";
   const [meta, setMeta] = useState<CrmMeta | null>(null);
-  const [department, setDepartment] = useState(() => departments.some((item) => item.key === requestedDepartment) ? requestedDepartment : "cash");
+  const [department, setDepartment] = useState(() => initialDepartment(requestedDepartment));
   const [q, setQ] = useState("");
   const [branch, setBranch] = useState("");
   const [statuses, setStatuses] = useState<CrmStatus[]>([]);
   const [leads, setLeads] = useState<CrmLead[]>([]);
   const [selected, setSelected] = useState<CrmLead | null>(null);
+  const [summaryView, setSummaryView] = useState<{ title: string; subtitle: string; leads: CrmLead[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const openedRequestedLead = useRef("");
 
   useEffect(() => { void loadMeta(); }, []);
+  useEffect(() => {
+    if (!departments.some((item) => item.key === requestedDepartment) || requestedDepartment === department) return;
+    setDepartment(requestedDepartment);
+    setBranch("");
+    setSelected(null);
+    openedRequestedLead.current = "";
+    try { window.sessionStorage.setItem(departmentStorageKey, requestedDepartment); } catch {}
+  }, [requestedDepartment, department]);
   useEffect(() => {
     const timer = window.setTimeout(() => void loadDashboard(), 180);
     return () => window.clearTimeout(timer);
@@ -102,25 +124,29 @@ export function CrmDashboardPage() {
     }
   }
 
-  async function markLeadRead(lead: CrmLead, updateDrawer = true) {
-    const patched = readPatch(lead);
-    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
-    if (updateDrawer) setSelected(patched);
-    try {
-      await crmFetch("/api/crm/unread", {
-        method: "POST",
-        body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
-      });
-    } catch (failure) {
-      console.warn("تعذر حفظ قراءة محادثة العميل", failure);
-    }
-  }
-
   function openLead(lead: CrmLead) {
     const patched = readPatch(lead);
     setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
     setSelected(patched);
   }
+
+  function selectDepartment(nextDepartment: string) {
+    setDepartment(nextDepartment);
+    setBranch("");
+    setSelected(null);
+    openedRequestedLead.current = "";
+    try { window.sessionStorage.setItem(departmentStorageKey, nextDepartment); } catch {}
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("department", nextDepartment);
+    nextParams.delete("lead");
+    setSearchParams(nextParams, { replace: true });
+  }
+
+  function openSummary(title: string, subtitle: string, matches: (lead: CrmLead) => boolean) {
+    setSummaryView({ title, subtitle, leads: leads.filter(matches) });
+  }
+
+  useEscapeToClose(Boolean(summaryView), () => setSummaryView(null));
 
   const groups = useMemo(() => {
     const originalOrder = new Map(leads.map((lead, index) => [lead.id, index]));
@@ -184,7 +210,7 @@ export function CrmDashboardPage() {
             key={item.key}
             type="button"
             className={department === item.key ? "active" : ""}
-            onClick={() => { setDepartment(item.key); setBranch(""); }}
+            onClick={() => selectDepartment(item.key)}
           >
             {item.label}
           </button>
@@ -192,11 +218,11 @@ export function CrmDashboardPage() {
       </div>
 
       <section className="crm-dashboard-summary-grid">
-        <article><span className="icon"><UsersThree size={23} /></span><div><small>إجمالي العملاء</small><strong>{summary.total.toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon"><UserPlus size={23} /></span><div><small>عملاء جدد</small><strong>{summary.newCount.toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon"><ChatCircleDots size={23} /></span><div><small>رسائل غير مقروءة</small><strong>{summary.unread.toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon"><PhoneCall size={23} /></span><div><small>عملاء موزعون</small><strong>{summary.assigned.toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon"><CheckCircle size={23} /></span><div><small>مكتمل / تم البيع</small><strong>{summary.completed.toLocaleString("ar-SA")}</strong></div></article>
+        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("إجمالي العملاء", "كل العملاء الظاهرين في القسم الحالي", () => true)}><span className="icon"><UsersThree size={23} /></span><div><small>إجمالي العملاء</small><strong>{summary.total.toLocaleString("ar-SA")}</strong></div></button>
+        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الجدد", "العملاء الموجودون في حالة عميل جديد", (lead) => leadStatus(lead) === "عميل جديد")}><span className="icon"><UserPlus size={23} /></span><div><small>عملاء جدد</small><strong>{summary.newCount.toLocaleString("ar-SA")}</strong></div></button>
+        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("الرسائل غير المقروءة", "العملاء الذين لديهم رسائل واردة لم يفتحها المندوب بعد", leadHasUnreadMessage)}><span className="icon"><ChatCircleDots size={23} /></span><div><small>رسائل غير مقروءة</small><strong>{summary.unread.toLocaleString("ar-SA")}</strong></div></button>
+        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الموزعون", "العملاء المرتبطون بمندوب أو مسؤول", (lead) => Boolean(lead.assigned_to || lead.assigned_name))}><span className="icon"><PhoneCall size={23} /></span><div><small>عملاء موزعون</small><strong>{summary.assigned.toLocaleString("ar-SA")}</strong></div></button>
+        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("مكتمل / تم البيع", "العملاء الموجودون في الحالات المكتملة أو تم البيع", (lead) => ["تم البيع", "تم الانتهاء", "تم الإنتهاء - إنشاء طلب البيع", "تم الانتهاء - إنشاء طلب البيع"].includes(leadStatus(lead)))}><span className="icon"><CheckCircle size={23} /></span><div><small>مكتمل / تم البيع</small><strong>{summary.completed.toLocaleString("ar-SA")}</strong></div></button>
       </section>
 
       <div className="crm-toolbar crm-dashboard-toolbar">
@@ -249,10 +275,31 @@ export function CrmDashboardPage() {
         </div>
       ) : null}
 
+      {summaryView ? (
+        <div className="crm-modal-backdrop" onMouseDown={() => setSummaryView(null)}>
+          <div className="crm-modal-card crm-dashboard-summary-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header><div><h2>{summaryView.title}</h2><p>{summaryView.subtitle}</p></div><button className="crm-icon-button" type="button" onClick={() => setSummaryView(null)} aria-label="إغلاق"><X size={19} /></button></header>
+            <div className="crm-dashboard-summary-list">
+              {summaryView.leads.map((lead) => (
+                <button type="button" key={lead.id} className="crm-dashboard-summary-lead" onClick={() => { setSummaryView(null); openLead(lead); }}>
+                  <div><strong>{lead.customer_name || "عميل"}</strong><span>{leadStatus(lead)} · {sourceLabel(lead.source_code, lead.source_name)}</span><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}{lead.preview_text ? ` · ${lead.preview_text}` : ""}</small></div>
+                  <div className="crm-dashboard-summary-lead-meta">{leadHasUnreadMessage(lead) ? <b>{Math.max(1, Number(lead.unread_count || 0)).toLocaleString("ar-SA")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at)}</time></div>
+                </button>
+              ))}
+              {!summaryView.leads.length ? <div className="crm-empty-state">لا يوجد عملاء داخل هذا الكارت</div> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <LeadDrawer
         lead={selected}
         meta={meta}
         onClose={() => setSelected(null)}
+        onRead={(updated) => {
+          setLeads((current) => current.map((lead) => lead.id === updated.id ? { ...lead, ...updated } : lead));
+          setSelected((current) => current?.id === updated.id ? { ...current, ...updated } : current);
+        }}
         onSaved={(updated) => {
           setLeads((current) => current.map((lead) => lead.id === updated.id ? { ...lead, ...updated } : lead));
           setSelected((current) => current ? { ...current, ...updated } : current);
