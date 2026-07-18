@@ -3,6 +3,8 @@ import { ArrowClockwise, FilePdf, FileXls, MagnifyingGlass, Users, X } from "@ph
 import { crmFetch, downloadCsv, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmMeta } from "../types";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../components/PermissionGate";
 
 type ReportRow = {
   name: string;
@@ -37,6 +39,8 @@ function reportExportRows(section: string, rows: ReportRow[]) {
 }
 
 export function CrmReportsPage() {
+  const { user } = useAuth();
+  const canExport = hasPermission(user, "crm.reports.export");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [filters, setFilters] = useState(emptyFilters);
   const [data, setData] = useState<any | null>(null);
@@ -102,8 +106,8 @@ export function CrmReportsPage() {
       <header className="crm-page-head">
         <div><h1>التقارير</h1><p>صفحة واحدة تشمل المؤشرات والمصادر والأقسام والمناديب وخدمة العملاء بنفس الفلاتر.</p></div>
         <div className="crm-head-actions">
-          <button className="crm-secondary-button" onClick={exportAll}><FileXls size={18} />تصدير Excel</button>
-          <button className="crm-secondary-button" onClick={printAll}><FilePdf size={18} />تصدير PDF</button>
+          {canExport ? <><button className="crm-secondary-button" onClick={exportAll}><FileXls size={18} />تصدير Excel</button>
+          <button className="crm-secondary-button" onClick={printAll}><FilePdf size={18} />تصدير PDF</button></> : null}
           <button className="crm-primary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
         </div>
       </header>

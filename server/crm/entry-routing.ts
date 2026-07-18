@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmPermission, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function array(value: unknown) {
@@ -9,11 +9,10 @@ function array(value: unknown) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إعدادات دخول وتوزيع العملاء متاحة للإدارة فقط" });
-
   const sql = getSql();
 
   if (request.method === "GET") {
+    if (!(await requireCrmPermission(user, response, "crm.settings.view"))) return;
     const [settings] = await sql<any[]>`select * from crm.automation_settings where id='default'`;
     return response.status(200).json({ ok: true, settings });
   }
@@ -21,6 +20,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!["PUT", "PATCH", "POST"].includes(request.method || "")) {
     return response.status(405).json({ ok: false, error: "Method not allowed" });
   }
+  if (!(await requireCrmPermission(user, response, "crm.settings.manage"))) return;
 
   const body = parseBody(request);
   const section = clean(body.section);

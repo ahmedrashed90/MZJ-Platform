@@ -1,10 +1,11 @@
 import type { VercelRequest,VercelResponse } from "@vercel/node";
-import { clean,isCrmManager,parseBody,requireCrmUser,userScope } from "../_crm-utils.js";
+import { clean,parseBody,requireCrmPermission,requireCrmUser,userScope } from "../_crm-utils.js";
 import { classifyConversationService } from "../_crm-lifecycle.js";
 import { getSql } from "../_db.js";
 export default async function handler(request:VercelRequest,response:VercelResponse){
   const user=await requireCrmUser(request,response);if(!user)return;const sql=getSql();
   if(request.method==="GET"){
+    if(!(await requireCrmPermission(user,response,"crm.inbox.view")))return;
     const scope=userScope(user),state=clean(request.query.state),channel=clean(request.query.channel),search=clean(request.query.search);const like=`%${search}%`;
     const rows=await sql<any[]>`
       select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text,ct.primary_phone,ct.primary_phone_normalized,
@@ -18,7 +19,7 @@ export default async function handler(request:VercelRequest,response:VercelRespo
     return response.status(200).json({ok:true,rows});
   }
   if(request.method==="POST"){
-    if(!isCrmManager(user))return response.status(403).json({ok:false,error:"تصنيف المحادثات غير المحددة متاح للإدارة فقط"});
+    if(!(await requireCrmPermission(user,response,"crm.inbox_agent.manage")))return;
     const body=parseBody(request),conversationId=clean(body.conversationId),serviceKey=clean(body.serviceKey);if(!conversationId||!serviceKey)return response.status(400).json({ok:false,error:"المحادثة والخدمة مطلوبتان"});
     const result=await classifyConversationService({conversationId,serviceKey,sourceCode:clean(body.sourceCode),classificationMethod:"manual",actor:user,eventKey:`manual-classification:${conversationId}:${Date.now()}`});
     return response.status(200).json({ok:true,result});

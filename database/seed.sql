@@ -4,7 +4,8 @@ insert into core.branches(code, name, sort_order) values
 ('multaqa', 'فرع الملتقى', 30),
 ('online', 'فرع الاونلاين', 40),
 ('customer_service', 'خدمة العملاء', 50),
-('call_center_branch', 'الكول سنتر', 60)
+('call_center_branch', 'الكول سنتر', 60),
+('warehouse', 'المستودع', 70)
 on conflict (code) do update set name = excluded.name, sort_order = excluded.sort_order, is_active = true;
 
 insert into core.departments(code, name, system_code) values
@@ -20,10 +21,15 @@ on conflict (code) do update set name = excluded.name, system_code = excluded.sy
 insert into core.roles(code, name, is_system) values
 ('admin', 'مدير النظام', true),
 ('sales_manager', 'مدير المبيعات', true),
+('accounts_manager', 'مدير الحسابات', true),
+('operations_manager', 'مدير العمليات', true),
+('operations_admin', 'إداري العمليات', true),
 ('branch_manager', 'مدير فرع', true),
 ('call_center_agent', 'مندوب كول سنتر', true),
+('customer_service_agent', 'مندوب خدمة عملاء', true),
 ('sales_user', 'مندوب مبيعات', true),
-('marketing_user', 'مستخدم التسويق', true),
+('marketing_executive', 'تنفيذي التسويق', true),
+('marketing_user', 'مستخدم التسويق (قديم)', true),
 ('operations_user', 'مستخدم العمليات', true),
 ('tracking_user', 'مستخدم التتبع', true)
 on conflict (code) do update set name = excluded.name;

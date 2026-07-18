@@ -13,6 +13,8 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import { crmFetch, formatDate } from "../api";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../components/PermissionGate";
 import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
 
@@ -119,6 +121,8 @@ function templateStatusLabel(row: any) {
 }
 
 export function CrmAdminPage({ embedded = false }: Props) {
+  const { user } = useAuth();
+  const canManage = hasPermission(user, "crm.settings.manage");
   const [tab, setTab] = useState<Tab>("entry_routing");
   const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
@@ -258,7 +262,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
   }
 
   return (
-    <div className={`crm-page crm-admin-page ${embedded ? "embedded" : ""}`}>
+    <div className={`crm-page crm-admin-page ${embedded ? "embedded" : ""} ${canManage ? "" : "read-only"}`}>
       {!embedded ? (
         <header className="crm-page-head">
           <div><h1>إعدادات CRM</h1><p>كل الإعدادات التشغيلية في مكان واحد بدون تعديل السورس.</p></div>

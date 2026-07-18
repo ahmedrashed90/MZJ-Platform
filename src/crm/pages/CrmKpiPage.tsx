@@ -11,6 +11,8 @@ import {
 } from "@phosphor-icons/react";
 import { crmFetch, queryString } from "../api";
 import type { CrmMeta } from "../types";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../components/PermissionGate";
 
 type ModalTab = "speed" | "efficiency" | "discipline" | "value" | "result";
 
@@ -107,7 +109,10 @@ function percent(value: unknown) {
 }
 
 export function CrmKpiPage() {
-  const [tab, setTab] = useState<"add" | "reports">("add");
+  const { user } = useAuth();
+  const canManage = hasPermission(user, "crm.kpi.manage");
+  const canExport = hasPermission(user, "crm.kpi.export");
+  const [tab, setTab] = useState<"add" | "reports">(canManage ? "add" : "reports");
   const [modalTab, setModalTab] = useState<ModalTab>("speed");
   const [filters, setFilters] = useState({ month: "", from: "", to: "", branch: "", agent: "", q: "" });
   const [rows, setRows] = useState<any[]>([]);
@@ -246,7 +251,7 @@ export function CrmKpiPage() {
         <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
       </header>
 
-      <div className="crm-department-tabs"><button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>إضافة التقييم</button><button className={tab === "reports" ? "active" : ""} onClick={() => setTab("reports")}>التقارير</button></div>
+      <div className="crm-department-tabs">{canManage ? <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>إضافة التقييم</button> : null}<button className={tab === "reports" ? "active" : ""} onClick={() => setTab("reports")}>التقارير</button></div>
 
       <div className="crm-filter-panel reports kpi-filters">
         <label><span>الشهر</span><input type="month" value={filters.month} onChange={(event) => setFilters((current) => ({ ...current, month: event.target.value }))} /></label>
@@ -260,7 +265,7 @@ export function CrmKpiPage() {
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
-      {tab === "add" ? (
+      {tab === "add" && canManage ? (
         <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الفرع</th><th>المندوب</th><th>القسم</th><th>المبيعات</th><th>السرعة</th><th>الكفاءة</th><th>الانضباط</th><th>القيمة</th><th>KPI %</th><th>التقييم</th><th>الإجراء</th></tr></thead><tbody>
           {visibleAgents.map((agent) => { const last = rows.find((row) => row.user_id === agent.id); return <tr key={agent.id}><td>{(agent.branches || []).join("، ") || "—"}</td><td><div className="kpi-agent-cell"><strong>{agent.full_name}</strong><small>{agent.employee_no || ""}</small></div></td><td>{(agent.departments || []).join("، ") || "—"}</td><td>{last?.total_sales ?? last?.calculated_sales ?? 0}</td><td>{last ? percent(last.speed_score) : "—"}</td><td>{last ? percent(last.efficiency_score) : "—"}</td><td>{last ? percent(last.discipline_score) : "—"}</td><td>{last ? percent(last.value_score) : "—"}</td><td>{last ? <strong>{percent(last.total_score)}</strong> : "—"}</td><td>{last?.rating || "—"}</td><td><button className="crm-primary-button small" onClick={() => open(agent, last)}>تقييم</button></td></tr>; })}
           {!visibleAgents.length ? <tr><td colSpan={11}><div className="crm-empty-state">لا يوجد مستخدمون مطابقون للفلاتر</div></td></tr> : null}
@@ -270,12 +275,12 @@ export function CrmKpiPage() {
       {tab === "reports" ? (
         <>
           <section className="crm-report-summary kpi-report-summary"><article><span>عدد المناديب</span><strong>{reportSummary.count}</strong></article><article><span>متوسط السرعة</span><strong>{percent(reportSummary.speed)}</strong></article><article><span>متوسط الكفاءة</span><strong>{percent(reportSummary.efficiency)}</strong></article><article><span>متوسط الانضباط</span><strong>{percent(reportSummary.discipline)}</strong></article><article><span>متوسط القيمة</span><strong>{percent(reportSummary.value)}</strong></article><article><span>متوسط KPI</span><strong>{percent(reportSummary.total)}</strong></article></section>
-          <div className="kpi-report-cards">{visibleRows.map((row) => <article key={row.id} className="crm-panel kpi-report-card"><header><div><span>{(row.branches || []).join("، ") || "بدون فرع"}</span><h2>{row.full_name}</h2><p>{String(row.period_start).slice(0,10)} إلى {String(row.period_end).slice(0,10)}</p></div><strong>{percent(row.total_score)}</strong></header><div className="kpi-card-score-grid"><span>السرعة<b>{percent(row.speed_score)}</b></span><span>الكفاءة<b>{percent(row.efficiency_score)}</b></span><span>الانضباط<b>{percent(row.discipline_score)}</b></span><span>القيمة<b>{percent(row.value_score)}</b></span><span>النقاط<b>{Math.round(number(row.details?.finalKpi?.repTotalScore))}</b></span><span>التقييم<b>{row.rating || "—"}</b></span></div><footer><button className="crm-row-actions-button" onClick={() => open(null, row)}><PencilSimple size={16} />تعديل</button><button className="crm-row-actions-button" onClick={() => print(row, "all")}><FilePdf size={16} />PDF كامل</button></footer></article>)}</div>
+          <div className="kpi-report-cards">{visibleRows.map((row) => <article key={row.id} className="crm-panel kpi-report-card"><header><div><span>{(row.branches || []).join("، ") || "بدون فرع"}</span><h2>{row.full_name}</h2><p>{String(row.period_start).slice(0,10)} إلى {String(row.period_end).slice(0,10)}</p></div><strong>{percent(row.total_score)}</strong></header><div className="kpi-card-score-grid"><span>السرعة<b>{percent(row.speed_score)}</b></span><span>الكفاءة<b>{percent(row.efficiency_score)}</b></span><span>الانضباط<b>{percent(row.discipline_score)}</b></span><span>القيمة<b>{percent(row.value_score)}</b></span><span>النقاط<b>{Math.round(number(row.details?.finalKpi?.repTotalScore))}</b></span><span>التقييم<b>{row.rating || "—"}</b></span></div><footer>{canManage ? <button className="crm-row-actions-button" onClick={() => open(null, row)}><PencilSimple size={16} />تعديل</button> : null}{canExport ? <button className="crm-row-actions-button" onClick={() => print(row, "all")}><FilePdf size={16} />PDF كامل</button> : null}</footer></article>)}</div>
           {!visibleRows.length ? <div className="crm-empty-state panel">لا توجد تقييمات ضمن الفترة والفلاتر المحددة</div> : null}
         </>
       ) : null}
 
-      {modal ? (
+      {modal && canManage ? (
         <div className="crm-modal-backdrop" onMouseDown={() => setModal(false)}>
           <div className="crm-modal-card kpi-modal-card pro" onMouseDown={(event) => event.stopPropagation()}>
             <header><div><h2>إضافة تقييم المناديب</h2><p>جميع النتائج تحسب تلقائيًا من المدخلات اليومية بنفس منطق النظام القديم.</p></div><button className="crm-icon-button" onClick={() => setModal(false)}><X size={18} /></button></header>
@@ -287,7 +292,7 @@ export function CrmKpiPage() {
               <label><span>أيام العمل</span><input type="number" min="1" value={form.details.workDays} onChange={(event) => updateDetails((draft) => { draft.workDays = Math.max(1, number(event.target.value)); })} /></label>
             </section>
 
-            <div className="kpi-pdf-actions"><button onClick={() => print(form, "speed")}><FilePdf size={15} />PDF السرعة</button><button onClick={() => print(form, "efficiency")}><FilePdf size={15} />PDF الكفاءة</button><button onClick={() => print(form, "discipline")}><FilePdf size={15} />PDF الانضباط</button><button onClick={() => print(form, "value")}><FilePdf size={15} />PDF القيمة</button><button onClick={() => print(form, "all")}><FilePdf size={15} />PDF كامل</button></div>
+            {canExport ? <div className="kpi-pdf-actions"><button onClick={() => print(form, "speed")}><FilePdf size={15} />PDF السرعة</button><button onClick={() => print(form, "efficiency")}><FilePdf size={15} />PDF الكفاءة</button><button onClick={() => print(form, "discipline")}><FilePdf size={15} />PDF الانضباط</button><button onClick={() => print(form, "value")}><FilePdf size={15} />PDF القيمة</button><button onClick={() => print(form, "all")}><FilePdf size={15} />PDF كامل</button></div> : null}
 
             <nav className="kpi-modal-tabs">{(["speed","efficiency","discipline","value","result"] as ModalTab[]).map((item) => <button key={item} className={modalTab === item ? "active" : ""} onClick={() => setModalTab(item)}>{item === "speed" ? "السرعة" : item === "efficiency" ? "الكفاءة" : item === "discipline" ? "الانضباط" : item === "value" ? "القيمة" : "النتيجة"}</button>)}</nav>
 

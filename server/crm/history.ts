@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { clean, requireCrmPermission, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function scopeCondition(scope: ReturnType<typeof userScope>) {
@@ -10,6 +10,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
   if (!user) return;
+  if (!(await requireCrmPermission(user, response, "crm.finance_history.view"))) return;
   const sql = getSql();
   const scope = scopeCondition(userScope(user));
   const leadId = clean(request.query.leadId);

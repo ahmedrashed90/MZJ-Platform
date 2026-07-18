@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { SessionUser } from "./_auth.js";
-import { requireUser } from "./_auth.js";
+import { requireSystemAccess } from "./_auth.js";
+import { hasPermission } from "./_permissions.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { getSql } from "./_db.js";
 import { calculateLeadCompletion } from "./_crm-customer-fields.js";
@@ -41,21 +42,36 @@ export function hasAnyRole(user: SessionUser, roles: string[]) {
   return user.roleCodes.some((role) => roles.includes(role));
 }
 
-export function isCrmManager(user: SessionUser) {
-  return hasAnyRole(user, ["admin", "sales_manager", "branch_manager"]);
-}
 
 export async function requireCrmUser(request: VercelRequest, response: VercelResponse) {
-  const user = await requireUser(request, response);
+  const user = await requireSystemAccess(request, response, "crm");
   if (!user) return null;
   await ensureCrmSchema();
-  const crmDepartments = new Set(["cash_sales", "finance_sales", "customer_service", "call_center"]);
-  const allowed = user.roleCodes.includes("admin") || user.roleCodes.includes("sales_manager") || user.departmentCodes.some((code) => crmDepartments.has(code));
-  if (!allowed) {
-    response.status(403).json({ ok: false, error: "لا توجد صلاحية للدخول إلى CRM" });
-    return null;
-  }
   return user;
+}
+
+export async function requireCrmPermission(user: SessionUser, response: VercelResponse, permissionCode: string) {
+  if (hasPermission(user, permissionCode)) return true;
+  const sql = getSql();
+  await sql`
+    insert into audit.activity_log(user_id, system_code, permission_code, action, entity_type, entity_id, result, rejection_reason)
+    values (${user.id}::uuid, 'crm', ${permissionCode}, 'permission_denied', 'permission', ${permissionCode}, 'denied', 'missing_permission')
+  `.catch(() => undefined);
+  response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه العملية", permission: permissionCode });
+  return false;
+}
+
+export async function requireCrmAnyPermission(user: SessionUser, response: VercelResponse, permissionCodes: string[]) {
+  for (const permissionCode of permissionCodes) {
+    if (hasPermission(user, permissionCode)) return true;
+  }
+  const sql = getSql();
+  await sql`
+    insert into audit.activity_log(user_id, system_code, permission_code, action, entity_type, entity_id, result, rejection_reason)
+    values (${user.id}::uuid, 'crm', ${permissionCodes.join(",")}, 'permission_denied', 'permission_group', 'crm_meta', 'denied', 'missing_any_permission')
+  `.catch(() => undefined);
+  response.status(403).json({ ok: false, error: "لا توجد صلاحية للوصول إلى بيانات CRM المطلوبة" });
+  return false;
 }
 
 export type Scope = {
@@ -67,12 +83,17 @@ export type Scope = {
 };
 
 export function userScope(user: SessionUser): Scope {
-  const all = hasAnyRole(user, ["admin", "sales_manager"]);
-  const callCenterOnly = !all && user.departmentCodes.includes("call_center") && !user.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
+  const rule = user.scopeRules?.crm;
+  const configuredScope = rule?.scopeCode || user.dataScopes?.crm;
+  const departmentCodes = rule?.departmentCodes?.length ? rule.departmentCodes : user.departmentCodes;
+  const branchCodes = rule?.branchCodes?.length ? rule.branchCodes : user.branchCodes;
+  const all = configuredScope === "all";
+  const assignedOnly = configuredScope ? ["self", "assigned", "workflow_assigned", "created_by_me"].includes(configuredScope) : false;
+  const callCenterOnly = !all && (assignedOnly || (departmentCodes.includes("call_center") && !departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))));
   return {
     all,
-    departmentCodes: user.departmentCodes,
-    branchCodes: user.branchCodes,
+    departmentCodes,
+    branchCodes,
     userId: user.id,
     callCenterOnly,
   };

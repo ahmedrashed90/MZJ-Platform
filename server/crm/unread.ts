@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, normalizePhone, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
+import { clean, normalizePhone, parseBody, requireCrmPermission, requireCrmUser, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead, markCrmLeadUnread } from "../_crm-unread-state.js";
 
@@ -14,6 +14,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
   if (!user) return;
+  if (!(await requireCrmPermission(user, response, "crm.conversation.mark_read"))) return;
   const sql = getSql();
   const scope = userScope(user);
   const body = parseBody(request);
@@ -72,9 +73,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (action === "mark_read") {
-    const readThroughAt = validIsoDate(body.readThroughAt ?? body.read_through_at) || new Date().toISOString();
-    const updated = await markCrmLeadRead(sql, lead.id, { conversationId, readThroughAt });
-    return response.status(200).json({ ok: true, row: updated, readThroughAt });
+    const updated = await markCrmLeadRead(sql, lead.id);
+    return response.status(200).json({ ok: true, row: updated });
   }
 
   return response.status(400).json({ ok: false, error: "إجراء حالة القراءة غير مدعوم" });

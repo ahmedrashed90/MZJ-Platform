@@ -12,6 +12,13 @@ export type AuthUser = {
   departmentCodes: string[];
   branches: string[];
   branchCodes: string[];
+  permissions: string[];
+  inheritedPermissions: string[];
+  allowedOverrides: string[];
+  deniedOverrides: string[];
+  systemCodes: string[];
+  dataScopes: Record<string, string>;
+  scopeRules: Record<string, { scopeCode: string; branchCodes: string[]; departmentCodes: string[] }>;
 };
 
 export type SetupStatus = {

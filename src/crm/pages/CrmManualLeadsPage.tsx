@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, Check, MagnifyingGlass, PencilSimple, PlusCircle, Trash, UsersThree, X } from "@phosphor-icons/react";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../components/PermissionGate";
 import type { CrmMeta } from "../types";
 
 const initialForm = {
@@ -19,7 +21,11 @@ const initialForm = {
 };
 
 export function CrmManualLeadsPage() {
-  const [tab, setTab] = useState<"add" | "list">("add");
+  const { user } = useAuth();
+  const canCreate = hasPermission(user, "crm.manual_lead.create");
+  const canApprove = hasPermission(user, "crm.manual_lead.approve_duplicate");
+  const canDelete = hasPermission(user, "crm.manual_lead.delete");
+  const [tab, setTab] = useState<"add" | "list">(canCreate ? "add" : "list");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [form, setForm] = useState(initialForm);
   const [rows, setRows] = useState<any[]>([]);
@@ -116,13 +122,13 @@ export function CrmManualLeadsPage() {
       </header>
 
       <div className="crm-department-tabs crm-inner-page-tabs">
-        <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><PlusCircle size={18} />إضافة عميل</button>
+        {canCreate ? <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><PlusCircle size={18} />إضافة عميل</button> : null}
         <button className={tab === "list" ? "active" : ""} onClick={() => { setTab("list"); void loadRows(); }}><UsersThree size={18} />عرض العملاء المسجلة</button>
       </div>
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
-      {tab === "add" ? (
+      {tab === "add" && canCreate ? (
         <section className="crm-panel crm-form-panel crm-manual-form-panel">
           <header><h2>بيانات العميل</h2><span>العميل اليدوي يتم التواصل معه عن طريق واتساب بالقوالب فقط.</span></header>
           <div className="crm-form-grid crm-manual-form-grid">
@@ -165,7 +171,7 @@ export function CrmManualLeadsPage() {
                     <td>{row.requested_call_center_name || "—"}</td>
                     <td>{formatDate(row.updated_at)}</td>
                     <td><span className={`crm-status-pill ${row.approval_status}`}>{row.approval_status === "pending" ? "بانتظار موافقة الإدارة" : row.approval_status === "approved" ? "تمت الموافقة" : "مرفوض"}</span></td>
-                    <td><div className="crm-row-actions">{row.approval_status === "pending" ? <button title="موافقة" onClick={() => { setApproval(row); setApprovalAgent(row.requested_assigned_to || ""); }}><Check size={16} /></button> : null}<button title="تعديل"><PencilSimple size={16} /></button><button title="مسح" onClick={() => void remove(row.id)}><Trash size={16} /></button></div></td>
+                    <td><div className="crm-row-actions">{row.approval_status === "pending" && canApprove ? <button title="موافقة" onClick={() => { setApproval(row); setApprovalAgent(row.requested_assigned_to || ""); }}><Check size={16} /></button> : null}{canDelete ? <button title="مسح" onClick={() => void remove(row.id)}><Trash size={16} /></button> : null}</div></td>
                   </tr>
                 ))}
                 {!rows.length ? <tr><td colSpan={9}><div className="crm-empty-state">لا توجد سجلات</div></td></tr> : null}
@@ -175,7 +181,7 @@ export function CrmManualLeadsPage() {
         </section>
       ) : null}
 
-      {approval ? (
+      {approval && canApprove ? (
         <div className="crm-modal-backdrop" onMouseDown={() => setApproval(null)}>
           <div className="crm-modal-card small" onMouseDown={(event) => event.stopPropagation()}>
             <header><div><h2>موافقة طلب العميل</h2><p>العميل الموجود: {approval.duplicate_customer_name || "غير محدد"}</p></div><button className="crm-icon-button" onClick={() => setApproval(null)}><X size={18} /></button></header>

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { randomUUID } from "node:crypto";
-import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmPermission, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { normalizeCustomerFieldOptions } from "../_crm-customer-fields.js";
 
@@ -11,10 +11,10 @@ function stringList(value: unknown) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إعدادات CRM متاحة للإدارة فقط" });
   const sql = getSql();
 
   if (request.method === "GET") {
+    if (!(await requireCrmPermission(user, response, "crm.settings.view"))) return;
     const [statuses, templates, mappings, quality, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
@@ -110,6 +110,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method || "")) return response.status(405).json({ ok: false, error: "Method not allowed" });
+  if (!(await requireCrmPermission(user, response, "crm.settings.manage"))) return;
   const body = parseBody(request);
   const section = clean(body.section);
   const action = clean(body.action || (request.method === "DELETE" ? "delete" : "save"));

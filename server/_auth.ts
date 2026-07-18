@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { getSql } from "./_db.js";
+import { getEffectivePermissions, hasPermission, type DataScopeCode, type SystemScopeRule } from "./_permissions.js";
 
 export const SESSION_COOKIE = "mzj_session";
 const SESSION_HOURS = 12;
@@ -17,6 +18,13 @@ export type SessionUser = {
   departmentCodes: string[];
   branches: string[];
   branchCodes: string[];
+  permissions: string[];
+  inheritedPermissions: string[];
+  allowedOverrides: string[];
+  deniedOverrides: string[];
+  systemCodes: string[];
+  dataScopes: Record<string, DataScopeCode>;
+  scopeRules: Record<string, SystemScopeRule>;
 };
 
 function parseCookies(header: string | undefined) {
@@ -125,6 +133,8 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
       and last_seen_at < now() - interval '5 minutes'
   `.catch(() => undefined);
 
+  const access = await getEffectivePermissions(row.id);
+
   return {
     id: row.id,
     employeeNo: row.employee_no,
@@ -137,6 +147,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     departmentCodes: normalizeArray(row.department_codes),
     branches: normalizeArray(row.branches),
     branchCodes: normalizeArray(row.branch_codes),
+    ...access,
   };
 }
 
@@ -155,14 +166,48 @@ export async function requireUser(request: VercelRequest, response: VercelRespon
   }
 }
 
-export async function requireAdmin(request: VercelRequest, response: VercelResponse) {
+export async function requirePermission(request: VercelRequest, response: VercelResponse, permissionCode: string) {
   const user = await requireUser(request, response);
   if (!user) return null;
-  if (!user.roleCodes.includes("admin")) {
-    response.status(403).json({ ok: false, error: "هذه العملية متاحة لمدير النظام فقط" });
+  if (!hasPermission(user, permissionCode)) {
+    const sql = getSql();
+    const requestId = String(request.headers["x-request-id"] || "").trim() || randomUUID();
+    const userAgent = String(request.headers["user-agent"] || "").slice(0, 500) || null;
+    const systemCode = permissionCode.startsWith("system.") ? permissionCode.split(".")[1] : permissionCode.split(".")[0] || "core";
+    await sql`
+      insert into audit.activity_log(
+        user_id, system_code, permission_code, action, entity_type, entity_id, ip_address, user_agent, request_id, result, rejection_reason
+      ) values (
+        ${user.id}::uuid, ${systemCode}, ${permissionCode}, 'permission_denied', 'permission', ${permissionCode},
+        ${requestIp(request)}, ${userAgent}, ${requestId}, 'denied', 'missing_permission'
+      )
+    `.catch(() => undefined);
+    response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه العملية", permission: permissionCode });
     return null;
   }
   return user;
+}
+
+export async function requireAnyPermission(request: VercelRequest, response: VercelResponse, permissionCodes: string[]) {
+  const user = await requireUser(request, response);
+  if (!user) return null;
+  if (!permissionCodes.some((code) => hasPermission(user, code))) {
+    response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه العملية" });
+    return null;
+  }
+  return user;
+}
+
+export async function requireSystemAccess(request: VercelRequest, response: VercelResponse, systemCode: string) {
+  return requirePermission(request, response, `system.${systemCode}.access`);
+}
+
+export async function requireAdmin(request: VercelRequest, response: VercelResponse) {
+  return requireAnyPermission(request, response, [
+    "settings.users.view",
+    "settings.roles.manage",
+    "settings.permissions.manage",
+  ]);
 }
 
 export function safeSecretEquals(actual: string, expected: string) {

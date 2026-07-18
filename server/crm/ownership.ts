@@ -1,8 +1,8 @@
 import type { VercelRequest,VercelResponse } from "@vercel/node";
-import { clean,requireCrmUser,userScope } from "../_crm-utils.js";
+import { clean,requireCrmPermission, requireCrmUser,userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 export default async function handler(request:VercelRequest,response:VercelResponse){
-  const user=await requireCrmUser(request,response);if(!user)return;if(request.method!=="GET")return response.status(405).json({ok:false,error:"Method not allowed"});
+  const user=await requireCrmUser(request,response);if(!user)return;if(!(await requireCrmPermission(user,response,"crm.ownership.view")))return;if(request.method!=="GET")return response.status(405).json({ok:false,error:"Method not allowed"});
   const sql=getSql(),scope=userScope(user),leadId=clean(request.query.leadId),mode=clean(request.query.mode);
   const rows=await sql<any[]>`
     select e.*,e.id::text,e.contact_id::text,e.service_request_id::text,e.lead_id::text,e.previous_assigned_to::text,e.new_assigned_to::text,e.actor_id::text,

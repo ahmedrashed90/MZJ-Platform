@@ -1,0 +1,1494 @@
+{
+  "systems": [
+    {
+      "code": "operations",
+      "name": "العمليات",
+      "order": 10
+    },
+    {
+      "code": "tracking",
+      "name": "التراكينج",
+      "order": 20
+    },
+    {
+      "code": "marketing",
+      "name": "التسويق",
+      "order": 30
+    },
+    {
+      "code": "crm",
+      "name": "CRM",
+      "order": 40
+    },
+    {
+      "code": "core",
+      "name": "الإعدادات المركزية",
+      "order": 50
+    }
+  ],
+  "pages": [
+    {
+      "system": "operations",
+      "code": "dashboard",
+      "name": "الداش بورد",
+      "route": "/operations",
+      "order": 10
+    },
+    {
+      "system": "operations",
+      "code": "database",
+      "name": "قاعدة البيانات والمخزون",
+      "route": "/operations/database",
+      "order": 20
+    },
+    {
+      "system": "operations",
+      "code": "movement",
+      "name": "حركة السيارات",
+      "route": "/operations/movement",
+      "order": 30
+    },
+    {
+      "system": "operations",
+      "code": "requests",
+      "name": "طلبات العمليات",
+      "route": "/operations/requests",
+      "order": 40
+    },
+    {
+      "system": "operations",
+      "code": "history",
+      "name": "سجل الحركات",
+      "route": "/operations/history",
+      "order": 50
+    },
+    {
+      "system": "operations",
+      "code": "archive",
+      "name": "الأرشيف",
+      "route": "/operations/archive",
+      "order": 60
+    },
+    {
+      "system": "operations",
+      "code": "settings",
+      "name": "إعدادات العمليات",
+      "route": "/settings?section=operations",
+      "order": 70
+    },
+    {
+      "system": "tracking",
+      "code": "orders",
+      "name": "طلبات التتبع",
+      "route": "/tracking",
+      "order": 10
+    },
+    {
+      "system": "tracking",
+      "code": "public_tracking",
+      "name": "صفحة تتبع العميل العامة",
+      "route": "/tracking/public",
+      "order": 20
+    },
+    {
+      "system": "tracking",
+      "code": "settings",
+      "name": "إعدادات التراكينج",
+      "route": "/settings?section=tracking",
+      "order": 30
+    },
+    {
+      "system": "marketing",
+      "code": "dashboard",
+      "name": "لوحة التحكم",
+      "route": "/marketing",
+      "order": 10
+    },
+    {
+      "system": "marketing",
+      "code": "campaigns",
+      "name": "إدارة الحملات",
+      "route": "/marketing/campaigns",
+      "order": 20
+    },
+    {
+      "system": "marketing",
+      "code": "agenda",
+      "name": "إدارة الأجندة",
+      "route": "/marketing/agenda",
+      "order": 30
+    },
+    {
+      "system": "marketing",
+      "code": "publishing",
+      "name": "تجهيز وجدولة النشر",
+      "route": "/marketing/publishing",
+      "order": 40
+    },
+    {
+      "system": "marketing",
+      "code": "calendar",
+      "name": "التقويم",
+      "route": "/marketing/calendar",
+      "order": 50
+    },
+    {
+      "system": "marketing",
+      "code": "settings",
+      "name": "إعدادات التسويق",
+      "route": "/settings?section=marketing",
+      "order": 60
+    },
+    {
+      "system": "crm",
+      "code": "dashboard",
+      "name": "الداش بورد",
+      "route": "/crm",
+      "order": 10
+    },
+    {
+      "system": "crm",
+      "code": "database",
+      "name": "قاعدة البيانات",
+      "route": "/crm/database",
+      "order": 20
+    },
+    {
+      "system": "crm",
+      "code": "manual_leads",
+      "name": "إضافة العملاء",
+      "route": "/crm/manual-leads",
+      "order": 30
+    },
+    {
+      "system": "crm",
+      "code": "finance_history",
+      "name": "سجل عملاء التمويل",
+      "route": "/crm/finance-history",
+      "order": 40
+    },
+    {
+      "system": "crm",
+      "code": "inbox",
+      "name": "صندوق الوارد",
+      "route": "/crm/inbox",
+      "order": 50
+    },
+    {
+      "system": "crm",
+      "code": "inbox_agent",
+      "name": "وكيل صندوق الوارد",
+      "route": "/crm/inbox-agent",
+      "order": 60
+    },
+    {
+      "system": "crm",
+      "code": "ownership",
+      "name": "سجل ملكية العملاء",
+      "route": "/crm/ownership",
+      "order": 70
+    },
+    {
+      "system": "crm",
+      "code": "reports",
+      "name": "التقارير",
+      "route": "/crm/reports",
+      "order": 80
+    },
+    {
+      "system": "crm",
+      "code": "kpi",
+      "name": "تقييم المناديب KPI",
+      "route": "/crm/kpi",
+      "order": 90
+    },
+    {
+      "system": "crm",
+      "code": "settings",
+      "name": "إعدادات CRM",
+      "route": "/settings?section=crm",
+      "order": 100
+    },
+    {
+      "system": "core",
+      "code": "users",
+      "name": "المستخدمون",
+      "route": "/settings",
+      "order": 10
+    },
+    {
+      "system": "core",
+      "code": "roles",
+      "name": "الأدوار وقوالب الصلاحيات",
+      "route": "/settings?section=users&tab=roles",
+      "order": 20
+    },
+    {
+      "system": "core",
+      "code": "organization",
+      "name": "الفروع والأقسام",
+      "route": "/settings?section=users&tab=organization",
+      "order": 30
+    },
+    {
+      "system": "core",
+      "code": "permissions",
+      "name": "دليل الصلاحيات",
+      "route": "/settings?section=users&tab=permissions",
+      "order": 40
+    },
+    {
+      "system": "core",
+      "code": "audit",
+      "name": "سجلات الصلاحيات والأمن",
+      "route": "/settings?section=users&tab=audit",
+      "order": 50
+    }
+  ],
+  "permissions": [
+    {
+      "code": "settings.access",
+      "system": "core",
+      "page": null,
+      "action": "access",
+      "name": "فتح صفحة الإعدادات",
+      "category": "settings",
+      "order": 5,
+      "sensitive": true
+    },
+    {
+      "code": "settings.audit.view",
+      "system": "core",
+      "page": "audit",
+      "action": "view",
+      "name": "مشاهدة سجل تعديلات الصلاحيات",
+      "category": "settings",
+      "order": 23,
+      "sensitive": true
+    },
+    {
+      "code": "settings.security.view",
+      "system": "core",
+      "page": "audit",
+      "action": "security_view",
+      "name": "مشاهدة سجل النشاط الأمني",
+      "category": "settings",
+      "order": 24,
+      "sensitive": true
+    },
+    {
+      "code": "settings.branches.manage",
+      "system": "core",
+      "page": "organization",
+      "action": "manage",
+      "name": "إدارة الفروع والأقسام",
+      "category": "settings",
+      "order": 22,
+      "sensitive": true
+    },
+    {
+      "code": "settings.permissions.manage",
+      "system": "core",
+      "page": "permissions",
+      "action": "manage",
+      "name": "إدارة الصلاحيات الفردية",
+      "category": "settings",
+      "order": 21,
+      "sensitive": true
+    },
+    {
+      "code": "settings.roles.manage",
+      "system": "core",
+      "page": "roles",
+      "action": "manage",
+      "name": "إدارة الأدوار وقوالب الصلاحيات",
+      "category": "settings",
+      "order": 20,
+      "sensitive": true
+    },
+    {
+      "code": "settings.users.view",
+      "system": "core",
+      "page": "users",
+      "action": "view",
+      "name": "مشاهدة المستخدمين",
+      "category": "settings",
+      "order": 10,
+      "sensitive": true
+    },
+    {
+      "code": "settings.users.create",
+      "system": "core",
+      "page": "users",
+      "action": "create",
+      "name": "إضافة مستخدم",
+      "category": "settings",
+      "order": 11,
+      "sensitive": true
+    },
+    {
+      "code": "settings.users.update",
+      "system": "core",
+      "page": "users",
+      "action": "update",
+      "name": "تعديل مستخدم",
+      "category": "settings",
+      "order": 12,
+      "sensitive": true
+    },
+    {
+      "code": "settings.users.disable",
+      "system": "core",
+      "page": "users",
+      "action": "disable",
+      "name": "تعطيل وإعادة تفعيل مستخدم",
+      "category": "settings",
+      "order": 13,
+      "sensitive": true
+    },
+    {
+      "code": "system.crm.access",
+      "system": "crm",
+      "page": null,
+      "action": "access",
+      "name": "الدخول إلى نظام CRM",
+      "category": "system",
+      "order": 4,
+      "sensitive": false
+    },
+    {
+      "code": "crm.dashboard.view",
+      "system": "crm",
+      "page": "dashboard",
+      "action": "view",
+      "name": "مشاهدة داش بورد CRM",
+      "category": "page",
+      "order": 400,
+      "sensitive": false
+    },
+    {
+      "code": "crm.database.view",
+      "system": "crm",
+      "page": "database",
+      "action": "view",
+      "name": "مشاهدة قاعدة بيانات العملاء",
+      "category": "page",
+      "order": 410,
+      "sensitive": false
+    },
+    {
+      "code": "crm.customer.view",
+      "system": "crm",
+      "page": "database",
+      "action": "customer_view",
+      "name": "فتح بيانات العميل",
+      "category": "action",
+      "order": 411,
+      "sensitive": false
+    },
+    {
+      "code": "crm.customer.update",
+      "system": "crm",
+      "page": "database",
+      "action": "update",
+      "name": "تعديل بيانات العميل",
+      "category": "action",
+      "order": 413,
+      "sensitive": false
+    },
+    {
+      "code": "crm.customer.change_status",
+      "system": "crm",
+      "page": "database",
+      "action": "change_status",
+      "name": "تغيير حالة العميل",
+      "category": "action",
+      "order": 414,
+      "sensitive": false
+    },
+    {
+      "code": "crm.customer.add_note",
+      "system": "crm",
+      "page": "database",
+      "action": "add_note",
+      "name": "إضافة ملاحظة للعميل",
+      "category": "action",
+      "order": 415,
+      "sensitive": false
+    },
+    {
+      "code": "crm.customer.change_owner",
+      "system": "crm",
+      "page": "database",
+      "action": "change_owner",
+      "name": "تغيير مسؤول العميل",
+      "category": "action",
+      "order": 416,
+      "sensitive": true
+    },
+    {
+      "code": "crm.customer.transfer",
+      "system": "crm",
+      "page": "database",
+      "action": "transfer",
+      "name": "نقل العميل",
+      "category": "action",
+      "order": 417,
+      "sensitive": true
+    },
+    {
+      "code": "crm.customer.delete",
+      "system": "crm",
+      "page": "database",
+      "action": "delete",
+      "name": "حذف العميل",
+      "category": "action",
+      "order": 418,
+      "sensitive": true
+    },
+    {
+      "code": "crm.customer.export",
+      "system": "crm",
+      "page": "database",
+      "action": "export",
+      "name": "تصدير العملاء",
+      "category": "action",
+      "order": 419,
+      "sensitive": true
+    },
+    {
+      "code": "crm.finance_history.view",
+      "system": "crm",
+      "page": "finance_history",
+      "action": "view",
+      "name": "مشاهدة سجل عملاء التمويل",
+      "category": "page",
+      "order": 430,
+      "sensitive": false
+    },
+    {
+      "code": "crm.inbox.view",
+      "system": "crm",
+      "page": "inbox",
+      "action": "view",
+      "name": "مشاهدة صندوق الوارد",
+      "category": "page",
+      "order": 440,
+      "sensitive": false
+    },
+    {
+      "code": "crm.conversation.view",
+      "system": "crm",
+      "page": "inbox",
+      "action": "conversation_view",
+      "name": "فتح المحادثة",
+      "category": "action",
+      "order": 441,
+      "sensitive": false
+    },
+    {
+      "code": "crm.conversation.send_text",
+      "system": "crm",
+      "page": "inbox",
+      "action": "send_text",
+      "name": "إرسال نص",
+      "category": "action",
+      "order": 442,
+      "sensitive": false
+    },
+    {
+      "code": "crm.conversation.send_template",
+      "system": "crm",
+      "page": "inbox",
+      "action": "send_template",
+      "name": "إرسال قالب",
+      "category": "action",
+      "order": 443,
+      "sensitive": false
+    },
+    {
+      "code": "crm.conversation.send_media",
+      "system": "crm",
+      "page": "inbox",
+      "action": "send_media",
+      "name": "إرسال وسائط",
+      "category": "action",
+      "order": 444,
+      "sensitive": false
+    },
+    {
+      "code": "crm.conversation.download_attachment",
+      "system": "crm",
+      "page": "inbox",
+      "action": "download_attachment",
+      "name": "تحميل مرفق",
+      "category": "action",
+      "order": 445,
+      "sensitive": false
+    },
+    {
+      "code": "crm.conversation.mark_read",
+      "system": "crm",
+      "page": "inbox",
+      "action": "mark_read",
+      "name": "تغيير حالة القراءة",
+      "category": "action",
+      "order": 446,
+      "sensitive": false
+    },
+    {
+      "code": "crm.inbox_agent.view",
+      "system": "crm",
+      "page": "inbox_agent",
+      "action": "view",
+      "name": "مشاهدة وكيل صندوق الوارد",
+      "category": "page",
+      "order": 450,
+      "sensitive": false
+    },
+    {
+      "code": "crm.inbox_agent.manage",
+      "system": "crm",
+      "page": "inbox_agent",
+      "action": "manage",
+      "name": "إدارة وكيل صندوق الوارد",
+      "category": "action",
+      "order": 451,
+      "sensitive": true
+    },
+    {
+      "code": "crm.kpi.view",
+      "system": "crm",
+      "page": "kpi",
+      "action": "view",
+      "name": "مشاهدة KPI",
+      "category": "page",
+      "order": 480,
+      "sensitive": false
+    },
+    {
+      "code": "crm.kpi.manage",
+      "system": "crm",
+      "page": "kpi",
+      "action": "manage",
+      "name": "إضافة وتعديل تقييمات المناديب",
+      "category": "action",
+      "order": 481,
+      "sensitive": true
+    },
+    {
+      "code": "crm.kpi.export",
+      "system": "crm",
+      "page": "kpi",
+      "action": "export",
+      "name": "تصدير تقارير KPI",
+      "category": "action",
+      "order": 482,
+      "sensitive": true
+    },
+    {
+      "code": "crm.customer.create",
+      "system": "crm",
+      "page": "manual_leads",
+      "action": "create",
+      "name": "إضافة عميل",
+      "category": "action",
+      "order": 412,
+      "sensitive": false
+    },
+    {
+      "code": "crm.manual_leads.view",
+      "system": "crm",
+      "page": "manual_leads",
+      "action": "view",
+      "name": "فتح صفحة إضافة العملاء",
+      "category": "page",
+      "order": 420,
+      "sensitive": false
+    },
+    {
+      "code": "crm.manual_lead.create",
+      "system": "crm",
+      "page": "manual_leads",
+      "action": "create_request",
+      "name": "إنشاء طلب إضافة عميل",
+      "category": "action",
+      "order": 421,
+      "sensitive": false
+    },
+    {
+      "code": "crm.manual_lead.approve_duplicate",
+      "system": "crm",
+      "page": "manual_leads",
+      "action": "approve_duplicate",
+      "name": "اعتماد أو رفض العميل المكرر",
+      "category": "action",
+      "order": 422,
+      "sensitive": true
+    },
+    {
+      "code": "crm.manual_lead.delete",
+      "system": "crm",
+      "page": "manual_leads",
+      "action": "delete_request",
+      "name": "حذف طلب إضافة عميل",
+      "category": "action",
+      "order": 423,
+      "sensitive": true
+    },
+    {
+      "code": "crm.ownership.view",
+      "system": "crm",
+      "page": "ownership",
+      "action": "view",
+      "name": "مشاهدة سجل ملكية العملاء",
+      "category": "page",
+      "order": 460,
+      "sensitive": false
+    },
+    {
+      "code": "crm.reports.view",
+      "system": "crm",
+      "page": "reports",
+      "action": "view",
+      "name": "مشاهدة تقارير CRM",
+      "category": "page",
+      "order": 470,
+      "sensitive": false
+    },
+    {
+      "code": "crm.reports.export",
+      "system": "crm",
+      "page": "reports",
+      "action": "export",
+      "name": "تصدير تقارير CRM",
+      "category": "action",
+      "order": 471,
+      "sensitive": true
+    },
+    {
+      "code": "crm.settings.view",
+      "system": "crm",
+      "page": "settings",
+      "action": "view",
+      "name": "مشاهدة إعدادات CRM",
+      "category": "page",
+      "order": 490,
+      "sensitive": true
+    },
+    {
+      "code": "crm.settings.manage",
+      "system": "crm",
+      "page": "settings",
+      "action": "manage",
+      "name": "تعديل إعدادات CRM",
+      "category": "action",
+      "order": 491,
+      "sensitive": true
+    },
+    {
+      "code": "system.marketing.access",
+      "system": "marketing",
+      "page": null,
+      "action": "access",
+      "name": "الدخول إلى نظام التسويق",
+      "category": "system",
+      "order": 3,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.agenda.view",
+      "system": "marketing",
+      "page": "agenda",
+      "action": "view",
+      "name": "مشاهدة الأجندة",
+      "category": "page",
+      "order": 330,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.agenda.create",
+      "system": "marketing",
+      "page": "agenda",
+      "action": "create",
+      "name": "إنشاء أجندة",
+      "category": "action",
+      "order": 331,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.agenda.edit",
+      "system": "marketing",
+      "page": "agenda",
+      "action": "edit",
+      "name": "تعديل أجندة",
+      "category": "action",
+      "order": 332,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.agenda.delete",
+      "system": "marketing",
+      "page": "agenda",
+      "action": "delete",
+      "name": "حذف أجندة",
+      "category": "action",
+      "order": 333,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.calendar.view",
+      "system": "marketing",
+      "page": "calendar",
+      "action": "view",
+      "name": "مشاهدة التقويم",
+      "category": "page",
+      "order": 350,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.campaigns.view",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "view",
+      "name": "مشاهدة الحملات",
+      "category": "page",
+      "order": 310,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.campaign.create",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "create",
+      "name": "إنشاء حملة",
+      "category": "action",
+      "order": 311,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.campaign.edit",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "edit",
+      "name": "تعديل حملة",
+      "category": "action",
+      "order": 312,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.campaign.delete",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "delete",
+      "name": "حذف حملة",
+      "category": "action",
+      "order": 313,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.structure.approve",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "structure_approve",
+      "name": "اعتماد الهيكل",
+      "category": "workflow",
+      "order": 314,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.structure.reject",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "structure_reject",
+      "name": "رفض الهيكل",
+      "category": "workflow",
+      "order": 315,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.task_template.download",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "task_template_download",
+      "name": "تحميل قالب Task Template",
+      "category": "action",
+      "order": 316,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.task_template.upload",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "task_template_upload",
+      "name": "رفع Task Template",
+      "category": "action",
+      "order": 317,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.task_template.reupload",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "task_template_reupload",
+      "name": "إعادة رفع Task Template",
+      "category": "action",
+      "order": 318,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.task_template.approve",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "task_template_approve",
+      "name": "اعتماد Task Template",
+      "category": "workflow",
+      "order": 319,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.assignment_actions.execute",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "assignment_execute",
+      "name": "تنفيذ إجراء تكليف مسند",
+      "category": "workflow",
+      "order": 320,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.assignment_actions.approve",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "assignment_approve",
+      "name": "اعتماد إجراءات التكليف",
+      "category": "workflow",
+      "order": 321,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.final_file.upload",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "final_file_upload",
+      "name": "رفع الملف النهائي",
+      "category": "action",
+      "order": 322,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.task.reopen",
+      "system": "marketing",
+      "page": "campaigns",
+      "action": "task_reopen",
+      "name": "إعادة فتح التاسك",
+      "category": "workflow",
+      "order": 323,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.dashboard.view",
+      "system": "marketing",
+      "page": "dashboard",
+      "action": "view",
+      "name": "مشاهدة لوحة التسويق",
+      "category": "page",
+      "order": 300,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.publishing.view",
+      "system": "marketing",
+      "page": "publishing",
+      "action": "view",
+      "name": "مشاهدة تجهيز النشر",
+      "category": "page",
+      "order": 340,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.publishing.manage",
+      "system": "marketing",
+      "page": "publishing",
+      "action": "manage",
+      "name": "تعديل تجهيز وجدولة النشر",
+      "category": "action",
+      "order": 341,
+      "sensitive": true
+    },
+    {
+      "code": "marketing.settings.view",
+      "system": "marketing",
+      "page": "settings",
+      "action": "view",
+      "name": "مشاهدة إعدادات التسويق",
+      "category": "page",
+      "order": 360,
+      "sensitive": false
+    },
+    {
+      "code": "marketing.settings.manage",
+      "system": "marketing",
+      "page": "settings",
+      "action": "manage",
+      "name": "تعديل إعدادات التسويق",
+      "category": "action",
+      "order": 361,
+      "sensitive": true
+    },
+    {
+      "code": "system.operations.access",
+      "system": "operations",
+      "page": null,
+      "action": "access",
+      "name": "الدخول إلى نظام العمليات",
+      "category": "system",
+      "order": 1,
+      "sensitive": false
+    },
+    {
+      "code": "operations.dashboard.view",
+      "system": "operations",
+      "page": "dashboard",
+      "action": "view",
+      "name": "مشاهدة داش بورد العمليات",
+      "category": "page",
+      "order": 100,
+      "sensitive": false
+    },
+    {
+      "code": "operations.database.view",
+      "system": "operations",
+      "page": "database",
+      "action": "view",
+      "name": "مشاهدة السيارات والمخزون",
+      "category": "page",
+      "order": 110,
+      "sensitive": false
+    },
+    {
+      "code": "operations.vehicle.create",
+      "system": "operations",
+      "page": "database",
+      "action": "create",
+      "name": "إضافة سيارة",
+      "category": "action",
+      "order": 111,
+      "sensitive": true
+    },
+    {
+      "code": "operations.vehicle.update",
+      "system": "operations",
+      "page": "database",
+      "action": "update",
+      "name": "تعديل سيارة",
+      "category": "action",
+      "order": 112,
+      "sensitive": true
+    },
+    {
+      "code": "operations.vehicle.delete",
+      "system": "operations",
+      "page": "database",
+      "action": "delete",
+      "name": "حذف سيارة",
+      "category": "action",
+      "order": 113,
+      "sensitive": true
+    },
+    {
+      "code": "operations.vehicle.export",
+      "system": "operations",
+      "page": "database",
+      "action": "export",
+      "name": "تصدير السيارات",
+      "category": "action",
+      "order": 114,
+      "sensitive": true
+    },
+    {
+      "code": "operations.history.view",
+      "system": "operations",
+      "page": "history",
+      "action": "view",
+      "name": "مشاهدة سجل الحركات",
+      "category": "page",
+      "order": 140,
+      "sensitive": false
+    },
+    {
+      "code": "operations.movement.view",
+      "system": "operations",
+      "page": "movement",
+      "action": "view",
+      "name": "مشاهدة حركة السيارات",
+      "category": "page",
+      "order": 120,
+      "sensitive": false
+    },
+    {
+      "code": "operations.movement.execute",
+      "system": "operations",
+      "page": "movement",
+      "action": "execute",
+      "name": "تنفيذ حركة سيارة",
+      "category": "action",
+      "order": 121,
+      "sensitive": true
+    },
+    {
+      "code": "operations.requests.view",
+      "system": "operations",
+      "page": "requests",
+      "action": "view",
+      "name": "مشاهدة طلبات العمليات",
+      "category": "page",
+      "order": 130,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.create",
+      "system": "operations",
+      "page": "requests",
+      "action": "create",
+      "name": "إنشاء طلب عمليات",
+      "category": "action",
+      "order": 131,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.send",
+      "system": "operations",
+      "page": "requests",
+      "action": "send",
+      "name": "إرسال طلب عمليات",
+      "category": "action",
+      "order": 132,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.receive_order",
+      "system": "operations",
+      "page": "requests",
+      "action": "receive_order",
+      "name": "مرحلة استلام الطلب",
+      "category": "workflow",
+      "order": 133,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.send_car",
+      "system": "operations",
+      "page": "requests",
+      "action": "send_car",
+      "name": "مرحلة إرسال السيارة",
+      "category": "workflow",
+      "order": 134,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.receive_car",
+      "system": "operations",
+      "page": "requests",
+      "action": "receive_car",
+      "name": "مرحلة استلام السيارة",
+      "category": "workflow",
+      "order": 135,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.finish_order",
+      "system": "operations",
+      "page": "requests",
+      "action": "finish_order",
+      "name": "مرحلة إنهاء الطلب",
+      "category": "workflow",
+      "order": 136,
+      "sensitive": false
+    },
+    {
+      "code": "operations.request.rollback",
+      "system": "operations",
+      "page": "requests",
+      "action": "rollback",
+      "name": "التراجع عن مرحلة طلب",
+      "category": "workflow",
+      "order": 137,
+      "sensitive": true
+    },
+    {
+      "code": "operations.request.delete",
+      "system": "operations",
+      "page": "requests",
+      "action": "delete",
+      "name": "حذف طلب عمليات",
+      "category": "action",
+      "order": 138,
+      "sensitive": true
+    },
+    {
+      "code": "operations.settings.view",
+      "system": "operations",
+      "page": "settings",
+      "action": "view",
+      "name": "مشاهدة إعدادات العمليات",
+      "category": "page",
+      "order": 150,
+      "sensitive": true
+    },
+    {
+      "code": "operations.settings.manage",
+      "system": "operations",
+      "page": "settings",
+      "action": "manage",
+      "name": "تعديل إعدادات العمليات",
+      "category": "action",
+      "order": 151,
+      "sensitive": true
+    },
+    {
+      "code": "system.tracking.access",
+      "system": "tracking",
+      "page": null,
+      "action": "access",
+      "name": "الدخول إلى نظام التراكينج",
+      "category": "system",
+      "order": 2,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.orders.view",
+      "system": "tracking",
+      "page": "orders",
+      "action": "view",
+      "name": "مشاهدة طلبات التراكينج",
+      "category": "page",
+      "order": 200,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.order.open",
+      "system": "tracking",
+      "page": "orders",
+      "action": "open",
+      "name": "فتح طلب التراكينج",
+      "category": "action",
+      "order": 201,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.link.create",
+      "system": "tracking",
+      "page": "orders",
+      "action": "create_link",
+      "name": "إنشاء رابط تتبع",
+      "category": "action",
+      "order": 202,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.link.copy",
+      "system": "tracking",
+      "page": "orders",
+      "action": "copy_link",
+      "name": "نسخ رابط التتبع",
+      "category": "action",
+      "order": 203,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.sms.send",
+      "system": "tracking",
+      "page": "orders",
+      "action": "send_sms",
+      "name": "إرسال SMS",
+      "category": "action",
+      "order": 204,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.order.archive",
+      "system": "tracking",
+      "page": "orders",
+      "action": "archive",
+      "name": "أرشفة الطلب",
+      "category": "action",
+      "order": 205,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.01.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_01_complete",
+      "name": "تنفيذ المرحلة 1",
+      "category": "workflow",
+      "order": 210,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.02.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_02_complete",
+      "name": "تنفيذ المرحلة 2",
+      "category": "workflow",
+      "order": 211,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.03.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_03_complete",
+      "name": "تنفيذ المرحلة 3",
+      "category": "workflow",
+      "order": 212,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.04.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_04_complete",
+      "name": "تنفيذ المرحلة 4",
+      "category": "workflow",
+      "order": 213,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.05.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_05_complete",
+      "name": "تنفيذ المرحلة 5",
+      "category": "workflow",
+      "order": 214,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.06.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_06_complete",
+      "name": "تنفيذ المرحلة 6",
+      "category": "workflow",
+      "order": 215,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.07.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_07_complete",
+      "name": "تنفيذ المرحلة 7",
+      "category": "workflow",
+      "order": 216,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.08.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_08_complete",
+      "name": "تنفيذ المرحلة 8",
+      "category": "workflow",
+      "order": 217,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.09.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_09_complete",
+      "name": "تنفيذ المرحلة 9",
+      "category": "workflow",
+      "order": 218,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.10.complete",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_10_complete",
+      "name": "تنفيذ المرحلة 10",
+      "category": "workflow",
+      "order": 219,
+      "sensitive": false
+    },
+    {
+      "code": "tracking.stage.01.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_01_rollback",
+      "name": "التراجع عن المرحلة 1",
+      "category": "workflow",
+      "order": 230,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.02.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_02_rollback",
+      "name": "التراجع عن المرحلة 2",
+      "category": "workflow",
+      "order": 231,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.03.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_03_rollback",
+      "name": "التراجع عن المرحلة 3",
+      "category": "workflow",
+      "order": 232,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.04.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_04_rollback",
+      "name": "التراجع عن المرحلة 4",
+      "category": "workflow",
+      "order": 233,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.05.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_05_rollback",
+      "name": "التراجع عن المرحلة 5",
+      "category": "workflow",
+      "order": 234,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.06.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_06_rollback",
+      "name": "التراجع عن المرحلة 6",
+      "category": "workflow",
+      "order": 235,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.07.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_07_rollback",
+      "name": "التراجع عن المرحلة 7",
+      "category": "workflow",
+      "order": 236,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.08.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_08_rollback",
+      "name": "التراجع عن المرحلة 8",
+      "category": "workflow",
+      "order": 237,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.09.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_09_rollback",
+      "name": "التراجع عن المرحلة 9",
+      "category": "workflow",
+      "order": 238,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.stage.10.rollback",
+      "system": "tracking",
+      "page": "orders",
+      "action": "stage_10_rollback",
+      "name": "التراجع عن المرحلة 10",
+      "category": "workflow",
+      "order": 239,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.settings.view",
+      "system": "tracking",
+      "page": "settings",
+      "action": "view",
+      "name": "مشاهدة إعدادات التراكينج",
+      "category": "page",
+      "order": 206,
+      "sensitive": true
+    },
+    {
+      "code": "tracking.settings.manage",
+      "system": "tracking",
+      "page": "settings",
+      "action": "manage",
+      "name": "تعديل إعدادات التراكينج",
+      "category": "action",
+      "order": 207,
+      "sensitive": true
+    }
+  ],
+  "roles": [
+    {
+      "code": "admin",
+      "name": "مدير النظام"
+    },
+    {
+      "code": "sales_manager",
+      "name": "مدير المبيعات"
+    },
+    {
+      "code": "accounts_manager",
+      "name": "مدير الحسابات"
+    },
+    {
+      "code": "operations_manager",
+      "name": "مدير العمليات"
+    },
+    {
+      "code": "operations_admin",
+      "name": "إداري العمليات"
+    },
+    {
+      "code": "branch_manager",
+      "name": "مدير فرع"
+    },
+    {
+      "code": "sales_user",
+      "name": "مندوب مبيعات"
+    },
+    {
+      "code": "call_center_agent",
+      "name": "مندوب كول سنتر"
+    },
+    {
+      "code": "customer_service_agent",
+      "name": "مندوب خدمة عملاء"
+    },
+    {
+      "code": "marketing_executive",
+      "name": "تنفيذي التسويق"
+    },
+    {
+      "code": "marketing_user",
+      "name": "مستخدم التسويق (قديم)"
+    },
+    {
+      "code": "operations_user",
+      "name": "مستخدم العمليات (قديم)"
+    },
+    {
+      "code": "tracking_user",
+      "name": "مستخدم التراكينج"
+    }
+  ]
+}

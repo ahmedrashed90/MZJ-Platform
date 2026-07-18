@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, branchForDepartment, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, requireCrmUser, resolveSourceName } from "../_crm-utils.js";
+import { audit, branchForDepartment, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, normalizePhone, parseBody, requireCrmPermission, requireCrmUser, resolveSourceName, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest } from "../_crm-lifecycle.js";
@@ -8,8 +8,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const user = await requireCrmUser(request, response);
   if (!user) return;
   const sql = getSql();
+  const scope = userScope(user);
 
   if (request.method === "GET") {
+    if (!(await requireCrmPermission(user, response, "crm.manual_leads.view"))) return;
     const q = clean(request.query.q);
     const status = clean(request.query.status);
     const rows = await sql<any[]>`
@@ -25,13 +27,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.sources src on src.code=r.source_code
       where (${status || null}::text is null or r.approval_status=${status || null})
         and (${q || null}::text is null or concat_ws(' ',r.customer_name,r.phone,r.source_code,r.car_name,sales.full_name) ilike ${q ? `%${q}%` : null})
-        and (${isCrmManager(user)}::boolean or r.requested_by=${user.id}::uuid)
+        and (${scope.all}::boolean or r.requested_by=${user.id}::uuid)
       order by r.created_at desc limit 500
     `;
     return response.status(200).json({ ok: true, rows });
   }
 
   if (request.method === "POST") {
+    if (!(await requireCrmPermission(user, response, "crm.manual_lead.create"))) return;
     const body = parseBody(request);
     const customerName = clean(body.customerName);
     const phone = clean(body.phone);
@@ -73,7 +76,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (request.method === "PATCH") {
-    if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "اعتماد الطلبات متاح للإدارة فقط" });
+    if (!(await requireCrmPermission(user, response, "crm.manual_lead.approve_duplicate"))) return;
     const body = parseBody(request);
     const id = clean(body.id);
     const action = clean(body.action);
@@ -105,9 +108,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (request.method === "DELETE") {
+    if (!(await requireCrmPermission(user, response, "crm.manual_lead.delete"))) return;
     const body = parseBody(request);
     const id = clean(body.id || request.query.id);
-    await sql`delete from crm.manual_lead_requests where id=${id}::uuid and (${isCrmManager(user)}::boolean or requested_by=${user.id}::uuid)`;
+    await sql`delete from crm.manual_lead_requests where id=${id}::uuid and (${scope.all}::boolean or requested_by=${user.id}::uuid)`;
     return response.status(200).json({ ok: true });
   }
   return response.status(405).json({ ok: false, error: "Method not allowed" });

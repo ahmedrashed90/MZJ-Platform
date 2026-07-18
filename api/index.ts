@@ -3,6 +3,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import dashboardHandler from "../server/dashboard.js";
 import metaHandler from "../server/meta.js";
 import usersHandler from "../server/users.js";
+import accessControlHandler from "../server/access-control.js";
 import loginHandler from "../server/auth/login.js";
 import logoutHandler from "../server/auth/logout.js";
 import meHandler from "../server/auth/me.js";
@@ -35,6 +36,7 @@ const routes = new Map<string, ApiHandler>([
   ["dashboard", dashboardHandler],
   ["meta", metaHandler],
   ["users", usersHandler],
+  ["access-control", accessControlHandler],
   ["auth/login", loginHandler],
   ["auth/logout", logoutHandler],
   ["auth/me", meHandler],
@@ -78,7 +80,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.11.5" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.12.0" });
   }
 
   if (route === "integrations/media") {

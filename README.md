@@ -196,3 +196,11 @@
 - لو PostgreSQL لم يقبل الرسالة، الوركر يعيد HTTP 502 حتى لا تضيع الرسالة بصمت.
 - رابط المنصة الافتراضي داخل الوركر هو `https://mzj-platform.vercel.app/api/integrations/whatsapp`.
 - يجب أن تكون قيمة `MZJ_GATEWAY_SECRET` واحدة في Vercel وCloudflare Worker.
+
+## v1.12.0 — Central users and permissions
+
+- Centralized users, roles, branches, departments, permissions, permission audit, and security audit under Settings.
+- Added per-system access, page/action/workflow permission catalog, individual allow/deny overrides, and per-system data scopes.
+- Added route, UI, API, and PostgreSQL-scope enforcement for the integrated CRM module.
+- Redirected legacy CRM admin and activity routes to the central Settings sections.
+- Added idempotent migration, seed, rollback companion, documentation, and automated access-control checks.
