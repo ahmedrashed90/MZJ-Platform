@@ -102,33 +102,24 @@ export function CrmDashboardPage() {
     }
   }
 
-  async function markLeadRead(lead: CrmLead) {
-    const readThroughAt = lead.last_incoming_message_at || lead.last_message_at || new Date().toISOString();
-    const readThroughMessageKey = String(lead.extra_data?.lastUnreadMessageKey || "").trim();
+  async function markLeadRead(lead: CrmLead, updateDrawer = true) {
+    const patched = readPatch(lead);
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
+    if (updateDrawer) setSelected(patched);
     try {
-      const result = await crmFetch<{ ok: boolean; row?: CrmLead | null; cleared?: boolean }>("/api/crm/unread", {
+      await crmFetch("/api/crm/unread", {
         method: "POST",
-        body: JSON.stringify({
-          action: "mark_read",
-          leadId: lead.id,
-          conversationId: lead.conversation_id,
-          readThroughAt,
-          readThroughMessageKey,
-        }),
+        body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
       });
-      const next = result.cleared === false
-        ? { ...lead, ...(result.row || {}) }
-        : { ...readPatch(lead), ...(result.row || {}) };
-      setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...next } : item));
-      setSelected((current) => current?.id === lead.id ? { ...current, ...next } : current);
     } catch (failure) {
       console.warn("تعذر حفظ قراءة محادثة العميل", failure);
     }
   }
 
   function openLead(lead: CrmLead) {
-    setSelected(lead);
-    if (leadHasUnreadMessage(lead)) void markLeadRead(lead);
+    const patched = readPatch(lead);
+    setLeads((current) => current.map((item) => item.id === lead.id ? { ...item, ...patched } : item));
+    setSelected(patched);
   }
 
   const groups = useMemo(() => {

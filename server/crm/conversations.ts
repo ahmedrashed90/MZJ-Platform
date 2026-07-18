@@ -15,7 +15,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const leadId = clean(request.query.leadId);
     const conversationId = clean(request.query.conversationId);
     const limit = Math.min(300, Math.max(1, Number(request.query.limit || 100)));
-    const markRead = ["1", "true", "yes", "on"].includes(clean(request.query.markRead).toLowerCase());
 
     if (conversationId) {
       const [conversation] = await sql<any[]>`
@@ -41,42 +40,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
         where m.conversation_id=${conversationId}::uuid
         order by m.created_at asc limit ${limit}
       `;
-      if (markRead) {
-        const latestInbound = [...messages].reverse().find((message: any) =>
-          String(message.direction || "").toLowerCase() === "in"
-          || String(message.sender_type || "").toLowerCase() === "customer"
-        );
-        const readThroughAt = String(latestInbound?.created_at || new Date().toISOString());
-        const readThroughMessageKey = clean(
-          latestInbound?.provider_message_id
-          || latestInbound?.legacy_id
-          || latestInbound?.id
-        ) || null;
-
-        if (conversation.lead_id) {
-          await markCrmLeadRead(sql, {
-            leadId: conversation.lead_id,
-            conversationId: conversation.id,
-            readThroughAt,
-            readThroughMessageKey,
-          });
-        } else {
-          await sql`
-            update crm.conversations
-            set unread_count=0,
-                metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('lastReadAt',${readThroughAt}::text),
-                updated_at=now()
-            where id=${conversationId}::uuid
-              and (last_customer_message_at is null or last_customer_message_at<=${readThroughAt}::timestamptz)
-          `;
-        }
-      }
-
-      return response.status(200).json({
-        ok: true,
-        conversation: { ...conversation, unread_count: markRead ? 0 : Number(conversation.unread_count || 0) },
-        messages,
-      });
+      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
+      else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
+      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
     }
 
     let rows: any[] = [...await sql<any[]>`

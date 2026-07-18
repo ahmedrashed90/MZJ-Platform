@@ -4,6 +4,7 @@ import {
   CalendarBlank,
   ChatCircleDots,
   PaperPlaneTilt,
+  Paperclip,
   DownloadSimple,
   FilePdf,
   ImageSquare,
@@ -162,9 +163,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
-  const previousStatusRef = useRef("");
 
   useEffect(() => {
     if (!lead) {
@@ -186,11 +187,21 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setConversationId(lead.conversation_id || "");
     setConversationChannel(lead.channel_code || "");
     setMessageText("");
-    setSelectedTemplate("");
     setNotice("");
+    setPendingFile(null);
     setMediaUrls({});
-    previousStatusRef.current = value(lead.status_label || "عميل جديد");
-    void loadConversation(lead.id, lead.conversation_id || "", false, true);
+    void loadConversation(lead.id, lead.conversation_id || "", false);
+    const readLead = {
+      ...lead,
+      unread_count: 0,
+      dashboard_unread: false,
+      has_unread_message: false,
+      has_unread_messages: false,
+      message_unread: false,
+      is_unread: false,
+      dashboard_message_read_at: new Date().toISOString(),
+    };
+    onSaved(readLead);
   }, [lead?.id]);
 
   useEffect(() => {
@@ -202,7 +213,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [lead?.id, onClose]);
 
-  async function loadConversation(leadId: string, preferredId = "", silent = false, markRead = false) {
+  async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
     try {
       let id = preferredId;
@@ -213,7 +224,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         setConversationChannel(result.rows[0]?.channel_code || "");
       }
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300&markRead=${markRead ? "1" : "0"}`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");
         setMessages(result.messages || []);
       } else if (!silent) {
@@ -283,15 +294,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   useEffect(() => {
-    if (!form) return;
-    const currentStatus = value(form.values.status_label || "عميل جديد");
-    const previousStatus = previousStatusRef.current;
-    if (!previousStatus) {
-      previousStatusRef.current = currentStatus;
-      return;
-    }
-    if (currentStatus === previousStatus) return;
-    previousStatusRef.current = currentStatus;
     if (mappedTemplate?.id) {
       setSelectedTemplate(mappedTemplate.id);
       setMessageText(renderTemplateInComposer(mappedTemplate));
@@ -299,7 +301,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
     setSelectedTemplate("");
     setMessageText("");
-  }, [form?.values.status_label, mappedTemplate?.id]);
+  }, [mappedTemplate?.id]);
 
   useEffect(() => {
     const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
@@ -415,43 +417,104 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
   }
 
+  function mediaTypeForFile(file: File) {
+    if (file.type.startsWith("image/")) return "image";
+    if (file.type.startsWith("audio/")) return "audio";
+    if (file.type.startsWith("video/")) return "video";
+    return "document";
+  }
+
+  async function uploadPendingFile(file: File) {
+    const prepared = await crmFetch<{ ok: boolean; assetId: string; uploadUrl: string }>("/api/crm/media", {
+      method: "POST",
+      body: JSON.stringify({ action: "prepare_upload", conversationId, mediaType: mediaTypeForFile(file), fileName: file.name, mimeType: file.type || "application/octet-stream", fileSize: file.size, isSensitive: true }),
+    });
+    const upload = await fetch(prepared.uploadUrl, { method: "PUT", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
+    if (!upload.ok) throw new Error("فشل رفع الملف إلى التخزين الآمن");
+    await crmFetch("/api/crm/media", { method: "POST", body: JSON.stringify({ action: "mark_ready", assetId: prepared.assetId }) });
+    return prepared.assetId;
+  }
+
+  async function resolveMessageMediaUrl(message: CrmMessage, refresh = false) {
+    const cached = message.media_asset_id ? mediaUrls[message.media_asset_id] : "";
+    if (cached && !refresh) return cached;
+    if (!message.media_asset_id) return message.attachment_url || "";
+    const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
+    setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
+    return result.url;
+  }
+
   async function openMedia(message: CrmMessage) {
-    if (!message.media_asset_id) {
-      if (message.attachment_url) window.open(message.attachment_url, "_blank", "noopener,noreferrer");
-      return;
-    }
+    let mediaWindow: Window | null = null;
+    try { mediaWindow = window.open("about:blank", "_blank"); } catch { mediaWindow = null; }
     try {
-      const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
-      setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
-      window.open(result.url, "_blank", "noopener,noreferrer");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
+      const url = await resolveMessageMediaUrl(message, true);
+      if (!url) throw new Error("رابط الملف غير متاح");
+      if (mediaWindow && !mediaWindow.closed) mediaWindow.location.href = url;
+      else window.open(url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      if (mediaWindow && !mediaWindow.closed) mediaWindow.close();
+      setNotice(error instanceof Error ? error.message : "تعذر فتح الملف");
+    }
+  }
+
+  async function downloadMedia(message: CrmMessage) {
+    let fallbackWindow: Window | null = null;
+    try { fallbackWindow = window.open("about:blank", "_blank"); } catch { fallbackWindow = null; }
+    try {
+      const url = await resolveMessageMediaUrl(message, true);
+      if (!url) throw new Error("رابط الملف غير متاح");
+      const response = await fetch(url, { method: "GET", cache: "no-store" });
+      if (!response.ok) throw new Error("تعذر تحميل الملف");
+      const blob = await response.blob();
+      if (fallbackWindow && !fallbackWindow.closed) fallbackWindow.close();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = message.file_name || "attachment";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+    } catch (error) {
+      const url = await resolveMessageMediaUrl(message).catch(() => "");
+      if (fallbackWindow && !fallbackWindow.closed && url) fallbackWindow.location.href = url;
+      else if (url) window.open(url, "_blank", "noopener,noreferrer");
+      else setNotice(error instanceof Error ? error.message : "تعذر تحميل الملف");
+    }
   }
 
   function renderMessageMedia(message: CrmMessage) {
     const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
+    if ((type === "image" || type === "sticker") && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} title="فتح الصورة" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
     if (message.media_asset_id || message.attachment_url || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
-      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
+      return <div className="crm-chat-file-card" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><button type="button" className="crm-icon-button" title="تحميل الملف" onClick={(event) => { event.stopPropagation(); void downloadMedia(message); }}><DownloadSimple size={18} /></button></div>;
     }
     return null;
   }
 
   async function sendMessage() {
     if (!conversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
-    if (!messageText.trim() && !selectedTemplate) return;
+    if (!messageText.trim() && !selectedTemplate && !pendingFile) return;
 
     const draftText = messageText;
     const draftTemplate = selectedTemplate;
+    const draftFile = pendingFile;
     const tempId = `temp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const tempMessage: CrmMessage = {
       id: tempId,
       direction: "out",
-      message_type: draftTemplate ? "template" : "text",
+      message_type: draftFile ? mediaTypeForFile(draftFile) : draftTemplate ? "template" : "text",
       body: draftText || null,
+      attachment_type: draftFile ? mediaTypeForFile(draftFile) : null,
+      file_name: draftFile?.name || null,
+      mime_type: draftFile?.type || null,
+      file_size: draftFile?.size || null,
       provider_status: "queued",
       sender_type: "human",
       created_at: new Date().toISOString(),
@@ -459,16 +522,20 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
     setMessageText("");
     setSelectedTemplate("");
+    setPendingFile(null);
     setMessages((current) => [...current, tempMessage]);
     setSending(true);
     setNotice("");
 
     try {
+      const mediaAssetId = draftFile ? await uploadPendingFile(draftFile) : "";
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate }),
+        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
       });
-      setMessages((current) => current.map((message) => message.id === tempId ? result.message : message));
+      setMessages((current) => current.map((message) => message.id === tempId
+        ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
+        : message));
       setNotice(result.providerStatus === "queued" ? "تم تسليم الرسالة للإرسال" : "تم إرسال الرسالة");
       window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 1200);
       window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 3500);
@@ -476,6 +543,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       setMessages((current) => current.filter((message) => message.id !== tempId));
       setMessageText((current) => current.trim() ? current : draftText);
       setSelectedTemplate((current) => current || draftTemplate);
+      setPendingFile((current) => current || draftFile);
       setNotice(error instanceof Error ? error.message : "فشل إرسال الرسالة");
     } finally {
       setSending(false);
@@ -526,7 +594,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
                   if (!editedTextStillMatchesTemplate(rendered, nextText)) setSelectedTemplate("");
                 }
               }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+              <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
+              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section>
 

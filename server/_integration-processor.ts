@@ -17,10 +17,6 @@ function bool(value: unknown) {
   return value === true || value === 1 || ["true", "1", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
-function isProtectedWhatsappMediaUrl(value: unknown) {
-  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(clean(value));
-}
-
 function nestedWhatsapp(payload: any) {
   return payload?.entry?.[0]?.changes?.[0]?.value || {};
 }
@@ -55,8 +51,7 @@ function mediaData(payload: any) {
   const type = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
   const nested = msg?.[rawType] || msg?.[type];
   const storageKey = first(payload.storageKey, payload.storage_key);
-  const rawUrl = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
-  const url = isProtectedWhatsappMediaUrl(rawUrl) ? "" : rawUrl;
+  const url = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
   const fileName = first(payload.fileName, payload.file_name, nested?.filename);
   const mimeType = first(payload.mimeType, payload.mime_type, nested?.mime_type);
   const fileSize = Number(payload.fileSize ?? payload.file_size ?? 0) || null;
@@ -100,15 +95,11 @@ function identityData(source: string, payload: any) {
   const contact = wa?.contacts?.[0] || {};
   const participant = first(payload.participantId, payload.participant_id, payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId, payload.user_id, payload.userId, payload.igId, payload.tiktokId, payload.fbId, payload.waId, msg?.from, contact?.wa_id);
   const pageId = first(payload.pageId, payload.page_id);
-  const suppliedConversationId = first(payload.conversationId, payload.conversation_id, payload.convId);
-  const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.clientNumber, payload.leadPhone, msg?.from, contact?.wa_id, participant);
-  const phoneNormalized = normalizePhone(phone);
-  const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, suppliedConversationId) || phoneNormalized || crypto.randomUUID();
-  const conversationExternalId = source === "whatsapp"
-    ? (phoneNormalized || normalizePhone(participant) || normalizePhone(suppliedConversationId) || suppliedConversationId || externalId)
-    : (suppliedConversationId || `${source}:${pageId || "default"}:${externalId}`);
+  const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, payload.conversationId, payload.conversation_id, payload.convId) || crypto.randomUUID();
+  const conversationExternalId = first(payload.conversationId, payload.conversation_id, payload.convId) || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`);
+  const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.clientNumber, payload.leadPhone, msg?.from, contact?.wa_id);
   const displayName = first(payload.customerName, payload.displayName, payload.full_name, payload.fullName, payload.leadName, payload.name, contact?.profile?.name, "عميل");
-  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized, displayName };
+  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName };
 }
 
 function trustedKnownService(routeSource: string, payload: any) {
@@ -278,20 +269,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     if (direction === "in") {
       [existingMessage] = await sql<any[]>`
         update crm.messages
-        set direction='in',
-            provider_status='received',
-            sender_type='customer',
-            message_type=case when ${media.hasAttachment}::boolean then ${media.type || "document"} else message_type end,
-            body=coalesce(nullif(${text},''),body),
-            attachment_url=coalesce(nullif(${media.storageKey ? "" : media.url},''),attachment_url),
-            attachment_type=coalesce(nullif(${media.type},''),attachment_type),
-            file_name=coalesce(nullif(${media.fileName},''),file_name),
-            mime_type=coalesce(nullif(${media.mimeType},''),mime_type),
-            file_size=coalesce(${media.fileSize},file_size),
-            storage_key=coalesce(nullif(${media.storageKey},''),storage_key),
-            media_status=case when ${media.hasAttachment}::boolean then 'ready' else media_status end,
-            caption=coalesce(nullif(${media.caption},''),caption),
-            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, refreshedFromProvider: true })}::jsonb
+        set direction='in',provider_status='received',sender_type='customer'
         where id=${existingMessage.id}::uuid
         returning *,id::text,conversation_id::text
       `;
