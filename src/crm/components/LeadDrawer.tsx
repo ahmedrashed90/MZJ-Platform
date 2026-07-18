@@ -137,16 +137,6 @@ function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
 }
 
-function normalizeChatMediaUrl(value: unknown) {
-  let url = String(value || "").trim().replace(/\\\//g, "/").replace(/&amp;/gi, "&");
-  if (!url || /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(url)) return "";
-  if (url.startsWith("//")) url = `https:${url}`;
-  else if (url.startsWith("/")) url = `https://w-mersal.com${url}`;
-  else if (/^(?:uploads?|storage|media|files?|documents?|public)\//i.test(url)) url = `https://w-mersal.com/${url.replace(/^\/+/, "")}`;
-  else if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && /^[\w.-]+\.[a-z]{2,}(?:\/|$)/i.test(url)) url = `https://${url}`;
-  return /^https?:\/\//i.test(url) ? url : "";
-}
-
 function editedTextStillMatchesTemplate(renderedTemplate: string, editedText: string) {
   const source = String(renderedTemplate || "");
   const placeholders = [...source.matchAll(/{{\s*\d+\s*}}/g)];
@@ -445,28 +435,65 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return prepared.assetId;
   }
 
+  async function resolveMessageMediaUrl(message: CrmMessage, refresh = false) {
+    const cached = message.media_asset_id ? mediaUrls[message.media_asset_id] : "";
+    if (cached && !refresh) return cached;
+    if (!message.media_asset_id) return message.attachment_url || "";
+    const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
+    setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
+    return result.url;
+  }
+
   async function openMedia(message: CrmMessage) {
-    if (!message.media_asset_id) {
-      const directUrl = normalizeChatMediaUrl(message.attachment_url);
-      if (directUrl) window.open(directUrl, "_blank", "noopener,noreferrer");
-      return;
-    }
+    let mediaWindow: Window | null = null;
+    try { mediaWindow = window.open("about:blank", "_blank"); } catch { mediaWindow = null; }
     try {
-      const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
-      setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
-      window.open(result.url, "_blank", "noopener,noreferrer");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
+      const url = await resolveMessageMediaUrl(message, true);
+      if (!url) throw new Error("رابط الملف غير متاح");
+      if (mediaWindow && !mediaWindow.closed) mediaWindow.location.href = url;
+      else window.open(url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      if (mediaWindow && !mediaWindow.closed) mediaWindow.close();
+      setNotice(error instanceof Error ? error.message : "تعذر فتح الملف");
+    }
+  }
+
+  async function downloadMedia(message: CrmMessage) {
+    let fallbackWindow: Window | null = null;
+    try { fallbackWindow = window.open("about:blank", "_blank"); } catch { fallbackWindow = null; }
+    try {
+      const url = await resolveMessageMediaUrl(message, true);
+      if (!url) throw new Error("رابط الملف غير متاح");
+      const response = await fetch(url, { method: "GET", cache: "no-store" });
+      if (!response.ok) throw new Error("تعذر تحميل الملف");
+      const blob = await response.blob();
+      if (fallbackWindow && !fallbackWindow.closed) fallbackWindow.close();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = message.file_name || "attachment";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+    } catch (error) {
+      const url = await resolveMessageMediaUrl(message).catch(() => "");
+      if (fallbackWindow && !fallbackWindow.closed && url) fallbackWindow.location.href = url;
+      else if (url) window.open(url, "_blank", "noopener,noreferrer");
+      else setNotice(error instanceof Error ? error.message : "تعذر تحميل الملف");
+    }
   }
 
   function renderMessageMedia(message: CrmMessage) {
-    const url = normalizeChatMediaUrl((message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "");
+    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image" && url) return <a href={url} target="_blank" rel="noopener noreferrer"><img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} loading="lazy" /></a>;
+    if ((type === "image" || type === "sticker") && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} title="فتح الصورة" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
-    if (message.media_asset_id || url || message.storage_key) {
+    if (message.media_asset_id || message.attachment_url || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
-      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
+      return <div className="crm-chat-file-card" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><button type="button" className="crm-icon-button" title="تحميل الملف" onClick={(event) => { event.stopPropagation(); void downloadMedia(message); }}><DownloadSimple size={18} /></button></div>;
     }
     return null;
   }
