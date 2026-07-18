@@ -84,6 +84,26 @@ function visibleProviderStatus(message: CrmMessage) {
   return isOutboundMessage(message) ? providerStatusLabel(message.provider_status) : "";
 }
 
+function isProtectedWhatsappMediaUrl(url: unknown) {
+  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(String(url || ""));
+}
+
+function safeExternalAttachmentUrl(url: unknown) {
+  const value = String(url || "").trim();
+  if (!value || isProtectedWhatsappMediaUrl(value)) return "";
+  return value;
+}
+
+function assetStreamUrl(assetId: unknown) {
+  const value = String(assetId || "").trim();
+  return value ? `/api/crm/media?assetId=${encodeURIComponent(value)}&stream=1` : "";
+}
+
+function assetDownloadUrl(assetId: unknown) {
+  const value = String(assetId || "").trim();
+  return value ? `/api/crm/media?assetId=${encodeURIComponent(value)}&download=1` : "";
+}
+
 function departmentCodeFor(key: ServiceKey) {
   if (key === "finance") return "finance_sales";
   if (key === "service") return "customer_service";
@@ -164,7 +184,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
   const lastTemplateStatusRef = useRef<{ leadId: string; status: string }>({ leadId: "", status: "" });
 
@@ -190,12 +209,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setMessageText("");
     setNotice("");
     setPendingFile(null);
-    setMediaUrls({});
     lastTemplateStatusRef.current = { leadId: lead.id, status: String(lead.status_label || lead.status_code || "عميل جديد") };
     void loadConversation(lead.id, lead.conversation_id || "", false, true);
     const readLead = {
       ...lead,
       unread_count: 0,
+      effective_unread: false,
       dashboard_unread: false,
       has_unread_message: false,
       has_unread_messages: false,
@@ -316,21 +335,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setMessageText("");
   }, [lead?.id, form?.values.status_label, mappedTemplate?.id]);
 
-  useEffect(() => {
-    const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
-    if (!missing.length) return;
-    let cancelled = false;
-    Promise.all(missing.map(async (message) => {
-      try {
-        const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id || "")}`);
-        return [message.media_asset_id || "", result.url] as const;
-      } catch { return [message.media_asset_id || "", ""] as const; }
-    })).then((entries) => {
-      if (cancelled) return;
-      setMediaUrls((current) => ({ ...current, ...Object.fromEntries(entries.filter((entry) => entry[0] && entry[1])) }));
-    });
-    return () => { cancelled = true; };
-  }, [messages, mediaUrls]);
 
   const credit = useMemo(() => {
     if (!form || form.serviceKey !== "finance") return null;
@@ -438,35 +442,49 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   async function uploadPendingFile(file: File) {
-    const prepared = await crmFetch<{ ok: boolean; assetId: string; uploadUrl: string }>("/api/crm/media", {
+    const response = await fetch(`/api/crm/media?action=upload_binary`, {
       method: "POST",
-      body: JSON.stringify({ action: "prepare_upload", conversationId, mediaType: mediaTypeForFile(file), fileName: file.name, mimeType: file.type || "application/octet-stream", fileSize: file.size, isSensitive: true }),
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+        "x-mzj-upload-mode": "binary",
+        "x-mzj-conversation-id": conversationId,
+        "x-mzj-media-type": mediaTypeForFile(file),
+        "x-mzj-file-name": encodeURIComponent(file.name || "attachment.bin"),
+        "x-mzj-mime-type": encodeURIComponent(file.type || "application/octet-stream"),
+        "x-mzj-file-size": String(file.size || 0),
+      },
+      body: file,
     });
-    const upload = await fetch(prepared.uploadUrl, { method: "PUT", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
-    if (!upload.ok) throw new Error("فشل رفع الملف إلى التخزين الآمن");
-    await crmFetch("/api/crm/media", { method: "POST", body: JSON.stringify({ action: "mark_ready", assetId: prepared.assetId }) });
-    return prepared.assetId;
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok === false || !payload?.assetId) {
+      throw new Error(payload?.error || `فشل رفع الملف إلى التخزين الآمن (${response.status})`);
+    }
+    return String(payload.assetId);
   }
 
   async function openMedia(message: CrmMessage) {
-    if (!message.media_asset_id) {
-      if (message.attachment_url) window.open(message.attachment_url, "_blank", "noopener,noreferrer");
+    const internalUrl = assetDownloadUrl(message.media_asset_id);
+    if (internalUrl) {
+      window.open(internalUrl, "_blank", "noopener,noreferrer");
       return;
     }
-    try {
-      const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
-      setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
-      window.open(result.url, "_blank", "noopener,noreferrer");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
+    const externalUrl = safeExternalAttachmentUrl(message.attachment_url);
+    if (externalUrl) {
+      window.open(externalUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    setNotice("المرفق لم يكتمل رفعه إلى التخزين بعد");
   }
 
   function renderMessageMedia(message: CrmMessage) {
-    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
+    const url = assetStreamUrl(message.media_asset_id) || safeExternalAttachmentUrl(message.attachment_url);
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
+    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} loading="lazy" />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
-    if (message.media_asset_id || message.attachment_url || message.storage_key) {
+    if (message.media_asset_id || safeExternalAttachmentUrl(message.attachment_url) || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
       return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
     }

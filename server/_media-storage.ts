@@ -123,3 +123,33 @@ export async function putMediaObject(storageKey: string, bytes: Uint8Array, cont
   }
   return { storageKey, fileSize: bytes.byteLength, etag: clean(result.headers.get("etag")) };
 }
+
+
+export async function getMediaObject(storageKey: string, range = "") {
+  const config = mediaStorageConfig();
+  if (!config) throw new Error("تخزين الوسائط R2 غير مضبوط في متغيرات Vercel");
+  const now = new Date();
+  const stamp = dateStamp(now);
+  const timestamp = amzDate(now);
+  const { host, canonicalUri, url } = endpoint(config, storageKey);
+  const payloadHash = sha256Text("");
+  const scope = `${stamp}/auto/s3/aws4_request`;
+  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${timestamp}\n`;
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = ["GET", canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", timestamp, scope, sha256Text(canonicalRequest)].join("\n");
+  const signature = crypto.createHmac("sha256", signingKey(config.secretAccessKey, stamp)).update(stringToSign).digest("hex");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const headers: Record<string, string> = {
+    authorization,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": timestamp,
+  };
+  if (clean(range)) headers.range = clean(range);
+  const result = await fetch(url, { method: "GET", headers });
+  if (!result.ok && result.status !== 206) {
+    const detail = (await result.text().catch(() => "")).slice(0, 1200);
+    throw new Error(`R2 download HTTP ${result.status}${detail ? `: ${detail}` : ""}`);
+  }
+  return result;
+}

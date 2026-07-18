@@ -100,6 +100,7 @@ export type CrmLead = {
   message_policy?: "free_text_and_templates" | "templates_only" | null;
   preview_text?: string | null;
   unread_count?: number | null;
+  effective_unread?: boolean | null;
   dashboard_unread?: boolean | null;
   has_unread_message?: boolean | null;
   has_unread_messages?: boolean | null;

@@ -29,6 +29,7 @@ function readPatch(lead: CrmLead): CrmLead {
   return {
     ...lead,
     unread_count: 0,
+    effective_unread: false,
     dashboard_unread: false,
     has_unread_message: false,
     has_unread_messages: false,
