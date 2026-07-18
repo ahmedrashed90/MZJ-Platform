@@ -190,7 +190,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setNotice("");
     setMediaUrls({});
     previousStatusRef.current = value(lead.status_label || "عميل جديد");
-    void loadConversation(lead.id, lead.conversation_id || "", false);
+    void loadConversation(lead.id, lead.conversation_id || "", false, true);
   }, [lead?.id]);
 
   useEffect(() => {
@@ -202,7 +202,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [lead?.id, onClose]);
 
-  async function loadConversation(leadId: string, preferredId = "", silent = false) {
+  async function loadConversation(leadId: string, preferredId = "", silent = false, markRead = false) {
     if (!silent) setLoadingMessages(true);
     try {
       let id = preferredId;
@@ -213,7 +213,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         setConversationChannel(result.rows[0]?.channel_code || "");
       }
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300&markRead=${markRead ? "1" : "0"}`);
         setConversationChannel(result.conversation?.channel_code || "");
         setMessages(result.messages || []);
       } else if (!silent) {
