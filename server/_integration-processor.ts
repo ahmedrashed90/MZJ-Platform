@@ -17,6 +17,33 @@ function bool(value: unknown) {
   return value === true || value === 1 || ["true", "1", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
+function isProtectedWhatsappMediaUrl(url: unknown) {
+  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(clean(url));
+}
+
+function fileNameFromUrl(url: unknown) {
+  try { return decodeURIComponent(new URL(clean(url)).pathname.split("/").pop() || ""); }
+  catch { return ""; }
+}
+
+function normalizedMediaType(rawValue: unknown, mimeValue: unknown, fileNameValue: unknown, urlValue: unknown) {
+  const mime = clean(mimeValue).toLowerCase();
+  const name = clean(fileNameValue).toLowerCase().split("?")[0];
+  const url = clean(urlValue).toLowerCase().split("?")[0];
+  const raw = clean(rawValue).toLowerCase();
+  if (/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/.test(name) || /\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/.test(url)) return "document";
+  if (/\.(mp3|ogg|opus|wav|m4a|aac)$/.test(name) || /\.(mp3|ogg|opus|wav|m4a|aac)$/.test(url)) return "audio";
+  if (/\.(mp4|mov|webm|mkv)$/.test(name) || /\.(mp4|mov|webm|mkv)$/.test(url)) return "video";
+  if (/\.(jpe?g|png|webp|gif|bmp|heic)$/.test(name) || /\.(jpe?g|png|webp|gif|bmp|heic)$/.test(url)) return "image";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime === "application/pdf" || mime.includes("word") || mime.includes("document") || mime.includes("sheet") || mime.includes("presentation")) return "document";
+  if (raw === "file") return "document";
+  if (raw === "voice" || raw === "ptt") return "audio";
+  return raw;
+}
+
 function nestedWhatsapp(payload: any) {
   return payload?.entry?.[0]?.changes?.[0]?.value || {};
 }
@@ -48,14 +75,16 @@ function dateValue(payload: any) {
 function mediaData(payload: any) {
   const msg = whatsappMessage(payload);
   const rawType = first(payload.mediaType, payload.media_type, payload.attachmentType, payload.attachment_type, payload.messageType, payload.message_type, msg?.type).toLowerCase();
-  const type = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
-  const nested = msg?.[rawType] || msg?.[type];
+  const rawNormalized = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
+  const nested = msg?.[rawType] || msg?.[rawNormalized];
   const storageKey = first(payload.storageKey, payload.storage_key);
-  const url = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
-  const fileName = first(payload.fileName, payload.file_name, nested?.filename);
+  const rawUrl = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
+  const url = isProtectedWhatsappMediaUrl(rawUrl) ? "" : rawUrl;
   const mimeType = first(payload.mimeType, payload.mime_type, nested?.mime_type);
+  const fileName = first(payload.fileName, payload.file_name, nested?.filename, fileNameFromUrl(url));
+  const type = normalizedMediaType(rawNormalized, mimeType, fileName, url);
   const fileSize = Number(payload.fileSize ?? payload.file_size ?? 0) || null;
-  const hasAttachment = bool(payload.hasAttachment) || Boolean(storageKey || url || nested?.id || ["image", "audio", "video", "document", "sticker"].includes(type));
+  const hasAttachment = bool(payload.hasAttachment) || Boolean(storageKey || rawUrl || nested?.id || ["image", "audio", "video", "document", "sticker"].includes(type));
   return {
     hasAttachment,
     type: type || (hasAttachment ? "document" : ""),

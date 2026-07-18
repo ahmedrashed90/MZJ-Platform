@@ -84,6 +84,29 @@ function visibleProviderStatus(message: CrmMessage) {
   return isOutboundMessage(message) ? providerStatusLabel(message.provider_status) : "";
 }
 
+function isProtectedWhatsappMediaUrl(url: string) {
+  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(String(url || ""));
+}
+
+function normalizedMessageMediaType(message: CrmMessage) {
+  const mime = String(message.mime_type || "").trim().toLowerCase();
+  const name = String(message.file_name || "").trim().toLowerCase().split("?")[0];
+  const attachmentUrl = String(message.attachment_url || "").trim().toLowerCase().split("?")[0];
+  const raw = String(message.attachment_type || message.message_type || "").trim().toLowerCase();
+
+  if (/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/.test(name) || /\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/.test(attachmentUrl)) return "document";
+  if (/\.(mp3|ogg|opus|wav|m4a|aac)$/.test(name) || /\.(mp3|ogg|opus|wav|m4a|aac)$/.test(attachmentUrl)) return "audio";
+  if (/\.(mp4|mov|webm|mkv)$/.test(name) || /\.(mp4|mov|webm|mkv)$/.test(attachmentUrl)) return "video";
+  if (/\.(jpe?g|png|webp|gif|bmp|heic)$/.test(name) || /\.(jpe?g|png|webp|gif|bmp|heic)$/.test(attachmentUrl)) return "image";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime === "application/pdf" || mime.includes("word") || mime.includes("document") || mime.includes("sheet") || mime.includes("presentation")) return "document";
+  if (raw === "voice" || raw === "ptt") return "audio";
+  if (raw === "file") return "document";
+  return raw;
+}
+
 function departmentCodeFor(key: ServiceKey) {
   if (key === "finance") return "finance_sales";
   if (key === "service") return "customer_service";
@@ -166,6 +189,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
+  const statusChangedByUserRef = useRef(false);
 
   useEffect(() => {
     if (!lead) {
@@ -183,6 +207,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       values: leadCoreValues(lead, serviceKey),
       customFields: Object.fromEntries(Object.entries(extra).map(([key, raw]) => [key, value(raw)])),
     });
+    statusChangedByUserRef.current = false;
     setMessages([]);
     setConversationId(lead.conversation_id || "");
     setConversationChannel(lead.channel_code || "");
@@ -294,6 +319,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   useEffect(() => {
+    // Opening an existing customer must always start with an empty composer.
+    // A mapped status template is prepared only after the user changes the status now.
+    if (!statusChangedByUserRef.current) return;
     if (mappedTemplate?.id) {
       setSelectedTemplate(mappedTemplate.id);
       setMessageText(renderTemplateInComposer(mappedTemplate));
@@ -353,6 +381,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   function setField(field: CrmCustomerField, next: string) {
+    if (field.field_key === "status_label") statusChangedByUserRef.current = true;
     setForm((current) => {
       if (!current) return current;
       if (field.field_key === "department_transfer") return changeDepartmentState(current, next as ServiceKey);
@@ -437,25 +466,39 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
   async function openMedia(message: CrmMessage) {
     if (!message.media_asset_id) {
-      if (message.attachment_url) window.open(message.attachment_url, "_blank", "noopener,noreferrer");
+      const directUrl = String(message.attachment_url || "").trim();
+      if (directUrl && !isProtectedWhatsappMediaUrl(directUrl)) {
+        window.open(directUrl, "_blank", "noopener,noreferrer");
+      } else {
+        setNotice("رابط المرفق المؤقت من واتساب غير صالح للفتح. أعد إرسال المرفق بعد تحديث Worker مرسال.");
+      }
       return;
     }
     try {
       const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
       setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
       window.open(result.url, "_blank", "noopener,noreferrer");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر فتح الملف"); }
+    } catch (error) {
+      const directUrl = String(message.attachment_url || "").trim();
+      if (directUrl && !isProtectedWhatsappMediaUrl(directUrl)) {
+        window.open(directUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+      setNotice(error instanceof Error ? error.message : "تعذر فتح الملف");
+    }
   }
 
   function renderMessageMedia(message: CrmMessage) {
-    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
-    const type = String(message.attachment_type || message.message_type || "").toLowerCase();
-    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
+    const candidateUrl = String((message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "").trim();
+    const url = isProtectedWhatsappMediaUrl(candidateUrl) ? "" : candidateUrl;
+    const type = normalizedMessageMediaType(message);
+    if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} loading="lazy" />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
-    if (message.media_asset_id || message.attachment_url || message.storage_key) {
+    if (message.media_asset_id || message.attachment_url || message.storage_key || message.attachment_type) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
-      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
+      const unavailable = !message.media_asset_id && !url;
+      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || (type === "audio" ? "رسالة صوتية" : type === "video" ? "فيديو" : type === "image" ? "صورة" : "مرفق")}</strong><small>{unavailable ? "الرابط المؤقت غير متاح" : (message.mime_type || type || "ملف")}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
     }
     return null;
   }
