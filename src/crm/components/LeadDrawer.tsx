@@ -443,6 +443,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return "document";
   }
 
+  function safeMessageMediaUrl(value: unknown) {
+    const url = String(value || "").trim();
+    if (!url || /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(url)) return "";
+    return url;
+  }
+
   async function uploadPendingFile(file: File) {
     const prepared = await crmFetch<{ ok: boolean; assetId: string; uploadUrl: string }>("/api/crm/media", {
       method: "POST",
@@ -457,7 +463,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   async function resolveMessageMediaUrl(message: CrmMessage, refresh = false) {
     const cached = message.media_asset_id ? mediaUrls[message.media_asset_id] : "";
     if (cached && !refresh) return cached;
-    if (!message.media_asset_id) return message.attachment_url || "";
+    if (!message.media_asset_id) return safeMessageMediaUrl(message.attachment_url);
     const result = await crmFetch<{ ok: boolean; url: string }>(`/api/crm/media?assetId=${encodeURIComponent(message.media_asset_id)}`);
     setMediaUrls((current) => ({ ...current, [message.media_asset_id || ""]: result.url }));
     return result.url;
@@ -505,7 +511,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   function renderMessageMedia(message: CrmMessage) {
-    const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
+    const url = safeMessageMediaUrl((message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "");
     const type = String(message.attachment_type || message.message_type || "").toLowerCase();
     if ((type === "image" || type === "sticker") && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} title="فتح الصورة" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;

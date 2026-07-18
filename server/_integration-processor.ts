@@ -17,6 +17,15 @@ function bool(value: unknown) {
   return value === true || value === 1 || ["true", "1", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
+function isProtectedWhatsappMediaUrl(value: unknown) {
+  return /lookaside\.fbsbx\.com\/whatsapp_business\/attachments/i.test(clean(value));
+}
+
+function safeInboundMediaUrl(...values: unknown[]) {
+  const candidate = first(...values);
+  return candidate && !isProtectedWhatsappMediaUrl(candidate) ? candidate : "";
+}
+
 function nestedWhatsapp(payload: any) {
   return payload?.entry?.[0]?.changes?.[0]?.value || {};
 }
@@ -51,7 +60,7 @@ function mediaData(payload: any) {
   const type = rawType === "file" ? "document" : rawType === "voice" || rawType === "ptt" ? "audio" : rawType;
   const nested = msg?.[rawType] || msg?.[type];
   const storageKey = first(payload.storageKey, payload.storage_key);
-  const url = first(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
+  const url = safeInboundMediaUrl(payload.mediaUrl, payload.media_url, payload.attachmentUrl, payload.attachment_url, payload.fileUrl, payload.file_url, nested?.url, nested?.link);
   const fileName = first(payload.fileName, payload.file_name, nested?.filename);
   const mimeType = first(payload.mimeType, payload.mime_type, nested?.mime_type);
   const fileSize = Number(payload.fileSize ?? payload.file_size ?? 0) || null;
@@ -292,7 +301,8 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         attachment_type=case when ${media.hasAttachment} then coalesce(nullif(${media.type},''),attachment_type) else attachment_type end,
         attachment_url=case
           when ${Boolean(media.storageKey)} then null
-          when ${media.hasAttachment} then coalesce(nullif(${media.url},''),attachment_url)
+          when ${media.hasAttachment} and nullif(${media.url},'') is not null then ${media.url}
+          when ${media.hasAttachment} and coalesce(attachment_url,'') ~* 'lookaside\.fbsbx\.com/whatsapp_business/attachments' then null
           else attachment_url
         end,
         file_name=case when ${media.hasAttachment} then coalesce(nullif(${media.fileName},''),file_name) else file_name end,
