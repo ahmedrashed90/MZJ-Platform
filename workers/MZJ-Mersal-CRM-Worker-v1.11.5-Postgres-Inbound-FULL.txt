@@ -28,11 +28,12 @@
  * unread state, assignments, and automations are owned by PostgreSQL in the platform.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.11.5";
+const VERSION = "mzj-mersal-postgres-v1.11.6";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
 const SUCCESS_STATUSES = new Set(["ok", "success", "sent", "queued", "accepted", "submitted", "delivered", "processing"]);
+const MERSAL_CONTACT_CACHE = new Map();
 
 export default {
   async fetch(request, env, ctx) {
@@ -73,7 +74,7 @@ export default {
       if (ctx?.waitUntil) ctx.waitUntil(kvPutJson(env, "DEBUG_LAST_PAYLOAD", incoming));
 
       try {
-        const result = await processInboundWebhook(incoming, env);
+        const result = await processInboundWebhook(incoming, env, ctx);
         if (ctx?.waitUntil) ctx.waitUntil(kvPutJson(env, "DEBUG_LAST_FORWARD", result));
         return json({ ok: true, accepted: true, ...result, version: VERSION }, 200);
       } catch (error) {
@@ -329,21 +330,36 @@ function templateComponents(body) {
   return [{ type: "body", parameters: params.map((value) => ({ type: "text", text: String(value ?? "") })) }];
 }
 
-async function processInboundWebhook(incoming, env) {
+async function processInboundWebhook(incoming, env, ctx) {
   const events = normalizeInboundEvents(incoming);
   if (!events.length) return { processed: 0, forwarded: [], note: "webhook received without an inbound message" };
 
   const forwarded = [];
   for (const event of events) {
-    const platformPayload = await buildPlatformInboundPayload(event, env);
+    // Persist the customer reply immediately. Media enrichment runs after the message
+    // and unread state already exist in PostgreSQL, so images/audio never block text reception.
+    const platformPayload = buildPlatformInboundPayload(event, env);
     const result = await forwardToPlatform(platformPayload, env);
     if (!result.ok) throw new Error(`PostgreSQL endpoint rejected ${event.eventId}: HTTP ${result.status} ${result.error}`);
+
+    if (platformPayload.hasAttachment) {
+      const mediaTask = enrichInboundMedia(event, platformPayload, env).catch(async (error) => {
+        const failure = { ok: false, eventId: event.eventId, phone: event.phone, error: errorMessage(error), at: new Date().toISOString() };
+        console.error("Inbound media enrichment failed", failure);
+        await kvPutJson(env, "DEBUG_LAST_MEDIA", failure);
+        return failure;
+      });
+      if (ctx?.waitUntil) ctx.waitUntil(mediaTask);
+      else await mediaTask;
+    }
+
     forwarded.push({
       eventId: event.eventId,
       phone: event.phone,
       status: result.status,
       conversationId: result.data?.result?.conversationId || null,
       messageId: result.data?.result?.messageId || null,
+      mediaPending: Boolean(platformPayload.hasAttachment),
     });
   }
 
@@ -412,53 +428,20 @@ function normalizeInboundEvents(incoming) {
   return [...unique.values()];
 }
 
-async function buildPlatformInboundPayload(event, env) {
+function buildPlatformInboundPayload(event, env) {
   const message = event.message || {};
   const text = inboundText(message) || first(event.generic?.text, event.generic?.body, event.generic?.customer_message, event.generic?.last_input_text);
   let attachment = inboundAttachment(message) || genericAttachment(event.generic || {});
 
   if (attachment?.hasAttachment) {
     const direct = normalizePublicMediaUrl(attachment.mediaUrl, mersalBase(env));
-    attachment = { ...attachment, mediaUrl: direct, fileUrl: direct, attachmentUrl: direct };
-
-    if (!direct || isProtectedWhatsappMediaUrl(direct)) {
-      const resolved = await resolveInboundMedia(env, {
-        phone: event.phone,
-        providerMessageId: event.eventId,
-        mediaId: attachment.mediaId,
-        messageType: attachment.attachmentType,
-        messageTimestamp: event.timestamp,
-      });
-      if (!resolved?.url) {
-        throw new Error(`Inbound media could not be matched safely for ${event.eventId}: ${resolved?.error || "media URL not found"}`);
-      }
-      attachment = {
-        ...attachment,
-        mediaUrl: resolved.url,
-        fileUrl: resolved.url,
-        attachmentUrl: resolved.url,
-        attachmentType: resolved.attachmentType || attachment.attachmentType,
-        fileName: attachment.fileName || resolved.fileName,
-        mimeType: attachment.mimeType || resolved.mimeType,
-      };
-    }
-
-    const stored = await storeInboundMedia(env, {
-      sourceUrl: attachment.mediaUrl,
-      eventId: event.eventId,
-      conversationId: event.phone,
-      mediaType: attachment.attachmentType,
-      fileName: attachment.fileName,
-      mimeType: attachment.mimeType,
-    });
+    const safeDirect = direct && !isProtectedWhatsappMediaUrl(direct) ? direct : "";
     attachment = {
       ...attachment,
-      storageKey: stored.storageKey,
-      mediaAssetId: stored.assetId,
-      fileName: stored.fileName,
-      mimeType: stored.mimeType,
-      fileSize: stored.fileSize,
-      mediaStatus: "ready",
+      mediaUrl: safeDirect,
+      fileUrl: safeDirect,
+      attachmentUrl: safeDirect,
+      mediaStatus: "pending",
       isSensitive: true,
     };
   }
@@ -495,15 +478,79 @@ async function buildPlatformInboundPayload(event, env) {
     fileSize: attachment?.fileSize || null,
     caption: attachment?.caption || "",
     mediaId: attachment?.mediaId || "",
-    storageKey: attachment?.storageKey || "",
-    storage_key: attachment?.storageKey || "",
-    mediaAssetId: attachment?.mediaAssetId || "",
-    media_asset_id: attachment?.mediaAssetId || "",
+    storageKey: "",
+    storage_key: "",
+    mediaAssetId: "",
+    media_asset_id: "",
     mediaStatus: attachment?.mediaStatus || "",
     isSensitive: attachment?.isSensitive === true,
   };
 
   return event.envelope ? { ...event.envelope, ...base } : base;
+}
+
+async function enrichInboundMedia(event, platformPayload, env) {
+  const message = event.message || {};
+  const attachment = inboundAttachment(message) || genericAttachment(event.generic || {});
+  if (!attachment?.hasAttachment) return { ok: true, skipped: true };
+
+  let sourceUrl = normalizePublicMediaUrl(attachment.mediaUrl, mersalBase(env));
+  let resolved = null;
+  if (!sourceUrl || isProtectedWhatsappMediaUrl(sourceUrl)) {
+    resolved = await resolveInboundMedia(env, {
+      phone: event.phone,
+      providerMessageId: event.eventId,
+      mediaId: attachment.mediaId,
+      messageType: attachment.attachmentType,
+      messageTimestamp: event.timestamp,
+    });
+    if (!resolved?.url) throw new Error(`Inbound media could not be matched safely for ${event.eventId}: ${resolved?.error || "media URL not found"}`);
+    sourceUrl = resolved.url;
+  }
+
+  const mediaType = resolved?.attachmentType || attachment.attachmentType;
+  const fileName = attachment.fileName || resolved?.fileName || "";
+  const mimeType = attachment.mimeType || resolved?.mimeType || "";
+  const stored = await storeInboundMedia(env, {
+    sourceUrl,
+    eventId: event.eventId,
+    conversationId: event.phone,
+    mediaType,
+    fileName,
+    mimeType,
+  });
+
+  const enrichedPayload = {
+    ...platformPayload,
+    messageType: mediaType,
+    attachmentType: mediaType,
+    mediaType,
+    mediaUrl: sourceUrl,
+    fileUrl: sourceUrl,
+    attachmentUrl: sourceUrl,
+    fileName: stored.fileName,
+    mimeType: stored.mimeType,
+    fileSize: stored.fileSize,
+    storageKey: stored.storageKey,
+    storage_key: stored.storageKey,
+    mediaAssetId: stored.assetId,
+    media_asset_id: stored.assetId,
+    mediaStatus: "ready",
+    isSensitive: true,
+  };
+  const result = await forwardToPlatform(enrichedPayload, env);
+  if (!result.ok) throw new Error(`PostgreSQL media update rejected ${event.eventId}: HTTP ${result.status} ${result.error}`);
+  const success = {
+    ok: true,
+    eventId: event.eventId,
+    phone: event.phone,
+    storageKey: stored.storageKey,
+    mediaType,
+    matchReason: resolved?.matchReason || "direct_public_url",
+    at: new Date().toISOString(),
+  };
+  await kvPutJson(env, "DEBUG_LAST_MEDIA", success);
+  return success;
 }
 
 async function forwardToPlatform(payload, env) {
@@ -595,7 +642,7 @@ async function resolveInboundMedia(env, input) {
   const contactId = await findMersalContactId(env, token, input.phone);
   if (!contactId) return { ok: false, error: "Mersal contact not found" };
 
-  const attempts = [0, 900, 1600, 2500, 3500];
+  const attempts = [0, 700, 1000, 1500, 2500, 4000, 6000];
   let messagesChecked = 0;
   for (const delay of attempts) {
     if (delay) await sleep(delay);
@@ -617,6 +664,11 @@ async function resolveInboundMedia(env, input) {
 }
 
 async function findMersalContactId(env, token, phone) {
+  const normalized = normalizePhone(phone);
+  const cacheKey = `${mersalBase(env)}|${normalized}`;
+  const cached = MERSAL_CONTACT_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.contactId;
+
   const payload = await mersalApiPost(`${mersalBase(env)}/api/wpbox/getConversations/none?mobile_api=true`, { token });
   const rows = Array.isArray(payload)
     ? payload
@@ -627,12 +679,13 @@ async function findMersalContactId(env, token, phone) {
         : Array.isArray(payload?.conversations)
           ? payload.conversations
           : [];
-  const normalized = normalizePhone(phone);
   const found = rows.find((row) => {
     const rowPhone = normalizePhone(row?.phone || row?.name || row?.mobile);
     return rowPhone === normalized || (rowPhone.length >= 9 && normalized.length >= 9 && rowPhone.endsWith(normalized.slice(-9)));
   });
-  return first(found?.id, found?.contact_id);
+  const contactId = first(found?.id, found?.contact_id);
+  if (contactId) MERSAL_CONTACT_CACHE.set(cacheKey, { contactId, expiresAt: Date.now() + 10 * 60 * 1000 });
+  return contactId;
 }
 
 async function mersalApiPost(url, body) {
@@ -774,12 +827,27 @@ function findMersalMedia(rows, input) {
 
   const eventTime = timestampMs(input.messageTimestamp);
   if (eventTime) {
-    const timedRows = rows.filter((row) => {
+    const candidates = [];
+    const seen = new Set();
+    for (const row of rows) {
+      if (!isInboundMersalRow(row)) continue;
       const rowTime = mersalRowTimestamp(row);
-      return rowTime > 0 && Math.abs(rowTime - eventTime) <= 5 * 60 * 1000;
-    });
-    const timedMatches = uniqueMediaMatches(timedRows, matchInput, true);
-    if (timedMatches.length === 1) return { ...timedMatches[0], matchReason: "unique_inbound_type_and_timestamp" };
+      if (!rowTime) continue;
+      const delta = Math.abs(rowTime - eventTime);
+      if (delta > 2 * 60 * 1000) continue;
+      const media = mediaFromMersalRow(row, input.contactId, input.mediaBase);
+      if (!media?.url) continue;
+      if (matchInput.targetType && normalizeMediaType(media.attachmentType) !== matchInput.targetType) continue;
+      const key = `${normalizeMediaType(media.attachmentType)}|${media.url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push({ media, delta });
+    }
+    candidates.sort((left, right) => left.delta - right.delta);
+    if (candidates.length === 1) return { ...candidates[0].media, matchReason: "nearest_inbound_type_and_timestamp" };
+    if (candidates.length > 1 && candidates[0].delta < candidates[1].delta) {
+      return { ...candidates[0].media, matchReason: "nearest_inbound_type_and_timestamp" };
+    }
   }
 
   return null;

@@ -166,6 +166,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
+  const openedStatusRef = useRef<{ leadId: string; status: string }>({ leadId: "", status: "" });
 
   useEffect(() => {
     if (!lead) {
@@ -187,6 +188,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setConversationId(lead.conversation_id || "");
     setConversationChannel(lead.channel_code || "");
     setMessageText("");
+    setSelectedTemplate("");
+    openedStatusRef.current = { leadId: lead.id, status: value(lead.status_label) || "عميل جديد" };
     setNotice("");
     setPendingFile(null);
     setMediaUrls({});
@@ -202,6 +205,10 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
       dashboard_message_read_at: new Date().toISOString(),
     };
     onSaved(readLead);
+    void crmFetch("/api/crm/unread", {
+      method: "POST",
+      body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id || "" }),
+    }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
   }, [lead?.id]);
 
   useEffect(() => {
@@ -294,6 +301,18 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   useEffect(() => {
+    if (!form || form.id !== lead?.id) {
+      setSelectedTemplate("");
+      setMessageText("");
+      return;
+    }
+    const currentStatus = form.values.status_label || "";
+    const openedStatus = openedStatusRef.current.leadId === lead?.id ? openedStatusRef.current.status : "";
+    if (!currentStatus || currentStatus === openedStatus) {
+      setSelectedTemplate("");
+      setMessageText("");
+      return;
+    }
     if (mappedTemplate?.id) {
       setSelectedTemplate(mappedTemplate.id);
       setMessageText(renderTemplateInComposer(mappedTemplate));
@@ -301,7 +320,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
     setSelectedTemplate("");
     setMessageText("");
-  }, [mappedTemplate?.id]);
+  }, [lead?.id, form?.values.status_label, mappedTemplate?.id]);
 
   useEffect(() => {
     const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
