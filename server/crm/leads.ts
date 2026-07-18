@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, normalizePhone, parseBody, positiveInt, requireCrmPermission, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
@@ -275,12 +275,6 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
   const statusChanged = clean(before.status_label) !== input.statusLabel;
   const branchChanged = clean(before.branch_code) !== input.branchCode;
-  const ownerChanged = clean(before.assigned_to) !== clean(assignedTo) || clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
-  const notesChanged = clean(before.notes) !== input.notes;
-  if (statusChanged && !(await requireCrmPermission(user, response, "crm.customer.change_status"))) return;
-  if ((departmentChanged || branchChanged) && !(await requireCrmPermission(user, response, "crm.customer.transfer"))) return;
-  if (ownerChanged && !(await requireCrmPermission(user, response, "crm.customer.change_owner"))) return;
-  if (notesChanged && !(await requireCrmPermission(user, response, "crm.customer.add_note"))) return;
 
   const [row] = await sql<any[]>`
     update crm.leads set
@@ -391,6 +385,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
 }
 
 async function remove(request: VercelRequest, response: VercelResponse, user: any) {
+  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "حذف العملاء متاح للإدارة فقط" });
   const sql = getSql();
   const body = parseBody(request);
   const id = clean(body.id || request.query.id);
@@ -405,21 +400,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const user = await requireCrmUser(request, response);
   if (!user) return;
   response.setHeader("Cache-Control", "no-store");
-  if (request.method === "GET") {
-    if (!(await requireCrmPermission(user, response, "crm.database.view"))) return;
-    return list(request, response, user);
-  }
-  if (request.method === "POST") {
-    if (!(await requireCrmPermission(user, response, "crm.customer.create"))) return;
-    return create(request, response, user);
-  }
-  if (request.method === "PATCH" || request.method === "PUT") {
-    if (!(await requireCrmPermission(user, response, "crm.customer.update"))) return;
-    return update(request, response, user);
-  }
-  if (request.method === "DELETE") {
-    if (!(await requireCrmPermission(user, response, "crm.customer.delete"))) return;
-    return remove(request, response, user);
-  }
+  if (request.method === "GET") return list(request, response, user);
+  if (request.method === "POST") return create(request, response, user);
+  if (request.method === "PATCH" || request.method === "PUT") return update(request, response, user);
+  if (request.method === "DELETE") return remove(request, response, user);
   return response.status(405).json({ ok: false, error: "Method not allowed" });
 }

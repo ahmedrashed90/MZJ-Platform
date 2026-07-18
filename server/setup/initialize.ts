@@ -2,8 +2,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, requestIp, safeSecretEquals } from "../_auth.js";
 import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
 import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
-import { ensureAccessControlSchema, resetAccessControlSchemaCache } from "../_access-control-schema.js";
-import { getEffectivePermissions } from "../_permissions.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -34,8 +32,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
   try {
     await runSqlScript(SCHEMA_SQL);
     await runSqlScript(SEED_SQL);
-    resetAccessControlSchemaCache();
-    await ensureAccessControlSchema();
 
     const sql = getSql();
     const [count] = await sql<{ count: number }[]>`select count(*)::int as count from core.users`;
@@ -66,11 +62,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       await tx`insert into core.user_roles(user_id, role_id) values (${created.id}::uuid, ${adminRole.id}::uuid)`;
       await tx`
-        insert into core.user_systems(user_id, system_code, is_enabled, data_scope)
-        select ${created.id}::uuid, code, true, 'all' from core.systems where code in ('operations','tracking','marketing','crm')
-        on conflict (user_id, system_code) do update set is_enabled=true, data_scope='all', updated_at=now()
-      `;
-      await tx`
         insert into audit.activity_log(user_id, system_code, action, entity_type, entity_id, after_data, ip_address)
         values (
           ${created.id}::uuid,
@@ -87,7 +78,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     });
 
     await createSession(request, response, user.id);
-    const access = await getEffectivePermissions(user.id);
     return response.status(201).json({
       ok: true,
       user: {
@@ -102,7 +92,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
         departmentCodes: [],
         branches: [],
         branchCodes: [],
-        ...access,
       },
     });
   } catch (error: any) {

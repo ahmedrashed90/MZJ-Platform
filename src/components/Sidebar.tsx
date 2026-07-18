@@ -6,46 +6,31 @@ import {
   House,
   Megaphone,
   MapPin,
+  Pulse,
   Question,
   SignOut,
   SuitcaseSimple,
   UsersThree,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
-import { hasAnyPermission, hasPermission } from "./PermissionGate";
 
 const items = [
   { href: "/", label: "الداش بورد", icon: House },
-  { href: "/crm", label: "CRM", icon: UsersThree, permission: "system.crm.access" },
-  { href: "/marketing", label: "التسويق", icon: Megaphone, permission: "system.marketing.access" },
-  { href: "/operations", label: "العمليات", icon: SuitcaseSimple, permission: "system.operations.access" },
-  { href: "/tracking", label: "التتبع", icon: MapPin, permission: "system.tracking.access" },
-];
-
-const settingsPermissions = [
-  "settings.users.view",
-  "settings.users.create",
-  "settings.users.update",
-  "settings.users.disable",
-  "settings.roles.manage",
-  "settings.permissions.manage",
-  "settings.branches.manage",
-  "settings.audit.view",
-  "settings.security.view",
-  "crm.settings.view",
-  "marketing.settings.view",
-  "operations.settings.view",
-  "tracking.settings.view",
+  { href: "/crm", label: "CRM", icon: UsersThree },
+  { href: "/marketing", label: "التسويق", icon: Megaphone },
+  { href: "/operations", label: "العمليات", icon: SuitcaseSimple },
+  { href: "/tracking", label: "التتبع", icon: MapPin },
 ];
 
 const supportItems = [
   { href: "/reports", label: "التقارير", icon: ChartBar },
   { href: "/database", label: "قاعدة البيانات", icon: Database },
-  { href: "/settings", label: "الإعدادات", icon: Gear, permissions: settingsPermissions },
+  { href: "/settings", label: "الإعدادات", icon: Gear, adminOnly: true },
+  { href: "/activity", label: "سجل النشاط", icon: Pulse },
   { href: "/help", label: "المساعدة", icon: Question },
 ];
 
-type NavItem = { href: string; label: string; icon: typeof House; permission?: string; permissions?: string[] };
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean };
 
 function Item({ href, label, icon: Icon }: NavItem) {
   return (
@@ -66,8 +51,8 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const visibleItems = items.filter((item) => !item.permission || hasPermission(user, item.permission));
-  const visibleSupport = supportItems.filter((item) => !item.permissions || hasAnyPermission(user, item.permissions));
+  const isAdmin = user?.roleCodes.includes("admin") ?? false;
+  const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 
   return (
@@ -79,7 +64,7 @@ export function Sidebar() {
 
       <nav className="sidebar-nav" aria-label="القائمة الرئيسية">
         <div className="nav-group">
-          {visibleItems.map((item) => <Item key={item.href} {...item} />)}
+          {items.map((item) => <Item key={item.href} {...item} />)}
         </div>
         <div className="nav-separator" />
         <div className="nav-group">

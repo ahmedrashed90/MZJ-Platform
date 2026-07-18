@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, requireCrmPermission, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { clean, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function norm(value: unknown) {
@@ -20,7 +20,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!(await requireCrmPermission(user, response, "crm.reports.view"))) return;
   const sql = getSql();
   const scope = userScope(user);
   const from = clean(request.query.from);

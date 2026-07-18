@@ -1,12 +1,12 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, departmentCodeFromKey, departmentKey, parseBody, requireCrmPermission, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, departmentCodeFromKey, departmentKey, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!(await requireCrmPermission(user, response, "crm.customer.transfer"))) return;
+  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "نقل العملاء متاح للإدارة فقط" });
   const body = parseBody(request);
   const leadIds = Array.isArray(body.leadIds) ? body.leadIds.map(clean).filter(Boolean) : [];
   const newAgentId = clean(body.newAgentId);

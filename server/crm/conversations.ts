@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, parseBody, requireCrmPermission, requireCrmUser, userScope } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
 import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
@@ -12,13 +12,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const scope = userScope(user);
 
   if (request.method === "GET") {
-    if (!(await requireCrmPermission(user, response, "crm.inbox.view"))) return;
     const leadId = clean(request.query.leadId);
     const conversationId = clean(request.query.conversationId);
     const limit = Math.min(300, Math.max(1, Number(request.query.limit || 100)));
 
     if (conversationId) {
-      if (!(await requireCrmPermission(user, response, "crm.conversation.view"))) return;
       const [conversation] = await sql<any[]>`
         select c.*, c.id::text, c.lead_id::text,
           l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.source_code,coalesce(src.name,l.source_name) as source_name,l.platform_code,l.service_key,
@@ -36,15 +34,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!conversation) return response.status(404).json({ ok: false, error: "المحادثة غير موجودة" });
       const messages = await sql<any[]>`
-        select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
-        from crm.messages m left join core.users u on u.id=m.sent_by
-        left join crm.media_assets a on a.message_id=m.id
-        where m.conversation_id=${conversationId}::uuid
-        order by m.created_at asc limit ${limit}
+        select * from (
+          select m.*, m.id::text, m.conversation_id::text, u.full_name as sent_by_name, a.id::text as media_asset_id
+          from crm.messages m left join core.users u on u.id=m.sent_by
+          left join crm.media_assets a on a.message_id=m.id
+          where m.conversation_id=${conversationId}::uuid
+          order by m.created_at desc limit ${limit}
+        ) recent order by recent.created_at asc
       `;
-      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id);
-      else await sql`update crm.conversations set unread_count=0, updated_at=now() where id=${conversationId}::uuid`;
-      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
+      const latestVisibleInbound = [...messages].reverse().find((message) => message.direction === "in")?.created_at;
+      const readThroughAt = latestVisibleInbound || conversation.last_customer_message_at || conversation.last_message_at || new Date().toISOString();
+      if (conversation.lead_id) await markCrmLeadRead(sql, conversation.lead_id, { conversationId, readThroughAt });
+      else await sql`update crm.conversations set unread_count=case when last_customer_message_at is null or last_customer_message_at<=${readThroughAt}::timestamptz then 0 else unread_count end, updated_at=now() where id=${conversationId}::uuid`;
+      const stillUnread = conversation.last_customer_message_at && Date.parse(conversation.last_customer_message_at) > Date.parse(readThroughAt);
+      return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: stillUnread ? conversation.unread_count : 0 }, messages, readThroughAt });
     }
 
     let rows: any[] = [...await sql<any[]>`
@@ -112,12 +115,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const text = clean(body.text || body.message);
     const templateId = clean(body.templateId);
     const mediaAssetId = clean(body.mediaAssetId);
-    const sendPermission = mediaAssetId
-      ? "crm.conversation.send_media"
-      : templateId
-        ? "crm.conversation.send_template"
-        : "crm.conversation.send_text";
-    if (!(await requireCrmPermission(user, response, sendPermission))) return;
     if (!conversationId) return response.status(400).json({ ok: false, error: "المحادثة مطلوبة" });
     if (!text && !templateId && !mediaAssetId) return response.status(400).json({ ok: false, error: "اكتب الرسالة أو اختر القالب أو أرفق ملفًا" });
 

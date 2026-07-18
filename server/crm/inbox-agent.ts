@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, parseBody, requireCrmPermission, requireCrmUser } from "../_crm-utils.js";
+import { clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -8,7 +8,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    if (!(await requireCrmPermission(user, response, "crm.inbox_agent.view"))) return;
     const [settings, managers, logs] = await Promise.all([
       sql`select * from crm.inbox_agent_settings where id='default'`,
       sql`select *,id::text,updated_by::text from crm.inbox_agent_managers order by scope_code`,
@@ -17,7 +16,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({ ok: true, settings: settings[0], managers, logs });
   }
 
-  if (!(await requireCrmPermission(user, response, "crm.inbox_agent.manage"))) return;
+  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لحفظ إعدادات الوكيل" });
   const body = parseBody(request);
   const section = clean(body.section || "settings");
 

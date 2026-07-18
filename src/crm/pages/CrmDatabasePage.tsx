@@ -4,17 +4,10 @@ import { crmFetch, departmentLabel, downloadCsv, formatDate, queryString } from 
 import { LeadDrawer } from "../components/LeadDrawer";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta } from "../types";
-import { useAuth } from "../../auth/AuthContext";
-import { hasPermission } from "../../components/PermissionGate";
 
 const emptyFilters = { from: "", to: "", source: "", car: "", payment: "", campaign: "", status: "", department: "", branch: "", agent: "", callCenter: "", q: "" };
 
 export function CrmDatabasePage() {
-  const { user } = useAuth();
-  const canViewCustomer = hasPermission(user, "crm.customer.view");
-  const canDelete = hasPermission(user, "crm.customer.delete");
-  const canTransfer = hasPermission(user, "crm.customer.transfer");
-  const canExport = hasPermission(user, "crm.customer.export");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [filters, setFilters] = useState(emptyFilters);
   const [rows, setRows] = useState<CrmLead[]>([]);
@@ -95,7 +88,7 @@ export function CrmDatabasePage() {
 
   return (
     <div className="crm-page crm-database-page">
-      <header className="crm-page-head"><div><h1>قاعدة البيانات</h1><p>عرض وتصفية وتعديل ونقل وتصدير عملاء CRM.</p></div><div className="crm-head-actions">{canExport ? <><button className="crm-secondary-button" onClick={exportRows}><FileXls size={18} />تصدير Excel</button><button className="crm-secondary-button" onClick={printRows}><FilePdf size={18} />تصدير PDF</button></> : null}{canTransfer ? <button className="crm-primary-button" onClick={() => setTransferOpen(true)} disabled={!checked.size}><UsersThree size={18} />نقل العملاء ({checked.size})</button> : null}</div></header>
+      <header className="crm-page-head"><div><h1>قاعدة البيانات</h1><p>عرض وتصفية وتعديل ونقل وتصدير عملاء CRM.</p></div><div className="crm-head-actions"><button className="crm-secondary-button" onClick={exportRows}><FileXls size={18} />تصدير Excel</button><button className="crm-secondary-button" onClick={printRows}><FilePdf size={18} />تصدير PDF</button><button className="crm-primary-button" onClick={() => setTransferOpen(true)} disabled={!checked.size}><UsersThree size={18} />نقل العملاء ({checked.size})</button></div></header>
 
       <div className="crm-filter-panel">
         <input type="date" title="التاريخ من" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} />
@@ -118,21 +111,21 @@ export function CrmDatabasePage() {
 
       <div className="crm-table-shell">
         <table className="crm-table">
-          <thead><tr>{canTransfer ? <th><input type="checkbox" checked={rows.length > 0 && rows.every((row) => checked.has(row.id))} onChange={(event) => setChecked(event.target.checked ? new Set(rows.map((row) => row.id)) : new Set())} /></th> : null}<th>إجراءات</th><th>اسم العميل</th><th>الجوال</th><th>المكان</th><th>الفرع</th><th>المصدر</th><th>اسم السيارة</th><th>الدفع</th><th>الحالة</th><th>القسم</th><th>المسؤول</th><th>الكول سنتر</th><th>اسم الحملة</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead>
+          <thead><tr><th><input type="checkbox" checked={rows.length > 0 && rows.every((row) => checked.has(row.id))} onChange={(event) => setChecked(event.target.checked ? new Set(rows.map((row) => row.id)) : new Set())} /></th><th>إجراءات</th><th>اسم العميل</th><th>الجوال</th><th>المكان</th><th>الفرع</th><th>المصدر</th><th>اسم السيارة</th><th>الدفع</th><th>الحالة</th><th>القسم</th><th>المسؤول</th><th>الكول سنتر</th><th>اسم الحملة</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead>
           <tbody>
-            {rows.map((row) => <tr key={row.id}>{canTransfer ? <td><input type="checkbox" checked={checked.has(row.id)} onChange={() => toggle(row.id)} /></td> : null}<td><div className="crm-row-actions">{canViewCustomer ? <button title="فتح بيانات العميل" onClick={() => setSelected(row)}><PencilSimple size={16} /></button> : null}<button title="عرض السيارة" onClick={() => setVehicle(row)}><Car size={16} /></button>{canDelete ? <button title="حذف" onClick={() => void remove(row)}><Trash size={16} /></button> : null}</div></td><td>{row.customer_name || "—"}</td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.location || "—"}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.car_name || "—"}</td><td>{row.payment_type || "—"}</td><td><span className={`crm-status-pill ${String(row.status_label).includes("غير مؤهل") ? "danger" : ""}`}>{row.status_label || "عميل جديد"}</span></td><td>{departmentLabel(row.department_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.call_center_name || "—"}</td><td>{row.campaign_name || "—"}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}
-            {!loading && !rows.length ? <tr><td colSpan={canTransfer ? 16 : 15}><div className="crm-empty-state">لا توجد نتائج مطابقة</div></td></tr> : null}
-            {loading ? <tr><td colSpan={canTransfer ? 16 : 15}><div className="crm-empty-state">جاري تحميل البيانات...</div></td></tr> : null}
+            {rows.map((row) => <tr key={row.id}><td><input type="checkbox" checked={checked.has(row.id)} onChange={() => toggle(row.id)} /></td><td><div className="crm-row-actions"><button title="تعديل" onClick={() => setSelected(row)}><PencilSimple size={16} /></button><button title="عرض السيارة" onClick={() => setVehicle(row)}><Car size={16} /></button><button title="حذف" onClick={() => void remove(row)}><Trash size={16} /></button></div></td><td>{row.customer_name || "—"}</td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.location || "—"}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.car_name || "—"}</td><td>{row.payment_type || "—"}</td><td><span className={`crm-status-pill ${String(row.status_label).includes("غير مؤهل") ? "danger" : ""}`}>{row.status_label || "عميل جديد"}</span></td><td>{departmentLabel(row.department_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.call_center_name || "—"}</td><td>{row.campaign_name || "—"}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}
+            {!loading && !rows.length ? <tr><td colSpan={16}><div className="crm-empty-state">لا توجد نتائج مطابقة</div></td></tr> : null}
+            {loading ? <tr><td colSpan={16}><div className="crm-empty-state">جاري تحميل البيانات...</div></td></tr> : null}
           </tbody>
         </table>
       </div>
       {rows.length < total ? <button className="crm-secondary-button crm-load-more" onClick={() => setLimit((current) => current + 50)}>تحميل 50 عميل بعدهم</button> : null}
 
-      {canViewCustomer ? <LeadDrawer lead={selected} meta={meta} onClose={() => setSelected(null)} onSaved={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected(null); }} /> : null}
+      <LeadDrawer lead={selected} meta={meta} onClose={() => setSelected(null)} onSaved={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected(null); }} />
 
       {vehicle ? <div className="crm-modal-backdrop" onMouseDown={() => setVehicle(null)}><div className="crm-modal-card small" onMouseDown={(event) => event.stopPropagation()}><header><h2>بيانات السيارة</h2><button className="crm-icon-button" onClick={() => setVehicle(null)}><X size={18} /></button></header><div className="crm-detail-list"><span><b>اسم السيارة</b>{vehicle.car_name || "—"}</span><span><b>الموديل</b>{vehicle.car_model || "—"}</span><span><b>نوع السيارة</b>{vehicle.car_type || "—"}</span><span><b>اللون</b>{vehicle.color || "—"}</span><span><b>ملاحظات السيارة</b>{vehicle.notes || "—"}</span></div></div></div> : null}
 
-      {transferOpen && canTransfer ? <div className="crm-modal-backdrop" onMouseDown={() => setTransferOpen(false)}><div className="crm-modal-card" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>نقل العملاء</h2><p>نقل ذكي بين كل الفروع والأقسام. القسم والفرع يتغيران تلقائيًا حسب المندوب الجديد.</p></div><button className="crm-icon-button" onClick={() => setTransferOpen(false)}><X size={18} /></button></header><div className="crm-transfer-summary"><span>عدد العملاء المحددين</span><strong>{checked.size}</strong></div><label className="crm-form-label"><span>إلى المندوب الجديد</span><select value={newAgentId} onChange={(event) => setNewAgentId(event.target.value)}><option value="">اختر مندوب من أي فرع وأي قسم</option>{salesUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name} - {user.branches.join("، ") || "بدون فرع"} - {user.departments.join("، ")}</option>)}</select></label><div className="crm-modal-actions"><button className="crm-secondary-button" onClick={() => setTransferOpen(false)}>إلغاء</button><button className="crm-primary-button" disabled={!newAgentId || !checked.size} onClick={() => void transfer()}>تأكيد نقل العملاء المحددين وتحديث الفرع والقسم</button></div></div></div> : null}
+      {transferOpen ? <div className="crm-modal-backdrop" onMouseDown={() => setTransferOpen(false)}><div className="crm-modal-card" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>نقل العملاء</h2><p>نقل ذكي بين كل الفروع والأقسام. القسم والفرع يتغيران تلقائيًا حسب المندوب الجديد.</p></div><button className="crm-icon-button" onClick={() => setTransferOpen(false)}><X size={18} /></button></header><div className="crm-transfer-summary"><span>عدد العملاء المحددين</span><strong>{checked.size}</strong></div><label className="crm-form-label"><span>إلى المندوب الجديد</span><select value={newAgentId} onChange={(event) => setNewAgentId(event.target.value)}><option value="">اختر مندوب من أي فرع وأي قسم</option>{salesUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name} - {user.branches.join("، ") || "بدون فرع"} - {user.departments.join("، ")}</option>)}</select></label><div className="crm-modal-actions"><button className="crm-secondary-button" onClick={() => setTransferOpen(false)}>إلغاء</button><button className="crm-primary-button" disabled={!newAgentId || !checked.size} onClick={() => void transfer()}>تأكيد نقل العملاء المحددين وتحديث الفرع والقسم</button></div></div></div> : null}
     </div>
   );
 }

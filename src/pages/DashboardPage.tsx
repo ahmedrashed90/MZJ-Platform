@@ -37,8 +37,6 @@ import {
   YAxis,
 } from "recharts";
 import type { DashboardData, NullableNumber } from "../types";
-import { useAuth } from "../auth/AuthContext";
-import { hasPermission } from "../components/PermissionGate";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -198,12 +196,6 @@ function EmptyChart({ label }: { label: string }) {
 }
 
 export function DashboardPage() {
-  const { user } = useAuth();
-  const canViewCrm = hasPermission(user, "system.crm.access") && hasPermission(user, "crm.dashboard.view");
-  const canViewMarketing = hasPermission(user, "system.marketing.access") && hasPermission(user, "marketing.dashboard.view");
-  const canViewTracking = hasPermission(user, "system.tracking.access") && hasPermission(user, "tracking.orders.view");
-  const canViewOperations = hasPermission(user, "system.operations.access") && hasPermission(user, "operations.dashboard.view");
-  const hasDashboardSection = canViewCrm || canViewMarketing || canViewTracking || canViewOperations;
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -248,7 +240,7 @@ export function DashboardPage() {
         <header className="dashboard-head">
           <div className="dashboard-title">
             <h1>الداش بورد</h1>
-            <p>نظرة عامة على أداء الأنظمة المسموحة لحسابك</p>
+            <p>نظرة عامة على أداء جميع الأنظمة</p>
           </div>
           <div className="dashboard-controls">
             <button className="icon-button" type="button" aria-label="الفلاتر"><SlidersHorizontal size={20} /></button>
@@ -263,8 +255,6 @@ export function DashboardPage() {
           </div>
         ) : null}
 
-        {canViewCrm ? (
-          <>
         <section className="kpi-grid">
           <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => open("إجمالي العملاء", [{ label: "إجمالي العملاء", value: crm?.totalCustomers ?? null }])} />
           <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => open("المحادثات المفتوحة", [{ label: "المحادثات المفتوحة", value: crm?.openConversations ?? null }])} />
@@ -345,15 +335,9 @@ export function DashboardPage() {
           </article>
         </section>
 
-          </>
-        ) : null}
-
-        {(canViewCrm || canViewMarketing || canViewTracking) ? (
         <section className="summary-panel panel">
           <h2>ملخص الإدارات</h2>
           <div className="department-grid">
-            {canViewCrm ? (
-              <>
             <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
               { label: "العملاء", value: crm?.cashSales ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
@@ -369,28 +353,19 @@ export function DashboardPage() {
               { label: "تم البيع", value: crm?.sold ?? null },
               { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
             ]} onOpen={() => open("خدمة العملاء", [{ label: "العملاء", value: crm?.customerService ?? null }, { label: "محادثات مفتوحة", value: crm?.openConversations ?? null }])} />
-              </>
-            ) : null}
-            {canViewMarketing ? (
             <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
               { label: "الحملات", value: marketing?.campaigns ?? null },
               { label: "مجدولة", value: marketing?.scheduled ?? null },
               { label: "متأخرة", value: marketing?.delayed ?? null },
             ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
-            ) : null}
-            {canViewTracking ? (
             <DepartmentCard title="التتبع" icon={MapPin} metrics={[
               { label: "الطلبات", value: tracking?.requests ?? null },
               { label: "متابعة", value: tracking?.inProgress ?? null },
               { label: "مكتملة", value: tracking?.completed ?? null },
             ]} onOpen={() => open("التتبع", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
-            ) : null}
           </div>
         </section>
 
-        ) : null}
-
-        {canViewOperations ? (
         <section className="operations-dashboard-section">
           <div className="section-title-row">
             <div>
@@ -504,14 +479,6 @@ export function DashboardPage() {
             </OperationCard>
           </div>
         </section>
-        ) : null}
-
-        {!hasDashboardSection ? (
-          <div className="connection-banner">
-            <WarningCircle size={20} weight="fill" />
-            <span>لا توجد أقسام داش بورد مسموحة لحسابك. راجع مدير النظام عند الحاجة.</span>
-          </div>
-        ) : null}
       </div>
       <DetailsDrawer details={details} onClose={() => setDetails(null)} />
     </>

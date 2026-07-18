@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, parseBody, requireCrmPermission, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function number(value: unknown, fallback = 0) {
@@ -172,7 +172,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    if (!(await requireCrmPermission(user, response, "crm.kpi.view"))) return;
     const from = clean(request.query.from);
     const to = clean(request.query.to);
     const agent = clean(request.query.agent);
@@ -209,7 +208,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (request.method === "POST" || request.method === "PUT") {
-    if (!(await requireCrmPermission(user, response, "crm.kpi.manage"))) return;
+    if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إضافة التقييم متاحة للإدارة فقط" });
     const body = parseBody(request);
     const userId = clean(body.userId);
     const periodStart = clean(body.periodStart);

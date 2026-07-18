@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, requestIp } from "../_auth.js";
 import { getSql } from "../_db.js";
-import { getEffectivePermissions } from "../_permissions.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -68,7 +67,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     await sql`update core.users set last_login_at = now(), updated_at = now() where id = ${user.id}::uuid`;
     await createSession(request, response, user.id);
-    const access = await getEffectivePermissions(user.id);
     await sql`
       insert into audit.activity_log(user_id, system_code, action, entity_type, entity_id, ip_address)
       values (${user.id}::uuid, 'core', 'login', 'user', ${user.id}, ${requestIp(request)})
@@ -88,7 +86,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
         departmentCodes: user.department_codes || [],
         branches: user.branches || [],
         branchCodes: user.branch_codes || [],
-        ...access,
       },
     });
   } catch (error) {

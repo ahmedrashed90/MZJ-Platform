@@ -1,5 +1,5 @@
 import type { VercelRequest,VercelResponse } from "@vercel/node";
-import { clean,parseBody,requireCrmPermission,requireCrmUser,userScope } from "../_crm-utils.js";
+import { clean,parseBody,requireCrmUser,userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { buildMediaStorageKey,createDownloadUrl,createUploadUrl,mediaStorageConfigured } from "../_media-storage.js";
 
@@ -13,7 +13,6 @@ export default async function handler(request:VercelRequest,response:VercelRespo
   if(!mediaStorageConfigured())return response.status(503).json({ok:false,error:"تخزين الوسائط R2 غير مضبوط"});
   const sql=getSql();
   if(request.method==="POST"){
-    if(!(await requireCrmPermission(user,response,"crm.conversation.send_media")))return;
     const body=parseBody(request),action=clean(body.action);
     if(action==="prepare_upload"){
       const conversationId=clean(body.conversationId);if(!conversationId||!(await canAccessConversation(user,conversationId)))return response.status(403).json({ok:false,error:"لا توجد صلاحية للمحادثة"});
@@ -33,12 +32,13 @@ export default async function handler(request:VercelRequest,response:VercelRespo
     return response.status(400).json({ok:false,error:"إجراء غير مدعوم"});
   }
   if(request.method==="GET"){
-    if(!(await requireCrmPermission(user,response,"crm.conversation.download_attachment")))return;
     const assetId=clean(request.query.assetId);if(!assetId)return response.status(400).json({ok:false,error:"assetId مطلوب"});
     const [asset]=await sql<any[]>`select *,id::text,conversation_id::text from crm.media_assets where id=${assetId}::uuid`;
     if(!asset||!asset.conversation_id||!(await canAccessConversation(user,asset.conversation_id)))return response.status(404).json({ok:false,error:"الملف غير موجود أو غير مسموح"});
     await sql`insert into crm.media_access_logs(asset_id,user_id,action,ip_address,user_agent) values(${assetId}::uuid,${user.id}::uuid,'download',${clean(request.headers['x-forwarded-for'])||null},${clean(request.headers['user-agent'])||null})`;
-    return response.status(200).json({ok:true,url:createDownloadUrl(asset.storage_key,300),asset:{id:asset.id,fileName:asset.original_name,mediaType:asset.media_type,mimeType:asset.mime_type,fileSize:asset.file_size,isSensitive:asset.is_sensitive}});
+    const signedUrl=createDownloadUrl(asset.storage_key,300);
+    if(clean(request.query.download)==="1")return response.redirect(302,signedUrl);
+    return response.status(200).json({ok:true,url:signedUrl,asset:{id:asset.id,fileName:asset.original_name,mediaType:asset.media_type,mimeType:asset.mime_type,fileSize:asset.file_size,isSensitive:asset.is_sensitive}});
   }
   return response.status(405).json({ok:false,error:"Method not allowed"});
 }

@@ -1,16 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireCrmAnyPermission, requireCrmUser } from "../_crm-utils.js";
+import { requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!(await requireCrmAnyPermission(user, response, [
-    "crm.dashboard.view", "crm.database.view", "crm.manual_leads.view", "crm.finance_history.view",
-    "crm.inbox.view", "crm.inbox_agent.view", "crm.ownership.view", "crm.reports.view",
-    "crm.kpi.view", "crm.settings.view",
-  ]))) return;
   const sql = getSql();
 
   const [statuses, branches, users, sources, quality, endpoints, templates, mappings, customerFields] = await Promise.all([
