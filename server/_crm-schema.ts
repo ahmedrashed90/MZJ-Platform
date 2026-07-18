@@ -799,6 +799,17 @@ alter table crm.leads alter column extra_data set not null;
 insert into core.schema_migrations(version) values('crm-leads-extra-data-default-v1.11.8') on conflict(version) do nothing;
 `;
 
+
+const CRM_LEADS_EXTRA_DATA_GUARD_V1119_SQL = String.raw`
+update crm.leads set extra_data='{}'::jsonb where extra_data is null;
+alter table crm.leads alter column extra_data set default '{}'::jsonb;
+alter table crm.leads alter column extra_data set not null;
+create or replace function crm.guard_lead_extra_data_not_null() returns trigger language plpgsql as 'begin if new.extra_data is null then new.extra_data := ''{}''::jsonb; end if; return new; end';
+drop trigger if exists crm_leads_extra_data_not_null on crm.leads;
+create trigger crm_leads_extra_data_not_null before insert or update of extra_data on crm.leads for each row execute function crm.guard_lead_extra_data_not_null();
+insert into core.schema_migrations(version) values('crm-leads-extra-data-guard-v1.11.9') on conflict(version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -837,6 +848,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-leads-extra-data-default-v1.11.8'
       `;
       if (!leadExtraDataDefaultFix) await runSqlScript(CRM_LEADS_EXTRA_DATA_DEFAULT_V1118_SQL);
+      const [leadExtraDataGuardFix] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-leads-extra-data-guard-v1.11.9'
+      `;
+      if (!leadExtraDataGuardFix) await runSqlScript(CRM_LEADS_EXTRA_DATA_GUARD_V1119_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

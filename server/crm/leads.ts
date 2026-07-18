@@ -169,7 +169,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
       ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
-      ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
+      ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData && typeof input.extraData === "object" ? input.extraData : {})},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
       ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
     ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
