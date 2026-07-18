@@ -72,9 +72,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (action === "mark_read") {
-    const readThroughAt = validIsoDate(body.readThroughAt ?? body.read_through_at) || new Date().toISOString();
-    const updated = await markCrmLeadRead(sql, lead.id, { conversationId, readThroughAt });
-    return response.status(200).json({ ok: true, row: updated, readThroughAt });
+    const readThrough = validIsoDate(body.readThrough ?? body.read_through) || new Date().toISOString();
+    const updated = await markCrmLeadRead(sql, lead.id, { conversationId, readThrough });
+    return response.status(200).json({ ok: true, row: updated || lead, ignored: !updated });
   }
 
   return response.status(400).json({ ok: false, error: "إجراء حالة القراءة غير مدعوم" });

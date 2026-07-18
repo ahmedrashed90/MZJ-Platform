@@ -790,24 +790,17 @@ where lower(coalesce(sender_type,''))='customer'
 insert into core.schema_migrations(version) values('crm-inbound-direction-v1.11.7') on conflict(version) do nothing;
 `;
 
-const CRM_LEADS_EXTRA_DATA_DEFAULT_V1118_SQL = String.raw`
+const CRM_MEDIA_UNREAD_HARDENING_V1120_SQL = String.raw`
+drop trigger if exists crm_leads_extra_data_not_null on crm.leads;
+drop function if exists crm.guard_lead_extra_data_not_null();
 alter table crm.leads add column if not exists extra_data jsonb;
 update crm.leads set extra_data='{}'::jsonb where extra_data is null;
 alter table crm.leads alter column extra_data set default '{}'::jsonb;
 alter table crm.leads alter column extra_data set not null;
-
-insert into core.schema_migrations(version) values('crm-leads-extra-data-default-v1.11.8') on conflict(version) do nothing;
-`;
-
-
-const CRM_LEADS_EXTRA_DATA_GUARD_V1119_SQL = String.raw`
-update crm.leads set extra_data='{}'::jsonb where extra_data is null;
-alter table crm.leads alter column extra_data set default '{}'::jsonb;
-alter table crm.leads alter column extra_data set not null;
-create or replace function crm.guard_lead_extra_data_not_null() returns trigger language plpgsql as 'begin if new.extra_data is null then new.extra_data := ''{}''::jsonb; end if; return new; end';
-drop trigger if exists crm_leads_extra_data_not_null on crm.leads;
-create trigger crm_leads_extra_data_not_null before insert or update of extra_data on crm.leads for each row execute function crm.guard_lead_extra_data_not_null();
-insert into core.schema_migrations(version) values('crm-leads-extra-data-guard-v1.11.9') on conflict(version) do nothing;
+update crm.conversations set metadata='{}'::jsonb where metadata is null;
+alter table crm.conversations alter column metadata set default '{}'::jsonb;
+alter table crm.conversations alter column metadata set not null;
+insert into core.schema_migrations(version) values('crm-media-unread-hardening-v1.12.0') on conflict(version) do nothing;
 `;
 
 export async function ensureCrmSchema() {
@@ -844,14 +837,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-inbound-direction-v1.11.7'
       `;
       if (!inboundDirectionFix) await runSqlScript(CRM_INBOUND_DIRECTION_FIX_V1117_SQL);
-      const [leadExtraDataDefaultFix] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-leads-extra-data-default-v1.11.8'
+      const [mediaUnreadHardening] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-media-unread-hardening-v1.12.0'
       `;
-      if (!leadExtraDataDefaultFix) await runSqlScript(CRM_LEADS_EXTRA_DATA_DEFAULT_V1118_SQL);
-      const [leadExtraDataGuardFix] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-leads-extra-data-guard-v1.11.9'
-      `;
-      if (!leadExtraDataGuardFix) await runSqlScript(CRM_LEADS_EXTRA_DATA_GUARD_V1119_SQL);
+      if (!mediaUnreadHardening) await runSqlScript(CRM_MEDIA_UNREAD_HARDENING_V1120_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

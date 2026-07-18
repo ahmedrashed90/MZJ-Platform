@@ -46,10 +46,12 @@ export function buildInboundMediaStorageKey(input: { channelCode: string; conver
 }
 
 function hmac(key: crypto.BinaryLike, value: string) { return crypto.createHmac("sha256", key).update(value).digest(); }
-function sha256(value: string) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function sha256Bytes(value: crypto.BinaryLike) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function sha256Text(value: string) { return sha256Bytes(value); }
 function amzDate(date: Date) { return date.toISOString().replace(/[:-]|\.\d{3}/g, ""); }
 function dateStamp(date: Date) { return amzDate(date).slice(0, 8); }
-function encodePath(path: string) { return path.split("/").map((segment) => encodeURIComponent(segment).replace(/%2F/gi, "/")).join("/"); }
+function awsEncode(value: string) { return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`); }
+function encodePath(path: string) { return path.split("/").map(awsEncode).join("/"); }
 
 function signingKey(secret: string, stamp: string) {
   const date = hmac(`AWS4${secret}`, stamp);
@@ -58,14 +60,19 @@ function signingKey(secret: string, stamp: string) {
   return hmac(service, "aws4_request");
 }
 
+function endpoint(config: MediaStorageConfig, storageKey: string) {
+  const host = `${config.accountId}.r2.cloudflarestorage.com`;
+  const canonicalUri = `/${awsEncode(config.bucket)}/${encodePath(storageKey)}`;
+  return { host, canonicalUri, url: `https://${host}${canonicalUri}` };
+}
+
 function presign(method: "GET" | "PUT", storageKey: string, expiresSeconds = 900) {
   const config = mediaStorageConfig();
   if (!config) throw new Error("تخزين الوسائط R2 غير مضبوط في متغيرات Vercel");
   const now = new Date();
   const stamp = dateStamp(now);
   const timestamp = amzDate(now);
-  const host = `${config.accountId}.r2.cloudflarestorage.com`;
-  const canonicalUri = `/${encodeURIComponent(config.bucket)}/${encodePath(storageKey)}`;
+  const { host, canonicalUri, url } = endpoint(config, storageKey);
   const scope = `${stamp}/auto/s3/aws4_request`;
   const query: Record<string, string> = {
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
@@ -74,12 +81,45 @@ function presign(method: "GET" | "PUT", storageKey: string, expiresSeconds = 900
     "X-Amz-Expires": String(Math.max(60, Math.min(604800, expiresSeconds))),
     "X-Amz-SignedHeaders": "host",
   };
-  const canonicalQuery = Object.entries(query).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&");
+  const canonicalQuery = Object.entries(query).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${awsEncode(key)}=${awsEncode(value)}`).join("&");
   const canonicalRequest = [method, canonicalUri, canonicalQuery, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
-  const stringToSign = ["AWS4-HMAC-SHA256", timestamp, scope, sha256(canonicalRequest)].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", timestamp, scope, sha256Text(canonicalRequest)].join("\n");
   const signature = crypto.createHmac("sha256", signingKey(config.secretAccessKey, stamp)).update(stringToSign).digest("hex");
-  return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  return `${url}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
 export function createUploadUrl(storageKey: string, expiresSeconds = 900) { return presign("PUT", storageKey, expiresSeconds); }
 export function createDownloadUrl(storageKey: string, expiresSeconds = 300) { return presign("GET", storageKey, expiresSeconds); }
+
+export async function putMediaObject(storageKey: string, bytes: Uint8Array, contentType = "application/octet-stream") {
+  const config = mediaStorageConfig();
+  if (!config) throw new Error("تخزين الوسائط R2 غير مضبوط في متغيرات Vercel");
+  const now = new Date();
+  const stamp = dateStamp(now);
+  const timestamp = amzDate(now);
+  const { host, canonicalUri, url } = endpoint(config, storageKey);
+  const payloadHash = sha256Bytes(bytes);
+  const scope = `${stamp}/auto/s3/aws4_request`;
+  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${timestamp}\n`;
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = ["PUT", canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", timestamp, scope, sha256Text(canonicalRequest)].join("\n");
+  const signature = crypto.createHmac("sha256", signingKey(config.secretAccessKey, stamp)).update(stringToSign).digest("hex");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const result = await fetch(url, {
+    method: "PUT",
+    headers: {
+      authorization,
+      "content-type": clean(contentType) || "application/octet-stream",
+      "content-length": String(bytes.byteLength),
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": timestamp,
+    },
+    body: Buffer.from(bytes),
+  });
+  if (!result.ok) {
+    const detail = (await result.text().catch(() => "")).slice(0, 1200);
+    throw new Error(`R2 upload HTTP ${result.status}${detail ? `: ${detail}` : ""}`);
+  }
+  return { storageKey, fileSize: bytes.byteLength, etag: clean(result.headers.get("etag")) };
+}

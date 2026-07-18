@@ -15,7 +15,7 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
       update crm.leads
       set
         unread_count=case
-          when coalesce(extra_data->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
+          when coalesce(coalesce(extra_data,'{}'::jsonb)->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
           when last_incoming_message_at is null or last_incoming_message_at<=${input.createdAt}::timestamptz then greatest(1,coalesce(unread_count,0)+1)
           else greatest(1,coalesce(unread_count,0))
         end,
@@ -27,10 +27,11 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
         last_message_direction='in',
         last_incoming_message_at=greatest(coalesce(last_incoming_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
         last_message_at=greatest(coalesce(last_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
-        extra_data=jsonb_set(
-          jsonb_set(coalesce(extra_data,'{}'::jsonb),'{lastFirestoreMessageId}',to_jsonb(${input.messageId || null}::text),true),
-          '{lastFirestoreMessagePath}',to_jsonb(${input.messagePath || null}::text),true
-        ) || jsonb_build_object('lastUnreadMessageKey',${input.messageKey}::text),
+        extra_data=coalesce(extra_data,'{}'::jsonb)||jsonb_build_object(
+          'lastProviderMessageId',${input.messageId || null}::text,
+          'lastProviderMessagePath',${input.messagePath || null}::text,
+          'lastUnreadMessageKey',${input.messageKey}::text
+        ),
         updated_at=now()
       where id=${input.leadId}::uuid
         and (dashboard_message_read_at is null or dashboard_message_read_at<${input.createdAt}::timestamptz)
@@ -41,12 +42,13 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
       await transaction`
         update crm.conversations
         set unread_count=case
-              when coalesce(metadata->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
+              when coalesce(coalesce(metadata,'{}'::jsonb)->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
               when last_message_at is null or last_message_at<=${input.createdAt}::timestamptz then greatest(1,coalesce(unread_count,0)+1)
               else greatest(1,coalesce(unread_count,0))
             end,
             last_message_at=greatest(coalesce(last_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
-            metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${input.messageKey}::text),true),
+            last_customer_message_at=greatest(coalesce(last_customer_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
+            metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('lastUnreadMessageKey',${input.messageKey}::text),
             updated_at=now()
         where lead_id=${input.leadId}::uuid
           and (${input.conversationId || null}::text is null or id::text=${input.conversationId || null} or legacy_id=${input.conversationId || null})
@@ -56,27 +58,26 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
   });
 }
 
-export async function markCrmLeadRead(sql: SqlClient, leadId: string, options: { conversationId?: string | null; readThroughAt?: string | null } = {}) {
-  const readThroughAt = options.readThroughAt || new Date().toISOString();
+export async function markCrmLeadRead(sql: SqlClient, leadId: string, input: { conversationId?: string | null; readThrough?: string | null } = {}) {
+  const readThrough = input.readThrough || new Date().toISOString();
   return sql.begin(async (transaction: SqlClient) => {
     const [updated] = await transaction<any[]>`
       update crm.leads
-      set unread_count=case when last_incoming_message_at is null or last_incoming_message_at<=${readThroughAt}::timestamptz then 0 else unread_count end,
-          dashboard_unread=case when last_incoming_message_at is null or last_incoming_message_at<=${readThroughAt}::timestamptz then false else dashboard_unread end,
-          has_unread_message=case when last_incoming_message_at is null or last_incoming_message_at<=${readThroughAt}::timestamptz then false else has_unread_message end,
-          has_unread_messages=case when last_incoming_message_at is null or last_incoming_message_at<=${readThroughAt}::timestamptz then false else has_unread_messages end,
-          message_unread=case when last_incoming_message_at is null or last_incoming_message_at<=${readThroughAt}::timestamptz then false else message_unread end,
-          is_unread=case when last_incoming_message_at is null or last_incoming_message_at<=${readThroughAt}::timestamptz then false else is_unread end,
-          dashboard_message_read_at=greatest(coalesce(dashboard_message_read_at,'epoch'::timestamptz),${readThroughAt}::timestamptz),updated_at=now()
+      set unread_count=0,dashboard_unread=false,has_unread_message=false,has_unread_messages=false,
+          message_unread=false,is_unread=false,dashboard_message_read_at=greatest(coalesce(dashboard_message_read_at,'epoch'::timestamptz),${readThrough}::timestamptz),
+          extra_data=coalesce(extra_data,'{}'::jsonb),updated_at=now()
       where id=${leadId}::uuid
+        and (last_incoming_message_at is null or last_incoming_message_at<=${readThrough}::timestamptz)
       returning *,id::text,assigned_to::text,call_center_assigned_to::text
     `;
-    await transaction`
-      update crm.conversations
-      set unread_count=case when last_customer_message_at is null or last_customer_message_at<=${readThroughAt}::timestamptz then 0 else unread_count end,updated_at=now()
-      where lead_id=${leadId}::uuid
-        and (${options.conversationId || null}::text is null or id::text=${options.conversationId || null} or legacy_id=${options.conversationId || null})
-    `;
+    if(updated){
+      await transaction`
+        update crm.conversations set unread_count=0,updated_at=now()
+        where lead_id=${leadId}::uuid
+          and (${input.conversationId || null}::text is null or id::text=${input.conversationId || null} or legacy_id=${input.conversationId || null})
+          and (last_customer_message_at is null or last_customer_message_at<=${readThrough}::timestamptz)
+      `;
+    }
     return updated || null;
   });
 }

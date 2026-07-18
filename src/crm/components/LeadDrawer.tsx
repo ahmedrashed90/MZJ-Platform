@@ -166,7 +166,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
-  const lastTemplateStatusRef = useRef("");
+  const lastTemplateStatusRef = useRef<{ leadId: string; status: string }>({ leadId: "", status: "" });
 
   useEffect(() => {
     if (!lead) {
@@ -188,12 +188,11 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     setConversationId(lead.conversation_id || "");
     setConversationChannel(lead.channel_code || "");
     setMessageText("");
-    setSelectedTemplate("");
-    lastTemplateStatusRef.current = value(lead.status_label || lead.status_code || "عميل جديد");
     setNotice("");
     setPendingFile(null);
     setMediaUrls({});
-    void loadConversation(lead.id, lead.conversation_id || "", false);
+    lastTemplateStatusRef.current = { leadId: lead.id, status: String(lead.status_label || lead.status_code || "عميل جديد") };
+    void loadConversation(lead.id, lead.conversation_id || "", false, true);
     const readLead = {
       ...lead,
       unread_count: 0,
@@ -216,7 +215,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [lead?.id, onClose]);
 
-  async function loadConversation(leadId: string, preferredId = "", silent = false) {
+  async function loadConversation(leadId: string, preferredId = "", silent = false, markRead = false) {
     if (!silent) setLoadingMessages(true);
     try {
       let id = preferredId;
@@ -227,7 +226,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         setConversationChannel(result.rows[0]?.channel_code || "");
       }
       if (id) {
-        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
+        const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300&markRead=${markRead ? "1" : "0"}`);
         setConversationChannel(result.conversation?.channel_code || "");
         setMessages(result.messages || []);
       } else if (!silent) {
@@ -243,7 +242,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   useEffect(() => {
     if (!lead || !conversationId) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadConversation(activeForm.id, conversationId, true);
+      if (document.visibilityState === "visible") void loadConversation(activeForm.id, conversationId, true, false);
     }, 5000);
     return () => window.clearInterval(timer);
   }, [lead?.id, conversationId]);
@@ -297,10 +296,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
   }
 
   useEffect(() => {
-    if (!form) return;
-    const currentStatus = value(form.values.status_label);
-    if (!currentStatus || currentStatus === lastTemplateStatusRef.current) return;
-    lastTemplateStatusRef.current = currentStatus;
+    if (!lead || !form) return;
+    const currentStatus = String(form.values.status_label || "");
+    const previous = lastTemplateStatusRef.current;
+    if (previous.leadId !== lead.id) {
+      lastTemplateStatusRef.current = { leadId: lead.id, status: currentStatus };
+      setSelectedTemplate("");
+      setMessageText("");
+      return;
+    }
+    if (previous.status === currentStatus) return;
+    lastTemplateStatusRef.current = { leadId: lead.id, status: currentStatus };
     if (mappedTemplate?.id) {
       setSelectedTemplate(mappedTemplate.id);
       setMessageText(renderTemplateInComposer(mappedTemplate));
@@ -308,7 +314,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
     }
     setSelectedTemplate("");
     setMessageText("");
-  }, [form?.values.status_label, mappedTemplate?.id]);
+  }, [lead?.id, form?.values.status_label, mappedTemplate?.id]);
 
   useEffect(() => {
     const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
@@ -456,16 +462,13 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
   function renderMessageMedia(message: CrmMessage) {
     const url = (message.media_asset_id && mediaUrls[message.media_asset_id]) || message.attachment_url || "";
-    const declaredType = String(message.attachment_type || message.message_type || "").toLowerCase();
-    const mime = String(message.mime_type || "").toLowerCase();
-    const type = mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" : mime === "application/pdf" || mime.startsWith("application/") || mime.startsWith("text/") ? "document" : declaredType;
+    const type = String(message.attachment_type || message.message_type || "").toLowerCase();
     if (type === "image" && url) return <img className="crm-chat-media-image" src={url} alt={message.file_name || "صورة العميل"} />;
     if (type === "audio" && url) return <audio className="crm-chat-media-player" controls preload="metadata" src={url} />;
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
     if (message.media_asset_id || message.attachment_url || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
-      const fallbackName = type === "document" ? "ملف مرفق" : type === "audio" ? "رسالة صوتية" : type === "video" ? "فيديو" : "صورة";
-      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || fallbackName}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
+      return <button type="button" className="crm-chat-file-card" onClick={() => void openMedia(message)}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><DownloadSimple size={18} /></button>;
     }
     return null;
   }
@@ -509,8 +512,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
         ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
         : message));
       setNotice(result.providerStatus === "queued" ? "تم تسليم الرسالة للإرسال" : "تم إرسال الرسالة");
-      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 1200);
-      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 3500);
+      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true, false), 1200);
+      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true, false), 3500);
     } catch (error) {
       setMessages((current) => current.filter((message) => message.id !== tempId));
       setMessageText((current) => current.trim() ? current : draftText);
@@ -549,7 +552,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved }: Props) {
 
         <div className="crm-drawer-grid crm-customer-workspace-grid">
           <section className="crm-conversation-panel crm-customer-conversation">
-            <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)}><ArrowClockwise size={18} /></button></header>
+            <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false, true)}><ArrowClockwise size={18} /></button></header>
             <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
               {!loadingMessages && !messages.length ? <div className="crm-empty-state crm-empty-conversation"><ChatCircleDots size={38} weight="duotone" /><strong>لا توجد رسائل مسجلة</strong><span>يمكن بدء الإرسال من الأسفل حسب قناة ومصدر العميل.</span></div> : null}
