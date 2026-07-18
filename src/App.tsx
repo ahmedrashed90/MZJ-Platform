@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Sidebar } from "./components/Sidebar";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -20,6 +20,10 @@ const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((mod
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmOwnershipPage = lazy(() => import("./crm/pages/CrmOwnershipPage").then((module) => ({ default: module.CrmOwnershipPage })));
+const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((module) => ({ default: module.TrackingLayout })));
+const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
+const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
+const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
 
 function PlatformRoutes() {
   return (
@@ -43,7 +47,10 @@ function PlatformRoutes() {
           </Route>
           <Route path="/marketing" element={<EmptyModulePage title="التسويق" description="الحملات والأجندة والكرييتيف وجدول النشر والتقويم." />} />
           <Route path="/operations" element={<EmptyModulePage title="العمليات" description="المخزون والمواقع والحركة وطلبات النقل والموافقات ونواقص السيارات." />} />
-          <Route path="/tracking" element={<EmptyModulePage title="التتبع" description="طلبات البيع ومراحل التتبع والروابط والـ QR والإشعارات." />} />
+          <Route path="/tracking" element={<TrackingLayout />}>
+            <Route index element={<TrackingOrdersPage />} />
+            <Route path="delete" element={<TrackingDeletePage />} />
+          </Route>
           <Route path="/reports" element={<EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." />} />
           <Route path="/database" element={<EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." />} />
           <Route path="/settings" element={<SettingsPage />} />
@@ -58,8 +65,21 @@ function PlatformRoutes() {
 
 export default function App() {
   const { loading, status, user } = useAuth();
+  const location = useLocation();
+  const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
 
   if (loading) return <PlatformLoadingPage />;
+  if (isPublicTracking) {
+    return (
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل صفحة التتبع...</div>}>
+        <Routes>
+          <Route path="/track" element={<PublicTrackingPage />} />
+          <Route path="/track.html" element={<Navigate to={`/track${location.search}`} replace />} />
+          <Route path="/Test-Track.html" element={<Navigate to={`/track${location.search}`} replace />} />
+        </Routes>
+      </Suspense>
+    );
+  }
   if (!status?.databaseConfigured || !status.databaseReachable) return <DatabaseSetupPage />;
   if (!status.schemaReady || !status.adminExists) return <FirstAdminSetupPage />;
   if (!user) return <LoginPage />;

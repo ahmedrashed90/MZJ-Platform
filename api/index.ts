@@ -28,6 +28,12 @@ import crmInboxHandler from "../server/crm/inbox.js";
 import crmOwnershipHandler from "../server/crm/ownership.js";
 import crmMediaHandler from "../server/crm/media.js";
 import internalAutomationJobHandler from "../server/internal/automation-job.js";
+import trackingOrdersHandler from "../server/tracking/orders.js";
+import trackingPublicHandler from "../server/tracking/public.js";
+import trackingSmsHandler from "../server/tracking/sms.js";
+import trackingDeleteHandler from "../server/tracking/delete.js";
+import trackingSettingsHandler from "../server/tracking/settings.js";
+import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -59,6 +65,12 @@ const routes = new Map<string, ApiHandler>([
   ["crm/media", crmMediaHandler],
   ["integrations/media", integrationMediaHandler],
   ["internal/automation-job", internalAutomationJobHandler],
+  ["tracking/orders", trackingOrdersHandler],
+  ["tracking/public", trackingPublicHandler],
+  ["tracking/sms", trackingSmsHandler],
+  ["tracking/delete", trackingDeleteHandler],
+  ["tracking/settings", trackingSettingsHandler],
+  ["integrations/tracking/orders", trackingIntegrationHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -78,11 +90,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.11.5" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.12.0" });
   }
 
   if (route === "integrations/media") {
     return integrationMediaHandler(request, response);
+  }
+
+  if (route === "integrations/tracking/orders") {
+    return trackingIntegrationHandler(request, response);
   }
 
   if (route.startsWith("integrations/")) {

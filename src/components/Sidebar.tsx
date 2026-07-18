@@ -19,7 +19,7 @@ const items = [
   { href: "/crm", label: "CRM", icon: UsersThree },
   { href: "/marketing", label: "التسويق", icon: Megaphone },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple },
-  { href: "/tracking", label: "التتبع", icon: MapPin },
+  { href: "/tracking", label: "التتبع", icon: MapPin, trackingOnly: true },
 ];
 
 const supportItems = [
@@ -30,7 +30,7 @@ const supportItems = [
   { href: "/help", label: "المساعدة", icon: Question },
 ];
 
-type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean };
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean };
 
 function Item({ href, label, icon: Icon }: NavItem) {
   return (
@@ -52,6 +52,8 @@ function Item({ href, label, icon: Icon }: NavItem) {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const isAdmin = user?.roleCodes.includes("admin") ?? false;
+  const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
+  const visibleItems = items.filter((item) => !item.trackingOnly || canViewTracking);
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 
@@ -64,7 +66,7 @@ export function Sidebar() {
 
       <nav className="sidebar-nav" aria-label="القائمة الرئيسية">
         <div className="nav-group">
-          {items.map((item) => <Item key={item.href} {...item} />)}
+          {visibleItems.map((item) => <Item key={item.href} {...item} />)}
         </div>
         <div className="nav-separator" />
         <div className="nav-group">

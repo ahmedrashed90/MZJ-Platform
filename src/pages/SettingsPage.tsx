@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { CrmAdminPage } from "../crm/pages/CrmAdminPage";
+import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
 
 type MetaItem = { id: string; code: string; name: string; system_code?: string };
 type MetaResponse = { ok: boolean; departments: MetaItem[]; branches: MetaItem[]; roles: MetaItem[]; error?: string };
@@ -186,7 +187,7 @@ export function SettingsPage() {
       {section === "crm" ? <CrmAdminPage embedded /> : null}
       {section === "marketing" ? <PendingSystemSettings title="إعدادات التسويق" description="مصادر العملاء أصبحت مشتركة بالفعل مع CRM. بقية إعدادات الحملات والأجندة تنتقل هنا عند دمج موديول التسويق." /> : null}
       {section === "operations" ? <PendingSystemSettings title="إعدادات العمليات" description="إعدادات المخزون والمواقع والحركة والموافقات سيكون مكانها هنا داخل الإعدادات الموحدة." /> : null}
-      {section === "tracking" ? <PendingSystemSettings title="إعدادات التتبع" description="إعدادات مراحل التتبع والروابط والإشعارات سيكون مكانها هنا داخل الإعدادات الموحدة." /> : null}
+      {section === "tracking" ? <TrackingSettingsPanel /> : null}
     </div>
   );
 }
