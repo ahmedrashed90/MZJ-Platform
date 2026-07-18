@@ -28,13 +28,13 @@
  * unread state, assignments, and automations are owned by PostgreSQL in the platform.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.11.8";
+const VERSION = "mzj-mersal-postgres-v1.11.9";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
 const SUCCESS_STATUSES = new Set(["ok", "success", "sent", "queued", "accepted", "submitted", "delivered", "processing"]);
 const MERSAL_CONTACT_CACHE = new Map();
-const MERSAL_MEDIA_BASELINES = new Map();
+const MERSAL_MEDIA_LAST_USED = new Map();
 
 export default {
   async fetch(request, env, ctx) {
@@ -512,7 +512,6 @@ async function enrichInboundMedia(event, platformPayload, env) {
   const mediaType = resolved?.attachmentType || attachment.attachmentType;
   const fileName = attachment.fileName || resolved?.fileName || "";
   const mimeType = attachment.mimeType || resolved?.mimeType || "";
-
   let stored = null;
   let storageError = "";
   try {
@@ -655,41 +654,55 @@ async function resolveInboundMedia(env, input) {
   const contactId = await findMersalContactId(env, token, input.phone);
   if (!contactId) return { ok: false, error: "Mersal contact not found" };
 
-  const attempts = mediaRetryDelays(env);
+  const attempts = [0, 700, 1100, 1600, 2300, 3200, 4500, 6500];
   let messagesChecked = 0;
-  const baselineKey = `MEDIA_BASELINE:${clean(input.providerMessageId) || clean(input.mediaId) || stableEventId(input)}`;
-  let baseline = await loadMediaBaseline(env, baselineKey);
+  let firstFallbackIdentity = "";
+  const usageKey = mersalMediaUsageKey(contactId, input.messageType);
+  const lastUsedIdentity = await loadLastUsedMersalMedia(env, usageKey);
 
-  for (const delay of attempts) {
+  for (let index = 0; index < attempts.length; index += 1) {
+    const delay = attempts[index];
     if (delay) await sleep(delay);
     const messages = await mersalApiPost(`${mersalBase(env)}/api/wpbox/getMessages`, { token, contact_id: contactId });
     const rows = normalizeMersalRows(messages);
     messagesChecked = rows.length;
     const matchInput = { ...input, contactId, mediaBase: mersalBase(env) };
-    const found = findMersalMedia(rows, matchInput);
-    if (found?.url) {
-      await clearMediaBaseline(env, baselineKey);
-      return { ok: true, ...found };
+
+    const exact = findMersalMedia(rows, matchInput);
+    if (exact?.url) {
+      await saveLastUsedMersalMedia(env, usageKey, mersalMediaIdentity(exact));
+      return { ok: true, ...exact };
     }
 
-    const current = inboundMediaIdentities(rows, matchInput);
-    if (!baseline.length) {
-      baseline = current;
-      await saveMediaBaseline(env, baselineKey, baseline);
-      continue;
-    }
+    const fallback = newestInboundMersalMedia(rows, matchInput);
+    if (!fallback?.url) continue;
+    const identity = mersalMediaIdentity(fallback);
+    if (!firstFallbackIdentity) firstFallbackIdentity = identity;
+    if (lastUsedIdentity && identity === lastUsedIdentity) continue;
 
-    const baselineKeys = new Set(baseline.map((item) => item.key));
-    const appeared = current.filter((item) => !baselineKeys.has(item.key));
-    if (appeared.length === 1) {
-      await clearMediaBaseline(env, baselineKey);
-      return { ok: true, ...appeared[0].media, matchReason: "new_inbound_media_after_webhook" };
+    const rowTime = timestampMs(fallback.createdAt);
+    const eventTime = timestampMs(input.messageTimestamp);
+    const nearEvent = Boolean(rowTime && eventTime && mersalTimestampDistance(rowTime, eventTime) <= 10 * 60 * 1000);
+    const changedAfterFirstCheck = Boolean(firstFallbackIdentity && identity !== firstFallbackIdentity);
+    const finalUnknownTimeFallback = index === attempts.length - 1 && !rowTime;
+
+    if (nearEvent || changedAfterFirstCheck || finalUnknownTimeFallback) {
+      await saveLastUsedMersalMedia(env, usageKey, identity);
+      return {
+        ok: true,
+        ...fallback,
+        matchReason: nearEvent
+          ? "newest_inbound_type_near_webhook"
+          : changedAfterFirstCheck
+            ? "new_inbound_media_after_webhook"
+            : "newest_unused_inbound_type",
+      };
     }
   }
 
   return {
     ok: false,
-    error: "Mersal media URL not found with a safe exact match",
+    error: "Mersal media URL not found with a safe current-message match",
     contactId,
     messagesChecked,
     providerMessageId: clean(input.providerMessageId),
@@ -697,44 +710,37 @@ async function resolveInboundMedia(env, input) {
   };
 }
 
-function mediaRetryDelays(env) {
-  const configured = clean(env?.MERSAL_MEDIA_RETRY_DELAYS);
-  if (configured) {
-    const values = configured.split(",").map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value >= 0 && value <= 10000);
-    if (values.length) return values;
-  }
-  return [0, 700, 1100, 1700, 2500, 3600, 5000, 6500];
+function mersalMediaUsageKey(contactId, messageType) {
+  return `MERSAL_MEDIA_LAST_USED:${clean(contactId)}:${normalizeMediaType(messageType) || "media"}`;
 }
 
-function mediaBaselineValue(record) {
-  const value = record?.value || record;
-  return Array.isArray(value?.items) ? value.items.filter((item) => item?.key) : [];
+function mersalMediaIdentity(media) {
+  return first(media?.providerMessageId, media?.mediaId, media?.url);
 }
 
-async function loadMediaBaseline(env, key) {
-  const memory = MERSAL_MEDIA_BASELINES.get(key);
-  if (memory && memory.expiresAt > Date.now()) return memory.items;
-  const stored = mediaBaselineValue(await kvGetJson(env, key));
-  if (stored.length) MERSAL_MEDIA_BASELINES.set(key, { items: stored, expiresAt: Date.now() + 60 * 60 * 1000 });
-  return stored;
+async function loadLastUsedMersalMedia(env, key) {
+  const memory = MERSAL_MEDIA_LAST_USED.get(key);
+  if (memory) return memory;
+  const stored = await kvGetJson(env, key);
+  const identity = first(stored?.value?.identity, stored?.identity);
+  if (identity) MERSAL_MEDIA_LAST_USED.set(key, identity);
+  return identity;
 }
 
-async function saveMediaBaseline(env, key, items) {
-  const compact = items.slice(0, 100).map((item) => ({ key: item.key }));
-  MERSAL_MEDIA_BASELINES.set(key, { items: compact, expiresAt: Date.now() + 60 * 60 * 1000 });
-  await kvPutJson(env, key, { items: compact });
+async function saveLastUsedMersalMedia(env, key, identity) {
+  const value = clean(identity);
+  if (!value) return;
+  MERSAL_MEDIA_LAST_USED.set(key, value);
+  await kvPutJson(env, key, { identity: value });
 }
 
-async function clearMediaBaseline(env, key) {
-  MERSAL_MEDIA_BASELINES.delete(key);
-  try { if (env?.DEBUG_KV?.delete) await env.DEBUG_KV.delete(key); } catch {}
-}
-
-function inboundMediaIdentities(rows, input) {
+function newestInboundMersalMedia(rows, input) {
   const targetType = normalizeMediaType(input.messageType);
-  const target = ["image", "audio", "video", "document", "sticker"].includes(targetType) ? targetType : "";
-  const matches = uniqueMediaMatches(rows, { ...input, targetType: target }, true);
-  return matches.map((media) => ({ key: `${normalizeMediaType(media.attachmentType)}|${media.url}`, media }));
+  const matches = uniqueMediaMatches(rows, {
+    ...input,
+    targetType: ["image", "audio", "video", "document", "sticker"].includes(targetType) ? targetType : "",
+  }, true);
+  return matches[0] || null;
 }
 
 async function findMersalContactId(env, token, phone) {
@@ -936,14 +942,6 @@ function findMersalMedia(rows, input) {
   return null;
 }
 
-function mersalMediaField(...values) {
-  for (const value of values) {
-    const direct = directMediaValue(value);
-    if (direct) return direct;
-  }
-  return "";
-}
-
 function directMediaValue(value) {
   if (value == null) return "";
   if (typeof value === "string") {
@@ -1027,7 +1025,7 @@ function deepMersalMediaUrl(value, targetType, depth = 0, seen = new Set(), cont
   for (const [key, child] of Object.entries(value)) {
     if (child == null) continue;
     const keyType = mediaTypeFromKey(key);
-    const isContainer = /^(?:payload|data|raw|provider|provider_data|providerData|message|message_data|messageData|mersal|content|media|attachment)$/i.test(key);
+    const isContainer = /^(?:payload|data|raw|provider|provider_data|providerData|message|message_data|messageData|mersal|content|media|attachment|value)$/i.test(key);
     if (keyType && keyType !== targetType) continue;
     if (!keyType && !isContainer) continue;
     const found = deepMersalMediaUrl(child, targetType, depth + 1, seen, keyType || declared);
@@ -1051,7 +1049,7 @@ function mediaFromMersalRow(row, contactId, mediaBase) {
       contactId: contactId || first(row?.contact_id),
       providerMessageId: mersalRowMessageId(row),
       mediaId: mersalRowMediaIds(row)[0] || "",
-      createdAt: row?.created_at || row?.createdAt || "",
+      createdAt: first(row?.created_at, row?.createdAt, row?.received_at, row?.receivedAt, row?.sent_at, row?.sentAt, row?.message_time, row?.messageTime, row?.updated_at, row?.updatedAt, row?.timestamp, row?.date, row?.time),
       fileName: first(row?.file_name, row?.fileName, row?.filename, fileNameFromUrl(url)),
       mimeType: first(row?.mime_type, row?.mimeType, guessMimeType(url, attachmentType)),
     };
