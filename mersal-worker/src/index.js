@@ -28,7 +28,7 @@
  * unread state, assignments, and automations are owned by PostgreSQL in the platform.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.11.7";
+const VERSION = "mzj-mersal-postgres-v1.11.8";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
@@ -343,20 +343,15 @@ async function processInboundWebhook(incoming, env, ctx) {
     const result = await forwardToPlatform(platformPayload, env);
     if (!result.ok) throw new Error(`PostgreSQL endpoint rejected ${event.eventId}: HTTP ${result.status} ${result.error}`);
 
-    let mediaReady = !platformPayload.hasAttachment;
     if (platformPayload.hasAttachment) {
-      try {
-        await enrichInboundMedia(event, platformPayload, env);
-        mediaReady = true;
-      } catch (error) {
+      const mediaTask = enrichInboundMedia(event, platformPayload, env).catch(async (error) => {
         const failure = { ok: false, eventId: event.eventId, phone: event.phone, error: errorMessage(error), at: new Date().toISOString() };
         console.error("Inbound media enrichment failed", failure);
         await kvPutJson(env, "DEBUG_LAST_MEDIA", failure);
-        // The customer message is already stored in PostgreSQL. Returning a retryable
-        // error here makes Mersal resend the same webhook later, which updates that same
-        // message instead of leaving a protected lookaside URL forever.
-        throw new Error(`Inbound media pending for ${event.eventId}: ${failure.error}`);
-      }
+        return failure;
+      });
+      if (ctx?.waitUntil) ctx.waitUntil(mediaTask);
+      else await mediaTask;
     }
 
     forwarded.push({
@@ -365,7 +360,7 @@ async function processInboundWebhook(incoming, env, ctx) {
       status: result.status,
       conversationId: result.data?.result?.conversationId || null,
       messageId: result.data?.result?.messageId || null,
-      mediaPending: Boolean(platformPayload.hasAttachment) && !mediaReady,
+      mediaPending: Boolean(platformPayload.hasAttachment),
     });
   }
 
@@ -517,15 +512,25 @@ async function enrichInboundMedia(event, platformPayload, env) {
   const mediaType = resolved?.attachmentType || attachment.attachmentType;
   const fileName = attachment.fileName || resolved?.fileName || "";
   const mimeType = attachment.mimeType || resolved?.mimeType || "";
-  const stored = await storeInboundMedia(env, {
-    sourceUrl,
-    eventId: event.eventId,
-    conversationId: event.phone,
-    mediaType,
-    fileName,
-    mimeType,
-  });
 
+  let stored = null;
+  let storageError = "";
+  try {
+    stored = await storeInboundMedia(env, {
+      sourceUrl,
+      eventId: event.eventId,
+      conversationId: event.phone,
+      mediaType,
+      fileName,
+      mimeType,
+    });
+  } catch (error) {
+    storageError = errorMessage(error);
+    console.warn("Inbound media R2 storage fallback", { eventId: event.eventId, error: storageError });
+  }
+
+  const finalFileName = stored?.fileName || fileName || resolved?.fileName || ensureMediaFileName("", mediaType, mimeType || resolved?.mimeType || "", event.eventId);
+  const finalMimeType = stored?.mimeType || mimeType || resolved?.mimeType || guessMimeType(sourceUrl, mediaType);
   const enrichedPayload = {
     ...platformPayload,
     messageType: mediaType,
@@ -534,13 +539,13 @@ async function enrichInboundMedia(event, platformPayload, env) {
     mediaUrl: sourceUrl,
     fileUrl: sourceUrl,
     attachmentUrl: sourceUrl,
-    fileName: stored.fileName,
-    mimeType: stored.mimeType,
-    fileSize: stored.fileSize,
-    storageKey: stored.storageKey,
-    storage_key: stored.storageKey,
-    mediaAssetId: stored.assetId,
-    media_asset_id: stored.assetId,
+    fileName: finalFileName,
+    mimeType: finalMimeType,
+    fileSize: stored?.fileSize || null,
+    storageKey: stored?.storageKey || "",
+    storage_key: stored?.storageKey || "",
+    mediaAssetId: stored?.assetId || "",
+    media_asset_id: stored?.assetId || "",
     mediaStatus: "ready",
     isSensitive: true,
   };
@@ -550,9 +555,11 @@ async function enrichInboundMedia(event, platformPayload, env) {
     ok: true,
     eventId: event.eventId,
     phone: event.phone,
-    storageKey: stored.storageKey,
+    storageKey: stored?.storageKey || "",
     mediaType,
     matchReason: resolved?.matchReason || "direct_public_url",
+    deliveryMode: stored ? "r2" : "mersal_public_url",
+    storageError,
     at: new Date().toISOString(),
   };
   await kvPutJson(env, "DEBUG_LAST_MEDIA", success);
@@ -696,7 +703,7 @@ function mediaRetryDelays(env) {
     const values = configured.split(",").map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value >= 0 && value <= 10000);
     if (values.length) return values;
   }
-  return [0, 600, 1200, 2200, 4000];
+  return [0, 700, 1100, 1700, 2500, 3600, 5000, 6500];
 }
 
 function mediaBaselineValue(record) {
