@@ -78,6 +78,41 @@ create table if not exists operations.vehicle_statuses (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Compatibility upgrade for an existing vehicle_statuses table.
+-- CREATE TABLE IF NOT EXISTS does not add newly required columns to an existing table.
+alter table operations.vehicle_statuses add column if not exists is_inventory boolean;
+alter table operations.vehicle_statuses add column if not exists requires_status_note boolean;
+alter table operations.vehicle_statuses add column if not exists starts_delivery_cycle boolean;
+alter table operations.vehicle_statuses add column if not exists is_final_delivery boolean;
+alter table operations.vehicle_statuses add column if not exists is_active boolean;
+alter table operations.vehicle_statuses add column if not exists created_at timestamptz;
+alter table operations.vehicle_statuses add column if not exists updated_at timestamptz;
+
+update operations.vehicle_statuses
+set is_inventory = coalesce(is_inventory,true),
+    requires_status_note = coalesce(requires_status_note,false),
+    starts_delivery_cycle = coalesce(starts_delivery_cycle,false),
+    is_final_delivery = coalesce(is_final_delivery,false),
+    is_active = coalesce(is_active,true),
+    created_at = coalesce(created_at,now()),
+    updated_at = coalesce(updated_at,now());
+
+alter table operations.vehicle_statuses alter column is_inventory set default true;
+alter table operations.vehicle_statuses alter column is_inventory set not null;
+alter table operations.vehicle_statuses alter column requires_status_note set default false;
+alter table operations.vehicle_statuses alter column requires_status_note set not null;
+alter table operations.vehicle_statuses alter column starts_delivery_cycle set default false;
+alter table operations.vehicle_statuses alter column starts_delivery_cycle set not null;
+alter table operations.vehicle_statuses alter column is_final_delivery set default false;
+alter table operations.vehicle_statuses alter column is_final_delivery set not null;
+alter table operations.vehicle_statuses alter column is_active set default true;
+alter table operations.vehicle_statuses alter column is_active set not null;
+alter table operations.vehicle_statuses alter column created_at set default now();
+alter table operations.vehicle_statuses alter column created_at set not null;
+alter table operations.vehicle_statuses alter column updated_at set default now();
+alter table operations.vehicle_statuses alter column updated_at set not null;
+
 insert into operations.vehicle_statuses(code,name,sort_order,is_inventory,requires_status_note,starts_delivery_cycle,is_final_delivery) values
 ('available_for_sale','متاح للبيع',10,true,false,false,false),
 ('reserved','محجوز',20,true,false,false,false),
