@@ -1,28 +1,76 @@
-import { useEffect, useRef, useState } from "react";
-import { Archive, CheckCircle, ClockCounterClockwise, LinkSimple, SpinnerGap, Truck, X } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { Archive, Car, CheckCircle, Clock, FloppyDisk, MapPin, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
-import { formatOperationsDate, operationsFetch, statusLabel } from "../api";
-import type { VehicleDetail } from "../types";
+import { formatDate, operationsFetch } from "../api";
+import type { OperationsVehicle, VehicleDetail } from "../types";
 
-type Props={vehicleId:string|null;onClose:()=>void;onArchived?:()=>void};
-export function VehicleDetailDrawer({vehicleId,onClose,onArchived}:Props){
-  const [detail,setDetail]=useState<VehicleDetail|null>(null);const[loading,setLoading]=useState(false);const[error,setError]=useState("");const[archiveReason,setArchiveReason]=useState("");const[archiving,setArchiving]=useState(false);const abortRef=useRef<AbortController|null>(null);
-  const close=()=>{abortRef.current?.abort();setDetail(null);setError("");setArchiveReason("");onClose();}; useEscapeToClose(Boolean(vehicleId),close);
-  useEffect(()=>{if(!vehicleId){setDetail(null);return;}abortRef.current?.abort();const c=new AbortController();abortRef.current=c;setDetail(null);setError("");setLoading(true);operationsFetch<{detail:VehicleDetail}>(`/api/operations?resource=vehicle&id=${encodeURIComponent(vehicleId)}`,{signal:c.signal}).then((p)=>setDetail(p.detail)).catch((e)=>{if((e as Error).name!=="AbortError")setError((e as Error).message);}).finally(()=>setLoading(false));return()=>c.abort();},[vehicleId]);
-  if(!vehicleId)return null;const v=detail?.vehicle;
-  const archive=async()=>{if(!archiveReason.trim())return;setArchiving(true);setError("");try{await operationsFetch("/api/operations",{method:"POST",body:JSON.stringify({action:"archive_vehicle",vehicleId,reason:archiveReason})});close();onArchived?.();}catch(e){setError((e as Error).message);}finally{setArchiving(false);}};
-  return <div className="drawer-backdrop" onMouseDown={close}><aside className="operations-detail-drawer" onMouseDown={(e)=>e.stopPropagation()}>
-    <header><div><span>تفاصيل السيارة</span><h2>{v?.vin||"جاري التحميل..."}</h2><p>{v?[v.car_name,v.statement,v.model_year].filter(Boolean).join(" · "):"عرض البيانات من مصدر العمليات المعتمد"}</p></div><button type="button" className="icon-button" onClick={close}><X size={20}/></button></header>
-    <div className="operations-detail-body">{loading?<div className="operations-loading"><SpinnerGap className="spin" size={24}/>جاري تحميل التفاصيل...</div>:null}{error?<div className="operations-error">{error}</div>:null}{v?<>
-      <section className="operations-detail-grid">{[
-        ["VIN",v.vin],["السيارة",v.car_name],["الوصف",v.statement],["الوكيل",v.agent_name],["الموديل",v.model_year],["اللون الداخلي",v.interior_color],["اللون الخارجي",v.exterior_color],["اللوحة",v.plate_no],["اسم الدفعة",v.batch_no],["المكان الحالي",v.location_name],["الفرع الحالي",v.branch_code||v.location_branch_code],["الحالة",v.status_name||statusLabel(v.status_code)],["ملاحظات السيارة",v.notes],["ملاحظات الحالة",v.status_notes],["حجز - نواقص - تحديد مكان",v.missing_reservation_location],["آخر تعديل",formatOperationsDate(v.updated_at)]
-      ].map(([label,value])=><div key={label}><small>{label}</small><strong>{String(value||"—")}</strong></div>)}</section>
-      <section className="operations-detail-section"><h3><CheckCircle size={19}/> التشيك</h3><div className="operations-checklist-readonly">{detail.checklist.map((item)=><div key={item.code} className={item.is_present?"done":""}><span>{item.name}</span><b>{item.is_present?"موجود":"غير موجود"}</b>{item.note?<small>{item.note}</small>:null}</div>)}</div></section>
-      <section className="operations-detail-section"><h3><CheckCircle size={19}/> الموافقات</h3><div className="operations-approval-summary"><div><span>الموافقة المالية</span><b className={Boolean(detail.approval?.financial_approved)?"ok":"pending"}>{Boolean(detail.approval?.financial_approved)?"تمت":"لم تتم"}</b><small>{String(detail.approval?.financial_note||"بدون ملاحظة")}</small></div><div><span>الموافقة الإدارية</span><b className={Boolean(detail.approval?.administrative_approved)?"ok":"pending"}>{Boolean(detail.approval?.administrative_approved)?"تمت":"لم تتم"}</b><small>{String(detail.approval?.administrative_note||"بدون ملاحظة")}</small></div></div></section>
-      <section className="operations-detail-section"><h3><ClockCounterClockwise size={19}/> آخر الحركات</h3>{detail.movements.length?<div className="operations-timeline">{detail.movements.slice(0,10).map((m)=><article key={String(m.id)}><b>{String(m.from_location_name||"—")} ← {String(m.to_location_name||"—")}</b><span>{statusLabel(String(m.old_status||""))} ← {statusLabel(String(m.new_status||""))}</span><small>{String(m.performed_by_name||"—")} · {formatOperationsDate(String(m.created_at||""))}</small>{m.note?<p>{String(m.note)}</p>:null}</article>)}</div>:<p className="operations-empty-inline">لا توجد حركات مسجلة.</p>}</section>
-      <section className="operations-detail-section"><h3><Truck size={19}/> الطلبات</h3>{detail.requests.length?<div className="operations-mini-list">{detail.requests.map((r)=><div key={String(r.id)}><b>{String(r.request_no)}</b><span>نقل · {String(r.status)}</span><small>{formatOperationsDate(String(r.requested_at||""))}</small></div>)}</div>:<p className="operations-empty-inline">لا توجد طلبات مرتبطة.</p>}</section>
-      <section className="operations-detail-section"><h3><LinkSimple size={19}/> التراكينج</h3>{detail.trackingOrders.length?<div className="operations-mini-list">{detail.trackingOrders.map((t)=><div key={String(t.id)}><b>{String(t.sales_order_no||"—")}</b><span>{String(t.status||"—")} · {String(t.progress_percent||0)}%</span><small>{formatOperationsDate(String(t.updated_at||""))}</small></div>)}</div>:<p className="operations-empty-inline">لا يوجد طلب تتبع مرتبط.</p>}</section>
-      {!v.is_archived?<section className="operations-archive-box"><h3><Archive size={19}/> أرشفة السيارة</h3><p>تُنفذ فقط بعد حالة «مباع تم التسليم»، اكتمال الموافقتين، واكتمال التراكينج 100%.</p><textarea value={archiveReason} onChange={(e)=>setArchiveReason(e.target.value)} placeholder="سبب الأرشفة"/><button type="button" disabled={archiving||!archiveReason.trim()} onClick={()=>void archive()}>{archiving?"جاري الأرشفة...":"أرشفة السيارة"}</button></section>:null}
-    </>:null}</div>
-  </aside></div>;
+const editKeys = ["carName","statement","agentName","interiorColor","exteriorColor","modelYear","plateNo","batchNo","notes"] as const;
+type EditForm = Record<(typeof editKeys)[number], string>;
+function formFromVehicle(vehicle: OperationsVehicle): EditForm { return { carName:vehicle.car_name||"",statement:vehicle.statement||"",agentName:vehicle.agent_name||"",interiorColor:vehicle.interior_color||"",exteriorColor:vehicle.exterior_color||"",modelYear:vehicle.model_year||"",plateNo:vehicle.plate_no||"",batchNo:vehicle.batch_no||"",notes:vehicle.notes||"" }; }
+
+export function VehicleDetailDrawer({ vehicle, canEdit = false, canDelete, canArchive, onClose, onChanged }: { vehicle: OperationsVehicle; canEdit?: boolean; canDelete: boolean; canArchive: boolean; onClose: () => void; onChanged: () => void }) {
+  const [detail, setDetail] = useState<VehicleDetail | null>(null);
+  const [error, setError] = useState("");
+  const [action, setAction] = useState<"delete"|"archive"|null>(null);
+  const [reason, setReason] = useState("");
+  const [editing,setEditing]=useState(false);
+  const [form,setForm]=useState<EditForm>(()=>formFromVehicle(vehicle));
+  const [busy, setBusy] = useState(false);
+  useEscapeToClose(!action && !editing, onClose);
+  useEscapeToClose(Boolean(action), ()=>setAction(null));
+  useEscapeToClose(editing, ()=>setEditing(false));
+  useEffect(() => {
+    setForm(formFromVehicle(vehicle));
+    operationsFetch<{ok:boolean}&VehicleDetail>(`/api/operations?resource=vehicle&id=${encodeURIComponent(vehicle.id)}`).then((payload)=>setDetail(payload)).catch((reason)=>setError(reason instanceof Error?reason.message:"تعذر تحميل تفاصيل السيارة"));
+  }, [vehicle.id]);
+
+  async function submitAction() {
+    if (!action || !reason.trim()) return;
+    setBusy(true); setError("");
+    try {
+      await operationsFetch("/api/operations", { method: "POST", body: JSON.stringify({ action: action === "delete" ? "delete_vehicle" : "archive_vehicle", id: vehicle.id, reason }) });
+      onChanged(); onClose();
+    } catch (reasonError) { setError(reasonError instanceof Error ? reasonError.message : "تعذر تنفيذ الإجراء"); }
+    finally { setBusy(false); }
+  }
+
+  async function saveEdit(){
+    setBusy(true);setError("");
+    try{
+      await operationsFetch("/api/operations",{method:"POST",body:JSON.stringify({action:"update_vehicle",id:vehicle.id,...form})});
+      setEditing(false);onChanged();
+      const payload=await operationsFetch<{ok:boolean}&VehicleDetail>(`/api/operations?resource=vehicle&id=${encodeURIComponent(vehicle.id)}`);setDetail(payload);
+    }catch(reasonError){setError(reasonError instanceof Error?reasonError.message:"تعذر حفظ بيانات السيارة");}finally{setBusy(false);}
+  }
+
+  const shown=detail?.vehicle||vehicle;
+  return <div className="crm-drawer-backdrop operations-detail-backdrop" onMouseDown={(event)=>{if(event.currentTarget===event.target)onClose();}}>
+    <aside className="operations-detail-drawer">
+      <header><div><span>تفاصيل السيارة</span><h2>{shown.vin}</h2><p>{shown.car_name || "—"}</p></div><button type="button" onClick={onClose}><X size={22}/></button></header>
+      {error?<div className="connection-banner">{error}</div>:null}
+      <div className="operations-detail-actions">
+        {canEdit&&!shown.archived_at?<button type="button" onClick={()=>{setForm(formFromVehicle(shown));setEditing(true);}}><PencilSimple size={17}/>تعديل البيانات</button>:null}
+        {canArchive && !shown.archived_at?<button type="button" onClick={()=>{setAction("archive");setReason("");}}><Archive size={17}/>أرشفة السيارة</button>:null}
+        {canDelete?<button type="button" className="danger" onClick={()=>{setAction("delete");setReason("");}}><Trash size={17}/>مسح السيارة</button>:null}
+      </div>
+      <div className="operations-detail-body">
+        <section className="operations-detail-grid">
+          <div><Car size={18}/><span><small>السيارة</small><strong>{shown.car_name||"—"}</strong></span></div>
+          <div><MapPin size={18}/><span><small>المكان</small><strong>{shown.location_name||"—"}</strong></span></div>
+          <div><CheckCircle size={18}/><span><small>الحالة</small><strong>{shown.status_name||shown.status_code}</strong></span></div>
+          <div><Clock size={18}/><span><small>آخر تحديث</small><strong>{formatDate(shown.updated_at)}</strong></span></div>
+        </section>
+        <section className="operations-detail-section"><h3>بيانات السيارة</h3><dl>
+          <div><dt>البيان</dt><dd>{shown.statement||"—"}</dd></div><div><dt>الوكيل</dt><dd>{shown.agent_name||"—"}</dd></div><div><dt>الموديل</dt><dd>{shown.model_year||"—"}</dd></div><div><dt>اللوحة</dt><dd>{shown.plate_no||"—"}</dd></div><div><dt>اللون الخارجي</dt><dd>{shown.exterior_color||"—"}</dd></div><div><dt>اللون الداخلي</dt><dd>{shown.interior_color||"—"}</dd></div><div><dt>اسم الدفعة</dt><dd>{shown.batch_no||"—"}</dd></div><div><dt>الملاحظات</dt><dd>{shown.notes||"—"}</dd></div><div><dt>ملاحظات الحالة</dt><dd>{shown.status_note||"—"}</dd></div><div><dt>حجز - نواقص - تحديد مكان</dt><dd>{shown.shortage_location_note||"—"}</dd></div>
+        </dl></section>
+        <section className="operations-detail-section"><h3>التشيك</h3><div className="operations-check-summary">{detail?.checks.length?detail.checks.map((item:any)=><span key={item.item_code} className={item.status==="ok"?"ok":""}>{item.item_name}: {item.status}</span>):<p>لا توجد بيانات تشيك.</p>}</div></section>
+        <section className="operations-detail-section"><h3>الموافقات</h3><div className="operations-timeline">{detail?.approvals.length?detail.approvals.map((row:any)=><div key={row.id}><b>دورة {row.cycle_no}</b><span>مالي: {row.financial_approved?"تم":"لم يتم"} • إداري: {row.administrative_approved?"تم":"لم يتم"}</span><small>{formatDate(row.started_at)}</small></div>):<p>لا توجد دورات موافقات.</p>}</div></section>
+        <section className="operations-detail-section"><h3>طلبات النقل</h3><div className="operations-timeline">{detail?.transfers.length?detail.transfers.map((row:any)=><div key={row.id}><b>{row.request_no}</b><span>{row.source_location||"—"} ← {row.destination_location||"—"} • {row.status}</span><small>{formatDate(row.requested_at)}</small></div>):<p>لا توجد طلبات نقل.</p>}</div></section>
+        <section className="operations-detail-section"><h3>سجل الحركات</h3><div className="operations-timeline">{detail?.movements.length?detail.movements.map((row:any)=><div key={row.id}><b>{row.from_location_name||"—"} ← {row.to_location_name||"—"}</b><span>{row.old_status||"—"} ← {row.new_status||"—"}</span><small>{row.performed_by_name||"—"} • {formatDate(row.created_at)}</small></div>):<p>لا توجد حركات.</p>}</div></section>
+        <section className="operations-detail-section"><h3>طلبات التراكينج</h3><div className="operations-timeline">{detail?.tracking.length?detail.tracking.map((row:any)=><div key={row.id}><b>{row.sales_order_no}</b><span>{row.status}</span><small>{formatDate(row.updated_at)}</small></div>):<p>لا يوجد طلب تراكينج مرتبط.</p>}</div></section>
+      </div>
+    </aside>
+    {editing?<div className="modal-backdrop operations-confirm-backdrop"><div className="operations-confirm-modal operations-edit-modal"><h3>تعديل بيانات السيارة</h3><p>المكان والحالة يتم تغييرهما من تبويب الحركة فقط.</p><div className="operations-form-grid">{([['carName','السيارة'],['statement','البيان'],['agentName','الوكيل'],['interiorColor','اللون الداخلي'],['exteriorColor','اللون الخارجي'],['modelYear','الموديل'],['plateNo','اللوحة'],['batchNo','اسم الدفعة']] as Array<[keyof EditForm,string]>).map(([key,label])=><label key={key}><span>{label}</span><input value={form[key]} onChange={(event)=>setForm((current)=>({...current,[key]:event.target.value}))}/></label>)}<label className="span-2"><span>ملاحظات السيارة</span><textarea rows={4} value={form.notes} onChange={(event)=>setForm((current)=>({...current,notes:event.target.value}))}/></label></div><div><button type="button" onClick={()=>setEditing(false)}>إلغاء</button><button type="button" className="primary" disabled={busy} onClick={()=>void saveEdit()}><FloppyDisk size={17}/>{busy?"جاري الحفظ...":"حفظ التعديل"}</button></div></div></div>:null}
+    {action?<div className="modal-backdrop operations-confirm-backdrop"><div className="operations-confirm-modal"><h3>{action==="delete"?"تأكيد مسح السيارة":"تأكيد أرشفة السيارة"}</h3><p>{action==="delete"?"هذا حذف فيزيائي نهائي، ولن يُسمح به إذا كان للسيارة أي تاريخ.":"ستظل كل بيانات السيارة وتاريخها محفوظة في الأرشيف."}</p><strong>{shown.vin} — {shown.car_name||"—"}</strong><label><span>سبب الإجراء</span><textarea rows={4} value={reason} onChange={(e)=>setReason(e.target.value)}/></label><div><button type="button" onClick={()=>setAction(null)}>إلغاء</button><button type="button" className={action==="delete"?"danger":"primary"} disabled={!reason.trim()||busy} onClick={()=>void submitAction()}>{busy?"جاري التنفيذ...":action==="delete"?"مسح نهائي":"تأكيد الأرشفة"}</button></div></div></div>:null}
+  </div>;
 }

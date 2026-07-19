@@ -13,7 +13,7 @@ export type AuthUser = {
   branches: string[];
   branchCodes: string[];
   permissions: string[];
-  isSystemAdmin: boolean;
+  permissionCodes: string[];
 };
 
 export type SetupStatus = {

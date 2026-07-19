@@ -40,7 +40,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     const user = await sql.begin(async (tx) => {
-      const [adminRole] = await tx<{ id: string }[]>`select id::text from core.roles where code = 'system_admin' limit 1`;
+      const [adminRole] = await tx<{ id: string }[]>`select id::text from core.roles where code = 'admin' limit 1`;
       if (!adminRole) throw new Error("ADMIN_ROLE_MISSING");
 
       const [created] = await tx<{
@@ -87,13 +87,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
         email: user.email,
         mobile: user.mobile,
         roles: ["مدير النظام"],
-        roleCodes: ["system_admin"],
+        roleCodes: ["admin"],
         departments: [],
         departmentCodes: [],
         branches: [],
         branchCodes: [],
-        permissions: [],
-        isSystemAdmin: true,
       },
     });
   } catch (error: any) {

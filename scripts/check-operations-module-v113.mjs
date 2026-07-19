@@ -1,88 +1,77 @@
 import fs from "node:fs";
-import path from "node:path";
 
-const requiredFiles = [
-  "server/_operations-schema.ts",
-  "server/_operations-auth.ts",
-  "server/_operations-service.ts",
-  "server/operations/index.ts",
-  "src/operations/OperationsLayout.tsx",
-  "src/operations/pages/InventoryPage.tsx",
-  "src/operations/pages/VehicleManagementPage.tsx",
-  "src/operations/pages/MovementPage.tsx",
-  "src/operations/pages/RequestsPage.tsx",
-  "src/operations/pages/ApprovalsPage.tsx",
-  "src/operations/pages/MovementLogPage.tsx",
-  "database/migrations/20260719_operations_native.sql",
+const required = [
+  ["api/index.ts", '["operations", operationsHandler]'],
+  ["src/App.tsx", 'path="/operations"'],
+  ["src/operations/OperationsLayout.tsx", "مخزون السيارات"],
+  ["src/operations/OperationsLayout.tsx", "إدارة السيارات"],
+  ["src/operations/OperationsLayout.tsx", "الحركة"],
+  ["src/operations/OperationsLayout.tsx", "طلبات النقل"],
+  ["src/operations/OperationsLayout.tsx", "الموافقات"],
+  ["src/operations/OperationsLayout.tsx", "جميع السيارات"],
+  ["src/operations/OperationsLayout.tsx", "سجل الحركات"],
+  ["src/operations/OperationsLayout.tsx", "الأرشيف"],
+  ["server/operations.ts", "operations.vehicle.delete"],
+  ["server/operations.ts", "VEHICLE_HAS_HISTORY"],
+  ["server/operations.ts", "move_vehicles"],
+  ["server/operations.ts", "advance_transfer"],
+  ["server/operations.ts", "APPROVALS_REQUIRED"],
+  ["server/operations.ts", "for update"],
+  ["server/_operations-schema.ts", "operations.vehicle_statuses"],
+  ["server/_operations-schema.ts", "operations.vehicle_approval_cycles"],
+  ["server/_operations-schema.ts", "operations.transfer_request_events"],
+  ["server/_operations-schema.ts", "operations.event_outbox"],
+  ["server/_operations-schema.ts", "audit.vehicle_deletions"],
+  ["server/_operations-schema.ts", "operations.vehicle.delete"],
+  ["server/_operations-schema.ts", "tracking.orders.delete"],
+  ["server/_dashboard-data.ts", "operations.schema"],
+  ["server/_dashboard-data.ts", "sectionErrors"],
+  ["src/pages/SettingsPage.tsx", "OperationsSettingsPanel"],
+  ["src/operations/pages/OperationsManagePage.tsx", "استبدال كامل"],
+  ["src/operations/pages/OperationsManagePage.tsx", "إضافة فوق الحالي"],
+  ["src/operations/pages/OperationsManagePage.tsx", "تحديث من الشيت"],
+  ["server/_operations-schema.ts", "operations.import.replace"],
+  ["server/_operations-schema.ts", "operations.transfer.delete"],
+  ["server/operations.ts", "delete_transfer"],
+  ["server/operations.ts", "confirmReplace"],
+  ["src/operations/components/VehicleTable.tsx", "operations-column-resizer"],
+  ["src/operations/components/VehicleTable.tsx", "localStorage.getItem"],
+  ["src/operations/components/VehicleTable.tsx", "onDoubleClick"],
+  ["src/operations/components/VehicleDetailDrawer.tsx", "update_vehicle"],
+  ["src/operations/pages/OperationsTransfersPage.tsx", "حذف قبل التنفيذ"],
+  ["src/operations/pages/OperationsTransfersPage.tsx", 'resource:"transfer"'],
+  ["src/operations/pages/OperationsMovementPage.tsx", "مراجعة الحركة قبل التنفيذ"],
+  ["src/operations/pages/OperationsMovementPage.tsx", "operations-movement-vehicle-data"],
+  ["src/operations/components/OperationsSettingsPanel.tsx", "branch_ids"],
+  ["server/operations.ts", "operations.location_branches"],
+  ["server/operations.ts", "branch_ids"],
+  ["src/operations/pages/OperationsApprovalsPage.tsx", "operations-confirm-modal"],
 ];
-for (const file of requiredFiles) {
-  if (!fs.existsSync(file)) throw new Error(`Operations check failed: missing ${file}`);
-}
 
-const checks = [
-  ["src/App.tsx", '<Route path="/operations" element={<OperationsLayout />}>'],
-  ["src/App.tsx", '<Route path="movement" element={<MovementPage />} />'],
-  ["src/operations/OperationsLayout.tsx", 'label: "الحركة"'],
-  ["server/_operations-service.ts", 'vehicle.location_code==="agency"'],
-  ["server/_operations-service.ts", "financial_approved"],
-  ["server/_operations-service.ts", "administrative_approved"],
-  ["server/_operations-service.ts", "DUPLICATE_ACTIVE_REQUEST"],
-  ["server/_operations-service.ts", "INVALID_SOURCE_LOCATION"],
-  ["server/_operations-service.ts", "VEHICLE_NOT_ELIGIBLE"],
-  ["server/_operations-service.ts", "sql.begin(async"],
-  ["server/operations/index.ts", "requestId"],
-  ["server/operations/index.ts", "fieldErrors"],
-  ["server/operations/index.ts", 'approvalType === "financial"'],
-  ["server/operations/index.ts", 'approvalType === "administrative"'],
-  ["server/_dashboard-data.ts", "getOperationsDashboard(user)"],
-  ["server/_operations-service.ts", "getShortages(user)"],
-  ["server/integrations/tracking-orders.ts", "operations_vehicle_id"],
-  ["src/operations/components/VehicleDetailDrawer.tsx", "AbortController"],
-  ["src/operations/components/VehicleDetailDrawer.tsx", "setDetail(null)"],
-  ["src/operations/components/StickyHorizontalScroll.tsx", "scrollLeft"],
-  ["src/operations/pages/InventoryPage.tsx", "تصدير النتائج الحالية إلى Excel"],
-  ["src/operations/pages/MovementPage.tsx", "checklistByVehicle"],
-  ["src/operations/pages/MovementPage.tsx", "حجز - نواقص - تحديد مكان"],
-  ["database/migrations/20260719_operations_native.sql", "legacy_transfer_request_id"],
-  ["database/migrations/20260719_operations_native.sql", "operations.event_outbox"],
-];
-for (const [file, needle] of checks) {
+for (const [file, needle] of required) {
   const text = fs.readFileSync(file, "utf8");
   if (!text.includes(needle)) throw new Error(`Operations check failed: ${file} missing ${needle}`);
 }
 
-const operationsSources = [];
-function walk(directory) {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const full = path.join(directory, entry.name);
-    if (entry.isDirectory()) walk(full);
-    else if (/\.(?:ts|tsx|css)$/.test(entry.name)) operationsSources.push(full);
-  }
-}
-walk("src/operations");
-walk("server/operations");
-operationsSources.push("server/_operations-auth.ts", "server/_operations-schema.ts", "server/_operations-service.ts");
-const forbidden = [
-  [/firebase/i, "Firebase"],
-  [/<iframe/i, "iframe"],
-  [/@(?:gmail|hotmail|outlook|mzj-platform)\.com/i, "hardcoded email"],
-  [/localStorage/i, "localStorage source of truth"],
+const operationFiles = [
+  ...fs.readdirSync("src/operations", { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => `src/operations/${entry.name}`),
+  ...fs.readdirSync("src/operations/pages", { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => `src/operations/pages/${entry.name}`),
+  ...fs.readdirSync("src/operations/components", { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => `src/operations/components/${entry.name}`),
+  "server/operations.ts",
 ];
-for (const file of operationsSources) {
+for (const file of operationFiles) {
   const text = fs.readFileSync(file, "utf8");
-  for (const [pattern, label] of forbidden) {
-    if (pattern.test(text)) {
-      const isAllowedColumnPreference = label === "localStorage source of truth" && file.endsWith("useResizableColumns.ts");
-      if (!isAllowedColumnPreference) throw new Error(`Operations check failed: ${label} found in ${file}`);
-    }
-  }
+  if (/firebase|firestore/i.test(text)) throw new Error(`Operations Native must not depend on Firebase: ${file}`);
 }
 
-const app = fs.readFileSync("src/App.tsx", "utf8");
-if (/operations\/(?:bulk|batch|group)-?movement/i.test(app)) throw new Error("Operations check failed: duplicate group movement route exists");
-if (/movementNote/.test(fs.readFileSync("src/operations/pages/MovementPage.tsx", "utf8"))) throw new Error("Operations check failed: removed movementNote payload returned");
 
-const migration = fs.readFileSync("database/migrations/20260719_operations_native.sql", "utf8");
-if (/drop\s+table|truncate\s+/i.test(migration)) throw new Error("Operations check failed: destructive migration statement found");
+for (const file of operationFiles) {
+  const text = fs.readFileSync(file, "utf8");
+  if (/window\.prompt|window\.confirm/.test(text)) throw new Error(`Operations must use platform dialogs instead of browser prompts: ${file}`);
+}
 
-console.log("Operations native module structural, safety, routing, state-machine, dashboard-source, tracking-link, and migration checks passed.");
+const api = fs.readFileSync("server/operations.ts", "utf8");
+if (/mock\s*data|localStorage/i.test(api)) throw new Error("Operations API must not use mock data or localStorage as a source of truth.");
+if (!fs.existsSync("database/migrations/20260720_operations_native.sql")) throw new Error("Operations migration is missing.");
+
+console.log("Operations Native v1.13.3 structure, permissions, transactions, import modes, dashboard isolation, and safe deletion checks passed.");

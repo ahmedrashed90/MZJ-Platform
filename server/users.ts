@@ -59,12 +59,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (password.length < 10) return response.status(400).json({ ok: false, error: "كلمة المرور المؤقتة يجب ألا تقل عن 10 أحرف" });
       if (!roleId) return response.status(400).json({ ok: false, error: "اختر دور المستخدم" });
 
-      const [targetRole] = await sql<{ code: string }[]>`select code from core.roles where id=${roleId}::uuid limit 1`;
-      if (!targetRole) return response.status(400).json({ ok: false, error: "الدور المحدد غير صحيح" });
-      if (targetRole.code === "system_admin" && !currentUser.roleCodes.includes("system_admin")) {
-        return response.status(403).json({ ok: false, error: "منح دور مدير النظام متاح لمدير نظام حالي فقط" });
-      }
-
       const created = await sql.begin(async (tx) => {
         const [user] = await tx`
           insert into core.users (

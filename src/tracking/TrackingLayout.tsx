@@ -1,10 +1,10 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Archive, ListMagnifyingGlass, Trash, SlidersHorizontal } from "@phosphor-icons/react";
+import { Archive, ListMagnifyingGlass, SlidersHorizontal } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 
 export function TrackingLayout() {
   const { user } = useAuth();
-  const isAdmin = Boolean(user?.isSystemAdmin || user?.roleCodes.includes("admin"));
+  const isAdmin = user?.roleCodes.some((code) => code === "admin" || code === "system_admin") ?? false;
   return (
     <section className="tracking-module">
       <nav className="crm-system-nav tracking-system-nav" aria-label="صفحات التتبع">
@@ -16,12 +16,6 @@ export function TrackingLayout() {
           <Archive size={18} weight="duotone" />
           <span>أرشيف الطلبات</span>
         </NavLink>
-        {isAdmin ? (
-          <NavLink to="/tracking/delete" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
-            <Trash size={18} weight="duotone" />
-            <span>حذف طلبات التتبع</span>
-          </NavLink>
-        ) : null}
         {isAdmin ? (
           <NavLink to="/settings?section=tracking" className="crm-system-link">
             <SlidersHorizontal size={18} weight="duotone" />

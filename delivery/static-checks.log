@@ -1,6 +1,0 @@
-API and server import extension check passed.
-Operations native module structural, safety, routing, state-machine, dashboard-source, tracking-link, and migration checks passed.
-Operations final mandatory corrections static acceptance checks passed.
-Operations final refactor acceptance checks passed: inventory UX, three-mode import, movement, transfer-only requests, approvals, hard-delete safety, permissions, audit, and dashboard refresh.
-Operations shortage business-rule tests passed (warehouse-only +3, branch gaps, agency/status/accessory exclusions, dedupe, and unique color combinations).
-TypeScript/TSX syntax and isolated transpilation checks passed for 110 files.

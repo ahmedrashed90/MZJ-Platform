@@ -34,7 +34,7 @@ import trackingSmsHandler from "../server/tracking/sms.js";
 import trackingDeleteHandler from "../server/tracking/delete.js";
 import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
-import operationsHandler from "../server/operations/index.js";
+import operationsHandler from "../server/operations.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -92,7 +92,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.13.2" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.13.3" });
   }
 
   if (route === "integrations/media") {

@@ -14,11 +14,14 @@ import {
   MagnifyingGlass,
   MapPin,
   Phone,
+  Trash,
+  ShieldWarning,
   User,
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
+import { useAuth } from "../../auth/AuthContext";
 import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel } from "../api";
 import type { TrackingCounts, TrackingOrderDetail, TrackingOrderRow, TrackingStage, TrackingVehicle } from "../types";
 
@@ -35,6 +38,8 @@ function visibleVin(vehicle: TrackingVehicle) {
 }
 
 export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: boolean }) {
+  const { user } = useAuth();
+  const canDelete = Boolean(user?.roleCodes.some((code) => ["admin","system_admin"].includes(code)) || user?.permissionCodes?.includes("tracking.orders.delete"));
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
   const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
   const [search, setSearch] = useState("");
@@ -46,8 +51,12 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeVehicleId, setActiveVehicleId] = useState("");
   const [actionKey, setActionKey] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
 
-  useEscapeToClose(Boolean(selected), () => setSelected(null));
+  useEscapeToClose(Boolean(selected) && !deleteOpen, () => setSelected(null));
+  useEscapeToClose(deleteOpen, () => setDeleteOpen(false));
 
   async function loadOrders(nextSearch = search, nextStatus = status) {
     setLoading(true);
@@ -120,6 +129,29 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
       await openOrder(selected.id);
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "تعذر إرسال SMS+");
+    } finally {
+      setActionKey("");
+    }
+  }
+
+  async function deleteOrder() {
+    if (!selected || !canDelete || deleteConfirmation.trim() !== selected.sales_order_no || !deleteReason.trim()) return;
+    setActionKey(`delete:${selected.id}`);
+    setMessage("");
+    setError("");
+    try {
+      const payload = await trackingFetch<{ ok: boolean; message: string }>("/api/tracking/delete", {
+        method: "POST",
+        body: JSON.stringify({ action: "delete", orderId: selected.id, confirmation: deleteConfirmation, reason: deleteReason }),
+      });
+      setMessage(payload.message);
+      setDeleteOpen(false);
+      setDeleteReason("");
+      setDeleteConfirmation("");
+      setSelected(null);
+      await loadOrders();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "تعذر مسح طلب التراكينج");
     } finally {
       setActionKey("");
     }
@@ -251,6 +283,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
             <div className="tracking-detail-actions">
               <button type="button" onClick={() => void copyLink(activeVehicle)}><Copy size={17} />نسخ رابط العميل</button>
               <button type="button" onClick={() => window.open(trackingUrl(activeVehicle), "_blank")}><LinkSimple size={17} />فتح صفحة العميل</button>
+              {canDelete ? <button type="button" className="tracking-delete-detail-button" onClick={() => { setDeleteOpen(true); setDeleteReason(""); setDeleteConfirmation(""); }}><Trash size={17} />مسح طلب التراكينج</button> : null}
               {!selected.is_archived && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
                 <button type="button" className="tracking-archive-button" onClick={() => void archiveOrder()} disabled={Boolean(actionKey)}>
                   <Archive size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
@@ -338,6 +371,18 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
               </section>
             </div>
           </aside>
+        </div>
+      ) : null}
+      {deleteOpen && selected ? (
+        <div className="modal-backdrop tracking-delete-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setDeleteOpen(false); }}>
+          <div className="tracking-delete-modal">
+            <header><div><ShieldWarning size={26} weight="duotone" /><span><strong>تأكيد مسح طلب التراكينج</strong><small>{selected.sales_order_no}</small></span></div><button type="button" onClick={() => setDeleteOpen(false)}><X size={20} /></button></header>
+            <div className="tracking-delete-summary"><p><b>العميل:</b> {selected.customer_name || "—"}</p><p><b>الجوال:</b> {selected.customer_mobile || "—"}</p><p><b>السيارات:</b> {selected.vehicles.map((vehicle) => `${visibleVin(vehicle)} — ${vehicle.car_name || "—"}`).join("، ")}</p></div>
+            <div className="tracking-delete-warning"><ShieldWarning size={24} /><div><strong>سيتم مسح الطلب ومراحله من التراكينج فقط</strong><span>السيارات نفسها لن تُحذف من مخزون العمليات، وسيظهر لها «لا يوجد طلب» إذا لم يوجد طلب نشط آخر.</span></div></div>
+            <label><span>سبب الحذف *</span><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} rows={4} /></label>
+            <label><span>اكتب رقم الطلب كاملًا للتأكيد</span><input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={selected.sales_order_no} /></label>
+            <div className="tracking-delete-modal-actions"><button type="button" className="secondary" onClick={() => setDeleteOpen(false)}>إلغاء</button><button type="button" className="danger" disabled={!deleteReason.trim() || deleteConfirmation.trim() !== selected.sales_order_no || Boolean(actionKey)} onClick={() => void deleteOrder()}><Trash size={17} />{actionKey === `delete:${selected.id}` ? "جاري المسح..." : "مسح الطلب نهائيًا"}</button></div>
+          </div>
         </div>
       ) : null}
     </div>
