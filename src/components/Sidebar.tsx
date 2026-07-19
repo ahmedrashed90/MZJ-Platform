@@ -18,7 +18,7 @@ const items = [
   { href: "/", label: "الداش بورد", icon: House },
   { href: "/crm", label: "CRM", icon: UsersThree },
   { href: "/marketing", label: "التسويق", icon: Megaphone },
-  { href: "/operations", label: "العمليات", icon: SuitcaseSimple, operationsOnly: true },
+  { href: "/operations", label: "العمليات", icon: SuitcaseSimple },
   { href: "/tracking", label: "التراكينج", icon: MapPin, trackingOnly: true },
 ];
 
@@ -30,7 +30,7 @@ const supportItems = [
   { href: "/help", label: "المساعدة", icon: Question },
 ];
 
-type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean };
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean };
 
 function Item({ href, label, icon: Icon }: NavItem) {
   return (
@@ -51,10 +51,13 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const isAdmin = user?.isSystemAdmin ?? user?.roleCodes.includes("system_admin") ?? false;
+  const isAdmin = user?.isSystemAdmin || user?.roleCodes.some((code) => ["system_admin", "admin"].includes(code)) || false;
+  const canViewOperations = isAdmin || user?.permissions?.includes("operations.view") || user?.departmentCodes.includes("operations");
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
-  const canViewOperations = isAdmin || Boolean(user?.roleCodes.includes("operations_user")) || Boolean(user?.permissionCodes?.includes("operations.view"));
-  const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations));
+  const visibleItems = items.filter((item) => {
+    if (item.href === "/operations") return canViewOperations;
+    return !item.trackingOnly || canViewTracking;
+  });
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 

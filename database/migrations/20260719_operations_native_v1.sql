@@ -1,9 +1,4 @@
-import { runSqlScript } from "./_db.js";
-import { ensureTrackingSchema } from "./_tracking-schema.js";
-
-let schemaPromise: Promise<void> | null = null;
-
-const OPERATIONS_SCHEMA_SQL = String.raw`create extension if not exists pg_trgm;
+create extension if not exists pg_trgm;
 
 insert into core.roles(code,name,is_system) values
 ('system_admin','مدير النظام',true),
@@ -331,14 +326,3 @@ join tracking.orders o on o.id=tv.order_id
 left join tracking.vehicle_stages vs on vs.vehicle_id=tv.id
 left join tracking.stages s on s.id=vs.stage_id
 group by v.id,tv.id,o.id,o.sales_order_no,o.status,o.is_archived,o.is_deleted;
-`;
-
-export function ensureOperationsSchema() {
-  if (!schemaPromise) {
-    schemaPromise = ensureTrackingSchema().then(() => runSqlScript(OPERATIONS_SCHEMA_SQL)).catch((error) => {
-      schemaPromise = null;
-      throw error;
-    });
-  }
-  return schemaPromise;
-}

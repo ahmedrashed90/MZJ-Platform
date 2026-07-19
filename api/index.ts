@@ -34,7 +34,14 @@ import trackingSmsHandler from "../server/tracking/sms.js";
 import trackingDeleteHandler from "../server/tracking/delete.js";
 import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
-import operationsHandler from "../server/operations/index.js";
+import operationsMetaHandler from "../server/operations/meta.js";
+import operationsVehiclesHandler from "../server/operations/vehicles.js";
+import operationsMovementsHandler from "../server/operations/movements.js";
+import operationsRequestsHandler from "../server/operations/requests.js";
+import operationsApprovalsHandler from "../server/operations/approvals.js";
+import operationsArchiveHandler from "../server/operations/archive.js";
+import operationsSettingsHandler from "../server/operations/settings.js";
+import operationsReportsHandler from "../server/operations/reports.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -72,7 +79,14 @@ const routes = new Map<string, ApiHandler>([
   ["tracking/delete", trackingDeleteHandler],
   ["tracking/settings", trackingSettingsHandler],
   ["integrations/tracking/orders", trackingIntegrationHandler],
-  ["operations", operationsHandler],
+  ["operations/meta", operationsMetaHandler],
+  ["operations/vehicles", operationsVehiclesHandler],
+  ["operations/movements", operationsMovementsHandler],
+  ["operations/requests", operationsRequestsHandler],
+  ["operations/approvals", operationsApprovalsHandler],
+  ["operations/archive", operationsArchiveHandler],
+  ["operations/settings", operationsSettingsHandler],
+  ["operations/reports", operationsReportsHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -92,7 +106,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "2.0.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.14.0-operations-native" });
   }
 
   if (route === "integrations/media") {

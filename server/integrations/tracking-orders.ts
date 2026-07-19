@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { safeSecretEquals } from "../_auth.js";
 import { getSql } from "../_db.js";
-import { ensureTrackingSchema } from "../_tracking-schema.js";
+import { ensureOperationsSchema } from "../_operations-schema.js";
 import { clean, dateValue, ensureVehicleStageRows, numberValue } from "../_tracking-utils.js";
 
 function requestBody(request: VercelRequest) {
@@ -15,7 +15,7 @@ function requestKey(request: VercelRequest) {
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
-  await ensureTrackingSchema();
+  await ensureOperationsSchema();
 
   const configuredKey = clean(process.env.TRACKING_INGEST_KEY);
   if (configuredKey && !safeSecretEquals(requestKey(request), configuredKey)) {
@@ -90,6 +90,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         limit 1
       `;
 
+      const [operationsVehicle] = rawVin ? await tx<any[]>`
+        select id::text from operations.vehicles
+        where vin=${rawVin} and is_deleted=false
+        limit 1
+      ` : [];
+
       const vehicleValues = {
         carName: [clean(item.type), clean(item.category), clean(item.model)].filter(Boolean).join(" "),
         qty: numberValue(item.qty) || 1,
@@ -109,7 +115,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             exterior_color=${clean(item.exteriorColor)||null},dealer=${clean(item.dealer)||null},qty=${vehicleValues.qty},
             unit_price=${vehicleValues.unitPrice},item_value=${vehicleValues.itemValue},subtotal_excl_vat=${vehicleValues.subtotal},
             tax_value=${vehicleValues.tax},total_incl_vat=${vehicleValues.total},registration_fee=${vehicleValues.registrationFee},
-            raw_payload=${tx.json(body)},updated_at=now()
+            operations_vehicle_id=${operationsVehicle?.id || null}::uuid,raw_payload=${tx.json(body)},updated_at=now()
           where id=${vehicle.id}::uuid
           returning *,id::text
         `;
@@ -117,12 +123,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         [vehicle] = await tx<any[]>`
           insert into tracking.order_vehicles(
             order_id,vin,item_no,car_name,item_type,item_category,item_model,interior_color,exterior_color,dealer,qty,
-            unit_price,item_value,subtotal_excl_vat,tax_value,total_incl_vat,registration_fee,raw_payload,updated_at
+            unit_price,item_value,subtotal_excl_vat,tax_value,total_incl_vat,registration_fee,operations_vehicle_id,raw_payload,updated_at
           ) values (
             ${order.id}::uuid,${vin},${itemNo},${vehicleValues.carName||null},${clean(item.type)||null},${clean(item.category)||null},
             ${clean(item.model)||null},${clean(item.interiorColor)||null},${clean(item.exteriorColor)||null},${clean(item.dealer)||null},
             ${vehicleValues.qty},${vehicleValues.unitPrice},${vehicleValues.itemValue},${vehicleValues.subtotal},${vehicleValues.tax},
-            ${vehicleValues.total},${vehicleValues.registrationFee},${tx.json(body)},now()
+            ${vehicleValues.total},${vehicleValues.registrationFee},${operationsVehicle?.id || null}::uuid,${tx.json(body)},now()
           ) returning *,id::text
         `;
       }

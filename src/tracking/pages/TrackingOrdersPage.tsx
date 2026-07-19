@@ -36,8 +36,6 @@ function visibleVin(vehicle: TrackingVehicle) {
 }
 
 export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: boolean }) {
-  const [routeParams] = useSearchParams();
-  const requestedOrderId = routeParams.get("order");
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
   const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
   const [search, setSearch] = useState("");
@@ -49,6 +47,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeVehicleId, setActiveVehicleId] = useState("");
   const [actionKey, setActionKey] = useState("");
+  const [routeParams] = useSearchParams();
+  const requestedOrderId = routeParams.get("request") || "";
 
   useEscapeToClose(Boolean(selected), () => setSelected(null));
 
@@ -80,11 +80,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
     }
   }
 
-  useEffect(() => {
-    setStatus("");
-    void loadOrders("", "");
-    if (requestedOrderId) void openOrder(requestedOrderId);
-  }, [archivedOnly, requestedOrderId]);
+  useEffect(() => { setStatus(""); void loadOrders("", ""); }, [archivedOnly]);
+  useEffect(() => { if (requestedOrderId) void openOrder(requestedOrderId); }, [requestedOrderId]);
 
   const activeVehicle = useMemo(
     () => selected?.vehicles.find((vehicle) => vehicle.id === activeVehicleId) || selected?.vehicles[0] || null,

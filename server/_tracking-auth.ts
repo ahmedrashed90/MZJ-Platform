@@ -1,10 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { isSystemAdmin, requireUser, type SessionUser } from "./_auth.js";
+import { requireUser, type SessionUser } from "./_auth.js";
 
 export function canAccessTracking(user: SessionUser) {
-  return isSystemAdmin(user) || user.permissionCodes.includes("tracking.view")
-    || user.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code))
-    || user.departmentCodes.includes("tracking");
+  return user.isSystemAdmin || user.roleCodes.some((code) => ["admin", "tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code))
+    || (user.departmentCodes.includes("tracking") || user.departmentCodes.includes("operations"));
 }
 
 export async function requireTrackingUser(request: VercelRequest, response: VercelResponse) {

@@ -6,7 +6,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireUser(request, response);
   if (!user) return;
-  const data = await getDashboardData(user);
+  const data = await getDashboardData();
   response.setHeader("Cache-Control", "no-store");
   return response.status(200).json(data);
 }

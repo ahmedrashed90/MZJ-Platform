@@ -13,7 +13,7 @@ import {
 import { useSearchParams } from "react-router-dom";
 import { CrmAdminPage } from "../crm/pages/CrmAdminPage";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
-import { OperationsSettingsPanel } from "../operations/components/OperationsSettingsPanel";
+import { OperationsSettingsPanel } from "../operations/OperationsSettingsPanel";
 
 type MetaItem = { id: string; code: string; name: string; system_code?: string };
 type MetaResponse = { ok: boolean; departments: MetaItem[]; branches: MetaItem[]; roles: MetaItem[]; error?: string };

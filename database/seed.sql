@@ -19,7 +19,7 @@ on conflict (code) do update set name = excluded.name, system_code = excluded.sy
 
 insert into core.roles(code, name, is_system) values
 ('system_admin', 'مدير النظام', true),
-('admin', 'مدير منصة قديم', true),
+('admin', 'مدير النظام (متوافق)', true),
 ('sales_manager', 'مدير المبيعات', true),
 ('branch_manager', 'مدير فرع', true),
 ('call_center_agent', 'مندوب كول سنتر', true),

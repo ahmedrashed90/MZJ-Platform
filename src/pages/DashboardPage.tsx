@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Briefcase,
@@ -37,7 +37,6 @@ import {
   YAxis,
 } from "recharts";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
 import { useEscapeToClose } from "../components/useEscapeToClose";
 import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
@@ -276,31 +275,26 @@ function isToday(value: unknown) {
 
 export function DashboardPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  const canViewOperationsApprovals = Boolean(user?.isSystemAdmin || user?.permissionCodes.includes("operations.approvals.view"));
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const detailsRequestId = useRef(0);
 
-  const loadDashboard = useCallback(async () => {
-    try {
-      const response = await fetch("/api/dashboard", { cache: "no-store" });
-      const payload = await response.json() as DashboardData;
-      setData(payload);
-    } catch {
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void loadDashboard();
-    const onOperationsChanged = () => void loadDashboard();
-    window.addEventListener("operations:data-changed", onOperationsChanged);
-    return () => window.removeEventListener("operations:data-changed", onOperationsChanged);
-  }, [loadDashboard]);
+    let active = true;
+    fetch("/api/dashboard", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload: DashboardData) => {
+        if (active) setData(payload);
+      })
+      .catch(() => {
+        if (active) setData(null);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   const current = data;
   const pieData = useMemo(() => {
@@ -548,15 +542,18 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid lower-row">
-            {canViewOperationsApprovals ? (
-              <OperationCard title="كارت الموافقة المالية والإدارية" badge={operations?.approvals.total ?? null} onView={() => navigate("/operations/approvals")}>
-                <div className="operation-metrics-grid">
-                  <OperationMetric label="ناقص موافقة مالية" value={operations?.approvals.missingFinancial ?? null} onOpen={() => navigate("/operations/approvals?filter=missing_financial")} />
-                  <OperationMetric label="ناقص موافقة إدارية" value={operations?.approvals.missingAdministrative ?? null} onOpen={() => navigate("/operations/approvals?filter=missing_administrative")} />
-                  <OperationMetric label="موافقات مكتملة" value={operations?.approvals.completed ?? null} onOpen={() => navigate("/operations/approvals?filter=completed")} />
-                </div>
-              </OperationCard>
-            ) : null}
+            <OperationCard title="كارت الموافقة المالية والإدارية" badge={operations?.approvals.total ?? null} onView={() => open("كارت الموافقة المالية والإدارية", [
+              { label: "الإجمالي", value: operations?.approvals.total ?? null },
+              { label: "ناقص موافقة مالية", value: operations?.approvals.missingFinancial ?? null },
+              { label: "ناقص موافقة إدارية", value: operations?.approvals.missingAdministrative ?? null },
+              { label: "موافقات مكتملة", value: operations?.approvals.completed ?? null },
+            ])}>
+              <div className="operation-metrics-grid">
+                <OperationMetric label="ناقص موافقة مالية" value={operations?.approvals.missingFinancial ?? null} onOpen={() => open("ناقص موافقة مالية", [{ label: "ناقص موافقة مالية", value: operations?.approvals.missingFinancial ?? null }])} />
+                <OperationMetric label="ناقص موافقة إدارية" value={operations?.approvals.missingAdministrative ?? null} onOpen={() => open("ناقص موافقة إدارية", [{ label: "ناقص موافقة إدارية", value: operations?.approvals.missingAdministrative ?? null }])} />
+                <OperationMetric label="موافقات مكتملة" value={operations?.approvals.completed ?? null} onOpen={() => open("موافقات مكتملة", [{ label: "موافقات مكتملة", value: operations?.approvals.completed ?? null }])} />
+              </div>
+            </OperationCard>
 
             <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => open("نواقص السيارات", [
               { label: "الإجمالي", value: operations?.shortages.total ?? null },

@@ -307,16 +307,6 @@ create table if not exists operations.vehicle_approvals (
   administrative_approved boolean not null default false,
   financial_approved_by uuid references core.users(id),
   administrative_approved_by uuid references core.users(id),
-  financial_approved_at timestamptz,
-  financial_note text,
-  financial_revoked_by uuid references core.users(id),
-  financial_revoked_at timestamptz,
-  administrative_approved_at timestamptz,
-  administrative_note text,
-  administrative_revoked_by uuid references core.users(id),
-  administrative_revoked_at timestamptz,
-  cycle_no integer not null default 0,
-  created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
