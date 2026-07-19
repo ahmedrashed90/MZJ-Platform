@@ -10,7 +10,23 @@ const emptyForm = {
   locationId: "", statusCode: "available_for_sale", notes: "", statusNote: "", reservationShortageLocationNote: "", sourceType: "", version: 0,
 };
 
-const headers = ["VIN","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","الموديل","اللوحة","اسم الدفعة بالتاريخ","كود المكان","كود الحالة","ملاحظات في السيارة","ملاحظات الحالة","حجز - نواقص - تحديد مكان"];
+const headers = ["VIN","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","الموديل","اللوحة","اسم الدفعة بالتاريخ","المكان","الحالة","ملاحظات في السيارة","ملاحظات الحالة","حجز - نواقص - تحديد مكان"];
+
+function normalizeArabicLookup(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/ـ/g, "")
+    .replace(/\s+/g, " ");
+}
+
+const statusAliases: Record<string, string> = {
+  [normalizeArabicLookup("حجز")]: "reserved",
+  [normalizeArabicLookup("محجوز")]: "reserved",
+};
 
 function formFromVehicle(vehicle: OperationsVehicle) {
   return { id: vehicle.id, vin: vehicle.vin, carName: vehicle.car_name || "", statement: vehicle.statement || "", agentName: vehicle.agent_name || "", interiorColor: vehicle.interior_color || "", exteriorColor: vehicle.exterior_color || "", modelYear: vehicle.model_year || "", plateNo: vehicle.plate_no || "", batchNo: vehicle.batch_no || "", locationId: vehicle.location_id || "", statusCode: vehicle.status_code || "available_for_sale", notes: vehicle.notes || "", statusNote: vehicle.status_note || "", reservationShortageLocationNote: vehicle.reservation_shortage_location_note || "", sourceType: "", version: vehicle.version || 0 };
@@ -67,7 +83,7 @@ export function OperationsVehicleManagementPage() {
         const payload = await operationsFetch<{ vehicles: OperationsVehicle[] }>(`/api/operations/vehicles?page=${page}&limit=100&includeArchived=true`);
         all.push(...payload.vehicles);
       }
-      const rows = all.map((vehicle) => ({ VIN: vehicle.vin, السيارة: vehicle.car_name, البيان: vehicle.statement, الوكيل: vehicle.agent_name, "اللون الداخلي": vehicle.interior_color, "اللون الخارجي": vehicle.exterior_color, الموديل: vehicle.model_year, اللوحة: vehicle.plate_no, "اسم الدفعة بالتاريخ": vehicle.batch_no, المكان: vehicle.location_name, "كود المكان": vehicle.location_code, الحالة: vehicle.status_name, "كود الحالة": vehicle.status_code, "ملاحظات في السيارة": vehicle.notes, "ملاحظات الحالة": vehicle.status_note, "حجز - نواقص - تحديد مكان": vehicle.reservation_shortage_location_note, مؤرشف: vehicle.is_archived ? "نعم" : "لا" }));
+      const rows = all.map((vehicle) => ({ VIN: vehicle.vin, السيارة: vehicle.car_name, البيان: vehicle.statement, الوكيل: vehicle.agent_name, "اللون الداخلي": vehicle.interior_color, "اللون الخارجي": vehicle.exterior_color, الموديل: vehicle.model_year, اللوحة: vehicle.plate_no, "اسم الدفعة بالتاريخ": vehicle.batch_no, المكان: vehicle.location_name, الحالة: vehicle.status_name, "ملاحظات في السيارة": vehicle.notes, "ملاحظات الحالة": vehicle.status_note, "حجز - نواقص - تحديد مكان": vehicle.reservation_shortage_location_note, مؤرشف: vehicle.is_archived ? "نعم" : "لا" }));
       downloadXlsx("MZJ-Operations-Vehicles.xlsx", "السيارات", rows);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "تعذر تصدير البيانات"); }
     finally { setSaving(false); }
@@ -77,10 +93,32 @@ export function OperationsVehicleManagementPage() {
     setSaving(true); setError(""); setImportReport(null);
     try {
       const rawRows = await readSpreadsheet(file);
-      const locationByCode = new Map(meta?.locations.map((item) => [item.code, item.id]));
-      const rows = rawRows.map((row) => ({
-        vin: String(row.VIN || row["الهيكل VIN"] || "").trim(), carName: row["السيارة"], statement: row["البيان"], agentName: row["الوكيل"], interiorColor: row["اللون الداخلي"], exteriorColor: row["اللون الخارجي"], modelYear: row["الموديل"], plateNo: row["اللوحة"], batchNo: row["اسم الدفعة بالتاريخ"], locationId: locationByCode.get(String(row["كود المكان"] || "").trim()) || String(row["locationId"] || ""), statusCode: String(row["كود الحالة"] || row["statusCode"] || "available_for_sale").trim(), notes: row["ملاحظات في السيارة"], statusNote: row["ملاحظات الحالة"], reservationShortageLocationNote: row["حجز - نواقص - تحديد مكان"],
-      }));
+      const locationByCode = new Map(meta?.locations.map((item) => [normalizeArabicLookup(item.code), item.id]));
+      const locationByName = new Map(meta?.locations.map((item) => [normalizeArabicLookup(item.name), item.id]));
+      const statusByCode = new Map(meta?.statuses.map((item) => [normalizeArabicLookup(item.code), item.code]));
+      const statusByName = new Map(meta?.statuses.map((item) => [normalizeArabicLookup(item.name), item.code]));
+      const rows = rawRows.map((row) => {
+        const locationValue = row["المكان"] || row["كود المكان"] || row["locationId"] || "";
+        const statusValue = row["الحالة"] || row["كود الحالة"] || row["statusCode"] || "متاح للبيع";
+        const normalizedLocation = normalizeArabicLookup(locationValue);
+        const normalizedStatus = normalizeArabicLookup(statusValue);
+        return {
+          vin: String(row.VIN || row["الهيكل VIN"] || "").trim(),
+          carName: row["السيارة"],
+          statement: row["البيان"],
+          agentName: row["الوكيل"],
+          interiorColor: row["اللون الداخلي"],
+          exteriorColor: row["اللون الخارجي"],
+          modelYear: row["الموديل"],
+          plateNo: row["اللوحة"],
+          batchNo: row["اسم الدفعة بالتاريخ"] || row["الدفعة"],
+          locationId: locationByName.get(normalizedLocation) || locationByCode.get(normalizedLocation) || String(row["locationId"] || ""),
+          statusCode: statusAliases[normalizedStatus] || statusByName.get(normalizedStatus) || statusByCode.get(normalizedStatus) || String(row["statusCode"] || "available_for_sale").trim(),
+          notes: row["ملاحظات في السيارة"],
+          statusNote: row["ملاحظات الحالة"] || row["ملاحظة المكان"],
+          reservationShortageLocationNote: row["حجز - نواقص - تحديد مكان"] || row["ملاحظة النواقص"],
+        };
+      });
       const payload = await operationsFetch<{ report: any; message: string }>("/api/operations/vehicles", { method: "POST", body: JSON.stringify({ action: "import", rows }) });
       setImportReport(payload.report); setMessage(payload.message);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "تعذر استيراد الملف"); }

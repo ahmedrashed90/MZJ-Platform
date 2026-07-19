@@ -1,6 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Archive, ArrowsLeftRight, Car, ClipboardText, Files, Garage, ListMagnifyingGlass, SlidersHorizontal, Stack, Table } from "@phosphor-icons/react";
-import { useAuth } from "../auth/AuthContext";
+import { Archive, ArrowsLeftRight, Car, ClipboardText, Files, Garage, ListMagnifyingGlass, Stack, Table } from "@phosphor-icons/react";
 
 const links = [
   { to: "/operations", end: true, label: "مخزون السيارات", icon: Garage },
@@ -15,8 +14,6 @@ const links = [
 ];
 
 export function OperationsLayout() {
-  const { user } = useAuth();
-  const canSettings = user?.isSystemAdmin || user?.permissions?.includes("operations.settings.manage");
   return (
     <section className="operations-module">
       <nav className="crm-system-nav operations-system-nav" aria-label="صفحات العمليات">
@@ -25,7 +22,6 @@ export function OperationsLayout() {
             <Icon size={18} weight="duotone" /><span>{label}</span>
           </NavLink>
         ))}
-        {canSettings ? <NavLink to="/settings?section=operations" className="crm-system-link"><SlidersHorizontal size={18} weight="duotone" /><span>إعدادات العمليات</span></NavLink> : null}
       </nav>
       <Outlet />
     </section>
