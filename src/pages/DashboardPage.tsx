@@ -43,6 +43,7 @@ import type { CrmLead } from "../crm/types";
 import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/api";
 import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
 import type { DashboardData, NullableNumber } from "../types";
+import { OperationsDashboardModal, type OperationsDashboardSpec } from "../components/OperationsDashboardModal";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -277,6 +278,7 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
+  const [operationsModal, setOperationsModal] = useState<OperationsDashboardSpec | null>(null);
   const [loading, setLoading] = useState(true);
   const detailsRequestId = useRef(0);
 
@@ -307,6 +309,8 @@ export function DashboardPage() {
   }, [current]);
 
   const open = (title: string, rows: NonNullable<DetailPayload["rows"]>, subtitle?: string) => setDetails({ title, rows, subtitle });
+  const openOperationsVehicles = (title: string, metric: string, locationCode?: string) => setOperationsModal({ kind: "vehicles", title, metric, locationCode });
+  const openOperationsRequests = () => setOperationsModal({ kind: "requests", title: "طلبات النقل والتصوير" });
 
   async function allVisibleCrmLeads() {
     const departments = ["cash", "finance", "service"] as const;
@@ -496,22 +500,16 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid locations-row">
-            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => open("إجمالي المخزون", [
-              { label: "الإجمالي الفعلي", value: operations?.inventory.actualTotal ?? null },
-              { label: "الوكالة", value: operations?.inventory.agency ?? null },
-              { label: "المتاح للبيع", value: operations?.inventory.availableForSale ?? null },
-              { label: "مباع تحت التسليم", value: operations?.inventory.underDelivery ?? null },
-              { label: "بها ملاحظات", value: operations?.inventory.hasNotes ?? null },
-            ])}>
-              <div className="inventory-primary">
+            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => openOperationsVehicles("إجمالي المخزون - الإجمالي الفعلي", "actual")}>
+              <button type="button" className="inventory-primary" onClick={() => openOperationsVehicles("إجمالي المخزون - الإجمالي الفعلي", "actual")}>
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />
-              </div>
+              </button>
               <div className="inventory-tags">
-                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => open("الوكالة", [{ label: "الوكالة", value: operations?.inventory.agency ?? null }])} />
-                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => open("المتاح للبيع", [{ label: "المتاح للبيع", value: operations?.inventory.availableForSale ?? null }])} />
-                <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => open("بها ملاحظات", [{ label: "بها ملاحظات", value: operations?.inventory.hasNotes ?? null }])} />
-                <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => open("مباع تحت التسليم", [{ label: "مباع تحت التسليم", value: operations?.inventory.underDelivery ?? null }])} />
+                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => openOperationsVehicles("الوكالة", "actual", "agency")} />
+                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => openOperationsVehicles("المتاح للبيع", "available")} />
+                <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => openOperationsVehicles("بها ملاحظات", "has_notes")} />
+                <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => openOperationsVehicles("مباع تحت التسليم", "under_delivery")} />
               </div>
               <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) - (مباع تم التسليم)</p>
             </OperationCard>
@@ -532,9 +530,12 @@ export function DashboardPage() {
                 { label: "بها ملاحظات", value: location.hasNotes },
               ];
               return (
-                <OperationCard key={location.key} title={location.name} onView={() => open(location.name, rows)}>
+                <OperationCard key={location.key} title={location.name} onView={() => openOperationsVehicles(`${location.name} - الإجمالي الفعلي`, "actual", location.key)}>
                   <div className="operation-metrics-grid">
-                    {rows.map((row) => <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => open(`${location.name} - ${row.label}`, [row])} />)}
+                    {rows.map((row) => {
+                      const metric = row.label === "الإجمالي الفعلي" ? "actual" : row.label === "مباع تحت التسليم" ? "under_delivery" : row.label === "متاح للبيع" ? "available" : row.label === "حجز" ? "reserved" : row.label === "مباع تم التسليم" ? "delivered" : "has_notes";
+                      return <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => openOperationsVehicles(`${location.name} - ${row.label}`, metric, location.key)} />;
+                    })}
                   </div>
                 </OperationCard>
               );
@@ -568,17 +569,12 @@ export function DashboardPage() {
               </div>
             </OperationCard>
 
-            <OperationCard title="طلبات النقل" badge={operations?.transfers.total ?? null} onView={() => open("طلبات النقل", [
-              { label: "تم استلام الطلب", value: operations?.transfers.requestReceived ?? null },
-              { label: "تم استلام السيارة", value: operations?.transfers.vehicleReceived ?? null },
-              { label: "تم إرسال السيارة", value: operations?.transfers.vehicleSent ?? null },
-              { label: "تم الانتهاء", value: operations?.transfers.completed ?? null },
-            ])}>
+            <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={openOperationsRequests}>
               <div className="operation-metrics-grid">
-                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => open("تم استلام الطلب", [{ label: "تم استلام الطلب", value: operations?.transfers.requestReceived ?? null }])} />
-                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => open("تم استلام السيارة", [{ label: "تم استلام السيارة", value: operations?.transfers.vehicleReceived ?? null }])} />
-                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => open("تم إرسال السيارة", [{ label: "تم إرسال السيارة", value: operations?.transfers.vehicleSent ?? null }])} />
-                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => open("تم الانتهاء", [{ label: "تم الانتهاء", value: operations?.transfers.completed ?? null }])} />
+                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={openOperationsRequests} />
+                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={openOperationsRequests} />
+                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={openOperationsRequests} />
+                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={openOperationsRequests} />
               </div>
             </OperationCard>
 
@@ -601,6 +597,7 @@ export function DashboardPage() {
         </section>
       </div>
       <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />
+      <OperationsDashboardModal spec={operationsModal} onClose={() => setOperationsModal(null)} />
     </>
   );
 }

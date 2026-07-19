@@ -1,22 +1,12 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { Archive, ArrowsLeftRight, Car, CheckSquare, ClipboardText, ListBullets, Table, Wrench } from "@phosphor-icons/react";
-
-const tabs = [
-  { to: "/operations", end: true, label: "مخزون السيارات", icon: Car },
-  { to: "/operations/manage", label: "إدارة السيارات", icon: Wrench },
-  { to: "/operations/movement", label: "الحركة", icon: ArrowsLeftRight },
-  { to: "/operations/transfers", label: "طلبات النقل", icon: ClipboardText },
-  { to: "/operations/approvals", label: "الموافقات", icon: CheckSquare },
-  { to: "/operations/all", label: "جميع السيارات", icon: Table },
-  { to: "/operations/movements", label: "سجل الحركات", icon: ListBullets },
-  { to: "/operations/archive", label: "الأرشيف", icon: Archive },
+import { NavLink,Outlet } from "react-router-dom";
+const tabs=[
+  ["/operations","مخزون السيارات"],
+  ["/operations/manage","إدارة السيارات"],
+  ["/operations/movement","الحركة"],
+  ["/operations/transfers","طلبات النقل"],
+  ["/operations/approvals","الموافقات"],
+  ["/operations/all","جميع السيارات"],
+  ["/operations/movements","سجل الحركات"],
+  ["/operations/archive","الأرشيف"],
 ];
-
-export function OperationsLayout() {
-  return <div className="operations-module">
-    <nav className="operations-tabs" aria-label="تبويبات العمليات">
-      {tabs.map(({to,end,label,icon:Icon}) => <NavLink key={to} to={to} end={end} className={({isActive})=>isActive?"active":""}><Icon size={18}/><span>{label}</span></NavLink>)}
-    </nav>
-    <Outlet />
-  </div>;
-}
+export function OperationsLayout(){return <div className="operations-shell"><nav className="operations-tabs">{tabs.map(([href,label])=><NavLink key={href} to={href} end={href==='/operations'} className={({isActive})=>isActive?'active':''}>{label}</NavLink>)}</nav><Outlet/></div>}

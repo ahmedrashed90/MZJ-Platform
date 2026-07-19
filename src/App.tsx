@@ -33,6 +33,7 @@ const OperationsAllVehiclesPage = lazy(() => import("./operations/pages/Operatio
 const OperationsMovementsLogPage = lazy(() => import("./operations/pages/OperationsMovementsLogPage").then((module) => ({ default: module.OperationsMovementsLogPage })));
 const OperationsArchivePage = lazy(() => import("./operations/pages/OperationsArchivePage").then((module) => ({ default: module.OperationsArchivePage })));
 
+
 function PlatformRoutes() {
   return (
     <div className="app-shell">

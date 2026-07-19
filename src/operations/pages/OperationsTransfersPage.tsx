@@ -1,37 +1,137 @@
 import { useEffect, useState } from "react";
-import { ArrowClockwise, Car, CheckCircle, DownloadSimple, Eye, MagnifyingGlass, Plus, Trash, WarningCircle, X } from "@phosphor-icons/react";
+import { createPortal } from "react-dom";
+import { MagnifyingGlass, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { useAuth } from "../../auth/AuthContext";
-import { useEscapeToClose } from "../../components/useEscapeToClose";
-import { downloadCsv, formatDate, operationsFetch, operationsQuery } from "../api";
-import type { OperationsVehicle, TransferRow } from "../types";
+import { formatOperationsError, operationsFetch } from "../api";
+import type { TransferRow, VehicleRow } from "../types";
 import { useOperationsMeta } from "../useOperationsMeta";
 
-const stageLabels:Record<string,string>={request_received:"تم استلام الطلب",vehicle_sent:"تم إرسال السيارة",vehicle_received:"تم استلام السيارة",completed:"تم الانتهاء",cancelled:"ملغي",deleted:"محذوف قبل التنفيذ"};
-type TransferDetail={transfer:TransferRow&Record<string,any>;vehicles:any[];events:any[];movements:any[]};
+const labels: Record<string, string> = {
+  request_received: "تم استلام الطلب",
+  vehicle_sent: "تم إرسال السيارة",
+  vehicle_received: "تم استلام السيارة",
+  completed: "تم الانتهاء",
+  cancelled: "ملغي",
+};
+const nextLabels: Record<string, string> = {
+  request_received: "تنفيذ: تم إرسال السيارة",
+  vehicle_sent: "تنفيذ: تم استلام السيارة",
+  vehicle_received: "تنفيذ: تم الانتهاء",
+};
 
-export function OperationsTransfersPage(){
-  const {user}=useAuth();const {meta}=useOperationsMeta();const [tab,setTab]=useState<"create"|"active"|"completed">("create");
-  const [search,setSearch]=useState("");const [results,setResults]=useState<OperationsVehicle[]>([]);const [selected,setSelected]=useState<OperationsVehicle[]>([]);const [destinationLocationId,setDestinationLocationId]=useState("");const [note,setNote]=useState("");
-  const [listSearch,setListSearch]=useState("");const [transfers,setTransfers]=useState<TransferRow[]>([]);const [loading,setLoading]=useState(false);const [busy,setBusy]=useState("");const [error,setError]=useState("");const [message,setMessage]=useState("");
-  const [confirmAction,setConfirmAction]=useState<{type:"cancel"|"delete";row:TransferRow}|null>(null);const [confirmReason,setConfirmReason]=useState("");
-  const [detail,setDetail]=useState<TransferDetail|null>(null);const [detailLoading,setDetailLoading]=useState(false);
-  const isAdmin=user?.roleCodes.some((code)=>["admin","system_admin"].includes(code))||false;const canDeleteAny=isAdmin||user?.permissionCodes?.includes("operations.transfer.delete")||false;
-  useEscapeToClose(Boolean(confirmAction),()=>setConfirmAction(null));useEscapeToClose(Boolean(detail),()=>setDetail(null));
-  async function searchVehicles(){if(search.trim().length<2)return;setLoading(true);try{const payload=await operationsFetch<{ok:boolean;vehicles:OperationsVehicle[]}>(`/api/operations${operationsQuery({resource:"vehicles",search,limit:20})}`);setResults(payload.vehicles||[]);}catch(reason){setError(reason instanceof Error?reason.message:"تعذر البحث");}finally{setLoading(false);}}
-  useEffect(()=>{const timer=window.setTimeout(()=>void searchVehicles(),300);return()=>window.clearTimeout(timer);},[search]);
-  async function loadTransfers(completed=tab==="completed",query=listSearch){setLoading(true);setError("");try{const payload=await operationsFetch<{ok:boolean;transfers:TransferRow[]}>(`/api/operations${operationsQuery({resource:"transfers",completed,search:query})}`);setTransfers(payload.transfers||[]);}catch(reason){setError(reason instanceof Error?reason.message:"تعذر تحميل الطلبات");}finally{setLoading(false);}}
-  useEffect(()=>{if(tab!=="create")void loadTransfers(tab==="completed","");},[tab]);
-  async function openDetail(row:TransferRow){setDetailLoading(true);setError("");try{const payload=await operationsFetch<{ok:boolean}&TransferDetail>(`/api/operations${operationsQuery({resource:"transfer",id:row.id})}`);setDetail(payload);}catch(reason){setError(reason instanceof Error?reason.message:"تعذر تحميل تفاصيل الطلب");}finally{setDetailLoading(false);}}
-  async function create(){setBusy("create");setError("");setMessage("");try{const payload=await operationsFetch<{ok:boolean;message:string}>("/api/operations",{method:"POST",body:JSON.stringify({action:"create_transfer",vehicleIds:selected.map((row)=>row.id),destinationLocationId,note})});setMessage(payload.message);setSelected([]);setDestinationLocationId("");setNote("");setTab("active");}catch(reason){setError(reason instanceof Error?reason.message:"تعذر إنشاء الطلب");}finally{setBusy("");}}
-  async function advance(row:TransferRow){setBusy(row.id);setError("");try{const payload=await operationsFetch<{ok:boolean;message:string}>("/api/operations",{method:"POST",body:JSON.stringify({action:"advance_transfer",id:row.id})});setMessage(payload.message);await loadTransfers(false);}catch(reason){setError(reason instanceof Error?reason.message:"تعذر تنفيذ المرحلة");}finally{setBusy("");}}
-  async function submitConfirmed(){if(!confirmAction||!confirmReason.trim())return;const {type,row}=confirmAction;setBusy(row.id);setError("");try{await operationsFetch("/api/operations",{method:"POST",body:JSON.stringify({action:type==="delete"?"delete_transfer":"cancel_transfer",id:row.id,reason:confirmReason})});setConfirmAction(null);setConfirmReason("");setMessage(type==="delete"?"تم حذف الطلب قبل بدء التنفيذ.":"تم إلغاء الطلب مع الاحتفاظ بسجل مراحله.");await loadTransfers(false);}catch(reasonError){setError(reasonError instanceof Error?reasonError.message:type==="delete"?"تعذر حذف الطلب":"تعذر الإلغاء");}finally{setBusy("");}}
-  function exportRows(){downloadCsv(`MZJ-Operations-Transfers-${tab}.csv`,transfers.map((row)=>({"رقم الطلب":row.request_no,"الحالة":stageLabels[row.status]||row.status,"المصدر":row.source_location_name,"الوجهة":row.destination_location_name,"عدد السيارات":row.vehicles_count,"VINs":row.vins,"المنشئ":row.requested_by_name,"الفرع":row.requested_by_branch,"تاريخ الإنشاء":formatDate(row.requested_at),"تاريخ الانتهاء":formatDate(row.completed_at)})));}
-  const sourceLocation=selected[0]?.location_id;const incompatible=selected.some((row)=>row.location_id!==sourceLocation);
-  return <div className="module-page operations-page"><header className="module-page-head"><div><h1>طلبات النقل</h1><p>إنشاء طلب، متابعة المراحل الأربع، والطلبات المكتملة فقط.</p></div>{tab!=="create"?<div className="operations-head-actions"><button type="button" onClick={exportRows}><DownloadSimple size={18}/>تصدير النتائج</button><button type="button" onClick={()=>void loadTransfers()}><ArrowClockwise size={18}/>تحديث</button></div>:null}</header>
-    {error?<div className="connection-banner"><WarningCircle size={20}/><span>{error}</span></div>:null}{message?<div className="success-banner operations-success-banner">{message}</div>:null}
-    <div className="operations-subtabs"><button className={tab==="create"?"active":""} onClick={()=>setTab("create")}>إنشاء طلب</button><button className={tab==="active"?"active":""} onClick={()=>setTab("active")}>متابعة الطلبات</button><button className={tab==="completed"?"active":""} onClick={()=>setTab("completed")}>الطلبات المكتملة</button></div>
-    {tab==="create"?<section className="panel operations-transfer-create"><div className="operations-search-select"><label><span>اختيار السيارات بالبحث الجزئي في VIN</span><div><MagnifyingGlass size={18}/><input value={search} onChange={(e)=>setSearch(e.target.value)}/></div></label>{results.length?<div className="operations-search-results">{results.map((vehicle)=><button key={vehicle.id} type="button" disabled={selected.some((row)=>row.id===vehicle.id)||vehicle.has_active_transfer} onClick={()=>{setSelected((current)=>[...current,vehicle]);setSearch("");setResults([]);}}><span><strong>{vehicle.vin}</strong><small>{vehicle.car_name||"—"} • {vehicle.location_name||"—"}{vehicle.has_active_transfer?" • مرتبط بطلب جارٍ":""}</small></span><Plus size={17}/></button>)}</div>:null}</div><div className="operations-transfer-selected">{selected.map((vehicle)=><div key={vehicle.id}><Car size={20}/><span><strong>{vehicle.vin}</strong><small>{vehicle.car_name||"—"} • {vehicle.location_name||"—"}</small></span><button type="button" onClick={()=>setSelected((current)=>current.filter((row)=>row.id!==vehicle.id))}><Trash size={16}/></button></div>)}</div><div className="operations-form-grid"><label><span>المكان المستهدف</span><select value={destinationLocationId} onChange={(e)=>setDestinationLocationId(e.target.value)}><option value="">اختر المكان</option>{(meta?.destinationLocations||meta?.locations||[]).filter((row)=>row.id!==sourceLocation).map((row)=><option key={row.id} value={row.id}>{row.name}</option>)}</select></label><label className="span-2"><span>ملاحظات الطلب</span><textarea rows={3} value={note} onChange={(e)=>setNote(e.target.value)}/></label></div>{incompatible?<div className="connection-banner">يجب أن تكون جميع السيارات في مكان مصدر واحد.</div>:null}<button type="button" className="operations-primary-button" disabled={busy==="create"||!selected.length||!destinationLocationId||incompatible} onClick={()=>void create()}>{busy==="create"?"جاري الإنشاء...":"إنشاء طلب النقل"}</button></section>:<><section className="panel operations-transfer-search"><label className="operations-search-field"><span>بحث برقم الطلب أو VIN أو السيارة أو المكان</span><div><MagnifyingGlass size={18}/><input value={listSearch} onChange={(event)=>setListSearch(event.target.value)} onKeyDown={(event)=>{if(event.key==="Enter")void loadTransfers(tab==="completed",listSearch);}}/></div></label><button type="button" className="operations-primary-button" onClick={()=>void loadTransfers(tab==="completed",listSearch)}>بحث</button></section><section className="operations-transfer-list">{loading?<div className="panel operations-empty-state">جاري تحميل الطلبات...</div>:transfers.length?transfers.map((row)=><article className="panel operations-transfer-card" key={row.id}><header><div><span>{stageLabels[row.status]||row.status}</span><h3>{row.request_no}</h3><p>{row.source_location_name||"—"} ← {row.destination_location_name||"—"}</p></div><strong>{row.vehicles_count} سيارة</strong></header><div className="operations-transfer-stage-line">{["request_received","vehicle_sent","vehicle_received","completed"].map((stage,index)=>{const currentIndex=["request_received","vehicle_sent","vehicle_received","completed"].indexOf(row.status);return <div key={stage} className={currentIndex>=index?"done":""}><span>{currentIndex>=index?<CheckCircle size={18}/>:index+1}</span><small>{stageLabels[stage]}</small></div>})}</div><div className="operations-transfer-meta"><span>السيارات: {row.vins||"—"}</span><span>المنشئ: {row.requested_by_name||"—"}</span><span>التاريخ: {formatDate(row.requested_at)}</span></div><div className="operations-transfer-actions"><button type="button" className="secondary" onClick={()=>void openDetail(row)} disabled={detailLoading}><Eye size={17}/>عرض التفاصيل</button>{tab==="active"?<>{row.status==="request_received"&&(canDeleteAny||row.requested_by===user?.id)?<button type="button" className="danger secondary" disabled={busy===row.id} onClick={()=>{setConfirmAction({type:"delete",row});setConfirmReason("");}}>حذف قبل التنفيذ</button>:null}<button type="button" className="danger secondary" disabled={busy===row.id} onClick={()=>{setConfirmAction({type:"cancel",row});setConfirmReason("");}}>إلغاء الطلب</button><button type="button" className="operations-primary-button" disabled={busy===row.id} onClick={()=>void advance(row)}>{busy===row.id?"جاري التنفيذ...":`تنفيذ: ${stageLabels[{request_received:"vehicle_sent",vehicle_sent:"vehicle_received",vehicle_received:"completed"}[row.status]||""]||"المرحلة التالية"}`}</button></>:null}</div></article>):<div className="panel operations-empty-state">لا توجد طلبات في هذا التبويب.</div>}</section></>}
-    {detail?<div className="modal-backdrop operations-confirm-backdrop"><div className="operations-transfer-detail-modal"><header><div><span>{stageLabels[detail.transfer.status]||detail.transfer.status}</span><h3>{detail.transfer.request_no}</h3><p>{detail.transfer.source_location_name||"—"} ← {detail.transfer.destination_location_name||"—"}</p></div><button type="button" onClick={()=>setDetail(null)}><X size={20}/></button></header><div className="operations-transfer-detail-body"><section><h4>السيارات</h4><div className="operations-detail-cards">{detail.vehicles.map((vehicle)=><div key={vehicle.id}><strong>{vehicle.vin}</strong><span>{vehicle.car_name||"—"} • {vehicle.model_year||"—"}</span><small>{vehicle.source_location_name||"—"} ← {vehicle.current_location_name||"—"}</small></div>)}</div></section><section><h4>سجل المراحل والإجراءات</h4><div className="operations-timeline">{detail.events.map((event)=><div key={event.id}><b>{stageLabels[event.stage_code]||event.stage_code} — {event.action}</b><span>{event.note||"بدون ملاحظة"}</span><small>{event.actor_name||"—"} • {event.actor_role||"—"} • {formatDate(event.created_at)}</small></div>)}</div></section>{detail.movements.length?<section><h4>الحركات الناتجة</h4><div className="operations-timeline">{detail.movements.map((movement)=><div key={movement.id}><b>{movement.vin}: {movement.from_location_name||"—"} ← {movement.to_location_name||"—"}</b><span>{movement.old_status||"—"} ← {movement.new_status||"—"}</span><small>{movement.performed_by_name||"—"} • {formatDate(movement.created_at)}</small></div>)}</div></section>:null}</div></div></div>:null}
-    {confirmAction?<div className="modal-backdrop operations-confirm-backdrop"><div className="operations-confirm-modal"><h3>{confirmAction.type==="delete"?"حذف طلب النقل قبل التنفيذ":"إلغاء طلب النقل"}</h3><p>{confirmAction.type==="delete"?"يُسمح بالحذف فقط قبل تنفيذ أي مرحلة فعلية، وسيبقى حدث الحذف محفوظًا في سجل التدقيق.":"سيظل الطلب وجميع إجراءاته السابقة محفوظة، ولن يمكن تنفيذ مراحل جديدة عليه."}</p><strong>{confirmAction.row.request_no}</strong><label><span>سبب {confirmAction.type==="delete"?"الحذف":"الإلغاء"}</span><textarea rows={4} value={confirmReason} onChange={(event)=>setConfirmReason(event.target.value)}/></label><div><button type="button" onClick={()=>setConfirmAction(null)}>إلغاء</button><button type="button" className="danger" disabled={!confirmReason.trim()||busy===confirmAction.row.id} onClick={()=>void submitConfirmed()}>{busy===confirmAction.row.id?"جاري التنفيذ...":confirmAction.type==="delete"?"تأكيد الحذف":"تأكيد الإلغاء"}</button></div></div></div>:null}
-  </div>;
+type ConfirmAction = { request: TransferRow; type: "delete" | "cancel" } | null;
+
+export function OperationsTransfersPage() {
+  const { user } = useAuth();
+  const { locations, error: metaError } = useOperationsMeta();
+  const [tab, setTab] = useState<"create" | "active" | "completed">("create");
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<VehicleRow[]>([]);
+  const [selected, setSelected] = useState<VehicleRow[]>([]);
+  const [destination, setDestination] = useState("");
+  const [note, setNote] = useState("");
+  const [requests, setRequests] = useState<TransferRow[]>([]);
+  const [detail, setDetail] = useState<TransferRow | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+  const [confirmReason, setConfirmReason] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isAdmin = Boolean(user?.roleCodes.some(code => code === "admin" || code === "system_admin"));
+  const canCancel = isAdmin || Boolean(user?.permissions?.includes("operations.transfer.cancel"));
+
+  async function load() {
+    setError("");
+    try {
+      const response = await operationsFetch<{ requests: TransferRow[] }>("transfers", { query: { tab: tab === "completed" ? "completed" : "active", type: "transfer" } });
+      setRequests(response.requests || []);
+    } catch (caught) {
+      setError(formatOperationsError(caught));
+      setRequests([]);
+    }
+  }
+
+  useEffect(() => { if (tab !== "create") void load(); }, [tab]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (q.trim().length < 2) { setResults([]); return; }
+      operationsFetch<{ rows: VehicleRow[] }>("vehicles", { query: { q, page: 1, limit: 20 } }).then(response => setResults(response.rows || [])).catch(caught => setError(formatOperationsError(caught)));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [q]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || busy) return;
+      if (confirmAction) { setConfirmAction(null); setConfirmReason(""); }
+      else if (detail) setDetail(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmAction, detail, busy]);
+
+  function add(vehicle: VehicleRow) {
+    if (!selected.some(item => item.id === vehicle.id)) setSelected(current => [...current, vehicle]);
+    setQ("");
+    setResults([]);
+  }
+
+  async function create() {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const response = await operationsFetch<{ request: { id: string; requestNo: string } }>("createTransfer", { method: "POST", body: { vehicleIds: selected.map(item => item.id), destinationLocationId: destination, note, transferType: "transfer" } });
+      setMessage(`تم إنشاء الطلب ${response.request.requestNo}`);
+      setSelected([]); setDestination(""); setNote(""); setTab("active");
+    } catch (caught) { setError(formatOperationsError(caught)); }
+    finally { setBusy(false); }
+  }
+
+  async function advance(request: TransferRow) {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await operationsFetch("advanceTransfer", { method: "POST", body: { id: request.id } });
+      setMessage(`تم تنفيذ المرحلة التالية للطلب ${request.request_no}`);
+      await load();
+    } catch (caught) { setError(formatOperationsError(caught)); }
+    finally { setBusy(false); }
+  }
+
+  async function confirmRequestAction() {
+    if (!confirmAction || !confirmReason.trim()) return;
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await operationsFetch(confirmAction.type === "delete" ? "deleteTransfer" : "cancelTransfer", { method: "POST", body: { id: confirmAction.request.id, reason: confirmReason } });
+      setMessage(confirmAction.type === "delete" ? `تم مسح الطلب ${confirmAction.request.request_no}` : `تم إلغاء الطلب ${confirmAction.request.request_no}`);
+      setConfirmAction(null); setConfirmReason(""); setDetail(null);
+      await load();
+    } catch (caught) { setError(formatOperationsError(caught)); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="operations-page">
+      <header className="operations-page-head"><div><h1>طلبات النقل</h1><p>إنشاء طلب ومتابعة المراحل الأربع والطلبات المكتملة فقط.</p></div></header>
+      {error || metaError ? <div className="operations-error">{error || metaError}</div> : null}
+      {message ? <div className="operations-success">{message}</div> : null}
+      <div className="operations-subtabs"><button className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>إنشاء طلب</button><button className={tab === "active" ? "active" : ""} onClick={() => setTab("active")}>متابعة الطلبات</button><button className={tab === "completed" ? "active" : ""} onClick={() => setTab("completed")}>الطلبات المكتملة</button></div>
+
+      {tab === "create" ? (
+        <section className="operations-card">
+          <label className="search-field"><span>اختيار السيارات بالبحث الجزئي في VIN</span><div><MagnifyingGlass /><input value={q} onChange={event => setQ(event.target.value)} /></div>{results.length ? <div className="operations-suggestions">{results.map(vehicle => <button key={vehicle.id} type="button" onClick={() => add(vehicle)}><strong>{vehicle.vin}</strong><span>{vehicle.car_name || "—"} — {vehicle.statement || "—"} — {vehicle.location_name || "—"}</span></button>)}</div> : null}</label>
+          <div className="transfer-selected">{selected.map(vehicle => <span key={vehicle.id}>{vehicle.vin}<button type="button" onClick={() => setSelected(current => current.filter(item => item.id !== vehicle.id))}><X /></button></span>)}</div>
+          <label><span>المكان المستهدف</span><select value={destination} onChange={event => setDestination(event.target.value)}><option value="">اختر المكان</option>{locations.map(location => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
+          <label><span>ملاحظات الطلب</span><textarea value={note} onChange={event => setNote(event.target.value)} /></label>
+          <button className="operations-main-button" disabled={busy || !selected.length || !destination} onClick={() => void create()}>{busy ? "جاري الإنشاء..." : "إنشاء طلب النقل"}</button>
+        </section>
+      ) : (
+        <section className="operations-card"><div className="request-list">{requests.length ? requests.map(request => {
+          const owner = request.requested_by === user?.id;
+          return <article key={request.id}><div><strong>{request.request_no}</strong><span>{request.source_location || "—"} ← {request.destination_location || "—"}</span><small>{request.requested_by_name || "—"} — {new Date(request.requested_at).toLocaleString("ar-SA")} — {labels[request.status] || request.status}</small></div><div><button onClick={() => setDetail(request)}>تفاصيل</button>{tab === "active" && nextLabels[request.status] ? <button className="primary" disabled={busy} onClick={() => void advance(request)}>{nextLabels[request.status]}</button> : null}{tab === "active" && request.status === "request_received" && (owner || canCancel) ? <button className="danger" disabled={busy} onClick={() => { setConfirmAction({ request, type: "delete" }); setConfirmReason(""); }}>مسح الطلب</button> : null}{tab === "active" && request.status !== "request_received" && canCancel ? <button className="danger" disabled={busy} onClick={() => { setConfirmAction({ request, type: "cancel" }); setConfirmReason(""); }}>إلغاء الطلب</button> : null}</div></article>;
+        }) : <div className="operations-empty">لا توجد طلبات</div>}</div></section>
+      )}
+
+      {detail ? <div className="operations-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setDetail(null); }}><div className="operations-modal"><header><div><h3>{detail.request_no}</h3><span>{labels[detail.status] || detail.status} — {detail.requested_by_name || "—"} — {new Date(detail.requested_at).toLocaleString("ar-SA")}</span></div><button onClick={() => setDetail(null)}><X /></button></header><div className="transfer-detail-summary"><div><span>من</span><strong>{detail.source_location || "—"}</strong></div><div><span>إلى</span><strong>{detail.destination_location || "—"}</strong></div><div><span>عدد السيارات</span><strong>{detail.vehicle_count}</strong></div></div><table className="operations-table"><thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th></tr></thead><tbody>{detail.vehicles.map(vehicle => <tr key={vehicle.id}><td>{vehicle.vin}</td><td>{vehicle.carName || "—"}</td><td>{vehicle.statement || "—"}</td></tr>)}</tbody></table>{detail.note ? <div className="transfer-detail-note"><strong>ملاحظات الطلب</strong><p>{detail.note}</p></div> : null}</div></div> : null}
+
+      {confirmAction ? createPortal(<div className="operations-confirm-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) { setConfirmAction(null); setConfirmReason(""); } }}><section className="operations-confirm-modal"><header><div><WarningCircle size={26} /><span><strong>{confirmAction.type === "delete" ? "مسح طلب النقل" : "إلغاء طلب النقل"}</strong><small>{confirmAction.request.request_no}</small></span></div><button disabled={busy} onClick={() => { setConfirmAction(null); setConfirmReason(""); }}><X /></button></header><p>{confirmAction.type === "delete" ? "يُسمح بالمسح فقط قبل تنفيذ أي إجراء فعلي على الطلب، ويظل سجل التدقيق محفوظًا." : "سيتم إيقاف الطلب ومنع تنفيذ مراحل جديدة مع الحفاظ على جميع الإجراءات السابقة."}</p><label><span>سبب الإجراء — إجباري</span><textarea rows={4} value={confirmReason} onChange={event => setConfirmReason(event.target.value)} /></label><footer><button disabled={busy} onClick={() => { setConfirmAction(null); setConfirmReason(""); }}>إلغاء</button><button className="danger" disabled={busy || !confirmReason.trim()} onClick={() => void confirmRequestAction()}><Trash />{busy ? "جاري التنفيذ..." : "تأكيد الإجراء"}</button></footer></section></div>, document.body) : null}
+    </div>
+  );
 }

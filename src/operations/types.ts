@@ -1,17 +1,12 @@
-export type OperationsLocation = { id: string; code: string; name: string; sort_order: number; branch_id?: string | null; branch_name?: string | null; branch_code?: string | null; branch_ids?: string[] };
-export type VehicleStatus = { code: string; name: string; sort_order: number; is_inventory: boolean; requires_status_note: boolean; requires_delivery_approvals: boolean; is_final: boolean };
-export type CheckItemDefinition = { code: string; name: string };
-export type OperationsMeta = { locations: OperationsLocation[]; destinationLocations?: OperationsLocation[]; branches?: Array<{id:string;code:string;name:string;sort_order:number}>; statuses: VehicleStatus[]; permissions: Array<{code:string;name:string;system_code:string}>; checkItems: CheckItemDefinition[] };
-export type OperationsVehicle = {
-  id: string; vin: string; car_name?: string|null; statement?: string|null; agent_name?: string|null; interior_color?: string|null; exterior_color?: string|null;
-  model_year?: string|null; plate_no?: string|null; batch_no?: string|null; location_id?: string|null; location_code?: string|null; location_name?: string|null;
-  status_code: string; status_name?: string|null; source_type?: string|null; has_notes: boolean; notes?: string|null; status_note?: string|null;
-  shortage_location_note?: string|null; archived_at?: string|null; archive_reason?: string|null; created_at: string; updated_at: string; version: number;
-  financial_approved?: boolean; administrative_approved?: boolean; tracking_order_id?: string|null; tracking_order_no?: string|null; tracking_status?: string|null;
-  tracking_archived?: boolean|null; completed_stages?: number|null; total_stages?: number|null; has_active_transfer?: boolean;
+export type OperationLocation = { id:string; code:string; name:string };
+export type OperationStatus = { code:string; name:string; requires_note:boolean; requires_approvals:boolean; is_final:boolean };
+export type VehicleRow = {
+  id:string; vin:string; car_name?:string; statement?:string; agent_name?:string; interior_color?:string; exterior_color?:string;
+  model_year?:string; plate_no?:string; batch_no?:string; location_id?:string; location_code?:string; location_name?:string; status_code:string; status_name?:string;
+  notes?:string; status_note?:string; shortage_location_note?:string; archived_at?:string; archive_reason?:string;
+  financial_approved?:boolean; administrative_approved?:boolean; shortages_count?:number; checks_count?:number; active_transfers?:number;
+  tracking_order_id?:string; tracking_order_no?:string; tracking_status?:string; tracking_progress?:number;
 };
-export type MovementRow = { id:string;created_at:string;vin:string;car_name?:string|null;from_location_name?:string|null;to_location_name?:string|null;old_status?:string|null;new_status?:string|null;performed_by_name?:string|null;performed_role?:string|null;performed_branch?:string|null;note?:string|null;status_note?:string|null;shortage_location_note?:string|null;request_no?:string|null;batch_id?:string|null };
-export type TransferRow = { id:string;request_no:string;status:string;note?:string|null;requested_by?:string|null;requested_by_name?:string|null;requested_by_role?:string|null;requested_by_branch?:string|null;requested_at:string;completed_at?:string|null;source_location_id?:string|null;source_location_name?:string|null;destination_location_id?:string|null;destination_location_name?:string|null;vehicles_count:number;vins?:string|null;vehicles:Array<{id:string;vin:string;car_name?:string|null;source_status?:string|null}> };
-export type ApprovalRow = { cycle_id:string;cycle_no:number;financial_approved:boolean;administrative_approved:boolean;financial_note?:string|null;administrative_note?:string|null;financial_approved_by_name?:string|null;administrative_approved_by_name?:string|null;financial_approved_at?:string|null;administrative_approved_at?:string|null;started_at:string;vehicle_id:string;vin:string;car_name?:string|null;statement?:string|null;status_code:string;location_name?:string|null };
-export type VehicleDetail = { vehicle: OperationsVehicle; movements:any[]; checks:any[]; statusNotes:any[]; approvals:any[]; transfers:any[]; tracking:any[] };
-export type ImportPreviewRow = { rowNo:number; row:Record<string,string>; location?:OperationsLocation; status?:VehicleStatus; outcome?:"inserted"|"updated"|"skipped"|"failed"; errors:string[] };
+export type TransferRow = { id:string; request_no:string; transfer_type:string; status:string; requested_by?:string; requested_by_name?:string; requested_by_branch?:string; requested_at:string; note?:string; source_location?:string; destination_location?:string; vehicle_count:number; vehicles:Array<{id:string;vin:string;carName?:string;statement?:string}> };
+export type ApprovalRow = { id:string; vin:string; car_name?:string; statement?:string; model_year?:string; location_name?:string; cycle_id?:string; cycle_no?:number; financial_approved:boolean; administrative_approved:boolean; financial_note?:string; administrative_note?:string; financial_approved_by_name?:string; administrative_approved_by_name?:string; financial_approved_at?:string; administrative_approved_at?:string };
+export type MovementRow = { id:string; created_at:string; vin:string; car_name?:string; from_location?:string; to_location?:string; old_status?:string; new_status?:string; note?:string; status_note?:string; shortage_location_note?:string; performed_by_name?:string; performed_branch?:string; request_no?:string; batch_no?:string };

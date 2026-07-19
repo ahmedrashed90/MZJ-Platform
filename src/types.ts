@@ -3,7 +3,6 @@ export type NullableNumber = number | null;
 export type DashboardData = {
   connected: boolean;
   generatedAt: string;
-  sectionErrors?: Record<string, string>;
   crm: {
     totalCustomers: NullableNumber;
     openConversations: NullableNumber;
@@ -35,6 +34,7 @@ export type DashboardData = {
     inProgress: NullableNumber;
     completed: NullableNumber;
   };
+  errors?: Record<string, string>;
   operations: {
     inventory: {
       actualTotal: NullableNumber;

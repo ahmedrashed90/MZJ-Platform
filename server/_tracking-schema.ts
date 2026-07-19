@@ -24,6 +24,19 @@ alter table tracking.orders add column if not exists archived_at timestamptz;
 alter table tracking.orders add column if not exists archived_by uuid references core.users(id);
 alter table tracking.orders add column if not exists archived_by_name text;
 alter table tracking.orders add column if not exists archive_reason text;
+alter table tracking.orders add column if not exists source_key text;
+alter table tracking.orders add column if not exists source_identity text;
+alter table tracking.orders add column if not exists source_fingerprint text;
+alter table tracking.orders add column if not exists source_row_number text;
+alter table tracking.orders add column if not exists source_sheet_id text;
+alter table tracking.orders add column if not exists source_sheet_name text;
+alter table tracking.orders add column if not exists source_message_id text;
+alter table tracking.orders add column if not exists source_original_id text;
+update tracking.orders set source_key='legacy:'||id::text where source_key is null;
+alter table tracking.orders drop constraint if exists orders_sales_order_no_key;
+alter table tracking.orders drop constraint if exists tracking_orders_sales_order_no_key;
+create unique index if not exists tracking_orders_source_key_unique_idx on tracking.orders(source_key) where source_key is not null;
+create index if not exists tracking_orders_sales_order_no_idx on tracking.orders(sales_order_no,created_at desc);
 
 alter table tracking.order_vehicles add column if not exists item_no text;
 alter table tracking.order_vehicles add column if not exists item_type text;
@@ -87,16 +100,16 @@ create table if not exists tracking.deleted_orders (
   deleted_at timestamptz not null default now()
 );
 create index if not exists tracking_deleted_orders_no_idx on tracking.deleted_orders(sales_order_no, deleted_at desc);
+alter table tracking.deleted_orders add column if not exists order_internal_id uuid;
+alter table tracking.deleted_orders add column if not exists source_key text;
+alter table tracking.deleted_orders add column if not exists source_identity text;
+alter table tracking.deleted_orders add column if not exists source_fingerprint text;
+alter table tracking.deleted_orders add column if not exists source_payload jsonb not null default '{}'::jsonb;
+alter table tracking.deleted_orders add column if not exists request_id text;
+alter table tracking.deleted_orders add column if not exists deleted_by_email text;
+alter table tracking.deleted_orders add column if not exists deleted_by_role text;
+create index if not exists tracking_deleted_orders_source_key_idx on tracking.deleted_orders(source_key,deleted_at desc);
 
-create table if not exists tracking.deleted_order_blocks (
-  sales_order_no text primary key,
-  is_blocked boolean not null default true,
-  reason text,
-  deleted_by uuid references core.users(id),
-  deleted_at timestamptz not null default now(),
-  released_by uuid references core.users(id),
-  released_at timestamptz
-);
 
 create table if not exists tracking.sms_messages (
   id uuid primary key default gen_random_uuid(),
