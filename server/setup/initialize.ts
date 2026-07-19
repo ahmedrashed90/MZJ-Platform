@@ -92,6 +92,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         departmentCodes: [],
         branches: [],
         branchCodes: [],
+        permissionCodes: [],
       },
     });
   } catch (error: any) {

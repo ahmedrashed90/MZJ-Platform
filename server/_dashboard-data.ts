@@ -1,4 +1,5 @@
 import { getSql } from "./_db.js";
+import { ensureOperationsSchema } from "./_operations-schema.js";
 import type { DashboardData } from "../src/types.js";
 
 const locationNames = [
@@ -67,6 +68,8 @@ export async function getDashboardData(): Promise<DashboardData> {
   }
 
   try {
+    await ensureOperationsSchema();
+
     const [crmRow] = await sql<{
       total_customers: number;
       open_conversations: number;
@@ -150,16 +153,20 @@ export async function getDashboardData(): Promise<DashboardData> {
       select
         l.code as key,
         l.name,
-        count(v.id) filter (where v.is_deleted = false)::int as actual_total,
-        count(v.id) filter (where v.status_code = 'under_delivery' and v.is_deleted = false)::int as under_delivery,
-        count(v.id) filter (where v.status_code = 'available_for_sale' and v.is_deleted = false)::int as available_for_sale,
-        count(v.id) filter (where v.status_code = 'reserved' and v.is_deleted = false)::int as reserved,
-        count(v.id) filter (where v.status_code = 'delivered' and v.is_deleted = false)::int as delivered,
-        count(v.id) filter (where v.has_notes = true and v.is_deleted = false)::int as has_notes
+        count(v.id) filter (
+          where v.is_deleted=false and v.is_archived=false
+            and coalesce(vs.counts_in_actual_inventory,true)=true
+        )::int as actual_total,
+        count(v.id) filter (where v.status_code='under_delivery' and v.is_deleted=false and v.is_archived=false)::int as under_delivery,
+        count(v.id) filter (where v.status_code='available_for_sale' and v.is_deleted=false and v.is_archived=false)::int as available_for_sale,
+        count(v.id) filter (where v.status_code='reserved' and v.is_deleted=false and v.is_archived=false)::int as reserved,
+        count(v.id) filter (where v.status_code='delivered' and v.is_deleted=false and v.is_archived=false)::int as delivered,
+        count(v.id) filter (where v.has_notes=true and v.is_deleted=false and v.is_archived=false)::int as has_notes
       from operations.locations l
-      left join operations.vehicles v on v.location_id = l.id
-      where l.is_active = true
-      group by l.code, l.name, l.sort_order
+      left join operations.vehicles v on v.location_id=l.id
+      left join operations.vehicle_statuses vs on vs.code=v.status_code
+      where l.is_active=true
+      group by l.code,l.name,l.sort_order
       order by l.sort_order
     `;
 
@@ -171,12 +178,17 @@ export async function getDashboardData(): Promise<DashboardData> {
       has_notes: number;
     }[]>`
       select
-        count(*) filter (where is_deleted = false)::int as actual_total,
-        count(*) filter (where source_type = 'agency' and is_deleted = false)::int as agency,
-        count(*) filter (where status_code = 'available_for_sale' and is_deleted = false)::int as available_for_sale,
-        count(*) filter (where status_code = 'under_delivery' and is_deleted = false)::int as under_delivery,
-        count(*) filter (where has_notes = true and is_deleted = false)::int as has_notes
-      from operations.vehicles
+        count(v.id) filter (
+          where v.is_deleted=false and v.is_archived=false
+            and coalesce(vs.counts_in_actual_inventory,true)=true
+        )::int as actual_total,
+        count(v.id) filter (where l.code='agency' and v.is_deleted=false and v.is_archived=false)::int as agency,
+        count(v.id) filter (where v.status_code='available_for_sale' and v.is_deleted=false and v.is_archived=false)::int as available_for_sale,
+        count(v.id) filter (where v.status_code='under_delivery' and v.is_deleted=false and v.is_archived=false)::int as under_delivery,
+        count(v.id) filter (where v.has_notes=true and v.is_deleted=false and v.is_archived=false)::int as has_notes
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      left join operations.vehicle_statuses vs on vs.code=v.status_code
     `;
 
     const [approvalRow] = await sql<{
@@ -186,11 +198,19 @@ export async function getDashboardData(): Promise<DashboardData> {
       completed: number;
     }[]>`
       select
-        count(*)::int as total,
-        count(*) filter (where financial_approved = false)::int as missing_financial,
-        count(*) filter (where administrative_approved = false)::int as missing_administrative,
-        count(*) filter (where financial_approved = true and administrative_approved = true)::int as completed
-      from operations.vehicle_approvals
+        count(v.id)::int as total,
+        count(v.id) filter (where coalesce(a.financial_approved,false)=false)::int as missing_financial,
+        count(v.id) filter (where coalesce(a.administrative_approved,false)=false)::int as missing_administrative,
+        count(v.id) filter (where coalesce(a.financial_approved,false)=true and coalesce(a.administrative_approved,false)=true)::int as completed
+      from operations.vehicles v
+      left join lateral (
+        select financial_approved,administrative_approved
+        from operations.vehicle_approvals va
+        where va.vehicle_id=v.id
+        order by va.updated_at desc
+        limit 1
+      ) a on true
+      where v.status_code='under_delivery' and v.is_deleted=false and v.is_archived=false
     `;
 
     const [shortageRow] = await sql<{
@@ -205,8 +225,8 @@ export async function getDashboardData(): Promise<DashboardData> {
         count(*) filter (where s.is_resolved = false and l.code = 'hall')::int as hall,
         count(*) filter (where s.is_resolved = false and l.code = 'qadisiyah')::int as qadisiyah
       from operations.vehicle_shortages s
-      join operations.vehicles v on v.id = s.vehicle_id
-      left join operations.locations l on l.id = v.location_id
+      join operations.vehicles v on v.id=s.vehicle_id and v.is_deleted=false and v.is_archived=false
+      left join operations.locations l on l.id=v.location_id
     `;
 
     const [transferRow] = await sql<{
@@ -217,11 +237,11 @@ export async function getDashboardData(): Promise<DashboardData> {
       completed: number;
     }[]>`
       select
-        count(*)::int as total,
-        count(*) filter (where status = 'request_received')::int as request_received,
-        count(*) filter (where status = 'vehicle_received')::int as vehicle_received,
-        count(*) filter (where status = 'vehicle_sent')::int as vehicle_sent,
-        count(*) filter (where status = 'completed')::int as completed
+        count(*) filter (where is_deleted=false)::int as total,
+        count(*) filter (where is_deleted=false and current_stage=1)::int as request_received,
+        count(*) filter (where is_deleted=false and current_stage=3)::int as vehicle_received,
+        count(*) filter (where is_deleted=false and current_stage=2)::int as vehicle_sent,
+        count(*) filter (where is_deleted=false and status='completed')::int as completed
       from operations.transfer_requests
     `;
 

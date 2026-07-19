@@ -27,3 +27,56 @@ insert into core.roles(code, name, is_system) values
 ('operations_user', 'مستخدم العمليات', true),
 ('tracking_user', 'مستخدم التتبع', true)
 on conflict (code) do update set name = excluded.name;
+insert into core.permissions(code,name,system_code) values
+('operations.view','دخول نظام العمليات','operations'),
+('operations.vehicles.view','عرض السيارات والمخزون','operations'),
+('operations.vehicles.create','إضافة سيارة','operations'),
+('operations.vehicles.update','تعديل سيارة','operations'),
+('operations.vehicles.import','استيراد السيارات','operations'),
+('operations.vehicles.export','تصدير السيارات','operations'),
+('operations.vehicles.archive','أرشفة السيارات','operations'),
+('operations.movements.view','عرض حركة السيارات','operations'),
+('operations.movements.create','تنفيذ حركة سيارات','operations'),
+('operations.requests.view','عرض طلبات النقل والتصوير','operations'),
+('operations.requests.create','إنشاء طلب نقل أو تصوير','operations'),
+('operations.requests.receive','استلام طلب العمليات','operations'),
+('operations.requests.dispatch','إرسال السيارة','operations'),
+('operations.requests.confirm_receipt','تأكيد استلام السيارة','operations'),
+('operations.requests.complete','إنهاء الطلب','operations'),
+('operations.requests.delete_before_receipt','حذف الطلب قبل استلام السيارة','operations'),
+('operations.approvals.financial','الاعتماد المالي للسيارات','operations'),
+('operations.approvals.administrative','الاعتماد الإداري للسيارات','operations'),
+('operations.reports.all_cars','عرض تقرير جميع السيارات','operations'),
+('operations.logs.view','عرض سجل الحركات','operations'),
+('operations.logs.export','تصدير سجل الحركات','operations'),
+('operations.settings.manage','إدارة إعدادات العمليات','operations')
+on conflict (code) do update set name=excluded.name, system_code=excluded.system_code;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r cross join core.permissions p
+where r.code='admin' and p.system_code='operations'
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r cross join core.permissions p
+where r.code='operations_user' and p.system_code='operations' and p.code<>'operations.settings.manage'
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r cross join core.permissions p
+where r.code='sales_manager' and p.code in (
+  'operations.view','operations.vehicles.view','operations.vehicles.export',
+  'operations.movements.view','operations.requests.view',
+  'operations.approvals.financial','operations.approvals.administrative',
+  'operations.reports.all_cars','operations.logs.view','operations.logs.export'
+)
+on conflict do nothing;
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id from core.roles r cross join core.permissions p
+where r.code='branch_manager' and p.code in (
+  'operations.view','operations.vehicles.view','operations.movements.view',
+  'operations.requests.view','operations.reports.all_cars','operations.logs.view'
+)
+on conflict do nothing;
+

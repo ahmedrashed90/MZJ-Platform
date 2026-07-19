@@ -24,6 +24,13 @@ const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((modu
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
+const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
+const OperationsInventoryPage = lazy(() => import("./operations/pages/OperationsInventoryPage").then((module) => ({ default: module.OperationsInventoryPage })));
+const OperationsVehiclesPage = lazy(() => import("./operations/pages/OperationsVehiclesPage").then((module) => ({ default: module.OperationsVehiclesPage })));
+const OperationsMovementsPage = lazy(() => import("./operations/pages/OperationsMovementsPage").then((module) => ({ default: module.OperationsMovementsPage })));
+const OperationsRequestsPage = lazy(() => import("./operations/pages/OperationsRequestsPage").then((module) => ({ default: module.OperationsRequestsPage })));
+const OperationsAllCarsPage = lazy(() => import("./operations/pages/OperationsAllCarsPage").then((module) => ({ default: module.OperationsAllCarsPage })));
+const OperationsMovementLogPage = lazy(() => import("./operations/pages/OperationsMovementLogPage").then((module) => ({ default: module.OperationsMovementLogPage })));
 
 function PlatformRoutes() {
   return (
@@ -46,7 +53,15 @@ function PlatformRoutes() {
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
           <Route path="/marketing" element={<EmptyModulePage title="التسويق" description="الحملات والأجندة والكرييتيف وجدول النشر والتقويم." />} />
-          <Route path="/operations" element={<EmptyModulePage title="العمليات" description="المخزون والمواقع والحركة وطلبات النقل والموافقات ونواقص السيارات." />} />
+          <Route path="/operations" element={<OperationsLayout />}>
+            <Route index element={<Navigate to="inventory" replace />} />
+            <Route path="inventory" element={<OperationsInventoryPage />} />
+            <Route path="vehicles" element={<OperationsVehiclesPage />} />
+            <Route path="movements" element={<OperationsMovementsPage />} />
+            <Route path="requests" element={<OperationsRequestsPage />} />
+            <Route path="all-cars" element={<OperationsAllCarsPage />} />
+            <Route path="movement-log" element={<OperationsMovementLogPage />} />
+          </Route>
           <Route path="/tracking" element={<TrackingLayout />}>
             <Route index element={<TrackingOrdersPage />} />
             <Route path="archive" element={<TrackingOrdersPage archivedOnly />} />

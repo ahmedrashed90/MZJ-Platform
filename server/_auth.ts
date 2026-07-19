@@ -17,6 +17,7 @@ export type SessionUser = {
   departmentCodes: string[];
   branches: string[];
   branchCodes: string[];
+  permissionCodes: string[];
 };
 
 function parseCookies(header: string | undefined) {
@@ -91,6 +92,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     department_codes: string[] | null;
     branches: string[] | null;
     branch_codes: string[] | null;
+    permission_codes: string[] | null;
   }[]>`
     select
       u.id::text,
@@ -103,7 +105,8 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
       coalesce(array_agg(distinct d.name) filter (where d.id is not null), '{}') as departments,
       coalesce(array_agg(distinct d.code) filter (where d.id is not null), '{}') as department_codes,
       coalesce(array_agg(distinct b.name) filter (where b.id is not null), '{}') as branches,
-      coalesce(array_agg(distinct b.code) filter (where b.id is not null), '{}') as branch_codes
+      coalesce(array_agg(distinct b.code) filter (where b.id is not null), '{}') as branch_codes,
+      coalesce(array_agg(distinct p.code) filter (where p.id is not null), '{}') as permission_codes
     from core.sessions s
     join core.users u on u.id = s.user_id and u.is_active = true
     left join core.user_roles ur on ur.user_id = u.id
@@ -112,6 +115,8 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     left join core.departments d on d.id = ud.department_id
     left join core.user_branches ub on ub.user_id = u.id
     left join core.branches b on b.id = ub.branch_id
+    left join core.role_permissions rp on rp.role_id = r.id
+    left join core.permissions p on p.id = rp.permission_id
     where s.token_hash = ${tokenHash(token)} and s.expires_at > now()
     group by u.id
   `;
@@ -137,6 +142,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     departmentCodes: normalizeArray(row.department_codes),
     branches: normalizeArray(row.branches),
     branchCodes: normalizeArray(row.branch_codes),
+    permissionCodes: normalizeArray(row.permission_codes),
   };
 }
 
