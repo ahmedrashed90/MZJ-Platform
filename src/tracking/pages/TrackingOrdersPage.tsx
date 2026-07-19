@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArchiveBox,
+  Archive,
   ArrowClockwise,
   ArrowCounterClockwise,
   CalendarBlank,
@@ -180,7 +180,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
       <section className={`tracking-summary-grid ${archivedOnly ? "archive-only" : ""}`}>
         {(archivedOnly ? [
-          { key: "", label: "إجمالي الطلبات المؤرشفة", value: counts.archived, icon: ArchiveBox },
+          { key: "", label: "إجمالي الطلبات المؤرشفة", value: counts.archived, icon: Archive },
         ] : [
           { key: "", label: "إجمالي الطلبات", value: counts.total, icon: Car },
           { key: "not_started", label: "لم تبدأ", value: counts.not_started, icon: Clock },
@@ -253,7 +253,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
               <button type="button" onClick={() => window.open(trackingUrl(activeVehicle), "_blank")}><LinkSimple size={17} />فتح صفحة العميل</button>
               {!selected.is_archived && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
                 <button type="button" className="tracking-archive-button" onClick={() => void archiveOrder()} disabled={Boolean(actionKey)}>
-                  <ArchiveBox size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
+                  <Archive size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
                 </button>
               ) : null}
             </div>
@@ -270,7 +270,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
               {selected.is_archived ? (
                 <div className="tracking-archived-notice">
-                  <ArchiveBox size={24} weight="duotone" />
+                  <Archive size={24} weight="duotone" />
                   <div><strong>الطلب موجود في الأرشيف</strong><span>{selected.archived_at ? `تمت الأرشفة في ${formatTrackingDate(selected.archived_at)}` : "طلب منتهي ومؤرشف"}{selected.archived_by_name ? ` بواسطة ${selected.archived_by_name}` : ""}</span></div>
                 </div>
               ) : null}

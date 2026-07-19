@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { ArchiveBox, ListMagnifyingGlass, Trash, SlidersHorizontal } from "@phosphor-icons/react";
+import { Archive, ListMagnifyingGlass, Trash, SlidersHorizontal } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 
 export function TrackingLayout() {
@@ -13,7 +13,7 @@ export function TrackingLayout() {
           <span>طلبات التتبع</span>
         </NavLink>
         <NavLink to="/tracking/archive" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
-          <ArchiveBox size={18} weight="duotone" />
+          <Archive size={18} weight="duotone" />
           <span>أرشيف الطلبات</span>
         </NavLink>
         {isAdmin ? (

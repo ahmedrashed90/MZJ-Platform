@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArchiveBox, Car, CheckCircle, MagnifyingGlass, MapPin, WarningCircle } from "@phosphor-icons/react";
+import { Archive, Car, CheckCircle, MagnifyingGlass, MapPin, WarningCircle } from "@phosphor-icons/react";
 import { formatTrackingDate, formatTrackingMoney, trackingFetch } from "../api";
 import type { PublicTrackingOrder, TrackingVehicle } from "../types";
 
@@ -101,7 +101,7 @@ export function PublicTrackingPage() {
 
                   {order.is_archived ? (
                     <div className="public-archived-notice">
-                      <ArchiveBox size={34} weight="duotone" />
+                      <Archive size={34} weight="duotone" />
                       <div><strong>الطلب منتهي</strong><span>تم الانتهاء من هذا الطلب وأرشفته بنجاح.</span></div>
                     </div>
                   ) : (
