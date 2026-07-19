@@ -1,31 +1,61 @@
-/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22051
-    throw new Error(
-          ^
 
-Error: Error when performing the request to https://registry.npmjs.org/pnpm/-/pnpm-9.15.9.tgz; for troubleshooting help, see https://github.com/nodejs/corepack#troubleshooting
-    at fetch (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22051:11)
-    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
-    at async fetchUrlStream (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22081:20)
-    ... 4 lines matching cause stack trace ...
-    at async Object.runMain (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:23648:7) {
-  [cause]: TypeError: fetch failed
-      at node:internal/deps/undici/undici:13510:13
-      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
-      at async fetch (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22045:16)
-      at async fetchUrlStream (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22081:20)
-      at async download (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22204:18)
-      at async installVersion (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22296:55)
-      at async Engine.ensurePackageManager (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22847:32)
-      at async Engine.executePackageManagerRequest (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:22958:25)
-      at async Object.runMain (/opt/nvm/versions/node/v22.16.0/lib/node_modules/corepack/dist/lib/corepack.cjs:23648:7) {
-    [cause]: Error: getaddrinfo EAI_AGAIN registry.npmjs.org
-        at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
-      errno: -3001,
-      code: 'EAI_AGAIN',
-      syscall: 'getaddrinfo',
-      hostname: 'registry.npmjs.org'
-    }
-  }
-}
+> mzj-platform@1.13.2 build /mnt/data/MZJ-Platform-v1.13.2-Operations-Native-FULL-Vercel-TypeFix
+> pnpm run typecheck && vite build
 
-Node.js v22.16.0
+
+> mzj-platform@1.13.2 typecheck /mnt/data/MZJ-Platform-v1.13.2-Operations-Native-FULL-Vercel-TypeFix
+> node scripts/check-api-imports.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-tracking-module-v112.mjs && node scripts/check-operations-module-v113.mjs && node scripts/check-operations-final-corrections.mjs && node scripts/test-operations-shortage-rules.mjs && node scripts/check-typescript-syntax.mjs && tsc -b
+
+API and server import extension check passed.
+CRM module structure and no-sample-data check passed.
+Dynamic customer completion calculation check passed.
+CRM reference v27 structure, unread flow, finance differences, and category checks passed.
+CRM settings v1.8 full-width layout, Worker-based Mersal sync, and distribution checks passed.
+CRM v1.9.2 entry/distribution-only flow, full-screen chat, mapped templates, and shared Mersal send endpoint checks passed.
+PASS: WhatsApp uses only the configured canonical worker route
+PASS: Worker delivery has no route fallback loop
+PASS: Template payload sends both params and components
+PASS: Mersal template name is preferred over provider numeric id
+PASS: UI request returns queued while Vercel finishes the provider call in the background
+PASS: Worker result is stored directly by the background platform task
+PASS: Admin exposes one WhatsApp send field for text, templates, and media
+Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, and SMS+ checks passed.
+Operations native module structural, safety, routing, state-machine, dashboard-source, tracking-link, and migration checks passed.
+Operations final mandatory corrections static acceptance checks passed.
+Operations shortage business-rule tests passed (warehouse-only +3, branch gaps, agency/status/accessory exclusions, dedupe, and unique color combinations).
+TypeScript/TSX syntax and isolated transpilation checks passed for 109 files.
+[36mvite v7.3.6 [32mbuilding client environment for production...[36m[39m
+transforming...
+[32m✓[39m 5203 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                                [39m[1m[2m  0.69 kB[22m[1m[22m[2m │ gzip:   0.35 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-VPYyBX-j.css                 [39m[1m[2m120.36 kB[22m[1m[22m[2m │ gzip:  21.00 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmLayout-DoYaYcnS.js              [39m[1m[2m  1.22 kB[22m[1m[22m[2m │ gzip:   0.67 kB[22m
+[2mdist/[22m[2massets/[22m[36mTrackingLayout-bEiLpiyZ.js         [39m[1m[2m  1.28 kB[22m[1m[22m[2m │ gzip:   0.56 kB[22m
+[2mdist/[22m[2massets/[22m[36mVehicleSearch-DLU68Vc2.js          [39m[1m[2m  1.77 kB[22m[1m[22m[2m │ gzip:   0.96 kB[22m
+[2mdist/[22m[2massets/[22m[36mOperationsLayout-C4bECyOR.js       [39m[1m[2m  1.95 kB[22m[1m[22m[2m │ gzip:   0.88 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmOwnershipPage-BOd3ZWVE.js       [39m[1m[2m  2.19 kB[22m[1m[22m[2m │ gzip:   1.01 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmInboxPage-V2oJGHI0.js           [39m[1m[2m  3.59 kB[22m[1m[22m[2m │ gzip:   1.57 kB[22m
+[2mdist/[22m[2massets/[22m[36mMovementLogPage-Dyd33d_h.js        [39m[1m[2m  5.11 kB[22m[1m[22m[2m │ gzip:   1.71 kB[22m
+[2mdist/[22m[2massets/[22m[36mMovementPage-BNE54M33.js           [39m[1m[2m  5.22 kB[22m[1m[22m[2m │ gzip:   2.13 kB[22m
+[2mdist/[22m[2massets/[22m[36mApprovalsPage-DNGDrITv.js          [39m[1m[2m  6.67 kB[22m[1m[22m[2m │ gzip:   2.06 kB[22m
+[2mdist/[22m[2massets/[22m[36mPublicTrackingPage-CtPG176t.js     [39m[1m[2m  6.94 kB[22m[1m[22m[2m │ gzip:   2.36 kB[22m
+[2mdist/[22m[2massets/[22m[36mTrackingDeletePage-C9GOsR-i.js     [39m[1m[2m  7.21 kB[22m[1m[22m[2m │ gzip:   2.36 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmManualLeadsPage-m-pCfQEy.js     [39m[1m[2m 10.54 kB[22m[1m[22m[2m │ gzip:   3.14 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmDashboardPage-CsYSj1kQ.js       [39m[1m[2m 11.56 kB[22m[1m[22m[2m │ gzip:   3.76 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmFinanceHistoryPage-C-NohNRy.js  [39m[1m[2m 12.11 kB[22m[1m[22m[2m │ gzip:   3.41 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmReportsPage-BIItHrgZ.js         [39m[1m[2m 12.22 kB[22m[1m[22m[2m │ gzip:   3.60 kB[22m
+[2mdist/[22m[2massets/[22m[36mVehicleManagementPage-Ctwkdzvi.js  [39m[1m[2m 13.37 kB[22m[1m[22m[2m │ gzip:   4.53 kB[22m
+[2mdist/[22m[2massets/[22m[36mRequestsPage-tkRreE2U.js           [39m[1m[2m 13.38 kB[22m[1m[22m[2m │ gzip:   3.67 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmDatabasePage-xauEdiUh.js        [39m[1m[2m 13.58 kB[22m[1m[22m[2m │ gzip:   4.03 kB[22m
+[2mdist/[22m[2massets/[22m[36mTrackingOrdersPage-BuNViNnq.js     [39m[1m[2m 13.78 kB[22m[1m[22m[2m │ gzip:   4.09 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmInboxAgentPage-CjxDdQ5L.js      [39m[1m[2m 14.83 kB[22m[1m[22m[2m │ gzip:   3.90 kB[22m
+[2mdist/[22m[2massets/[22m[36mInventoryPage-CWD0KtDR.js          [39m[1m[2m 15.78 kB[22m[1m[22m[2m │ gzip:   4.51 kB[22m
+[2mdist/[22m[2massets/[22m[36mLeadDrawer-CC7yqluV.js             [39m[1m[2m 24.23 kB[22m[1m[22m[2m │ gzip:   7.51 kB[22m
+[2mdist/[22m[2massets/[22m[36mCrmKpiPage-XSyS1ZF_.js             [39m[1m[2m 24.70 kB[22m[1m[22m[2m │ gzip:   6.68 kB[22m
+[2mdist/[22m[2massets/[22m[36mreact-BydBm8hb.js                  [39m[1m[2m 49.88 kB[22m[1m[22m[2m │ gzip:  17.74 kB[22m
+[2mdist/[22m[2massets/[22m[36micons-CAAYMtF2.js                  [39m[1m[2m277.95 kB[22m[1m[22m[2m │ gzip:  63.07 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-CLhIhwsB.js                  [39m[1m[2m319.41 kB[22m[1m[22m[2m │ gzip:  87.54 kB[22m
+[2mdist/[22m[2massets/[22m[36mcharts-Cwy6n58x.js                 [39m[1m[2m375.83 kB[22m[1m[22m[2m │ gzip: 109.36 kB[22m
+[32m✓ built in 7.20s[39m

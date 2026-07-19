@@ -1,1 +1,1 @@
-Production build exit code: 1
+Production build exit code: 0

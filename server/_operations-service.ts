@@ -50,7 +50,9 @@ function scopeValues(user: SessionUser) {
   const scope = userBranchScope(user);
   return { all: scope === null, branches: scope || [] };
 }
-function sqlJson(sql: postgres.Sql, value: unknown) {
+type SqlJsonClient = Pick<postgres.TransactionSql, "json">;
+
+function sqlJson(sql: SqlJsonClient, value: unknown) {
   return sql.json((value ?? {}) as never);
 }
 function statusCode(value: unknown) {

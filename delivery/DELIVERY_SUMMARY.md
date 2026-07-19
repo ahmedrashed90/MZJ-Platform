@@ -8,5 +8,6 @@
 - التكامل: Tracking، Session، Users، Roles، Branches، Dashboard، Audit Trail، Event Outbox.
 - الحماية: Server-side permissions، Transactions، Locks، Validation، Structured Errors، ومنع التكرار.
 - الاختبارات الثابتة: ناجحة.
-- TypeScript Build الكامل وProduction Build: يحتاجان إعادة التشغيل بعد تثبيت dependencies في بيئة متصلة.
+- `pnpm run typecheck`: ناجح، بما فيه `tsc -b`.
+- `pnpm run build`: ناجح، وVite Production Build اكتمل بنجاح.
 - اختبارات PostgreSQL والواجهة الحية: مطلوبة على Staging قبل الإنتاج.

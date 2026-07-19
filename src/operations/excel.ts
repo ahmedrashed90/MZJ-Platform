@@ -3,7 +3,9 @@ function columnIndex(reference: string) {
   const letters=(reference.match(/[A-Z]+/i)?.[0]||"").toUpperCase(); let value=0; for(const char of letters)value=value*26+(char.charCodeAt(0)-64); return Math.max(0,value-1);
 }
 async function inflateRaw(data: Uint8Array) {
-  const stream=new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  const copy = new Uint8Array(new ArrayBuffer(data.byteLength));
+  copy.set(data);
+  const stream = new Blob([copy.buffer]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 async function unzipEntries(buffer: ArrayBuffer) {

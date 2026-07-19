@@ -8,28 +8,27 @@
 - Operations structural and mandatory corrections checks: ناجحة.
 - Shortage business-rule tests: ناجحة.
 - TypeScript/TSX syntax and isolated transpilation: ناجح لـ109 ملفات.
+- `pnpm run typecheck`: ناجح بالكامل، بما فيه `tsc -b`.
+- `pnpm run build`: ناجح بالكامل.
+- Vite Production Build: ناجح، وتم تحويل 5203 Modules.
 
-راجع `static-checks-final.log`.
+راجع:
 
-## غير مكتمل بسبب بيئة التشغيل
+- `delivery/typescript-check-final.log`
+- `delivery/production-build.log`
+- `delivery/typescript-check-status.txt`
+- `delivery/production-build-status.txt`
 
-- `tsc -b`: Exit code 1 بسبب عدم وجود dependencies وtype declarations في `node_modules`.
-- Production build: Exit code 1 لأن Corepack لم يستطع تنزيل pnpm من npm registry بسبب `EAI_AGAIN`.
-- PostgreSQL integration/UI acceptance: لم تُشغل لعدم توفر قاعدة بيانات وبيئة نشر حية.
+## إصلاحات مانع بناء Vercel
 
-لا يتم اعتبار هذه النقاط ناجحة، ويجب إعادة تشغيلها في بيئة بها اتصال وحزم وقاعدة بيانات قبل النشر.
+تم إصلاح مانعين للبناء:
 
-## تصحيح نشر Vercel بعد التسليم
+1. دالة تحويل JSON في `server/_operations-service.ts` كانت تقبل `postgres.Sql` فقط، بينما PostgreSQL.js 3.4.9 يعرّف اتصال الـTransaction كنوع مستقل `TransactionSql`. تم جعل الدالة تقبل واجهة `json` المشتركة دون تغيير منطق المعاملات.
+2. إنشاء `Blob` في `src/operations/excel.ts` كان يمرر `Uint8Array<ArrayBufferLike>` مباشرة، وهو غير متوافق مع تعريفات TypeScript الحديثة. تم إنشاء نسخة بذاكرة `ArrayBuffer` صريحة قبل فك الضغط، دون تغيير منطق قراءة Excel.
 
-تم إصلاح مانع بناء ظهر على Vercel بسبب استيراد TypeScript من مسار مطلق خاص بإصدار Node محلي:
+## اختبارات ما زالت تحتاج بيئة حية
 
-`/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js`
-
-أصبحت سكربتات الفحص تستورد حزمة `typescript` المحلية المعرّفة في `devDependencies`، ولذلك لا تعتمد على إصدار Node أو مسار NVM في بيئة النشر.
-
-تمت إعادة تشغيل:
-
-- `scripts/check-customer-completion.mjs`: ناجح.
-- `scripts/check-typescript-syntax.mjs`: ناجح لـ109 ملفات.
-
-لم يتم الادعاء بإتمام Production Build محلي كامل لعدم وجود بقية `node_modules` في بيئة التسليم؛ يجب إعادة Deploy على Vercel لتشغيل البناء بالحزم المثبتة من `pnpm-lock.yaml`.
+- تطبيق Migration على قاعدة PostgreSQL تجريبية أولًا.
+- اختبارات Transactions وLocks المتزامنة ضد PostgreSQL.
+- اختبار UI يدوي حسب الأدوار والفروع.
+- اختبار التكامل الحي مع بيانات Tracking.
