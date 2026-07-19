@@ -20,6 +20,10 @@ alter table tracking.orders add column if not exists is_deleted boolean not null
 alter table tracking.orders add column if not exists deleted_at timestamptz;
 alter table tracking.orders add column if not exists deleted_by uuid references core.users(id);
 alter table tracking.orders add column if not exists deleted_reason text;
+alter table tracking.orders add column if not exists archived_at timestamptz;
+alter table tracking.orders add column if not exists archived_by uuid references core.users(id);
+alter table tracking.orders add column if not exists archived_by_name text;
+alter table tracking.orders add column if not exists archive_reason text;
 
 alter table tracking.order_vehicles add column if not exists item_no text;
 alter table tracking.order_vehicles add column if not exists item_type text;
@@ -110,6 +114,36 @@ create table if not exists tracking.sms_messages (
   error_message text
 );
 create index if not exists tracking_sms_messages_order_idx on tracking.sms_messages(order_id, queued_at desc);
+
+create table if not exists tracking.system_migrations (
+  migration_key text primary key,
+  applied_at timestamptz not null default now()
+);
+
+with applied as (
+  insert into tracking.system_migrations(migration_key)
+  values ('archive_initial_tracking_history_except_active_7_v1')
+  on conflict (migration_key) do nothing
+  returning migration_key
+)
+update tracking.orders
+set is_archived=true,
+    archived_at=coalesce(archived_at, now()),
+    archived_by_name=coalesce(archived_by_name, 'ترحيل النظام القديم'),
+    archive_reason=coalesce(archive_reason, 'طلبات مكتملة قبل تشغيل نظام التتبع داخل المنصة'),
+    updated_at=now()
+where exists (select 1 from applied)
+  and coalesce(is_deleted,false)=false
+  and sales_order_no <= 'SAL-ORD-2026-00759'
+  and sales_order_no not in (
+    'SAL-ORD-2026-00711',
+    'SAL-ORD-2026-00758',
+    'SAL-ORD-2026-00757',
+    'SAL-ORD-2026-00753',
+    'SAL-ORD-2026-00754',
+    'SAL-ORD-2026-00751',
+    'SAL-ORD-2026-00748'
+  );
 
 insert into tracking.stages(code,name,description,owner_type,sort_order,sms_enabled,is_active) values
 ('stage_1','طلب الشراء (خاص بالعميل)','تم تسجيل طلب الشراء في النظام بنجاح.','customer',1,true,true),

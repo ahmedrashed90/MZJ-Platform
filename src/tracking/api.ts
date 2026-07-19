@@ -36,7 +36,8 @@ export function formatTrackingMoney(value?: number | string | null) {
   return `${number.toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س`;
 }
 
-export function trackingStatusLabel(status?: string | null) {
+export function trackingStatusLabel(status?: string | null, isArchived = false) {
+  if (isArchived) return "مؤرشف";
   if (status === "completed") return "مكتمل";
   if (status === "in_progress") return "تحت الإجراء";
   return "لم يبدأ";

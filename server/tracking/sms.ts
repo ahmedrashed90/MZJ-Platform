@@ -54,6 +54,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     where o.id=${orderId}::uuid and coalesce(o.is_deleted,false)=false
   `;
   if (!row) return response.status(404).json({ ok: false, error: "لم يتم العثور على بيانات الرسالة" });
+  if (row.is_archived) return response.status(400).json({ ok: false, error: "الطلب مؤرشف ولا يمكن إرسال رسائل جديدة له" });
   if (!row.sms_enabled) return response.status(400).json({ ok: false, error: "إرسال SMS+ غير مفعّل لهذه المرحلة" });
 
   const phone = normalizeSaudiPhone(row.customer_mobile);

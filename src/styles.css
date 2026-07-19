@@ -2034,3 +2034,14 @@ button.small-metric { cursor: pointer; }
   .public-tracking-search > div { grid-template-columns: 1fr; }
   .public-order-card,.public-cars-card { border-radius: 0; border-left: 0; border-right: 0; }
 }
+
+.tracking-summary-grid.archive-only { grid-template-columns: minmax(280px, 380px); }
+.tracking-status.archived { background: #eee8f8; color: #66438e; }
+.tracking-detail-actions .tracking-archive-button { background: #6b4a8d; color: #fff; border-color: #6b4a8d; }
+.tracking-archived-notice { display: flex; align-items: center; gap: 12px; padding: 15px 17px; border: 1px solid #d9cce7; background: #f7f2fb; color: #5f3f7d; border-radius: 14px; }
+.tracking-archived-notice > div { display: grid; gap: 4px; }
+.tracking-archived-notice span { color: #7b688c; font-size: 12px; }
+.public-archived-notice { margin-top: 18px; border: 1px solid #cfe5d5; background: #f3fbf5; border-radius: 16px; padding: 22px; display: flex; align-items: center; justify-content: center; gap: 14px; color: #216b39; text-align: right; }
+.public-archived-notice > div { display: grid; gap: 5px; }
+.public-archived-notice strong { font-size: 20px; }
+.public-archived-notice span { color: #54765e; }

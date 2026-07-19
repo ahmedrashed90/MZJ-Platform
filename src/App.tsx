@@ -49,6 +49,7 @@ function PlatformRoutes() {
           <Route path="/operations" element={<EmptyModulePage title="العمليات" description="المخزون والمواقع والحركة وطلبات النقل والموافقات ونواقص السيارات." />} />
           <Route path="/tracking" element={<TrackingLayout />}>
             <Route index element={<TrackingOrdersPage />} />
+            <Route path="archive" element={<TrackingOrdersPage archivedOnly />} />
             <Route path="delete" element={<TrackingDeletePage />} />
           </Route>
           <Route path="/reports" element={<EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." />} />

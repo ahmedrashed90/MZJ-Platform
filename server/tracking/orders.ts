@@ -79,7 +79,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     const search = clean(request.query.search);
     const status = clean(request.query.status);
-    const limit = Math.min(Math.max(Number(request.query.limit || 100), 1), 300);
+    const archivedOnly = ["1", "true", "yes"].includes(clean(request.query.archived).toLowerCase());
+    const limit = Math.min(Math.max(Number(request.query.limit || 1000), 1), 2000);
     const pattern = `%${search}%`;
     const orders = await sql<any[]>`
       select
@@ -94,6 +95,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join tracking.vehicle_stages vs on vs.vehicle_id=v.id
       left join tracking.stages sx on sx.id=vs.stage_id and sx.is_active=true
       where coalesce(o.is_deleted,false)=false
+        and coalesce(o.is_archived,false)=${archivedOnly}
         and (vs.id is null or sx.id is not null)
         and (${status}='' or o.status=${status})
         and (
@@ -108,10 +110,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     const [counts] = await sql<any[]>`
       select
-        count(*)::int as total,
-        count(*) filter (where status='not_started')::int as not_started,
-        count(*) filter (where status='in_progress')::int as in_progress,
-        count(*) filter (where status='completed')::int as completed
+        count(*) filter (where coalesce(is_archived,false)=false)::int as total,
+        count(*) filter (where coalesce(is_archived,false)=false and status='not_started')::int as not_started,
+        count(*) filter (where coalesce(is_archived,false)=false and status='in_progress')::int as in_progress,
+        count(*) filter (where coalesce(is_archived,false)=false and status='completed')::int as completed,
+        count(*) filter (where coalesce(is_archived,false)=true)::int as archived
       from tracking.orders where coalesce(is_deleted,false)=false
     `;
     return response.status(200).json({ ok: true, orders, counts });
@@ -120,6 +123,42 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method === "POST") {
     const body = typeof request.body === "string" ? JSON.parse(request.body || "{}") : request.body || {};
     const action = clean(body.action);
+
+    if (action === "archive_order") {
+      const orderId = clean(body.orderId);
+      if (!orderId) return response.status(400).json({ ok: false, error: "رقم الطلب الداخلي مطلوب" });
+
+      const [archiveState] = await sql<any[]>`
+        select o.id::text,o.is_archived,
+          count(vs.id) filter (where s.is_active=true)::int as total_stages,
+          count(vs.id) filter (where s.is_active=true and vs.status='completed')::int as completed_stages
+        from tracking.orders o
+        left join tracking.order_vehicles v on v.order_id=o.id
+        left join tracking.vehicle_stages vs on vs.vehicle_id=v.id
+        left join tracking.stages s on s.id=vs.stage_id
+        where o.id=${orderId}::uuid and coalesce(o.is_deleted,false)=false
+        group by o.id
+      `;
+      if (!archiveState) return response.status(404).json({ ok: false, error: "طلب التتبع غير موجود" });
+      if (archiveState.is_archived) {
+        const detail = await getOrderDetail(orderId);
+        return response.status(200).json({ ok: true, order: detail, message: "الطلب موجود في الأرشيف بالفعل" });
+      }
+      const totalStages = Number(archiveState.total_stages || 0);
+      const completedStages = Number(archiveState.completed_stages || 0);
+      if (totalStages <= 0 || completedStages < totalStages) {
+        return response.status(400).json({ ok: false, error: "زر الأرشفة يتاح بعد اكتمال المراحل العشر لجميع سيارات الطلب" });
+      }
+      await sql`
+        update tracking.orders
+        set is_archived=true,archived_at=now(),archived_by=${user.id}::uuid,archived_by_name=${user.fullName},
+            archive_reason='اكتملت جميع مراحل التتبع',updated_at=now()
+        where id=${orderId}::uuid
+      `;
+      const detail = await getOrderDetail(orderId);
+      return response.status(200).json({ ok: true, order: detail, message: "تم نقل الطلب إلى الأرشيف" });
+    }
+
     const vehicleId = clean(body.vehicleId);
     const stageId = clean(body.stageId);
     if (!["complete_stage", "revert_stage"].includes(action)) {
@@ -128,13 +167,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!vehicleId || !stageId) return response.status(400).json({ ok: false, error: "السيارة والمرحلة مطلوبتان" });
 
     const [row] = await sql<any[]>`
-      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order
+      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived
       from tracking.vehicle_stages vs
       join tracking.order_vehicles v on v.id=vs.vehicle_id
+      join tracking.orders o on o.id=v.order_id
       join tracking.stages s on s.id=vs.stage_id
       where vs.vehicle_id=${vehicleId}::uuid and vs.stage_id=${stageId}::uuid
     `;
     if (!row) return response.status(404).json({ ok: false, error: "مرحلة السيارة غير موجودة" });
+    if (row.is_archived) return response.status(400).json({ ok: false, error: "الطلب مؤرشف ولا يمكن تعديل مراحله" });
 
     if (action === "complete_stage") {
       if (row.status !== "completed") {

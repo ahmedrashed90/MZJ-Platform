@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArchiveBox,
   ArrowClockwise,
   ArrowCounterClockwise,
   CalendarBlank,
@@ -33,9 +34,9 @@ function visibleVin(vehicle: TrackingVehicle) {
   return vehicle.vin?.startsWith("PENDING-") ? "لم يُحدد بعد" : vehicle.vin || "—";
 }
 
-export function TrackingOrdersPage() {
+export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: boolean }) {
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
-  const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0 });
+  const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
@@ -52,9 +53,9 @@ export function TrackingOrdersPage() {
     setLoading(true);
     setError("");
     try {
-      const payload = await trackingFetch<ListResponse>(`/api/tracking/orders${trackingQuery({ search: nextSearch, status: nextStatus })}`);
+      const payload = await trackingFetch<ListResponse>(`/api/tracking/orders${trackingQuery({ search: nextSearch, status: nextStatus, archived: archivedOnly ? "true" : "false" })}`);
       setOrders(payload.orders || []);
-      setCounts(payload.counts || { total: 0, not_started: 0, in_progress: 0, completed: 0 });
+      setCounts(payload.counts || { total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "تعذر تحميل طلبات التتبع");
     } finally {
@@ -76,7 +77,7 @@ export function TrackingOrdersPage() {
     }
   }
 
-  useEffect(() => { void loadOrders("", ""); }, []);
+  useEffect(() => { setStatus(""); void loadOrders("", ""); }, [archivedOnly]);
 
   const activeVehicle = useMemo(
     () => selected?.vehicles.find((vehicle) => vehicle.id === activeVehicleId) || selected?.vehicles[0] || null,
@@ -124,6 +125,28 @@ export function TrackingOrdersPage() {
     }
   }
 
+  async function archiveOrder() {
+    if (!selected || selected.is_archived) return;
+    const confirmed = window.confirm(`نقل الطلب ${selected.sales_order_no} إلى الأرشيف؟`);
+    if (!confirmed) return;
+    setActionKey(`archive:${selected.id}`);
+    setMessage("");
+    setError("");
+    try {
+      const payload = await trackingFetch<DetailResponse>("/api/tracking/orders", {
+        method: "POST",
+        body: JSON.stringify({ action: "archive_order", orderId: selected.id }),
+      });
+      setSelected(null);
+      setMessage(payload.message || "تم نقل الطلب إلى الأرشيف");
+      await loadOrders();
+    } catch (archiveError) {
+      setError(archiveError instanceof Error ? archiveError.message : "تعذر أرشفة الطلب");
+    } finally {
+      setActionKey("");
+    }
+  }
+
   function trackingUrl(vehicle?: TrackingVehicle | null) {
     if (!selected) return "";
     const key = vehicle && !vehicle.vin.startsWith("PENDING-")
@@ -143,8 +166,8 @@ export function TrackingOrdersPage() {
     <div className="module-page tracking-orders-page">
       <header className="module-page-head tracking-page-head">
         <div>
-          <h1>طلبات التتبع</h1>
-          <p>طلبات البيع والسيارات ومراحل التنفيذ وروابط تتبع العميل من داخل المنصة.</p>
+          <h1>{archivedOnly ? "أرشيف طلبات التتبع" : "طلبات التتبع"}</h1>
+          <p>{archivedOnly ? "الطلبات المنتهية التي تم نقلها إلى الأرشيف." : "طلبات البيع والسيارات ومراحل التنفيذ وروابط تتبع العميل من داخل المنصة."}</p>
         </div>
         <button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>
           <ArrowClockwise size={18} className={loading ? "spin" : ""} />
@@ -155,13 +178,15 @@ export function TrackingOrdersPage() {
       {error ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>{error}</span></div> : null}
       {message ? <div className="success-banner tracking-success-banner"><CheckCircle size={20} weight="fill" /><span>{message}</span></div> : null}
 
-      <section className="tracking-summary-grid">
-        {[
+      <section className={`tracking-summary-grid ${archivedOnly ? "archive-only" : ""}`}>
+        {(archivedOnly ? [
+          { key: "", label: "إجمالي الطلبات المؤرشفة", value: counts.archived, icon: ArchiveBox },
+        ] : [
           { key: "", label: "إجمالي الطلبات", value: counts.total, icon: Car },
           { key: "not_started", label: "لم تبدأ", value: counts.not_started, icon: Clock },
           { key: "in_progress", label: "تحت الإجراء", value: counts.in_progress, icon: ArrowClockwise },
           { key: "completed", label: "مكتملة", value: counts.completed, icon: CheckCircle },
-        ].map(({ key, label, value, icon: Icon }) => (
+        ]).map(({ key, label, value, icon: Icon }) => (
           <button key={label} type="button" className={`tracking-summary-card ${status === key ? "active" : ""}`} onClick={() => { setStatus(key); void loadOrders(search, key); }}>
             <span className="tracking-summary-icon"><Icon size={23} weight="duotone" /></span>
             <span><small>{label}</small><strong>{value}</strong></span>
@@ -198,7 +223,7 @@ export function TrackingOrdersPage() {
                     <td>{order.branch || "—"}</td>
                     <td>{order.vehicles_count}</td>
                     <td><div className="tracking-mini-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
-                    <td><span className={`tracking-status ${order.status}`}>{trackingStatusLabel(order.status)}</span></td>
+                    <td><span className={`tracking-status ${order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived)}</span></td>
                     <td>{formatTrackingDate(order.updated_at)}</td>
                   </tr>
                 );
@@ -226,6 +251,11 @@ export function TrackingOrdersPage() {
             <div className="tracking-detail-actions">
               <button type="button" onClick={() => void copyLink(activeVehicle)}><Copy size={17} />نسخ رابط العميل</button>
               <button type="button" onClick={() => window.open(trackingUrl(activeVehicle), "_blank")}><LinkSimple size={17} />فتح صفحة العميل</button>
+              {!selected.is_archived && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
+                <button type="button" className="tracking-archive-button" onClick={() => void archiveOrder()} disabled={Boolean(actionKey)}>
+                  <ArchiveBox size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
+                </button>
+              ) : null}
             </div>
 
             <div className="tracking-detail-body">
@@ -237,6 +267,13 @@ export function TrackingOrdersPage() {
                 <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
                 <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
               </section>
+
+              {selected.is_archived ? (
+                <div className="tracking-archived-notice">
+                  <ArchiveBox size={24} weight="duotone" />
+                  <div><strong>الطلب موجود في الأرشيف</strong><span>{selected.archived_at ? `تمت الأرشفة في ${formatTrackingDate(selected.archived_at)}` : "طلب منتهي ومؤرشف"}{selected.archived_by_name ? ` بواسطة ${selected.archived_by_name}` : ""}</span></div>
+                </div>
+              ) : null}
 
               <section className="tracking-vehicle-section">
                 <div className="tracking-section-heading"><div><Car size={20} /><h3>السيارات في الطلب</h3></div><span>{selected.vehicles.length}</span></div>
@@ -275,9 +312,9 @@ export function TrackingOrdersPage() {
                               <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
                             </div>
                             <div className="tracking-stage-actions">
-                              {!done ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
-                              {done ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
-                              {stage.sms_enabled ? <button type="button" className="sms" onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
+                              {!selected.is_archived && !done ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
+                              {!selected.is_archived && done ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
+                              {!selected.is_archived && stage.sms_enabled ? <button type="button" className="sms" onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
                             </div>
                           </article>
                         );

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Car, CheckCircle, MagnifyingGlass, MapPin, WarningCircle } from "@phosphor-icons/react";
+import { ArchiveBox, Car, CheckCircle, MagnifyingGlass, MapPin, WarningCircle } from "@phosphor-icons/react";
 import { formatTrackingDate, formatTrackingMoney, trackingFetch } from "../api";
 import type { PublicTrackingOrder, TrackingVehicle } from "../types";
 
@@ -99,24 +99,33 @@ export function PublicTrackingPage() {
                     <div><small>إجمالي السيارة</small><strong>{formatTrackingMoney(Number(activeVehicle.total_incl_vat || 0) + Number(activeVehicle.registration_fee || 0))}</strong></div>
                   </div>
 
-                  <div className="public-progress-summary">
-                    <div><span>حالة الطلب الحالية</span><strong>{completed === 0 ? "لم يبدأ بعد" : completed >= totalStages ? "تم إتمام جميع المراحل" : `تم تنفيذ ${completed} من ${totalStages} مراحل`}</strong></div>
-                    <div><span>آخر تحديث</span><strong>{formatTrackingDate(order.updated_at)}</strong></div>
-                  </div>
-                  <div className="public-progress-row"><div><span>نسبة اكتمال الطلب</span><strong>{percent}%</strong></div><div className="public-progress-bar"><span style={{ width: `${percent}%` }} /></div></div>
+                  {order.is_archived ? (
+                    <div className="public-archived-notice">
+                      <ArchiveBox size={34} weight="duotone" />
+                      <div><strong>الطلب منتهي</strong><span>تم الانتهاء من هذا الطلب وأرشفته بنجاح.</span></div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="public-progress-summary">
+                        <div><span>حالة الطلب الحالية</span><strong>{completed === 0 ? "لم يبدأ بعد" : completed >= totalStages ? "تم إتمام جميع المراحل" : `تم تنفيذ ${completed} من ${totalStages} مراحل`}</strong></div>
+                        <div><span>آخر تحديث</span><strong>{formatTrackingDate(order.updated_at)}</strong></div>
+                      </div>
+                      <div className="public-progress-row"><div><span>نسبة اكتمال الطلب</span><strong>{percent}%</strong></div><div className="public-progress-bar"><span style={{ width: `${percent}%` }} /></div></div>
 
-                  <div className="public-timeline-title">خطوات طلبك من أول الحجز حتى استلام السيارة</div>
-                  <ol className="public-timeline">
-                    {activeVehicle.stages.map((stage) => {
-                      const done = stage.status === "completed";
-                      return (
-                        <li key={stage.stage_id || stage.code} className={done ? "done" : ""}>
-                          <div className="public-step-icon">{done ? <CheckCircle size={25} weight="fill" /> : stage.sort_order}</div>
-                          <div><h3>{stage.name}</h3><p>{stage.description || ""}</p>{done ? <small>تم في: {formatTrackingDate(stage.completed_at)}</small> : null}</div>
-                        </li>
-                      );
-                    })}
-                  </ol>
+                      <div className="public-timeline-title">خطوات طلبك من أول الحجز حتى استلام السيارة</div>
+                      <ol className="public-timeline">
+                        {activeVehicle.stages.map((stage) => {
+                          const done = stage.status === "completed";
+                          return (
+                            <li key={stage.stage_id || stage.code} className={done ? "done" : ""}>
+                              <div className="public-step-icon">{done ? <CheckCircle size={25} weight="fill" /> : stage.sort_order}</div>
+                              <div><h3>{stage.name}</h3><p>{stage.description || ""}</p>{done ? <small>تم في: {formatTrackingDate(stage.completed_at)}</small> : null}</div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </>
+                  )}
                 </div>
               ) : null}
             </section>

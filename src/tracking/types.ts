@@ -50,6 +50,9 @@ export type TrackingOrderRow = {
   status: TrackingStatus;
   tracking_token?: string | null;
   is_archived?: boolean;
+  archived_at?: string | null;
+  archived_by_name?: string | null;
+  archive_reason?: string | null;
   subtotal_before_tax?: number | string | null;
   tax_value?: number | string | null;
   total_incl_vat?: number | string | null;
@@ -96,6 +99,7 @@ export type TrackingCounts = {
   not_started: number;
   in_progress: number;
   completed: number;
+  archived: number;
 };
 
 export type PublicTrackingOrder = {
