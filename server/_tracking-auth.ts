@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, type SessionUser } from "./_auth.js";
 
 export function canAccessTracking(user: SessionUser) {
-  return user.isSystemAdmin || user.roleCodes.some((code) => ["admin", "tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code))
+  return user.roleCodes.some((code) => ["system_admin", "admin", "tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code))
     || (user.departmentCodes.includes("tracking") || user.departmentCodes.includes("operations"));
 }
 

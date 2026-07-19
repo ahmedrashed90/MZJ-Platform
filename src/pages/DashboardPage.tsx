@@ -42,6 +42,8 @@ import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
 import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/api";
 import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
+import { downloadExcel, formatOperationsDate, operationsFetch, operationsQuery, requestStatusLabel, statusLabel } from "../operations/api";
+import type { ApprovalRow, OperationsRequest, ShortageRow, VehicleRow } from "../operations/types";
 import type { DashboardData, NullableNumber } from "../types";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
@@ -65,70 +67,85 @@ type DetailPayload = {
   rows?: Array<{ label: string; value: NullableNumber }>;
   leads?: DashboardLeadItem[];
   trackingOrders?: TrackingOrderRow[];
+  operationVehicles?: VehicleRow[];
+  operationApprovals?: ApprovalRow[];
+  operationRequests?: OperationsRequest[];
+  operationShortages?: ShortageRow[];
   loading?: boolean;
   error?: string;
 };
 
 function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayload | null; onClose: () => void; onLeadOpen: (item: DashboardLeadItem) => void }) {
+  const [search, setSearch] = useState("");
+  const [requestDetail, setRequestDetail] = useState<OperationsRequest | null>(null);
+  const [requestDetailLoading, setRequestDetailLoading] = useState(false);
+  const [requestDetailError, setRequestDetailError] = useState("");
   useEscapeToClose(Boolean(details), onClose);
+  useEffect(() => { setSearch(""); setRequestDetail(null); setRequestDetailError(""); }, [details?.title]);
   if (!details) return null;
+
+  const searchable = Boolean(details.operationVehicles || details.operationApprovals || details.operationRequests || details.operationShortages);
+  const matches = (row: unknown) => !search.trim() || JSON.stringify(row).toLocaleLowerCase("ar").includes(search.trim().toLocaleLowerCase("ar"));
+  const vehicles = (details.operationVehicles || []).filter(matches);
+  const approvals = (details.operationApprovals || []).filter(matches);
+  const requests = (details.operationRequests || []).filter(matches);
+  const shortages = (details.operationShortages || []).filter(matches);
+
+  const openRequestDetail = async (row: OperationsRequest) => {
+    setRequestDetail(row);
+    setRequestDetailLoading(true);
+    setRequestDetailError("");
+    try {
+      const payload = await operationsFetch<{ request: OperationsRequest }>(`/api/operations${operationsQuery({ resource: "request", id: row.id })}`);
+      setRequestDetail(payload.request);
+    } catch (failure) {
+      setRequestDetailError(failure instanceof Error ? failure.message : "تعذر تحميل تفاصيل الطلب");
+    } finally {
+      setRequestDetailLoading(false);
+    }
+  };
+
+  const exportOperations = () => {
+    if (details.operationVehicles) {
+      downloadExcel(details.title, ["VIN", "السيارة", "الوصف", "الموديل", "اللون الداخلي", "اللون الخارجي", "الموقع", "الحالة"], vehicles.map((row) => [row.vin, row.car_name, row.statement, row.model_year, row.interior_color, row.exterior_color, row.location_name, row.status_name || statusLabel(row.status_code)]));
+    } else if (details.operationApprovals) {
+      downloadExcel(details.title, ["VIN", "السيارة", "الوصف", "الموقع", "الموافقة المالية", "الموافقة الإدارية"], approvals.map((row) => [row.vin, row.car_name, row.statement, row.location_name, row.financial_approved ? "تمت" : "لم تتم", row.administrative_approved ? "تمت" : "لم تتم"]));
+    } else if (details.operationRequests) {
+      downloadExcel(details.title, ["رقم الطلب", "النوع", "منشئ الطلب", "تاريخ الطلب", "الحالة", "VIN", "المصدر", "الوجهة"], requests.map((row) => [row.request_no, row.request_type === "transfer" ? "نقل" : "تصوير", row.requested_by_name, formatOperationsDate(row.requested_at), requestStatusLabel(row.status), row.vins, row.source_location_name, row.destination_location_name]));
+    } else if (details.operationShortages) {
+      downloadExcel(details.title, ["الفرع الناقص", "السيارة", "الوصف", "الموديل", "اللون الخارجي", "اللون الداخلي", "العدد في الفرع", "المواقع الموجودة", "الإجمالي في المواقع المسموحة"], shortages.map((row) => [row.branch_name, row.car_name, row.statement, row.model_year, row.exterior_color, row.interior_color, row.branch_count, (row.existing_locations || []).join("، "), row.total_count]));
+    }
+  };
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
-      <aside className={`details-drawer ${details.trackingOrders ? "tracking-orders-drawer" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
+      <aside className={`details-drawer ${details.trackingOrders || searchable ? "tracking-orders-drawer" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
         <header className="drawer-head">
           <div>
             <span>التفاصيل</span>
             <h2>{details.title}</h2>
             {details.subtitle ? <p>{details.subtitle}</p> : null}
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="إغلاق">
-            <X size={20} />
-          </button>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="إغلاق"><X size={20} /></button>
         </header>
         <div className="drawer-body">
-          {(details.rows || []).map((row) => (
-            <div className="drawer-row" key={row.label}>
-              <span>{row.label}</span>
-              <Value value={row.value} className="drawer-value" />
-            </div>
-          ))}
-          {details.loading ? <div className="drawer-loading">{details.trackingOrders ? "جاري تحميل الطلبات..." : "جاري تحميل العملاء..."}</div> : null}
+          {searchable ? <div className="operations-drilldown-toolbar"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث داخل النتائج..." /><button type="button" onClick={exportOperations}>تصدير النتائج إلى Excel</button></div> : null}
+          {(details.rows || []).map((row) => <div className="drawer-row" key={row.label}><span>{row.label}</span><Value value={row.value} className="drawer-value" /></div>)}
+          {details.loading ? <div className="drawer-loading">جاري تحميل البيانات...</div> : null}
           {details.error ? <div className="drawer-error">{details.error}</div> : null}
           {(details.leads || []).map((item) => {
             const lead = item.lead;
             const unread = Math.max(0, Number(lead.unread_count || 0));
-            return (
-              <button className="drawer-customer-row" key={lead.id} type="button" onClick={() => onLeadOpen(item)}>
-                <div><strong>{lead.customer_name || "عميل"}</strong><span>{lead.status_label || "عميل جديد"} · {item.department === "finance" ? "مبيعات التمويل" : item.department === "service" ? "خدمة العملاء" : "مبيعات الكاش"}</span><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}{lead.preview_text ? ` · ${lead.preview_text}` : ""}</small></div>
-                <div className="drawer-customer-meta">{unread > 0 ? <b>{unread.toLocaleString("ar-SA")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at || lead.created_at)}</time></div>
-              </button>
-            );
+            return <button className="drawer-customer-row" key={lead.id} type="button" onClick={() => onLeadOpen(item)}><div><strong>{lead.customer_name || "عميل"}</strong><span>{lead.status_label || "عميل جديد"} · {item.department === "finance" ? "مبيعات التمويل" : item.department === "service" ? "خدمة العملاء" : "مبيعات الكاش"}</span><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}{lead.preview_text ? ` · ${lead.preview_text}` : ""}</small></div><div className="drawer-customer-meta">{unread > 0 ? <b>{unread.toLocaleString("ar-SA")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at || lead.created_at)}</time></div></button>;
           })}
-          {details.trackingOrders ? (
-            <div className="drawer-tracking-table-wrap">
-              <table className="drawer-tracking-table">
-                <thead><tr><th>رقم الطلب</th><th>العميل</th><th>الفرع</th><th>التقدم</th><th>آخر تحديث</th></tr></thead>
-                <tbody>
-                  {details.trackingOrders.map((order) => {
-                    const total = Number(order.total_stages || 0);
-                    const percent = total > 0 ? Math.round((Number(order.completed_stages || 0) / total) * 100) : 0;
-                    return (
-                      <tr key={order.id}>
-                        <td><strong>{order.sales_order_no || "—"}</strong></td>
-                        <td>{order.customer_name || "—"}</td>
-                        <td>{order.branch || "—"}</td>
-                        <td><div className="drawer-tracking-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
-                        <td>{formatTrackingDate(order.updated_at)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
+          {details.trackingOrders ? <div className="drawer-tracking-table-wrap"><table className="drawer-tracking-table"><thead><tr><th>رقم الطلب</th><th>العميل</th><th>الفرع</th><th>التقدم</th><th>آخر تحديث</th></tr></thead><tbody>{details.trackingOrders.map((order) => { const total = Number(order.total_stages || 0); const percent = total > 0 ? Math.round((Number(order.completed_stages || 0) / total) * 100) : 0; return <tr key={order.id}><td><strong>{order.sales_order_no || "—"}</strong></td><td>{order.customer_name || "—"}</td><td>{order.branch || "—"}</td><td><div className="drawer-tracking-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td><td>{formatTrackingDate(order.updated_at)}</td></tr>; })}</tbody></table></div> : null}
+          {details.operationVehicles ? <div className="drawer-tracking-table-wrap"><table className="drawer-tracking-table operations-drilldown-table"><thead><tr><th>VIN</th><th>السيارة</th><th>الوصف</th><th>الموديل</th><th>اللون الداخلي</th><th>اللون الخارجي</th><th>الموقع</th><th>الحالة</th></tr></thead><tbody>{vehicles.map((row) => <tr key={row.id}><td><strong>{row.vin}</strong></td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.model_year || "—"}</td><td>{row.interior_color || "—"}</td><td>{row.exterior_color || "—"}</td><td>{row.location_name || "—"}</td><td>{row.status_name || statusLabel(row.status_code)}</td></tr>)}</tbody></table></div> : null}
+          {details.operationApprovals ? <div className="drawer-tracking-table-wrap"><table className="drawer-tracking-table operations-drilldown-table"><thead><tr><th>VIN</th><th>السيارة</th><th>الوصف</th><th>الموقع</th><th>المالية</th><th>الإدارية</th><th>الملاحظات</th></tr></thead><tbody>{approvals.map((row) => <tr key={row.id}><td><strong>{row.vin}</strong></td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.location_name || "—"}</td><td>{row.financial_approved ? "تمت" : "لم تتم"}</td><td>{row.administrative_approved ? "تمت" : "لم تتم"}</td><td>{[row.financial_note, row.administrative_note].filter(Boolean).join(" | ") || "—"}</td></tr>)}</tbody></table></div> : null}
+          {details.operationRequests ? <><div className="drawer-tracking-table-wrap"><table className="drawer-tracking-table operations-drilldown-table"><thead><tr><th>رقم الطلب</th><th>النوع</th><th>منشئ الطلب</th><th>التاريخ</th><th>الحالة</th><th>VIN</th><th>المصدر</th><th>الوجهة</th><th>التفاصيل</th></tr></thead><tbody>{requests.map((row) => <tr key={row.id}><td><strong>{row.request_no}</strong></td><td>{row.request_type === "transfer" ? "نقل" : "تصوير"}</td><td>{row.requested_by_name || "—"}</td><td>{formatOperationsDate(row.requested_at)}</td><td>{requestStatusLabel(row.status)}</td><td>{row.vins || "—"}</td><td>{row.source_location_name || "—"}</td><td>{row.destination_location_name || "—"}</td><td><button type="button" className="operations-link-button" onClick={() => void openRequestDetail(row)}>تفاصيل</button></td></tr>)}</tbody></table></div>{requestDetail || requestDetailLoading || requestDetailError ? <section className="dashboard-request-detail"><header><div><span>تفاصيل الطلب</span><h3>{requestDetail?.request_no || "جاري التحميل..."}</h3></div><button type="button" className="icon-button" onClick={() => { setRequestDetail(null); setRequestDetailError(""); }}><X size={17}/></button></header>{requestDetailLoading ? <div className="drawer-loading">جاري تحميل تفاصيل الطلب...</div> : null}{requestDetailError ? <div className="drawer-error">{requestDetailError}</div> : null}{requestDetail ? <><div className="dashboard-request-fields">{[["النوع",requestDetail.request_type === "transfer" ? "نقل" : "تصوير"],["الحالة",requestStatusLabel(requestDetail.status)],["منشئ الطلب",requestDetail.requested_by_name],["تاريخ الطلب",formatOperationsDate(requestDetail.requested_at)],["المصدر",requestDetail.source_location_name],["الوجهة",requestDetail.destination_location_name],["الأولوية",requestDetail.priority],["سبب الطلب",requestDetail.reason],["نوع التصوير",requestDetail.photography_type],["تاريخ التصوير",requestDetail.photography_date],["الملاحظات",requestDetail.notes]].map(([label,value]) => <div key={String(label)}><small>{label}</small><strong>{String(value || "—")}</strong></div>)}</div><div className="dashboard-request-vehicles">{(requestDetail.vehicles || []).map((vehicle) => <article key={vehicle.id}><b>{vehicle.vin}</b><span>{[vehicle.car_name,vehicle.statement,vehicle.model_year].filter(Boolean).join(" · ") || "—"}</span><small>{[vehicle.interior_color,vehicle.exterior_color,vehicle.location_name].filter(Boolean).join(" · ") || "—"}</small></article>)}</div>{requestDetail.events?.length ? <div className="operations-timeline">{requestDetail.events.map((event) => <article key={String(event.id)}><b>{String(event.action || event.stage_code || "إجراء")}</b><span>{String(event.actor_name || "—")}</span><small>{formatOperationsDate(String(event.created_at || ""))}</small>{event.note ? <p>{String(event.note)}</p> : null}</article>)}</div> : null}</> : null}</section> : null}</> : null}
+          {details.operationShortages ? <div className="drawer-tracking-table-wrap"><table className="drawer-tracking-table operations-drilldown-table"><thead><tr><th>الفرع الناقص</th><th>السيارة</th><th>الوصف</th><th>الموديل</th><th>الخارجي</th><th>الداخلي</th><th>العدد في الفرع</th><th>المواقع الموجودة</th><th>الإجمالي</th></tr></thead><tbody>{shortages.map((row) => <tr key={`${row.branch_code}-${row.combination_key}`}><td><strong>{row.branch_name}</strong></td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.model_year || "—"}</td><td>{row.exterior_color || "—"}</td><td>{row.interior_color || "—"}</td><td>{row.branch_count}</td><td>{(row.existing_locations || []).join("، ") || "—"}</td><td>{row.total_count}</td></tr>)}</tbody></table></div> : null}
           {!details.loading && !details.error && details.leads && !details.leads.length ? <div className="drawer-empty">لا توجد بيانات داخل هذا الكارت</div> : null}
           {!details.loading && !details.error && details.trackingOrders && !details.trackingOrders.length ? <div className="drawer-empty">لا توجد طلبات في هذه الحالة</div> : null}
+          {!details.loading && !details.error && searchable && !vehicles.length && !approvals.length && !requests.length && !shortages.length ? <div className="drawer-empty">لا توجد نتائج مطابقة</div> : null}
         </div>
       </aside>
     </div>
@@ -343,6 +360,58 @@ export function DashboardPage() {
     }
   }
 
+  async function openOperationVehicles(title: string, filters: Record<string, unknown>) {
+    const requestId = ++detailsRequestId.current;
+    setDetails({ title, subtitle: "نفس الصفوف المستخدمة في حساب المؤشر", loading: true, operationVehicles: [] });
+    try {
+      const payload = await operationsFetch<{ rows: VehicleRow[]; total: number }>(`/api/operations${operationsQuery({ resource: "vehicles", ...filters, exportAll: true, page: 1 })}`);
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle: `${Number(payload.total || payload.rows.length).toLocaleString("ar-SA")} سيارة`, operationVehicles: payload.rows || [] });
+    } catch (failure) {
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, operationVehicles: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات السيارات" });
+    }
+  }
+
+  async function openOperationApprovals(title: string, type = "") {
+    const requestId = ++detailsRequestId.current;
+    setDetails({ title, subtitle: "نفس بيانات تبويب الموافقات", loading: true, operationApprovals: [] });
+    try {
+      const payload = await operationsFetch<{ rows: ApprovalRow[] }>(`/api/operations${operationsQuery({ resource: "approvals", type })}`);
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle: `${payload.rows.length.toLocaleString("ar-SA")} سيارة`, operationApprovals: payload.rows || [] });
+    } catch (failure) {
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, operationApprovals: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات الموافقات" });
+    }
+  }
+
+  async function openOperationRequests(title: string, status = "", type = "") {
+    const requestId = ++detailsRequestId.current;
+    setDetails({ title, subtitle: "نفس بيانات تبويب طلبات النقل والتصوير", loading: true, operationRequests: [] });
+    try {
+      const payload = await operationsFetch<{ rows: OperationsRequest[] }>(`/api/operations${operationsQuery({ resource: "requests", type, status, limit: 1000 })}`);
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle: `${payload.rows.length.toLocaleString("ar-SA")} طلب`, operationRequests: payload.rows || [] });
+    } catch (failure) {
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, operationRequests: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات الطلبات" });
+    }
+  }
+
+  async function openOperationShortages(title: string, branch = "") {
+    const requestId = ++detailsRequestId.current;
+    setDetails({ title, subtitle: "النواقص المحتسبة حسب التركيبة الفريدة", loading: true, operationShortages: [] });
+    try {
+      const payload = await operationsFetch<{ rows: ShortageRow[] }>(`/api/operations${operationsQuery({ resource: "shortages", branch })}`);
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle: `${payload.rows.length.toLocaleString("ar-SA")} تركيبة ناقصة`, operationShortages: payload.rows || [] });
+    } catch (failure) {
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, operationShortages: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات النواقص" });
+    }
+  }
+
   function openCrmLead(item: DashboardLeadItem) {
     setDetails(null);
     navigate(`/crm?department=${item.department}&lead=${encodeURIComponent(item.lead.id)}`);
@@ -496,24 +565,18 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid locations-row">
-            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => open("إجمالي المخزون", [
-              { label: "الإجمالي الفعلي", value: operations?.inventory.actualTotal ?? null },
-              { label: "الوكالة", value: operations?.inventory.agency ?? null },
-              { label: "المتاح للبيع", value: operations?.inventory.availableForSale ?? null },
-              { label: "مباع تحت التسليم", value: operations?.inventory.underDelivery ?? null },
-              { label: "بها ملاحظات", value: operations?.inventory.hasNotes ?? null },
-            ])}>
-              <div className="inventory-primary">
+            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => void openOperationVehicles("إجمالي المخزون الفعلي", { metric: "actual" })}>
+              <button type="button" className="inventory-primary" onClick={() => void openOperationVehicles("إجمالي المخزون الفعلي", { metric: "actual" })}>
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />
-              </div>
+              </button>
               <div className="inventory-tags">
-                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => open("الوكالة", [{ label: "الوكالة", value: operations?.inventory.agency ?? null }])} />
-                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => open("المتاح للبيع", [{ label: "المتاح للبيع", value: operations?.inventory.availableForSale ?? null }])} />
-                <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => open("بها ملاحظات", [{ label: "بها ملاحظات", value: operations?.inventory.hasNotes ?? null }])} />
-                <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => open("مباع تحت التسليم", [{ label: "مباع تحت التسليم", value: operations?.inventory.underDelivery ?? null }])} />
+                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => void openOperationVehicles("الوكالة - الإجمالي الفعلي", { location: "agency", metric: "actual" })} />
+                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => void openOperationVehicles("المتاح للبيع", { metric: "available" })} />
+                <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => void openOperationVehicles("بها ملاحظات", { metric: "notes" })} />
+                <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => void openOperationVehicles("مباع تحت التسليم", { metric: "under_delivery" })} />
               </div>
-              <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) - (مباع تم التسليم)</p>
+              <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) و(مباع تم التسليم)</p>
             </OperationCard>
 
             {(operations?.locations ?? [
@@ -524,17 +587,17 @@ export function DashboardPage() {
               { key: "multaqa", name: "الملتقى", actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null },
             ]).map((location) => {
               const rows = [
-                { label: "الإجمالي الفعلي", value: location.actualTotal },
-                { label: "مباع تحت التسليم", value: location.underDelivery },
-                { label: "متاح للبيع", value: location.availableForSale },
-                { label: "حجز", value: location.reserved },
-                { label: "مباع تم التسليم", value: location.delivered },
-                { label: "بها ملاحظات", value: location.hasNotes },
+                { label: "الإجمالي الفعلي", value: location.actualTotal, metric: "actual" },
+                { label: "مباع تحت التسليم", value: location.underDelivery, metric: "under_delivery" },
+                { label: "متاح للبيع", value: location.availableForSale, metric: "available" },
+                { label: "حجز", value: location.reserved, metric: "reserved" },
+                { label: "مباع تم التسليم", value: location.delivered, metric: "delivered" },
+                { label: "بها ملاحظات", value: location.hasNotes, metric: "notes" },
               ];
               return (
-                <OperationCard key={location.key} title={location.name} onView={() => open(location.name, rows)}>
+                <OperationCard key={location.key} title={location.name} onView={() => void openOperationVehicles(`${location.name} - الإجمالي الفعلي`, { location: location.key, metric: "actual" })}>
                   <div className="operation-metrics-grid">
-                    {rows.map((row) => <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => open(`${location.name} - ${row.label}`, [row])} />)}
+                    {rows.map((row) => <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => void openOperationVehicles(`${location.name} - ${row.label}`, { location: location.key, metric: row.metric })} />)}
                   </div>
                 </OperationCard>
               );
@@ -542,43 +605,28 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid lower-row">
-            <OperationCard title="كارت الموافقة المالية والإدارية" badge={operations?.approvals.total ?? null} onView={() => open("كارت الموافقة المالية والإدارية", [
-              { label: "الإجمالي", value: operations?.approvals.total ?? null },
-              { label: "ناقص موافقة مالية", value: operations?.approvals.missingFinancial ?? null },
-              { label: "ناقص موافقة إدارية", value: operations?.approvals.missingAdministrative ?? null },
-              { label: "موافقات مكتملة", value: operations?.approvals.completed ?? null },
-            ])}>
+            <OperationCard title="كارت الموافقة المالية والإدارية" badge={operations?.approvals.total ?? null} onView={() => void openOperationApprovals("كارت الموافقة المالية والإدارية")}>
               <div className="operation-metrics-grid">
-                <OperationMetric label="ناقص موافقة مالية" value={operations?.approvals.missingFinancial ?? null} onOpen={() => open("ناقص موافقة مالية", [{ label: "ناقص موافقة مالية", value: operations?.approvals.missingFinancial ?? null }])} />
-                <OperationMetric label="ناقص موافقة إدارية" value={operations?.approvals.missingAdministrative ?? null} onOpen={() => open("ناقص موافقة إدارية", [{ label: "ناقص موافقة إدارية", value: operations?.approvals.missingAdministrative ?? null }])} />
-                <OperationMetric label="موافقات مكتملة" value={operations?.approvals.completed ?? null} onOpen={() => open("موافقات مكتملة", [{ label: "موافقات مكتملة", value: operations?.approvals.completed ?? null }])} />
+                <OperationMetric label="ناقص موافقة مالية" value={operations?.approvals.missingFinancial ?? null} onOpen={() => void openOperationApprovals("ناقص موافقة مالية", "financial")} />
+                <OperationMetric label="ناقص موافقة إدارية" value={operations?.approvals.missingAdministrative ?? null} onOpen={() => void openOperationApprovals("ناقص موافقة إدارية", "administrative")} />
+                <OperationMetric label="موافقات مكتملة" value={operations?.approvals.completed ?? null} onOpen={() => void openOperationApprovals("موافقات مكتملة", "completed")} />
               </div>
             </OperationCard>
 
-            <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => open("نواقص السيارات", [
-              { label: "الإجمالي", value: operations?.shortages.total ?? null },
-              { label: "الملتقى", value: operations?.shortages.multaqa ?? null },
-              { label: "الصالة", value: operations?.shortages.hall ?? null },
-              { label: "القادسية", value: operations?.shortages.qadisiyah ?? null },
-            ])}>
+            <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => void openOperationShortages("نواقص السيارات")}>
               <div className="operation-metrics-grid three-columns">
-                <OperationMetric label="الملتقى" value={operations?.shortages.multaqa ?? null} onOpen={() => open("نواقص السيارات - الملتقى", [{ label: "الملتقى", value: operations?.shortages.multaqa ?? null }])} />
-                <OperationMetric label="الصالة" value={operations?.shortages.hall ?? null} onOpen={() => open("نواقص السيارات - الصالة", [{ label: "الصالة", value: operations?.shortages.hall ?? null }])} />
-                <OperationMetric label="القادسية" value={operations?.shortages.qadisiyah ?? null} onOpen={() => open("نواقص السيارات - القادسية", [{ label: "القادسية", value: operations?.shortages.qadisiyah ?? null }])} />
+                <OperationMetric label="الملتقى" value={operations?.shortages.multaqa ?? null} onOpen={() => void openOperationShortages("نواقص السيارات - الملتقى", "multaqa")} />
+                <OperationMetric label="الصالة" value={operations?.shortages.hall ?? null} onOpen={() => void openOperationShortages("نواقص السيارات - الصالة", "hall")} />
+                <OperationMetric label="القادسية" value={operations?.shortages.qadisiyah ?? null} onOpen={() => void openOperationShortages("نواقص السيارات - القادسية", "qadisiyah")} />
               </div>
             </OperationCard>
 
-            <OperationCard title="طلبات النقل" badge={operations?.transfers.total ?? null} onView={() => open("طلبات النقل", [
-              { label: "تم استلام الطلب", value: operations?.transfers.requestReceived ?? null },
-              { label: "تم استلام السيارة", value: operations?.transfers.vehicleReceived ?? null },
-              { label: "تم إرسال السيارة", value: operations?.transfers.vehicleSent ?? null },
-              { label: "تم الانتهاء", value: operations?.transfers.completed ?? null },
-            ])}>
+            <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={() => void openOperationRequests("طلبات النقل والتصوير")}>
               <div className="operation-metrics-grid">
-                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => open("تم استلام الطلب", [{ label: "تم استلام الطلب", value: operations?.transfers.requestReceived ?? null }])} />
-                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => open("تم استلام السيارة", [{ label: "تم استلام السيارة", value: operations?.transfers.vehicleReceived ?? null }])} />
-                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => open("تم إرسال السيارة", [{ label: "تم إرسال السيارة", value: operations?.transfers.vehicleSent ?? null }])} />
-                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => open("تم الانتهاء", [{ label: "تم الانتهاء", value: operations?.transfers.completed ?? null }])} />
+                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => void openOperationRequests("تم استلام الطلب", "request_received")} />
+                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => void openOperationRequests("تم استلام السيارة", "vehicle_received")} />
+                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => void openOperationRequests("تم إرسال السيارة", "vehicle_sent")} />
+                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => void openOperationRequests("تم الانتهاء", "completed")} />
               </div>
             </OperationCard>
 

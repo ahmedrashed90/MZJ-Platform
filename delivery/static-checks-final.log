@@ -1,0 +1,45 @@
+MZJ Platform v1.13.2 Operations Native - Final static checks
+Generated: 2026-07-19T17:06:03Z
+
+--- scripts/check-api-imports.mjs
+API and server import extension check passed.
+
+--- scripts/check-crm-entry-distribution-v192.mjs
+CRM v1.9.2 entry/distribution-only flow, full-screen chat, mapped templates, and shared Mersal send endpoint checks passed.
+
+--- scripts/check-crm-module.mjs
+CRM module structure and no-sample-data check passed.
+
+--- scripts/check-crm-reference-v27.mjs
+CRM reference v27 structure, unread flow, finance differences, and category checks passed.
+
+--- scripts/check-crm-settings-v180.mjs
+CRM settings v1.8 full-width layout, Worker-based Mersal sync, and distribution checks passed.
+
+--- scripts/check-customer-completion.mjs
+Dynamic customer completion calculation check passed.
+
+--- scripts/check-worker-route-discovery-v194.mjs
+PASS: WhatsApp uses only the configured canonical worker route
+PASS: Worker delivery has no route fallback loop
+PASS: Template payload sends both params and components
+PASS: Mersal template name is preferred over provider numeric id
+PASS: UI request returns queued while Vercel finishes the provider call in the background
+PASS: Worker result is stored directly by the background platform task
+PASS: Admin exposes one WhatsApp send field for text, templates, and media
+
+--- scripts/check-tracking-module-v112.mjs
+Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, and SMS+ checks passed.
+
+--- scripts/check-operations-module-v113.mjs
+Operations native module structural, safety, routing, state-machine, dashboard-source, tracking-link, and migration checks passed.
+
+--- scripts/check-operations-final-corrections.mjs
+Operations final mandatory corrections static acceptance checks passed.
+
+--- scripts/test-operations-shortage-rules.mjs
+Operations shortage business-rule tests passed (warehouse-only +3, branch gaps, agency/status/accessory exclusions, dedupe, and unique color combinations).
+
+--- scripts/check-typescript-syntax.mjs
+TypeScript/TSX syntax and isolated transpilation checks passed for 109 files.
+

@@ -1,44 +1,75 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, type SessionUser } from "./_auth.js";
 
-export type OperationsUser = SessionUser & { isSystemAdmin: boolean };
+const fullAccessRoles = new Set(["system_admin"]);
 
-export function hasOperationsPermission(user: SessionUser, permission: string) {
-  if (canAccessAllOperationsBranches(user)) return true;
-  return user.permissions.includes(permission);
+export function isSystemAdmin(user: SessionUser) {
+  return user.roleCodes.some((code) => fullAccessRoles.has(code));
 }
 
-export async function requireOperationsUser(
-  request: VercelRequest,
-  response: VercelResponse,
-  permission = "operations.view",
-) {
+export function hasOperationsAccess(user: SessionUser) {
+  return isSystemAdmin(user)
+    || user.departmentCodes.includes("operations")
+    || user.roleCodes.some((code) => ["operations_manager", "operations_user", "accounting_manager", "branch_manager"].includes(code))
+    || user.permissions.some((code) => code === "operations.view" || code.startsWith("operations."));
+}
+
+export function can(user: SessionUser, permission: string) {
+  if (isSystemAdmin(user)) return true;
+  if (user.permissions.includes(permission)) return true;
+  if (user.roleCodes.includes("operations_manager") && permission.startsWith("operations.")) return true;
+  if (user.roleCodes.includes("accounting_manager")) {
+    return ["operations.view", "operations.vehicles.view", "operations.vehicles.export", "operations.requests.view", "operations.approvals.view", "operations.approvals.financial"].includes(permission);
+  }
+  if (user.roleCodes.includes("operations_user") || user.departmentCodes.includes("operations")) {
+    return [
+      "operations.view",
+      "operations.vehicles.view",
+      "operations.movements.create",
+      "operations.requests.view",
+      "operations.requests.create",
+      "operations.requests.progress",
+      "operations.tracking.view",
+    ].includes(permission);
+  }
+  if (user.roleCodes.includes("branch_manager")) {
+    return [
+      "operations.view",
+      "operations.vehicles.view",
+      "operations.vehicles.export",
+      "operations.requests.view",
+      "operations.requests.create",
+      "operations.requests.progress",
+    ].includes(permission);
+  }
+  return false;
+}
+
+export async function requireOperationsUser(request: VercelRequest, response: VercelResponse) {
   const user = await requireUser(request, response);
   if (!user) return null;
-  const belongsToOperations = user.departmentCodes.includes("operations") || user.roleCodes.some((code) => [
-    "operations_user", "operations_admin", "operations_branch_admin", "branch_manager", "sales_manager",
-  ].includes(code));
-  if (!user.isSystemAdmin && !belongsToOperations && !hasOperationsPermission(user, permission)) {
-    response.status(403).json({ ok: false, error: "ليس لديك صلاحية دخول نظام العمليات" });
+  if (!hasOperationsAccess(user)) {
+    response.status(403).json({ ok: false, code: "FORBIDDEN", error: "ليس لديك صلاحية الدخول إلى نظام العمليات" });
     return null;
   }
-  if (!hasOperationsPermission(user, permission) && permission !== "operations.view") {
-    response.status(403).json({ ok: false, error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
-    return null;
-  }
-  return user as OperationsUser;
+  return user;
 }
 
-export function canAccessAllOperationsBranches(user: SessionUser) {
-  return user.isSystemAdmin || user.roleCodes.some((code) => ["operations_admin"].includes(code));
+export function requirePermission(response: VercelResponse, user: SessionUser, permission: string) {
+  if (can(user, permission)) return true;
+  response.status(403).json({ ok: false, code: "FORBIDDEN", error: "ليس لديك صلاحية تنفيذ هذا الإجراء" });
+  return false;
 }
 
-export function visibleBranchCodes(user: SessionUser) {
-  return canAccessAllOperationsBranches(user) ? null : user.branchCodes;
+export function userBranchScope(user: SessionUser): string[] | null {
+  if (isSystemAdmin(user) || user.roleCodes.some((code) => ["operations_manager", "accounting_manager"].includes(code))) return null;
+  return user.branchCodes.length ? user.branchCodes : [];
 }
 
-export function canAccessBranch(user: SessionUser, branchCode: string | null | undefined) {
-  if (canAccessAllOperationsBranches(user)) return true;
-  if (!branchCode) return user.branchCodes.length === 0;
-  return user.branchCodes.includes(branchCode);
+export function actorRole(user: SessionUser) {
+  return user.roleCodes[0] || "user";
+}
+
+export function actorBranch(user: SessionUser) {
+  return user.branchCodes[0] || null;
 }

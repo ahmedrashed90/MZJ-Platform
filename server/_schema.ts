@@ -369,6 +369,7 @@ create table if not exists tracking.order_vehicles (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references tracking.orders(id) on delete cascade,
   vin text not null,
+  operations_vehicle_id uuid references operations.vehicles(id),
   car_name text,
   is_selected boolean not null default false,
   unique(order_id, vin)
@@ -469,12 +470,14 @@ on conflict (code) do update set name = excluded.name, system_code = excluded.sy
 
 insert into core.roles(code, name, is_system) values
 ('system_admin', 'مدير النظام', true),
-('admin', 'مدير النظام (متوافق)', true),
+('admin', 'مدير المنصة', true),
 ('sales_manager', 'مدير المبيعات', true),
 ('branch_manager', 'مدير فرع', true),
 ('call_center_agent', 'مندوب كول سنتر', true),
 ('sales_user', 'مندوب مبيعات', true),
 ('marketing_user', 'مستخدم التسويق', true),
+('accounting_manager', 'مدير الحسابات', true),
+('operations_manager', 'مدير العمليات', true),
 ('operations_user', 'مستخدم العمليات', true),
 ('tracking_user', 'مستخدم التتبع', true)
 on conflict (code) do update set name = excluded.name;

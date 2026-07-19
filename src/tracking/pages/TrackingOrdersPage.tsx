@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import {
   Archive,
   ArrowClockwise,
@@ -47,8 +46,6 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeVehicleId, setActiveVehicleId] = useState("");
   const [actionKey, setActionKey] = useState("");
-  const [routeParams] = useSearchParams();
-  const requestedOrderId = routeParams.get("request") || "";
 
   useEscapeToClose(Boolean(selected), () => setSelected(null));
 
@@ -81,7 +78,6 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   }
 
   useEffect(() => { setStatus(""); void loadOrders("", ""); }, [archivedOnly]);
-  useEffect(() => { if (requestedOrderId) void openOrder(requestedOrderId); }, [requestedOrderId]);
 
   const activeVehicle = useMemo(
     () => selected?.vehicles.find((vehicle) => vehicle.id === activeVehicleId) || selected?.vehicles[0] || null,

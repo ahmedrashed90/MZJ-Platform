@@ -19,7 +19,7 @@ type DeletedRow = {
 
 export function TrackingDeletePage() {
   const { user } = useAuth();
-  const isAdmin = user?.isSystemAdmin || user?.roleCodes.includes("admin") || false;
+  const isAdmin = Boolean(user?.isSystemAdmin || user?.roleCodes.includes("admin"));
   const [search, setSearch] = useState("");
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
   const [deleted, setDeleted] = useState<DeletedRow[]>([]);

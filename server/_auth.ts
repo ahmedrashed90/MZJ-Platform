@@ -144,7 +144,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     branches: normalizeArray(row.branches),
     branchCodes: normalizeArray(row.branch_codes),
     permissions: normalizeArray(row.permissions),
-    isSystemAdmin: normalizeArray(row.role_codes).some((code) => code === "system_admin" || code === "admin"),
+    isSystemAdmin: normalizeArray(row.role_codes).some((code) => code === "system_admin"),
   };
 }
 
@@ -166,7 +166,7 @@ export async function requireUser(request: VercelRequest, response: VercelRespon
 export async function requireAdmin(request: VercelRequest, response: VercelResponse) {
   const user = await requireUser(request, response);
   if (!user) return null;
-  if (!user.isSystemAdmin) {
+  if (!user.roleCodes.some((code) => code === "admin" || code === "system_admin")) {
     response.status(403).json({ ok: false, error: "هذه العملية متاحة لمدير النظام فقط" });
     return null;
   }

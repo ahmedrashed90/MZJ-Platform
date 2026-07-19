@@ -42,7 +42,7 @@ export function hasAnyRole(user: SessionUser, roles: string[]) {
 }
 
 export function isCrmManager(user: SessionUser) {
-  return user.isSystemAdmin || hasAnyRole(user, ["admin", "sales_manager", "branch_manager"]);
+  return hasAnyRole(user, ["system_admin", "admin", "sales_manager", "branch_manager"]);
 }
 
 export async function requireCrmUser(request: VercelRequest, response: VercelResponse) {
@@ -50,7 +50,7 @@ export async function requireCrmUser(request: VercelRequest, response: VercelRes
   if (!user) return null;
   await ensureCrmSchema();
   const crmDepartments = new Set(["cash_sales", "finance_sales", "customer_service", "call_center"]);
-  const allowed = user.isSystemAdmin || user.roleCodes.includes("admin") || user.roleCodes.includes("sales_manager") || user.departmentCodes.some((code) => crmDepartments.has(code));
+  const allowed = user.roleCodes.includes("system_admin") || user.roleCodes.includes("admin") || user.roleCodes.includes("sales_manager") || user.departmentCodes.some((code) => crmDepartments.has(code));
   if (!allowed) {
     response.status(403).json({ ok: false, error: "لا توجد صلاحية للدخول إلى CRM" });
     return null;
@@ -67,7 +67,7 @@ export type Scope = {
 };
 
 export function userScope(user: SessionUser): Scope {
-  const all = user.isSystemAdmin || hasAnyRole(user, ["admin", "sales_manager"]);
+  const all = hasAnyRole(user, ["system_admin", "admin", "sales_manager"]);
   const callCenterOnly = !all && user.departmentCodes.includes("call_center") && !user.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
   return {
     all,

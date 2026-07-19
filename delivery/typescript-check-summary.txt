@@ -1,0 +1,41 @@
+--- Diagnostic code summary ---
+   6500 error TS7026
+    575 error TS7006
+     81 error TS2307
+     40 error TS2875
+      7 error TS7031
+      6 error TS2503
+      4 error TS2322
+      1 error TS2688
+--- First missing dependency diagnostics ---
+src/App.tsx(1,32): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/App.tsx(2,54): error TS2307: Cannot find module 'react-router-dom' or its corresponding type declarations.
+src/App.tsx(38,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/auth/AuthContext.tsx(1,86): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/auth/AuthContext.tsx(113,10): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/components/Sidebar.tsx(1,25): error TS2307: Cannot find module 'react-router-dom' or its corresponding type declarations.
+src/components/Sidebar.tsx(14,8): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/components/Sidebar.tsx(37,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/components/useEscapeToClose.ts(1,35): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/CrmLayout.tsx(1,33): error TS2307: Cannot find module 'react-router-dom' or its corresponding type declarations.
+src/crm/CrmLayout.tsx(12,8): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/crm/CrmLayout.tsx(28,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/crm/components/CrmEntryRoutingSettings.tsx(1,37): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/components/CrmEntryRoutingSettings.tsx(2,84): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/crm/components/CrmEntryRoutingSettings.tsx(66,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/crm/components/LeadDrawer.tsx(1,54): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/components/LeadDrawer.tsx(17,8): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/crm/components/LeadDrawer.tsx(580,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/crm/pages/CrmAdminPage.tsx(1,62): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/pages/CrmAdminPage.tsx(14,8): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/crm/pages/CrmAdminPage.tsx(109,10): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/crm/pages/CrmDashboardPage.tsx(1,54): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/pages/CrmDashboardPage.tsx(2,33): error TS2307: Cannot find module 'react-router-dom' or its corresponding type declarations.
+src/crm/pages/CrmDashboardPage.tsx(12,8): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/crm/pages/CrmDashboardPage.tsx(196,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/crm/pages/CrmDatabasePage.tsx(1,46): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/pages/CrmDatabasePage.tsx(2,108): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+src/crm/pages/CrmDatabasePage.tsx(94,5): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/crm/pages/CrmFinanceHistoryPage.tsx(1,46): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/crm/pages/CrmFinanceHistoryPage.tsx(13,8): error TS2307: Cannot find module '@phosphor-icons/react' or its corresponding type declarations.
+--- Operations diagnostics excluding missing React/JSX/module types ---

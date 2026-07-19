@@ -369,6 +369,7 @@ create table if not exists tracking.order_vehicles (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references tracking.orders(id) on delete cascade,
   vin text not null,
+  operations_vehicle_id uuid references operations.vehicles(id),
   car_name text,
   is_selected boolean not null default false,
   unique(order_id, vin)

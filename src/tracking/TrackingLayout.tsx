@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 
 export function TrackingLayout() {
   const { user } = useAuth();
-  const isAdmin = user?.isSystemAdmin || user?.roleCodes.includes("admin") || false;
+  const isAdmin = Boolean(user?.isSystemAdmin || user?.roleCodes.includes("admin"));
   return (
     <section className="tracking-module">
       <nav className="crm-system-nav tracking-system-nav" aria-label="صفحات التتبع">

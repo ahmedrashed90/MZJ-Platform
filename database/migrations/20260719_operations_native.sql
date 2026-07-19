@@ -1,8 +1,3 @@
-import { getSql } from "./_db.js";
-
-let operationsSchemaPromise: Promise<void> | null = null;
-
-const OPERATIONS_SCHEMA_SQL = String.raw`
 create schema if not exists operations;
 create schema if not exists audit;
 
@@ -455,17 +450,3 @@ alter table audit.activity_log add column if not exists actor_role text;
 alter table audit.activity_log add column if not exists reason text;
 alter table audit.activity_log add column if not exists is_override boolean not null default false;
 alter table audit.activity_log add column if not exists request_id text;
-`;
-
-export function ensureOperationsSchema() {
-  if (!operationsSchemaPromise) {
-    operationsSchemaPromise = (async () => {
-      const sql = getSql();
-      await sql.unsafe(OPERATIONS_SCHEMA_SQL);
-    })().catch((error) => {
-      operationsSchemaPromise = null;
-      throw error;
-    });
-  }
-  return operationsSchemaPromise;
-}
