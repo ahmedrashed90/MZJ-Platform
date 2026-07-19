@@ -130,11 +130,11 @@ export async function getDashboardData(): Promise<DashboardData> {
 
     const [trackingRow] = await sql<{ requests: number; in_progress: number; completed: number }[]>`
       select
-        count(*)::int as requests,
-        count(*) filter (where status = 'in_progress')::int as in_progress,
-        count(*) filter (where status = 'completed')::int as completed
+        count(*) filter (where coalesce(is_archived,false)=false)::int as requests,
+        count(*) filter (where coalesce(is_archived,false)=false and status = 'in_progress')::int as in_progress,
+        count(*) filter (where coalesce(is_archived,false)=true)::int as completed
       from tracking.orders
-      where is_archived = false
+      where coalesce(is_deleted,false)=false
     `;
 
     const locations = await sql<{
@@ -232,12 +232,12 @@ export async function getDashboardData(): Promise<DashboardData> {
       completed: number;
     }[]>`
       select
-        count(*)::int as total,
-        count(*) filter (where status = 'not_started')::int as not_started,
-        count(*) filter (where status = 'in_progress')::int as in_progress,
-        count(*) filter (where status = 'completed')::int as completed
+        count(*) filter (where coalesce(is_archived,false)=false)::int as total,
+        count(*) filter (where coalesce(is_archived,false)=false and status = 'not_started')::int as not_started,
+        count(*) filter (where coalesce(is_archived,false)=false and status = 'in_progress')::int as in_progress,
+        count(*) filter (where coalesce(is_archived,false)=true)::int as completed
       from tracking.orders
-      where is_archived = false
+      where coalesce(is_deleted,false)=false
     `;
 
     const fallbackLocations = emptyData().operations.locations;

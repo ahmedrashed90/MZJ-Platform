@@ -166,7 +166,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
     <div className="module-page tracking-orders-page">
       <header className="module-page-head tracking-page-head">
         <div>
-          <h1>{archivedOnly ? "أرشيف طلبات التتبع" : "طلبات التتبع"}</h1>
+          <h1>{archivedOnly ? "أرشيف طلبات التراكينج" : "طلبات التراكينج"}</h1>
           <p>{archivedOnly ? "الطلبات المنتهية التي تم نقلها إلى الأرشيف." : "طلبات البيع والسيارات ومراحل التنفيذ وروابط تتبع العميل من داخل المنصة."}</p>
         </div>
         <button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>

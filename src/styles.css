@@ -1714,6 +1714,16 @@ button.small-metric { cursor: pointer; }
 .drawer-customer-meta b { min-width: 23px; height: 23px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; background: #16a34a; color: #fff; }
 .drawer-loading,.drawer-error,.drawer-empty { min-height: 110px; padding: 18px; border: 1px dashed var(--line); border-radius: 12px; display: grid; place-items: center; color: var(--muted); text-align: center; }
 .drawer-error { color: #9f1924; background: #fff6f6; border-color: #ecc9ca; }
+.details-drawer.tracking-orders-drawer { width: min(940px, 96vw); }
+.drawer-tracking-table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.drawer-tracking-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.drawer-tracking-table th { padding: 12px 14px; text-align: right; background: #fffaf7; color: #7f6e68; font-size: 11px; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.drawer-tracking-table td { padding: 14px; text-align: right; font-size: 12px; border-bottom: 1px solid #f2ece9; vertical-align: middle; }
+.drawer-tracking-table tbody tr:last-child td { border-bottom: 0; }
+.drawer-tracking-table td strong { font-size: 12px; }
+.drawer-tracking-table td small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.drawer-tracking-progress { width: 115px; height: 7px; overflow: hidden; border-radius: 999px; background: #f1e7e2; }
+.drawer-tracking-progress span { display: block; height: 100%; border-radius: inherit; background: #b95e3d; }
 
 .crm-dashboard-summary-grid .crm-dashboard-summary-card {
   min-height: 96px;

@@ -40,6 +40,8 @@ import { useNavigate } from "react-router-dom";
 import { useEscapeToClose } from "../components/useEscapeToClose";
 import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
+import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/api";
+import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
 import type { DashboardData, NullableNumber } from "../types";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
@@ -62,6 +64,7 @@ type DetailPayload = {
   subtitle?: string;
   rows?: Array<{ label: string; value: NullableNumber }>;
   leads?: DashboardLeadItem[];
+  trackingOrders?: TrackingOrderRow[];
   loading?: boolean;
   error?: string;
 };
@@ -72,7 +75,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
-      <aside className="details-drawer" onMouseDown={(event) => event.stopPropagation()}>
+      <aside className={`details-drawer ${details.trackingOrders ? "tracking-orders-drawer" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
         <header className="drawer-head">
           <div>
             <span>التفاصيل</span>
@@ -90,7 +93,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
               <Value value={row.value} className="drawer-value" />
             </div>
           ))}
-          {details.loading ? <div className="drawer-loading">جاري تحميل العملاء...</div> : null}
+          {details.loading ? <div className="drawer-loading">{details.trackingOrders ? "جاري تحميل الطلبات..." : "جاري تحميل العملاء..."}</div> : null}
           {details.error ? <div className="drawer-error">{details.error}</div> : null}
           {(details.leads || []).map((item) => {
             const lead = item.lead;
@@ -102,7 +105,30 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
               </button>
             );
           })}
+          {details.trackingOrders ? (
+            <div className="drawer-tracking-table-wrap">
+              <table className="drawer-tracking-table">
+                <thead><tr><th>رقم الطلب</th><th>العميل</th><th>الفرع</th><th>التقدم</th><th>آخر تحديث</th></tr></thead>
+                <tbody>
+                  {details.trackingOrders.map((order) => {
+                    const total = Number(order.total_stages || 0);
+                    const percent = total > 0 ? Math.round((Number(order.completed_stages || 0) / total) * 100) : 0;
+                    return (
+                      <tr key={order.id}>
+                        <td><strong>{order.sales_order_no || "—"}</strong></td>
+                        <td>{order.customer_name || "—"}</td>
+                        <td>{order.branch || "—"}</td>
+                        <td><div className="drawer-tracking-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
+                        <td>{formatTrackingDate(order.updated_at)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
           {!details.loading && !details.error && details.leads && !details.leads.length ? <div className="drawer-empty">لا توجد بيانات داخل هذا الكارت</div> : null}
+          {!details.loading && !details.error && details.trackingOrders && !details.trackingOrders.length ? <div className="drawer-empty">لا توجد طلبات في هذه الحالة</div> : null}
         </div>
       </aside>
     </div>
@@ -303,6 +329,20 @@ export function DashboardPage() {
     }
   }
 
+  async function openTrackingList(title: string, status: TrackingStatus) {
+    const requestId = ++detailsRequestId.current;
+    const archived = status === "completed";
+    setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
+    try {
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ status, archived, limit: 2000 })}`);
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: payload.orders || [] });
+    } catch (failure) {
+      if (detailsRequestId.current !== requestId) return;
+      setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات الطلبات" });
+    }
+  }
+
   function openCrmLead(item: DashboardLeadItem) {
     setDetails(null);
     navigate(`/crm?department=${item.department}&lead=${encodeURIComponent(item.lead.id)}`);
@@ -438,11 +478,11 @@ export function DashboardPage() {
               { label: "مجدولة", value: marketing?.scheduled ?? null },
               { label: "متأخرة", value: marketing?.delayed ?? null },
             ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
-            <DepartmentCard title="التتبع" icon={MapPin} metrics={[
+            <DepartmentCard title="التراكينج" icon={MapPin} metrics={[
               { label: "الطلبات", value: tracking?.requests ?? null },
               { label: "متابعة", value: tracking?.inProgress ?? null },
               { label: "مكتملة", value: tracking?.completed ?? null },
-            ]} onOpen={() => open("التتبع", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
+            ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
           </div>
         </section>
 
@@ -552,9 +592,9 @@ export function DashboardPage() {
                 <button type="button" onClick={() => open("جميع طلبات التتبع", [{ label: "الإجمالي", value: operations?.salesTracking.total ?? null }])}>عرض الكل</button>
               </div>
               <div className="operation-metrics-grid three-columns">
-                <OperationMetric label="طلبات لم تبدأ" value={operations?.salesTracking.notStarted ?? null} onOpen={() => open("طلبات لم تبدأ", [{ label: "طلبات لم تبدأ", value: operations?.salesTracking.notStarted ?? null }])} />
-                <OperationMetric label="طلبات تحت الإجراء" value={operations?.salesTracking.inProgress ?? null} onOpen={() => open("طلبات تحت الإجراء", [{ label: "طلبات تحت الإجراء", value: operations?.salesTracking.inProgress ?? null }])} />
-                <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => open("طلبات مكتملة", [{ label: "طلبات مكتملة", value: operations?.salesTracking.completed ?? null }])} />
+                <OperationMetric label="طلبات لم تبدأ" value={operations?.salesTracking.notStarted ?? null} onOpen={() => void openTrackingList("طلبات لم تبدأ", "not_started")} />
+                <OperationMetric label="طلبات تحت الإجراء" value={operations?.salesTracking.inProgress ?? null} onOpen={() => void openTrackingList("طلبات تحت الإجراء", "in_progress")} />
+                <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => void openTrackingList("طلبات مكتملة", "completed")} />
               </div>
             </OperationCard>
           </div>

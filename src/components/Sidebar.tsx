@@ -19,7 +19,7 @@ const items = [
   { href: "/crm", label: "CRM", icon: UsersThree },
   { href: "/marketing", label: "التسويق", icon: Megaphone },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple },
-  { href: "/tracking", label: "التتبع", icon: MapPin, trackingOnly: true },
+  { href: "/tracking", label: "التراكينج", icon: MapPin, trackingOnly: true },
 ];
 
 const supportItems = [
