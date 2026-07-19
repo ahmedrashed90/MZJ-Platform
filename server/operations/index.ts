@@ -1,10 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { randomUUID } from "node:crypto";
 import { ensureOperationsSchema } from "../_operations-schema.js";
-import { requireOperationsUser, requirePermission } from "../_operations-auth.js";
+import { canDeleteVehicle, canReplaceInventory, requireOperationsUser, requirePermission } from "../_operations-auth.js";
 import {
   OperationsError,
   archiveVehicle,
+  deleteVehiclePermanently,
   cancelOrDeleteRequest,
   createMovement,
   createRequest,
@@ -14,6 +15,8 @@ import {
   getShortages,
   getVehicleDetail,
   importVehicles,
+  previewMovement,
+  previewVehicleImport,
   listActivity,
   listApprovals,
   listMovements,
@@ -126,9 +129,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
         if (!requirePermission(response, user, clean(body.id) ? "operations.vehicles.update" : "operations.vehicles.create")) return;
         return response.status(clean(body.id) ? 200 : 201).json({ ok: true, vehicle: await saveVehicle(user, body), message: clean(body.id) ? "تم تحديث السيارة" : "تمت إضافة السيارة" });
       }
+      if (action === "preview_import") {
+        if (!requirePermission(response, user, "operations.vehicles.import")) return;
+        if (clean(body.mode) === "replace" && !canReplaceInventory(user)) return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "الاستبدال الكامل متاح لمدير النظام أو لصلاحية الاستبدال الكامل فقط", requestId });
+        return response.status(200).json({ ok: true, preview: await previewVehicleImport(user, body.rows, body.mode) });
+      }
       if (action === "import_vehicles") {
         if (!requirePermission(response, user, "operations.vehicles.import")) return;
-        return response.status(200).json({ ok: true, report: await importVehicles(user, body.rows), message: "تمت معالجة ملف الاستيراد" });
+        if (clean(body.mode) === "replace" && !canReplaceInventory(user)) return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "الاستبدال الكامل متاح لمدير النظام أو لصلاحية الاستبدال الكامل فقط", requestId });
+        return response.status(200).json({ ok: true, report: await importVehicles(user, body.rows, body.mode, body.sourceName, body.requestKey), message: "تمت معالجة ملف الاستيراد" });
+      }
+      if (action === "preview_movement") {
+        if (!requirePermission(response, user, "operations.movements.create")) return;
+        return response.status(200).json({ ok: true, preview: await previewMovement(user, body) });
       }
       if (action === "create_movement") {
         if (!requirePermission(response, user, "operations.movements.create")) return;
@@ -154,8 +167,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (action === "update_approval") {
         const approvalType = clean(body.approvalType);
         const allowed = user.isSystemAdmin
-          || (approvalType === "financial" && user.roleCodes.includes("accounting_manager"))
-          || (approvalType === "administrative" && user.roleCodes.includes("operations_manager"));
+          || (approvalType === "financial" && (user.permissions.includes("operations.approvals.financial") || user.roleCodes.includes("accounting_manager")))
+          || (approvalType === "administrative" && (user.permissions.includes("operations.approvals.administrative") || user.roleCodes.includes("operations_manager")));
         if (!allowed) return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "ليس لديك صلاحية تنفيذ هذا النوع من الموافقات", message: "ليس لديك صلاحية تنفيذ هذا النوع من الموافقات", requestId });
         if (approvalType === "all" && !user.isSystemAdmin) return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "مسح الموافقات متاح لمدير النظام فقط", requestId });
         return response.status(200).json({ ok: true, approval: await updateApproval(user, body), message: "تم تحديث الموافقة" });
@@ -171,6 +184,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (action === "archive_vehicle") {
         if (!requirePermission(response, user, "operations.archive.create")) return;
         return response.status(200).json({ ok: true, vehicle: await archiveVehicle(user, body), message: "تمت أرشفة السيارة" });
+      }
+      if (action === "delete_vehicle") {
+        if (!canDeleteVehicle(user)) return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "مسح السيارة متاح لمدير النظام أو لصلاحية operations.vehicle.delete فقط", requestId });
+        return response.status(200).json({ ok: true, vehicle: await deleteVehiclePermanently(user, body), message: "تم مسح السيارة نهائيًا" });
       }
       throw new OperationsError("VALIDATION_ERROR", "الإجراء غير مدعوم", 400);
     }

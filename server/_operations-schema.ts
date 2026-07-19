@@ -20,11 +20,13 @@ insert into core.permissions(code,name,system_code) values
 ('operations.vehicles.view','عرض السيارات','operations'),
 ('operations.vehicles.create','إضافة سيارة','operations'),
 ('operations.vehicles.update','تعديل سيارة','operations'),
+('operations.vehicle.delete','مسح سيارة نهائيًا','operations'),
 ('operations.vehicles.import','استيراد السيارات','operations'),
+('operations.vehicles.replace','الاستبدال الكامل للمخزون','operations'),
 ('operations.vehicles.export','تصدير السيارات','operations'),
 ('operations.movements.create','تنفيذ حركة','operations'),
 ('operations.requests.view','عرض الطلبات','operations'),
-('operations.requests.create','إنشاء طلب نقل أو تصوير','operations'),
+('operations.requests.create','إنشاء طلب نقل','operations'),
 ('operations.requests.progress','تنفيذ مراحل الطلب','operations'),
 ('operations.requests.cancel','إلغاء الطلب','operations'),
 ('operations.approvals.view','عرض الموافقات','operations'),
@@ -49,7 +51,7 @@ where r.code='accounting_manager'
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.system_code='operations'
+select r.id,p.id from core.roles r join core.permissions p on p.system_code='operations' and p.code not in ('operations.vehicle.delete','operations.vehicles.replace')
 where r.code='operations_manager'
 on conflict do nothing;
 
@@ -140,6 +142,34 @@ create unique index if not exists operations_vehicles_vin_unique on operations.v
 create index if not exists operations_vehicles_vin_pattern_idx on operations.vehicles(vin text_pattern_ops);
 create index if not exists operations_vehicles_search_idx on operations.vehicles using gin (to_tsvector('simple',coalesce(vin,'')||' '||coalesce(car_name,'')||' '||coalesce(statement,'')||' '||coalesce(model_year,'')));
 create index if not exists operations_vehicles_scope_idx on operations.vehicles(branch_code,location_id,status_code,is_archived) where coalesce(is_deleted,false)=false;
+
+alter table operations.vehicles add column if not exists inventory_active boolean not null default true;
+alter table operations.vehicles add column if not exists last_import_batch_id uuid;
+create index if not exists operations_vehicles_inventory_active_idx on operations.vehicles(inventory_active,is_archived,status_code) where coalesce(is_deleted,false)=false;
+
+create table if not exists operations.import_batches (
+  id uuid primary key default gen_random_uuid(),
+  mode text not null check(mode in ('replace','add','update')),
+  request_key text unique,
+  status text not null default 'processing',
+  source_name text,
+  total_rows integer not null default 0,
+  valid_rows integer not null default 0,
+  invalid_rows integer not null default 0,
+  added_count integer not null default 0,
+  updated_count integer not null default 0,
+  skipped_count integer not null default 0,
+  failed_count integer not null default 0,
+  requested_by uuid references core.users(id),
+  requested_by_name text,
+  report jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+alter table operations.import_batches add column if not exists request_key text;
+create unique index if not exists operations_import_batches_request_key_unique on operations.import_batches(request_key) where request_key is not null;
+create index if not exists operations_import_batches_created_idx on operations.import_batches(created_at desc);
+
 
 create table if not exists operations.vehicle_status_notes (
   id bigserial primary key,
@@ -233,6 +263,7 @@ create table if not exists operations.approval_events (
 create table if not exists operations.movement_batches (
   id uuid primary key default gen_random_uuid(),
   batch_no text not null unique,
+  request_key text unique,
   destination_location_id uuid not null references operations.locations(id),
   new_status_code text not null,
   vehicle_count integer not null,
@@ -242,6 +273,9 @@ create table if not exists operations.movement_batches (
   performed_by_branch text,
   created_at timestamptz not null default now()
 );
+
+alter table operations.movement_batches add column if not exists request_key text;
+create unique index if not exists operations_movement_batches_request_key_unique on operations.movement_batches(request_key) where request_key is not null;
 
 create table if not exists operations.movements (
   id uuid primary key default gen_random_uuid(),

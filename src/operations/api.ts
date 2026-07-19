@@ -23,6 +23,12 @@ export async function operationsFetch<T>(url: string, options?: RequestInit): Pr
   if (!response.ok || payload?.ok === false) throw new OperationsApiError(payload?.message || payload?.error || "تعذر تنفيذ العملية", payload);
   return payload as T;
 }
+
+export function notifyOperationsChanged(detail?: Record<string, unknown>) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("operations:data-changed", { detail: detail || {} }));
+}
+
 export function operationsQuery(values: Record<string, unknown>) {
   const params = new URLSearchParams();
   Object.entries(values).forEach(([key, value]) => { if (value !== undefined && value !== null && value !== "") params.set(key, String(value)); });

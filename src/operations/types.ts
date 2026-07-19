@@ -28,7 +28,7 @@ export type OperationsRequest = {
   source_location_name: string | null; destination_location_name: string | null; source_branch_code: string | null; destination_branch_code: string | null;
   status: string; current_stage: number; reason: string | null; priority: string | null; photography_type: string | null; photography_date: string | null;
   notes: string | null; requested_by_name: string | null; requested_by_branch: string | null; requested_at: string; completed_at: string | null;
-  cancellation_reason: string | null; vehicles_count: number; vins: string; vehicles: VehicleRow[]; events?: Array<Record<string, unknown>>;
+  cancellation_reason: string | null; vehicles_count: number; vins: string; vehicles: VehicleRow[]; events?: Array<Record<string, unknown>>; movements?: Array<Record<string, unknown>>;
 };
 export type ApprovalRow = {
   id: string; vehicle_id: string; vin: string; car_name: string | null; statement: string | null; model_year: string | null;

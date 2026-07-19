@@ -56,7 +56,7 @@ assertIncludes("src/operations/components/StickyHorizontalScroll.tsx", [
 ]);
 assertIncludes("src/operations/pages/MovementPage.tsx", [
   "checklistByVehicle",
-  "تم إلغاء حقل «ملاحظة الحركة»",
+  "لا يوجد حقل إنشاء جديد باسم «ملاحظة الحركة»",
 ]);
 if (read("src/operations/pages/MovementPage.tsx").includes("movementNote")) {
   throw new Error("Removed movementNote field or payload reappeared in the unified movement page");

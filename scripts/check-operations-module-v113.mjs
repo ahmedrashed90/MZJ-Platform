@@ -71,7 +71,10 @@ const forbidden = [
 for (const file of operationsSources) {
   const text = fs.readFileSync(file, "utf8");
   for (const [pattern, label] of forbidden) {
-    if (pattern.test(text)) throw new Error(`Operations check failed: ${label} found in ${file}`);
+    if (pattern.test(text)) {
+      const isAllowedColumnPreference = label === "localStorage source of truth" && file.endsWith("useResizableColumns.ts");
+      if (!isAllowedColumnPreference) throw new Error(`Operations check failed: ${label} found in ${file}`);
+    }
   }
 }
 

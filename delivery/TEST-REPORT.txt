@@ -1,0 +1,32 @@
+MZJ Platform v1.13.3 - Test Report
+Date: 2026-07-19
+
+PASSED
+1. node scripts/check-api-imports.mjs
+   API and server import extension check passed.
+2. node scripts/check-operations-module-v113.mjs
+   Operations structural, safety, routing, state-machine, dashboard-source, tracking-link, and migration checks passed.
+3. node scripts/check-operations-final-corrections.mjs
+   Mandatory operations corrections static acceptance checks passed.
+4. node scripts/check-operations-final-refactor.mjs
+   Inventory UX, three-mode import, movement, transfer-only requests, approvals, hard-delete safety, permissions, audit, and dashboard refresh checks passed.
+5. node scripts/test-operations-shortage-rules.mjs
+   Operations shortage business rules passed.
+6. node scripts/check-typescript-syntax.mjs
+   TypeScript/TSX syntax and isolated transpilation passed for 110 files.
+
+NOT EXECUTED IN THIS ENVIRONMENT
+- pnpm install --frozen-lockfile
+- pnpm run typecheck (including tsc -b)
+- pnpm run build / Vite production build
+- Database migration against a live test or main PostgreSQL database
+- Browser end-to-end tests against a deployed Vercel environment
+
+Reason: the execution environment could not reach registry.npmjs.org (DNS EAI_AGAIN), and the required package manager/dependencies were not available locally. This is an environment limitation, not a claim that the production build passed.
+
+REQUIRED BEFORE MAIN DEPLOYMENT
+- Install dependencies in a network-enabled CI or development environment.
+- Run pnpm run typecheck.
+- Run pnpm run build.
+- Apply database/migrations/20260719_operations_native.sql first to a database copy/test environment, then main after verification.
+- Run the acceptance scenarios in delivery/OPERATIONS-FINAL-REFACTOR-REPORT-AR.md.

@@ -7,6 +7,14 @@ export function isSystemAdmin(user: SessionUser) {
   return user.roleCodes.some((code) => fullAccessRoles.has(code));
 }
 
+export function canDeleteVehicle(user: SessionUser) {
+  return isSystemAdmin(user) || user.permissions.includes("operations.vehicle.delete");
+}
+
+export function canReplaceInventory(user: SessionUser) {
+  return isSystemAdmin(user) || user.permissions.includes("operations.vehicles.replace");
+}
+
 export function hasOperationsAccess(user: SessionUser) {
   return isSystemAdmin(user)
     || user.departmentCodes.includes("operations")
