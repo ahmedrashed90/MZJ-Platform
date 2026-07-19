@@ -11,6 +11,15 @@ export function nullableText(value: unknown) {
   return text || null;
 }
 
+export function uniqueCleanStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set<string>(
+    value
+      .map((item: unknown) => clean(item))
+      .filter((item: string) => item.length > 0),
+  ));
+}
+
 export function asBoolean(value: unknown) {
   return value === true || value === 1 || ["1", "true", "yes", "نعم"].includes(clean(value).toLowerCase());
 }

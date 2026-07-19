@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { OPERATIONS_PERMISSIONS, requireOperationsPermission, requireOperationsUser } from "../_operations-auth.js";
-import { clean, nextOperationsNumber, nullableText, requestStatusFromStage } from "../_operations-utils.js";
+import { clean, nextOperationsNumber, nullableText, requestStatusFromStage, uniqueCleanStrings } from "../_operations-utils.js";
 
 function parseBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, any>;
@@ -177,7 +177,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (action === "create") {
         if (!requireOperationsPermission(user, response, OPERATIONS_PERMISSIONS.requestsCreate)) return;
         const transferType = clean(body.transferType);
-        const vehicleIds = Array.isArray(body.vehicleIds) ? [...new Set(body.vehicleIds.map(clean).filter(Boolean))] : [];
+        const vehicleIds = uniqueCleanStrings(body.vehicleIds);
         const destinationLocationId = clean(body.destinationLocationId);
         const targetStatusCode = clean(body.targetStatusCode) || null;
         const photoDate = clean(body.photoDate) || null;
