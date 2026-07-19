@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js";
+import ts from "typescript";
 
 const roots = ["src", "server", "api", "vite.config.ts"];
 const files = [];

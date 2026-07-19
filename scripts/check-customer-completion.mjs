@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import vm from "node:vm";
-const tsModule = await import("typescript").catch(() => import("/opt/nvm/versions/node/v22.16.0/lib/node_modules/typescript/lib/typescript.js"));
-const ts = tsModule.default ?? tsModule;
+import ts from "typescript";
 
 const sourcePath = new URL("../server/_crm-customer-fields.ts", import.meta.url);
 const source = fs.readFileSync(sourcePath, "utf8")
