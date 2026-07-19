@@ -14,9 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 
-type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean };
-
-const items: NavItem[] = [
+const items = [
   { href: "/", label: "الداش بورد", icon: House },
   { href: "/crm", label: "CRM", icon: UsersThree },
   { href: "/marketing", label: "التسويق", icon: Megaphone },
@@ -24,13 +22,15 @@ const items: NavItem[] = [
   { href: "/tracking", label: "التراكينج", icon: MapPin, trackingOnly: true },
 ];
 
-const supportItems: NavItem[] = [
+const supportItems = [
   { href: "/reports", label: "التقارير", icon: ChartBar },
   { href: "/database", label: "قاعدة البيانات", icon: Database },
   { href: "/settings", label: "الإعدادات", icon: Gear, adminOnly: true },
   { href: "/activity", label: "سجل النشاط", icon: Pulse },
   { href: "/help", label: "المساعدة", icon: Question },
 ];
+
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean };
 
 function Item({ href, label, icon: Icon }: NavItem) {
   return (
@@ -39,7 +39,7 @@ function Item({ href, label, icon: Icon }: NavItem) {
       end={href === "/"}
       className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
     >
-      {({ isActive }: { isActive: boolean }) => (
+      {({ isActive }) => (
         <>
           <Icon size={22} weight={isActive ? "fill" : "regular"} />
           <span>{label}</span>
@@ -51,9 +51,9 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const isAdmin = user?.roleCodes.includes("admin") ?? false;
+  const isAdmin = user?.isSystemAdmin ?? user?.roleCodes.includes("system_admin") ?? false;
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
-  const canViewOperations = isAdmin || user?.roleCodes.some((code) => ["operations_user", "sales_manager", "branch_manager"].includes(code)) || user?.departmentCodes.includes("operations") || user?.permissionCodes?.some((code) => code.startsWith("operations."));
+  const canViewOperations = isAdmin || Boolean(user?.roleCodes.includes("operations_user")) || Boolean(user?.permissionCodes?.includes("operations.view"));
   const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations));
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
@@ -67,11 +67,11 @@ export function Sidebar() {
 
       <nav className="sidebar-nav" aria-label="القائمة الرئيسية">
         <div className="nav-group">
-          {visibleItems.map((item) => <Item key={item.href} href={item.href} label={item.label} icon={item.icon} />)}
+          {visibleItems.map((item) => <Item key={item.href} {...item} />)}
         </div>
         <div className="nav-separator" />
         <div className="nav-group">
-          {visibleSupport.map((item) => <Item key={item.href} href={item.href} label={item.label} icon={item.icon} />)}
+          {visibleSupport.map((item) => <Item key={item.href} {...item} />)}
         </div>
       </nav>
 

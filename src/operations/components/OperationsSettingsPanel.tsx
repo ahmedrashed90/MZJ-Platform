@@ -1,152 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
-import { CheckCircle, FloppyDisk, MapPin, Plus, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { useCallback,useEffect,useState } from "react";
+import { FloppyDisk,MapPin,Plus,WarningCircle } from "@phosphor-icons/react";
 import { operationsFetch } from "../api";
+import type { OperationsMeta } from "../types";
 
-type Branch = { id: string; code: string; name: string };
-type LocationRow = {
-  id: string;
-  code: string;
-  name: string;
-  location_type: string;
-  branch_id: string | null;
-  branch_name: string | null;
-  sort_order: number;
-  is_active: boolean;
-};
-type StatusRow = {
-  code: string;
-  name: string;
-  sort_order: number;
-  counts_in_actual_inventory: boolean;
-  requires_approvals: boolean;
-  allows_archive: boolean;
-  is_active: boolean;
-};
-
-type SettingsResponse = { ok: boolean; locations: LocationRow[]; statuses: StatusRow[]; branches: Branch[] };
-
-const newLocation: LocationRow = { id: "", code: "", name: "", location_type: "branch", branch_id: null, branch_name: null, sort_order: 0, is_active: true };
-const newStatus: StatusRow = { code: "", name: "", sort_order: 0, counts_in_actual_inventory: true, requires_approvals: false, allows_archive: false, is_active: true };
-
+const empty={id:"",entity:"location",code:"",name:"",branchId:"",notes:"",sortOrder:"0",countsInInventory:true,isFinal:false,requiresApprovals:false};
 export function OperationsSettingsPanel() {
-  const [locations, setLocations] = useState<LocationRow[]>([]);
-  const [statuses, setStatuses] = useState<StatusRow[]>([]);
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [locationForm, setLocationForm] = useState<LocationRow>(newLocation);
-  const [statusForm, setStatusForm] = useState<StatusRow>(newStatus);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState("");
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const payload = await operationsFetch<SettingsResponse>("/api/operations/settings");
-      setLocations(payload.locations || []);
-      setStatuses(payload.statuses || []);
-      setBranches(payload.branches || []);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "تعذر تحميل إعدادات العمليات");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
-
-  async function saveLocation(event: React.FormEvent) {
-    event.preventDefault();
-    setSaving("location");
-    setError("");
-    setMessage("");
-    try {
-      const payload = await operationsFetch<{ ok: boolean; message: string }>("/api/operations/settings", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "save_location",
-          id: locationForm.id,
-          code: locationForm.code,
-          name: locationForm.name,
-          locationType: locationForm.location_type,
-          branchId: locationForm.branch_id,
-          sortOrder: locationForm.sort_order,
-          isActive: locationForm.is_active,
-        }),
-      });
-      setMessage(payload.message);
-      setLocationForm(newLocation);
-      await load();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ الموقع");
-    } finally {
-      setSaving("");
-    }
-  }
-
-  async function saveStatus(event: React.FormEvent) {
-    event.preventDefault();
-    setSaving("status");
-    setError("");
-    setMessage("");
-    try {
-      const payload = await operationsFetch<{ ok: boolean; message: string }>("/api/operations/settings", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "save_status",
-          code: statusForm.code,
-          name: statusForm.name,
-          sortOrder: statusForm.sort_order,
-          countsInActualInventory: statusForm.counts_in_actual_inventory,
-          requiresApprovals: statusForm.requires_approvals,
-          allowsArchive: statusForm.allows_archive,
-          isActive: statusForm.is_active,
-        }),
-      });
-      setMessage(payload.message);
-      setStatusForm(newStatus);
-      await load();
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ الحالة");
-    } finally {
-      setSaving("");
-    }
-  }
-
-  return (
-    <div className="ops-settings-panel">
-      {error ? <div className="ops-error"><WarningCircle size={19} weight="fill" /><span>{error}</span></div> : null}
-      {message ? <div className="ops-success"><CheckCircle size={19} weight="fill" /><span>{message}</span></div> : null}
-      <div className="ops-settings-grid">
-        <section className="panel ops-settings-card">
-          <div className="ops-section-heading"><MapPin size={23} weight="duotone" /><div><h2>المواقع التشغيلية</h2><p>المستودع والوكالة والفروع المستخدمة في المخزون والحركات.</p></div></div>
-          <div className="ops-settings-list">
-            {locations.map((item) => <button type="button" key={item.id} onClick={() => setLocationForm(item)} className={locationForm.id === item.id ? "active" : ""}><div><strong>{item.name}</strong><span>{item.code} • {item.location_type} • {item.branch_name || "غير مرتبط بفرع"}</span></div><small>{item.is_active ? "فعال" : "موقوف"}</small></button>)}
-          </div>
-          <form className="ops-settings-form" onSubmit={saveLocation}>
-            <div className="ops-settings-form-head"><strong>{locationForm.id ? "تعديل الموقع" : "إضافة موقع"}</strong>{locationForm.id ? <button type="button" className="ops-text-button" onClick={() => setLocationForm(newLocation)}><Plus size={15} />موقع جديد</button> : null}</div>
-            <div className="ops-form-grid two"><label><span>الكود</span><input required value={locationForm.code} onChange={(event) => setLocationForm({ ...locationForm, code: event.target.value })} disabled={Boolean(locationForm.id)} /></label><label><span>الاسم</span><input required value={locationForm.name} onChange={(event) => setLocationForm({ ...locationForm, name: event.target.value })} /></label></div>
-            <div className="ops-form-grid three"><label><span>نوع الموقع</span><select value={locationForm.location_type} onChange={(event) => setLocationForm({ ...locationForm, location_type: event.target.value })}><option value="branch">فرع</option><option value="warehouse">مستودع</option><option value="agency">وكالة</option><option value="other">أخرى</option></select></label><label><span>الفرع المرتبط</span><select value={locationForm.branch_id || ""} onChange={(event) => setLocationForm({ ...locationForm, branch_id: event.target.value || null })}><option value="">بدون ربط</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label><label><span>الترتيب</span><input type="number" value={locationForm.sort_order} onChange={(event) => setLocationForm({ ...locationForm, sort_order: Number(event.target.value) })} /></label></div>
-            <label className="ops-checkbox-line"><input type="checkbox" checked={locationForm.is_active} onChange={(event) => setLocationForm({ ...locationForm, is_active: event.target.checked })} /><span>الموقع فعال</span></label>
-            <button type="submit" className="ops-button primary" disabled={saving === "location"}><FloppyDisk size={18} />{saving === "location" ? "جاري الحفظ..." : "حفظ الموقع"}</button>
-          </form>
-        </section>
-
-        <section className="panel ops-settings-card">
-          <div className="ops-section-heading"><Wrench size={23} weight="duotone" /><div><h2>حالات السيارات</h2><p>تعريف الحالات التي تدخل في المخزون الفعلي والاعتمادات والأرشفة.</p></div></div>
-          <div className="ops-settings-list">
-            {statuses.map((item) => <button type="button" key={item.code} onClick={() => setStatusForm(item)} className={statusForm.code === item.code ? "active" : ""}><div><strong>{item.name}</strong><span>{item.code} • {item.counts_in_actual_inventory ? "داخل المخزون" : "خارج المخزون"}</span></div><small>{item.is_active ? "فعال" : "موقوف"}</small></button>)}
-          </div>
-          <form className="ops-settings-form" onSubmit={saveStatus}>
-            <div className="ops-settings-form-head"><strong>{statuses.some((item) => item.code === statusForm.code) ? "تعديل الحالة" : "إضافة حالة"}</strong>{statusForm.code ? <button type="button" className="ops-text-button" onClick={() => setStatusForm(newStatus)}><Plus size={15} />حالة جديدة</button> : null}</div>
-            <div className="ops-form-grid three"><label><span>الكود</span><input required value={statusForm.code} onChange={(event) => setStatusForm({ ...statusForm, code: event.target.value })} disabled={statuses.some((item) => item.code === statusForm.code)} /></label><label><span>الاسم</span><input required value={statusForm.name} onChange={(event) => setStatusForm({ ...statusForm, name: event.target.value })} /></label><label><span>الترتيب</span><input type="number" value={statusForm.sort_order} onChange={(event) => setStatusForm({ ...statusForm, sort_order: Number(event.target.value) })} /></label></div>
-            <div className="ops-settings-checks"><label><input type="checkbox" checked={statusForm.counts_in_actual_inventory} onChange={(event) => setStatusForm({ ...statusForm, counts_in_actual_inventory: event.target.checked })} /><span>تدخل في المخزون الفعلي</span></label><label><input type="checkbox" checked={statusForm.requires_approvals} onChange={(event) => setStatusForm({ ...statusForm, requires_approvals: event.target.checked })} /><span>تتطلب اعتمادًا</span></label><label><input type="checkbox" checked={statusForm.allows_archive} onChange={(event) => setStatusForm({ ...statusForm, allows_archive: event.target.checked })} /><span>تسمح بالأرشفة</span></label><label><input type="checkbox" checked={statusForm.is_active} onChange={(event) => setStatusForm({ ...statusForm, is_active: event.target.checked })} /><span>الحالة فعالة</span></label></div>
-            <button type="submit" className="ops-button primary" disabled={saving === "status"}><FloppyDisk size={18} />{saving === "status" ? "جاري الحفظ..." : "حفظ الحالة"}</button>
-          </form>
-        </section>
-      </div>
-      {loading ? <div className="ops-loading-row">جاري تحميل إعدادات العمليات...</div> : null}
-    </div>
-  );
+  const [meta,setMeta]=useState<OperationsMeta|null>(null);const [form,setForm]=useState({...empty});const [saving,setSaving]=useState(false);const [message,setMessage]=useState("");const [error,setError]=useState("");
+  const load=useCallback(async()=>{setError("");try{setMeta(await operationsFetch<OperationsMeta>("meta"));}catch(err){setError(err instanceof Error?err.message:"تعذر تحميل الإعدادات");}},[]);
+  useEffect(()=>{void load();},[load]);
+  async function submit(event:React.FormEvent){event.preventDefault();setSaving(true);setError("");setMessage("");try{const payload=await operationsFetch<{message:string}>("settings",{method:"POST",body:JSON.stringify({...form,sortOrder:Number(form.sortOrder)})});setMessage(payload.message);setForm({...empty});await load();}catch(err){setError(err instanceof Error?err.message:"تعذر الحفظ");}finally{setSaving(false);}}
+  return <div className="operations-settings-embedded">
+    {error?<div className="connection-banner"><WarningCircle size={19}/><span>{error}</span></div>:null}{message?<div className="success-banner">{message}</div>:null}
+    <section className="panel operations-form"><header className="settings-card-title"><div><MapPin size={22}/><h2>مواقع وحالات العمليات</h2></div><button type="button" onClick={()=>setForm({...empty})}><Plus size={16}/>جديد</button></header>
+      <form onSubmit={submit} className="operations-form-grid"><label><span>نوع الإعداد</span><select value={form.entity} onChange={e=>setForm({...empty,entity:e.target.value})}><option value="location">مكان</option><option value="status">حالة سيارة</option></select></label><label><span>الكود</span><input required value={form.code} disabled={Boolean(form.id&&form.entity==="status")} onChange={e=>setForm({...form,code:e.target.value})}/></label><label><span>الاسم</span><input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></label>
+      {form.entity==="location"?<><label><span>الفرع المرتبط</span><select value={form.branchId} onChange={e=>setForm({...form,branchId:e.target.value})}><option value="">بدون فرع</option>{meta?.branches.map(branch=><option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label><label className="wide"><span>ملاحظات</span><textarea rows={3} value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/></label></>:<div className="operations-check-grid wide"><label><input type="checkbox" checked={form.countsInInventory} onChange={e=>setForm({...form,countsInInventory:e.target.checked})}/><span>تدخل في المخزون الفعلي</span></label><label><input type="checkbox" checked={form.isFinal} onChange={e=>setForm({...form,isFinal:e.target.checked})}/><span>حالة نهائية</span></label><label><input type="checkbox" checked={form.requiresApprovals} onChange={e=>setForm({...form,requiresApprovals:e.target.checked})}/><span>تحتاج موافقات</span></label></div>}
+      <label><span>الترتيب</span><input type="number" value={form.sortOrder} onChange={e=>setForm({...form,sortOrder:e.target.value})}/></label><div className="operations-form-actions wide"><button className="primary" disabled={saving}><FloppyDisk size={17}/>{saving?"جاري الحفظ...":"حفظ الإعداد"}</button></div></form>
+    </section>
+    <div className="operations-settings-grid"><section className="panel"><h3>المواقع</h3>{meta?.locations.map(item=><button type="button" className="settings-row" key={item.id} onClick={()=>setForm({id:item.id,entity:"location",code:item.code,name:item.name,branchId:item.branch_id||"",notes:item.notes||"",sortOrder:String(item.sort_order),countsInInventory:true,isFinal:false,requiresApprovals:false})}><span>{item.name}<small>{item.branch_name||"بدون فرع"}</small></span><b>{item.code}</b></button>)}</section><section className="panel"><h3>الحالات</h3>{meta?.statuses.map(item=><button type="button" className="settings-row" key={item.code} onClick={()=>setForm({id:"",entity:"status",code:item.code,name:item.name,branchId:"",notes:"",sortOrder:String(item.sort_order),countsInInventory:item.counts_in_inventory,isFinal:item.is_final,requiresApprovals:item.requires_approvals})}><span>{item.name}<small>{item.is_final?"نهائية":item.counts_in_inventory?"ضمن المخزون":"خارج المخزون"}</small></span><b>{item.code}</b></button>)}</section></div>
+  </div>;
 }

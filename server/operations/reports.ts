@@ -1,83 +1,52 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
+import type { VercelRequest,VercelResponse } from "@vercel/node";
+import type { SessionUser } from "../_auth.js";
+import { hasPermission,isSystemAdmin } from "../_auth.js";
+import { clean,permittedLocationIds } from "../_operations-auth.js";
 import { getSql } from "../_db.js";
-import { ensureOperationsSchema } from "../_operations-schema.js";
-import { OPERATIONS_PERMISSIONS, requireOperationsPermission, requireOperationsUser } from "../_operations-auth.js";
-import { clean } from "../_operations-utils.js";
+import { pageParams } from "./common.js";
 
-function scopeAll(user: { roleCodes: string[]; branchCodes: string[] }) {
-  if (user.roleCodes.some((code) => ["admin", "sales_manager"].includes(code))) return true;
-  return user.roleCodes.includes("operations_user") && user.branchCodes.length === 0;
+export async function allVehiclesReport(request:VercelRequest,response:VercelResponse,user:SessionUser) {
+  const sql=getSql(); const allowed=await permittedLocationIds(user); const all=isSystemAdmin(user);
+  const search=clean(request.query.search),locationId=clean(request.query.locationId),statusCode=clean(request.query.statusCode),modelYear=clean(request.query.modelYear);
+  const minCount=Math.max(1,Number(request.query.minCount || 1)); const pattern=`%${search}%`; const {page,pageSize,offset}=pageParams(request.query as Record<string,unknown>,40,200);
+  const [countRow]=await sql<{total:number}[]>`
+    select count(*)::int as total from (
+      select 1 from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses st on st.code=v.status_code
+      where coalesce(v.is_deleted,false)=false and v.archived_at is null and coalesce(st.counts_in_inventory,true)=true
+        and (${all} or v.location_id=any(${allowed}::uuid[])) and (${locationId}='' or v.location_id=${locationId || null}::uuid)
+        and (${statusCode}='' or v.status_code=${statusCode}) and (${modelYear}='' or coalesce(v.model_year,'')=${modelYear})
+        and (${search}='' or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
+      group by v.car_name,v.statement,v.model_year,l.name,st.name,v.status_code having count(*)>=${minCount}
+    ) g
+  `;
+  const rows=await sql<any[]>`
+    select coalesce(v.car_name,'—') as car_name,coalesce(v.statement,'—') as statement,coalesce(v.model_year,'—') as model_year,
+      coalesce(l.name,'—') as location_name,coalesce(st.name,v.status_code,'—') as status_name,count(*)::int as total
+    from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses st on st.code=v.status_code
+    where coalesce(v.is_deleted,false)=false and v.archived_at is null and coalesce(st.counts_in_inventory,true)=true
+      and (${all} or v.location_id=any(${allowed}::uuid[])) and (${locationId}='' or v.location_id=${locationId || null}::uuid)
+      and (${statusCode}='' or v.status_code=${statusCode}) and (${modelYear}='' or coalesce(v.model_year,'')=${modelYear})
+      and (${search}='' or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
+    group by v.car_name,v.statement,v.model_year,l.name,st.name,v.status_code having count(*)>=${minCount}
+    order by v.car_name,v.statement,v.model_year,l.name,st.name limit ${pageSize} offset ${offset}
+  `;
+  const total=Number(countRow?.total || 0); return response.status(200).json({ok:true,rows,pagination:{page,pageSize,total,pages:Math.max(1,Math.ceil(total/pageSize))}});
 }
 
-export default async function handler(request: VercelRequest, response: VercelResponse) {
-  if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
-  await ensureOperationsSchema();
-  const user = await requireOperationsUser(request, response);
-  if (!user) return;
-  if (!requireOperationsPermission(user, response, OPERATIONS_PERMISSIONS.reportsAllCars)) return;
-  const sql = getSql();
+export async function auditReport(request:VercelRequest,response:VercelResponse,user:SessionUser) {
+  if (!hasPermission(user,"operations.audit.view")) return response.status(403).json({ok:false,error:"ليس لديك صلاحية عرض سجل التدقيق"});
+  const sql=getSql(); const {page,pageSize,offset}=pageParams(request.query as Record<string,unknown>,50,200); const search=clean(request.query.search),action=clean(request.query.action),entityType=clean(request.query.entityType); const pattern=`%${search}%`;
+  const [countRow]=await sql<{total:number}[]>`select count(*)::int as total from operations.audit_events where (${action}='' or action=${action}) and (${entityType}='' or entity_type=${entityType}) and (${search}='' or coalesce(actor_name,'') ilike ${pattern} or coalesce(entity_id,'') ilike ${pattern} or coalesce(reason,'') ilike ${pattern})`;
+  const rows=await sql<any[]>`select id::text,actor_name,actor_role,actor_branch,page_code,action,entity_type,entity_id,reason,is_override,created_at from operations.audit_events where (${action}='' or action=${action}) and (${entityType}='' or entity_type=${entityType}) and (${search}='' or coalesce(actor_name,'') ilike ${pattern} or coalesce(entity_id,'') ilike ${pattern} or coalesce(reason,'') ilike ${pattern}) order by created_at desc limit ${pageSize} offset ${offset}`;
+  const total=Number(countRow?.total || 0); return response.status(200).json({ok:true,rows,pagination:{page,pageSize,total,pages:Math.max(1,Math.ceil(total/pageSize))}});
+}
 
-  try {
-    const search = clean(request.query.search);
-    const carName = clean(request.query.carName);
-    const statement = clean(request.query.statement);
-    const modelYear = clean(request.query.modelYear);
-    const minCount = Math.max(Number(request.query.minCount || 0), 0);
-    const pattern = `%${search}%`;
-    const all = scopeAll(user);
-
-    const rows = await sql<any[]>`
-      select
-        coalesce(nullif(trim(v.car_name),''),'غير محدد') as car_name,
-        coalesce(nullif(trim(v.statement),''),'غير محدد') as statement,
-        coalesce(nullif(trim(v.model_year),''),'غير محدد') as model_year,
-        count(*)::int as total,
-        count(*) filter (where v.status_code='available_for_sale')::int as available_for_sale,
-        count(*) filter (where v.status_code='reserved')::int as reserved,
-        count(*) filter (where v.status_code='has_notes')::int as has_notes,
-        count(*) filter (where l.code='warehouse')::int as warehouse,
-        count(*) filter (where l.code='agency')::int as agency,
-        count(*) filter (where l.code='hall')::int as hall,
-        count(*) filter (where l.code='qadisiyah')::int as qadisiyah,
-        count(*) filter (where l.code='multaqa')::int as multaqa,
-        max(v.updated_at) as last_update
-      from operations.vehicles v
-      left join operations.locations l on l.id=v.location_id
-      left join core.branches b on b.id=l.branch_id
-      left join operations.vehicle_statuses st on st.code=v.status_code
-      where v.is_deleted=false and v.is_archived=false and coalesce(st.counts_in_actual_inventory,false)=true
-        and (${search}='' or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(v.model_year,'') ilike ${pattern})
-        and (${carName}='' or v.car_name=${carName})
-        and (${statement}='' or v.statement=${statement})
-        and (${modelYear}='' or v.model_year=${modelYear})
-        and (${all}::boolean or coalesce(l.location_type,'other')<>'branch' or coalesce(b.code,'')=any(${user.branchCodes}::text[]))
-      group by coalesce(nullif(trim(v.car_name),''),'غير محدد'),coalesce(nullif(trim(v.statement),''),'غير محدد'),coalesce(nullif(trim(v.model_year),''),'غير محدد')
-      having count(*)>=${minCount}
-      order by car_name,statement,model_year
-    `;
-
-    const filters = await sql<any[]>`
-      select
-        array_remove(array_agg(distinct nullif(trim(v.car_name),'')),null) as car_names,
-        array_remove(array_agg(distinct nullif(trim(v.statement),'')),null) as statements,
-        array_remove(array_agg(distinct nullif(trim(v.model_year),'')),null) as model_years
-      from operations.vehicles v
-      left join operations.locations l on l.id=v.location_id
-      left join core.branches b on b.id=l.branch_id
-      left join operations.vehicle_statuses st on st.code=v.status_code
-      where v.is_deleted=false and v.is_archived=false and coalesce(st.counts_in_actual_inventory,false)=true
-        and (${all}::boolean or coalesce(l.location_type,'other')<>'branch' or coalesce(b.code,'')=any(${user.branchCodes}::text[]))
-    `;
-    const totals = rows.reduce((acc, row) => ({
-      total: acc.total + Number(row.total || 0),
-      availableForSale: acc.availableForSale + Number(row.available_for_sale || 0),
-      reserved: acc.reserved + Number(row.reserved || 0),
-      hasNotes: acc.hasNotes + Number(row.has_notes || 0),
-    }), { total: 0, availableForSale: 0, reserved: 0, hasNotes: 0 });
-
-    return response.status(200).json({ ok: true, rows, filters: filters[0] || {}, totals });
-  } catch (error) {
-    console.error("Operations reports failed", error);
-    return response.status(500).json({ ok: false, error: "تعذر تحميل تقرير جميع السيارات" });
-  }
+export async function trackingDetails(request:VercelRequest,response:VercelResponse,user:SessionUser) {
+  if (!hasPermission(user,"operations.tracking.view")) return response.status(403).json({ok:false,error:"ليس لديك صلاحية عرض حالة التراكينج"});
+  const vehicleId=clean(request.query.vehicleId); if (!vehicleId) return response.status(400).json({ok:false,error:"معرف السيارة مطلوب"});
+  const sql=getSql(); const allowed=await permittedLocationIds(user); const all=isSystemAdmin(user);
+  const [vehicle]=await sql<any[]>`select id::text,vin,location_id::text from operations.vehicles where id=${vehicleId}::uuid and coalesce(is_deleted,false)=false and (${all} or location_id=any(${allowed}::uuid[]))`;
+  if (!vehicle) return response.status(404).json({ok:false,error:"السيارة غير موجودة أو خارج نطاق صلاحيتك"});
+  const rows=await sql<any[]>`select tracking_order_id::text,tracking_vehicle_id::text,request_no,status,progress,current_stage,created_at,updated_at,completed_at,is_deleted,is_cancelled,is_rejected,is_archived from operations.tracking_vehicle_read_model where vehicle_id=${vehicleId}::uuid order by updated_at desc`;
+  return response.status(200).json({ok:true,vehicle,requests:rows,canOpen:hasPermission(user,"operations.tracking.open"),openPath:hasPermission(user,"operations.tracking.open")?"/tracking":null});
 }

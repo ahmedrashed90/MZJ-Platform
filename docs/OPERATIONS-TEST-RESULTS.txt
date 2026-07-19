@@ -1,0 +1,53 @@
+MZJ Unified Platform - Operations Rebuild Test Results
+Date: 2026-07-19
+
+PASSED - EXECUTED CHECKS
+1. API and server import extension check.
+2. CRM module structure and no-sample-data check.
+3. Dynamic CRM customer completion check.
+4. CRM reference v27 checks.
+5. CRM settings v180 checks.
+6. CRM entry/distribution v192 checks.
+7. Worker route discovery v194 checks.
+8. Tracking native module v112 checks.
+9. TypeScript/TSX syntax transpile check: 120 files.
+10. Mandatory under-delivery approval flow tests:
+   - Direct delivery without under-delivery rejected.
+   - No approvals rejected.
+   - Financial approval only rejected.
+   - Administrative approval only rejected.
+   - Both approvals allow an explicit delivery transition.
+   - No automatic delivery after approval completion.
+   - Unrelated edits do not reset approvals.
+   - Delivery preserves approvals and metadata.
+   - Leaving under-delivery to another state clears current operational approval data.
+   - Approval history, audit events, and outbox events remain preserved.
+11. Operations native rebuild structural checks:
+   - Required routes and pages.
+   - No legacy Operations Tracking/Media route.
+   - PostgreSQL transaction usage.
+   - Branch/location server-side authorization.
+   - Independent per-vehicle checks in bulk movements.
+   - Ordered transfer stages and request locking.
+   - Approval permissions and under-delivery-only dashboard card.
+   - Dashboard branch scoping.
+   - Tracking integration and archive conditions.
+   - XLSX preview/import/export structure.
+   - Escape-aware dialogs.
+12. Operations backend scan: no Firebase/Firestore and no hardcoded mzj-platform user email.
+13. Migration file and embedded migration string are identical.
+
+NOT EXECUTED TO COMPLETION IN THIS ENVIRONMENT
+1. Full `tsc -b` project check.
+   Reason: project dependencies and type packages are not installed. The errors begin with missing React/Node/Vercel modules and JSX type definitions.
+2. Vite production build.
+   Reason: Corepack attempted to download pnpm 9.15.9, but network/DNS access to registry.npmjs.org is unavailable (EAI_AGAIN).
+3. Live PostgreSQL migration and CRUD integration tests.
+   Reason: DATABASE_URL is not available in the delivery environment.
+
+REQUIRED RELEASE-GATE COMMANDS IN A CONNECTED STAGING ENVIRONMENT
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run typecheck
+pnpm run build
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/migrations/001_operations_rebuild.sql

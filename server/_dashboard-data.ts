@@ -1,5 +1,6 @@
 import { getSql } from "./_db.js";
-import { ensureOperationsSchema } from "./_operations-schema.js";
+import { ensureOperationsSchema } from "./_operations-auth.js";
+import { hasPermission, isSystemAdmin, type SessionUser } from "./_auth.js";
 import type { DashboardData } from "../src/types.js";
 
 const locationNames = [
@@ -59,7 +60,11 @@ function asNumber(value: unknown): number {
   return Number(value ?? 0);
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
+export async function getDashboardData(user: SessionUser): Promise<DashboardData> {
+  await ensureOperationsSchema();
+  const unrestrictedOperations = isSystemAdmin(user);
+  const branchCodes = user.branchCodes;
+  const canViewApprovals = hasPermission(user, "operations.approvals.view");
   let sql;
   try {
     sql = getSql();
@@ -68,8 +73,6 @@ export async function getDashboardData(): Promise<DashboardData> {
   }
 
   try {
-    await ensureOperationsSchema();
-
     const [crmRow] = await sql<{
       total_customers: number;
       open_conversations: number;
@@ -153,20 +156,19 @@ export async function getDashboardData(): Promise<DashboardData> {
       select
         l.code as key,
         l.name,
-        count(v.id) filter (
-          where v.is_deleted=false and v.is_archived=false
-            and coalesce(vs.counts_in_actual_inventory,true)=true
-        )::int as actual_total,
-        count(v.id) filter (where v.status_code='under_delivery' and v.is_deleted=false and v.is_archived=false)::int as under_delivery,
-        count(v.id) filter (where v.status_code='available_for_sale' and v.is_deleted=false and v.is_archived=false)::int as available_for_sale,
-        count(v.id) filter (where v.status_code='reserved' and v.is_deleted=false and v.is_archived=false)::int as reserved,
-        count(v.id) filter (where v.status_code='delivered' and v.is_deleted=false and v.is_archived=false)::int as delivered,
-        count(v.id) filter (where v.has_notes=true and v.is_deleted=false and v.is_archived=false)::int as has_notes
+        count(v.id) filter (where v.is_deleted = false and v.archived_at is null and coalesce(st.counts_in_inventory,true)=true)::int as actual_total,
+        count(v.id) filter (where v.status_code = 'under_delivery' and v.is_deleted = false and v.archived_at is null)::int as under_delivery,
+        count(v.id) filter (where v.status_code = 'available_for_sale' and v.is_deleted = false and v.archived_at is null)::int as available_for_sale,
+        count(v.id) filter (where v.status_code = 'reserved' and v.is_deleted = false and v.archived_at is null)::int as reserved,
+        count(v.id) filter (where v.status_code = 'delivered' and v.is_deleted = false and v.archived_at is null)::int as delivered,
+        count(v.id) filter (where v.has_notes = true and v.is_deleted = false and v.archived_at is null)::int as has_notes
       from operations.locations l
-      left join operations.vehicles v on v.location_id=l.id
-      left join operations.vehicle_statuses vs on vs.code=v.status_code
-      where l.is_active=true
-      group by l.code,l.name,l.sort_order
+      left join core.branches b on b.id=l.branch_id
+      left join operations.vehicles v on v.location_id = l.id
+      left join operations.vehicle_statuses st on st.code=v.status_code
+      where l.is_active = true
+        and (${unrestrictedOperations}::boolean or b.code=any(${branchCodes}::text[]))
+      group by l.code, l.name, l.sort_order
       order by l.sort_order
     `;
 
@@ -178,40 +180,46 @@ export async function getDashboardData(): Promise<DashboardData> {
       has_notes: number;
     }[]>`
       select
-        count(v.id) filter (
-          where v.is_deleted=false and v.is_archived=false
-            and coalesce(vs.counts_in_actual_inventory,true)=true
-        )::int as actual_total,
-        count(v.id) filter (where l.code='agency' and v.is_deleted=false and v.is_archived=false)::int as agency,
-        count(v.id) filter (where v.status_code='available_for_sale' and v.is_deleted=false and v.is_archived=false)::int as available_for_sale,
-        count(v.id) filter (where v.status_code='under_delivery' and v.is_deleted=false and v.is_archived=false)::int as under_delivery,
-        count(v.id) filter (where v.has_notes=true and v.is_deleted=false and v.is_archived=false)::int as has_notes
+        count(*) filter (where v.is_deleted = false and v.archived_at is null and coalesce(st.counts_in_inventory,true)=true)::int as actual_total,
+        count(*) filter (where l.code = 'agency' and v.is_deleted = false and v.archived_at is null)::int as agency,
+        count(*) filter (where v.status_code = 'available_for_sale' and v.is_deleted = false and v.archived_at is null)::int as available_for_sale,
+        count(*) filter (where v.status_code = 'under_delivery' and v.is_deleted = false and v.archived_at is null)::int as under_delivery,
+        count(*) filter (where v.has_notes = true and v.is_deleted = false and v.archived_at is null)::int as has_notes
       from operations.vehicles v
+      left join operations.vehicle_statuses st on st.code=v.status_code
       left join operations.locations l on l.id=v.location_id
-      left join operations.vehicle_statuses vs on vs.code=v.status_code
+      left join core.branches b on b.id=l.branch_id
+      where (${unrestrictedOperations}::boolean or b.code=any(${branchCodes}::text[]))
     `;
 
-    const [approvalRow] = await sql<{
+    let approvalRow: {
       total: number;
       missing_financial: number;
       missing_administrative: number;
       completed: number;
-    }[]>`
-      select
-        count(v.id)::int as total,
-        count(v.id) filter (where coalesce(a.financial_approved,false)=false)::int as missing_financial,
-        count(v.id) filter (where coalesce(a.administrative_approved,false)=false)::int as missing_administrative,
-        count(v.id) filter (where coalesce(a.financial_approved,false)=true and coalesce(a.administrative_approved,false)=true)::int as completed
-      from operations.vehicles v
-      left join lateral (
-        select financial_approved,administrative_approved
-        from operations.vehicle_approvals va
-        where va.vehicle_id=v.id
-        order by va.updated_at desc
-        limit 1
-      ) a on true
-      where v.status_code='under_delivery' and v.is_deleted=false and v.is_archived=false
-    `;
+    } | undefined;
+    if (canViewApprovals) {
+      [approvalRow] = await sql<{
+        total: number;
+        missing_financial: number;
+        missing_administrative: number;
+        completed: number;
+      }[]>`
+        select
+          count(v.id)::int as total,
+          count(v.id) filter (where coalesce(a.financial_approved,false)=false)::int as missing_financial,
+          count(v.id) filter (where coalesce(a.administrative_approved,false)=false)::int as missing_administrative,
+          count(v.id) filter (where coalesce(a.financial_approved,false)=true and coalesce(a.administrative_approved,false)=true)::int as completed
+        from operations.vehicles v
+        left join operations.vehicle_approvals a on a.vehicle_id=v.id
+        left join operations.locations l on l.id=v.location_id
+        left join core.branches b on b.id=l.branch_id
+        where coalesce(v.is_deleted,false)=false
+          and v.archived_at is null
+          and v.status_code='under_delivery'
+          and (${unrestrictedOperations}::boolean or b.code=any(${branchCodes}::text[]))
+      `;
+    }
 
     const [shortageRow] = await sql<{
       total: number;
@@ -225,8 +233,12 @@ export async function getDashboardData(): Promise<DashboardData> {
         count(*) filter (where s.is_resolved = false and l.code = 'hall')::int as hall,
         count(*) filter (where s.is_resolved = false and l.code = 'qadisiyah')::int as qadisiyah
       from operations.vehicle_shortages s
-      join operations.vehicles v on v.id=s.vehicle_id and v.is_deleted=false and v.is_archived=false
-      left join operations.locations l on l.id=v.location_id
+      join operations.vehicles v on v.id = s.vehicle_id
+      left join operations.locations l on l.id = v.location_id
+      left join core.branches b on b.id=l.branch_id
+      where coalesce(v.is_deleted,false)=false
+        and v.archived_at is null
+        and (${unrestrictedOperations}::boolean or b.code=any(${branchCodes}::text[]))
     `;
 
     const [transferRow] = await sql<{
@@ -237,12 +249,17 @@ export async function getDashboardData(): Promise<DashboardData> {
       completed: number;
     }[]>`
       select
-        count(*) filter (where is_deleted=false)::int as total,
-        count(*) filter (where is_deleted=false and current_stage=1)::int as request_received,
-        count(*) filter (where is_deleted=false and current_stage=3)::int as vehicle_received,
-        count(*) filter (where is_deleted=false and current_stage=2)::int as vehicle_sent,
-        count(*) filter (where is_deleted=false and status='completed')::int as completed
-      from operations.transfer_requests
+        count(*)::int as total,
+        count(*) filter (where status = 'request_received')::int as request_received,
+        count(*) filter (where status = 'vehicle_received')::int as vehicle_received,
+        count(*) filter (where status = 'vehicle_sent')::int as vehicle_sent,
+        count(*) filter (where status = 'completed')::int as completed
+      from operations.transfer_requests tr
+      left join core.branches sb on sb.id=tr.source_branch_id
+      left join core.branches db on db.id=tr.destination_branch_id
+      where tr.deleted_at is null
+        and tr.transfer_type='transfer'
+        and (${unrestrictedOperations}::boolean or sb.code=any(${branchCodes}::text[]) or db.code=any(${branchCodes}::text[]))
     `;
 
     const [salesTrackingRow] = await sql<{
@@ -260,22 +277,23 @@ export async function getDashboardData(): Promise<DashboardData> {
       where coalesce(is_deleted,false)=false
     `;
 
-    const fallbackLocations = emptyData().operations.locations;
-    const normalizedLocations = fallbackLocations.map((base) => {
-      const found = locations.find((item) => item.key === base.key || item.name === base.name);
-      return found
-        ? {
-            key: found.key,
-            name: found.name,
-            actualTotal: asNumber(found.actual_total),
-            underDelivery: asNumber(found.under_delivery),
-            availableForSale: asNumber(found.available_for_sale),
-            reserved: asNumber(found.reserved),
-            delivered: asNumber(found.delivered),
-            hasNotes: asNumber(found.has_notes),
-          }
-        : base;
+    const mapLocation = (item: typeof locations[number]) => ({
+      key: item.key,
+      name: item.name,
+      actualTotal: asNumber(item.actual_total),
+      underDelivery: asNumber(item.under_delivery),
+      availableForSale: asNumber(item.available_for_sale),
+      reserved: asNumber(item.reserved),
+      delivered: asNumber(item.delivered),
+      hasNotes: asNumber(item.has_notes),
     });
+    const fallbackLocations = emptyData().operations.locations;
+    const normalizedLocations = unrestrictedOperations
+      ? fallbackLocations.map((base) => {
+          const found = locations.find((item) => item.key === base.key || item.name === base.name);
+          return found ? mapLocation(found) : base;
+        })
+      : locations.map(mapLocation);
 
     return {
       connected: true,
@@ -320,11 +338,16 @@ export async function getDashboardData(): Promise<DashboardData> {
           hasNotes: asNumber(inventoryRow?.has_notes),
         },
         locations: normalizedLocations,
-        approvals: {
+        approvals: canViewApprovals ? {
           total: asNumber(approvalRow?.total),
           missingFinancial: asNumber(approvalRow?.missing_financial),
           missingAdministrative: asNumber(approvalRow?.missing_administrative),
           completed: asNumber(approvalRow?.completed),
+        } : {
+          total: null,
+          missingFinancial: null,
+          missingAdministrative: null,
+          completed: null,
         },
         shortages: {
           total: asNumber(shortageRow?.total),

@@ -1,72 +1,17 @@
-import { NavLink, Outlet, useLocation } from "react-router-dom";
-import {
-  ArrowsLeftRight,
-  Car,
-  ClipboardText,
-  ListMagnifyingGlass,
-  SlidersHorizontal,
-  Table,
-} from "@phosphor-icons/react";
+import { NavLink,Outlet } from "react-router-dom";
+import { Archive,ArrowsLeftRight,Car,CheckCircle,ClipboardText,FileXls,Garage,ListMagnifyingGlass,Stack,Truck } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
-import { OperationsProvider, useOperations } from "./OperationsContext";
 
-const links = [
-  { to: "/operations/inventory", label: "المخزون", icon: Car, permission: "operations.vehicles.view" },
-  { to: "/operations/vehicles", label: "إدارة السيارات", icon: SlidersHorizontal, permission: "operations.vehicles.view" },
-  { to: "/operations/movements", label: "حركة السيارات", icon: ArrowsLeftRight, permission: "operations.movements.view" },
-  { to: "/operations/requests", label: "طلبات النقل والتصوير", icon: ClipboardText, permission: "operations.requests.view" },
-  { to: "/operations/all-cars", label: "جميع السيارات", icon: Table, permission: "operations.reports.all_cars" },
-  { to: "/operations/movement-log", label: "سجل الحركات", icon: ListMagnifyingGlass, permission: "operations.logs.view" },
+const pages=[
+  {to:"/operations",label:"مخزون السيارات",icon:Car,end:true,permissions:["operations.vehicles.view"]},
+  {to:"/operations/manage",label:"إدارة السيارات",icon:Garage,permissions:["operations.vehicles.create","operations.vehicles.update"]},
+  {to:"/operations/import-export",label:"الاستيراد والتصدير",icon:FileXls,permissions:["operations.vehicles.import","operations.vehicles.export"]},
+  {to:"/operations/movements",label:"حركة سيارة",icon:ArrowsLeftRight,permissions:["operations.movements.execute"]},
+  {to:"/operations/bulk-movement",label:"حركة جماعية",icon:Stack,permissions:["operations.movements.bulk"]},
+  {to:"/operations/requests",label:"طلبات النقل والتصوير",icon:Truck,permissions:["operations.requests.create","operations.requests.view_outgoing","operations.requests.view_incoming","operations.requests.view_all"]},
+  {to:"/operations/approvals",label:"الموافقات",icon:CheckCircle,permissions:["operations.approvals.view"]},
+  {to:"/operations/all-vehicles",label:"جميع السيارات",icon:ListMagnifyingGlass,permissions:["operations.vehicles.view"]},
+  {to:"/operations/movement-log",label:"سجل الحركات",icon:ClipboardText,permissions:["operations.movements.view"]},
+  {to:"/operations/archive",label:"الأرشيف",icon:Archive,permissions:["operations.archive.view"]},
 ];
-
-function OperationsShell() {
-  const { user } = useAuth();
-  const location = useLocation();
-  const { can, loading, error } = useOperations();
-  const isAdmin = Boolean(user?.roleCodes.includes("admin"));
-  const canEnter = isAdmin
-    || Boolean(user?.roleCodes.some((code) => ["operations_user", "sales_manager", "branch_manager"].includes(code)))
-    || Boolean(user?.departmentCodes.includes("operations"))
-    || Boolean(user?.permissionCodes.some((code) => code.startsWith("operations.")));
-
-  if (!canEnter) {
-    return <div className="ops-state-card error"><strong>لا توجد لديك صلاحية للدخول إلى نظام العمليات.</strong></div>;
-  }
-
-  const visibleLinks = links.filter((item) => isAdmin || can(item.permission));
-  const currentLink = links.find((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`));
-  const currentPageAllowed = !currentLink || isAdmin || can(currentLink.permission);
-  const canManageSettings = isAdmin || can("operations.settings.manage");
-
-  return (
-    <section className="ops-module">
-      <nav className="crm-system-nav ops-system-nav" aria-label="صفحات العمليات">
-        {visibleLinks.map(({ to, label, icon: Icon }) => (
-          <NavLink key={to} to={to} className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
-            <Icon size={18} weight="duotone" />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-        {canManageSettings ? (
-          <NavLink to="/settings?section=operations" className="crm-system-link ops-settings-link">
-            <SlidersHorizontal size={18} weight="duotone" />
-            <span>إعدادات العمليات</span>
-          </NavLink>
-        ) : null}
-      </nav>
-      {loading ? <div className="ops-state-card">جاري تحميل إعدادات العمليات...</div> : null}
-      {error ? <div className="ops-state-card error">{error}</div> : null}
-      {!loading && !error && visibleLinks.length && currentPageAllowed ? <Outlet /> : null}
-      {!loading && !error && visibleLinks.length && !currentPageAllowed ? <div className="ops-state-card error">لا توجد لديك صلاحية لعرض هذه الصفحة.</div> : null}
-      {!loading && !error && !visibleLinks.length ? <div className="ops-state-card error">لا توجد صفحات عمليات متاحة ضمن صلاحياتك الحالية.</div> : null}
-    </section>
-  );
-}
-
-export function OperationsLayout() {
-  return (
-    <OperationsProvider>
-      <OperationsShell />
-    </OperationsProvider>
-  );
-}
+export function OperationsLayout(){const {user}=useAuth();const unrestricted=Boolean(user?.isSystemAdmin||user?.roleCodes.includes("system_admin"));const visible=pages.filter(page=>unrestricted||page.permissions.some(permission=>user?.permissionCodes.includes(permission)));return <section className="operations-module"><header className="operations-module-head"><div><span>نظام العمليات</span><h1>إدارة مخزون وحركة السيارات</h1><p>فلو أصلي داخل المنصة بصلاحيات الفروع ومعاملات PostgreSQL وسجل تدقيق كامل.</p></div></header><nav className="operations-tabs" aria-label="صفحات العمليات">{visible.map(({to,label,icon:Icon,end})=><NavLink key={to} to={to} end={end} className={({isActive})=>isActive?"active":""}><Icon size={18}/><span>{label}</span></NavLink>)}</nav><Outlet/></section>}

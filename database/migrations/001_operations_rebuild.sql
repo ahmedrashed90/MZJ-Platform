@@ -1,4 +1,4 @@
-export const OPERATIONS_MIGRATION_SQL = String.raw`create extension if not exists pgcrypto;
+create extension if not exists pgcrypto;
 create extension if not exists pg_trgm;
 create schema if not exists operations;
 
@@ -514,4 +514,3 @@ join core.permissions p on p.code in (
 )
 where r.code in ('sales_manager','branch_manager','operations_user')
 on conflict do nothing;
-`;

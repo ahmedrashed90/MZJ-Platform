@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, requestIp, safeSecretEquals } from "../_auth.js";
 import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
 import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
+import { OPERATIONS_MIGRATION_SQL } from "../_operations-schema.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -32,6 +33,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   try {
     await runSqlScript(SCHEMA_SQL);
     await runSqlScript(SEED_SQL);
+    await runSqlScript(OPERATIONS_MIGRATION_SQL);
 
     const sql = getSql();
     const [count] = await sql<{ count: number }[]>`select count(*)::int as count from core.users`;
@@ -40,7 +42,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     const user = await sql.begin(async (tx) => {
-      const [adminRole] = await tx<{ id: string }[]>`select id::text from core.roles where code = 'admin' limit 1`;
+      const [adminRole] = await tx<{ id: string }[]>`select id::text from core.roles where code = 'system_admin' limit 1`;
       if (!adminRole) throw new Error("ADMIN_ROLE_MISSING");
 
       const [created] = await tx<{
@@ -87,12 +89,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
         email: user.email,
         mobile: user.mobile,
         roles: ["مدير النظام"],
-        roleCodes: ["admin"],
+        roleCodes: ["system_admin"],
         departments: [],
         departmentCodes: [],
         branches: [],
         branchCodes: [],
-        permissionCodes: [],
+        permissions: [],
+        permissionCodes: ["*"],
+        isSystemAdmin: true,
       },
     });
   } catch (error: any) {

@@ -40,7 +40,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           from core.users u
           join core.user_roles ur on ur.user_id = u.id
           join core.roles r on r.id = ur.role_id
-          where u.is_active = true and r.code = 'admin'
+          where u.is_active = true and r.code = 'system_admin'
         ) as exists
       `;
       adminExists = Boolean(admin?.exists);
