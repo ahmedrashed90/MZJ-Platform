@@ -208,7 +208,7 @@ create table if not exists operations.approval_events (
   id bigserial primary key,
   approval_id uuid references operations.vehicle_approvals(id),
   vehicle_id uuid not null references operations.vehicles(id),
-  cycle_no integer not null,
+  cycle_no integer not null default 1,
   approval_type text not null,
   action text not null,
   note text,
@@ -219,8 +219,9 @@ create table if not exists operations.approval_events (
   after_data jsonb,
   created_at timestamptz not null default now()
 );
--- Compatibility with legacy approval_events tables. CREATE TABLE IF NOT EXISTS does not
--- add columns introduced by the native approvals workflow.
+-- One canonical compatibility definition for native approval events. This upgrades legacy
+-- tables without deleting their rows and replaces the old action constraint that rejected
+-- the native actions used by the API.
 alter table operations.approval_events add column if not exists approval_id uuid references operations.vehicle_approvals(id);
 alter table operations.approval_events add column if not exists vehicle_id uuid references operations.vehicles(id);
 alter table operations.approval_events add column if not exists cycle_no integer;
@@ -242,6 +243,21 @@ alter table operations.approval_events alter column cycle_no set default 1;
 alter table operations.approval_events alter column cycle_no set not null;
 update operations.approval_events set created_at=now() where created_at is null;
 alter table operations.approval_events alter column created_at set default now();
+alter table operations.approval_events drop constraint if exists approval_events_action_check;
+do $approval_events_native_action$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid='operations.approval_events'::regclass
+      and conname='approval_events_action_native_check'
+  ) then
+    alter table operations.approval_events
+      add constraint approval_events_action_native_check
+      check (action in ('approve','revert','note','reset')) not valid;
+  end if;
+end
+$approval_events_native_action$;
 create index if not exists operations_approval_events_vehicle_idx on operations.approval_events(vehicle_id,created_at desc);
 
 create table if not exists operations.movement_batches (

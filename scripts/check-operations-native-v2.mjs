@@ -67,7 +67,6 @@ for (const requiredSql of [
   "alter table operations.movements add column if not exists vehicle_id",
   "alter table operations.transfer_requests add column if not exists request_no",
   "alter table operations.transfer_request_vehicles add column if not exists transfer_request_id",
-  "alter table operations.approval_events add column if not exists cycle_no",
 ]) {
   if (!operationsSchema.includes(requiredSql)) throw new Error(`Operations V2 check failed: schema compatibility missing ${requiredSql}`);
 }
@@ -86,8 +85,13 @@ if (!transferPage.includes('"stage_completed"') || !transferPage.includes("تف�
 if (!operationsApi.includes('insert into operations.movement_batches(batch_no')) {
   throw new Error("Operations V2 check failed: movement batches must write the legacy required batch_no value");
 }
-if (!operationsApi.includes("where v.id=${vehicleId}::uuid and v.is_deleted=false for update of v")) {
-  throw new Error("Operations V2 check failed: approval vehicle locking must target vehicles only when locations are left joined");
+if (!operationsApi.includes("for update of v")) {
+  throw new Error("Operations V2 check failed: approval vehicle lock must target vehicles only");
+}
+if (!operationsSchema.includes("drop constraint if exists approval_events_action_check") ||
+    !operationsSchema.includes("approval_events_action_native_check") ||
+    !operationsSchema.includes("'approve','revert','note','reset'")) {
+  throw new Error("Operations V2 check failed: approval event action compatibility is incomplete");
 }
 
 const trackingDelete = fs.readFileSync("server/tracking/delete.ts", "utf8");

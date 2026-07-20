@@ -49,6 +49,26 @@ where created_at is null;
 
 alter table operations.approval_events alter column created_at set default now();
 
+-- The legacy constraint accepts different action names and rejects the native API values.
+-- Replace it once with the canonical native action constraint. NOT VALID preserves any
+-- historical legacy rows while enforcing the correct values for every new event.
+alter table operations.approval_events drop constraint if exists approval_events_action_check;
+
+do $approval_events_native_action$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid='operations.approval_events'::regclass
+      and conname='approval_events_action_native_check'
+  ) then
+    alter table operations.approval_events
+      add constraint approval_events_action_native_check
+      check (action in ('approve','revert','note','reset')) not valid;
+  end if;
+end
+$approval_events_native_action$;
+
 create index if not exists operations_approval_events_vehicle_idx
 on operations.approval_events(vehicle_id,created_at desc);
 
