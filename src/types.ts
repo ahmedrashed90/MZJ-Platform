@@ -3,6 +3,7 @@ export type NullableNumber = number | null;
 export type DashboardData = {
   connected: boolean;
   generatedAt: string;
+  sectionErrors?: Record<string, string>;
   crm: {
     totalCustomers: NullableNumber;
     openConversations: NullableNumber;
@@ -39,7 +40,9 @@ export type DashboardData = {
       actualTotal: NullableNumber;
       agency: NullableNumber;
       availableForSale: NullableNumber;
+      reserved: NullableNumber;
       underDelivery: NullableNumber;
+      delivered: NullableNumber;
       hasNotes: NullableNumber;
     };
     locations: Array<{
@@ -66,6 +69,8 @@ export type DashboardData = {
     };
     transfers: {
       total: NullableNumber;
+      transferTotal: NullableNumber;
+      photographyTotal: NullableNumber;
       requestReceived: NullableNumber;
       vehicleReceived: NullableNumber;
       vehicleSent: NullableNumber;

@@ -20,19 +20,18 @@ const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((mod
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmOwnershipPage = lazy(() => import("./crm/pages/CrmOwnershipPage").then((module) => ({ default: module.CrmOwnershipPage })));
-const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
-const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
-const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
-const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((module) => ({ default: module.MovementPage })));
-const TransfersPage = lazy(() => import("./operations/pages/TransfersPage").then((module) => ({ default: module.TransfersPage })));
-const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
-const AllVehiclesPage = lazy(() => import("./operations/pages/AllVehiclesPage").then((module) => ({ default: module.AllVehiclesPage })));
-const MovementsLogPage = lazy(() => import("./operations/pages/MovementsLogPage").then((module) => ({ default: module.MovementsLogPage })));
-const ArchivePage = lazy(() => import("./operations/pages/ArchivePage").then((module) => ({ default: module.ArchivePage })));
 const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((module) => ({ default: module.TrackingLayout })));
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
+const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
+const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
+const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
+const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((module) => ({ default: module.MovementPage })));
+const TransferRequestsPage = lazy(() => import("./operations/pages/TransferRequestsPage").then((module) => ({ default: module.TransferRequestsPage })));
+const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
+const MovementHistoryPage = lazy(() => import("./operations/pages/MovementHistoryPage").then((module) => ({ default: module.MovementHistoryPage })));
+
 
 function PlatformRoutes() {
   return (
@@ -59,11 +58,11 @@ function PlatformRoutes() {
             <Route index element={<InventoryPage />} />
             <Route path="manage" element={<VehicleManagementPage />} />
             <Route path="movement" element={<MovementPage />} />
-            <Route path="transfers" element={<TransfersPage />} />
+            <Route path="transfers" element={<TransferRequestsPage />} />
             <Route path="approvals" element={<ApprovalsPage />} />
-            <Route path="all" element={<AllVehiclesPage />} />
-            <Route path="movements" element={<MovementsLogPage />} />
-            <Route path="archive" element={<ArchivePage />} />
+            <Route path="all" element={<InventoryPage all />} />
+            <Route path="movements" element={<MovementHistoryPage />} />
+            <Route path="archive" element={<InventoryPage archived />} />
           </Route>
           <Route path="/tracking" element={<TrackingLayout />}>
             <Route index element={<TrackingOrdersPage />} />

@@ -29,8 +29,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       department_codes: string[] | null;
       branches: string[] | null;
       branch_codes: string[] | null;
-      permissions: string[] | null;
-      permission_codes: string[] | null;
     }[]>`
       select
         u.id::text,
@@ -43,14 +41,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         coalesce(array_agg(distinct d.name) filter (where d.id is not null), '{}') as departments,
         coalesce(array_agg(distinct d.code) filter (where d.id is not null), '{}') as department_codes,
         coalesce(array_agg(distinct b.name) filter (where b.id is not null), '{}') as branches,
-        coalesce(array_agg(distinct b.code) filter (where b.id is not null), '{}') as branch_codes,
-        coalesce(array_agg(distinct p.name) filter (where p.id is not null), '{}') as permissions,
-        coalesce(array_agg(distinct p.code) filter (where p.id is not null), '{}') as permission_codes
+        coalesce(array_agg(distinct b.code) filter (where b.id is not null), '{}') as branch_codes
       from core.users u
       left join core.user_roles ur on ur.user_id = u.id
       left join core.roles r on r.id = ur.role_id
-      left join core.role_permissions rp on rp.role_id = r.id
-      left join core.permissions p on p.id = rp.permission_id
       left join core.user_departments ud on ud.user_id = u.id
       left join core.departments d on d.id = ud.department_id
       left join core.user_branches ub on ub.user_id = u.id
@@ -92,8 +86,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
         departmentCodes: user.department_codes || [],
         branches: user.branches || [],
         branchCodes: user.branch_codes || [],
-        permissions: user.permissions || [],
-        permissionCodes: user.permission_codes || [],
       },
     });
   } catch (error) {

@@ -28,58 +28,14 @@ export function getSql() {
   return client;
 }
 
-function splitSqlScript(sqlText: string) {
-  return sqlText
+export async function runSqlScript(sqlText: string) {
+  const sql = getSql();
+  const statements = sqlText
     .split(/;\s*(?:\r?\n|$)/g)
     .map((statement) => statement.trim())
     .filter(Boolean);
-}
 
-export async function runSqlScript(sqlText: string) {
-  const sql = getSql();
-  for (const statement of splitSqlScript(sqlText)) {
+  for (const statement of statements) {
     await sql.unsafe(statement);
   }
-}
-
-export async function runSqlScriptTransaction(sqlText: string, lockKey: string) {
-  const sql = getSql();
-  const statements = splitSqlScript(sqlText);
-  await sql.begin(async (transaction) => {
-    await transaction`select pg_advisory_xact_lock(hashtext(${lockKey}))`;
-    for (const statement of statements) {
-      await transaction.unsafe(statement);
-    }
-  });
-}
-
-export async function runSqlMigrationTransaction(
-  sqlText: string,
-  lockKey: string,
-  migrationTable: string,
-  migrationKey: string,
-  readinessSql?: string,
-) {
-  if (!/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(migrationTable)) {
-    throw new Error("Invalid migration table identifier");
-  }
-  const [schemaName] = migrationTable.split(".");
-  const sql = getSql();
-  const statements = splitSqlScript(sqlText);
-  await sql.begin(async (transaction) => {
-    await transaction`select pg_advisory_xact_lock(hashtext(${lockKey}))`;
-    await transaction.unsafe(`create schema if not exists ${schemaName}`);
-    await transaction.unsafe(`create table if not exists ${migrationTable} (migration_key text primary key, applied_at timestamptz not null default now())`);
-    const applied = await transaction.unsafe(`select migration_key from ${migrationTable} where migration_key = $1 limit 1`, [migrationKey]);
-    let schemaReady = false;
-    if (readinessSql) {
-      const rows = await transaction.unsafe(readinessSql);
-      schemaReady = Boolean(rows[0]?.ready);
-    }
-    if (applied.length > 0 && (!readinessSql || schemaReady)) return;
-    for (const statement of statements) {
-      await transaction.unsafe(statement);
-    }
-    await transaction.unsafe(`insert into ${migrationTable}(migration_key) values ($1) on conflict (migration_key) do update set applied_at=now()`, [migrationKey]);
-  });
 }

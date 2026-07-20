@@ -1,21 +1,75 @@
-import { useEffect, useState } from 'react';
-import { CheckCircle, MagnifyingGlass, WarningCircle, XCircle } from '@phosphor-icons/react';
-import { formatDate, operationsFetch, operationsQuery } from '../api';
-import { useOperationsMeta } from '../OperationsLayout';
-import type { ApprovalRow } from '../types';
-import { OperationsModal } from '../components/OperationsModal';
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle, MagnifyingGlass, ShieldCheck, WarningCircle, XCircle } from "@phosphor-icons/react";
+import { Modal } from "../../components/Modal";
+import { operationsFetch, queryString } from "../api";
+import { useOperations } from "../useOperations";
 
-export function ApprovalsPage(){
-  const meta=useOperationsMeta();const [rows,setRows]=useState<ApprovalRow[]>([]);const [filter,setFilter]=useState('');const [search,setSearch]=useState('');const [selected,setSelected]=useState<ApprovalRow|null>(null);const [financialNote,setFinancialNote]=useState('');const [administrativeNote,setAdministrativeNote]=useState('');const [loading,setLoading]=useState(false);const [error,setError]=useState('');const [message,setMessage]=useState('');
-  const canFinancial=meta.systemAdmin||meta.permissions.includes('operations.approvals.financial');const canAdministrative=meta.systemAdmin||meta.permissions.includes('operations.approvals.administrative');const canReset=meta.systemAdmin||meta.permissions.includes('operations.approvals.reset');
-  async function load(){setLoading(true);setError('');try{const payload=await operationsFetch<any>(`/api/operations${operationsQuery({resource:'approvals',filter,search})}`);setRows(payload.rows||[]);}catch(e){setError(e instanceof Error?e.message:'تعذر تحميل الموافقات');}finally{setLoading(false);}}
-  useEffect(()=>{void load();},[filter]);
-  function open(row:ApprovalRow){setSelected(row);setFinancialNote(row.financial_note||'');setAdministrativeNote(row.administrative_note||'');}
-  async function act(type:'financial'|'administrative'|'all',action:'approve'|'revert'|'note'|'reset',note=''){if(!selected)return;setLoading(true);setError('');try{const payload=await operationsFetch<any>('/api/operations',{method:'POST',body:JSON.stringify({action:'approval',vehicleId:selected.vehicle_id,type,approvalAction:action,note})});setMessage(payload.message);setSelected(null);await load();}catch(e){setError(e instanceof Error?e.message:'تعذر تنفيذ الموافقة');}finally{setLoading(false);}}
-  return <div className="module-page operations-page">
-    <section className="panel approval-filter-card"><div className="approval-filters"><button className={!filter?'active':''} onClick={()=>setFilter('')}>كل السيارات</button><button className={filter==='missing_financial'?'active':''} onClick={()=>setFilter('missing_financial')}>ناقص مالي</button><button className={filter==='missing_administrative'?'active':''} onClick={()=>setFilter('missing_administrative')}>ناقص إداري</button><button className={filter==='completed'?'active':''} onClick={()=>setFilter('completed')}>مكتملة</button></div><div className="operations-search approval-search"><MagnifyingGlass size={18}/><input value={search} onChange={(e)=>setSearch(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter')void load();}} placeholder="بحث برقم الهيكل أو السيارة"/><button onClick={()=>void load()}>بحث</button></div></section>
-    {error?<div className="connection-banner"><WarningCircle size={20}/><span>{error}</span></div>:null}{message?<div className="success-banner"><span>{message}</span></div>:null}
-    <section className="panel operations-list-panel"><div className="operations-panel-title"><div><h2>الموافقات المالية والإدارية</h2><p>السيارات بحالة مباع تحت التسليم فقط.</p></div><strong>{rows.length}</strong></div><div className="operations-table-scroll"><table className="operations-table"><thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>المكان</th><th>المالية</th><th>الإدارية</th><th>الإجراء</th></tr></thead><tbody>{rows.length===0?<tr><td colSpan={7} className="table-empty">لا توجد سيارات مطابقة</td></tr>:rows.map((row)=><tr key={row.vehicle_id}><td>{row.vin}</td><td>{row.car_name||'—'}</td><td>{row.statement||'—'}</td><td>{row.location_name||'—'}</td><td><span className={row.financial_approved?'approval-ok':'approval-missing'}>{row.financial_approved?'تم':'لم يتم'}</span></td><td><span className={row.administrative_approved?'approval-ok':'approval-missing'}>{row.administrative_approved?'تم':'لم يتم'}</span></td><td><button className="small-action" onClick={()=>open(row)}>فتح الموافقات</button></td></tr>)}</tbody></table></div>{loading?<div className="operations-loading">جاري التحميل...</div>:null}</section>
-    <OperationsModal open={Boolean(selected)} title={selected?`موافقات السيارة — ${selected.vin}`:''} onClose={()=>setSelected(null)} className="operations-wide-modal">{selected?<div className="approval-modal-grid"><article className={selected.financial_approved?'approval-card approved':'approval-card'}><header><h3>الموافقة المالية</h3>{selected.financial_approved?<CheckCircle size={24}/>:<XCircle size={24}/>}</header><p>الحالة: <strong>{selected.financial_approved?'تمت':'لم تتم'}</strong></p><small>{selected.financial_approved_at?`${formatDate(selected.financial_approved_at)} — ${selected.financial_approved_by_name||'—'}`:'لم تنفذ بعد'}</small><label><span>الملاحظة المالية</span><textarea value={financialNote} onChange={(e)=>setFinancialNote(e.target.value)}/></label><div className="approval-actions">{canFinancial?<><button onClick={()=>void act('financial','note',financialNote)}>حفظ الملاحظة</button>{!selected.financial_approved?<button onClick={()=>void act('financial','approve',financialNote)}>موافقة مالية</button>:<button className="danger" onClick={()=>void act('financial','revert',financialNote)}>تراجع</button>}</>:null}</div></article><article className={selected.administrative_approved?'approval-card approved':'approval-card'}><header><h3>الموافقة الإدارية</h3>{selected.administrative_approved?<CheckCircle size={24}/>:<XCircle size={24}/>}</header><p>الحالة: <strong>{selected.administrative_approved?'تمت':'لم تتم'}</strong></p><small>{selected.administrative_approved_at?`${formatDate(selected.administrative_approved_at)} — ${selected.administrative_approved_by_name||'—'}`:'لم تنفذ بعد'}</small><label><span>الملاحظة الإدارية</span><textarea value={administrativeNote} onChange={(e)=>setAdministrativeNote(e.target.value)}/></label><div className="approval-actions">{canAdministrative?<><button onClick={()=>void act('administrative','note',administrativeNote)}>حفظ الملاحظة</button>{!selected.administrative_approved?<button onClick={()=>void act('administrative','approve',administrativeNote)}>موافقة إدارية</button>:<button className="danger" onClick={()=>void act('administrative','revert',administrativeNote)}>تراجع</button>}</>:null}</div></article>{canReset?<div className="approval-reset-row"><button className="danger" onClick={()=>{const reason=window.prompt('اكتب سبب مسح الموافقات');if(reason)void act('all','reset',reason);}}>إلغاء الطلب (مسح الموافقات)</button></div>:null}</div>:null}</OperationsModal>
-  </div>;
+type ApprovalRow = {
+  id: string; vehicle_id: string; cycle_no: number; financial_approved: boolean; administrative_approved: boolean;
+  financial_note?: string | null; administrative_note?: string | null; financial_approved_by_name?: string | null; administrative_approved_by_name?: string | null;
+  vin: string; car_name?: string | null; statement?: string | null; model_year?: string | null; location_name?: string | null; status_code: string;
+};
+
+export function ApprovalsPage() {
+  const { meta } = useOperations();
+  const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [rows, setRows] = useState<ApprovalRow[]>([]);
+  const [selected, setSelected] = useState<ApprovalRow | null>(null);
+  const [financialNote, setFinancialNote] = useState("");
+  const [administrativeNote, setAdministrativeNote] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function load() {
+    setLoading(true); setError("");
+    try { const payload = await operationsFetch<{ rows: ApprovalRow[] }>(`/api/operations${queryString({ resource: "approvals", filter, search })}`); setRows(payload.rows); if (selected) { const updated = payload.rows.find((row) => row.vehicle_id === selected.vehicle_id); if (updated) setSelected(updated); } }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل الموافقات"); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); }, [filter]);
+  useEffect(() => { if (selected) { setFinancialNote(selected.financial_note || ""); setAdministrativeNote(selected.administrative_note || ""); } }, [selected]);
+
+  async function act(type: "financial" | "administrative", action: "approve" | "revert" | "note") {
+    if (!selected) return;
+    setLoading(true); setError(""); setMessage("");
+    try {
+      const payload = await operationsFetch<{ message: string }>("/api/operations", { method: "POST", body: JSON.stringify({ action: "approval_action", vehicleId: selected.vehicle_id, approvalType: type, approvalAction: action, note: type === "financial" ? financialNote : administrativeNote }) });
+      setMessage(payload.message); await load();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحديث الموافقة"); }
+    finally { setLoading(false); }
+  }
+
+  async function reset() {
+    if (!selected) return;
+    setLoading(true); setError("");
+    try { await operationsFetch("/api/operations", { method: "POST", body: JSON.stringify({ action: "approval_action", vehicleId: selected.vehicle_id, approvalType: "financial", approvalAction: "reset", note: "إلغاء الطلب (مسح الموافقات)" }) }); setMessage("تم مسح الموافقات مع الحفاظ على السجل"); await load(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر مسح الموافقات"); }
+    finally { setLoading(false); }
+  }
+
+  const counts = useMemo(() => ({ all: rows.length, missingFinancial: rows.filter((r) => !r.financial_approved).length, missingAdministrative: rows.filter((r) => !r.administrative_approved).length, completed: rows.filter((r) => r.financial_approved && r.administrative_approved).length }), [rows]);
+
+  return (
+    <div className="module-page operations-page">
+      <header className="module-page-head"><div><h1>الموافقات المالية والإدارية</h1><p>الموافقتان مستقلتان، وكلتاهما مطلوبة قبل الانتقال إلى مباع تم التسليم.</p></div></header>
+      {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}{message ? <div className="operations-alert success">{message}</div> : null}
+      <section className="panel operations-approvals-panel">
+        <div className="operations-approval-filters">
+          {[ ["", "كل السيارات", counts.all], ["missing_financial", "ناقص مالي", counts.missingFinancial], ["missing_administrative", "ناقص إداري", counts.missingAdministrative], ["completed", "مكتملة", counts.completed] ].map(([key,label,count]) => <button key={String(key)} type="button" className={filter === key ? "active" : ""} onClick={() => setFilter(String(key))}><span>{label}</span><b>{count}</b></button>)}
+        </div>
+        <div className="operations-filters"><label className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void load(); }} placeholder="بحث برقم الهيكل أو السيارة" /></label><button type="button" onClick={() => void load()}><MagnifyingGlass size={17} />بحث</button></div>
+        <div className="operations-approval-list">{!loading && !rows.length ? <div className="operations-empty-state"><ShieldCheck size={42} /><strong>لا توجد سيارات مطابقة</strong></div> : rows.map((row) => <button key={row.id} type="button" onClick={() => setSelected(row)}><div><b>{row.vin}</b><span>{row.car_name || "—"} · {row.statement || "—"}</span><small>{row.location_name || "—"}</small></div><span className={row.financial_approved ? "ok" : "pending"}>{row.financial_approved ? "مالي ✓" : "ناقص مالي"}</span><span className={row.administrative_approved ? "ok" : "pending"}>{row.administrative_approved ? "إداري ✓" : "ناقص إداري"}</span></button>)}</div>
+      </section>
+
+      <Modal open={Boolean(selected)} title={selected?.vin || "موافقات السيارة"} subtitle={selected ? `${selected.car_name || "—"} · ${selected.statement || "—"}` : undefined} onClose={() => setSelected(null)} className="operations-approval-modal">
+        {selected ? <div className="operations-approval-cards">
+          <article><header><ShieldCheck size={24} /><div><h3>الموافقة المالية</h3><span className={selected.financial_approved ? "ok" : "pending"}>{selected.financial_approved ? "تم" : "لم يتم"}</span></div></header><textarea value={financialNote} onChange={(e) => setFinancialNote(e.target.value)} placeholder="ملاحظة مالية" /><div>{meta.permissions.canApproveFinancial ? <><button type="button" onClick={() => void act("financial", "note")} disabled={loading}>حفظ الملاحظة</button>{selected.financial_approved ? <button type="button" className="danger" onClick={() => void act("financial", "revert")} disabled={loading}><XCircle size={17} />تراجع</button> : <button type="button" className="primary" onClick={() => void act("financial", "approve")} disabled={loading}><CheckCircle size={17} />موافقة مالية</button>}</> : <span>لا توجد صلاحية</span>}</div></article>
+          <article><header><CheckCircle size={24} /><div><h3>الموافقة الإدارية</h3><span className={selected.administrative_approved ? "ok" : "pending"}>{selected.administrative_approved ? "تم" : "لم يتم"}</span></div></header><textarea value={administrativeNote} onChange={(e) => setAdministrativeNote(e.target.value)} placeholder="ملاحظة إدارية" /><div>{meta.permissions.canApproveAdministrative ? <><button type="button" onClick={() => void act("administrative", "note")} disabled={loading}>حفظ الملاحظة</button>{selected.administrative_approved ? <button type="button" className="danger" onClick={() => void act("administrative", "revert")} disabled={loading}><XCircle size={17} />تراجع</button> : <button type="button" className="primary" onClick={() => void act("administrative", "approve")} disabled={loading}><CheckCircle size={17} />موافقة إدارية</button>}</> : <span>لا توجد صلاحية</span>}</div></article>
+          <button type="button" className="operations-reset-approvals" onClick={() => void reset()} disabled={loading}>إلغاء الطلب (مسح الموافقات)</button>
+        </div> : null}
+      </Modal>
+    </div>
+  );
 }

@@ -1,25 +1,45 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
-import { ArrowsLeftRight, Archive, Car, CheckCircle, ClipboardText, ClockCounterClockwise, ListBullets, Wrench } from '@phosphor-icons/react';
-import { operationsFetch } from './api';
-import type { OperationsMeta } from './types';
+import { useEffect, useState } from "react";
+import { NavLink, Outlet } from "react-router-dom";
+import { ArrowClockwise, WarningCircle } from "@phosphor-icons/react";
+import { operationsFetch } from "./api";
+import type { OperationsMeta } from "./types";
 
-const MetaContext=createContext<OperationsMeta|null>(null);
-export function useOperationsMeta(){const value=useContext(MetaContext);if(!value)throw new Error('Operations meta is not loaded');return value;}
-const tabs=[
-  {to:'/operations',label:'مخزون السيارات',icon:Car,end:true},
-  {to:'/operations/manage',label:'إدارة السيارات',icon:Wrench},
-  {to:'/operations/movement',label:'الحركة',icon:ArrowsLeftRight},
-  {to:'/operations/transfers',label:'طلبات النقل',icon:ClipboardText},
-  {to:'/operations/approvals',label:'الموافقات',icon:CheckCircle},
-  {to:'/operations/all',label:'جميع السيارات',icon:ListBullets},
-  {to:'/operations/movements',label:'سجل الحركات',icon:ClockCounterClockwise},
-  {to:'/operations/archive',label:'الأرشيف',icon:Archive},
-];
-export function OperationsLayout(){
-  const [meta,setMeta]=useState<OperationsMeta|null>(null);const [error,setError]=useState('');
-  useEffect(()=>{operationsFetch<{ok:boolean}&OperationsMeta>('/api/operations?resource=meta').then((payload)=>setMeta(payload)).catch((e)=>setError(e instanceof Error?e.message:'تعذر تحميل إعدادات العمليات'));},[]);
-  if(error)return <div className="module-page"><div className="connection-banner"><span>{error}</span></div></div>;
-  if(!meta)return <div className="crm-loading-panel">جاري تحميل نظام العمليات...</div>;
-  return <MetaContext.Provider value={meta}><div className="operations-module"><header className="module-page-head operations-main-head"><div><h1>نظام العمليات</h1><p>إدارة مخزون السيارات والحركة وطلبات النقل والموافقات من داخل المنصة الموحدة.</p></div></header><nav className="operations-tabs" aria-label="تبويبات العمليات">{tabs.map(({to,label,icon:Icon,end})=><NavLink key={to} to={to} end={end} className={({isActive})=>isActive?'active':''}><Icon size={18} weight="duotone"/><span>{label}</span></NavLink>)}</nav><Outlet/></div></MetaContext.Provider>;
+const tabs = [
+  ["/operations", "مخزون السيارات"],
+  ["/operations/manage", "إدارة السيارات"],
+  ["/operations/movement", "الحركة"],
+  ["/operations/transfers", "طلبات النقل"],
+  ["/operations/approvals", "الموافقات"],
+  ["/operations/all", "جميع السيارات"],
+  ["/operations/movements", "سجل الحركات"],
+  ["/operations/archive", "الأرشيف"],
+] as const;
+
+export type OperationsOutletContext = { meta: OperationsMeta; reloadMeta: () => Promise<void> };
+
+export function OperationsLayout() {
+  const [meta, setMeta] = useState<OperationsMeta | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true); setError("");
+    try { setMeta(await operationsFetch<OperationsMeta>("/api/operations?resource=meta")); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل إعدادات العمليات"); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); }, []);
+
+  if (loading && !meta) return <div className="crm-loading-panel">جاري تجهيز نظام العمليات...</div>;
+  if (!meta) return <div className="module-page"><div className="connection-banner"><WarningCircle size={20} /><span>{error || "تعذر فتح نظام العمليات"}</span><button type="button" onClick={() => void load()}><ArrowClockwise size={17} />إعادة المحاولة</button></div></div>;
+
+  return (
+    <div className="operations-module">
+      <div className="operations-tabs" role="tablist">
+        {tabs.map(([href, label]) => <NavLink key={href} to={href} end={href === "/operations"} className={({ isActive }) => isActive ? "active" : ""}>{label}</NavLink>)}
+      </div>
+      {error ? <div className="connection-banner"><WarningCircle size={20} /><span>{error}</span></div> : null}
+      <Outlet context={{ meta, reloadMeta: load } satisfies OperationsOutletContext} />
+    </div>
+  );
 }

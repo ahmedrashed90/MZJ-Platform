@@ -1,27 +1,101 @@
-import { useEffect, useState } from 'react';
-import { FileArrowDown, FileArrowUp, FileXls, Plus, WarningCircle } from '@phosphor-icons/react';
-import { operationsFetch, operationsQuery } from '../api';
-import { exportCsvTemplate, exportExcel, parseDelimitedFile } from '../excel';
-import { useOperationsMeta } from '../OperationsLayout';
-import type { VehicleRow } from '../types';
-import { VehicleTable } from '../components/VehicleTable';
-import { OperationsModal } from '../components/OperationsModal';
+import { useEffect, useRef, useState } from "react";
+import { FileArrowDown, FileArrowUp, FloppyDisk, MagnifyingGlass, Plus, WarningCircle } from "@phosphor-icons/react";
+import { exportExcel, operationsFetch, queryString } from "../api";
+import { parseExcelFile } from "../excel";
+import type { VehicleRow } from "../types";
+import { useOperations } from "../useOperations";
 
-const emptyForm={id:'',vin:'',carName:'',statement:'',agentName:'',interiorColor:'',exteriorColor:'',modelYear:'',plateNo:'',batchNo:'',locationId:'',branchId:'',statusCode:'available_for_sale',statusNote:'',shortageLocationNote:'',notes:''};
-export function VehicleManagementPage(){
-  const meta=useOperationsMeta();const [rows,setRows]=useState<VehicleRow[]>([]);const [form,setForm]=useState(emptyForm);const [formOpen,setFormOpen]=useState(false);const [importOpen,setImportOpen]=useState(false);const [mode,setMode]=useState<'replace'|'append'|'update'>('append');const [file,setFile]=useState<File|null>(null);const [preview,setPreview]=useState<any[]>([]);const [report,setReport]=useState<any>(null);const [saving,setSaving]=useState(false);const [error,setError]=useState('');const [message,setMessage]=useState('');
-  async function load(){try{const payload=await operationsFetch<any>(`/api/operations${operationsQuery({resource:'vehicles',page:1,pageSize:100})}`);setRows(payload.rows||[]);}catch(e){setError(e instanceof Error?e.message:'تعذر تحميل السيارات');}}
-  useEffect(()=>{void load();},[]);
-  function edit(row:VehicleRow){setForm({id:row.id,vin:row.vin,carName:row.car_name||'',statement:row.statement||'',agentName:row.agent_name||'',interiorColor:row.interior_color||'',exteriorColor:row.exterior_color||'',modelYear:row.model_year||'',plateNo:row.plate_no||'',batchNo:row.batch_no||'',locationId:row.location_id||'',branchId:row.branch_id||'',statusCode:row.status_code||'available_for_sale',statusNote:row.status_note||'',shortageLocationNote:row.shortage_location_note||'',notes:row.notes||''});setFormOpen(true);}
-  async function save(event:React.FormEvent){event.preventDefault();setSaving(true);setError('');try{const payload=await operationsFetch<any>('/api/operations',{method:'POST',body:JSON.stringify({action:'save_vehicle',...form})});setMessage(payload.message||'تم حفظ السيارة');setFormOpen(false);setForm(emptyForm);await load();}catch(e){setError(e instanceof Error?e.message:'تعذر حفظ السيارة');}finally{setSaving(false);}}
-  async function chooseFile(next:File|null){setFile(next);setReport(null);if(!next){setPreview([]);return;}try{setPreview((await parseDelimitedFile(next)).slice(0,200));}catch{setError('تعذر قراءة الملف. استخدم CSV محفوظًا من Excel.');}}
-  async function runImport(){if(!file||!preview.length)return;setSaving(true);setError('');try{const allRows=await parseDelimitedFile(file);const payload=await operationsFetch<any>('/api/operations',{method:'POST',body:JSON.stringify({action:'import_vehicles',mode,fileName:file.name,rows:allRows})});setReport(payload);setMessage('تم تنفيذ الاستيراد وعرض التقرير');await load();}catch(e){setError(e instanceof Error?e.message:'تعذر الاستيراد');}finally{setSaving(false);}}
-  async function exportData(){try{const payload=await operationsFetch<any>(`/api/operations${operationsQuery({resource:'vehicles',page:1,pageSize:5000,archived:'all'})}`);exportExcel('بيانات-السيارات',['رقم الهيكل','السيارة','البيان','الوكيل','اللون الداخلي','اللون الخارجي','الموديل','اللوحة','اسم الدفعة','المكان','الحالة','ملاحظات'],payload.rows.map((row:VehicleRow)=>[row.vin,row.car_name,row.statement,row.agent_name,row.interior_color,row.exterior_color,row.model_year,row.plate_no,row.batch_no,row.location_name,row.status_name,row.notes]));}catch(e){setError(e instanceof Error?e.message:'تعذر التصدير');}}
-  return <div className="module-page operations-page">
-    <section className="panel operations-action-bar"><button type="button" onClick={()=>{setForm(emptyForm);setFormOpen(true);}}><Plus size={18}/>إضافة سيارة</button><button type="button" className="secondary" onClick={()=>exportCsvTemplate('قالب-استيراد-السيارات',['vin','carName','statement','agentName','interiorColor','exteriorColor','modelYear','plateNo','batchNo','statusCode','statusNote','notes'])}><FileArrowDown size={18}/>تصدير قالب Excel</button><button type="button" className="secondary" onClick={()=>void exportData()}><FileXls size={18}/>تصدير البيانات</button><button type="button" className="secondary" onClick={()=>setImportOpen(true)}><FileArrowUp size={18}/>استيراد من Excel</button></section>
-    {error?<div className="connection-banner"><WarningCircle size={20}/><span>{error}</span></div>:null}{message?<div className="success-banner"><span>{message}</span></div>:null}
-    <section className="panel operations-list-panel"><div className="operations-panel-title"><div><h2>إدارة السيارات</h2><p>إضافة وتعديل بيانات السيارة الأساسية. تغيير المكان والحالة يتم من تبويب الحركة.</p></div><strong>{rows.length}</strong></div><VehicleTable rows={rows} onOpen={edit}/></section>
-    <OperationsModal open={formOpen} title={form.id?'تعديل بيانات السيارة':'إضافة سيارة'} onClose={()=>setFormOpen(false)} className="operations-wide-modal"><form className="operations-form" onSubmit={save}><div className="form-grid"><label><span>رقم الهيكل</span><input required value={form.vin} onChange={(e)=>setForm({...form,vin:e.target.value})}/></label><label><span>السيارة</span><input value={form.carName} onChange={(e)=>setForm({...form,carName:e.target.value})}/></label><label><span>البيان</span><input value={form.statement} onChange={(e)=>setForm({...form,statement:e.target.value})}/></label><label><span>الوكيل</span><input value={form.agentName} onChange={(e)=>setForm({...form,agentName:e.target.value})}/></label><label><span>اللون الداخلي</span><input value={form.interiorColor} onChange={(e)=>setForm({...form,interiorColor:e.target.value})}/></label><label><span>اللون الخارجي</span><input value={form.exteriorColor} onChange={(e)=>setForm({...form,exteriorColor:e.target.value})}/></label><label><span>الموديل</span><input value={form.modelYear} onChange={(e)=>setForm({...form,modelYear:e.target.value})}/></label><label><span>اللوحة</span><input value={form.plateNo} onChange={(e)=>setForm({...form,plateNo:e.target.value})}/></label><label><span>اسم الدفعة</span><input value={form.batchNo} onChange={(e)=>setForm({...form,batchNo:e.target.value})}/></label>{!form.id?<><label><span>المكان الأولي</span><select value={form.locationId} onChange={(e)=>setForm({...form,locationId:e.target.value})}><option value="">اختر المكان</option>{meta.locations.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>الحالة الأولية</span><select value={form.statusCode} onChange={(e)=>setForm({...form,statusCode:e.target.value})}>{meta.statuses.map((item)=><option key={item.code} value={item.code}>{item.name}</option>)}</select></label></>:null}<label><span>الفرع</span><select value={form.branchId} onChange={(e)=>setForm({...form,branchId:e.target.value})}><option value="">بدون فرع</option>{meta.branches.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>{!form.id&&meta.statuses.find((item)=>item.code===form.statusCode)?.requires_note?<label><span>ملاحظات الحالة</span><textarea required value={form.statusNote} onChange={(e)=>setForm({...form,statusNote:e.target.value})}/></label>:null}<label><span>ملاحظات السيارة</span><textarea value={form.notes} onChange={(e)=>setForm({...form,notes:e.target.value})}/></label><div className="modal-actions"><button type="button" className="secondary" onClick={()=>setFormOpen(false)}>إلغاء</button><button type="submit" disabled={saving}>{saving?'جاري الحفظ...':'حفظ'}</button></div></form></OperationsModal>
-    <OperationsModal open={importOpen} title="استيراد السيارات من Excel" onClose={()=>setImportOpen(false)} className="operations-wide-modal"><div className="import-flow"><div className="import-modes"><button className={mode==='replace'?'active':''} onClick={()=>setMode('replace')}><strong>استبدال كامل</strong><span>يؤرشف السيارات غير الموجودة في الملف بدل حذف تاريخها.</span></button><button className={mode==='append'?'active':''} onClick={()=>setMode('append')}><strong>إضافة فوق الحالي</strong><span>يضيف VINs الجديدة ويتجاوز الموجودة.</span></button><button className={mode==='update'?'active':''} onClick={()=>setMode('update')}><strong>تحديث من الشيت</strong><span>يحدث السيارات الموجودة فقط دون تغيير المكان أو الحالة.</span></button></div><label className="file-drop"><FileArrowUp size={34}/><span>{file?.name||'اختر ملف CSV محفوظًا من Excel'}</span><input type="file" accept=".csv,.txt" onChange={(e)=>void chooseFile(e.target.files?.[0]||null)}/></label>{preview.length?<div className="import-preview"><h3>معاينة أول {preview.length} صف</h3><div className="operations-table-scroll"><table className="operations-table"><thead><tr>{Object.keys(preview[0]).map((key)=><th key={key}>{key}</th>)}</tr></thead><tbody>{preview.slice(0,10).map((row,index)=><tr key={index}>{Object.keys(preview[0]).map((key)=><td key={key}>{row[key]}</td>)}</tr>)}</tbody></table></div></div>:null}{report?<div className="import-report"><strong>نتيجة الاستيراد</strong><span>مضاف: {report.inserted}</span><span>محدث: {report.updated}</span><span>متجاوز: {report.skipped}</span><span>فاشل: {report.failed}</span></div>:null}<div className="modal-actions"><button type="button" className="secondary" onClick={()=>setImportOpen(false)}>إغلاق</button><button type="button" disabled={!file||!preview.length||saving} onClick={()=>void runImport()}>{saving?'جاري الاستيراد...':'تنفيذ الاستيراد'}</button></div></div></OperationsModal>
-  </div>;
+const emptyForm = { id: "", vin: "", carName: "", statement: "", agentName: "", exteriorColor: "", interiorColor: "", modelYear: "", plateNo: "", batchNo: "", locationId: "", statusCode: "available_for_sale", sourceType: "", notes: "", stateNote: "", shortageNote: "" };
+
+export function VehicleManagementPage() {
+  const { meta } = useOperations();
+  const [form, setForm] = useState(emptyForm);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<VehicleRow[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [importMode, setImportMode] = useState<"replace" | "add" | "update">("add");
+  const [importReport, setImportReport] = useState<any>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function findVehicles() {
+    if (!search.trim()) { setResults([]); return; }
+    try { const payload = await operationsFetch<{ rows: VehicleRow[] }>(`/api/operations${queryString({ resource: "vehicles", search, pageSize: 20 })}`); setResults(payload.rows); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر البحث"); }
+  }
+  useEffect(() => { const timer = window.setTimeout(() => void findVehicles(), 300); return () => window.clearTimeout(timer); }, [search]);
+
+  function edit(row: VehicleRow) {
+    setForm({ id: row.id, vin: row.vin, carName: row.car_name || "", statement: row.statement || "", agentName: row.agent_name || "", exteriorColor: row.exterior_color || "", interiorColor: row.interior_color || "", modelYear: row.model_year || "", plateNo: row.plate_no || "", batchNo: row.batch_no || "", locationId: row.location_id || "", statusCode: row.status_code, sourceType: row.source_type || "", notes: row.notes || "", stateNote: row.state_note || "", shortageNote: row.shortage_note || "" });
+    setResults([]); setSearch(row.vin);
+  }
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault(); setSaving(true); setError(""); setMessage("");
+    try {
+      const action = form.id ? "update_vehicle" : "create_vehicle";
+      const payload = await operationsFetch<{ message: string }>("/api/operations", { method: "POST", body: JSON.stringify({ action, ...form }) });
+      setMessage(payload.message); setForm(emptyForm); setSearch("");
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر حفظ السيارة"); }
+    finally { setSaving(false); }
+  }
+
+  function downloadTemplate() {
+    exportExcel("قالب-استيراد-السيارات.xlsx", ["رقم الهيكل","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","موديل","اللوحة","اسم الدفعة بالتاريخ","المكان","الحالة","ملاحظات في السيارة"], []);
+  }
+
+  async function importFile(file: File) {
+    setSaving(true); setError(""); setMessage(""); setImportReport(null);
+    try {
+      const rows = await parseExcelFile(file) as Record<string, string>[];
+      if (!rows.length) throw new Error("الملف لا يحتوي على صفوف قابلة للاستيراد. استخدم قالب Excel أو CSV.");
+      const payload = await operationsFetch<{ message: string; report: any }>("/api/operations", { method: "POST", body: JSON.stringify({ action: "import_vehicles", mode: importMode, fileName: file.name, rows }) });
+      setMessage(payload.message); setImportReport(payload.report);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر استيراد الملف"); }
+    finally { setSaving(false); if (fileRef.current) fileRef.current.value = ""; }
+  }
+
+  return (
+    <div className="module-page operations-page">
+      <header className="module-page-head"><div><h1>إدارة السيارات</h1><p>إضافة وتعديل البيانات الأساسية واستيراد المخزون بثلاثة أوضاع آمنة.</p></div></header>
+      {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}{message ? <div className="operations-alert success">{message}</div> : null}
+      <div className="operations-management-grid">
+        <section className="panel operations-form-panel">
+          <div className="operations-section-title"><Plus size={21} /><div><h2>{form.id ? "تعديل بيانات السيارة" : "إضافة سيارة"}</h2><p>{form.id ? "المكان والحالة يتم تغييرهما من تبويب الحركة فقط." : "يتم التحقق من رقم الهيكل والمكان والحالة قبل الحفظ."}</p></div></div>
+          {form.id ? <button type="button" className="operations-reset-form" onClick={() => setForm(emptyForm)}>إلغاء التعديل وإضافة سيارة جديدة</button> : null}
+          <form className="operations-form-grid" onSubmit={save}>
+            <label><span>رقم الهيكل VIN</span><input required value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} /></label>
+            <label><span>السيارة</span><input value={form.carName} onChange={(e) => setForm({ ...form, carName: e.target.value })} /></label>
+            <label><span>البيان</span><input value={form.statement} onChange={(e) => setForm({ ...form, statement: e.target.value })} /></label>
+            <label><span>الوكيل</span><input value={form.agentName} onChange={(e) => setForm({ ...form, agentName: e.target.value })} /></label>
+            <label><span>اللون الداخلي</span><input value={form.interiorColor} onChange={(e) => setForm({ ...form, interiorColor: e.target.value })} /></label>
+            <label><span>اللون الخارجي</span><input value={form.exteriorColor} onChange={(e) => setForm({ ...form, exteriorColor: e.target.value })} /></label>
+            <label><span>الموديل</span><input value={form.modelYear} onChange={(e) => setForm({ ...form, modelYear: e.target.value })} /></label>
+            <label><span>اللوحة</span><input value={form.plateNo} onChange={(e) => setForm({ ...form, plateNo: e.target.value })} /></label>
+            <label><span>اسم الدفعة بالتاريخ</span><input value={form.batchNo} onChange={(e) => setForm({ ...form, batchNo: e.target.value })} /></label>
+            <label><span>المكان</span><select required disabled={Boolean(form.id)} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label><span>الحالة</span><select disabled={Boolean(form.id)} value={form.statusCode} onChange={(e) => setForm({ ...form, statusCode: e.target.value })}>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+            <label><span>المصدر</span><input value={form.sourceType} onChange={(e) => setForm({ ...form, sourceType: e.target.value })} /></label>
+            <label className="wide"><span>ملاحظات في السيارة</span><textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label>
+            <label className="wide"><span>حجز - نواقص - تحديد مكان</span><textarea value={form.shortageNote} onChange={(e) => setForm({ ...form, shortageNote: e.target.value })} /></label>
+            <button className="operations-primary-button wide" type="submit" disabled={saving || (form.id ? !meta.permissions.canEditVehicle : !meta.permissions.canCreateVehicle)}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ"}</button>
+          </form>
+        </section>
+
+        <section className="panel operations-import-panel">
+          <div className="operations-section-title"><FileArrowUp size={21} /><div><h2>استيراد من Excel</h2><p>المكان والحالة لا يتم تعديلهما للسيارات الموجودة حتى لا يتم تجاوز فلو الحركة.</p></div></div>
+          <div className="operations-import-modes">
+            <label><input type="radio" checked={importMode === "replace"} onChange={() => setImportMode("replace")} /><span><b>استبدال كامل</b><small>تعطيل السيارات غير الموجودة من المخزون النشط بدون حذف التاريخ.</small></span></label>
+            <label><input type="radio" checked={importMode === "add"} onChange={() => setImportMode("add")} /><span><b>إضافة فوق الحالي</b><small>إضافة السيارات الجديدة فقط بدون تعديل الموجود.</small></span></label>
+            <label><input type="radio" checked={importMode === "update"} onChange={() => setImportMode("update")} /><span><b>تحديث من الشيت</b><small>تحديث السيارات الموجودة فقط وعدم إضافة أرقام هياكل جديدة.</small></span></label>
+          </div>
+          <div className="operations-import-actions"><button type="button" onClick={downloadTemplate}><FileArrowDown size={18} />تصدير قالب فاضي</button><button type="button" onClick={() => fileRef.current?.click()} disabled={saving || !meta.permissions.canImport}><FileArrowUp size={18} />اختيار الملف والاستيراد</button><input ref={fileRef} type="file" accept=".xlsx,.xls,.html,.csv,.txt" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); }} /></div>
+          {importReport ? <div className="operations-import-report"><div><span>المقروء</span><b>{importReport.total}</b></div><div><span>المضاف</span><b>{importReport.inserted}</b></div><div><span>المحدث</span><b>{importReport.updated}</b></div><div><span>المتجاهل</span><b>{importReport.skipped}</b></div><div><span>الفاشل</span><b>{importReport.failed}</b></div>{importReport.deactivated !== undefined ? <div><span>خرج من النشط</span><b>{importReport.deactivated}</b></div> : null}<details><summary>تفاصيل التقرير</summary><pre>{JSON.stringify(importReport, null, 2)}</pre></details></div> : null}
+        </section>
+      </div>
+
+      <section className="panel operations-search-edit-panel"><div className="operations-section-title"><MagnifyingGlass size={21} /><div><h2>البحث للتعديل</h2><p>ابحث برقم الهيكل أو السيارة ثم اختر السجل.</p></div></div><label className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="اكتب جزءًا من رقم الهيكل" /></label>{results.length ? <div className="operations-search-results">{results.map((row) => <button key={row.id} type="button" onClick={() => edit(row)}><b>{row.vin}</b><span>{row.car_name || "—"} · {row.location_name || "—"} · {row.status_name}</span></button>)}</div> : null}</section>
+    </div>
+  );
 }

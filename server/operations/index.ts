@@ -2,591 +2,887 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
-import { assertPermission, hasPermission, isSystemAdmin, requireOperationsUser } from "../_operations-auth.js";
-import { OperationsError, operationsRequestId, sendOperationsError } from "../_operations-errors.js";
-import type { SessionUser } from "../_auth.js";
+import {
+  hasPermission,
+  isSystemAdmin,
+  primaryBranch,
+  primaryRole,
+  requireOperationsPermission,
+  requireOperationsUser,
+} from "../_operations-auth.js";
+import {
+  boolValue,
+  clean,
+  intValue,
+  OperationError,
+  parseBody,
+  requestId,
+  sendOperationError,
+} from "../_operations-utils.js";
 
-const CHECK_ITEMS = [
-  ["mats", "فرشات"], ["extinguisher", "طفاية"], ["bag", "شنطة"], ["spare", "اسبير"], ["remote", "ريموت"],
-  ["screen", "شاشة"], ["recorder", "مسجل"], ["ac", "مكيف"], ["camera", "كاميرا"], ["sensor", "حساس"],
-] as const;
-
-function clean(value: unknown) { return String(value ?? "").trim(); }
-function integer(value: unknown, fallback = 0) { const n = Number(value); return Number.isFinite(n) ? Math.trunc(n) : fallback; }
-function bodyOf(request: VercelRequest) {
-  if (typeof request.body === "string") return JSON.parse(request.body || "{}");
-  return request.body || {};
-}
-function ids(value: unknown) {
-  return Array.from(new Set((Array.isArray(value) ? value : []).map(clean).filter(Boolean)));
-}
-function branchScope(sql: any, user: SessionUser, alias = "b") {
-  if (isSystemAdmin(user)) return sql``;
-  if (!user.branchCodes.length) return sql`and false`;
-  return sql`and ${sql(alias)}.code in ${sql(user.branchCodes)}`;
-}
-function statusLabel(code: string) {
-  return ({ available_for_sale: "متاح للبيع", reserved: "حجز", has_notes: "بها ملاحظات", under_delivery: "مباع تحت التسليم", delivered: "مباع تم التسليم" } as Record<string,string>)[code] || code;
-}
-function stageLabel(code: string) {
-  return ({ request_received: "تم استلام الطلب", vehicle_sent: "تم إرسال السيارة", vehicle_received: "تم استلام السيارة", completed: "تم الانتهاء", cancelled: "ملغي" } as Record<string,string>)[code] || code;
-}
-function nextRequestNo(prefix = "TR") { return `${prefix}-${new Date().getFullYear()}-${Date.now().toString().slice(-8)}`; }
-function nextBatchNo() { return `MOV-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`; }
-
-async function readVehicle(sql: any, id: string, lock = false) {
-  const rows = await sql<any[]>`
-    select v.*,v.id::text,l.code as location_code,l.name as location_name,b.code as branch_code,b.name as branch_name,
-      s.name as status_name,s.requires_note,s.counts_in_actual_inventory
-    from operations.vehicles v
-    left join operations.locations l on l.id=v.location_id
-    left join core.branches b on b.id=v.branch_id
-    left join operations.vehicle_statuses s on s.code=v.status_code
-    where v.id=${id}::uuid and v.is_deleted=false
-    ${lock ? sql`for update` : sql``}
-  `;
-  return rows[0];
+function pageValues(request: VercelRequest) {
+  const page = Math.max(1, intValue(request.query.page, 1));
+  const pageSize = Math.min(200, Math.max(10, intValue(request.query.pageSize, 50)));
+  return { page, pageSize, offset: (page - 1) * pageSize };
 }
 
-function assertVehicleScope(user: SessionUser, vehicle: any) {
-  if (isSystemAdmin(user)) return;
-  if (!vehicle?.branch_code || !user.branchCodes.includes(vehicle.branch_code)) {
-    throw new OperationsError(403, "FORBIDDEN", "السيارة خارج نطاق الفروع المسموح بها");
-  }
+function actor(user: Awaited<ReturnType<typeof requireOperationsUser>>) {
+  if (!user) throw new Error("AUTH_REQUIRED");
+  return {
+    id: user.id,
+    name: user.fullName,
+    role: primaryRole(user),
+    branch: primaryBranch(user),
+    email: user.email,
+  };
 }
 
-async function currentApproval(sql: any, vehicleId: string, lock = false) {
-  const rows = await sql<any[]>`
-    select *,id::text from operations.vehicle_approvals
-    where vehicle_id=${vehicleId}::uuid and is_current=true
-    order by cycle_no desc limit 1
-    ${lock ? sql`for update` : sql``}
-  `;
-  return rows[0];
+function accessScope(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, alias = "l") {
+  if (isSystemAdmin(user) || user.branchCodes.length === 0) return sql`true`;
+  if (alias === "sl") return sql`coalesce(sl.branch_code,sl.code) in ${sql(user.branchCodes)}`;
+  if (alias === "dl") return sql`coalesce(dl.branch_code,dl.code) in ${sql(user.branchCodes)}`;
+  if (alias === "tl") return sql`coalesce(tl.branch_code,tl.code) in ${sql(user.branchCodes)}`;
+  return sql`coalesce(l.branch_code,l.code) in ${sql(user.branchCodes)}`;
 }
 
-async function ensureApprovalCycle(tx: any, vehicleId: string) {
-  const existing = await currentApproval(tx, vehicleId, true);
-  if (existing) return existing;
-  const [last] = await tx<any[]>`select coalesce(max(cycle_no),0)::int as cycle_no from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid`;
-  const [created] = await tx<any[]>`
-    insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_current,financial_approved,administrative_approved)
-    values (${vehicleId}::uuid,${Number(last?.cycle_no || 0)+1},true,false,false)
-    returning *,id::text
-  `;
-  return created;
+function hasBranchAccess(
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+  branchCode?: string | null,
+  locationCode?: string | null,
+) {
+  if (isSystemAdmin(user) || user.branchCodes.length === 0) return true;
+  const candidates = [branchCode, locationCode].map((value) => clean(value)).filter(Boolean);
+  return candidates.some((value) => user.branchCodes.includes(value));
 }
 
-async function createNewApprovalCycle(tx: any, vehicleId: string) {
-  await tx`update operations.vehicle_approvals set is_current=false,updated_at=now() where vehicle_id=${vehicleId}::uuid and is_current=true`;
-  return ensureApprovalCycle(tx, vehicleId);
+function assertBranchAccess(
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+  branchCode?: string | null,
+  locationCode?: string | null,
+  message = "لا تملك صلاحية تنفيذ الإجراء على هذا الفرع",
+) {
+  if (!hasBranchAccess(user, branchCode, locationCode)) throw new OperationError(403, "FORBIDDEN", message);
 }
 
-async function assertStatus(tx: any, statusCode: string, note?: string) {
-  const [status] = await tx<any[]>`select * from operations.vehicle_statuses where code=${statusCode} and is_active=true`;
-  if (!status) throw new OperationsError(400, "VALIDATION_ERROR", "حالة السيارة غير صحيحة", { fieldErrors: { statusCode: "اختر حالة صحيحة" } });
-  if (status.requires_note && !clean(note)) throw new OperationsError(400, "VALIDATION_ERROR", "ملاحظات الحالة مطلوبة", { fieldErrors: { statusNote: "ملاحظات الحالة مطلوبة" } });
-  return status;
-}
-
-async function assertDeliveredAllowed(tx: any, vehicleId: string) {
-  const approval = await currentApproval(tx, vehicleId, true);
-  if (!approval?.financial_approved || !approval?.administrative_approved) {
-    const missing = [!approval?.financial_approved ? "الموافقة المالية" : "", !approval?.administrative_approved ? "الموافقة الإدارية" : ""].filter(Boolean).join(" و");
-    throw new OperationsError(409, "APPROVALS_REQUIRED", `لا يمكن تغيير الحالة إلى «مباع تم التسليم» قبل اكتمال ${missing || "الموافقتين"}`);
-  }
-}
-
-async function audit(tx: any, user: SessionUser, action: string, entityType: string, entityId: string, beforeData: unknown, afterData: unknown) {
-  await tx`
-    insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
-    values (${user.id}::uuid,'operations',${action},${entityType},${entityId},${tx.json(beforeData || {})},${tx.json(afterData || {})})
-  `;
-}
-
-async function outbox(tx: any, eventType: string, entityType: string, entityId: string, payload: unknown) {
-  await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,aggregate_type,aggregate_id,payload) values (${eventType},${entityType},${entityId},${entityType},${entityId},${tx.json(payload || {})})`;
-}
-
-async function listMeta(sql: any, user: SessionUser) {
-  const [locations, statuses, branches] = await Promise.all([
-    sql<any[]>`select id::text,code,name,sort_order from operations.locations where is_active=true order by sort_order,name`,
-    sql<any[]>`select code,name,requires_note,counts_in_actual_inventory,is_terminal,sort_order from operations.vehicle_statuses where is_active=true order by sort_order`,
-    isSystemAdmin(user)
-      ? sql<any[]>`select id::text,code,name from core.branches where is_active=true order by sort_order,name`
-      : sql<any[]>`select id::text,code,name from core.branches where is_active=true and code in ${sql(user.branchCodes)} order by sort_order,name`,
+async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const [locations, statuses, checkItems] = await Promise.all([
+    sql<any[]>`select id::text,code,name,branch_code,is_agency,sort_order from operations.locations where is_active=true order by sort_order,name`,
+    sql<any[]>`select code,name,sort_order,is_actual_stock,is_delivery_status,is_terminal from operations.vehicle_statuses where is_active=true order by sort_order`,
+    sql<any[]>`select code,name,sort_order from operations.check_item_definitions where is_active=true order by sort_order`,
   ]);
-  return { locations, statuses, branches, checkItems: CHECK_ITEMS.map(([code,name]) => ({ code,name })), permissions: user.permissionCodes, systemAdmin: isSystemAdmin(user) };
+  return {
+    ok: true,
+    locations,
+    statuses,
+    checkItems,
+    permissions: {
+      canCreateVehicle: hasPermission(user, "operations.vehicle.create"),
+      canEditVehicle: hasPermission(user, "operations.vehicle.edit"),
+      canDeleteVehicle: hasPermission(user, "operations.vehicle.delete"),
+      canArchiveVehicle: hasPermission(user, "operations.vehicle.archive"),
+      canImport: hasPermission(user, "operations.vehicle.import"),
+      canExport: hasPermission(user, "operations.vehicle.export"),
+      canMove: hasPermission(user, "operations.movement.create"),
+      canCreateTransfer: hasPermission(user, "operations.transfer.create"),
+      canApproveFinancial: hasPermission(user, "operations.approval.financial"),
+      canApproveAdministrative: hasPermission(user, "operations.approval.administrative"),
+      canManageSettings: hasPermission(user, "operations.settings.manage"),
+      isSystemAdmin: isSystemAdmin(user),
+    },
+  };
 }
 
-async function listVehicles(sql: any, user: SessionUser, query: Record<string, unknown>) {
-  const search = clean(query.search);
-  const status = clean(query.status);
-  const location = clean(query.location);
-  const branch = clean(query.branch);
-  const archived = clean(query.archived);
-  const page = Math.max(1, integer(query.page, 1));
-  const pageSize = Math.min(5000, Math.max(1, integer(query.pageSize, 25)));
-  const offset = (page - 1) * pageSize;
-  const scope = branchScope(sql,user,"b");
-  const searchTerm = `%${search}%`;
-  const archivedFilter = archived === "true" ? sql`and v.archived_at is not null` : archived === "all" ? sql`` : sql`and v.archived_at is null`;
+async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const search = clean(request.query.search);
+  const location = clean(request.query.location);
+  const status = clean(request.query.status);
+  const model = clean(request.query.model);
+  const agent = clean(request.query.agent);
+  const archived = boolValue(request.query.archived);
+  const activeOnly = !archived;
+  const { page, pageSize, offset } = pageValues(request);
+  const pattern = `%${search}%`;
+  const scope = accessScope(sql, user, "l");
 
-  const baseFilter = sql`
-    v.is_deleted=false
-    ${archivedFilter}
-    ${search ? sql`and (v.vin ilike ${searchTerm} or coalesce(v.car_name,'') ilike ${searchTerm} or coalesce(v.statement,'') ilike ${searchTerm} or coalesce(v.plate_no,'') ilike ${searchTerm})` : sql``}
-    ${status ? sql`and v.status_code=${status}` : sql``}
-    ${location ? sql`and l.code=${location}` : sql``}
-    ${branch ? sql`and b.code=${branch}` : sql``}
-    ${scope}
-  `;
-
-  const [countRow] = await sql<any[]>`
+  const [countRow] = await sql<{ total: number }[]>`
     select count(*)::int as total
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
-    left join core.branches b on b.id=v.branch_id
-    where ${baseFilter}
+    where v.is_deleted=false
+      and (${activeOnly}=false or (v.archived_at is null and v.is_inventory_active=true))
+      and (${archived}=false or v.archived_at is not null)
+      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
+      and (${location}='' or l.code=${location})
+      and (${status}='' or v.status_code=${status})
+      and (${model}='' or coalesce(v.model_year,'')=${model})
+      and (${agent}='' or coalesce(v.agent_name,'') ilike ${`%${agent}%`})
+      and ${scope}
   `;
 
   const rows = await sql<any[]>`
-    select v.id::text,v.vin,v.car_name,v.statement,v.agent_name,v.interior_color,v.exterior_color,v.model_year,v.plate_no,v.batch_no,
-      v.status_code,s.name as status_name,v.status_note,v.shortage_location_note,v.notes,v.has_notes,v.archived_at,v.archive_reason,
-      l.id::text as location_id,l.code as location_code,l.name as location_name,
-      b.id::text as branch_id,b.code as branch_code,b.name as branch_name,
-      a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
-      tr.id as tracking_order_id,tr.sales_order_no as tracking_order_no,tr.status as tracking_status,tr.progress as tracking_progress,tr.is_archived as tracking_archived
+    select
+      v.id::text,v.vin,v.car_name,v.statement,v.agent_name,v.exterior_color,v.interior_color,v.model_year,v.plate_no,v.batch_no,
+      v.location_id::text,l.code as location_code,l.name as location_name,l.branch_code,
+      v.status_code,coalesce(s.name,v.status_code) as status_name,v.source_type,v.has_notes,v.notes,v.state_note,v.shortage_note,
+      v.archived_at,v.archive_reason,v.created_by_name,v.updated_by_name,v.created_at,v.updated_at,v.version,
+      coalesce(a.financial_approved,false) as financial_approved,
+      coalesce(a.administrative_approved,false) as administrative_approved,
+      coalesce(a.financial_note,'') as financial_note,coalesce(a.administrative_note,'') as administrative_note,
+      coalesce(tr.active_orders,0)::int as tracking_active_orders,tr.order_id::text as tracking_order_id,tr.sales_order_no as tracking_order_no,
+      tr.status as tracking_status,coalesce(tr.progress,0)::int as tracking_progress,
+      coalesce(req.active_requests,0)::int as active_transfer_requests
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
-    left join core.branches b on b.id=v.branch_id
     left join operations.vehicle_statuses s on s.code=v.status_code
-    left join operations.vehicle_approvals a on a.vehicle_id=v.id and a.is_current=true
     left join lateral (
-      select o.id::text,o.sales_order_no,o.status,o.is_archived,
-        case when count(vs.id)=0 then 0 else round((count(vs.id) filter(where vs.status='completed')::numeric/count(vs.id)::numeric)*100)::int end as progress
-      from tracking.order_vehicles tov
-      join tracking.orders o on o.id=tov.order_id and coalesce(o.is_deleted,false)=false
-      left join tracking.vehicle_stages vs on vs.vehicle_id=tov.id
-      where tov.operations_vehicle_id=v.id or (tov.operations_vehicle_id is null and tov.vin=v.vin)
-      group by o.id,o.sales_order_no,o.status,o.is_archived,o.updated_at
-      order by (case when o.is_archived=false and o.status<>'completed' then 0 else 1 end),o.updated_at desc
+      select va.* from operations.vehicle_approvals va where va.vehicle_id=v.id and va.is_active=true order by va.cycle_no desc limit 1
+    ) a on true
+    left join lateral (
+      select count(*) over() as active_orders,o.id as order_id,o.sales_order_no,o.status,
+        case when count(vs.id)=0 then 0 else round(100.0*count(vs.id) filter(where vs.status='completed')/count(vs.id)) end as progress
+      from tracking.order_vehicles ov
+      join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false and coalesce(o.is_archived,false)=false
+      left join tracking.vehicle_stages vs on vs.vehicle_id=ov.id
+      where (ov.vehicle_id=v.id or (ov.vehicle_id is null and ov.vin=v.vin))
+      group by o.id,o.sales_order_no,o.status,o.updated_at
+      order by case when o.status='in_progress' then 0 when o.status='not_started' then 1 else 2 end,o.updated_at desc
       limit 1
     ) tr on true
-    where ${baseFilter}
-    order by v.updated_at desc,v.created_at desc
+    left join lateral (
+      select count(distinct r.id)::int as active_requests
+      from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id
+      where rv.vehicle_id=v.id and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
+    ) req on true
+    where v.is_deleted=false
+      and (${activeOnly}=false or (v.archived_at is null and v.is_inventory_active=true))
+      and (${archived}=false or v.archived_at is not null)
+      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
+      and (${location}='' or l.code=${location})
+      and (${status}='' or v.status_code=${status})
+      and (${model}='' or coalesce(v.model_year,'')=${model})
+      and (${agent}='' or coalesce(v.agent_name,'') ilike ${`%${agent}%`})
+      and ${scope}
+    order by v.updated_at desc,v.vin
     limit ${pageSize} offset ${offset}
   `;
-  return { rows, total: Number(countRow?.total || 0), page, pageSize };
+  return { ok: true, rows, total: Number(countRow?.total || 0), page, pageSize };
 }
 
-async function vehicleDetail(sql: any, user: SessionUser, id: string) {
-  const vehicle = await readVehicle(sql,id);
-  if (!vehicle) throw new OperationsError(404,"VEHICLE_NOT_FOUND","السيارة غير موجودة");
-  assertVehicleScope(user,vehicle);
-  const [checks,checkHistory,statusNotes,approvals,approvalEvents,movements,requests,tracking] = await Promise.all([
-    sql<any[]>`select * from operations.vehicle_check_items where vehicle_id=${id}::uuid order by item_name`,
+async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const scope = accessScope(sql, user, "l");
+  const [vehicle] = await sql<any[]>`
+    select v.*,v.id::text,v.location_id::text,l.code as location_code,l.name as location_name,l.branch_code,
+      coalesce(s.name,v.status_code) as status_name
+    from operations.vehicles v
+    left join operations.locations l on l.id=v.location_id
+    left join operations.vehicle_statuses s on s.code=v.status_code
+    where v.id=${id}::uuid and v.is_deleted=false and ${scope}
+  `;
+  if (!vehicle) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة أو لا تملك صلاحية عرضها");
+
+  const [checks, checkHistory, approvals, approvalEvents, movements, transfers, tracking, archiveEvents, notes] = await Promise.all([
+    sql<any[]>`
+      select d.code,d.name,d.sort_order,coalesce(v.status,'unknown') as status,v.note,v.updated_by_name,v.updated_at
+      from operations.check_item_definitions d left join operations.vehicle_check_values v on v.item_code=d.code and v.vehicle_id=${id}::uuid
+      where d.is_active=true order by d.sort_order
+    `,
     sql<any[]>`select * from operations.vehicle_check_history where vehicle_id=${id}::uuid order by created_at desc limit 100`,
-    sql<any[]>`select * from operations.vehicle_status_notes where vehicle_id=${id}::uuid order by created_at desc limit 100`,
-    sql<any[]>`select *,id::text from operations.vehicle_approvals where vehicle_id=${id}::uuid order by cycle_no desc`,
-    sql<any[]>`select e.* from operations.approval_events e where e.vehicle_id=${id}::uuid order by e.created_at desc limit 100`,
-    sql<any[]>`select m.*,m.id::text,fl.name as from_location_name,tl.name as to_location_name from operations.movements m left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id where m.vehicle_id=${id}::uuid order by m.created_at desc limit 100`,
-    sql<any[]>`select r.*,r.id::text from operations.transfer_requests r join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id where rv.vehicle_id=${id}::uuid and r.deleted_at is null order by r.requested_at desc`,
-    sql<any[]>`select o.id::text,o.sales_order_no,o.status,o.is_archived,o.created_at,o.updated_at from tracking.order_vehicles tv join tracking.orders o on o.id=tv.order_id where (tv.operations_vehicle_id=${id}::uuid or tv.vin=${vehicle.vin}) and coalesce(o.is_deleted,false)=false order by o.updated_at desc`,
+    sql<any[]>`select *,id::text from operations.vehicle_approvals where vehicle_id=${id}::uuid order by cycle_no desc,created_at desc`,
+    sql<any[]>`select * from operations.approval_events where vehicle_id=${id}::uuid order by created_at desc limit 100`,
+    sql<any[]>`
+      select m.*,m.id::text,m.batch_id::text,m.transfer_request_id::text,fl.name as from_location_name,tl.name as to_location_name
+      from operations.movements m left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id
+      where m.vehicle_id=${id}::uuid order by m.created_at desc limit 150
+    `,
+    sql<any[]>`
+      select r.id::text,r.request_no,r.request_kind,r.status,r.requested_by_name,r.requested_at,r.completed_at,r.cancelled_at,
+        sl.name as source_location_name,dl.name as destination_location_name
+      from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id
+      left join operations.locations sl on sl.id=r.source_location_id left join operations.locations dl on dl.id=r.destination_location_id
+      where rv.vehicle_id=${id}::uuid order by r.requested_at desc
+    `,
+    sql<any[]>`
+      select o.id::text,o.sales_order_no,o.status,o.is_archived,o.created_at,o.updated_at,
+        case when count(vs.id)=0 then 0 else round(100.0*count(vs.id) filter(where vs.status='completed')/count(vs.id)) end::int as progress
+      from tracking.order_vehicles ov join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false
+      left join tracking.vehicle_stages vs on vs.vehicle_id=ov.id
+      where ov.vehicle_id=${id}::uuid or (ov.vehicle_id is null and ov.vin=${vehicle.vin})
+      group by o.id order by o.updated_at desc
+    `,
+    sql<any[]>`select * from operations.vehicle_archive_events where vehicle_id=${id}::uuid order by created_at desc`,
+    sql<any[]>`select * from operations.vehicle_status_notes where vehicle_id=${id}::uuid order by created_at desc`,
   ]);
-  return { vehicle, checks, checkHistory, statusNotes, approvals, approvalEvents, movements, requests, tracking };
+  return { ok: true, vehicle: { ...vehicle, checks, checkHistory, approvals, approvalEvents, movements, transfers, tracking, archiveEvents, statusNotes: notes } };
 }
 
-async function saveVehicle(sql: any, user: SessionUser, data: any, requestId: string) {
-  assertPermission(user,"operations.vehicle.manage");
-  const id = clean(data.id);
-  const vin = clean(data.vin);
-  if (!vin) throw new OperationsError(400,"VALIDATION_ERROR","رقم الهيكل مطلوب",{fieldErrors:{vin:"رقم الهيكل مطلوب"}});
-  const statusCode = clean(data.statusCode) || "available_for_sale";
-  const statusNote = clean(data.statusNote);
-  const locationId = clean(data.locationId) || null;
-  const branchId = clean(data.branchId) || null;
-  await assertStatus(sql,statusCode,statusNote);
-  if (!isSystemAdmin(user) && branchId) {
-    const [branch] = await sql<any[]>`select code from core.branches where id=${branchId}::uuid`;
-    if (!branch || !user.branchCodes.includes(branch.code)) throw new OperationsError(403,"FORBIDDEN","لا يمكنك ربط السيارة بهذا الفرع");
-  }
-  try {
-    return await sql.begin(async (tx: any) => {
-      if (id) {
-        const before = await readVehicle(tx,id,true);
-        if (!before) throw new OperationsError(404,"VEHICLE_NOT_FOUND","السيارة غير موجودة");
-        assertVehicleScope(user,before);
-        const [duplicate] = await tx<any[]>`select id::text from operations.vehicles where vin=${vin} and id<>${id}::uuid and is_deleted=false`;
-        if (duplicate) throw new OperationsError(409,"DUPLICATE_VIN","رقم الهيكل موجود بالفعل");
-        const [updated] = await tx<any[]>`
-          update operations.vehicles set
-            vin=${vin},car_name=${clean(data.carName)||null},statement=${clean(data.statement)||null},agent_name=${clean(data.agentName)||null},
-            interior_color=${clean(data.interiorColor)||null},exterior_color=${clean(data.exteriorColor)||null},model_year=${clean(data.modelYear)||null},
-            plate_no=${clean(data.plateNo)||null},batch_no=${clean(data.batchNo)||null},notes=${clean(data.notes)||null},
-            shortage_location_note=${clean(data.shortageLocationNote)||null},branch_id=${branchId}::uuid,updated_by=${user.id}::uuid,updated_at=now()
-          where id=${id}::uuid returning *,id::text
-        `;
-        await audit(tx,user,"vehicle_updated","vehicle",id,before,updated);
-        return updated;
-      }
-      const [duplicate] = await tx<any[]>`select id::text from operations.vehicles where vin=${vin} and is_deleted=false`;
-      if (duplicate) throw new OperationsError(409,"DUPLICATE_VIN","رقم الهيكل موجود بالفعل");
-      const [created] = await tx<any[]>`
-        insert into operations.vehicles(
-          vin,car_name,statement,agent_name,interior_color,exterior_color,model_year,plate_no,batch_no,location_id,branch_id,status_code,status_note,
-          shortage_location_note,source_type,has_notes,notes,created_by,updated_by
-        ) values (
-          ${vin},${clean(data.carName)||null},${clean(data.statement)||null},${clean(data.agentName)||null},${clean(data.interiorColor)||null},${clean(data.exteriorColor)||null},
-          ${clean(data.modelYear)||null},${clean(data.plateNo)||null},${clean(data.batchNo)||null},${locationId}::uuid,${branchId}::uuid,${statusCode},${statusNote||null},
-          ${clean(data.shortageLocationNote)||null},${clean(data.sourceType)||null},${statusCode==='has_notes'},${clean(data.notes)||null},${user.id}::uuid,${user.id}::uuid
-        ) returning *,id::text
-      `;
-      if (statusCode === "under_delivery") await createNewApprovalCycle(tx,created.id);
-      if (statusNote) await tx`insert into operations.vehicle_status_notes(vehicle_id,status_code,note,created_by,created_by_name) values (${created.id}::uuid,${statusCode},${statusNote},${user.id}::uuid,${user.fullName})`;
-      await audit(tx,user,"vehicle_created","vehicle",created.id,{},created);
-      await outbox(tx,"operations.vehicle.created","vehicle",created.id,{vin,requestId});
-      return created;
-    });
-  } catch (error) { throw error; }
+async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const { page, pageSize, offset } = pageValues(request);
+  const search = clean(request.query.search);
+  const from = clean(request.query.from);
+  const to = clean(request.query.to);
+  const status = clean(request.query.status);
+  const userSearch = clean(request.query.user);
+  const dateFrom = clean(request.query.dateFrom);
+  const dateTo = clean(request.query.dateTo);
+  const timeFrom = clean(request.query.timeFrom);
+  const timeTo = clean(request.query.timeTo);
+  const pattern = `%${search}%`;
+  const scope = accessScope(sql, user, "tl");
+  const rows = await sql<any[]>`
+    select m.id::text,m.batch_id::text,m.transfer_request_id::text,m.created_at,m.movement_type,m.old_status,m.new_status,m.note,m.state_note,m.shortage_note,
+      m.performed_by_name,m.performed_by_role,m.performed_by_branch,v.id::text as vehicle_id,v.vin,v.car_name,v.statement,
+      fl.code as from_location_code,fl.name as from_location_name,tl.code as to_location_code,tl.name as to_location_name
+    from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
+    left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id
+    where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
+      and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
+      and (${status}='' or m.new_status=${status})
+      and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`})
+      and (${dateFrom}='' or m.created_at::date>=${dateFrom}::date)
+      and (${dateTo}='' or m.created_at::date<=${dateTo}::date)
+      and (${timeFrom}='' or m.created_at::time>=${timeFrom}::time)
+      and (${timeTo}='' or m.created_at::time<=${timeTo}::time)
+      and ${scope}
+    order by m.created_at desc limit ${pageSize} offset ${offset}
+  `;
+  const [count] = await sql<{ total: number }[]>`
+    select count(*)::int as total from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
+    left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id
+    where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
+      and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or m.new_status=${status})
+      and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`})
+      and (${dateFrom}='' or m.created_at::date>=${dateFrom}::date) and (${dateTo}='' or m.created_at::date<=${dateTo}::date)
+      and (${timeFrom}='' or m.created_at::time>=${timeFrom}::time) and (${timeTo}='' or m.created_at::time<=${timeTo}::time)
+      and ${scope}
+  `;
+  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 
-async function performMovement(sql: any, user: SessionUser, data: any, requestId: string) {
-  assertPermission(user,"operations.movement.create");
-  const vehicleInputs = Array.isArray(data.vehicles) ? data.vehicles : [];
-  const vehicleIds = ids(vehicleInputs.map((item:any)=>item.id));
-  if (!vehicleIds.length) throw new OperationsError(400,"VALIDATION_ERROR","اختر سيارة واحدة على الأقل");
-  const toLocationId = clean(data.toLocationId);
-  const toStatusCode = clean(data.toStatusCode);
-  if (!toLocationId || !toStatusCode) throw new OperationsError(400,"VALIDATION_ERROR","اختر المكان والحالة الجديدة");
-  const status = await assertStatus(sql,toStatusCode,vehicleInputs.length===1 ? clean(vehicleInputs[0]?.statusNote) : "placeholder");
-  if (status.requires_note && vehicleInputs.some((item:any)=>!clean(item.statusNote))) throw new OperationsError(400,"VALIDATION_ERROR","ملاحظات الحالة مطلوبة لكل سيارة");
-  const idempotencyKey = clean(data.idempotencyKey) || requestId;
-  return sql.begin(async (tx:any) => {
-    const [duplicate] = await tx<any[]>`select b.id::text,b.batch_no from operations.movement_batches b join operations.movements m on m.batch_id=b.id where m.idempotency_key like ${`${idempotencyKey}:%`} limit 1`;
-    if (duplicate) return { duplicate:true,batchId:duplicate.id,batchNo:duplicate.batch_no };
-    const [destination] = await tx<any[]>`select id::text,code,name from operations.locations where id=${toLocationId}::uuid and is_active=true`;
-    if (!destination) throw new OperationsError(400,"INVALID_DESTINATION_LOCATION","المكان الجديد غير صحيح");
-    const rows = await tx<any[]>`
-      select v.*,v.id::text,l.code as location_code,l.name as location_name,b.code as branch_code,b.name as branch_name
-      from operations.vehicles v left join operations.locations l on l.id=v.location_id left join core.branches b on b.id=v.branch_id
-      where v.id in ${tx(vehicleIds)} and v.is_deleted=false for update
-    `;
-    if (rows.length !== vehicleIds.length) throw new OperationsError(404,"VEHICLE_NOT_FOUND","تعذر العثور على إحدى السيارات المختارة");
-    rows.forEach((vehicle:any)=>assertVehicleScope(user,vehicle));
-    const batchNo = nextBatchNo();
-    const [batch] = await tx<any[]>`insert into operations.movement_batches(batch_no,vehicle_count,destination_location_id,new_status,to_location_id,to_status_code,general_note,performed_by,performed_by_name) values (${batchNo},${rows.length},${toLocationId}::uuid,${toStatusCode},${toLocationId}::uuid,${toStatusCode},${clean(data.generalNote)||null},${user.id}::uuid,${user.fullName}) returning id::text,batch_no`;
-    const movements:any[]=[];
-    for (const vehicle of rows) {
-      if (vehicle.status_code === "delivered" && toStatusCode !== "delivered") throw new OperationsError(409,"INVALID_STATUS_TRANSITION",`السيارة ${vehicle.vin} تم تسليمها ولا يمكن تحريكها بهذا الفلو`);
-      if (toStatusCode === "delivered") await assertDeliveredAllowed(tx,vehicle.id);
-      const input = vehicleInputs.find((item:any)=>clean(item.id)===vehicle.id) || {};
-      const before = {...vehicle};
-      const after = {...vehicle,location_id:toLocationId,status_code:toStatusCode,status_note:clean(input.statusNote)||null,shortage_location_note:clean(input.shortageLocationNote)||null};
-      const [movement] = await tx<any[]>`
-        insert into operations.movements(batch_id,vehicle_id,from_location_id,to_location_id,old_status,new_status,note,status_note,shortage_location_note,performed_by,performed_by_name,before_data,after_data,idempotency_key)
-        values (${batch.id}::uuid,${vehicle.id}::uuid,${vehicle.location_id}::uuid,${toLocationId}::uuid,${vehicle.status_code},${toStatusCode},${clean(input.note)||clean(data.generalNote)||null},${clean(input.statusNote)||null},${clean(input.shortageLocationNote)||null},${user.id}::uuid,${user.fullName},${tx.json(before)},${tx.json(after)},${`${idempotencyKey}:${vehicle.id}`})
-        returning *,id::text
-      `;
-      await tx`update operations.vehicles set location_id=${toLocationId}::uuid,status_code=${toStatusCode},status_note=${clean(input.statusNote)||null},shortage_location_note=${clean(input.shortageLocationNote)||null},has_notes=${toStatusCode==='has_notes'},updated_by=${user.id}::uuid,updated_at=now() where id=${vehicle.id}::uuid`;
-      if (toStatusCode === "under_delivery" && vehicle.status_code !== "under_delivery") await createNewApprovalCycle(tx,vehicle.id);
-      if (clean(input.statusNote)) await tx`insert into operations.vehicle_status_notes(vehicle_id,status_code,note,movement_id,created_by,created_by_name) values (${vehicle.id}::uuid,${toStatusCode},${clean(input.statusNote)},${movement.id}::uuid,${user.id}::uuid,${user.fullName})`;
-      if (Array.isArray(input.checks) && vehicle.location_code === "agency") {
-        for (const check of input.checks) {
-          const code=clean(check.code); const definition=CHECK_ITEMS.find(([itemCode])=>itemCode===code); if(!definition) continue;
-          const [previous] = await tx<any[]>`select * from operations.vehicle_check_items where vehicle_id=${vehicle.id}::uuid and item_code=${code}`;
-          await tx`insert into operations.vehicle_check_items(vehicle_id,item_code,item_name,status,note,updated_by,updated_by_name,updated_at) values (${vehicle.id}::uuid,${code},${definition[1]},${clean(check.status)||'not_checked'},${clean(check.note)||null},${user.id}::uuid,${user.fullName},now()) on conflict(vehicle_id,item_code) do update set status=excluded.status,note=excluded.note,updated_by=excluded.updated_by,updated_by_name=excluded.updated_by_name,updated_at=now()`;
-          await tx`insert into operations.vehicle_check_history(vehicle_id,item_code,item_name,old_status,new_status,note,movement_id,actor_id,actor_name) values (${vehicle.id}::uuid,${code},${definition[1]},${previous?.status||null},${clean(check.status)||'not_checked'},${clean(check.note)||null},${movement.id}::uuid,${user.id}::uuid,${user.fullName})`;
-        }
-      }
-      await audit(tx,user,"vehicle_moved","vehicle",vehicle.id,before,after);
-      await outbox(tx,"operations.vehicle.moved","vehicle",vehicle.id,{vin:vehicle.vin,batchId:batch.id,batchNo,requestId});
-      movements.push(movement);
-    }
-    return { batchId:batch.id,batchNo,movements };
-  });
-}
-
-async function createTransfer(sql:any,user:SessionUser,data:any,requestId:string) {
-  assertPermission(user,"operations.transfer.create");
-  const vehicleIds=ids(data.vehicleIds); const destinationLocationId=clean(data.destinationLocationId); const requestType=clean(data.requestType)==='photo'?'photo':'transfer';
-  if(!vehicleIds.length) throw new OperationsError(400,"VALIDATION_ERROR","اختر سيارة واحدة على الأقل");
-  if(requestType==='transfer'&&!destinationLocationId) throw new OperationsError(400,"VALIDATION_ERROR","اختر المكان المستهدف");
-  const idempotencyKey=clean(data.idempotencyKey)||requestId;
-  return sql.begin(async(tx:any)=>{
-    const [existing]=await tx<any[]>`select id::text,request_no from operations.transfer_requests where idempotency_key=${idempotencyKey} and deleted_at is null`;
-    if(existing) return {duplicate:true,id:existing.id,requestNo:existing.request_no};
-    const vehicles=await tx<any[]>`select v.*,v.id::text,l.code as location_code,l.name as location_name,b.code as branch_code,b.name as branch_name from operations.vehicles v left join operations.locations l on l.id=v.location_id left join core.branches b on b.id=v.branch_id where v.id in ${tx(vehicleIds)} and v.is_deleted=false for update`;
-    if(vehicles.length!==vehicleIds.length) throw new OperationsError(404,"VEHICLE_NOT_FOUND","تعذر العثور على إحدى السيارات المختارة");
-    vehicles.forEach((vehicle:any)=>assertVehicleScope(user,vehicle));
-    const conflicts=await tx<any[]>`select rv.vehicle_id::text,r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id in ${tx(vehicleIds)} and r.deleted_at is null and r.cancelled_at is null and r.current_stage not in ('completed','cancelled')`;
-    if(conflicts.length) throw new OperationsError(409,"DUPLICATE_ACTIVE_REQUEST",`توجد سيارة مرتبطة بطلب جارٍ: ${conflicts[0].request_no}`);
-    let destination:any=null;
-    if(destinationLocationId){[destination]=await tx<any[]>`select id::text,code,name from operations.locations where id=${destinationLocationId}::uuid and is_active=true`; if(!destination) throw new OperationsError(400,"INVALID_DESTINATION_LOCATION","المكان المستهدف غير صحيح");}
-    if(requestType==='transfer'&&vehicles.every((vehicle:any)=>vehicle.location_id===destinationLocationId)) throw new OperationsError(409,"INVALID_DESTINATION_LOCATION","المكان المستهدف مطابق للمكان الحالي لكل السيارات");
-    const requestNo=nextRequestNo(requestType==='photo'?'PH':'TR');
-    const [requestRow]=await tx<any[]>`insert into operations.transfer_requests(request_no,department_code,transfer_type,request_type,source_location_id,destination_location_id,status,current_stage,requested_by,requested_by_name,requested_at,notes,idempotency_key) values (${requestNo},'operations',${requestType},${requestType},${vehicles[0]?.location_id}::uuid,${destinationLocationId}::uuid,'request_received','request_received',${user.id}::uuid,${user.fullName},now(),${clean(data.notes)||null},${idempotencyKey}) returning *,id::text`;
-    for(const vehicle of vehicles){await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status_code,vehicle_snapshot) values (${requestRow.id}::uuid,${vehicle.id}::uuid,${vehicle.location_id}::uuid,${vehicle.status_code},${tx.json(vehicle)})`;}
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,stage_code,action,note,actor_id,actor_name,actor_branch_codes,after_data) values (${requestRow.id}::uuid,'request_received','request_received','created',${clean(data.notes)||null},${user.id}::uuid,${user.fullName},${user.branchCodes}::text[],${tx.json({vehicleIds,destinationLocationId,requestType})})`;
-    await audit(tx,user,"transfer_request_created","transfer_request",requestRow.id,{},requestRow);
-    await outbox(tx,requestType==='photo'?'operations.photo_request.created':'operations.transfer_request.created','transfer_request',requestRow.id,{requestNo,vehicleIds,requestId});
-    return {id:requestRow.id,requestNo};
-  });
-}
-
-async function transferAction(sql:any,user:SessionUser,data:any,requestId:string) {
-  const action=clean(data.action); const requestIdValue=clean(data.requestId);
-  if(!requestIdValue) throw new OperationsError(400,"VALIDATION_ERROR","رقم الطلب الداخلي مطلوب");
-  if(action==='delete_transfer') assertPermission(user,"operations.transfer.delete");
-  else if(action==='cancel_transfer') assertPermission(user,"operations.transfer.cancel");
-  else assertPermission(user,"operations.transfer.progress");
-  return sql.begin(async(tx:any)=>{
-    const [requestRow]=await tx<any[]>`select r.*,r.id::text,sl.name as source_location_name,dl.name as destination_location_name from operations.transfer_requests r left join operations.locations sl on sl.id=r.source_location_id left join operations.locations dl on dl.id=r.destination_location_id where r.id=${requestIdValue}::uuid and r.deleted_at is null for update`;
-    if(!requestRow) throw new OperationsError(404,"CONFLICT","طلب النقل غير موجود");
-    const vehicles=await tx<any[]>`select v.*,v.id::text,b.code as branch_code,l.name as location_name from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id left join core.branches b on b.id=v.branch_id left join operations.locations l on l.id=v.location_id where rv.transfer_request_id=${requestIdValue}::uuid order by v.vin for update`;
-    if(!isSystemAdmin(user)&&!vehicles.some((vehicle:any)=>vehicle.branch_code&&user.branchCodes.includes(vehicle.branch_code))) throw new OperationsError(403,"FORBIDDEN","طلب النقل خارج نطاق فروعك");
-    if(action==='delete_transfer'){
-      const [progressEvent]=await tx<any[]>`select id from operations.transfer_request_events where transfer_request_id=${requestIdValue}::uuid and action<>'created' limit 1`;
-      if(progressEvent) throw new OperationsError(409,"CONFLICT","لا يمكن مسح الطلب بعد بدء تنفيذه؛ استخدم إلغاء الطلب");
-      await tx`update operations.transfer_requests set deleted_at=now(),deleted_by=${user.id}::uuid,delete_reason=${clean(data.reason)||'حذف قبل بدء التنفيذ'} where id=${requestIdValue}::uuid`;
-      await tx`insert into operations.transfer_request_events(transfer_request_id,stage,stage_code,action,note,actor_id,actor_name,actor_branch_codes,before_data) values (${requestIdValue}::uuid,${requestRow.current_stage},${requestRow.current_stage},'deleted',${clean(data.reason)||null},${user.id}::uuid,${user.fullName},${user.branchCodes}::text[],${tx.json(requestRow)})`;
-      await audit(tx,user,"transfer_request_deleted","transfer_request",requestIdValue,requestRow,{deleted:true,reason:clean(data.reason)});
-      return {message:"تم مسح طلب النقل قبل بدء التنفيذ"};
-    }
-    if(action==='cancel_transfer'){
-      if(!clean(data.reason)) throw new OperationsError(400,"VALIDATION_ERROR","سبب الإلغاء مطلوب");
-      if(['completed','cancelled'].includes(requestRow.current_stage)) throw new OperationsError(409,"CONFLICT","لا يمكن إلغاء هذا الطلب");
-      await tx`update operations.transfer_requests set current_stage='cancelled',status='cancelled',cancelled_at=now(),cancelled_by=${user.id}::uuid,cancel_reason=${clean(data.reason)} where id=${requestIdValue}::uuid`;
-      await tx`insert into operations.transfer_request_events(transfer_request_id,stage,stage_code,action,note,actor_id,actor_name,actor_branch_codes,before_data,after_data) values (${requestIdValue}::uuid,'cancelled','cancelled','cancelled',${clean(data.reason)},${user.id}::uuid,${user.fullName},${user.branchCodes}::text[],${tx.json(requestRow)},${tx.json({current_stage:'cancelled'})})`;
-      await outbox(tx,"operations.transfer_request.cancelled","transfer_request",requestIdValue,{requestNo:requestRow.request_no,requestId});
-      return {message:"تم إلغاء الطلب"};
-    }
-    const transitions:Record<string,{from:string,to:string}>={send_vehicle:{from:'request_received',to:'vehicle_sent'},receive_vehicle:{from:'vehicle_sent',to:'vehicle_received'},complete_transfer:{from:'vehicle_received',to:'completed'}};
-    const transition=transitions[action]; if(!transition) throw new OperationsError(400,"VALIDATION_ERROR","الإجراء غير مدعوم");
-    if(requestRow.current_stage!==transition.from) throw new OperationsError(409,"CONFLICT",`المرحلة الحالية هي «${stageLabel(requestRow.current_stage)}» ولا تسمح بهذا الإجراء`);
-    if(action==='receive_vehicle'){
-      if(!requestRow.destination_location_id) throw new OperationsError(409,"INVALID_DESTINATION_LOCATION","الطلب لا يحتوي على مكان مستهدف");
-      const batchNo=nextBatchNo();
-      const [batch]=await tx<any[]>`insert into operations.movement_batches(batch_no,vehicle_count,destination_location_id,to_location_id,general_note,performed_by,performed_by_name) values (${batchNo},${vehicles.length},${requestRow.destination_location_id}::uuid,${requestRow.destination_location_id}::uuid,${`استلام من طلب ${requestRow.request_no}`},${user.id}::uuid,${user.fullName}) returning id::text`;
-      for(const vehicle of vehicles){
-        const before={...vehicle}; const after={...vehicle,location_id:requestRow.destination_location_id};
-        await tx`insert into operations.movements(batch_id,request_id,transfer_request_id,vehicle_id,from_location_id,to_location_id,old_status,new_status,note,performed_by,performed_by_name,before_data,after_data,idempotency_key) values (${batch.id}::uuid,${requestIdValue},${requestIdValue}::uuid,${vehicle.id}::uuid,${vehicle.location_id}::uuid,${requestRow.destination_location_id}::uuid,${vehicle.status_code},${vehicle.status_code},${`استلام السيارة من طلب ${requestRow.request_no}`},${user.id}::uuid,${user.fullName},${tx.json(before)},${tx.json(after)},${`transfer:${requestIdValue}:receive:${vehicle.id}`})`;
-        await tx`update operations.vehicles set location_id=${requestRow.destination_location_id}::uuid,updated_by=${user.id}::uuid,updated_at=now() where id=${vehicle.id}::uuid`;
-      }
-    }
-    await tx`update operations.transfer_requests set current_stage=${transition.to},status=${transition.to},completed_at=${transition.to==='completed'?tx`now()`:null} where id=${requestIdValue}::uuid`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,stage_code,action,note,actor_id,actor_name,actor_branch_codes,before_data,after_data) values (${requestIdValue}::uuid,${transition.to},${transition.to},${action},${clean(data.note)||null},${user.id}::uuid,${user.fullName},${user.branchCodes}::text[],${tx.json(requestRow)},${tx.json({current_stage:transition.to})})`;
-    await audit(tx,user,`transfer_request_${transition.to}`,"transfer_request",requestIdValue,requestRow,{current_stage:transition.to});
-    await outbox(tx,`operations.transfer_request.${transition.to}`,"transfer_request",requestIdValue,{requestNo:requestRow.request_no,requestId});
-    return {message:`تم تحديث الطلب إلى «${stageLabel(transition.to)}»`};
-  });
-}
-
-async function listTransfers(sql:any,user:SessionUser,query:Record<string,unknown>) {
-  assertPermission(user,"operations.transfer.view");
-  const requestType=clean(query.requestType); const stage=clean(query.stage); const search=clean(query.search); const searchTerm=`%${search}%`; const page=Math.max(1,integer(query.page,1)); const pageSize=Math.min(1000,Math.max(1,integer(query.pageSize,25))); const offset=(page-1)*pageSize;
-  const scope=isSystemAdmin(user)?sql``:user.branchCodes.length?sql`and exists(select 1 from operations.transfer_request_vehicles srv join operations.vehicles sv on sv.id=srv.vehicle_id left join core.branches sb on sb.id=sv.branch_id where srv.transfer_request_id=r.id and sb.code in ${sql(user.branchCodes)})`:sql`and false`;
-  const filter=sql`r.deleted_at is null ${requestType?sql`and r.request_type=${requestType}`:sql``} ${stage?sql`and r.current_stage=${stage}`:sql``} ${search?sql`and (r.request_no ilike ${searchTerm} or coalesce(r.requested_by_name,'') ilike ${searchTerm} or exists(select 1 from operations.transfer_request_vehicles x join operations.vehicles xv on xv.id=x.vehicle_id where x.transfer_request_id=r.id and xv.vin ilike ${searchTerm}))`:sql``} ${scope}`;
-  const [countRow]=await sql<any[]>`select count(*)::int as total from operations.transfer_requests r where ${filter}`;
-  const rows=await sql<any[]>`
-    select r.*,r.id::text,sl.name as source_location_name,dl.name as destination_location_name,
-      count(rv.vehicle_id)::int as vehicles_count,string_agg(v.vin,', ' order by v.vin) as vins
+async function listTransfers(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const { page, pageSize, offset } = pageValues(request);
+  const status = clean(request.query.status);
+  const kind = clean(request.query.kind) || "transfer";
+  const search = clean(request.query.search);
+  const completedRaw = clean(request.query.completed);
+  const hasCompletedFilter = completedRaw !== "";
+  const completed = boolValue(request.query.completed);
+  const pattern = `%${search}%`;
+  const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
+  const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+  const where = sql`
+    r.is_deleted=false and r.request_kind=${kind}
+    and (${status}='' or r.status=${status})
+    and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
+    and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
+      select 1 from operations.transfer_request_vehicles rx join operations.vehicles vx on vx.id=rx.vehicle_id
+      where rx.transfer_request_id=r.id and vx.vin ilike ${pattern}
+    ))
+    and (${isAdmin}=true or r.source_branch_code in ${sql(branches)} or r.destination_branch_code in ${sql(branches)} or r.requested_by=${user.id}::uuid)
+  `;
+  const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.transfer_requests r where ${where}`;
+  const rows = await sql<any[]>`
+    select r.id::text,r.request_no,r.request_kind,r.status,r.note,r.requested_by::text,r.requested_by_name,r.requested_by_role,r.requested_by_branch,
+      r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.cancelled_at,r.cancellation_reason,r.version,
+      sl.code as source_location_code,sl.name as source_location_name,dl.code as destination_location_code,dl.name as destination_location_name,
+      count(rv.vehicle_id)::int as vehicles_count,
+      coalesce(json_agg(json_build_object('vehicle_id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'model_year',v.model_year,'source_location_id',rv.source_location_id::text,'source_status',rv.source_status) order by v.vin) filter(where v.id is not null),'[]') as vehicles
     from operations.transfer_requests r
     left join operations.locations sl on sl.id=r.source_location_id left join operations.locations dl on dl.id=r.destination_location_id
     left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id
-    where ${filter}
-    group by r.id,sl.name,dl.name order by r.requested_at desc limit ${pageSize} offset ${offset}
+    where ${where}
+    group by r.id,sl.code,sl.name,dl.code,dl.name
+    order by r.requested_at desc limit ${pageSize} offset ${offset}
   `;
-  return {rows,total:Number(countRow?.total||0),page,pageSize};
+  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 
-async function transferDetail(sql:any,user:SessionUser,id:string) {
-  const [requestRow]=await sql<any[]>`select r.*,r.id::text,sl.name as source_location_name,dl.name as destination_location_name from operations.transfer_requests r left join operations.locations sl on sl.id=r.source_location_id left join operations.locations dl on dl.id=r.destination_location_id where r.id=${id}::uuid and r.deleted_at is null`;
-  if(!requestRow) throw new OperationsError(404,"CONFLICT","الطلب غير موجود");
-  const vehicles=await sql<any[]>`select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.interior_color,v.exterior_color,l.name as location_name,b.code as branch_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id left join operations.locations l on l.id=v.location_id left join core.branches b on b.id=v.branch_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
-  if(!isSystemAdmin(user)&&!vehicles.some((v:any)=>v.branch_code&&user.branchCodes.includes(v.branch_code))) throw new OperationsError(403,"FORBIDDEN","الطلب خارج نطاق فروعك");
-  const events=await sql<any[]>`select * from operations.transfer_request_events where transfer_request_id=${id}::uuid order by created_at`;
-  return {request:requestRow,vehicles,events};
-}
-
-async function listMovements(sql:any,user:SessionUser,query:Record<string,unknown>) {
-  const search=clean(query.search); const fromDate=clean(query.fromDate); const toDate=clean(query.toDate); const fromLocation=clean(query.fromLocation); const toLocation=clean(query.toLocation); const status=clean(query.status); const page=Math.max(1,integer(query.page,1)); const pageSize=Math.min(5000,Math.max(1,integer(query.pageSize,25))); const offset=(page-1)*pageSize; const searchTerm=`%${search}%`; const scope=branchScope(sql,user,"b");
-  const filter=sql`v.is_deleted=false ${search?sql`and (v.vin ilike ${searchTerm} or coalesce(v.car_name,'') ilike ${searchTerm} or coalesce(m.performed_by_name,'') ilike ${searchTerm})`:sql``} ${fromDate?sql`and m.created_at>=${fromDate}::date`:sql``} ${toDate?sql`and m.created_at<(${toDate}::date+interval '1 day')`:sql``} ${fromLocation?sql`and fl.code=${fromLocation}`:sql``} ${toLocation?sql`and tl.code=${toLocation}`:sql``} ${status?sql`and m.new_status=${status}`:sql``} ${scope}`;
-  const [countRow]=await sql<any[]>`select count(*)::int as total from operations.movements m join operations.vehicles v on v.id=m.vehicle_id left join core.branches b on b.id=v.branch_id left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id where ${filter}`;
-  const rows=await sql<any[]>`select m.*,m.id::text,v.vin,v.car_name,v.statement,v.model_year,fl.name as from_location_name,tl.name as to_location_name,b.name as branch_name from operations.movements m join operations.vehicles v on v.id=m.vehicle_id left join core.branches b on b.id=v.branch_id left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id where ${filter} order by m.created_at desc limit ${pageSize} offset ${offset}`;
-  return {rows,total:Number(countRow?.total||0),page,pageSize};
-}
-
-async function listApprovals(sql:any,user:SessionUser,query:Record<string,unknown>) {
-  assertPermission(user,"operations.approvals.view");
-  const filter=clean(query.filter); const search=clean(query.search); const searchTerm=`%${search}%`; const scope=branchScope(sql,user,"b");
-  const rows=await sql<any[]>`
-    select v.id::text as vehicle_id,v.vin,v.car_name,v.statement,v.model_year,v.status_code,l.name as location_name,b.name as branch_name,
-      a.id::text as approval_id,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
-      a.financial_approved_at,a.administrative_approved_at,fu.full_name as financial_approved_by_name,au.full_name as administrative_approved_by_name
-    from operations.vehicles v
-    join operations.vehicle_approvals a on a.vehicle_id=v.id and a.is_current=true
-    left join operations.locations l on l.id=v.location_id left join core.branches b on b.id=v.branch_id
-    left join core.users fu on fu.id=a.financial_approved_by left join core.users au on au.id=a.administrative_approved_by
-    where v.is_deleted=false and v.archived_at is null and v.status_code='under_delivery'
-      ${search?sql`and (v.vin ilike ${searchTerm} or coalesce(v.car_name,'') ilike ${searchTerm})`:sql``}
-      ${filter==='missing_financial'?sql`and a.financial_approved=false`:filter==='missing_administrative'?sql`and a.administrative_approved=false`:filter==='completed'?sql`and a.financial_approved=true and a.administrative_approved=true`:sql``}
-      ${scope}
-    order by v.updated_at desc
+async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const filter = clean(request.query.filter);
+  const search = clean(request.query.search);
+  const pattern = `%${search}%`;
+  const scope = accessScope(sql, user, "l");
+  const rows = await sql<any[]>`
+    select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
+      a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.updated_at,
+      v.vin,v.car_name,v.statement,v.model_year,v.status_code,l.code as location_code,l.name as location_name
+    from operations.vehicle_approvals a join operations.vehicles v on v.id=a.vehicle_id left join operations.locations l on l.id=v.location_id
+    where a.is_active=true and v.is_deleted=false and v.archived_at is null and v.status_code='under_delivery'
+      and (${filter}='' or (${filter}='missing_financial' and a.financial_approved=false) or (${filter}='missing_administrative' and a.administrative_approved=false) or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true))
+      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}) and ${scope}
+    order by a.updated_at desc
   `;
-  return {rows};
+  return { ok: true, rows };
 }
 
-async function approvalAction(sql:any,user:SessionUser,data:any) {
-  const type=clean(data.type); const action=clean(data.approvalAction); const vehicleId=clean(data.vehicleId); const note=clean(data.note);
-  if(!vehicleId) throw new OperationsError(400,"VALIDATION_ERROR","السيارة مطلوبة");
-  if(type==='financial') assertPermission(user,"operations.approvals.financial");
-  else if(type==='administrative') assertPermission(user,"operations.approvals.administrative");
-  else if(action==='reset') assertPermission(user,"operations.approvals.reset");
-  else throw new OperationsError(400,"VALIDATION_ERROR","نوع الموافقة غير صحيح");
-  return sql.begin(async(tx:any)=>{
-    const vehicle=await readVehicle(tx,vehicleId,true); if(!vehicle) throw new OperationsError(404,"VEHICLE_NOT_FOUND","السيارة غير موجودة"); assertVehicleScope(user,vehicle);
-    if(vehicle.status_code!=='under_delivery') throw new OperationsError(409,"VEHICLE_NOT_ELIGIBLE","الموافقات متاحة فقط لحالة مباع تحت التسليم");
-    const approval=await ensureApprovalCycle(tx,vehicleId); const before={...approval};
-    if(action==='reset'){
-      await tx`update operations.vehicle_approvals set financial_approved=false,administrative_approved=false,financial_approved_by=null,administrative_approved_by=null,financial_approved_at=null,administrative_approved_at=null,updated_at=now() where id=${approval.id}::uuid`;
-      await tx`insert into operations.approval_events(approval_id,vehicle_id,approval_type,action,note,actor_id,actor_name,before_data,after_data) values (${approval.id}::uuid,${vehicleId}::uuid,'all','reset',${note||null},${user.id}::uuid,${user.fullName},${tx.json(before)},${tx.json({financial_approved:false,administrative_approved:false})})`;
-      return {message:"تم مسح الموافقتين مع الاحتفاظ بالسجل"};
-    }
-    if(!['approve','revert','note'].includes(action)) throw new OperationsError(400,"VALIDATION_ERROR","إجراء الموافقة غير صحيح");
-    const approved=action==='approve'; const column=type==='financial'?'financial':'administrative';
-    if(action==='note'){
-      if(type==='financial') await tx`update operations.vehicle_approvals set financial_note=${note||null},updated_at=now() where id=${approval.id}::uuid`;
-      else await tx`update operations.vehicle_approvals set administrative_note=${note||null},updated_at=now() where id=${approval.id}::uuid`;
-    } else if(type==='financial') {
-      await tx`update operations.vehicle_approvals set financial_approved=${approved},financial_approved_by=${approved?user.id:null}::uuid,financial_approved_at=${approved?tx`now()`:null},financial_reverted_by=${approved?null:user.id}::uuid,financial_reverted_at=${approved?null:tx`now()`},financial_note=coalesce(${note||null},financial_note),updated_at=now() where id=${approval.id}::uuid`;
-    } else {
-      await tx`update operations.vehicle_approvals set administrative_approved=${approved},administrative_approved_by=${approved?user.id:null}::uuid,administrative_approved_at=${approved?tx`now()`:null},administrative_reverted_by=${approved?null:user.id}::uuid,administrative_reverted_at=${approved?null:tx`now()`},administrative_note=coalesce(${note||null},administrative_note),updated_at=now() where id=${approval.id}::uuid`;
-    }
-    const after=await currentApproval(tx,vehicleId,false);
-    await tx`insert into operations.approval_events(approval_id,vehicle_id,approval_type,action,note,actor_id,actor_name,before_data,after_data) values (${approval.id}::uuid,${vehicleId}::uuid,${type},${action==='approve'?'approved':action==='revert'?'reverted':'note_updated'},${note||null},${user.id}::uuid,${user.fullName},${tx.json(before)},${tx.json(after)})`;
-    await audit(tx,user,`approval_${column}_${action}`,"vehicle",vehicleId,before,after);
-    await outbox(tx,`operations.vehicle.approval_${action==='approve'?'granted':action==='revert'?'reversed':'updated'}`,"vehicle",vehicleId,{type,vin:vehicle.vin});
-    return {message:action==='approve'?`تمت ${type==='financial'?'الموافقة المالية':'الموافقة الإدارية'}`:action==='revert'?`تم التراجع عن ${type==='financial'?'الموافقة المالية':'الموافقة الإدارية'}`:"تم حفظ الملاحظة"};
-  });
+async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const { page, pageSize, offset } = pageValues(request);
+  const location = clean(request.query.location);
+  const metric = clean(request.query.metric);
+  const search = clean(request.query.search);
+  const pattern = `%${search}%`;
+  const scope = accessScope(sql, user, "l");
+  const condition = metric === "actual_total"
+    ? sql`v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true)`
+    : metric === "under_delivery"
+      ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery'`
+      : metric === "available_for_sale"
+        ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale'`
+        : metric === "reserved"
+          ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved'`
+          : metric === "delivered"
+            ? sql`v.status_code='delivered'`
+            : metric === "has_notes"
+              ? sql`v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true)`
+              : sql`v.archived_at is null and v.is_inventory_active=true`;
+  const base = sql`
+    v.is_deleted=false
+    and (${location}='' or l.code=${location}) and ${condition}
+    and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
+    and ${scope}
+  `;
+  const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code where ${base}`;
+  const rows = await sql<any[]>`
+    select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.interior_color,v.exterior_color,l.name as location_name,coalesce(s.name,v.status_code) as status_name
+    from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
+    where ${base} order by v.vin limit ${pageSize} offset ${offset}
+  `;
+  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 
-async function archiveAction(sql:any,user:SessionUser,data:any) {
-  assertPermission(user,"operations.archive.manage"); const vehicleId=clean(data.vehicleId); const action=clean(data.action); const reason=clean(data.reason);
-  if(!vehicleId||!reason) throw new OperationsError(400,"VALIDATION_ERROR","السيارة وسبب الإجراء مطلوبان");
-  return sql.begin(async(tx:any)=>{
-    const vehicle=await readVehicle(tx,vehicleId,true); if(!vehicle) throw new OperationsError(404,"VEHICLE_NOT_FOUND","السيارة غير موجودة"); assertVehicleScope(user,vehicle);
-    if(action==='restore'){
-      await tx`update operations.vehicles set archived_at=null,archived_by=null,archive_reason=null,updated_by=${user.id}::uuid,updated_at=now() where id=${vehicleId}::uuid`;
-      await tx`update operations.vehicle_archives set restored_by=${user.id}::uuid,restored_by_name=${user.fullName},restored_at=now(),restore_reason=${reason} where id=(select id from operations.vehicle_archives where vehicle_id=${vehicleId}::uuid and restored_at is null order by archived_at desc limit 1)`;
-      await audit(tx,user,"vehicle_restored","vehicle",vehicleId,vehicle,{...vehicle,archived_at:null}); return {message:"تمت استعادة السيارة من الأرشيف"};
-    }
-    if(vehicle.status_code!=='delivered') throw new OperationsError(409,"VEHICLE_NOT_ELIGIBLE","لا يمكن أرشفة السيارة قبل حالة مباع تم التسليم");
-    const approval=await currentApproval(tx,vehicleId,true); if(!approval?.financial_approved||!approval?.administrative_approved) throw new OperationsError(409,"APPROVALS_REQUIRED","لا يمكن الأرشفة قبل اكتمال الموافقتين");
-    const [activeTransfer]=await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${vehicleId}::uuid and r.deleted_at is null and r.cancelled_at is null and r.current_stage not in ('completed','cancelled') limit 1`;
-    if(activeTransfer) throw new OperationsError(409,"CONFLICT",`السيارة مرتبطة بطلب جارٍ ${activeTransfer.request_no}`);
-    const [incompleteTracking]=await tx<any[]>`select o.sales_order_no from tracking.order_vehicles tv join tracking.orders o on o.id=tv.order_id where (tv.operations_vehicle_id=${vehicleId}::uuid or tv.vin=${vehicle.vin}) and coalesce(o.is_deleted,false)=false and o.is_archived=false and o.status<>'completed' limit 1`;
-    if(incompleteTracking) throw new OperationsError(409,"CONFLICT",`طلب التراكينج ${incompleteTracking.sales_order_no} غير مكتمل`);
-    await tx`insert into operations.vehicle_archives(vehicle_id,reason,snapshot,archived_by,archived_by_name) values (${vehicleId}::uuid,${reason},${tx.json(vehicle)},${user.id}::uuid,${user.fullName})`;
-    await tx`update operations.vehicles set archived_at=now(),archived_by=${user.id}::uuid,archive_reason=${reason},updated_by=${user.id}::uuid,updated_at=now() where id=${vehicleId}::uuid`;
-    await audit(tx,user,"vehicle_archived","vehicle",vehicleId,vehicle,{...vehicle,archived_at:new Date().toISOString(),archive_reason:reason}); await outbox(tx,"operations.vehicle.archived","vehicle",vehicleId,{vin:vehicle.vin}); return {message:"تمت أرشفة السيارة"};
-  });
-}
-
-async function deleteVehicle(sql:any,user:SessionUser,data:any,requestId:string) {
-  assertPermission(user,"operations.vehicle.delete"); const vehicleId=clean(data.vehicleId); const reason=clean(data.reason); if(!vehicleId||!reason) throw new OperationsError(400,"VALIDATION_ERROR","سبب المسح مطلوب");
-  return sql.begin(async(tx:any)=>{
-    const vehicle=await readVehicle(tx,vehicleId,true); if(!vehicle) throw new OperationsError(404,"VEHICLE_NOT_FOUND","السيارة غير موجودة"); assertVehicleScope(user,vehicle);
-    const [relations]=await tx<any[]>`
-      select
-        (select count(*) from operations.movements where vehicle_id=${vehicleId}::uuid)::int as movements,
-        (select count(*) from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid)::int as approvals,
-        (select count(*) from operations.vehicle_shortages where vehicle_id=${vehicleId}::uuid)::int as shortages,
-        (select count(*) from operations.transfer_request_vehicles where vehicle_id=${vehicleId}::uuid)::int as requests,
-        (select count(*) from operations.vehicle_check_items where vehicle_id=${vehicleId}::uuid)::int as checks,
-        (select count(*) from operations.vehicle_status_notes where vehicle_id=${vehicleId}::uuid)::int as notes,
-        (select count(*) from operations.vehicle_archives where vehicle_id=${vehicleId}::uuid)::int as archives,
-        (select count(*) from tracking.order_vehicles where operations_vehicle_id=${vehicleId}::uuid or vin=${vehicle.vin})::int as tracking
+async function dashboardRequests(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const kind = clean(request.query.kind) || "transfer";
+  const search = clean(request.query.search);
+  const pattern = `%${search}%`;
+  if (kind === "photo") {
+    const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
+    const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+    const where = sql`
+      r.is_deleted=false
+      and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
+        select 1 from operations.photography_request_vehicles px join operations.vehicles pv on pv.id=px.vehicle_id
+        where px.request_id=r.id and pv.vin ilike ${pattern}
+      ))
+      and (${isAdmin}=true or r.requested_by_branch in ${sql(branches)} or r.requested_by=${user.id}::uuid)
     `;
-    const counts=Object.entries(relations||{}).filter(([,value])=>Number(value)>0);
-    if(counts.length) throw new OperationsError(409,"VEHICLE_HAS_HISTORY","السيارة لها تاريخ تشغيلي ولا يمكن مسحها؛ استخدم الأرشفة",{details:Object.fromEntries(counts)});
-    await tx`insert into operations.vehicle_deletion_audit(vehicle_internal_id,vin,vehicle_snapshot,reason,deleted_by,deleted_by_name,deleted_by_email,deleted_by_roles,request_id) values (${vehicleId}::uuid,${vehicle.vin},${tx.json(vehicle)},${reason},${user.id}::uuid,${user.fullName},${user.email},${user.roleCodes}::text[],${requestId})`;
-    await tx`delete from operations.vehicles where id=${vehicleId}::uuid`;
-    await audit(tx,user,"vehicle_physically_deleted","vehicle",vehicleId,vehicle,{reason,requestId});
-    return {message:"تم مسح السيارة نهائيًا"};
+    const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.photography_requests r where ${where}`;
+    const rows = await sql<any[]>`
+      select r.id::text,r.request_no,r.status,r.requested_by_name as creator_name,r.requested_at,r.photography_date,r.note,
+        coalesce(json_agg(json_build_object('vin',v.vin,'car_name',v.car_name,'statement',v.statement) order by v.vin) filter(where v.id is not null),'[]') as vehicles
+      from operations.photography_requests r left join operations.photography_request_vehicles rv on rv.request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id
+      where ${where}
+      group by r.id order by r.requested_at desc limit 500
+    `;
+    return { ok: true, rows, total: Number(count?.total || 0) };
+  }
+  return listTransfers(sql, { ...request, query: { ...request.query, kind: "transfer", pageSize: "200" } } as VercelRequest, user);
+}
+
+async function createVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const vin = clean(body.vin);
+  const locationId = clean(body.locationId);
+  const statusCode = clean(body.statusCode) || "available_for_sale";
+  if (!vin || !locationId) throw new OperationError(400, "VALIDATION_ERROR", "رقم الهيكل والمكان مطلوبان", { fieldErrors: { vin: !vin ? "مطلوب" : "", locationId: !locationId ? "مطلوب" : "" } });
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [valid] = await tx<any[]>`select l.id::text as location_id,l.code as location_code,l.branch_code,s.code as status_code from operations.locations l cross join operations.vehicle_statuses s where l.id=${locationId}::uuid and l.is_active=true and s.code=${statusCode} and s.is_active=true`;
+    if (!valid) throw new OperationError(400, "VALIDATION_ERROR", "المكان أو الحالة غير صحيحة");
+    assertBranchAccess(user, valid.branch_code, valid.location_code, "لا تملك صلاحية إضافة سيارة في هذا الفرع");
+    const [row] = await tx<any[]>`
+      insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,source_type,notes,state_note,shortage_note,has_notes,created_by,created_by_name,updated_by,updated_by_name)
+      values (${vin},${clean(body.carName)||null},${clean(body.statement)||null},${clean(body.agentName)||null},${clean(body.exteriorColor)||null},${clean(body.interiorColor)||null},${clean(body.modelYear)||null},${clean(body.plateNo)||null},${clean(body.batchNo)||null},${locationId}::uuid,${statusCode},${clean(body.sourceType)||null},${clean(body.notes)||null},${clean(body.stateNote)||null},${clean(body.shortageNote)||null},${statusCode==='has_notes' || Boolean(clean(body.notes))},${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
+      returning *,id::text
+    `;
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values (${who.id}::uuid,'operations','vehicle_created','vehicle',${row.id},${tx.json(row)})`;
+    return { ok: true, vehicle: row, message: "تمت إضافة السيارة" };
   });
 }
 
-async function importVehicles(sql:any,user:SessionUser,data:any) {
-  assertPermission(user,"operations.import"); const mode=clean(data.mode); const rows=Array.isArray(data.rows)?data.rows:[]; if(!['replace','append','update'].includes(mode)) throw new OperationsError(400,"VALIDATION_ERROR","وضع الاستيراد غير صحيح"); if(!rows.length) throw new OperationsError(400,"IMPORT_VALIDATION_FAILED","لا توجد صفوف للاستيراد");
-  return sql.begin(async(tx:any)=>{
-    const [batch]=await tx<any[]>`insert into operations.import_batches(mode,file_name,total_rows,status,created_by,created_by_name) values (${mode},${clean(data.fileName)||null},${rows.length},'processing',${user.id}::uuid,${user.fullName}) returning id::text`;
-    const seen=new Set<string>(); const report:any[]=[]; const fileVins:string[]=[]; let inserted=0,updated=0,skipped=0,failed=0;
-    for(let index=0;index<rows.length;index++){
-      const row=rows[index]||{}; const vin=clean(row.vin||row['رقم الهيكل']||row['الهيكل']); const rowNo=index+2; let result='failed',errorMessage='';
-      try{
-        if(!vin) throw new Error('رقم الهيكل مطلوب'); if(seen.has(vin)) throw new Error('رقم الهيكل مكرر داخل الملف'); seen.add(vin); fileVins.push(vin);
-        const [existing]=await tx<any[]>`select *,id::text from operations.vehicles where vin=${vin} and is_deleted=false for update`;
-        if(mode==='append'&&existing){result='skipped';skipped++;}
-        else if(mode==='update'&&!existing){result='skipped';skipped++;}
-        else if(existing){
-          await tx`update operations.vehicles set car_name=coalesce(${clean(row.carName||row['السيارة'])||null},car_name),statement=coalesce(${clean(row.statement||row['البيان'])||null},statement),agent_name=coalesce(${clean(row.agentName||row['الوكيل'])||null},agent_name),interior_color=coalesce(${clean(row.interiorColor||row['اللون الداخلي'])||null},interior_color),exterior_color=coalesce(${clean(row.exteriorColor||row['اللون الخارجي'])||null},exterior_color),model_year=coalesce(${clean(row.modelYear||row['الموديل'])||null},model_year),plate_no=coalesce(${clean(row.plateNo||row['اللوحة'])||null},plate_no),batch_no=coalesce(${clean(row.batchNo||row['اسم الدفعة'])||null},batch_no),notes=coalesce(${clean(row.notes||row['ملاحظات'])||null},notes),updated_by=${user.id}::uuid,updated_at=now() where id=${existing.id}::uuid`; result='updated';updated++;
-        } else {
-          const statusCode=clean(row.statusCode)||'available_for_sale'; if(['under_delivery','delivered'].includes(statusCode)) throw new Error('حالات البيع لا تُستورد من الشيت وتُنفذ من الحركة والموافقات'); await assertStatus(tx,statusCode,clean(row.statusNote));
-          await tx`insert into operations.vehicles(vin,car_name,statement,agent_name,interior_color,exterior_color,model_year,plate_no,batch_no,status_code,status_note,has_notes,notes,created_by,updated_by) values (${vin},${clean(row.carName||row['السيارة'])||null},${clean(row.statement||row['البيان'])||null},${clean(row.agentName||row['الوكيل'])||null},${clean(row.interiorColor||row['اللون الداخلي'])||null},${clean(row.exteriorColor||row['اللون الخارجي'])||null},${clean(row.modelYear||row['الموديل'])||null},${clean(row.plateNo||row['اللوحة'])||null},${clean(row.batchNo||row['اسم الدفعة'])||null},${statusCode},${clean(row.statusNote)||null},${statusCode==='has_notes'},${clean(row.notes||row['ملاحظات'])||null},${user.id}::uuid,${user.id}::uuid)`; result='inserted';inserted++;
+async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const id = clean(body.id);
+  if (!id) throw new OperationError(400, "VALIDATION_ERROR", "معرف السيارة مطلوب");
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [before] = await tx<any[]>`
+      select v.*,v.id::text,l.branch_code,l.code as location_code
+      from operations.vehicles v left join operations.locations l on l.id=v.location_id
+      where v.id=${id}::uuid and v.is_deleted=false for update
+    `;
+    if (!before) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
+    assertBranchAccess(user, before.branch_code, before.location_code, "لا تملك صلاحية تعديل سيارة في هذا الفرع");
+    const vin = clean(body.vin) || before.vin;
+    if (vin !== before.vin && !isSystemAdmin(user)) throw new OperationError(403, "FORBIDDEN", "تغيير رقم الهيكل متاح لمدير النظام فقط");
+    const locationId = clean(body.locationId) || before.location_id;
+    const statusCode = clean(body.statusCode) || before.status_code;
+    if (String(locationId) !== String(before.location_id) || statusCode !== before.status_code) {
+      throw new OperationError(400, "INVALID_STATUS_TRANSITION", "تغيير المكان أو الحالة يجب أن يتم من تبويب الحركة للحفاظ على سجل الحركات");
+    }
+    const [row] = await tx<any[]>`
+      update operations.vehicles set vin=${vin},car_name=${clean(body.carName)||null},statement=${clean(body.statement)||null},agent_name=${clean(body.agentName)||null},
+        exterior_color=${clean(body.exteriorColor)||null},interior_color=${clean(body.interiorColor)||null},model_year=${clean(body.modelYear)||null},plate_no=${clean(body.plateNo)||null},batch_no=${clean(body.batchNo)||null},
+        source_type=${clean(body.sourceType)||null},notes=${clean(body.notes)||null},state_note=${clean(body.stateNote)||null},shortage_note=${clean(body.shortageNote)||null},
+        has_notes=${statusCode==='has_notes' || Boolean(clean(body.notes))},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+      where id=${id}::uuid returning *,id::text
+    `;
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data) values (${who.id}::uuid,'operations','vehicle_updated','vehicle',${id},${tx.json(before)},${tx.json(row)})`;
+    return { ok: true, vehicle: row, message: "تم تحديث بيانات السيارة" };
+  });
+}
+
+async function deleteVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, idempotencyId: string) {
+  const id = clean(body.id);
+  const reason = clean(body.reason);
+  if (!id || !reason) throw new OperationError(400, "VALIDATION_ERROR", "السيارة وسبب المسح مطلوبان");
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [vehicle] = await tx<any[]>`
+      select v.*,v.id::text,l.branch_code,l.code as location_code
+      from operations.vehicles v left join operations.locations l on l.id=v.location_id
+      where v.id=${id}::uuid and v.is_deleted=false for update
+    `;
+    if (!vehicle) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
+    assertBranchAccess(user, vehicle.branch_code, vehicle.location_code, "لا تملك صلاحية مسح سيارة في هذا الفرع");
+    const [history] = await tx<any[]>`
+      select
+        (select count(*) from operations.movements where vehicle_id=${id}::uuid)::int as movements,
+        (select count(*) from operations.vehicle_approvals where vehicle_id=${id}::uuid)::int as approvals,
+        (select count(*) from operations.approval_events where vehicle_id=${id}::uuid)::int as approval_events,
+        (select count(*) from operations.vehicle_status_notes where vehicle_id=${id}::uuid)::int as status_notes,
+        (select count(*) from operations.vehicle_check_history where vehicle_id=${id}::uuid)::int as check_history,
+        (select count(*) from operations.vehicle_check_values where vehicle_id=${id}::uuid)::int as checks,
+        (select count(*) from operations.transfer_request_vehicles where vehicle_id=${id}::uuid)::int as transfers,
+        (select count(*) from operations.photography_request_vehicles where vehicle_id=${id}::uuid)::int as photos,
+        (select count(*) from tracking.order_vehicles where vehicle_id=${id}::uuid or vin=${vehicle.vin})::int as tracking,
+        (select count(*) from operations.vehicle_archive_events where vehicle_id=${id}::uuid)::int as archives,
+        (select count(*) from operations.event_outbox where vehicle_id=${id}::uuid or vin=${vehicle.vin})::int as outbox_events
+    `;
+    const total = Object.values(history || {}).reduce<number>((sum, value) => sum + Number(value || 0), 0);
+    if (total > 0) throw new OperationError(409, "VEHICLE_HAS_HISTORY", "السيارة لها تاريخ تشغيلي ولا يمكن مسحها. استخدم الأرشفة بدلًا من ذلك.", { safeDetails: history });
+    await tx`
+      insert into operations.vehicle_deletion_audit(vehicle_internal_id,vin,vehicle_snapshot,reason,deleted_by,deleted_by_name,deleted_by_email,deleted_by_role,request_id)
+      values (${id}::uuid,${vehicle.vin},${tx.json(vehicle)},${reason},${who.id}::uuid,${who.name},${who.email},${who.role},${idempotencyId})
+    `;
+    await tx`delete from operations.vehicles where id=${id}::uuid`;
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data) values (${who.id}::uuid,'operations','vehicle_deleted','vehicle',${vehicle.vin},${tx.json(vehicle)},${tx.json({ reason, requestId: idempotencyId })})`;
+    return { ok: true, message: "تم مسح السيارة نهائيًا" };
+  });
+}
+
+async function archiveVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const id = clean(body.id);
+  const reason = clean(body.reason);
+  if (!id || !reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الأرشفة مطلوب");
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [v] = await tx<any[]>`
+      select v.*,v.id::text,l.branch_code,l.code as location_code
+      from operations.vehicles v left join operations.locations l on l.id=v.location_id
+      where v.id=${id}::uuid and v.is_deleted=false and v.archived_at is null for update
+    `;
+    if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة أو مؤرشفة بالفعل");
+    assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية أرشفة سيارة في هذا الفرع");
+    if (v.status_code !== "delivered") throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة قبل وصول السيارة إلى حالة مباع تم التسليم");
+    const [state] = await tx<any[]>`
+      select
+        exists(select 1 from operations.vehicle_approvals where vehicle_id=${id}::uuid and financial_approved=true and administrative_approved=true) as approvals,
+        exists(select 1 from operations.movements where vehicle_id=${id}::uuid) as movement,
+        exists(select 1 from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${id}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed') as active_transfer,
+        exists(
+          select 1 from tracking.order_vehicles ov join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false
+          where (ov.vehicle_id=${id}::uuid or (ov.vehicle_id is null and ov.vin=${v.vin})) and o.status='completed'
+            and not exists(select 1 from tracking.vehicle_stages vs where vs.vehicle_id=ov.id and vs.status<>'completed')
+        ) as tracking_complete
+    `;
+    if (!state.approvals) throw new OperationError(409, "APPROVALS_REQUIRED", "لا يمكن الأرشفة قبل اكتمال الموافقة المالية والإدارية");
+    if (!state.movement) throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة بدون سجل حركة");
+    if (state.active_transfer) throw new OperationError(409, "CONFLICT", "لا يمكن الأرشفة لوجود طلب نقل نشط");
+    if (!state.tracking_complete) throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة قبل اكتمال طلب التراكينج بنسبة 100%");
+    const [updated] = await tx<any[]>`update operations.vehicles set archived_at=now(),archived_by=${who.id}::uuid,archived_by_name=${who.name},archive_reason=${reason},is_inventory_active=false,updated_at=now() where id=${id}::uuid returning *,id::text`;
+    await tx`insert into operations.vehicle_archive_events(vehicle_id,action,reason,actor_id,actor_name,snapshot) values (${id}::uuid,'archived',${reason},${who.id}::uuid,${who.name},${tx.json(updated)})`;
+    return { ok: true, message: "تمت أرشفة السيارة", vehicle: updated };
+  });
+}
+
+async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const items = Array.isArray(body.items) ? body.items : [];
+  const destinationLocationId = clean(body.destinationLocationId);
+  const newStatus = clean(body.newStatus);
+  if (!items.length || !destinationLocationId || !newStatus) throw new OperationError(400, "VALIDATION_ERROR", "اختر سيارة واحدة على الأقل والمكان والحالة الجديدة");
+  const vehicleIds = [...new Set(items.map((item: any) => clean(item.vehicleId)).filter(Boolean))];
+  if (vehicleIds.length !== items.length) throw new OperationError(400, "VALIDATION_ERROR", "لا يمكن اختيار السيارة نفسها أكثر من مرة");
+  const [destination] = await sql<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
+  const [status] = await sql<any[]>`select code,name from operations.vehicle_statuses where code=${newStatus} and is_active=true`;
+  if (!destination) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", "المكان الجديد غير صحيح");
+  if (!status) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
+  assertBranchAccess(user, destination.branch_code, destination.code, "الحركة المباشرة متاحة فقط إلى موقع داخل الفروع المسموح بها؛ استخدم طلب نقل للانتقال إلى فرع آخر");
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [batch] = await tx<any[]>`
+      insert into operations.movement_batches(destination_location_id,new_status,general_note,requested_count,performed_by,performed_by_name,performed_by_role,performed_by_branch)
+      values (${destinationLocationId}::uuid,${newStatus},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text
+    `;
+    const moved: any[] = [];
+    for (const raw of items) {
+      const vehicleId = clean(raw.vehicleId);
+      const [v] = await tx<any[]>`
+        select v.*,v.id::text,l.branch_code,l.code as location_code
+        from operations.vehicles v left join operations.locations l on l.id=v.location_id
+        where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update
+      `;
+      if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", `السيارة ${vehicleId} غير موجودة`);
+      assertBranchAccess(user, v.branch_code, v.location_code, `لا تملك صلاحية تحريك السيارة ${v.vin}`);
+      if (String(v.location_id) === destinationLocationId && v.status_code === newStatus) throw new OperationError(409, "CONFLICT", `السيارة ${v.vin} موجودة بالفعل في المكان والحالة المختارين`);
+      if (newStatus === "has_notes" && !clean(raw.stateNote)) throw new OperationError(400, "VALIDATION_ERROR", `ملاحظات الحالة مطلوبة للسيارة ${v.vin}`);
+      if (newStatus === "delivered") {
+        if (v.status_code !== "under_delivery") throw new OperationError(409, "INVALID_STATUS_TRANSITION", `يجب أن تكون السيارة ${v.vin} في حالة مباع تحت التسليم قبل التسليم النهائي`);
+        const [approval] = await tx<any[]>`select financial_approved,administrative_approved from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid and is_active=true order by cycle_no desc limit 1`;
+        if (!approval?.financial_approved || !approval?.administrative_approved) throw new OperationError(409, "APPROVALS_REQUIRED", `لا يمكن تسليم السيارة ${v.vin} قبل اكتمال الموافقتين`);
+      }
+      if (newStatus === "under_delivery" && v.status_code !== "under_delivery") {
+        await tx`update operations.vehicle_approvals set is_active=false where vehicle_id=${vehicleId}::uuid and is_active=true`;
+        const [cycle] = await tx<{ next: number }[]>`select coalesce(max(cycle_no),0)+1 as next from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid`;
+        await tx`insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active) values (${vehicleId}::uuid,${Number(cycle?.next || 1)},true)`;
+      }
+      if (v.status_code === "under_delivery" && !["under_delivery", "delivered"].includes(newStatus)) {
+        await tx`update operations.vehicle_approvals set is_active=false where vehicle_id=${vehicleId}::uuid and is_active=true`;
+      }
+      const before = { ...v };
+      const [movement] = await tx<any[]>`
+        insert into operations.movements(vehicle_id,from_location_id,to_location_id,old_status,new_status,note,state_note,shortage_note,performed_by,performed_by_name,performed_by_role,performed_by_branch,batch_id,movement_type,before_data)
+        values (${vehicleId}::uuid,${v.location_id},${destinationLocationId}::uuid,${v.status_code},${newStatus},${clean(raw.note)||clean(body.note)||null},${clean(raw.stateNote)||null},${clean(raw.shortageNote)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${batch.id}::uuid,'direct',${tx.json(before)}) returning id::text
+      `;
+      const [updated] = await tx<any[]>`
+        update operations.vehicles set location_id=${destinationLocationId}::uuid,status_code=${newStatus},state_note=${clean(raw.stateNote)||null},shortage_note=${clean(raw.shortageNote)||null},
+          has_notes=${newStatus==='has_notes'},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+        where id=${vehicleId}::uuid returning *,id::text
+      `;
+      await tx`update operations.movements set after_data=${tx.json(updated)} where id=${movement.id}::uuid`;
+      if (clean(raw.stateNote)) await tx`insert into operations.vehicle_status_notes(vehicle_id,status_code,note,movement_id,created_by,created_by_name) values (${vehicleId}::uuid,${newStatus},${clean(raw.stateNote)},${movement.id}::uuid,${who.id}::uuid,${who.name})`;
+      if (v.location_id && Array.isArray(raw.checks)) {
+        for (const check of raw.checks) {
+          const itemCode = clean(check.itemCode);
+          if (!itemCode) continue;
+          const [old] = await tx<any[]>`select status,note from operations.vehicle_check_values where vehicle_id=${vehicleId}::uuid and item_code=${itemCode}`;
+          await tx`
+            insert into operations.vehicle_check_values(vehicle_id,item_code,status,note,updated_by,updated_by_name,updated_at)
+            values (${vehicleId}::uuid,${itemCode},${clean(check.status)||'unknown'},${clean(check.note)||null},${who.id}::uuid,${who.name},now())
+            on conflict(vehicle_id,item_code) do update set status=excluded.status,note=excluded.note,updated_by=excluded.updated_by,updated_by_name=excluded.updated_by_name,updated_at=now()
+          `;
+          await tx`insert into operations.vehicle_check_history(vehicle_id,item_code,old_status,new_status,note,movement_id,changed_by,changed_by_name) values (${vehicleId}::uuid,${itemCode},${old?.status||null},${clean(check.status)||'unknown'},${clean(check.note)||null},${movement.id}::uuid,${who.id}::uuid,${who.name})`;
         }
-      }catch(error){errorMessage=error instanceof Error?error.message:'خطأ غير معروف';failed++;}
-      report.push({rowNo,vin,result,error:errorMessage}); await tx`insert into operations.import_rows(batch_id,row_no,vin,payload,result,error_message) values (${batch.id}::uuid,${rowNo},${vin||null},${tx.json(row)},${result},${errorMessage||null})`;
+      }
+      await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values ('operations.vehicle.moved','vehicle',${vehicleId},${vehicleId}::uuid,${v.vin},${who.id}::uuid,${who.name},${destination.branch_code},'تم تحريك سيارة',${`${v.vin} إلى ${destination.name}`},${tx.json({ movementId: movement.id, batchId: batch.id })})`;
+      moved.push({ vehicleId, vin: v.vin, movementId: movement.id });
     }
-    if(mode==='replace'&&fileVins.length){
-      await tx`update operations.vehicles set archived_at=coalesce(archived_at,now()),archive_reason=coalesce(archive_reason,'غير موجود في آخر استبدال كامل للمخزون'),archived_by=${user.id}::uuid,updated_at=now() where is_deleted=false and archived_at is null and vin not in ${tx(fileVins)}`;
-    }
-    await tx`update operations.import_batches set inserted_rows=${inserted},updated_rows=${updated},skipped_rows=${skipped},failed_rows=${failed},status='completed',completed_at=now() where id=${batch.id}::uuid`;
-    await audit(tx,user,"vehicles_imported","import_batch",batch.id,{}, {mode,inserted,updated,skipped,failed}); return {batchId:batch.id,inserted,updated,skipped,failed,report};
+    return { ok: true, batchId: batch.id, moved, message: `تم تنفيذ الحركة على ${moved.length} سيارة` };
   });
 }
 
-async function dashboardVehicles(sql:any,user:SessionUser,query:Record<string,unknown>) {
-  const metric=clean(query.metric); const location=clean(query.location); const search=clean(query.search); const searchTerm=`%${search}%`; const scope=branchScope(sql,user,"b");
-  const metricFilter=metric==='actual'?sql`and s.counts_in_actual_inventory=true`:metric==='under_delivery'?sql`and v.status_code='under_delivery'`:metric==='available_for_sale'?sql`and v.status_code='available_for_sale'`:metric==='reserved'?sql`and v.status_code='reserved'`:metric==='delivered'?sql`and v.status_code='delivered'`:metric==='has_notes'?sql`and v.status_code='has_notes'`:sql``;
-  const rows=await sql<any[]>`select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.interior_color,v.exterior_color,l.name as location_name,s.name as status_name from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code left join core.branches b on b.id=v.branch_id where v.is_deleted=false and v.archived_at is null ${location?sql`and l.code=${location}`:sql``} ${metricFilter} ${search?sql`and (v.vin ilike ${searchTerm} or coalesce(v.car_name,'') ilike ${searchTerm} or coalesce(v.statement,'') ilike ${searchTerm})`:sql``} ${scope} order by v.vin limit 5000`;
-  return {rows};
+async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const vehicleIds = [...new Set((Array.isArray(body.vehicleIds) ? body.vehicleIds : []).map(clean).filter(Boolean))];
+  const destinationLocationId = clean(body.destinationLocationId);
+  if (!vehicleIds.length || !destinationLocationId) throw new OperationError(400, "VALIDATION_ERROR", "اختر السيارات والمكان المستهدف");
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [destination] = await tx<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
+    if (!destination) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", "المكان المستهدف غير صحيح");
+    const cars: any[] = [];
+    for (const vehicleId of vehicleIds) {
+      const [v] = await tx<any[]>`select v.*,v.id::text,l.branch_code,l.code as location_code from operations.vehicles v left join operations.locations l on l.id=v.location_id where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update`;
+      if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "إحدى السيارات غير موجودة");
+      if (String(v.location_id) === destinationLocationId) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", `السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
+      const [active] = await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
+      if (active) throw new OperationError(409, "DUPLICATE_ACTIVE_REQUEST", `السيارة ${v.vin} مرتبطة بطلب نقل نشط ${active.request_no}`);
+      if (!isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(v.branch_code || v.location_code)) throw new OperationError(403, "FORBIDDEN", `لا تملك صلاحية إنشاء طلب للسيارة ${v.vin}`);
+      cars.push(v);
+    }
+    const source = cars[0];
+    if (cars.some((vehicle) => String(vehicle.location_id) !== String(source.location_id))) {
+      throw new OperationError(400, "INVALID_SOURCE_LOCATION", "يجب أن تكون كل سيارات طلب النقل في المكان المصدر نفسه");
+    }
+    const [sequence] = await tx<{ n: number }[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;
+    const requestNo = `TR-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n || 1).padStart(6,'0')}`;
+    const [request] = await tx<any[]>`
+      insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,note)
+      values (${requestNo},'operations','transfer','transfer',${source.location_id},${destinationLocationId}::uuid,'request_received',${who.id}::uuid,${who.name},${who.role},${who.branch},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null}) returning *,id::text
+    `;
+    for (const v of cars) await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status) values (${request.id}::uuid,${v.id}::uuid,${v.location_id},${v.status_code})`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values (${request.id}::uuid,'request_received','created',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json({ requestNo, vehicleIds })})`;
+    await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values ('operations.transfer_request.created','transfer_request',${request.id},${who.id}::uuid,${who.name},${request.source_branch_code},${request.destination_branch_code},'طلب نقل جديد',${requestNo},${tx.json({ vehicleIds })})`;
+    return { ok: true, request, message: "تم إنشاء طلب النقل" };
+  });
 }
 
-async function dashboardRequests(sql:any,user:SessionUser,query:Record<string,unknown>) {
-  const requestType=clean(query.requestType)||'transfer'; const result=await listTransfers(sql,user,{requestType,pageSize:500,page:1,search:query.search}); return result;
+const transferOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"];
+
+async function transferAction(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const id = clean(body.id);
+  const action = clean(body.transferAction);
+  const reason = clean(body.reason);
+  const who = actor(user);
+  if (!id || !action) throw new OperationError(400, "VALIDATION_ERROR", "الطلب والإجراء مطلوبان");
+  return sql.begin(async (tx) => {
+    const [r] = await tx<any[]>`select *,id::text from operations.transfer_requests where id=${id}::uuid and is_deleted=false for update`;
+    if (!r) throw new OperationError(404, "CONFLICT", "طلب النقل غير موجود");
+    if (r.cancelled_at) throw new OperationError(409, "CONFLICT", "طلب النقل ملغي");
+    const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
+    if (action === "delete") {
+      if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "الحذف متاح لمنشئ الطلب أو صاحب الصلاحية فقط");
+      const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
+      if (r.status !== "request_received" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
+      await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${who.id}::uuid,updated_at=now() where id=${id}::uuid`;
+      await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'deleted',${reason||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json({ request:r,items })})`;
+      return { ok: true, message: "تم حذف طلب النقل قبل بدء التنفيذ" };
+    }
+    if (action === "cancel") {
+      if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
+      if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء طلب النقل");
+      await tx`update operations.transfer_requests set cancelled_at=now(),cancelled_by=${who.id}::uuid,cancellation_reason=${reason},updated_at=now(),version=version+1 where id=${id}::uuid`;
+      await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'cancelled',${reason},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json(r)})`;
+      return { ok: true, message: "تم إلغاء طلب النقل مع الحفاظ على السجل" };
+    }
+    const currentIndex = transferOrder.indexOf(r.status);
+    const next = clean(body.nextStatus) || transferOrder[currentIndex + 1];
+    if (!next || transferOrder.indexOf(next) !== currentIndex + 1) throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل طلب النقل بالترتيب");
+    const stagePermission: Record<string, string> = { vehicle_sent: "operations.transfer.send_vehicle", vehicle_received: "operations.transfer.receive_vehicle", completed: "operations.transfer.complete" };
+    if (stagePermission[next] && !hasPermission(user, stagePermission[next])) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية تنفيذ هذه المرحلة");
+    if (next === "vehicle_sent" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.source_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة إرسال السيارة خاصة بالفرع المصدر");
+    if (next === "vehicle_received" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.destination_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة استلام السيارة خاصة بالفرع المستهدف");
+    if (next === "vehicle_received") {
+      for (const v of items) {
+        const [locked] = await tx<any[]>`select *,id::text from operations.vehicles where id=${v.id}::uuid for update`;
+        const [movement] = await tx<any[]>`
+          insert into operations.movements(vehicle_id,from_location_id,to_location_id,old_status,new_status,note,performed_by,performed_by_name,performed_by_role,performed_by_branch,transfer_request_id,movement_type,before_data)
+          values (${v.id}::uuid,${locked.location_id},${r.destination_location_id},${locked.status_code},${locked.status_code},${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${id}::uuid,'transfer',${tx.json(locked)}) returning id::text
+        `;
+        const [updated] = await tx<any[]>`update operations.vehicles set location_id=${r.destination_location_id},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1 where id=${v.id}::uuid returning *,id::text`;
+        await tx`update operations.movements set after_data=${tx.json(updated)} where id=${movement.id}::uuid`;
+      }
+    }
+    await tx`update operations.transfer_requests set status=${next},completed_at=case when ${next}='completed' then now() else completed_at end,updated_at=now(),version=version+1 where id=${id}::uuid`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data,after_data) values (${id}::uuid,${next},'stage_completed',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json(r)},${tx.json({ status: next })})`;
+    await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.transfer_request.${next}`},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},'تحديث طلب نقل',${r.request_no},${tx.json({ status: next })})`;
+    return { ok: true, message: next === "completed" ? "تم إنهاء طلب النقل" : "تم تحديث مرحلة طلب النقل" };
+  });
 }
 
-export default async function handler(request:VercelRequest,response:VercelResponse){
-  const requestId=operationsRequestId(); response.setHeader("Cache-Control","no-store"); response.setHeader("X-Request-Id",requestId);
-  try{
-    await ensureOperationsSchema(); await ensureTrackingSchema();
-    const user=await requireOperationsUser(request,response); if(!user) return;
-    const resource=clean(request.query.resource)||'meta'; const sql=getSql();
-    if(request.method==='GET'){
-      if(resource==='meta') return response.status(200).json({ok:true,...await listMeta(sql,user)});
-      if(resource==='vehicles') return response.status(200).json({ok:true,...await listVehicles(sql,user,request.query)});
-      if(resource==='vehicle') return response.status(200).json({ok:true,...await vehicleDetail(sql,user,clean(request.query.id))});
-      if(resource==='transfers') return response.status(200).json({ok:true,...await listTransfers(sql,user,request.query)});
-      if(resource==='transfer') return response.status(200).json({ok:true,...await transferDetail(sql,user,clean(request.query.id))});
-      if(resource==='movements') return response.status(200).json({ok:true,...await listMovements(sql,user,request.query)});
-      if(resource==='approvals') return response.status(200).json({ok:true,...await listApprovals(sql,user,request.query)});
-      if(resource==='dashboard-vehicles') return response.status(200).json({ok:true,...await dashboardVehicles(sql,user,request.query)});
-      if(resource==='dashboard-requests') return response.status(200).json({ok:true,...await dashboardRequests(sql,user,request.query)});
-      throw new OperationsError(404,"VALIDATION_ERROR","المورد المطلوب غير موجود");
+async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const vehicleId = clean(body.vehicleId);
+  const type = clean(body.approvalType);
+  const action = clean(body.approvalAction);
+  const note = clean(body.note);
+  if (!vehicleId || !["financial", "administrative"].includes(type) || !["approve", "revert", "note", "reset"].includes(action)) throw new OperationError(400, "VALIDATION_ERROR", "بيانات إجراء الموافقة غير مكتملة");
+  if (type === "financial" && !hasPermission(user, "operations.approval.financial")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية الموافقة المالية");
+  if (type === "administrative" && !hasPermission(user, "operations.approval.administrative")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية الموافقة الإدارية");
+  const who = actor(user);
+  return sql.begin(async (tx) => {
+    const [v] = await tx<any[]>`
+      select v.*,v.id::text,l.branch_code,l.code as location_code
+      from operations.vehicles v left join operations.locations l on l.id=v.location_id
+      where v.id=${vehicleId}::uuid and v.is_deleted=false for update
+    `;
+    if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
+    assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية تنفيذ موافقة على سيارة في هذا الفرع");
+    if (v.status_code !== "under_delivery") throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "الموافقات متاحة فقط للسيارات مباع تحت التسليم");
+    let [a] = await tx<any[]>`select *,id::text from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid and is_active=true order by cycle_no desc limit 1 for update`;
+    if (!a) [a] = await tx<any[]>`insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active) values (${vehicleId}::uuid,1,true) returning *,id::text`;
+    const before = { ...a };
+    if (action === "reset") {
+      if (!isSystemAdmin(user) && !hasPermission(user, "operations.approval.financial") && !hasPermission(user, "operations.approval.administrative")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية مسح الموافقات");
+      [a] = await tx<any[]>`update operations.vehicle_approvals set financial_approved=false,administrative_approved=false,financial_approved_by=null,administrative_approved_by=null,financial_approved_by_name=null,administrative_approved_by_name=null,financial_approved_at=null,administrative_approved_at=null,updated_at=now() where id=${a.id}::uuid returning *,id::text`;
+    } else if (type === "financial") {
+      [a] = await tx<any[]>`
+        update operations.vehicle_approvals set financial_approved=${action==='approve' ? true : action==='revert' ? false : a.financial_approved},
+          financial_note=${note||a.financial_note||null},financial_approved_by=${action==='approve' ? who.id : action==='revert' ? null : a.financial_approved_by},
+          financial_approved_by_name=${action==='approve' ? who.name : action==='revert' ? null : a.financial_approved_by_name},
+          financial_approved_at=${action==='approve' ? sql`now()` : action==='revert' ? null : a.financial_approved_at},updated_at=now()
+        where id=${a.id}::uuid returning *,id::text
+      `;
+    } else {
+      [a] = await tx<any[]>`
+        update operations.vehicle_approvals set administrative_approved=${action==='approve' ? true : action==='revert' ? false : a.administrative_approved},
+          administrative_note=${note||a.administrative_note||null},administrative_approved_by=${action==='approve' ? who.id : action==='revert' ? null : a.administrative_approved_by},
+          administrative_approved_by_name=${action==='approve' ? who.name : action==='revert' ? null : a.administrative_approved_by_name},
+          administrative_approved_at=${action==='approve' ? sql`now()` : action==='revert' ? null : a.administrative_approved_at},updated_at=now()
+        where id=${a.id}::uuid returning *,id::text
+      `;
     }
-    if(request.method==='POST'){
-      const data=bodyOf(request); const action=clean(data.action);
-      if(action==='save_vehicle') return response.status(200).json({ok:true,vehicle:await saveVehicle(sql,user,data,requestId),message:"تم حفظ السيارة"});
-      if(action==='move_vehicles') return response.status(200).json({ok:true,...await performMovement(sql,user,data,requestId),message:"تم تنفيذ الحركة بنجاح"});
-      if(action==='create_transfer') return response.status(200).json({ok:true,...await createTransfer(sql,user,data,requestId),message:"تم إنشاء الطلب"});
-      if(['send_vehicle','receive_vehicle','complete_transfer','cancel_transfer','delete_transfer'].includes(action)) return response.status(200).json({ok:true,...await transferAction(sql,user,data,requestId)});
-      if(action==='approval') return response.status(200).json({ok:true,...await approvalAction(sql,user,data)});
-      if(action==='archive'||action==='restore') return response.status(200).json({ok:true,...await archiveAction(sql,user,{...data,action})});
-      if(action==='delete_vehicle') return response.status(200).json({ok:true,...await deleteVehicle(sql,user,data,requestId)});
-      if(action==='import_vehicles') return response.status(200).json({ok:true,...await importVehicles(sql,user,data)});
-      throw new OperationsError(400,"VALIDATION_ERROR","الإجراء المطلوب غير مدعوم");
+    await tx`insert into operations.approval_events(approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data) values (${a.id}::uuid,${vehicleId}::uuid,${a.cycle_no},${type},${action},${note||null},${who.id}::uuid,${who.name},${who.role},${tx.json(before)},${tx.json(a)})`;
+    return { ok: true, approval: a, message: "تم تحديث الموافقات" };
+  });
+}
+
+async function saveOperationSetting(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const kind = clean(body.kind);
+  const who = actor(user);
+  if (kind === "location") {
+    const id = clean(body.id);
+    const code = clean(body.code).toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+    const name = clean(body.name);
+    if (!code || !name) throw new OperationError(400, "VALIDATION_ERROR", "كود المكان واسمه مطلوبان");
+    const [row] = id ? await sql<any[]>`
+      update operations.locations set code=${code},name=${name},branch_code=${clean(body.branchCode)||null},is_agency=${boolValue(body.isAgency)},is_active=${body.isActive === undefined ? true : boolValue(body.isActive)},sort_order=${intValue(body.sortOrder,0)} where id=${id}::uuid returning *,id::text
+    ` : await sql<any[]>`
+      insert into operations.locations(code,name,branch_code,is_agency,is_active,sort_order) values (${code},${name},${clean(body.branchCode)||null},${boolValue(body.isAgency)},${body.isActive === undefined ? true : boolValue(body.isActive)},${intValue(body.sortOrder,0)}) returning *,id::text
+    `;
+    await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values (${who.id}::uuid,'operations','operation_location_saved','location',${row.id},${sql.json(row)})`;
+    return { ok: true, row, message: "تم حفظ إعداد المكان" };
+  }
+  if (kind === "status") {
+    const code = clean(body.code).toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+    const name = clean(body.name);
+    if (!code || !name) throw new OperationError(400, "VALIDATION_ERROR", "كود الحالة واسمها مطلوبان");
+    const [row] = await sql<any[]>`
+      insert into operations.vehicle_statuses(code,name,sort_order,is_actual_stock,is_delivery_status,is_terminal,is_active)
+      values (${code},${name},${intValue(body.sortOrder,0)},${boolValue(body.isActualStock)},${boolValue(body.isDeliveryStatus)},${boolValue(body.isTerminal)},${body.isActive === undefined ? true : boolValue(body.isActive)})
+      on conflict(code) do update set name=excluded.name,sort_order=excluded.sort_order,is_actual_stock=excluded.is_actual_stock,is_delivery_status=excluded.is_delivery_status,is_terminal=excluded.is_terminal,is_active=excluded.is_active
+      returning *
+    `;
+    await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values (${who.id}::uuid,'operations','operation_status_saved','vehicle_status',${row.code},${sql.json(row)})`;
+    return { ok: true, row, message: "تم حفظ إعداد الحالة" };
+  }
+  throw new OperationError(400, "VALIDATION_ERROR", "نوع الإعداد غير مدعوم");
+}
+
+async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const rows = Array.isArray(body.rows) ? body.rows : [];
+  const mode = clean(body.mode);
+  if (!rows.length || !["replace", "add", "update"].includes(mode)) throw new OperationError(400, "IMPORT_VALIDATION_FAILED", "ملف الاستيراد أو وضع الاستيراد غير صحيح");
+  const who = actor(user);
+  const unrestricted = isSystemAdmin(user) || user.branchCodes.length === 0;
+  const allowedBranches = user.branchCodes.length ? user.branchCodes : ["__all__"];
+  return sql.begin(async (tx) => {
+    const report: any = { total: rows.length, inserted: 0, updated: 0, skipped: 0, failed: 0, errors: [], warnings: [] };
+    const vins = new Set<string>();
+    const normalized = rows.map((raw: any, index: number) => ({
+      row: index + 2,
+      vin: clean(raw.vin || raw["رقم الهيكل"] || raw["الهيكل"]),
+      carName: clean(raw.carName || raw["السيارة"]), statement: clean(raw.statement || raw["البيان"]), agentName: clean(raw.agentName || raw["الوكيل"]),
+      exteriorColor: clean(raw.exteriorColor || raw["خارجي"] || raw["اللون الخارجي"]), interiorColor: clean(raw.interiorColor || raw["داخلي"] || raw["اللون الداخلي"]),
+      modelYear: clean(raw.modelYear || raw["موديل"]), plateNo: clean(raw.plateNo || raw["اللوحة"]), batchNo: clean(raw.batchNo || raw["اسم الدفعة بالتاريخ"]),
+      locationCode: clean(raw.locationCode || raw["المكان"]), statusCode: clean(raw.statusCode || raw["الحالة"]), notes: clean(raw.notes || raw["ملاحظات في السيارة"]),
+    }));
+    for (const row of normalized) {
+      if (!row.vin) { report.failed++; report.errors.push({ row: row.row, error: "رقم الهيكل مطلوب" }); continue; }
+      if (vins.has(row.vin)) { report.failed++; report.errors.push({ row: row.row, vin: row.vin, error: "رقم الهيكل مكرر داخل الملف" }); continue; }
+      vins.add(row.vin);
+      const [existing] = await tx<any[]>`
+        select v.*,v.id::text,l.branch_code,l.code as location_code
+        from operations.vehicles v left join operations.locations l on l.id=v.location_id
+        where v.vin=${row.vin} and v.is_deleted=false
+      `;
+      const [location] = row.locationCode ? await tx<any[]>`
+        select id::text,code as location_code,branch_code
+        from operations.locations where (code=${row.locationCode} or name=${row.locationCode}) and is_active=true limit 1
+      ` : [null];
+      const [status] = row.statusCode ? await tx<any[]>`select code from operations.vehicle_statuses where code=${row.statusCode} or name=${row.statusCode} limit 1` : [null];
+      if (!existing && mode === "update") { report.skipped++; report.warnings.push({ row: row.row, vin: row.vin, warning: "غير موجودة؛ وضع التحديث لا يضيف سيارات" }); continue; }
+      if (!existing && !location) { report.failed++; report.errors.push({ row: row.row, vin: row.vin, error: "المكان غير صحيح" }); continue; }
+      if (!existing && !hasBranchAccess(user, location?.branch_code, location?.location_code)) { report.failed++; report.errors.push({ row: row.row, vin: row.vin, error: "لا تملك صلاحية الاستيراد إلى هذا الفرع" }); continue; }
+      if (existing && !hasBranchAccess(user, existing.branch_code, existing.location_code)) { report.failed++; report.errors.push({ row: row.row, vin: row.vin, error: "لا تملك صلاحية تحديث سيارة في هذا الفرع" }); continue; }
+      if (existing && mode === "add") { report.skipped++; report.warnings.push({ row: row.row, vin: row.vin, warning: "موجودة بالفعل؛ وضع الإضافة لا يعدل السيارات الحالية" }); continue; }
+      try {
+        await tx.savepoint(async (rowTx) => {
+          if (!existing) {
+            await rowTx`insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,notes,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name) values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${status?.code||'available_for_sale'},${row.notes||null},${Boolean(row.notes)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})`;
+          } else {
+            await rowTx`
+              update operations.vehicles set car_name=coalesce(nullif(${row.carName},''),car_name),statement=coalesce(nullif(${row.statement},''),statement),agent_name=coalesce(nullif(${row.agentName},''),agent_name),
+                exterior_color=coalesce(nullif(${row.exteriorColor},''),exterior_color),interior_color=coalesce(nullif(${row.interiorColor},''),interior_color),model_year=coalesce(nullif(${row.modelYear},''),model_year),
+                plate_no=coalesce(nullif(${row.plateNo},''),plate_no),batch_no=coalesce(nullif(${row.batchNo},''),batch_no),notes=coalesce(nullif(${row.notes},''),notes),
+                is_inventory_active=true,updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+              where id=${existing.id}::uuid
+            `;
+          }
+        });
+        if (!existing) report.inserted++;
+        else {
+          if (row.locationCode || row.statusCode) report.warnings.push({ row: row.row, vin: row.vin, warning: "تم تجاهل المكان والحالة للسيارة الموجودة؛ التغيير يتم من تبويب الحركة" });
+          report.updated++;
+        }
+      } catch (error: any) {
+        report.failed++; report.errors.push({ row: row.row, vin: row.vin, error: clean(error?.message) || "تعذر حفظ الصف" });
+      }
     }
-    return response.status(405).json({ok:false,error:"Method not allowed",requestId});
-  }catch(error){return sendOperationsError(response,error,requestId);}
+    if (mode === "replace" && vins.size) {
+      const vinList = [...vins];
+      const [deactivated] = await tx<{ count: number }[]>`
+        with updated as (
+          update operations.vehicles v set is_inventory_active=false,updated_at=now()
+          from operations.locations l
+          where l.id=v.location_id and v.is_deleted=false and v.archived_at is null and v.vin not in ${tx(vinList)} and v.is_inventory_active=true
+            and (${unrestricted}=true or coalesce(l.branch_code,l.code) in ${tx(allowedBranches)})
+          returning 1
+        ) select count(*)::int as count from updated
+      `;
+      report.deactivated = Number(deactivated?.count || 0);
+    }
+    const [batch] = await tx<any[]>`insert into operations.import_batches(mode,file_name,total_rows,inserted_rows,updated_rows,skipped_rows,failed_rows,report,imported_by,imported_by_name) values (${mode},${clean(body.fileName)||null},${report.total},${report.inserted},${report.updated},${report.skipped},${report.failed},${tx.json(report)},${who.id}::uuid,${who.name}) returning id::text`;
+    return { ok: true, batchId: batch.id, report, message: "تم تنفيذ الاستيراد وحفظ التقرير" };
+  });
+}
+
+export default async function handler(request: VercelRequest, response: VercelResponse) {
+  const traceId = requestId("ops");
+  response.setHeader("Cache-Control", "no-store");
+  try {
+    await ensureTrackingSchema();
+    await ensureOperationsSchema();
+    const user = await requireOperationsUser(request, response);
+    if (!user) return;
+    const sql = getSql();
+    const resource = clean(request.query.resource) || "meta";
+
+    if (request.method === "GET") {
+      if (resource === "meta") return response.status(200).json(await loadMeta(sql, user));
+      if (resource === "vehicles") return response.status(200).json(await listVehicles(sql, request, user));
+      if (resource === "vehicle") return response.status(200).json(await vehicleDetail(sql, clean(request.query.id), user));
+      if (resource === "movements") return response.status(200).json(await listMovements(sql, request, user));
+      if (resource === "transfers") return response.status(200).json(await listTransfers(sql, request, user));
+      if (resource === "approvals") return response.status(200).json(await listApprovals(sql, request, user));
+      if (resource === "dashboard_vehicles") return response.status(200).json(await dashboardVehicles(sql, request, user));
+      if (resource === "dashboard_requests") return response.status(200).json(await dashboardRequests(sql, request, user));
+      return response.status(404).json({ ok: false, code: "VALIDATION_ERROR", error: "المورد المطلوب غير موجود", requestId: traceId });
+    }
+
+    if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed", requestId: traceId });
+    const body = parseBody(request.body);
+    const action = clean(body.action);
+    let result: unknown;
+    if (action === "create_vehicle") {
+      if (!requireOperationsPermission(user, "operations.vehicle.create", response)) return;
+      result = await createVehicle(sql, body, user);
+    } else if (action === "update_vehicle") {
+      if (!requireOperationsPermission(user, "operations.vehicle.edit", response)) return;
+      result = await updateVehicle(sql, body, user);
+    } else if (action === "delete_vehicle") {
+      if (!requireOperationsPermission(user, "operations.vehicle.delete", response)) return;
+      result = await deleteVehicle(sql, body, user, traceId);
+    } else if (action === "archive_vehicle") {
+      if (!requireOperationsPermission(user, "operations.vehicle.archive", response)) return;
+      result = await archiveVehicle(sql, body, user);
+    } else if (action === "move_vehicles") {
+      if (!requireOperationsPermission(user, "operations.movement.create", response)) return;
+      result = await moveVehicles(sql, body, user);
+    } else if (action === "create_transfer") {
+      if (!requireOperationsPermission(user, "operations.transfer.create", response)) return;
+      result = await createTransfer(sql, body, user);
+    } else if (action === "transfer_action") {
+      result = await transferAction(sql, body, user);
+    } else if (action === "approval_action") {
+      result = await approvalAction(sql, body, user);
+    } else if (action === "save_setting") {
+      if (!requireOperationsPermission(user, "operations.settings.manage", response)) return;
+      result = await saveOperationSetting(sql, body, user);
+    } else if (action === "import_vehicles") {
+      if (!requireOperationsPermission(user, "operations.vehicle.import", response)) return;
+      result = await importVehicles(sql, body, user);
+    } else {
+      throw new OperationError(400, "VALIDATION_ERROR", "الإجراء غير مدعوم");
+    }
+    return response.status(200).json({ ...(result as object), requestId: traceId });
+  } catch (error) {
+    console.error("Operations API failed", { traceId, method: request.method, resource: request.query.resource, error });
+    if (response.headersSent) return;
+    return sendOperationError(response, error, traceId);
+  }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowClockwise,
@@ -16,12 +16,13 @@ import {
   Phone,
   User,
   WarningCircle,
+  ShieldWarning,
   Trash,
   X,
 } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
+import { Modal } from "../../components/Modal";
 import { useAuth } from "../../auth/AuthContext";
-import { OperationsModal } from "../../operations/components/OperationsModal";
 import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel } from "../api";
 import type { TrackingCounts, TrackingOrderDetail, TrackingOrderRow, TrackingStage, TrackingVehicle } from "../types";
 
@@ -38,6 +39,7 @@ function visibleVin(vehicle: TrackingVehicle) {
 }
 
 export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: boolean }) {
+  const { user } = useAuth();
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
   const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
   const [search, setSearch] = useState("");
@@ -50,12 +52,13 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [activeVehicleId, setActiveVehicleId] = useState("");
   const [actionKey, setActionKey] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteReason, setDeleteReason] = useState("");
-  const { user } = useAuth();
-  const canDeleteOrder = Boolean(user?.roleCodes.some((code) => code === "admin" || code === "system_admin") || user?.permissionCodes?.includes("tracking.orders.delete"));
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState("");
+  const deleteButtonRef = useRef<HTMLButtonElement>(null);
+  const canDeleteTracking = Boolean(user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) || user?.permissions.includes("tracking.orders.delete"));
 
-  useEscapeToClose(Boolean(selected) && !deleteOpen, () => setSelected(null));
+  useEscapeToClose(Boolean(selected), () => setSelected(null));
 
   async function loadOrders(nextSearch = search, nextStatus = status) {
     setLoading(true);
@@ -155,25 +158,33 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
     }
   }
 
+  function closeDeleteModal() {
+    if (actionKey.startsWith("delete:")) return;
+    setDeleteOpen(false);
+    setDeleteErrorMessage("");
+    window.setTimeout(() => deleteButtonRef.current?.focus(), 0);
+  }
 
-  async function deleteOrder() {
+  async function deleteTrackingOrder() {
     if (!selected || deleteConfirmation.trim() !== selected.sales_order_no || !deleteReason.trim()) return;
-    setActionKey(`delete:${selected.id}`);
+    const selectedId = selected.id;
+    setActionKey(`delete:${selectedId}`);
     setError("");
+    setDeleteErrorMessage("");
     setMessage("");
     try {
-      const payload = await trackingFetch<{ ok: boolean; message: string }>("/api/tracking/delete", {
+      const payload = await trackingFetch<{ ok: boolean; message: string; requestId?: string }>("/api/tracking/delete", {
         method: "POST",
-        body: JSON.stringify({ orderId: selected.id, confirmation: deleteConfirmation, reason: deleteReason }),
+        body: JSON.stringify({ action: "delete", orderId: selectedId, confirmation: deleteConfirmation, reason: deleteReason }),
       });
       setDeleteOpen(false);
-      setSelected(null);
-      setDeleteConfirmation("");
       setDeleteReason("");
-      setMessage(payload.message || "تم مسح طلب التراكينج");
+      setDeleteConfirmation("");
+      setSelected(null);
+      setMessage(payload.message || "تم مسح طلب التراكينج وفك ارتباط السيارات من المخزون بنجاح.");
       await loadOrders();
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "تعذر مسح طلب التراكينج");
+      setDeleteErrorMessage(deleteError instanceof Error ? deleteError.message : "تعذر مسح طلب التراكينج");
     } finally {
       setActionKey("");
     }
@@ -288,8 +299,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                   <Archive size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
                 </button>
               ) : null}
-              {canDeleteOrder ? (
-                <button type="button" className="tracking-delete-inline-button" onClick={() => { setDeleteConfirmation(""); setDeleteReason(""); setDeleteOpen(true); }} disabled={Boolean(actionKey)}>
+              {canDeleteTracking ? (
+                <button ref={deleteButtonRef} type="button" className="tracking-delete-order-button" onClick={() => { setDeleteReason(""); setDeleteConfirmation(""); setDeleteErrorMessage(""); setDeleteOpen(true); }} disabled={Boolean(actionKey)}>
                   <Trash size={17} />مسح طلب التراكينج
                 </button>
               ) : null}
@@ -378,22 +389,23 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
         </div>
       ) : null}
 
-      <OperationsModal open={deleteOpen} title="مسح طلب التراكينج" onClose={() => setDeleteOpen(false)} className="tracking-delete-confirm-modal">
-        {selected ? (
-          <div className="tracking-delete-confirm-content">
-            <div className="tracking-delete-warning"><Trash size={38} /><div><strong>حذف نهائي من نظام التراكينج</strong><p>سيتم مسح الطلب ومراحله وروابطه داخل التراكينج فقط. السيارات نفسها لن تُحذف من مخزون العمليات.</p></div></div>
-            <div className="vehicle-detail-grid">
-              <div><small>رقم الطلب</small><strong>{selected.sales_order_no}</strong></div>
-              <div><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></div>
-              <div><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></div>
-              <div><small>أرقام الهياكل</small><strong>{selected.vehicles.map((vehicle) => visibleVin(vehicle)).join("، ") || "—"}</strong></div>
-            </div>
-            <label className="tracking-delete-field"><span>اكتب رقم الطلب كاملًا للتأكيد</span><input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={selected.sales_order_no} /></label>
-            <label className="tracking-delete-field"><span>سبب الحذف *</span><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} /></label>
-            <div className="modal-actions"><button type="button" className="secondary" onClick={() => setDeleteOpen(false)}>إلغاء</button><button type="button" className="danger" disabled={Boolean(actionKey) || deleteConfirmation.trim() !== selected.sales_order_no || !deleteReason.trim()} onClick={() => void deleteOrder()}>{actionKey === `delete:${selected.id}` ? "جاري المسح..." : "تأكيد مسح الطلب"}</button></div>
-          </div>
-        ) : null}
-      </OperationsModal>
+      <Modal
+        open={Boolean(selected && deleteOpen)}
+        level={1}
+        title="تأكيد مسح طلب التراكينج"
+        subtitle={selected ? `الطلب ${selected.sales_order_no}` : undefined}
+        onClose={closeDeleteModal}
+        className="tracking-delete-confirm-modal"
+        footer={<><button type="button" className="secondary" onClick={closeDeleteModal} disabled={actionKey.startsWith("delete:")}>إلغاء</button><button type="button" className="danger" onClick={() => void deleteTrackingOrder()} disabled={!selected || !deleteReason.trim() || deleteConfirmation.trim() !== selected.sales_order_no || actionKey.startsWith("delete:")}><Trash size={17} />{actionKey.startsWith("delete:") ? "جاري المسح..." : "تأكيد المسح"}</button></>}
+      >
+        {selected ? <div className="tracking-delete-confirm-body">
+          {deleteErrorMessage ? <div className="connection-banner warning"><WarningCircle size={19} /><span>{deleteErrorMessage}</span></div> : null}
+          <div className="operations-confirm-warning"><ShieldWarning size={24} weight="duotone" /><span>سيُمسح الطلب وسياراته ومراحله من نظام التراكينج فقط. السيارات نفسها لن تُحذف من مخزون العمليات، وسيتم فك ارتباطها وتحديث عمود Tracking.</span></div>
+          <div className="tracking-delete-summary"><p><b>العميل:</b> {selected.customer_name || "—"}</p><p><b>الجوال:</b> {selected.customer_mobile || "—"}</p><p><b>السيارات:</b> {selected.vehicles.map((vehicle) => `${visibleVin(vehicle)} — ${vehicle.car_name || vehicle.item_type || "سيارة"}`).join("، ") || "—"}</p></div>
+          <label className="operations-field"><span>سبب المسح — إجباري</span><textarea rows={4} value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="اكتب سبب مسح الطلب" /></label>
+          <label className="operations-field"><span>اكتب رقم الطلب كاملًا للتأكيد</span><input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={selected.sales_order_no} /></label>
+        </div> : null}
+      </Modal>
     </div>
   );
 }

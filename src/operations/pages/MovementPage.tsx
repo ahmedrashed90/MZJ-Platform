@@ -1,22 +1,72 @@
-import { useEffect, useState } from 'react';
-import { ArrowsLeftRight, MagnifyingGlass, Plus, Trash, WarningCircle } from '@phosphor-icons/react';
-import { operationsFetch, operationsQuery } from '../api';
-import { useOperationsMeta } from '../OperationsLayout';
-import type { VehicleRow } from '../types';
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Car, MagnifyingGlass, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { operationsFetch, queryString } from "../api";
+import type { VehicleRow } from "../types";
+import { useOperations } from "../useOperations";
 
-type SelectedVehicle=VehicleRow&{note:string;statusNote:string;shortageLocationNote:string;checks:Array<{code:string;name:string;status:string;note:string}>};
-export function MovementPage(){
-  const meta=useOperationsMeta();const [search,setSearch]=useState('');const [suggestions,setSuggestions]=useState<VehicleRow[]>([]);const [selected,setSelected]=useState<SelectedVehicle[]>([]);const [toLocationId,setToLocationId]=useState('');const [toStatusCode,setToStatusCode]=useState('available_for_sale');const [generalNote,setGeneralNote]=useState('');const [loading,setLoading]=useState(false);const [error,setError]=useState('');const [message,setMessage]=useState('');
-  async function searchVehicles(){if(!search.trim()){setSuggestions([]);return;}try{const payload=await operationsFetch<any>(`/api/operations${operationsQuery({resource:'vehicles',search,page:1,pageSize:20})}`);setSuggestions((payload.rows||[]).filter((row:VehicleRow)=>!selected.some((item)=>item.id===row.id)));}catch(e){setError(e instanceof Error?e.message:'تعذر البحث');}}
-  useEffect(()=>{const timer=window.setTimeout(()=>{if(search.trim().length>=2)void searchVehicles();else setSuggestions([]);},300);return()=>window.clearTimeout(timer);},[search]);
-  function add(row:VehicleRow){setSelected((current)=>[...current,{...row,note:'',statusNote:'',shortageLocationNote:'',checks:meta.checkItems.map((item)=>({...item,status:'not_checked',note:''}))}]);setSearch('');setSuggestions([]);}
-  function update(id:string,changes:Partial<SelectedVehicle>){setSelected((current)=>current.map((item)=>item.id===id?{...item,...changes}:item));}
-  async function submit(){if(!selected.length||!toLocationId||!toStatusCode)return;setLoading(true);setError('');setMessage('');try{const payload=await operationsFetch<any>('/api/operations',{method:'POST',body:JSON.stringify({action:'move_vehicles',toLocationId,toStatusCode,generalNote,idempotencyKey:crypto.randomUUID(),vehicles:selected.map((item)=>({id:item.id,note:item.note,statusNote:item.statusNote,shortageLocationNote:item.shortageLocationNote,checks:item.location_code==='agency'?item.checks:[]}))})});setMessage(`${payload.message} — رقم الدفعة: ${payload.batchNo}`);setSelected([]);setGeneralNote('');}catch(e){setError(e instanceof Error?e.message:'تعذر تنفيذ الحركة');}finally{setLoading(false);}}
-  const requiresNote=meta.statuses.find((item)=>item.code===toStatusCode)?.requires_note;
-  return <div className="module-page operations-page">
-    {error?<div className="connection-banner"><WarningCircle size={20}/><span>{error}</span></div>:null}{message?<div className="success-banner"><span>{message}</span></div>:null}
-    <section className="panel movement-builder"><div className="operations-panel-title"><div><h2>الحركة</h2><p>نفس الفلو يدعم سيارة واحدة أو عدة سيارات داخل Transaction واحدة.</p></div><ArrowsLeftRight size={28}/></div><div className="vehicle-picker"><div className="operations-search"><MagnifyingGlass size={19}/><input value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="اكتب جزءًا من رقم الهيكل"/></div>{suggestions.length?<div className="vehicle-suggestions">{suggestions.map((row)=><button key={row.id} type="button" onClick={()=>add(row)}><span><strong>{row.vin}</strong><small>{row.car_name||'—'} — {row.location_name||'—'} — {row.status_name||'—'}</small></span><Plus size={18}/></button>)}</div>:null}</div><div className="movement-destination"><label><span>المكان الجديد</span><select value={toLocationId} onChange={(e)=>setToLocationId(e.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>الحالة الجديدة</span><select value={toStatusCode} onChange={(e)=>setToStatusCode(e.target.value)}>{meta.statuses.map((item)=><option key={item.code} value={item.code}>{item.name}</option>)}</select></label><label className="wide"><span>ملاحظات عامة للحركة</span><textarea value={generalNote} onChange={(e)=>setGeneralNote(e.target.value)}/></label></div></section>
-    <section className="movement-cards">{selected.length===0?<div className="panel empty-selection">اختر سيارة واحدة أو أكثر لبدء الحركة.</div>:selected.map((vehicle,index)=><article className="panel movement-vehicle-card" key={vehicle.id}><header><div><span>السيارة {index+1}</span><h3>{vehicle.vin}</h3><p>{vehicle.car_name||'—'} — {vehicle.statement||'—'}</p></div><button type="button" className="danger-icon" onClick={()=>setSelected((current)=>current.filter((item)=>item.id!==vehicle.id))}><Trash size={18}/></button></header><div className="movement-current-grid"><div><small>المكان الحالي</small><strong>{vehicle.location_name||'—'}</strong></div><div><small>الحالة الحالية</small><strong>{vehicle.status_name||'—'}</strong></div><div><small>الموديل</small><strong>{vehicle.model_year||'—'}</strong></div><div><small>الفرع</small><strong>{vehicle.branch_name||'—'}</strong></div></div><div className="movement-notes"><label><span>ملاحظة السيارة في الحركة</span><textarea value={vehicle.note} onChange={(e)=>update(vehicle.id,{note:e.target.value})}/></label>{requiresNote?<label><span>ملاحظات الحالة *</span><textarea required value={vehicle.statusNote} onChange={(e)=>update(vehicle.id,{statusNote:e.target.value})}/></label>:null}<label><span>حجز - نواقص - تحديد مكان</span><textarea value={vehicle.shortageLocationNote} onChange={(e)=>update(vehicle.id,{shortageLocationNote:e.target.value})}/></label></div>{vehicle.location_code==='agency'?<div className="vehicle-check-grid"><h4>تشيك السيارة — يظهر لأن مكانها الحالي الوكالة</h4>{vehicle.checks.map((check)=><div key={check.code}><span>{check.name}</span><select value={check.status} onChange={(e)=>update(vehicle.id,{checks:vehicle.checks.map((item)=>item.code===check.code?{...item,status:e.target.value}:item)})}><option value="not_checked">لم يتم</option><option value="available">موجود</option><option value="missing">ناقص</option><option value="damaged">به ملاحظة</option></select><input placeholder="ملاحظة" value={check.note} onChange={(e)=>update(vehicle.id,{checks:vehicle.checks.map((item)=>item.code===check.code?{...item,note:e.target.value}:item)})}/></div>)}</div>:null}</article>)}</section>
-    {selected.length?<div className="sticky-submit-bar"><span>{selected.length} سيارة محددة</span><button type="button" disabled={loading||!toLocationId||!toStatusCode||Boolean(requiresNote&&selected.some((item)=>!item.statusNote.trim()))} onClick={()=>void submit()}>{loading?'جاري التنفيذ...':'مراجعة وتنفيذ الحركة'}</button></div>:null}
-  </div>;
+type SelectedVehicle = VehicleRow & { note: string; stateNote: string; shortageNote: string; checks: Record<string, { status: string; note: string }> };
+
+export function MovementPage() {
+  const { meta } = useOperations();
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<VehicleRow[]>([]);
+  const [selected, setSelected] = useState<SelectedVehicle[]>([]);
+  const [destinationLocationId, setDestinationLocationId] = useState("");
+  const [newStatus, setNewStatus] = useState("available_for_sale");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(async () => {
+      if (search.trim().length < 2) { setResults([]); return; }
+      try { const payload = await operationsFetch<{ rows: VehicleRow[] }>(`/api/operations${queryString({ resource: "vehicles", search, pageSize: 20 })}`); setResults(payload.rows.filter((row) => !selected.some((item) => item.id === row.id))); }
+      catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر البحث عن السيارات"); }
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [search, selected]);
+
+  function add(row: VehicleRow) {
+    setSelected((current) => [...current, { ...row, note: "", stateNote: "", shortageNote: "", checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "unknown", note: "" }])) }]);
+    setSearch(""); setResults([]);
+  }
+  function patch(id: string, values: Partial<SelectedVehicle>) { setSelected((current) => current.map((item) => item.id === id ? { ...item, ...values } : item)); }
+
+  const destination = useMemo(() => meta.locations.find((item) => item.id === destinationLocationId), [meta.locations, destinationLocationId]);
+  async function submit() {
+    setSaving(true); setMessage(""); setError("");
+    try {
+      const payload = await operationsFetch<{ message: string }>("/api/operations", { method: "POST", body: JSON.stringify({ action: "move_vehicles", destinationLocationId, newStatus, note, items: selected.map((item) => ({ vehicleId: item.id, note: item.note, stateNote: item.stateNote, shortageNote: item.shortageNote, checks: Object.entries(item.checks).map(([itemCode, value]) => ({ itemCode, status: value.status, note: value.note })) })) }) });
+      setMessage(payload.message); setSelected([]); setDestinationLocationId(""); setNote("");
+    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تنفيذ الحركة"); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="module-page operations-page">
+      <header className="module-page-head"><div><h1>الحركة</h1><p>تنفيذ حركة لسيارة واحدة أو عدة سيارات داخل Transaction واحدة، مع State مستقل لكل سيارة.</p></div></header>
+      {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}{message ? <div className="operations-alert success">{message}</div> : null}
+      <section className="panel operations-movement-panel">
+        <div className="operations-movement-toolbar">
+          <div className="operations-vehicle-search"><label className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="بحث جزئي في VIN أو السيارة" /></label>{results.length ? <div className="operations-search-results floating">{results.map((row) => <button key={row.id} type="button" onClick={() => add(row)}><Plus size={16} /><b>{row.vin}</b><span>{row.car_name || "—"} · {row.location_name} · {row.status_name}</span></button>)}</div> : null}</div>
+          <select value={destinationLocationId} onChange={(e) => setDestinationLocationId(e.target.value)}><option value="">المكان الجديد</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+          <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
+        </div>
+        <label className="operations-field"><span>ملاحظات عامة للحركة</span><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} /></label>
+
+        <div className="operations-selected-cars">
+          {!selected.length ? <div className="operations-empty-state"><Car size={42} weight="duotone" /><strong>لم يتم اختيار سيارات</strong><span>ابحث برقم الهيكل وأضف سيارة أو أكثر.</span></div> : selected.map((item) => (
+            <article key={item.id} className="operations-selected-car-card">
+              <header><div><b>{item.vin}</b><span>{item.car_name || "—"} · {item.statement || "—"}</span></div><button type="button" onClick={() => setSelected((current) => current.filter((row) => row.id !== item.id))}><Trash size={17} /></button></header>
+              <div className="operations-route-preview"><span>{item.location_name || "—"}<small>{item.status_name}</small></span><ArrowRight size={22} /><span>{destination?.name || "اختر المكان"}<small>{meta.statuses.find((status) => status.code === newStatus)?.name}</small></span></div>
+              <div className="operations-card-fields"><label><span>ملاحظة السيارة</span><input value={item.note} onChange={(e) => patch(item.id, { note: e.target.value })} /></label><label><span>حجز - نواقص - تحديد مكان</span><input value={item.shortageNote} onChange={(e) => patch(item.id, { shortageNote: e.target.value })} /></label>{newStatus === "has_notes" ? <label className="wide"><span>ملاحظات الحالة — مطلوبة</span><textarea value={item.stateNote} onChange={(e) => patch(item.id, { stateNote: e.target.value })} /></label> : null}</div>
+              {item.location_code === "agency" ? <div className="operations-check-editor"><h4>تشيك الوكالة لهذه السيارة</h4>{meta.checkItems.map((check) => <label key={check.code}><span>{check.name}</span><select value={item.checks[check.code]?.status || "unknown"} onChange={(e) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...item.checks[check.code], status: e.target.value } } })}><option value="unknown">غير محدد</option><option value="ok">موجود</option><option value="missing">ناقص</option></select><input placeholder="ملاحظة" value={item.checks[check.code]?.note || ""} onChange={(e) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...item.checks[check.code], note: e.target.value } } })} /></label>)}</div> : null}
+            </article>
+          ))}
+        </div>
+        <button className="operations-primary-button operations-submit-movement" type="button" disabled={saving || !selected.length || !destinationLocationId || !meta.permissions.canMove || (newStatus === "has_notes" && selected.some((item) => !item.stateNote.trim()))} onClick={() => void submit()}>{saving ? "جاري تنفيذ الحركة..." : `تنفيذ الحركة على ${selected.length} سيارة`}</button>
+      </section>
+    </div>
+  );
 }

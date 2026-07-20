@@ -8,8 +8,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireUser(request, response);
   if (!user) return;
-  await ensureOperationsSchema().catch((error)=>console.error("Dashboard operations schema ensure failed",error));
-  await ensureTrackingSchema().catch((error)=>console.error("Dashboard tracking schema ensure failed",error));
+  await ensureTrackingSchema();
+  await ensureOperationsSchema();
   const data = await getDashboardData(user);
   response.setHeader("Cache-Control", "no-store");
   return response.status(200).json(data);
