@@ -17,7 +17,9 @@ function columnIndex(reference: string) {
 
 async function inflateRaw(bytes: Uint8Array) {
   if (!("DecompressionStream" in window)) throw new Error("المتصفح لا يدعم قراءة ملفات Excel المضغوطة");
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  const compressedBuffer = new Uint8Array(bytes.byteLength);
+  compressedBuffer.set(bytes);
+  const stream = new Blob([compressedBuffer.buffer]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
