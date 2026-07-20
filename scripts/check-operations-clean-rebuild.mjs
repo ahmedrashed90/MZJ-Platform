@@ -10,7 +10,7 @@ function check(label, condition) {
 }
 
 const schema = read('server/_operations-schema.ts');
-const migration = read('database/migrations/014_operations_tracking_clean_rebuild.sql');
+const migration = read('database/migrations/015_operations_tracking_clean_rebuild.sql');
 const trackingSchema = read('server/_tracking-schema.ts');
 const trackingDelete = read('server/tracking/delete.ts');
 const trackingOrders = read('src/tracking/pages/TrackingOrdersPage.tsx');

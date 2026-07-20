@@ -1,4 +1,4 @@
-# MZJ Platform v1.14.0 — إعادة بناء العمليات النظيفة
+# MZJ Platform v1.15.0 — إعادة بناء العمليات النظيفة
 
 ## المصدر
 
@@ -39,7 +39,7 @@ SHA-256 للـBaseline:
 1. أخذ Backup كامل لقاعدة PostgreSQL.
 2. نشر السورس الكامل، وليس نسخ ملفات منفردة من إصدار سابق.
 3. المهاجرة تعمل تلقائيًا عند أول فتح للداش بورد أو نظام العمليات، ويمكن بدلًا من ذلك تشغيل:
-   `database/migrations/014_operations_tracking_clean_rebuild.sql`
+   `database/migrations/015_operations_tracking_clean_rebuild.sql`
    على Staging أولًا.
 4. التحقق من وجود العمود:
 

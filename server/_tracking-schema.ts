@@ -195,13 +195,30 @@ insert into tracking.stages(code,name,description,owner_type,sort_order,sms_enab
 on conflict (code) do nothing;
 
 insert into tracking.system_migrations(migration_key)
-values ('tracking_source_identity_delete_v1_14_0')
+values ('tracking_source_identity_delete_v1_15_0')
 on conflict (migration_key) do nothing;
+`;
+
+const TRACKING_SCHEMA_READY_SQL = String.raw`
+select (
+  to_regclass('tracking.deleted_source_identities') is not null
+  and to_regclass('tracking.deleted_orders') is not null
+  and exists (select 1 from information_schema.columns where table_schema='tracking' and table_name='orders' and column_name='source_identity')
+  and exists (select 1 from information_schema.columns where table_schema='tracking' and table_name='orders' and column_name='source_fingerprint')
+  and exists (select 1 from information_schema.columns where table_schema='tracking' and table_name='orders' and column_name='is_deleted')
+  and exists (select 1 from information_schema.columns where table_schema='tracking' and table_name='order_vehicles' and column_name='operations_vehicle_id')
+) as ready
 `;
 
 export function ensureTrackingSchema() {
   if (!trackingSchemaPromise) {
-    trackingSchemaPromise = runSqlMigrationTransaction(TRACKING_SCHEMA_SQL, "mzj:tracking-schema:v1.14.0", "tracking.system_migrations", "tracking_source_identity_delete_v1_14_0").catch((error) => {
+    trackingSchemaPromise = runSqlMigrationTransaction(
+      TRACKING_SCHEMA_SQL,
+      "mzj:tracking-schema:v1.15.0",
+      "tracking.system_migrations",
+      "tracking_source_identity_delete_v1_15_0",
+      TRACKING_SCHEMA_READY_SQL,
+    ).catch((error) => {
       trackingSchemaPromise = null;
       throw error;
     });

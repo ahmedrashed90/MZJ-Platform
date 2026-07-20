@@ -425,13 +425,35 @@ where r.code='operations_user'
 on conflict do nothing;
 
 insert into operations.system_migrations(migration_key)
-values ('operations_clean_rebuild_v1_14_0')
+values ('operations_clean_rebuild_v1_15_0')
 on conflict (migration_key) do nothing;
+`;
+
+const OPERATIONS_SCHEMA_READY_SQL = String.raw`
+select (
+  to_regclass('operations.vehicle_statuses') is not null
+  and to_regclass('operations.vehicle_status_notes') is not null
+  and to_regclass('operations.vehicle_check_items') is not null
+  and to_regclass('operations.movement_batches') is not null
+  and to_regclass('operations.transfer_request_events') is not null
+  and to_regclass('operations.vehicle_deletion_audit') is not null
+  and to_regclass('operations.event_outbox') is not null
+  and exists (select 1 from information_schema.columns where table_schema='operations' and table_name='vehicle_statuses' and column_name='requires_note')
+  and exists (select 1 from information_schema.columns where table_schema='operations' and table_name='vehicle_statuses' and column_name='counts_in_actual_inventory')
+  and exists (select 1 from information_schema.columns where table_schema='operations' and table_name='vehicles' and column_name='archived_at')
+  and exists (select 1 from information_schema.columns where table_schema='operations' and table_name='vehicles' and column_name='branch_id')
+) as ready
 `;
 
 export function ensureOperationsSchema() {
   if (!operationsSchemaPromise) {
-    operationsSchemaPromise = runSqlMigrationTransaction(OPERATIONS_SCHEMA_SQL, "mzj:operations-schema:v1.14.0", "operations.system_migrations", "operations_clean_rebuild_v1_14_0").catch((error) => {
+    operationsSchemaPromise = runSqlMigrationTransaction(
+      OPERATIONS_SCHEMA_SQL,
+      "mzj:operations-schema:v1.15.0",
+      "operations.system_migrations",
+      "operations_clean_rebuild_v1_15_0",
+      OPERATIONS_SCHEMA_READY_SQL,
+    ).catch((error) => {
       operationsSchemaPromise = null;
       throw error;
     });

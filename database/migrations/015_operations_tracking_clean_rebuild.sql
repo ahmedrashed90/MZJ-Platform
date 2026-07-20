@@ -1,4 +1,4 @@
--- MZJ Platform v1.14.0
+-- MZJ Platform v1.15.0
 -- Clean Native Operations rebuild from v1.13.2 Tracking FULL baseline.
 -- Non-destructive, idempotent migration. Test on staging and back up production before execution.
 
@@ -424,7 +424,7 @@ where r.code='operations_user'
 on conflict do nothing;
 
 insert into operations.system_migrations(migration_key)
-values ('operations_clean_rebuild_v1_14_0')
+values ('operations_clean_rebuild_v1_15_0')
 on conflict (migration_key) do nothing;
 
 create schema if not exists tracking;
@@ -619,5 +619,5 @@ insert into tracking.stages(code,name,description,owner_type,sort_order,sms_enab
 on conflict (code) do nothing;
 
 insert into tracking.system_migrations(migration_key)
-values ('tracking_source_identity_delete_v1_14_0')
+values ('tracking_source_identity_delete_v1_15_0')
 on conflict (migration_key) do nothing;

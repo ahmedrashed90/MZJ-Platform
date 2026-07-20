@@ -58,6 +58,7 @@ export async function runSqlMigrationTransaction(
   lockKey: string,
   migrationTable: string,
   migrationKey: string,
+  readinessSql?: string,
 ) {
   if (!/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(migrationTable)) {
     throw new Error("Invalid migration table identifier");
@@ -70,9 +71,15 @@ export async function runSqlMigrationTransaction(
     await transaction.unsafe(`create schema if not exists ${schemaName}`);
     await transaction.unsafe(`create table if not exists ${migrationTable} (migration_key text primary key, applied_at timestamptz not null default now())`);
     const applied = await transaction.unsafe(`select migration_key from ${migrationTable} where migration_key = $1 limit 1`, [migrationKey]);
-    if (applied.length > 0) return;
+    let schemaReady = false;
+    if (readinessSql) {
+      const rows = await transaction.unsafe(readinessSql);
+      schemaReady = Boolean(rows[0]?.ready);
+    }
+    if (applied.length > 0 && (!readinessSql || schemaReady)) return;
     for (const statement of statements) {
       await transaction.unsafe(statement);
     }
+    await transaction.unsafe(`insert into ${migrationTable}(migration_key) values ($1) on conflict (migration_key) do update set applied_at=now()`, [migrationKey]);
   });
 }
