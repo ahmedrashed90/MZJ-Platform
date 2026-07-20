@@ -78,5 +78,27 @@ export type TransferRow = {
   source_location_name?: string | null;
   destination_location_name?: string | null;
   vehicles_count: number;
-  vehicles: Array<{ vehicle_id: string; vin: string; car_name?: string | null; statement?: string | null; model_year?: string | null }>;
+  vehicles: Array<{
+    vehicle_id: string;
+    vin: string;
+    car_name?: string | null;
+    statement?: string | null;
+    model_year?: string | null;
+    interior_color?: string | null;
+    exterior_color?: string | null;
+    source_location_id?: string | null;
+    source_status?: string | null;
+    current_location_name?: string | null;
+    current_status_name?: string | null;
+  }>;
+  events?: Array<{
+    id: string;
+    stage?: string | null;
+    action: string;
+    note?: string | null;
+    actor_name?: string | null;
+    actor_role?: string | null;
+    actor_branch?: string | null;
+    created_at: string;
+  }>;
 };

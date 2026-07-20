@@ -2493,3 +2493,268 @@ button.small-metric { cursor: pointer; }
   .operations-request-vehicle-list > article { grid-template-columns: 1fr; }
 }
 body.operations-column-resizing, body.operations-column-resizing * { cursor: col-resize!important; user-select: none!important; }
+/* Operations movement, transfer requests and movement history refinement v1.14.7 */
+.operations-movement-page .operations-movement-panel,
+.operations-transfer-page .operations-transfer-create,
+.operations-transfer-page .operations-requests-panel { padding: 18px; }
+
+.operations-movement-controls,
+.operations-transfer-controls {
+  display: grid;
+  grid-template-columns: minmax(420px, 2fr) minmax(190px, .75fr) minmax(190px, .75fr);
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+.operations-transfer-controls { grid-template-columns: minmax(420px, 2fr) minmax(220px, .8fr); }
+.operations-control-field { display: grid; gap: 6px; min-width: 0; }
+.operations-control-field > span { color: #6f625c; font-size: 12px; font-weight: 800; }
+.operations-control-field select,
+.operations-selection-table input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px 10px;
+  font: inherit;
+  outline: 0;
+}
+.operations-control-field select:focus,
+.operations-selection-table input:focus { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(198,95,60,.08); }
+
+.operations-vehicle-picker { position: relative; min-width: 0; }
+.operations-vehicle-picker-input { min-height: 44px; }
+.operations-vehicle-picker-results {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 7px);
+  z-index: 40;
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(45,31,25,.18);
+}
+.operations-vehicle-picker-head,
+.operations-vehicle-picker-results > button {
+  display: grid;
+  grid-template-columns: minmax(135px,.9fr) minmax(210px,1.45fr) minmax(170px,1fr) minmax(120px,.75fr) 38px;
+  gap: 10px;
+  align-items: center;
+}
+.operations-vehicle-picker-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 38px;
+  padding: 7px 12px;
+  background: #f7f4f2;
+  border-bottom: 1px solid var(--line);
+  color: #736660;
+  font-size: 11px;
+  font-weight: 800;
+}
+.operations-vehicle-picker-results > button {
+  width: 100%;
+  min-height: 66px;
+  border: 0;
+  border-bottom: 1px solid #eee8e5;
+  background: #fff;
+  padding: 9px 12px;
+  text-align: right;
+  cursor: pointer;
+}
+.operations-vehicle-picker-results > button:last-child { border-bottom: 0; }
+.operations-vehicle-picker-results > button:hover { background: #faf8f7; }
+.operations-vehicle-picker-results > button > strong { color: #4f2d22; font-size: 13px; }
+.operations-picker-car,
+.operations-picker-location { display: grid; gap: 3px; min-width: 0; }
+.operations-picker-car b,
+.operations-picker-location b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operations-picker-car small,
+.operations-picker-location small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.operations-picker-approvals,
+.operations-approval-pair { display: flex; flex-wrap: wrap; gap: 4px; }
+.operations-picker-approvals small,
+.operations-approval-pair small {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #f1eeec;
+  color: #6f625c;
+  font-size: 10px;
+  font-weight: 800;
+}
+.operations-picker-approvals.complete small,
+.operations-approval-pair.complete small { background: #e8f7ec; color: #267442; }
+.operations-picker-add {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--brand);
+  background: #fff;
+}
+
+.operations-general-note,
+.operations-transfer-note { margin-bottom: 14px; }
+.operations-general-note textarea,
+.operations-transfer-note textarea { min-height: 76px; }
+.operations-selection-table-wrap { display: grid; gap: 10px; margin: 14px 0; min-width: 0; }
+.operations-selection-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #faf9f8;
+}
+.operations-selection-summary span { display: flex; align-items: center; gap: 6px; color: #756963; }
+.operations-resizable-table-shell { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
+.operations-resizable-table-shell .operations-table-tools { background: #faf9f8; }
+.operations-resizable-table th { overflow: visible; }
+.operations-resizable-table td { height: 50px; }
+.operations-resizable-table td strong[dir="ltr"] { display: inline-block; direction: ltr; }
+.operations-resizable-table .operations-column-resizer { inset-inline-end: -6px; width: 12px; }
+.operations-resizable-table .operations-column-resizer::before {
+  content: "↔";
+  position: absolute;
+  top: 50%;
+  inset-inline-start: -2px;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d8d0cc;
+  border-radius: 6px;
+  background: #f4f1ef;
+  color: #82736c;
+  font-size: 11px;
+  font-weight: 900;
+}
+.operations-resizable-table .operations-column-resizer:hover::before,
+.operations-resizable-table .operations-column-resizer:active::before { background: #fff; border-color: var(--brand); color: var(--brand); }
+.operations-cell-stack { display: grid; gap: 3px; min-width: 0; }
+.operations-cell-stack small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.operations-row-delete {
+  width: 34px;
+  height: 34px;
+  border: 1px solid #efc9cb;
+  border-radius: 9px;
+  background: #fff7f7;
+  color: #a92d35;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.operations-row-delete:hover { background: #a92d35; color: #fff; }
+.operations-agency-checks { border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; background: #fcfbfa; }
+.operations-agency-checks summary { cursor: pointer; font-weight: 800; }
+
+.operations-transfer-page .operations-primary-button,
+.operations-movement-page .operations-submit-movement { width: 100%; min-height: 46px; }
+.operations-requests-list > article {
+  display: grid;
+  grid-template-columns: 48px minmax(0,1fr) auto 42px;
+  align-items: center;
+  gap: 12px;
+}
+.operations-request-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 10px;
+}
+.operations-request-summary-grid > div {
+  min-height: 76px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fcfbfa;
+}
+.operations-request-summary-grid small { color: var(--muted); }
+.operations-transfer-stage-timeline {
+  display: grid;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+.operations-transfer-stage-timeline article {
+  display: grid;
+  grid-template-columns: 36px minmax(0,1fr);
+  gap: 9px;
+  align-items: center;
+  min-height: 76px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #faf9f8;
+}
+.operations-transfer-stage-timeline article > span {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #eeeae8;
+  color: #756963;
+  font-weight: 900;
+}
+.operations-transfer-stage-timeline article.done { border-color: #cfe5d5; background: #fbfffc; }
+.operations-transfer-stage-timeline article.done > span { background: #e5f6e9; color: #267442; }
+.operations-transfer-stage-timeline article div { display: grid; gap: 4px; }
+.operations-transfer-stage-timeline small { color: var(--muted); }
+.operations-request-vehicles-table-wrap { display: grid; gap: 10px; margin-top: 14px; }
+.operations-request-vehicles-table-wrap h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
+.operations-request-vehicles-table-wrap h3 span { min-width: 30px; height: 26px; border-radius: 999px; background: #f1edeb; display: grid; place-items: center; font-size: 11px; }
+.operations-request-note { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fcfbfa; }
+.operations-request-note small { color: var(--muted); }
+.operations-request-note p { margin: 6px 0 0; line-height: 1.8; }
+
+.operations-history-page .operations-history-filters {
+  grid-template-columns: minmax(260px,1.5fr) repeat(4,minmax(135px,1fr));
+  align-items: end;
+}
+.operations-history-page .operations-history-filters > label { display: grid; gap: 5px; }
+.operations-history-page .operations-history-filters > button { min-height: 44px; }
+.operations-history-page .operations-movement-history-table .operations-table-scroll { max-height: calc(100vh - 315px); }
+
+@media (max-width: 1100px) {
+  .operations-movement-controls,
+  .operations-transfer-controls { grid-template-columns: 1fr 1fr; }
+  .operations-movement-controls .operations-vehicle-picker,
+  .operations-transfer-controls .operations-vehicle-picker { grid-column: 1 / -1; }
+  .operations-request-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .operations-transfer-stage-timeline { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 760px) {
+  .operations-movement-controls,
+  .operations-transfer-controls,
+  .operations-request-summary-grid,
+  .operations-transfer-stage-timeline { grid-template-columns: 1fr; }
+  .operations-movement-controls .operations-vehicle-picker,
+  .operations-transfer-controls .operations-vehicle-picker { grid-column: auto; }
+  .operations-vehicle-picker-head { display: none; }
+  .operations-vehicle-picker-results > button { grid-template-columns: 1fr auto; }
+  .operations-vehicle-picker-results > button > strong,
+  .operations-picker-car,
+  .operations-picker-location,
+  .operations-picker-approvals { grid-column: 1; }
+  .operations-picker-add { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
+  .operations-selection-summary { align-items: flex-start; flex-direction: column; }
+  .operations-requests-list > article { grid-template-columns: 42px minmax(0,1fr); }
+  .operations-requests-list > article > .operations-status,
+  .operations-requests-list > article > strong { grid-column: 2; }
+}

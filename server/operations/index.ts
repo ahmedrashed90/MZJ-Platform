@@ -241,30 +241,35 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "tl");
   const rows = await sql<any[]>`
-    select m.id::text,m.batch_id::text,m.transfer_request_id::text,m.created_at,m.movement_type,m.old_status,m.new_status,m.note,m.state_note,m.shortage_note,
-      m.performed_by_name,m.performed_by_role,m.performed_by_branch,v.id::text as vehicle_id,v.vin,v.car_name,v.statement,
+    select m.id::text,m.batch_id::text,m.transfer_request_id::text,m.created_at,m.movement_type,m.old_status,m.new_status,
+      coalesce(os.name,m.old_status) as old_status_name,coalesce(ns.name,m.new_status) as new_status_name,
+      m.note,m.state_note,m.shortage_note,m.performed_by_name,m.performed_by_role,m.performed_by_branch,
+      v.id::text as vehicle_id,v.vin,v.car_name,v.statement,
       fl.code as from_location_code,fl.name as from_location_name,tl.code as to_location_code,tl.name as to_location_name
     from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
-    left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id
-    where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
+    left join operations.locations fl on fl.id=m.from_location_id
+    left join operations.locations tl on tl.id=m.to_location_id
+    left join operations.vehicle_statuses os on os.code=m.old_status
+    left join operations.vehicle_statuses ns on ns.code=m.new_status
+    where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
       and (${status}='' or m.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or m.created_at::date>=${dateFrom}::date)
-      and (${dateTo}='' or m.created_at::date<=${dateTo}::date)
-      and (${timeFrom}='' or m.created_at::time>=${timeFrom}::time)
-      and (${timeTo}='' or m.created_at::time<=${timeTo}::time)
+      and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date)
+      and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
+      and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time)
+      and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
-    order by m.created_at desc limit ${pageSize} offset ${offset}
+    order by m.created_at desc,m.id desc limit ${pageSize} offset ${offset}
   `;
   const [count] = await sql<{ total: number }[]>`
     select count(*)::int as total from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
     left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id
-    where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
+    where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or m.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or m.created_at::date>=${dateFrom}::date) and (${dateTo}='' or m.created_at::date<=${dateTo}::date)
-      and (${timeFrom}='' or m.created_at::time>=${timeFrom}::time) and (${timeTo}='' or m.created_at::time<=${timeTo}::time)
+      and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date) and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
+      and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time) and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
   `;
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
@@ -287,7 +292,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
     and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
     and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
       select 1 from operations.transfer_request_vehicles rx join operations.vehicles vx on vx.id=rx.vehicle_id
-      where rx.transfer_request_id=r.id and vx.vin ilike ${pattern}
+      where rx.transfer_request_id=r.id and (vx.vin ilike ${pattern} or coalesce(vx.car_name,'') ilike ${pattern} or coalesce(vx.statement,'') ilike ${pattern})
     ))
     and (${isAdmin}=true or r.source_branch_code in ${sql(branches)} or r.destination_branch_code in ${sql(branches)} or r.requested_by=${user.id}::uuid)
   `;
@@ -296,13 +301,33 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
     select r.id::text,r.request_no,r.request_kind,r.status,r.note,r.requested_by::text,r.requested_by_name,r.requested_by_role,r.requested_by_branch,
       r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.cancelled_at,r.cancellation_reason,r.version,
       sl.code as source_location_code,sl.name as source_location_name,dl.code as destination_location_code,dl.name as destination_location_name,
-      count(rv.vehicle_id)::int as vehicles_count,
-      coalesce(json_agg(json_build_object('vehicle_id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'model_year',v.model_year,'source_location_id',rv.source_location_id::text,'source_status',rv.source_status) order by v.vin) filter(where v.id is not null),'[]') as vehicles
+      coalesce(cars.vehicles_count,0)::int as vehicles_count,coalesce(cars.vehicles,'[]'::json) as vehicles,
+      coalesce(events.events,'[]'::json) as events
     from operations.transfer_requests r
-    left join operations.locations sl on sl.id=r.source_location_id left join operations.locations dl on dl.id=r.destination_location_id
-    left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id
+    left join operations.locations sl on sl.id=r.source_location_id
+    left join operations.locations dl on dl.id=r.destination_location_id
+    left join lateral (
+      select count(*)::int as vehicles_count,
+        json_agg(json_build_object(
+          'vehicle_id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'model_year',v.model_year,
+          'interior_color',v.interior_color,'exterior_color',v.exterior_color,
+          'source_location_id',rv.source_location_id::text,'source_status',rv.source_status,
+          'current_location_name',cl.name,'current_status_name',coalesce(cs.name,v.status_code)
+        ) order by v.vin) as vehicles
+      from operations.transfer_request_vehicles rv
+      join operations.vehicles v on v.id=rv.vehicle_id
+      left join operations.locations cl on cl.id=v.location_id
+      left join operations.vehicle_statuses cs on cs.code=v.status_code
+      where rv.transfer_request_id=r.id
+    ) cars on true
+    left join lateral (
+      select json_agg(json_build_object(
+        'id',e.id::text,'stage',e.stage,'action',e.action,'note',e.note,'actor_name',e.actor_name,
+        'actor_role',e.actor_role,'actor_branch',e.actor_branch,'created_at',e.created_at
+      ) order by e.created_at) as events
+      from operations.transfer_request_events e where e.transfer_request_id=r.id
+    ) events on true
     where ${where}
-    group by r.id,sl.code,sl.name,dl.code,dl.name
     order by r.requested_at desc limit ${pageSize} offset ${offset}
   `;
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
@@ -538,7 +563,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       const [v] = await tx<any[]>`
         select v.*,v.id::text,l.branch_code,l.code as location_code
         from operations.vehicles v left join operations.locations l on l.id=v.location_id
-        where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update
+        where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update of v
       `;
       if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", `السيارة ${vehicleId} غير موجودة`);
       assertBranchAccess(user, v.branch_code, v.location_code, `لا تملك صلاحية تحريك السيارة ${v.vin}`);
@@ -605,7 +630,7 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
     if (!destination) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", "المكان المستهدف غير صحيح");
     const cars: any[] = [];
     for (const vehicleId of vehicleIds) {
-      const [v] = await tx<any[]>`select v.*,v.id::text,l.branch_code,l.code as location_code from operations.vehicles v left join operations.locations l on l.id=v.location_id where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update`;
+      const [v] = await tx<any[]>`select v.*,v.id::text,l.branch_code,l.code as location_code from operations.vehicles v left join operations.locations l on l.id=v.location_id where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update of v`;
       if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "إحدى السيارات غير موجودة");
       if (String(v.location_id) === destinationLocationId) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", `السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
       const [active] = await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
