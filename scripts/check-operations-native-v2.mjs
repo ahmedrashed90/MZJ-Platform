@@ -67,6 +67,7 @@ for (const requiredSql of [
   "alter table operations.movements add column if not exists vehicle_id",
   "alter table operations.transfer_requests add column if not exists request_no",
   "alter table operations.transfer_request_vehicles add column if not exists transfer_request_id",
+  "alter table operations.approval_events add column if not exists cycle_no",
 ]) {
   if (!operationsSchema.includes(requiredSql)) throw new Error(`Operations V2 check failed: schema compatibility missing ${requiredSql}`);
 }
