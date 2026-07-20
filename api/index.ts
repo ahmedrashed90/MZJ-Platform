@@ -35,6 +35,7 @@ import trackingSmsHandler from "../server/tracking/sms.js";
 import trackingDeleteHandler from "../server/tracking/delete.js";
 import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
+import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-sales-order.js";
 import operationsHandler from "../server/operations/index.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
@@ -74,6 +75,7 @@ const routes = new Map<string, ApiHandler>([
   ["tracking/delete", trackingDeleteHandler],
   ["tracking/settings", trackingSettingsHandler],
   ["integrations/tracking/orders", trackingIntegrationHandler],
+  ["integrations/erpnext/sales-order", erpNextSalesOrderIntegrationHandler],
   ["operations", operationsHandler],
 ]);
 
@@ -103,6 +105,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (route === "integrations/tracking/orders") {
     return trackingIntegrationHandler(request, response);
+  }
+
+  if (route === "integrations/erpnext/sales-order") {
+    return erpNextSalesOrderIntegrationHandler(request, response);
   }
 
   if (route.startsWith("integrations/")) {

@@ -9,6 +9,12 @@ const checks = [
   ["server/tracking/sms.ts", 'status: "queued"'],
   ["server/tracking/sms.ts", 'source: "sales.html"'],
   ["server/integrations/tracking-orders.ts", "google-sheets-next-erp"],
+  ["server/integrations/tracking-orders.ts", "sales_order_no=${orderNo}"],
+  ["api/index.ts", "integrations/erpnext/sales-order"],
+  ["server/integrations/erpnext-sales-order.ts", "erpnext-webhook"],
+  ["server/integrations/erpnext-sales-order.ts", "registrationFeeRowsIgnoredAsVehicles"],
+  [".env.example", "ERPNEXT_WEBHOOK_KEY"],
+  ["docs/ERPNEXT-WEBHOOK-TRACKING-AR.md", "X-MZJ-ERPNext-Key"],
   ["src/App.tsx", 'path="/tracking"'],
   ["src/App.tsx", 'path="/track"'],
   ["src/App.tsx", 'path="/Test-Track.html"'],
@@ -28,4 +34,4 @@ for (const [file, needle] of checks) {
   const text = fs.readFileSync(file, "utf8");
   if (!text.includes(needle)) throw new Error(`Tracking check failed: ${file} missing ${needle}`);
 }
-console.log("Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, and SMS+ checks passed.");
+console.log("Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, direct ERPNext webhook, and SMS+ checks passed.");
