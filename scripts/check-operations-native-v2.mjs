@@ -63,6 +63,7 @@ if (!operationsApi.includes("tx.savepoint")) {
 const operationsSchema = fs.readFileSync("server/_operations-schema.ts", "utf8");
 for (const requiredSql of [
   "alter table operations.event_outbox add column if not exists event_type",
+  "alter table operations.movement_batches add column if not exists batch_no",
   "alter table operations.movements add column if not exists vehicle_id",
   "alter table operations.transfer_requests add column if not exists request_no",
   "alter table operations.transfer_request_vehicles add column if not exists transfer_request_id",
@@ -75,6 +76,14 @@ if (!operationsApi.includes("Operations movement outbox failed") || !operationsA
 const vehicleTable = fs.readFileSync("src/operations/components/VehicleTable.tsx", "utf8");
 if (!vehicleTable.includes("operations-column-resizer") || !vehicleTable.includes("اسحب يمينًا أو يسارًا")) {
   throw new Error("Operations V2 check failed: inventory table must expose visible resizable columns");
+}
+
+const transferPage = fs.readFileSync("src/operations/pages/TransferRequestsPage.tsx", "utf8");
+if (!transferPage.includes('"stage_completed"') || !transferPage.includes("تفاصيل التنفيذ غير مسجلة")) {
+  throw new Error("Operations V2 check failed: transfer stage timeline must recognize stored stage_completed events");
+}
+if (!operationsApi.includes('insert into operations.movement_batches(batch_no')) {
+  throw new Error("Operations V2 check failed: movement batches must write the legacy required batch_no value");
 }
 
 const trackingDelete = fs.readFileSync("server/tracking/delete.ts", "utf8");

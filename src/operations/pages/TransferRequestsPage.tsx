@@ -204,8 +204,8 @@ export function TransferRequestsPage() {
             <div className="operations-transfer-stage-timeline">{stageOrder.map((stage, index) => {
               const currentIndex = stageOrder.indexOf(selected.status as typeof stageOrder[number]);
               const done = selected.status === "completed" || index <= currentIndex;
-              const event = selected.events?.find((item) => item.stage === stage && ["created", "advanced"].includes(item.action));
-              return <article key={stage} className={done ? "done" : ""}><span>{done ? <CheckCircle size={21} weight="fill" /> : index + 1}</span><div><strong>{stageLabels[stage]}</strong><small>{event ? `${event.actor_name || "مستخدم المنصة"} · ${formatOperationsDate(event.created_at)}` : done && stage === "request_received" ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : "لم تنفذ بعد"}</small></div></article>;
+              const event = selected.events?.find((item) => item.stage === stage && ["created", "advanced", "stage_completed"].includes(item.action));
+              return <article key={stage} className={done ? "done" : ""}><span>{done ? <CheckCircle size={21} weight="fill" /> : index + 1}</span><div><strong>{stageLabels[stage]}</strong><small>{event ? `${event.actor_name || "مستخدم المنصة"} · ${formatOperationsDate(event.created_at)}` : done && stage === "request_received" ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : done ? "تم التنفيذ — تفاصيل التنفيذ غير مسجلة" : "لم تنفذ بعد"}</small></div></article>;
             })}</div>
 
             <div className="operations-request-vehicles-table-wrap">

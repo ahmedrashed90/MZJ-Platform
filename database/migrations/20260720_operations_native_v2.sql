@@ -218,6 +218,7 @@ create index if not exists operations_approval_events_vehicle_idx on operations.
 
 create table if not exists operations.movement_batches (
   id uuid primary key default gen_random_uuid(),
+  batch_no text not null default ('MB-' || upper(substr(replace(gen_random_uuid()::text,'-',''),1,12))),
   destination_location_id uuid references operations.locations(id),
   new_status text,
   general_note text,
@@ -228,6 +229,12 @@ create table if not exists operations.movement_batches (
   performed_by_branch text,
   created_at timestamptz not null default now()
 );
+alter table operations.movement_batches add column if not exists batch_no text;
+update operations.movement_batches
+set batch_no='MB-LEGACY-' || upper(substr(replace(id::text,'-',''),1,12))
+where batch_no is null or btrim(batch_no)='';
+alter table operations.movement_batches alter column batch_no set default ('MB-' || upper(substr(replace(gen_random_uuid()::text,'-',''),1,12)));
+alter table operations.movement_batches alter column batch_no set not null;
 alter table operations.movement_batches add column if not exists destination_location_id uuid references operations.locations(id);
 alter table operations.movement_batches add column if not exists new_status text;
 alter table operations.movement_batches add column if not exists general_note text;

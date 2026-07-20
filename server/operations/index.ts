@@ -552,10 +552,11 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
   if (!status) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
   assertBranchAccess(user, destination.branch_code, destination.code, "الحركة المباشرة متاحة فقط إلى موقع داخل الفروع المسموح بها؛ استخدم طلب نقل للانتقال إلى فرع آخر");
   const who = actor(user);
+  const movementBatchNo = requestId("MB").toUpperCase();
   return sql.begin(async (tx) => {
     const [batch] = await tx<any[]>`
-      insert into operations.movement_batches(destination_location_id,new_status,general_note,requested_count,performed_by,performed_by_name,performed_by_role,performed_by_branch)
-      values (${destinationLocationId}::uuid,${newStatus},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text
+      insert into operations.movement_batches(batch_no,destination_location_id,new_status,general_note,requested_count,performed_by,performed_by_name,performed_by_role,performed_by_branch)
+      values (${movementBatchNo},${destinationLocationId}::uuid,${newStatus},${clean(body.note)||null},${vehicleIds.length},${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text,batch_no
     `;
     const moved: any[] = [];
     for (const raw of items) {
