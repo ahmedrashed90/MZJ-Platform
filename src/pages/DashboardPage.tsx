@@ -9,9 +9,11 @@ import {
   Clock,
   CurrencyCircleDollar,
   FileMagnifyingGlass,
+  FileXls,
   GearSix,
   Handbag,
   MapPin,
+  MagnifyingGlass,
   Megaphone,
   Package,
   PhoneCall,
@@ -43,7 +45,10 @@ import type { CrmLead } from "../crm/types";
 import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/api";
 import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
 import type { DashboardData, NullableNumber } from "../types";
-import { OperationsDashboardModal, type OperationsDashboardSpec } from "../components/OperationsDashboardModal";
+import { OperationsModal } from "../operations/components/OperationsModal";
+import { operationsFetch, operationsQuery, formatDate as formatOperationsDate, stageLabel } from "../operations/api";
+import { exportExcel } from "../operations/excel";
+import type { TransferRow, VehicleRow } from "../operations/types";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -133,6 +138,86 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
         </div>
       </aside>
     </div>
+  );
+}
+
+
+type OperationsPopupSpec =
+  | { kind: "vehicles"; title: string; metric: string; location?: string }
+  | { kind: "requests"; title: string };
+
+function OperationsDashboardPopup({ spec, onClose }: { spec: OperationsPopupSpec | null; onClose: () => void }) {
+  const [search, setSearch] = useState("");
+  const [requestTab, setRequestTab] = useState<"transfer" | "photo">("transfer");
+  const [vehicles, setVehicles] = useState<VehicleRow[]>([]);
+  const [requests, setRequests] = useState<TransferRow[]>([]);
+  const [detail, setDetail] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    if (!spec) return;
+    setLoading(true);
+    setError("");
+    try {
+      if (spec.kind === "vehicles") {
+        const payload = await operationsFetch<{ ok: boolean; rows: VehicleRow[] }>(`/api/operations${operationsQuery({ resource: "dashboard-vehicles", metric: spec.metric, location: spec.location, search })}`);
+        setVehicles(payload.rows || []);
+      } else {
+        const payload = await operationsFetch<{ ok: boolean; rows: TransferRow[] }>(`/api/operations${operationsQuery({ resource: "dashboard-requests", requestType: requestTab, search })}`);
+        setRequests(payload.rows || []);
+      }
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل البيانات");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    setSearch("");
+    setRequestTab("transfer");
+    setDetail(null);
+  }, [spec]);
+  useEffect(() => { if (spec) void load(); }, [spec, requestTab]);
+
+  async function openRequest(row: TransferRow) {
+    setLoading(true);
+    try {
+      const payload = await operationsFetch<any>(`/api/operations${operationsQuery({ resource: "transfer", id: row.id })}`);
+      setDetail(payload);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر فتح تفاصيل الطلب");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function exportCurrent() {
+    if (spec?.kind === "vehicles") {
+      exportExcel(spec.title, ["رقم الهيكل", "السيارة", "البيان", "موديل", "داخلي", "خارجي", "المكان", "الحالة"], vehicles.map((row) => [row.vin, row.car_name, row.statement, row.model_year, row.interior_color, row.exterior_color, row.location_name, row.status_name]));
+    } else if (spec?.kind === "requests") {
+      exportExcel(`${spec.title}-${requestTab === "transfer" ? "النقل" : "التصوير"}`, ["رقم الطلب", "المنشئ", "تاريخ الطلب", "المرحلة", "عدد السيارات"], requests.map((row) => [row.request_no, row.requested_by_name, formatOperationsDate(row.requested_at), stageLabel(row.current_stage), row.vehicles_count]));
+    }
+  }
+
+  return (
+    <>
+      <OperationsModal open={Boolean(spec)} title={spec?.title || ""} onClose={onClose} className="dashboard-operations-modal operations-wide-modal">
+        {spec ? (
+          <div className="dashboard-operations-content">
+            {spec.kind === "requests" ? <div className="dashboard-request-tabs"><button className={requestTab === "transfer" ? "active" : ""} onClick={() => setRequestTab("transfer")}>طلبات النقل</button><button className={requestTab === "photo" ? "active" : ""} onClick={() => setRequestTab("photo")}>طلبات التصوير</button></div> : null}
+            <div className="operations-toolbar compact dashboard-popup-toolbar"><div className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void load(); }} placeholder={spec.kind === "vehicles" ? "بحث برقم الهيكل أو السيارة أو البيان" : "بحث برقم الطلب أو الهيكل أو المنشئ"} /></div><button type="button" onClick={() => void load()}><MagnifyingGlass size={17} />بحث</button><button type="button" className="secondary" onClick={exportCurrent}><FileXls size={17} />تصدير Excel</button></div>
+            {error ? <div className="connection-banner"><WarningCircle size={19} /><span>{error}</span></div> : null}
+            {spec.kind === "vehicles" ? <div className="operations-table-scroll dashboard-vehicle-results"><table className="operations-table"><thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>موديل</th><th>داخلي</th><th>خارجي</th><th>المكان</th><th>الحالة</th></tr></thead><tbody>{vehicles.length === 0 && !loading ? <tr><td colSpan={8} className="table-empty">لا توجد سيارات مطابقة</td></tr> : vehicles.map((row) => <tr key={row.id}><td>{row.vin}</td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.model_year || "—"}</td><td>{row.interior_color || "—"}</td><td>{row.exterior_color || "—"}</td><td>{row.location_name || "—"}</td><td>{row.status_name || "—"}</td></tr>)}</tbody></table></div> : <div className="operations-table-scroll"><table className="operations-table dashboard-request-table"><thead><tr><th>رقم الطلب</th><th>المنشئ</th><th>تاريخ الطلب</th><th>المرحلة</th><th>السيارات</th><th>الإجراء</th></tr></thead><tbody>{requests.length === 0 && !loading ? <tr><td colSpan={6} className="table-empty">لا توجد طلبات في هذا التبويب</td></tr> : requests.map((row) => <tr key={row.id}><td>{row.request_no}</td><td>{row.requested_by_name || "—"}</td><td>{formatOperationsDate(row.requested_at)}</td><td>{stageLabel(row.current_stage)}</td><td>{row.vehicles_count}</td><td><button type="button" className="small-action" onClick={() => void openRequest(row)}>تفاصيل</button></td></tr>)}</tbody></table></div>}
+            {loading ? <div className="operations-loading">جاري تحميل البيانات...</div> : null}
+          </div>
+        ) : null}
+      </OperationsModal>
+      <OperationsModal open={Boolean(detail)} title={detail ? `تفاصيل الطلب — ${detail.request.request_no}` : "تفاصيل الطلب"} onClose={() => setDetail(null)} className="dashboard-request-detail-modal">
+        {detail ? <div className="dashboard-request-detail"><div className="vehicle-detail-grid"><div><small>المنشئ</small><strong>{detail.request.requested_by_name || "—"}</strong></div><div><small>تاريخ الطلب</small><strong>{formatOperationsDate(detail.request.requested_at)}</strong></div><div><small>نوع الطلب</small><strong>{detail.request.request_type === "photo" ? "تصوير" : "نقل"}</strong></div><div><small>المرحلة</small><strong>{stageLabel(detail.request.current_stage)}</strong></div></div><div className="operations-table-scroll"><table className="operations-table"><thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th></tr></thead><tbody>{detail.vehicles.map((vehicle: any) => <tr key={vehicle.id}><td>{vehicle.vin}</td><td>{vehicle.car_name || "—"}</td><td>{vehicle.statement || "—"}</td></tr>)}</tbody></table></div></div> : null}
+      </OperationsModal>
+    </>
   );
 }
 
@@ -278,8 +363,8 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
-  const [operationsModal, setOperationsModal] = useState<OperationsDashboardSpec | null>(null);
   const [loading, setLoading] = useState(true);
+  const [operationsPopup, setOperationsPopup] = useState<OperationsPopupSpec | null>(null);
   const detailsRequestId = useRef(0);
 
   useEffect(() => {
@@ -309,8 +394,8 @@ export function DashboardPage() {
   }, [current]);
 
   const open = (title: string, rows: NonNullable<DetailPayload["rows"]>, subtitle?: string) => setDetails({ title, rows, subtitle });
-  const openOperationsVehicles = (title: string, metric: string, locationCode?: string) => setOperationsModal({ kind: "vehicles", title, metric, locationCode });
-  const openOperationsRequests = () => setOperationsModal({ kind: "requests", title: "طلبات النقل والتصوير" });
+  const openOperationsVehicles = (title: string, metric: string, location?: string) => setOperationsPopup({ kind: "vehicles", title, metric, location });
+  const openOperationsRequests = () => setOperationsPopup({ kind: "requests", title: "طلبات النقل والتصوير" });
 
   async function allVisibleCrmLeads() {
     const departments = ["cash", "finance", "service"] as const;
@@ -500,14 +585,14 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid locations-row">
-            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => openOperationsVehicles("إجمالي المخزون - الإجمالي الفعلي", "actual")}>
-              <button type="button" className="inventory-primary" onClick={() => openOperationsVehicles("إجمالي المخزون - الإجمالي الفعلي", "actual")}>
+            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => openOperationsVehicles("إجمالي المخزون — الإجمالي الفعلي", "actual")}>
+              <button type="button" className="inventory-primary" onClick={() => openOperationsVehicles("إجمالي المخزون — الإجمالي الفعلي", "actual")}>
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />
               </button>
               <div className="inventory-tags">
-                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => openOperationsVehicles("الوكالة", "actual", "agency")} />
-                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => openOperationsVehicles("المتاح للبيع", "available")} />
+                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => openOperationsVehicles("الوكالة", "all", "agency")} />
+                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => openOperationsVehicles("المتاح للبيع", "available_for_sale")} />
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => openOperationsVehicles("بها ملاحظات", "has_notes")} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => openOperationsVehicles("مباع تحت التسليم", "under_delivery")} />
               </div>
@@ -522,20 +607,17 @@ export function DashboardPage() {
               { key: "multaqa", name: "الملتقى", actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null },
             ]).map((location) => {
               const rows = [
-                { label: "الإجمالي الفعلي", value: location.actualTotal },
-                { label: "مباع تحت التسليم", value: location.underDelivery },
-                { label: "متاح للبيع", value: location.availableForSale },
-                { label: "حجز", value: location.reserved },
-                { label: "مباع تم التسليم", value: location.delivered },
-                { label: "بها ملاحظات", value: location.hasNotes },
+                { label: "الإجمالي الفعلي", value: location.actualTotal, metric: "actual" },
+                { label: "مباع تحت التسليم", value: location.underDelivery, metric: "under_delivery" },
+                { label: "متاح للبيع", value: location.availableForSale, metric: "available_for_sale" },
+                { label: "حجز", value: location.reserved, metric: "reserved" },
+                { label: "مباع تم التسليم", value: location.delivered, metric: "delivered" },
+                { label: "بها ملاحظات", value: location.hasNotes, metric: "has_notes" },
               ];
               return (
-                <OperationCard key={location.key} title={location.name} onView={() => openOperationsVehicles(`${location.name} - الإجمالي الفعلي`, "actual", location.key)}>
+                <OperationCard key={location.key} title={location.name} onView={() => openOperationsVehicles(`${location.name} — الإجمالي الفعلي`, "actual", location.key)}>
                   <div className="operation-metrics-grid">
-                    {rows.map((row) => {
-                      const metric = row.label === "الإجمالي الفعلي" ? "actual" : row.label === "مباع تحت التسليم" ? "under_delivery" : row.label === "متاح للبيع" ? "available" : row.label === "حجز" ? "reserved" : row.label === "مباع تم التسليم" ? "delivered" : "has_notes";
-                      return <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => openOperationsVehicles(`${location.name} - ${row.label}`, metric, location.key)} />;
-                    })}
+                    {rows.map((row) => <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => openOperationsVehicles(`${location.name} — ${row.label}`, row.metric, location.key)} />)}
                   </div>
                 </OperationCard>
               );
@@ -597,7 +679,7 @@ export function DashboardPage() {
         </section>
       </div>
       <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />
-      <OperationsDashboardModal spec={operationsModal} onClose={() => setOperationsModal(null)} />
+      <OperationsDashboardPopup spec={operationsPopup} onClose={() => setOperationsPopup(null)} />
     </>
   );
 }

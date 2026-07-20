@@ -52,9 +52,8 @@ function Item({ href, label, icon: Icon }: NavItem) {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const isAdmin = user?.roleCodes.includes("admin") ?? false;
-  const canViewOperations = isAdmin || Boolean(user?.permissions?.includes("operations.view")) || Boolean(user?.roleCodes.includes("operations_user"));
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
-  const visibleItems = items.filter((item) => item.href !== "/operations" ? (!item.trackingOnly || canViewTracking) : canViewOperations);
+  const visibleItems = items.filter((item) => !item.trackingOnly || canViewTracking);
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 

@@ -2,8 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, requestIp, safeSecretEquals } from "../_auth.js";
 import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
 import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
-import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
+import { ensureTrackingSchema } from "../_tracking-schema.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -34,8 +34,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   try {
     await runSqlScript(SCHEMA_SQL);
     await runSqlScript(SEED_SQL);
-    await ensureTrackingSchema();
     await ensureOperationsSchema();
+    await ensureTrackingSchema();
 
     const sql = getSql();
     const [count] = await sql<{ count: number }[]>`select count(*)::int as count from core.users`;
@@ -97,6 +97,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         branches: [],
         branchCodes: [],
         permissions: [],
+        permissionCodes: [],
       },
     });
   } catch (error: any) {

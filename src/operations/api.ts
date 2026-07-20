@@ -1,17 +1,27 @@
-export async function operationsFetch<T>(action:string, options?:{method?:string;body?:unknown;query?:Record<string,unknown>}):Promise<T>{
-  const params=new URLSearchParams({action});
-  Object.entries(options?.query||{}).forEach(([key,value])=>{if(value!==undefined&&value!==null&&String(value)!=="")params.set(key,String(value));});
-  const response=await fetch(`/api/operations?${params.toString()}`,{method:options?.method||"GET",credentials:"include",headers:options?.body?{"content-type":"application/json"}:undefined,body:options?.body?JSON.stringify(options.body):undefined,cache:"no-store"});
+export class OperationsApiError extends Error {
+  code?: string;
+  requestId?: string;
+  fieldErrors?: Record<string,string>;
+  constructor(message:string,payload?:any){ super(message); this.code=payload?.code; this.requestId=payload?.requestId; this.fieldErrors=payload?.fieldErrors; }
+}
+
+export function operationsQuery(values:Record<string,unknown>){
+  const params=new URLSearchParams();
+  Object.entries(values).forEach(([key,value])=>{if(value===undefined||value===null||value==='')return;params.set(key,String(value));});
+  const text=params.toString(); return text?`?${text}`:'';
+}
+
+export async function operationsFetch<T>(url:string,options?:RequestInit):Promise<T>{
+  const response=await fetch(url,{credentials:'include',cache:'no-store',...options,headers:{...(options?.body?{'content-type':'application/json'}:{}),...(options?.headers||{})}});
   const payload=await response.json().catch(()=>({}));
-  if(!response.ok||payload?.ok===false){const error=new Error(payload?.error||"تعذر تنفيذ العملية") as Error&{code?:string;requestId?:string;fieldErrors?:Record<string,string>};error.code=payload?.code;error.requestId=payload?.requestId;error.fieldErrors=payload?.fieldErrors;throw error;}
+  if(!response.ok||payload?.ok===false){
+    const base=payload?.message||payload?.error||'تعذر تنفيذ العملية';
+    const text=payload?.requestId?`${base} — رقم المرجع: ${payload.requestId}`:base;
+    throw new OperationsApiError(text,payload);
+  }
   return payload as T;
 }
-export function formatOperationsError(error:unknown){
-  if(error instanceof Error){const typed=error as Error&{requestId?:string};return typed.requestId?`${error.message} — رقم المرجع: ${typed.requestId}`:error.message;}
-  return "تعذر تنفيذ العملية";
-}
-export function exportExcelFile(fileName:string, headers:string[], rows:Array<Array<unknown>>){
-  const escape=(value:unknown)=>String(value??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  const html=`<html dir="rtl"><head><meta charset="UTF-8"></head><body><table border="1"><thead><tr>${headers.map(h=>`<th>${escape(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${escape(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></body></html>`;
-  const blob=new Blob(["\ufeff",html],{type:"application/vnd.ms-excel;charset=utf-8"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=`${fileName}.xls`;link.click();URL.revokeObjectURL(url);
-}
+
+export function formatDate(value?:string|null){if(!value)return '—';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString('ar-SA',{dateStyle:'medium',timeStyle:'short'});}
+export function statusLabel(code?:string|null){return ({available_for_sale:'متاح للبيع',reserved:'حجز',has_notes:'بها ملاحظات',under_delivery:'مباع تحت التسليم',delivered:'مباع تم التسليم'} as Record<string,string>)[String(code||'')]||String(code||'—');}
+export function stageLabel(code?:string|null){return ({request_received:'تم استلام الطلب',vehicle_sent:'تم إرسال السيارة',vehicle_received:'تم استلام السيارة',completed:'تم الانتهاء',cancelled:'ملغي'} as Record<string,string>)[String(code||'')]||String(code||'—');}

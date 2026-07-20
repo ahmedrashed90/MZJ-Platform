@@ -34,7 +34,6 @@ export type DashboardData = {
     inProgress: NullableNumber;
     completed: NullableNumber;
   };
-  errors?: Record<string, string>;
   operations: {
     inventory: {
       actualTotal: NullableNumber;

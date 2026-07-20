@@ -20,19 +20,19 @@ const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((mod
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmOwnershipPage = lazy(() => import("./crm/pages/CrmOwnershipPage").then((module) => ({ default: module.CrmOwnershipPage })));
+const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
+const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
+const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
+const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((module) => ({ default: module.MovementPage })));
+const TransfersPage = lazy(() => import("./operations/pages/TransfersPage").then((module) => ({ default: module.TransfersPage })));
+const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
+const AllVehiclesPage = lazy(() => import("./operations/pages/AllVehiclesPage").then((module) => ({ default: module.AllVehiclesPage })));
+const MovementsLogPage = lazy(() => import("./operations/pages/MovementsLogPage").then((module) => ({ default: module.MovementsLogPage })));
+const ArchivePage = lazy(() => import("./operations/pages/ArchivePage").then((module) => ({ default: module.ArchivePage })));
 const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((module) => ({ default: module.TrackingLayout })));
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
+const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
-const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
-const OperationsInventoryPage = lazy(() => import("./operations/pages/OperationsInventoryPage").then((module) => ({ default: module.OperationsInventoryPage })));
-const OperationsManagePage = lazy(() => import("./operations/pages/OperationsManagePage").then((module) => ({ default: module.OperationsManagePage })));
-const OperationsMovementPage = lazy(() => import("./operations/pages/OperationsMovementPage").then((module) => ({ default: module.OperationsMovementPage })));
-const OperationsTransfersPage = lazy(() => import("./operations/pages/OperationsTransfersPage").then((module) => ({ default: module.OperationsTransfersPage })));
-const OperationsApprovalsPage = lazy(() => import("./operations/pages/OperationsApprovalsPage").then((module) => ({ default: module.OperationsApprovalsPage })));
-const OperationsAllVehiclesPage = lazy(() => import("./operations/pages/OperationsAllVehiclesPage").then((module) => ({ default: module.OperationsAllVehiclesPage })));
-const OperationsMovementsLogPage = lazy(() => import("./operations/pages/OperationsMovementsLogPage").then((module) => ({ default: module.OperationsMovementsLogPage })));
-const OperationsArchivePage = lazy(() => import("./operations/pages/OperationsArchivePage").then((module) => ({ default: module.OperationsArchivePage })));
-
 
 function PlatformRoutes() {
   return (
@@ -56,18 +56,19 @@ function PlatformRoutes() {
           </Route>
           <Route path="/marketing" element={<EmptyModulePage title="التسويق" description="الحملات والأجندة والكرييتيف وجدول النشر والتقويم." />} />
           <Route path="/operations" element={<OperationsLayout />}>
-            <Route index element={<OperationsInventoryPage />} />
-            <Route path="manage" element={<OperationsManagePage />} />
-            <Route path="movement" element={<OperationsMovementPage />} />
-            <Route path="transfers" element={<OperationsTransfersPage />} />
-            <Route path="approvals" element={<OperationsApprovalsPage />} />
-            <Route path="all" element={<OperationsAllVehiclesPage />} />
-            <Route path="movements" element={<OperationsMovementsLogPage />} />
-            <Route path="archive" element={<OperationsArchivePage />} />
+            <Route index element={<InventoryPage />} />
+            <Route path="manage" element={<VehicleManagementPage />} />
+            <Route path="movement" element={<MovementPage />} />
+            <Route path="transfers" element={<TransfersPage />} />
+            <Route path="approvals" element={<ApprovalsPage />} />
+            <Route path="all" element={<AllVehiclesPage />} />
+            <Route path="movements" element={<MovementsLogPage />} />
+            <Route path="archive" element={<ArchivePage />} />
           </Route>
           <Route path="/tracking" element={<TrackingLayout />}>
             <Route index element={<TrackingOrdersPage />} />
             <Route path="archive" element={<TrackingOrdersPage archivedOnly />} />
+            <Route path="delete" element={<TrackingDeletePage />} />
           </Route>
           <Route path="/reports" element={<EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." />} />
           <Route path="/database" element={<EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." />} />

@@ -1,4 +1,4 @@
-import { runSqlScript } from "./_db.js";
+import { runSqlMigrationTransaction } from "./_db.js";
 
 let trackingSchemaPromise: Promise<void> | null = null;
 
@@ -15,7 +15,23 @@ alter table tracking.orders add column if not exists total_incl_vat numeric(14,2
 alter table tracking.orders add column if not exists registration_fee numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists source text;
 alter table tracking.orders add column if not exists source_payload jsonb not null default '{}'::jsonb;
+alter table tracking.orders add column if not exists source_identity text;
+alter table tracking.orders add column if not exists source_fingerprint text;
+alter table tracking.orders add column if not exists source_sheet_id text;
+alter table tracking.orders add column if not exists source_row_number text;
+alter table tracking.orders add column if not exists source_message_id text;
+alter table tracking.orders add column if not exists source_original_id text;
 alter table tracking.orders add column if not exists source_updated_at timestamptz;
+update tracking.orders set source_identity=coalesce(source_identity,'legacy:'||id::text),source_fingerprint=coalesce(source_fingerprint,'legacy:'||id::text) where source_identity is null or source_fingerprint is null;
+with duplicated as (
+  select id,source_fingerprint,row_number() over(partition by source_fingerprint order by created_at,id) as rn
+  from tracking.orders where source_fingerprint is not null
+)
+update tracking.orders o set source_fingerprint=o.source_fingerprint||':'||o.id::text
+from duplicated d where o.id=d.id and d.rn>1;
+alter table tracking.orders drop constraint if exists orders_sales_order_no_key;
+create index if not exists tracking_orders_sales_order_no_idx on tracking.orders(sales_order_no,updated_at desc);
+create unique index if not exists tracking_orders_source_fingerprint_uidx on tracking.orders(source_fingerprint);
 alter table tracking.orders add column if not exists is_deleted boolean not null default false;
 alter table tracking.orders add column if not exists deleted_at timestamptz;
 alter table tracking.orders add column if not exists deleted_by uuid references core.users(id);
@@ -24,20 +40,8 @@ alter table tracking.orders add column if not exists archived_at timestamptz;
 alter table tracking.orders add column if not exists archived_by uuid references core.users(id);
 alter table tracking.orders add column if not exists archived_by_name text;
 alter table tracking.orders add column if not exists archive_reason text;
-alter table tracking.orders add column if not exists source_key text;
-alter table tracking.orders add column if not exists source_identity text;
-alter table tracking.orders add column if not exists source_fingerprint text;
-alter table tracking.orders add column if not exists source_row_number text;
-alter table tracking.orders add column if not exists source_sheet_id text;
-alter table tracking.orders add column if not exists source_sheet_name text;
-alter table tracking.orders add column if not exists source_message_id text;
-alter table tracking.orders add column if not exists source_original_id text;
-update tracking.orders set source_key='legacy:'||id::text where source_key is null;
-alter table tracking.orders drop constraint if exists orders_sales_order_no_key;
-alter table tracking.orders drop constraint if exists tracking_orders_sales_order_no_key;
-create unique index if not exists tracking_orders_source_key_unique_idx on tracking.orders(source_key) where source_key is not null;
-create index if not exists tracking_orders_sales_order_no_idx on tracking.orders(sales_order_no,created_at desc);
 
+alter table tracking.order_vehicles add column if not exists operations_vehicle_id uuid references operations.vehicles(id) on delete set null;
 alter table tracking.order_vehicles add column if not exists item_no text;
 alter table tracking.order_vehicles add column if not exists item_type text;
 alter table tracking.order_vehicles add column if not exists item_category text;
@@ -57,6 +61,7 @@ alter table tracking.order_vehicles add column if not exists created_at timestam
 alter table tracking.order_vehicles add column if not exists updated_at timestamptz not null default now();
 create index if not exists tracking_order_vehicles_item_idx on tracking.order_vehicles(order_id, item_no);
 create index if not exists tracking_order_vehicles_vin_idx on tracking.order_vehicles(vin);
+create index if not exists tracking_order_vehicles_operations_vehicle_idx on tracking.order_vehicles(operations_vehicle_id);
 
 alter table tracking.stages add column if not exists description text;
 alter table tracking.stages add column if not exists updated_at timestamptz not null default now();
@@ -99,17 +104,35 @@ create table if not exists tracking.deleted_orders (
   deleted_by_name text,
   deleted_at timestamptz not null default now()
 );
-create index if not exists tracking_deleted_orders_no_idx on tracking.deleted_orders(sales_order_no, deleted_at desc);
-alter table tracking.deleted_orders add column if not exists order_internal_id uuid;
-alter table tracking.deleted_orders add column if not exists source_key text;
+alter table tracking.deleted_orders add column if not exists internal_order_id uuid;
+alter table tracking.deleted_orders add column if not exists source text;
 alter table tracking.deleted_orders add column if not exists source_identity text;
 alter table tracking.deleted_orders add column if not exists source_fingerprint text;
-alter table tracking.deleted_orders add column if not exists source_payload jsonb not null default '{}'::jsonb;
+alter table tracking.deleted_orders add column if not exists source_sheet_id text;
+alter table tracking.deleted_orders add column if not exists source_row_number text;
+alter table tracking.deleted_orders add column if not exists source_message_id text;
+alter table tracking.deleted_orders add column if not exists source_original_id text;
 alter table tracking.deleted_orders add column if not exists request_id text;
-alter table tracking.deleted_orders add column if not exists deleted_by_email text;
-alter table tracking.deleted_orders add column if not exists deleted_by_role text;
-create index if not exists tracking_deleted_orders_source_key_idx on tracking.deleted_orders(source_key,deleted_at desc);
+create index if not exists tracking_deleted_orders_no_idx on tracking.deleted_orders(sales_order_no, deleted_at desc);
 
+create table if not exists tracking.deleted_source_identities (
+  source_fingerprint text primary key,
+  source_identity text,
+  internal_order_id uuid not null,
+  sales_order_no text not null,
+  deleted_order_id uuid references tracking.deleted_orders(id) on delete cascade,
+  deleted_at timestamptz not null default now()
+);
+
+create table if not exists tracking.deleted_order_blocks (
+  sales_order_no text primary key,
+  is_blocked boolean not null default true,
+  reason text,
+  deleted_by uuid references core.users(id),
+  deleted_at timestamptz not null default now(),
+  released_by uuid references core.users(id),
+  released_at timestamptz
+);
 
 create table if not exists tracking.sms_messages (
   id uuid primary key default gen_random_uuid(),
@@ -170,11 +193,15 @@ insert into tracking.stages(code,name,description,owner_type,sort_order,sms_enab
 ('stage_9','جاهزية السيارة للاستلام (خاص بالمعرض)','السيارة جاهزة للاستلام من المعرض أو لطلب الشحن للمدينة المطلوبة.','showroom',9,true,true),
 ('stage_10','إتمام عملية التسليم بنجاح','تم تسليم السيارة وإغلاق الطلب بنجاح.','showroom',10,true,true)
 on conflict (code) do nothing;
+
+insert into tracking.system_migrations(migration_key)
+values ('tracking_source_identity_delete_v1_14_0')
+on conflict (migration_key) do nothing;
 `;
 
 export function ensureTrackingSchema() {
   if (!trackingSchemaPromise) {
-    trackingSchemaPromise = runSqlScript(TRACKING_SCHEMA_SQL).catch((error) => {
+    trackingSchemaPromise = runSqlMigrationTransaction(TRACKING_SCHEMA_SQL, "mzj:tracking-schema:v1.14.0", "tracking.system_migrations", "tracking_source_identity_delete_v1_14_0").catch((error) => {
       trackingSchemaPromise = null;
       throw error;
     });

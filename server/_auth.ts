@@ -18,6 +18,7 @@ export type SessionUser = {
   branches: string[];
   branchCodes: string[];
   permissions: string[];
+  permissionCodes: string[];
 };
 
 function parseCookies(header: string | undefined) {
@@ -93,6 +94,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     branches: string[] | null;
     branch_codes: string[] | null;
     permissions: string[] | null;
+    permission_codes: string[] | null;
   }[]>`
     select
       u.id::text,
@@ -106,17 +108,18 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
       coalesce(array_agg(distinct d.code) filter (where d.id is not null), '{}') as department_codes,
       coalesce(array_agg(distinct b.name) filter (where b.id is not null), '{}') as branches,
       coalesce(array_agg(distinct b.code) filter (where b.id is not null), '{}') as branch_codes,
-      coalesce(array_agg(distinct p.code) filter (where p.id is not null), '{}') as permissions
+      coalesce(array_agg(distinct p.name) filter (where p.id is not null), '{}') as permissions,
+      coalesce(array_agg(distinct p.code) filter (where p.id is not null), '{}') as permission_codes
     from core.sessions s
     join core.users u on u.id = s.user_id and u.is_active = true
     left join core.user_roles ur on ur.user_id = u.id
     left join core.roles r on r.id = ur.role_id
+    left join core.role_permissions rp on rp.role_id = r.id
+    left join core.permissions p on p.id = rp.permission_id
     left join core.user_departments ud on ud.user_id = u.id
     left join core.departments d on d.id = ud.department_id
     left join core.user_branches ub on ub.user_id = u.id
     left join core.branches b on b.id = ub.branch_id
-    left join core.role_permissions rp on rp.role_id = r.id
-    left join core.permissions p on p.id = rp.permission_id
     where s.token_hash = ${tokenHash(token)} and s.expires_at > now()
     group by u.id
   `;
@@ -143,6 +146,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
     branches: normalizeArray(row.branches),
     branchCodes: normalizeArray(row.branch_codes),
     permissions: normalizeArray(row.permissions),
+    permissionCodes: normalizeArray(row.permission_codes),
   };
 }
 
@@ -164,7 +168,7 @@ export async function requireUser(request: VercelRequest, response: VercelRespon
 export async function requireAdmin(request: VercelRequest, response: VercelResponse) {
   const user = await requireUser(request, response);
   if (!user) return null;
-  if (!user.roleCodes.includes("admin")) {
+  if (!user.roleCodes.some((code) => code === "admin" || code === "system_admin")) {
     response.status(403).json({ ok: false, error: "هذه العملية متاحة لمدير النظام فقط" });
     return null;
   }
@@ -176,22 +180,4 @@ export function safeSecretEquals(actual: string, expected: string) {
   const expectedBuffer = Buffer.from(expected);
   if (actualBuffer.length !== expectedBuffer.length) return false;
   return timingSafeEqual(actualBuffer, expectedBuffer);
-}
-
-export function isSystemAdmin(user: SessionUser) {
-  return user.roleCodes.includes("admin") || user.roleCodes.includes("system_admin");
-}
-
-export function hasPermission(user: SessionUser, permission: string) {
-  return isSystemAdmin(user) || user.permissions.includes(permission);
-}
-
-export async function requirePermission(request: VercelRequest, response: VercelResponse, permission: string) {
-  const user = await requireUser(request, response);
-  if (!user) return null;
-  if (!hasPermission(user, permission)) {
-    response.status(403).json({ ok: false, code: "FORBIDDEN", error: "ليست لديك صلاحية تنفيذ هذا الإجراء" });
-    return null;
-  }
-  return user;
 }

@@ -28,14 +28,51 @@ export function getSql() {
   return client;
 }
 
-export async function runSqlScript(sqlText: string) {
-  const sql = getSql();
-  const statements = sqlText
+function splitSqlScript(sqlText: string) {
+  return sqlText
     .split(/;\s*(?:\r?\n|$)/g)
     .map((statement) => statement.trim())
     .filter(Boolean);
+}
 
-  for (const statement of statements) {
+export async function runSqlScript(sqlText: string) {
+  const sql = getSql();
+  for (const statement of splitSqlScript(sqlText)) {
     await sql.unsafe(statement);
   }
+}
+
+export async function runSqlScriptTransaction(sqlText: string, lockKey: string) {
+  const sql = getSql();
+  const statements = splitSqlScript(sqlText);
+  await sql.begin(async (transaction) => {
+    await transaction`select pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    for (const statement of statements) {
+      await transaction.unsafe(statement);
+    }
+  });
+}
+
+export async function runSqlMigrationTransaction(
+  sqlText: string,
+  lockKey: string,
+  migrationTable: string,
+  migrationKey: string,
+) {
+  if (!/^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$/.test(migrationTable)) {
+    throw new Error("Invalid migration table identifier");
+  }
+  const [schemaName] = migrationTable.split(".");
+  const sql = getSql();
+  const statements = splitSqlScript(sqlText);
+  await sql.begin(async (transaction) => {
+    await transaction`select pg_advisory_xact_lock(hashtext(${lockKey}))`;
+    await transaction.unsafe(`create schema if not exists ${schemaName}`);
+    await transaction.unsafe(`create table if not exists ${migrationTable} (migration_key text primary key, applied_at timestamptz not null default now())`);
+    const applied = await transaction.unsafe(`select migration_key from ${migrationTable} where migration_key = $1 limit 1`, [migrationKey]);
+    if (applied.length > 0) return;
+    for (const statement of statements) {
+      await transaction.unsafe(statement);
+    }
+  });
 }

@@ -34,7 +34,7 @@ import trackingSmsHandler from "../server/tracking/sms.js";
 import trackingDeleteHandler from "../server/tracking/delete.js";
 import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
-import operationsHandler from "../server/operations.js";
+import operationsHandler from "../server/operations/index.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -71,8 +71,8 @@ const routes = new Map<string, ApiHandler>([
   ["tracking/sms", trackingSmsHandler],
   ["tracking/delete", trackingDeleteHandler],
   ["tracking/settings", trackingSettingsHandler],
-  ["operations", operationsHandler],
   ["integrations/tracking/orders", trackingIntegrationHandler],
+  ["operations", operationsHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
@@ -92,7 +92,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.13.4" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.14.0" });
   }
 
   if (route === "integrations/media") {
