@@ -20,7 +20,9 @@ import {
   sendOperationError,
 } from "../_operations-utils.js";
 
-function pageValues(request: VercelRequest) {
+type QueryRequest = Pick<VercelRequest, "query">;
+
+function pageValues(request: QueryRequest) {
   const page = Math.max(1, intValue(request.query.page, 1));
   const pageSize = Math.min(200, Math.max(10, intValue(request.query.pageSize, 50)));
   return { page, pageSize, offset: (page - 1) * pageSize };
@@ -258,7 +260,7 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 
-async function listTransfers(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const { page, pageSize, offset } = pageValues(request);
   const status = clean(request.query.status);
   const kind = clean(request.query.kind) || "transfer";
@@ -374,7 +376,7 @@ async function dashboardRequests(sql: ReturnType<typeof getSql>, request: Vercel
     `;
     return { ok: true, rows, total: Number(count?.total || 0) };
   }
-  return listTransfers(sql, { ...request, query: { ...request.query, kind: "transfer", pageSize: "200" } } as VercelRequest, user);
+  return listTransfers(sql, { query: { ...request.query, kind: "transfer", pageSize: "200" } }, user);
 }
 
 async function createVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
