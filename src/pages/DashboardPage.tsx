@@ -40,10 +40,7 @@ import { useNavigate } from "react-router-dom";
 import { useEscapeToClose } from "../components/useEscapeToClose";
 import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
-import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/api";
-import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
 import type { DashboardData, NullableNumber } from "../types";
-import { DashboardOperationsModal, type DashboardOperationsSelection } from "../operations/components/DashboardOperationsModal";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -65,7 +62,6 @@ type DetailPayload = {
   subtitle?: string;
   rows?: Array<{ label: string; value: NullableNumber }>;
   leads?: DashboardLeadItem[];
-  trackingOrders?: TrackingOrderRow[];
   loading?: boolean;
   error?: string;
 };
@@ -76,7 +72,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
-      <aside className={`details-drawer ${details.trackingOrders ? "tracking-orders-drawer" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
+      <aside className="details-drawer" onMouseDown={(event) => event.stopPropagation()}>
         <header className="drawer-head">
           <div>
             <span>التفاصيل</span>
@@ -94,7 +90,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
               <Value value={row.value} className="drawer-value" />
             </div>
           ))}
-          {details.loading ? <div className="drawer-loading">{details.trackingOrders ? "جاري تحميل الطلبات..." : "جاري تحميل العملاء..."}</div> : null}
+          {details.loading ? <div className="drawer-loading">جاري تحميل العملاء...</div> : null}
           {details.error ? <div className="drawer-error">{details.error}</div> : null}
           {(details.leads || []).map((item) => {
             const lead = item.lead;
@@ -106,30 +102,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
               </button>
             );
           })}
-          {details.trackingOrders ? (
-            <div className="drawer-tracking-table-wrap">
-              <table className="drawer-tracking-table">
-                <thead><tr><th>رقم الطلب</th><th>العميل</th><th>الفرع</th><th>التقدم</th><th>آخر تحديث</th></tr></thead>
-                <tbody>
-                  {details.trackingOrders.map((order) => {
-                    const total = Number(order.total_stages || 0);
-                    const percent = total > 0 ? Math.round((Number(order.completed_stages || 0) / total) * 100) : 0;
-                    return (
-                      <tr key={order.id}>
-                        <td><strong>{order.sales_order_no || "—"}</strong></td>
-                        <td>{order.customer_name || "—"}</td>
-                        <td>{order.branch || "—"}</td>
-                        <td><div className="drawer-tracking-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
-                        <td>{formatTrackingDate(order.updated_at)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
           {!details.loading && !details.error && details.leads && !details.leads.length ? <div className="drawer-empty">لا توجد بيانات داخل هذا الكارت</div> : null}
-          {!details.loading && !details.error && details.trackingOrders && !details.trackingOrders.length ? <div className="drawer-empty">لا توجد طلبات في هذه الحالة</div> : null}
         </div>
       </aside>
     </div>
@@ -278,7 +251,6 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
-  const [operationsSelection, setOperationsSelection] = useState<DashboardOperationsSelection | null>(null);
   const [loading, setLoading] = useState(true);
   const detailsRequestId = useRef(0);
 
@@ -331,27 +303,12 @@ export function DashboardPage() {
     }
   }
 
-  async function openTrackingList(title: string, status: TrackingStatus) {
-    const requestId = ++detailsRequestId.current;
-    const archived = status === "completed";
-    setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
-    try {
-      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ status, archived, limit: 2000 })}`);
-      if (detailsRequestId.current !== requestId) return;
-      setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: payload.orders || [] });
-    } catch (failure) {
-      if (detailsRequestId.current !== requestId) return;
-      setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات الطلبات" });
-    }
-  }
-
   function openCrmLead(item: DashboardLeadItem) {
     setDetails(null);
     navigate(`/crm?department=${item.department}&lead=${encodeURIComponent(item.lead.id)}`);
   }
 
   const disconnected = !loading && !current?.connected;
-  const sectionErrorLabels = Object.keys(current?.sectionErrors || {}).map((key) => ({ crm: "CRM", marketing: "التسويق", tracking: "التراكينج", operations: "العمليات" }[key] || key));
   const crm = current?.crm;
   const marketing = current?.marketing;
   const tracking = current?.tracking;
@@ -374,13 +331,7 @@ export function DashboardPage() {
         {disconnected ? (
           <div className="connection-banner">
             <WarningCircle size={20} weight="fill" />
-            <span>تعذر الاتصال بقاعدة PostgreSQL، لذلك لا يتم عرض أي أرقام أو بيانات وهمية.</span>
-          </div>
-        ) : null}
-        {!disconnected && sectionErrorLabels.length ? (
-          <div className="connection-banner warning">
-            <WarningCircle size={20} weight="fill" />
-            <span>تعذر تحديث بعض أقسام الداش بورد: {sectionErrorLabels.join("، ")}. بقية الأقسام المتاحة ما زالت تعمل بصورة طبيعية.</span>
+            <span>لم يتم ربط قاعدة PostgreSQL بعد، لذلك لا يتم عرض أي أرقام أو بيانات وهمية.</span>
           </div>
         ) : null}
 
@@ -487,11 +438,11 @@ export function DashboardPage() {
               { label: "مجدولة", value: marketing?.scheduled ?? null },
               { label: "متأخرة", value: marketing?.delayed ?? null },
             ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
-            <DepartmentCard title="التراكينج" icon={MapPin} metrics={[
+            <DepartmentCard title="التتبع" icon={MapPin} metrics={[
               { label: "الطلبات", value: tracking?.requests ?? null },
               { label: "متابعة", value: tracking?.inProgress ?? null },
               { label: "مكتملة", value: tracking?.completed ?? null },
-            ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
+            ]} onOpen={() => open("التتبع", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
           </div>
         </section>
 
@@ -505,16 +456,22 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid locations-row">
-            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
+            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => open("إجمالي المخزون", [
+              { label: "الإجمالي الفعلي", value: operations?.inventory.actualTotal ?? null },
+              { label: "الوكالة", value: operations?.inventory.agency ?? null },
+              { label: "المتاح للبيع", value: operations?.inventory.availableForSale ?? null },
+              { label: "مباع تحت التسليم", value: operations?.inventory.underDelivery ?? null },
+              { label: "بها ملاحظات", value: operations?.inventory.hasNotes ?? null },
+            ])}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />
               </div>
               <div className="inventory-tags">
-                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "agency", locationName: "الوكالة", metric: "actual_total", metricName: "الإجمالي الفعلي" })} />
-                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "available_for_sale", metricName: "متاح للبيع" })} />
-                <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
-                <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
+                <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => open("الوكالة", [{ label: "الوكالة", value: operations?.inventory.agency ?? null }])} />
+                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => open("المتاح للبيع", [{ label: "المتاح للبيع", value: operations?.inventory.availableForSale ?? null }])} />
+                <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => open("بها ملاحظات", [{ label: "بها ملاحظات", value: operations?.inventory.hasNotes ?? null }])} />
+                <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => open("مباع تحت التسليم", [{ label: "مباع تحت التسليم", value: operations?.inventory.underDelivery ?? null }])} />
               </div>
               <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) - (مباع تم التسليم)</p>
             </OperationCard>
@@ -535,12 +492,9 @@ export function DashboardPage() {
                 { label: "بها ملاحظات", value: location.hasNotes },
               ];
               return (
-                <OperationCard key={location.key} title={location.name} onView={() => setOperationsSelection({ mode: "vehicles", locationCode: location.key, locationName: location.name, metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
+                <OperationCard key={location.key} title={location.name} onView={() => open(location.name, rows)}>
                   <div className="operation-metrics-grid">
-                    {rows.map((row) => {
-                      const metricCodes: Record<string, string> = { "الإجمالي الفعلي": "actual_total", "مباع تحت التسليم": "under_delivery", "متاح للبيع": "available_for_sale", "حجز": "reserved", "مباع تم التسليم": "delivered", "بها ملاحظات": "has_notes" };
-                      return <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: location.key, locationName: location.name, metric: metricCodes[row.label] || "actual_total", metricName: row.label })} />;
-                    })}
+                    {rows.map((row) => <OperationMetric key={row.label} label={row.label} value={row.value} onOpen={() => open(`${location.name} - ${row.label}`, [row])} />)}
                   </div>
                 </OperationCard>
               );
@@ -574,14 +528,17 @@ export function DashboardPage() {
               </div>
             </OperationCard>
 
-            <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={() => setOperationsSelection({ mode: "requests" })}>
+            <OperationCard title="طلبات النقل" badge={operations?.transfers.total ?? null} onView={() => open("طلبات النقل", [
+              { label: "تم استلام الطلب", value: operations?.transfers.requestReceived ?? null },
+              { label: "تم استلام السيارة", value: operations?.transfers.vehicleReceived ?? null },
+              { label: "تم إرسال السيارة", value: operations?.transfers.vehicleSent ?? null },
+              { label: "تم الانتهاء", value: operations?.transfers.completed ?? null },
+            ])}>
               <div className="operation-metrics-grid">
-                <OperationMetric label="طلبات النقل" value={operations?.transfers.transferTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="طلبات التصوير" value={operations?.transfers.photographyTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
+                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => open("تم استلام الطلب", [{ label: "تم استلام الطلب", value: operations?.transfers.requestReceived ?? null }])} />
+                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => open("تم استلام السيارة", [{ label: "تم استلام السيارة", value: operations?.transfers.vehicleReceived ?? null }])} />
+                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => open("تم إرسال السيارة", [{ label: "تم إرسال السيارة", value: operations?.transfers.vehicleSent ?? null }])} />
+                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => open("تم الانتهاء", [{ label: "تم الانتهاء", value: operations?.transfers.completed ?? null }])} />
               </div>
             </OperationCard>
 
@@ -595,16 +552,15 @@ export function DashboardPage() {
                 <button type="button" onClick={() => open("جميع طلبات التتبع", [{ label: "الإجمالي", value: operations?.salesTracking.total ?? null }])}>عرض الكل</button>
               </div>
               <div className="operation-metrics-grid three-columns">
-                <OperationMetric label="طلبات لم تبدأ" value={operations?.salesTracking.notStarted ?? null} onOpen={() => void openTrackingList("طلبات لم تبدأ", "not_started")} />
-                <OperationMetric label="طلبات تحت الإجراء" value={operations?.salesTracking.inProgress ?? null} onOpen={() => void openTrackingList("طلبات تحت الإجراء", "in_progress")} />
-                <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => void openTrackingList("طلبات مكتملة", "completed")} />
+                <OperationMetric label="طلبات لم تبدأ" value={operations?.salesTracking.notStarted ?? null} onOpen={() => open("طلبات لم تبدأ", [{ label: "طلبات لم تبدأ", value: operations?.salesTracking.notStarted ?? null }])} />
+                <OperationMetric label="طلبات تحت الإجراء" value={operations?.salesTracking.inProgress ?? null} onOpen={() => open("طلبات تحت الإجراء", [{ label: "طلبات تحت الإجراء", value: operations?.salesTracking.inProgress ?? null }])} />
+                <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => open("طلبات مكتملة", [{ label: "طلبات مكتملة", value: operations?.salesTracking.completed ?? null }])} />
               </div>
             </OperationCard>
           </div>
         </section>
       </div>
       <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />
-      <DashboardOperationsModal selection={operationsSelection} onClose={() => setOperationsSelection(null)} />
     </>
   );
 }

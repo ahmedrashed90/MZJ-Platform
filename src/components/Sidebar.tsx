@@ -19,7 +19,7 @@ const items = [
   { href: "/crm", label: "CRM", icon: UsersThree },
   { href: "/marketing", label: "التسويق", icon: Megaphone },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, operationsOnly: true },
-  { href: "/tracking", label: "التراكينج", icon: MapPin, trackingOnly: true },
+  { href: "/tracking", label: "التتبع", icon: MapPin, trackingOnly: true },
 ];
 
 const supportItems = [
@@ -51,8 +51,8 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const isAdmin = user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) ?? false;
-  const canViewOperations = isAdmin || Boolean(user?.permissions.includes("operations.view")) || Boolean(user?.departmentCodes.includes("operations")) || Boolean(user?.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code)));
+  const isAdmin = user?.roleCodes.includes("admin") ?? false;
+  const canViewOperations = isAdmin || user?.roleCodes.some((code) => ["operations_user", "sales_manager", "branch_manager"].includes(code)) || user?.departmentCodes.includes("operations") || user?.permissions?.includes("operations.view");
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
   const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations));
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);

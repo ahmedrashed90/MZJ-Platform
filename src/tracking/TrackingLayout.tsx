@@ -10,7 +10,7 @@ export function TrackingLayout() {
       <nav className="crm-system-nav tracking-system-nav" aria-label="صفحات التتبع">
         <NavLink to="/tracking" end className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
           <ListMagnifyingGlass size={18} weight="duotone" />
-          <span>طلبات التراكينج</span>
+          <span>طلبات التتبع</span>
         </NavLink>
         <NavLink to="/tracking/archive" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
           <Archive size={18} weight="duotone" />

@@ -1,41 +1,28 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, type SessionUser } from "./_auth.js";
 
-export function isSystemAdmin(user: SessionUser) {
-  return user.roleCodes.some((code) => ["admin", "system_admin"].includes(code));
+const readRoles = new Set(["admin", "operations_user", "sales_manager", "branch_manager"]);
+
+export function canUseOperations(user: SessionUser) {
+  return user.roleCodes.some((code) => readRoles.has(code)) || user.departmentCodes.includes("operations") || user.permissions.includes("operations.view");
 }
 
-export function hasPermission(user: SessionUser, permission: string) {
-  return isSystemAdmin(user) || user.permissions.includes(permission);
-}
-
-export function canAccessOperations(user: SessionUser) {
-  return isSystemAdmin(user)
-    || user.permissions.includes("operations.view")
-    || user.departmentCodes.includes("operations")
-    || user.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code));
-}
-
-export async function requireOperationsUser(request: VercelRequest, response: VercelResponse) {
-  const user = await requireUser(request, response);
-  if (!user) return null;
-  if (!canAccessOperations(user)) {
-    response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية للدخول إلى نظام العمليات" });
-    return null;
+export function hasOperationsPermission(user: SessionUser, permission: string) {
+  if (user.roleCodes.includes("admin")) return true;
+  if (user.permissions.includes(permission)) return true;
+  if (user.roleCodes.includes("operations_user")) return true;
+  if (["operations.view", "operations.vehicles.read", "operations.movements.read", "operations.requests.read", "operations.vehicles.export"].includes(permission)) {
+    return canUseOperations(user);
   }
-  return user;
-}
-
-export function requireOperationsPermission(user: SessionUser, permission: string, response: VercelResponse) {
-  if (hasPermission(user, permission)) return true;
-  response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية لتنفيذ هذا الإجراء" });
   return false;
 }
 
-export function primaryRole(user: SessionUser) {
-  return user.roles[0] || user.roleCodes[0] || "مستخدم المنصة";
-}
-
-export function primaryBranch(user: SessionUser) {
-  return user.branches[0] || user.branchCodes[0] || "";
+export async function requireOperationsPermission(request: VercelRequest, response: VercelResponse, permission: string) {
+  const user = await requireUser(request, response);
+  if (!user) return null;
+  if (!canUseOperations(user) || !hasOperationsPermission(user, permission)) {
+    response.status(403).json({ ok: false, error: "ليست لديك صلاحية تنفيذ هذا الإجراء في نظام العمليات" });
+    return null;
+  }
+  return user;
 }

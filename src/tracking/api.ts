@@ -9,10 +9,7 @@ export async function trackingFetch<T>(url: string, options?: RequestInit): Prom
     },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.ok === false) {
-    const reference = payload?.requestId ? ` — رقم المرجع: ${payload.requestId}` : "";
-    throw new Error(`${payload?.error || payload?.message || "تعذر تنفيذ العملية"}${reference}`);
-  }
+  if (!response.ok || payload?.ok === false) throw new Error(payload?.error || "تعذر تنفيذ العملية");
   return payload as T;
 }
 
