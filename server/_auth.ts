@@ -164,7 +164,7 @@ export async function requireUser(request: VercelRequest, response: VercelRespon
 export async function requireAdmin(request: VercelRequest, response: VercelResponse) {
   const user = await requireUser(request, response);
   if (!user) return null;
-  if (!user.roleCodes.includes("admin")) {
+  if (!user.roleCodes.some((code) => ["admin", "system_admin"].includes(code))) {
     response.status(403).json({ ok: false, error: "هذه العملية متاحة لمدير النظام فقط" });
     return null;
   }

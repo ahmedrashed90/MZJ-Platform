@@ -1,48 +1,34 @@
-export async function operationsFetch<T>(url: string, options?: RequestInit): Promise<T> {
+export async function operationsFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
+    ...init,
     credentials: "include",
+    headers: { "content-type": "application/json", ...(init?.headers || {}) },
     cache: "no-store",
-    ...options,
-    headers: {
-      "content-type": "application/json",
-      ...(options?.headers || {}),
-    },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.ok === false) {
-    const error = new Error(payload?.error || "تعذر تنفيذ العملية") as Error & { details?: string[] };
-    error.details = Array.isArray(payload?.details) ? payload.details : undefined;
+  if (!response.ok || payload.ok === false) {
+    const message = payload.error || payload.message || "تعذر تنفيذ العملية";
+    const error = new Error(payload.requestId ? `${message} — رقم المرجع: ${payload.requestId}` : message) as Error & { code?: string; requestId?: string; details?: unknown };
+    error.code = payload.code;
+    error.requestId = payload.requestId;
+    error.details = payload.details;
     throw error;
   }
   return payload as T;
 }
 
-export function operationsQuery(values: Record<string, unknown>) {
+export function queryString(values: Record<string, unknown>) {
   const params = new URLSearchParams();
   Object.entries(values).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === "") return;
-    params.set(key, String(value));
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   });
-  return `?${params.toString()}`;
+  const text = params.toString();
+  return text ? `?${text}` : "";
 }
 
-export function formatOperationsDate(value?: string | null, withTime = true) {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString("ar-SA", withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
+export function formatOperationsDate(value: unknown) {
+  const date = new Date(String(value || ""));
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA") : "—";
 }
 
-export function downloadCsv(filename: string, rows: Array<Record<string, unknown>>) {
-  if (!rows.length) return;
-  const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
-  const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  const csv = [headers.map(escape).join(","), ...rows.map((row) => headers.map((header) => escape(row[header])).join(","))].join("\r\n");
-  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
+export { exportXlsx as exportExcel, parseDelimitedFile } from "./excel";

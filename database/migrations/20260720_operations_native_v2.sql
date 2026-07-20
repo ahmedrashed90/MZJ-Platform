@@ -1,8 +1,8 @@
-import { runSqlScript } from "./_db.js";
-
-let operationsSchemaPromise: Promise<void> | null = null;
-
-export const OPERATIONS_SCHEMA_SQL = String.raw`
+-- MZJ Platform Operations Native V2
+-- Generated from server/_operations-schema.ts
+-- Run only after a verified PostgreSQL backup and after applying the baseline schema.
+\set ON_ERROR_STOP on
+BEGIN;
 create schema if not exists operations;
 create sequence if not exists operations.transfer_request_no_seq;
 
@@ -374,14 +374,4 @@ create index if not exists tracking_deleted_orders_source_idx on tracking.delete
 update tracking.deleted_order_blocks
 set is_blocked=false,released_at=coalesce(released_at,now())
 where is_blocked=true;
-`;
-
-export function ensureOperationsSchema() {
-  if (!operationsSchemaPromise) {
-    operationsSchemaPromise = runSqlScript(OPERATIONS_SCHEMA_SQL).catch((error) => {
-      operationsSchemaPromise = null;
-      throw error;
-    });
-  }
-  return operationsSchemaPromise;
-}
+COMMIT;

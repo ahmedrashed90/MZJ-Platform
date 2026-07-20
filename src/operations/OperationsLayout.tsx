@@ -1,30 +1,45 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { ArrowsLeftRight, ClipboardText, Database, ListBullets, PlusCircle, SquaresFour } from "@phosphor-icons/react";
-import { OperationsProvider } from "./components/OperationsState";
+import { ArrowClockwise, WarningCircle } from "@phosphor-icons/react";
+import { operationsFetch } from "./api";
+import type { OperationsMeta } from "./types";
 
-const items = [
-  { href: "/operations", label: "قاعدة السيارات", icon: Database, end: true },
-  { href: "/operations/manage", label: "إدارة السيارات", icon: PlusCircle },
-  { href: "/operations/movements", label: "الحركة", icon: ArrowsLeftRight },
-  { href: "/operations/requests", label: "طلبات النقل", icon: ClipboardText },
-  { href: "/operations/availability", label: "كل السيارات", icon: SquaresFour },
-  { href: "/operations/activity", label: "سجل الحركات", icon: ListBullets },
-];
+const tabs = [
+  ["/operations", "مخزون السيارات"],
+  ["/operations/manage", "إدارة السيارات"],
+  ["/operations/movement", "الحركة"],
+  ["/operations/transfers", "طلبات النقل"],
+  ["/operations/approvals", "الموافقات"],
+  ["/operations/all", "جميع السيارات"],
+  ["/operations/movements", "سجل الحركات"],
+  ["/operations/archive", "الأرشيف"],
+] as const;
+
+export type OperationsOutletContext = { meta: OperationsMeta; reloadMeta: () => Promise<void> };
 
 export function OperationsLayout() {
+  const [meta, setMeta] = useState<OperationsMeta | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true); setError("");
+    try { setMeta(await operationsFetch<OperationsMeta>("/api/operations?resource=meta")); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل إعدادات العمليات"); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { void load(); }, []);
+
+  if (loading && !meta) return <div className="crm-loading-panel">جاري تجهيز نظام العمليات...</div>;
+  if (!meta) return <div className="module-page"><div className="connection-banner"><WarningCircle size={20} /><span>{error || "تعذر فتح نظام العمليات"}</span><button type="button" onClick={() => void load()}><ArrowClockwise size={17} />إعادة المحاولة</button></div></div>;
+
   return (
-    <OperationsProvider>
-    <section className="operations-module">
-      <nav className="crm-system-nav operations-system-nav" aria-label="صفحات العمليات">
-        {items.map(({ href, label, icon: Icon, end }) => (
-          <NavLink key={href} to={href} end={end} className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
-            <Icon size={18} weight="duotone" />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
-      <Outlet />
-    </section>
-    </OperationsProvider>
+    <div className="operations-module">
+      <div className="operations-tabs" role="tablist">
+        {tabs.map(([href, label]) => <NavLink key={href} to={href} end={href === "/operations"} className={({ isActive }) => isActive ? "active" : ""}>{label}</NavLink>)}
+      </div>
+      {error ? <div className="connection-banner"><WarningCircle size={20} /><span>{error}</span></div> : null}
+      <Outlet context={{ meta, reloadMeta: load } satisfies OperationsOutletContext} />
+    </div>
   );
 }
