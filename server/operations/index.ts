@@ -101,7 +101,8 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
   const model = clean(request.query.model);
   const agent = clean(request.query.agent);
   const archived = boolValue(request.query.archived);
-  const activeOnly = !archived;
+  const all = boolValue(request.query.all);
+  const activeOnly = !archived && !all;
   const { page, pageSize, offset } = pageValues(request);
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "l");
@@ -111,8 +112,8 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
     where v.is_deleted=false
-      and (${activeOnly}=false or (v.archived_at is null and v.is_inventory_active=true))
-      and (${archived}=false or v.archived_at is not null)
+      and (${all}=true or ${activeOnly}=false or (v.archived_at is null and v.is_inventory_active=true))
+      and (${all}=true or ${archived}=false or v.archived_at is not null)
       and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
       and (${location}='' or l.code=${location})
       and (${status}='' or v.status_code=${status})
@@ -156,8 +157,8 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       where rv.vehicle_id=v.id and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
     ) req on true
     where v.is_deleted=false
-      and (${activeOnly}=false or (v.archived_at is null and v.is_inventory_active=true))
-      and (${archived}=false or v.archived_at is not null)
+      and (${all}=true or ${activeOnly}=false or (v.archived_at is null and v.is_inventory_active=true))
+      and (${all}=true or ${archived}=false or v.archived_at is not null)
       and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
       and (${location}='' or l.code=${location})
       and (${status}='' or v.status_code=${status})

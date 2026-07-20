@@ -21,15 +21,16 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const pageSize = 50;
+  const showAll = all && !archived;
 
-  const params = useMemo(() => ({ resource: "vehicles", search, location, status, model, archived, page, pageSize }), [search, location, status, model, archived, page]);
+  const params = useMemo(() => ({ resource: "vehicles", search, location, status, model, archived: archived ? 1 : undefined, all: showAll ? 1 : undefined, page, pageSize }), [search, location, status, model, archived, showAll, page]);
   async function load() {
     setLoading(true); setError("");
     try { const payload = await operationsFetch<ListResponse>(`/api/operations${queryString(params)}`); setRows(payload.rows); setTotal(payload.total); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل المخزون"); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, [page, location, status, model, archived]);
+  useEffect(() => { void load(); }, [page, location, status, model, archived, showAll]);
 
   async function exportAll() {
     setLoading(true); setError("");
@@ -45,10 +46,11 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
     finally { setLoading(false); }
   }
 
-  const title = archived ? "أرشيف السيارات" : all ? "جميع السيارات" : "مخزون السيارات";
+  const title = archived ? "أرشيف السيارات" : showAll ? "جميع السيارات" : "مخزون السيارات";
+  const description = archived ? "السيارات المؤرشفة مع الحفاظ على تاريخها الكامل." : showAll ? "بحث وفلترة وعرض جميع بيانات السيارات المسجلة في PostgreSQL." : "عرض وفلاتر المخزون النشط الجاهز للعمل.";
   return (
     <div className="module-page operations-page">
-      <header className="module-page-head"><div><h1>{title}</h1><p>{archived ? "السيارات المؤرشفة مع الحفاظ على تاريخها الكامل." : "بحث وفلترة وعرض بيانات السيارات من PostgreSQL."}</p></div><div className="operations-header-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span><button type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />تحديث</button>{meta.permissions.canExport ? <button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button> : null}</div></header>
+      <header className="module-page-head"><div><h1>{title}</h1><p>{description}</p></div><div className="operations-header-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span><button type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />تحديث</button>{meta.permissions.canExport ? <button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button> : null}</div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-filters sticky">
