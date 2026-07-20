@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, Car, FilePdf, FileXls, MagnifyingGlass, PencilSimple, Trash, UsersThree, X } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
-import { crmFetch, departmentLabel, downloadCsv, formatDate, queryString } from "../api";
+import { crmFetch, departmentLabel, formatDate, queryString } from "../api";
+import { downloadXlsx } from "../xlsx";
 import { LeadDrawer } from "../components/LeadDrawer";
 import { sourceLabel } from "../sourceCatalog";
 import type { CrmLead, CrmMeta } from "../types";
@@ -13,20 +14,22 @@ export function CrmDatabasePage() {
   const [filters, setFilters] = useState(emptyFilters);
   const [rows, setRows] = useState<CrmLead[]>([]);
   const [total, setTotal] = useState(0);
-  const [limit, setLimit] = useState(50);
+  const pageSize = 50;
+  const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<CrmLead | null>(null);
   const [vehicle, setVehicle] = useState<CrmLead | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [transferOpen, setTransferOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [notice, setNotice] = useState("");
 
   useEscapeToClose(Boolean(vehicle), () => setVehicle(null));
   useEscapeToClose(transferOpen, () => setTransferOpen(false));
 
   useEffect(() => { void loadMeta(); }, []);
-  useEffect(() => { const timer = window.setTimeout(() => void loadRows(), 220); return () => window.clearTimeout(timer); }, [filters, limit]);
+  useEffect(() => { const timer = window.setTimeout(() => void loadRows(), 220); return () => window.clearTimeout(timer); }, [filters, page]);
 
   async function loadMeta() {
     try { setMeta(await crmFetch<CrmMeta>("/api/crm/meta")); } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر تحميل الفلاتر"); }
@@ -36,7 +39,7 @@ export function CrmDatabasePage() {
     setLoading(true);
     setNotice("");
     try {
-      const result = await crmFetch<{ ok: boolean; rows: CrmLead[]; total: number }>(`/api/crm/leads${queryString({ ...filters, limit })}`);
+      const result = await crmFetch<{ ok: boolean; rows: CrmLead[]; total: number }>(`/api/crm/leads${queryString({ ...filters, limit: pageSize, offset: page * pageSize })}`);
       setRows(result.rows || []);
       setTotal(result.total || 0);
       setChecked((current) => new Set([...current].filter((id) => result.rows.some((row) => row.id === id))));
@@ -51,7 +54,7 @@ export function CrmDatabasePage() {
   const salesUsers = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
   const callCenterUsers = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.includes("call_center")), [meta]);
 
-  function setFilter(key: keyof typeof emptyFilters, value: string) { setFilters((current) => ({ ...current, [key]: value })); }
+  function setFilter(key: keyof typeof emptyFilters, value: string) { setPage(0); setFilters((current) => ({ ...current, [key]: value })); }
   function toggle(id: string) { setChecked((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
 
   async function remove(row: CrmLead) {
@@ -60,6 +63,7 @@ export function CrmDatabasePage() {
       await crmFetch("/api/crm/leads", { method: "DELETE", body: JSON.stringify({ id: row.id }) });
       setRows((current) => current.filter((item) => item.id !== row.id));
       setTotal((current) => Math.max(0, current - 1));
+      if (rows.length === 1 && page > 0) setPage((current) => Math.max(0, current - 1));
       setNotice("تم حذف العميل وتحديث العداد");
     } catch (error) { setNotice(error instanceof Error ? error.message : "تعذر حذف العميل"); }
   }
@@ -73,26 +77,71 @@ export function CrmDatabasePage() {
     } catch (error) { setNotice(error instanceof Error ? error.message : "فشل نقل العملاء"); }
   }
 
-  function exportRows() {
-    downloadCsv("قاعدة-بيانات-CRM.csv", rows.map((row) => ({
-      "اسم العميل": row.customer_name, "الجوال": row.phone || row.phone_normalized, "المكان": row.location,
-      "الفرع": row.branch_name || row.branch_code, "المصدر": sourceLabel(row.source_code, row.source_name), "اسم السيارة": row.car_name,
-      "الدفع": row.payment_type, "الحالة": row.status_label, "القسم": departmentLabel(row.department_code),
-      "المسؤول": row.assigned_name, "الكول سنتر": row.call_center_name, "اسم الحملة": row.campaign_name,
-      "تاريخ التسجيل": formatDate(row.registered_at || row.created_at), "آخر تحديث": formatDate(row.updated_at),
-    })));
+  async function loadAllMatchingRows() {
+    const batchSize = 500;
+    const allRows: CrmLead[] = [];
+    let offset = 0;
+    let expectedTotal = 0;
+    do {
+      const result = await crmFetch<{ ok: boolean; rows: CrmLead[]; total: number }>(`/api/crm/leads${queryString({ ...filters, limit: batchSize, offset })}`);
+      expectedTotal = result.total || 0;
+      const batch = result.rows || [];
+      allRows.push(...batch);
+      offset += batch.length;
+      if (!batch.length) break;
+    } while (offset < expectedTotal);
+    return allRows;
   }
 
-  function printRows() {
-    const popup = window.open("", "_blank", "width=1200,height=800");
-    if (!popup) return;
-    popup.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>قاعدة البيانات</title><style>body{font-family:Tajawal,Arial;padding:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #ddd;padding:6px;text-align:right}th{background:#f5e8df}</style></head><body><h1>قاعدة البيانات</h1><p>عدد السجلات: ${rows.length}</p><table><thead><tr><th>اسم العميل</th><th>الجوال</th><th>الفرع</th><th>المصدر</th><th>السيارة</th><th>الحالة</th><th>القسم</th><th>المسؤول</th><th>الكول سنتر</th><th>آخر تحديث</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${row.customer_name || ""}</td><td>${row.phone || row.phone_normalized || ""}</td><td>${row.branch_name || row.branch_code || ""}</td><td>${sourceLabel(row.source_code, row.source_name)}</td><td>${row.car_name || ""}</td><td>${row.status_label || ""}</td><td>${departmentLabel(row.department_code)}</td><td>${row.assigned_name || ""}</td><td>${row.call_center_name || ""}</td><td>${formatDate(row.updated_at)}</td></tr>`).join("")}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`);
-    popup.document.close();
+  async function exportRows() {
+    setExporting(true);
+    setNotice("");
+    try {
+      const exportRows = await loadAllMatchingRows();
+      downloadXlsx("قاعدة-بيانات-CRM.xlsx", exportRows.map((row) => ({
+        "اسم العميل": row.customer_name, "الجوال": row.phone || row.phone_normalized, "المكان": row.location,
+        "الفرع": row.branch_name || row.branch_code, "المصدر": sourceLabel(row.source_code, row.source_name), "اسم السيارة": row.car_name,
+        "الفئة": row.car_category, "الموديل": row.car_model, "اللون": row.color,
+        "الدفع": row.payment_type, "نوع التمويل": row.finance_type, "الحالة": row.status_label, "القسم": departmentLabel(row.department_code),
+        "المسؤول": row.assigned_name, "الكول سنتر": row.call_center_name, "اسم الحملة": row.campaign_name,
+        "تاريخ التسجيل": formatDate(row.registered_at || row.created_at), "آخر تحديث": formatDate(row.updated_at),
+      })), "قاعدة بيانات CRM");
+      setNotice(`تم تصدير ${exportRows.length} عميل في ملف Excel حقيقي`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تصدير قاعدة البيانات");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function escapeHtml(value: unknown) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  async function printRows() {
+    setExporting(true);
+    setNotice("");
+    try {
+      const printRows = await loadAllMatchingRows();
+      const popup = window.open("", "_blank", "width=1200,height=800");
+      if (!popup) throw new Error("اسمح بفتح النافذة المنبثقة لتصدير PDF");
+      popup.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>قاعدة البيانات</title><style>body{font-family:Tajawal,Arial;padding:20px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #ddd;padding:6px;text-align:right}th{background:#f5e8df}</style></head><body><h1>قاعدة البيانات</h1><p>عدد السجلات: ${printRows.length}</p><table><thead><tr><th>اسم العميل</th><th>الجوال</th><th>الفرع</th><th>المصدر</th><th>السيارة</th><th>الحالة</th><th>القسم</th><th>المسؤول</th><th>الكول سنتر</th><th>آخر تحديث</th></tr></thead><tbody>${printRows.map((row) => `<tr><td>${escapeHtml(row.customer_name)}</td><td>${escapeHtml(row.phone || row.phone_normalized)}</td><td>${escapeHtml(row.branch_name || row.branch_code)}</td><td>${escapeHtml(sourceLabel(row.source_code, row.source_name))}</td><td>${escapeHtml(row.car_name)}</td><td>${escapeHtml(row.status_label)}</td><td>${escapeHtml(departmentLabel(row.department_code))}</td><td>${escapeHtml(row.assigned_name)}</td><td>${escapeHtml(row.call_center_name)}</td><td>${escapeHtml(formatDate(row.updated_at))}</td></tr>`).join("")}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`);
+      popup.document.close();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تجهيز ملف PDF");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
     <div className="crm-page crm-database-page">
-      <header className="crm-page-head"><div><h1>قاعدة البيانات</h1><p>عرض وتصفية وتعديل ونقل وتصدير عملاء CRM.</p></div><div className="crm-head-actions"><button className="crm-secondary-button" onClick={exportRows}><FileXls size={18} />تصدير Excel</button><button className="crm-secondary-button" onClick={printRows}><FilePdf size={18} />تصدير PDF</button><button className="crm-primary-button" onClick={() => setTransferOpen(true)} disabled={!checked.size}><UsersThree size={18} />نقل العملاء ({checked.size})</button></div></header>
+      <header className="crm-page-head"><div><h1>قاعدة البيانات</h1><p>عرض وتصفية وتعديل ونقل وتصدير عملاء CRM.</p></div><div className="crm-head-actions"><button className="crm-secondary-button" onClick={() => void exportRows()} disabled={exporting}><FileXls size={18} />{exporting ? "جاري التجهيز..." : "تصدير Excel"}</button><button className="crm-secondary-button" onClick={() => void printRows()} disabled={exporting}><FilePdf size={18} />تصدير PDF</button><button className="crm-primary-button" onClick={() => setTransferOpen(true)} disabled={!checked.size}><UsersThree size={18} />نقل العملاء ({checked.size})</button></div></header>
 
       <div className="crm-filter-panel">
         <input type="date" title="التاريخ من" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} />
@@ -110,7 +159,7 @@ export function CrmDatabasePage() {
         <button className="crm-icon-button" type="button" title="تحديث" onClick={() => void loadRows()}><ArrowClockwise size={19} /></button>
       </div>
 
-      <div className="crm-database-summary"><span>إجمالي العملاء: <b>{total}</b></span><span>نتيجة الفلتر: <b>{total}</b></span><span>المعروض: <b>{rows.length}</b></span></div>
+      <div className="crm-database-summary"><span>إجمالي العملاء: <b>{total}</b></span><span>نتيجة الفلتر: <b>{total}</b></span><span>المعروض: <b>{rows.length ? `${page * pageSize + 1}-${page * pageSize + rows.length}` : 0}</b></span></div>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
       <div className="crm-table-shell">
@@ -123,7 +172,7 @@ export function CrmDatabasePage() {
           </tbody>
         </table>
       </div>
-      {rows.length < total ? <button className="crm-secondary-button crm-load-more" onClick={() => setLimit((current) => current + 50)}>تحميل 50 عميل بعدهم</button> : null}
+      {total > pageSize ? <div className="crm-pagination"><button className="crm-secondary-button" disabled={page === 0 || loading} onClick={() => setPage((current) => Math.max(0, current - 1))}>السابق</button><span>صفحة {page + 1} من {Math.max(1, Math.ceil(total / pageSize))}</span><button className="crm-secondary-button" disabled={(page + 1) * pageSize >= total || loading} onClick={() => setPage((current) => current + 1)}>التالي</button></div> : null}
 
       <LeadDrawer lead={selected} meta={meta} onClose={() => setSelected(null)} onRead={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected((current) => current?.id === updated.id ? { ...current, ...updated } : current); }} onSaved={(updated) => { setRows((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated } : row)); setSelected(null); }} />
 

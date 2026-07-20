@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwise, CheckCircle, FloppyDisk, Robot, Trash, XCircle } from "@phosphor-icons/react";
-import { crmFetch, formatDate } from "../api";
+import { crmFetch, formatDate, queryString } from "../api";
 
 const defaults = {
   enabled: false,
@@ -45,16 +45,20 @@ export function CrmInboxAgentPage() {
   const [settings, setSettings] = useState(defaults);
   const [managers, setManagers] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
+  const logsPageSize = 100;
+  const [logsPage, setLogsPage] = useState(0);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsToday, setLogsToday] = useState(0);
   const [manager, setManager] = useState({ scopeCode: "", managerName: "", whatsappPhone: "", isActive: true });
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [logsPage]);
 
   async function load() {
     try {
-      const result = await crmFetch<{ ok: boolean; settings: any; managers: any[]; logs: any[] }>("/api/crm/inbox-agent");
-      setSettings(fromApi(result.settings)); setManagers(result.managers || []); setLogs(result.logs || []);
+      const result = await crmFetch<{ ok: boolean; settings: any; managers: any[]; logs: any[]; logsTotal: number; logsToday: number }>(`/api/crm/inbox-agent${queryString({ limit: logsPageSize, offset: logsPage * logsPageSize })}`);
+      setSettings(fromApi(result.settings)); setManagers(result.managers || []); setLogs(result.logs || []); setLogsTotal(result.logsTotal || 0); setLogsToday(result.logsToday || 0);
     } catch (error) { setNotice(error instanceof Error ? error.message : "فشل تحميل البيانات"); }
   }
 
@@ -82,7 +86,7 @@ export function CrmInboxAgentPage() {
   return (
     <div className="crm-page inbox-agent-page">
       <header className="crm-page-head"><div><h1>وكيل صندوق الوارد</h1><p>وكيل مركزي داخل المنصة يراقب تأخر الرد البشري على كل القنوات المفعلة، ويرد ويصعّد وفق الإعدادات.</p></div><button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button></header>
-      <div className="crm-agent-status-grid"><div className={`crm-agent-status ${settings.enabled ? "on" : "off"}`}><Robot size={30} weight="duotone" /><span>حالة الوكيل</span><strong>{settings.enabled ? "مفعل" : "متوقف"}</strong></div><div><span>أول رد بعد</span><strong>{settings.firstDelaySeconds}</strong><small>بالثواني</small></div><div><span>مديرو التصعيد</span><strong>{managers.filter((m) => m.is_active).length}</strong><small>مدير مفعّل</small></div><div><span>إجراءات اليوم</span><strong>{logs.filter((log) => new Date(log.created_at).toDateString() === new Date().toDateString()).length}</strong><small>ردود وتصعيدات</small></div><div><span>وكيل السوشيال</span><strong>{settings.socialEnabled ? "مفعل" : "متوقف"}</strong><small>{settings.socialPlatforms.join("، ") || "لا توجد منصات"}</small></div></div>
+      <div className="crm-agent-status-grid"><div className={`crm-agent-status ${settings.enabled ? "on" : "off"}`}><Robot size={30} weight="duotone" /><span>حالة الوكيل</span><strong>{settings.enabled ? "مفعل" : "متوقف"}</strong></div><div><span>أول رد بعد</span><strong>{settings.firstDelaySeconds}</strong><small>بالثواني</small></div><div><span>مديرو التصعيد</span><strong>{managers.filter((m) => m.is_active).length}</strong><small>مدير مفعّل</small></div><div><span>إجراءات اليوم</span><strong>{logsToday}</strong><small>ردود وتصعيدات</small></div><div><span>وكيل السوشيال</span><strong>{settings.socialEnabled ? "مفعل" : "متوقف"}</strong><small>{settings.socialPlatforms.join("، ") || "لا توجد منصات"}</small></div></div>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       <div className="crm-department-tabs"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>الإعدادات العامة</button><button className={tab === "replies" ? "active" : ""} onClick={() => setTab("replies")}>الردود</button><button className={tab === "logs" ? "active" : ""} onClick={() => setTab("logs")}>السجل</button></div>
 
@@ -97,7 +101,7 @@ export function CrmInboxAgentPage() {
 
       {tab === "replies" ? <div className="crm-settings-grid"><section className="crm-panel settings-card full"><h2>الردود</h2>{settings.replies.map((reply, index) => <label className="crm-form-label" key={index}><span>الرد {index + 1}</span><textarea rows={3} value={reply} onChange={(event) => set("replies", settings.replies.map((item, i) => i === index ? event.target.value : item))} /></label>)}<button className="crm-secondary-button" onClick={() => set("replies", [...settings.replies, ""])}>إضافة رد</button></section><section className="crm-panel settings-card full"><h2>كلمات توقف الوكيل</h2><input value={settings.stopKeywords.join("، ")} onChange={(event) => set("stopKeywords", event.target.value.split(/[،,]/).map((item) => item.trim()).filter(Boolean))} /><h2>نص تصعيد مدير الفرع</h2><textarea rows={6} value={settings.branchEscalationTemplate} onChange={(event) => set("branchEscalationTemplate", event.target.value)} /></section><div className="crm-settings-save"><button className="crm-primary-button" onClick={() => void saveSettings()}><FloppyDisk size={18} />حفظ الإعدادات</button></div></div> : null}
 
-      {tab === "logs" ? <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الوقت</th><th>الإجراء</th><th>العميل</th><th>الفرع</th><th>السبب</th><th>الرسالة</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id}><td>{formatDate(log.created_at)}</td><td>{log.action === "bot_reply" ? <span className="crm-log-action good"><CheckCircle size={16} />رد الوكيل</span> : log.action?.includes("escalat") ? <span className="crm-log-action warn"><Robot size={16} />تصعيد</span> : <span className="crm-log-action"><XCircle size={16} />{log.action}</span>}</td><td>{log.customer_name || "عميل"}<small>{log.customer_phone || ""}</small></td><td>{log.branch_code || "—"}</td><td>{log.reason || "—"}</td><td>{log.message_text || "—"}</td></tr>)}{!logs.length ? <tr><td colSpan={6}><div className="crm-empty-state">لا توجد سجلات بعد.</div></td></tr> : null}</tbody></table></div> : null}
+      {tab === "logs" ? <><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الوقت</th><th>الإجراء</th><th>العميل</th><th>الفرع</th><th>السبب</th><th>الرسالة</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id}><td>{formatDate(log.created_at)}</td><td>{log.action === "bot_reply" ? <span className="crm-log-action good"><CheckCircle size={16} />رد الوكيل</span> : log.action?.includes("escalat") ? <span className="crm-log-action warn"><Robot size={16} />تصعيد</span> : <span className="crm-log-action"><XCircle size={16} />{log.action}</span>}</td><td>{log.customer_name || "عميل"}<small>{log.customer_phone || ""}</small></td><td>{log.branch_code || "—"}</td><td>{log.reason || "—"}</td><td>{log.message_text || "—"}</td></tr>)}{!logs.length ? <tr><td colSpan={6}><div className="crm-empty-state">لا توجد سجلات بعد.</div></td></tr> : null}</tbody></table></div>{logsTotal > logsPageSize ? <div className="crm-pagination"><button className="crm-secondary-button" disabled={logsPage === 0} onClick={() => setLogsPage((current) => Math.max(0, current - 1))}>السابق</button><span>صفحة {logsPage + 1} من {Math.max(1, Math.ceil(logsTotal / logsPageSize))}</span><button className="crm-secondary-button" disabled={(logsPage + 1) * logsPageSize >= logsTotal} onClick={() => setLogsPage((current) => current + 1)}>التالي</button></div> : null}</> : null}
     </div>
   );
 }

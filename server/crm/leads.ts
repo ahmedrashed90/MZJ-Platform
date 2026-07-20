@@ -113,8 +113,8 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       and (${payment || null}::text is null or l.payment_type = ${payment || null})
       and (${car || null}::text is null or l.car_name = ${car || null})
       and (${campaign || null}::text is null or l.campaign_name = ${campaign || null})
-      and (${from || null}::date is null or coalesce(l.registered_at,l.created_at)::date >= ${from || null}::date)
-      and (${to || null}::date is null or coalesce(l.registered_at,l.created_at)::date <= ${to || null}::date)
+      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     order by l.updated_at desc, l.created_at desc
     limit ${limit} offset ${offset}
   `;
@@ -138,8 +138,8 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       and (${payment || null}::text is null or l.payment_type = ${payment || null})
       and (${car || null}::text is null or l.car_name = ${car || null})
       and (${campaign || null}::text is null or l.campaign_name = ${campaign || null})
-      and (${from || null}::date is null or coalesce(l.registered_at,l.created_at)::date >= ${from || null}::date)
-      and (${to || null}::date is null or coalesce(l.registered_at,l.created_at)::date <= ${to || null}::date)
+      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
   `;
   for (const row of rows) {
     row.source_name = row.catalog_source_name || sourceLabel(row.source_code || row.source_name);

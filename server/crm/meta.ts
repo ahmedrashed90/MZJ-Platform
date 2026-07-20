@@ -29,7 +29,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       group by u.id
       order by u.full_name
     `,
-    sql`select code,name,sort_order,system_codes,delivery_route,allow_free_text from core.sources where is_active=true order by sort_order,name`,
+    sql`select code,name,sort_order,system_codes,delivery_route,allow_free_text,report_group from core.sources where is_active=true order by sort_order,name`,
     sql`select * from crm.report_quality_settings where id = 'default'`,
     sql`select source_code, display_name, send_url, webhook_url, health_url, secret_name, is_active from crm.integration_endpoints order by display_name`,
     sql`select id::text,display_name,content,template_type,provider,departments from crm.message_templates where is_active=true order by display_name`,

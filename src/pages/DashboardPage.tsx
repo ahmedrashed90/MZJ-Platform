@@ -259,19 +259,24 @@ function leadStatus(lead: CrmLead) {
   return String(lead.status_label || lead.status_code || "عميل جديد").trim();
 }
 
-function startOfCurrentWeekMs() {
-  const date = new Date();
-  const daysSinceMonday = (date.getDay() + 6) % 7;
-  date.setDate(date.getDate() - daysSinceMonday);
-  date.setHours(0, 0, 0, 0);
-  return date.getTime();
+function riyadhDateKey(value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value || ""));
+  if (!Number.isFinite(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Riyadh", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+function riyadhWeekStartKey() {
+  const todayKey = riyadhDateKey(new Date());
+  const [year, month, day] = todayKey.split("-").map(Number);
+  if (!year || !month || !day) return "";
+  const riyadhNoonAsUtc = new Date(Date.UTC(year, month - 1, day, 9));
+  const daysSinceMonday = (riyadhNoonAsUtc.getUTCDay() + 6) % 7;
+  riyadhNoonAsUtc.setUTCDate(riyadhNoonAsUtc.getUTCDate() - daysSinceMonday);
+  return riyadhNoonAsUtc.toISOString().slice(0, 10);
 }
 
 function isToday(value: unknown) {
-  const date = new Date(String(value || ""));
-  if (!Number.isFinite(date.getTime())) return false;
-  const today = new Date();
-  return date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+  return riyadhDateKey(value) === riyadhDateKey(new Date());
 }
 
 export function DashboardPage() {
@@ -387,7 +392,7 @@ export function DashboardPage() {
         <section className="kpi-grid">
           <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />
           <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")}  />
-          <KpiCard title="العملاء المحتملون" value={crm?.potentialCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("العملاء المحتملون", "العملاء الموجودون في حالة محتمل", (lead) => leadStatus(lead) === "محتمل")} />
+          <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />
           <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => ["تم البيع", "تم الانتهاء - إنشاء طلب البيع", "تم الإنتهاء - إنشاء طلب البيع"].includes(leadStatus(lead)))} />
         </section>
 
@@ -414,8 +419,8 @@ export function DashboardPage() {
                   </ResponsiveContainer>
                 </div>
                 <div className="chart-summary">
-                  <SmallMetric label="جدد هذا الأسبوع" value={crm?.newThisWeek ?? null} onClick={() => void openCrmList("جدد هذا الأسبوع", "العملاء المسجلون منذ بداية الأسبوع الحالي", (lead) => Date.parse(String(lead.created_at || lead.registered_at || 0)) >= startOfCurrentWeekMs())} />
-                  <SmallMetric label="جدد اليوم" value={crm?.newToday ?? null} onClick={() => void openCrmList("جدد اليوم", "العملاء المسجلون اليوم", (lead) => isToday(lead.created_at || lead.registered_at))} />
+                  <SmallMetric label="جدد هذا الأسبوع" value={crm?.newThisWeek ?? null} onClick={() => void openCrmList("جدد هذا الأسبوع", "العملاء المسجلون منذ بداية الأسبوع الحالي", (lead) => riyadhDateKey(lead.registered_at || lead.created_at) >= riyadhWeekStartKey())} />
+                  <SmallMetric label="جدد اليوم" value={crm?.newToday ?? null} onClick={() => void openCrmList("جدد اليوم", "العملاء المسجلون اليوم", (lead) => isToday(lead.registered_at || lead.created_at))} />
                 </div>
               </>
             ) : <EmptyChart label="العملاء الجدد" />}

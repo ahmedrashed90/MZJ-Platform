@@ -15,7 +15,7 @@ function emptyData(): DashboardData {
     connected: false,
     generatedAt: new Date().toISOString(),
     sectionErrors: {},
-    crm: { totalCustomers: null, openConversations: null, potentialCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
+    crm: { totalCustomers: null, openConversations: null, noAnswerCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
     marketing: { campaigns: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
@@ -49,18 +49,18 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
       sql<any[]>`select
         (select count(*) from crm.leads where is_deleted=false) as total_customers,
         (select count(*) from crm.conversations where status='open') as open_conversations,
-        (select count(*) from crm.leads where status_label='محتمل' and is_deleted=false) as potential_customers,
+        (select count(*) from crm.leads where status_label='لم يتم الرد' and is_deleted=false) as no_answer_customers,
         (select count(*) from crm.leads where status_label in ('تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع') and is_deleted=false) as sold,
         (select count(*) from crm.leads where department_code='cash_sales' and is_deleted=false) as cash_sales,
         (select count(*) from crm.leads where department_code in ('finance_sales','call_center') and is_deleted=false) as finance_sales,
         (select count(*) from crm.leads where department_code='customer_service' and is_deleted=false) as customer_service,
-        (select count(*) from crm.leads where created_at::date=current_date and is_deleted=false) as new_today,
-        (select count(*) from crm.leads where created_at>=date_trunc('week',now()) and is_deleted=false) as new_this_week`,
+        (select count(*) from crm.leads where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date and is_deleted=false) as new_today,
+        (select count(*) from crm.leads where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=date_trunc('week',now() at time zone 'Asia/Riyadh')::date and is_deleted=false) as new_this_week`,
       sql<any[]>`select c.id::text,coalesce(c.customer_name,l.customer_name,'عميل') as customer_name,coalesce(c.preview_text,'') as preview_text,c.last_message_at,coalesce(c.unread_count,0) as unread_count,coalesce(c.lead_id::text,'') as lead_id,coalesce(l.department_code,'') as department_code from crm.conversations c left join crm.leads l on l.id=c.lead_id and l.is_deleted=false order by c.last_message_at desc nulls last limit 5`,
-      sql<any[]>`select to_char(day,'DD/MM') as label,count(l.id)::int as value from generate_series(current_date-interval '6 days',current_date,interval '1 day') day left join crm.leads l on l.created_at::date=day::date and l.is_deleted=false group by day order by day`,
+      sql<any[]>`select to_char(day,'DD/MM') as label,count(l.id)::int as value from generate_series((now() at time zone 'Asia/Riyadh')::date-interval '6 days',(now() at time zone 'Asia/Riyadh')::date,interval '1 day') day left join crm.leads l on (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date=day::date and l.is_deleted=false group by day order by day`,
     ]);
     data.crm = {
-      totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), potentialCustomers: asNumber(row?.potential_customers), sold: asNumber(row?.sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
+      totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
       recentConversations: recent.map((item) => ({ id: item.id, customerName: item.customer_name, preview: item.preview_text, time: item.last_message_at ? new Date(item.last_message_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "", unreadCount: asNumber(item.unread_count), leadId: item.lead_id, department: item.department_code === "finance_sales" || item.department_code === "call_center" ? "finance" : item.department_code === "customer_service" ? "service" : "cash" })),
       newCustomersSeries: series.map((item) => ({ label: item.label, value: asNumber(item.value) })),
     };

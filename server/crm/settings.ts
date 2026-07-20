@@ -152,10 +152,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const name = clean(body.name);
     if (!name) return response.status(400).json({ ok: false, error: "اسم المصدر بالعربي مطلوب" });
     const systems = stringList(body.systemCodes);
+    const reportGroup = ['digital','direct','other'].includes(clean(body.reportGroup)) ? clean(body.reportGroup) : 'other';
     const [row] = await sql<any[]>`
-      insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,updated_at)
-      values (${code},${name},${Number(body.sortOrder||0)},${body.isActive!==false},${systems.length ? systems : ["crm","marketing"]},${clean(body.deliveryRoute)||"whatsapp"},${body.allowFreeText===true},now())
-      on conflict (code) do update set name=excluded.name,sort_order=excluded.sort_order,is_active=excluded.is_active,system_codes=excluded.system_codes,delivery_route=excluded.delivery_route,allow_free_text=excluded.allow_free_text,updated_at=now()
+      insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group,updated_at)
+      values (${code},${name},${Number(body.sortOrder||0)},${body.isActive!==false},${systems.length ? systems : ["crm","marketing"]},${clean(body.deliveryRoute)||"whatsapp"},${body.allowFreeText===true},${reportGroup},now())
+      on conflict (code) do update set name=excluded.name,sort_order=excluded.sort_order,is_active=excluded.is_active,system_codes=excluded.system_codes,delivery_route=excluded.delivery_route,allow_free_text=excluded.allow_free_text,report_group=excluded.report_group,updated_at=now()
       returning *
     `;
     await audit(user, "source_saved", "source", code, row);
@@ -280,13 +281,51 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const marketingDenominatorStatuses = stringList(body.marketingDenominatorStatuses);
     const salesNumeratorStatuses = stringList(body.salesNumeratorStatuses);
     const salesDenominatorStatuses = stringList(body.salesDenominatorStatuses);
+    const qualifiedStatuses = stringList(body.qualifiedStatuses);
+    const totalStatuses = stringList(body.totalStatuses);
+    const notContactedStatuses = stringList(body.notContactedStatuses);
+    const allowedCards = new Set(["marketing", "total", "notContacted", "waste", "qualified", "delayed", "potential", "sold", "sales"]);
+    const summaryCards = stringList(body.summaryCards).filter((value) => allowedCards.has(value));
+    const marketingMode = clean(body.marketingDenominatorMode) === "statuses" ? "statuses" : "all";
+    const salesMode = clean(body.salesDenominatorMode) === "all" ? "all" : "statuses";
+    const totalMode = clean(body.totalMode) === "statuses" ? "statuses" : "all";
+    const selectedStatuses = [...new Set([
+      ...marketingNumeratorStatuses,
+      ...marketingDenominatorStatuses,
+      ...salesNumeratorStatuses,
+      ...salesDenominatorStatuses,
+      ...qualifiedStatuses,
+      ...totalStatuses,
+      ...notContactedStatuses,
+    ])];
+    const knownStatusRows = await sql<{ value: string }[]>`
+      select distinct value from crm.dashboard_statuses where is_active=true
+      union
+      select distinct status_label as value from crm.leads where is_deleted=false and nullif(status_label,'') is not null
+    `;
+    const knownStatuses = new Set(knownStatusRows.map((row) => row.value));
+    const unknownStatuses = selectedStatuses.filter((value) => !knownStatuses.has(value));
+    if (unknownStatuses.length) return response.status(400).json({ ok: false, error: `حالات غير معتمدة: ${unknownStatuses.join("، ")}` });
     if (!marketingNumeratorStatuses.length || !salesNumeratorStatuses.length) return response.status(400).json({ ok: false, error: "اختار حالات البسط للمؤشرات" });
+    if (!qualifiedStatuses.length) return response.status(400).json({ ok: false, error: "اختار الحالات التي تُحسب مؤهل" });
+    if (!notContactedStatuses.length) return response.status(400).json({ ok: false, error: "اختار حالات لم يتم الاتصال" });
+    if (!summaryCards.length || summaryCards.length !== new Set(summaryCards).size) return response.status(400).json({ ok: false, error: "ترتيب كروت النتائج غير صحيح" });
+    if (marketingMode === "statuses" && !marketingDenominatorStatuses.length) return response.status(400).json({ ok: false, error: "اختار حالات مقام جودة التسويق" });
+    if (salesMode === "statuses" && !salesDenominatorStatuses.length) return response.status(400).json({ ok: false, error: "اختار حالات مقام جودة المبيعات" });
+    if (totalMode === "statuses" && !totalStatuses.length) return response.status(400).json({ ok: false, error: "اختار الحالات الداخلة في إجمالي العملاء" });
+    const missingMarketing = marketingMode === "statuses" ? marketingNumeratorStatuses.filter((value) => !marketingDenominatorStatuses.includes(value)) : [];
+    const missingSales = salesMode === "statuses" ? salesNumeratorStatuses.filter((value) => !salesDenominatorStatuses.includes(value)) : [];
+    if (missingMarketing.length || missingSales.length) return response.status(400).json({ ok: false, error: "يجب أن يحتوي مقام كل جودة على جميع حالات البسط" });
+    const [before] = await sql<any[]>`select * from crm.report_quality_settings where id='default'`;
     const [row] = await sql<any[]>`
       update crm.report_quality_settings set
-        marketing_numerator_statuses=${marketingNumeratorStatuses},marketing_denominator_mode=${clean(body.marketingDenominatorMode)||"all"},marketing_denominator_statuses=${marketingDenominatorStatuses},
-        sales_numerator_statuses=${salesNumeratorStatuses},sales_denominator_mode=${clean(body.salesDenominatorMode)||"statuses"},sales_denominator_statuses=${salesDenominatorStatuses},updated_by=${user.id}::uuid,updated_at=now()
+        marketing_numerator_statuses=${marketingNumeratorStatuses},marketing_denominator_mode=${marketingMode},marketing_denominator_statuses=${marketingDenominatorStatuses},
+        sales_numerator_statuses=${salesNumeratorStatuses},sales_denominator_mode=${salesMode},sales_denominator_statuses=${salesDenominatorStatuses},
+        qualified_statuses=${qualifiedStatuses},total_mode=${totalMode},total_statuses=${totalStatuses},not_contacted_statuses=${notContactedStatuses},
+        summary_cards=${summaryCards},summary_cards_version=2,updated_by=${user.id}::uuid,updated_at=now()
       where id='default' returning *
     `;
+    await audit(user, "report_quality_settings_saved", "report_quality_settings", "default", row, before);
     return response.status(200).json({ ok: true, row });
   }
 

@@ -45,7 +45,7 @@ export type CrmMeta = {
   statuses: CrmStatus[];
   branches: Array<{ code: string; name: string; sort_order: number }>;
   users: CrmUserOption[];
-  sources: Array<{ code: string; name: string; sort_order?: number; system_codes?: string[]; delivery_route?: "whatsapp" | "facebook" | "instagram" | "tiktok"; allow_free_text?: boolean }>;
+  sources: Array<{ code: string; name: string; sort_order?: number; system_codes?: string[]; delivery_route?: "whatsapp" | "facebook" | "instagram" | "tiktok"; allow_free_text?: boolean; report_group?: "digital" | "direct" | "other" }>;
   templates: Array<{ id: string; display_name: string; content: string; template_type: string; provider?: string | null; departments: string[] }>;
   mappings: Array<{ id: string; department_code: string; status_value: string; status_label: string; template_id: string; message_type: string }>;
   quality: Record<string, unknown> | null;

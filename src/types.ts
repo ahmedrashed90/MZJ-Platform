@@ -7,7 +7,7 @@ export type DashboardData = {
   crm: {
     totalCustomers: NullableNumber;
     openConversations: NullableNumber;
-    potentialCustomers: NullableNumber;
+    noAnswerCustomers: NullableNumber;
     sold: NullableNumber;
     cashSales: NullableNumber;
     financeSales: NullableNumber;

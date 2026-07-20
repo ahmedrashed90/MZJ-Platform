@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { clean, positiveInt, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function scopeCondition(scope: ReturnType<typeof userScope>) {
@@ -18,6 +18,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const status = clean(request.query.status);
   const from = clean(request.query.from);
   const to = clean(request.query.to);
+  const limit = positiveInt(request.query.limit, 50, 200);
+  const offset = Math.max(0, Number(request.query.offset || 0) || 0);
 
   if (leadId) {
     const [lead] = await sql<any[]>`
@@ -151,15 +153,38 @@ export default async function handler(request: VercelRequest, response: VercelRe
       )
       and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.status_label,sales.full_name,cc.full_name) ilike ${q ? `%${q}%` : null})
       and (${status || null}::text is null or l.status_label=${status || null})
-      and (${from || null}::date is null or coalesce(l.registered_at,l.created_at)::date >= ${from || null}::date)
-      and (${to || null}::date is null or coalesce(l.registered_at,l.created_at)::date <= ${to || null}::date)
+      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     group by l.id,sales.full_name,cc.full_name,src.name
     order by max(e.created_at) desc nulls last,l.updated_at desc
-    limit 500
+    limit ${limit} offset ${offset}
+  `;
+  const [count] = await sql<{ total: number }[]>`
+    select count(*)::int as total
+    from crm.leads l
+    left join core.users sales on sales.id=l.assigned_to
+    left join core.users cc on cc.id=l.call_center_assigned_to
+    where l.is_deleted=false
+      and (
+        l.department_code in ('finance_sales','call_center')
+        or exists (
+          select 1 from crm.lead_events de
+          where de.lead_id=l.id
+            and (de.old_department in ('finance_sales','call_center') or de.new_department in ('finance_sales','call_center'))
+        )
+      )
+      and (
+        ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+        or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+      )
+      and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.status_label,sales.full_name,cc.full_name) ilike ${q ? `%${q}%` : null})
+      and (${status || null}::text is null or l.status_label=${status || null})
+      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
   `;
   for (const row of rows) {
     row.source_name = sourceLabel(row.source_code, row.catalog_source_name || row.source_name);
     delete row.catalog_source_name;
   }
-  return response.status(200).json({ ok: true, rows });
+  return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset });
 }

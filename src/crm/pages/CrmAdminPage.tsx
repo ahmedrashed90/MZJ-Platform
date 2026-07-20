@@ -4,6 +4,7 @@ import {
   CaretDown,
   CaretUp,
   CheckCircle,
+  FileXls,
   FloppyDisk,
   LinkSimple,
   PencilSimple,
@@ -15,6 +16,8 @@ import {
 import { crmFetch, formatDate } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
+import { downloadXlsx } from "../xlsx";
+import { readXlsx } from "../xlsxReader";
 
 const tabs = [
   { key: "entry_routing", label: "دخول وتوزيع العملاء" },
@@ -24,6 +27,7 @@ const tabs = [
   { key: "templates", label: "القوالب والرسائل" },
   { key: "mappings", label: "ربط الحالات بالقوالب" },
   { key: "quality", label: "مؤشرات التقارير" },
+  { key: "data_review", label: "مراجعة أخطاء البيانات" },
   { key: "endpoints", label: "ربط المنصات والـ Workers" },
   { key: "branches", label: "الفروع" },
   { key: "distribution", label: "توزيع العملاء" },
@@ -34,7 +38,7 @@ type Props = { embedded?: boolean };
 
 const blankStatus = { id: "", departmentCode: "cash", label: "", value: "", sortOrder: 10, isActive: true };
 const blankCustomerField = { id: "", fieldKey: "", label: "", fieldType: "text", sortOrder: 10, departmentKeys: [] as string[], isActive: true, isRequired: false, includeInCompletion: false, optionsText: "", isSystem: false, isLocked: false };
-const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", allowFreeText: false, isActive: true };
+const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", reportGroup: "other", allowFreeText: false, isActive: true };
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "manual", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
 const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", isActive: true };
@@ -49,6 +53,11 @@ function dbToQuality(raw: any) {
     salesNumeratorStatuses: raw?.sales_numerator_statuses || ["تم البيع", "تم الانتهاء - إنشاء طلب البيع"],
     salesDenominatorMode: raw?.sales_denominator_mode || "statuses",
     salesDenominatorStatuses: raw?.sales_denominator_statuses || [],
+    qualifiedStatuses: raw?.qualified_statuses || ["مؤهل"],
+    totalMode: raw?.total_mode || "all",
+    totalStatuses: raw?.total_statuses || [],
+    notContactedStatuses: raw?.not_contacted_statuses || ["عميل جديد"],
+    summaryCards: raw?.summary_cards || ["marketing", "total", "notContacted", "waste", "qualified", "potential", "sold", "sales"],
   };
 }
 
@@ -130,6 +139,10 @@ export function CrmAdminPage({ embedded = false }: Props) {
   const [branchForm, setBranchForm] = useState(blankBranch);
   const [ruleForm, setRuleForm] = useState(blankRule);
   const [quality, setQuality] = useState(dbToQuality(null));
+  const [dataReview, setDataReview] = useState<any | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewPreview, setReviewPreview] = useState<any | null>(null);
+  const [reviewRows, setReviewRows] = useState<Record<string, string>[]>([]);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncingMersal, setSyncingMersal] = useState(false);
@@ -175,6 +188,72 @@ export function CrmAdminPage({ embedded = false }: Props) {
       await load();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر الحذف");
+    }
+  }
+
+  async function loadDataReview() {
+    setReviewLoading(true);
+    setNotice("");
+    try {
+      setDataReview(await crmFetch<any>("/api/crm/data-review"));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر مراجعة أخطاء البيانات");
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  function exportDataReview() {
+    downloadXlsx("مراجعة-أخطاء-بيانات-CRM.xlsx", (dataReview?.issues || []).map((row: any) => ({
+      "اسم العميل": row.customerName,
+      "رقم الجوال": row.phone,
+      "كود الخطأ": row.issueCode,
+      "الحقل المطلوب تصحيحه": row.issueField,
+      "سبب الخطأ": row.issue,
+      "القيمة الحالية": row.currentValue,
+      "القسم": row.department,
+      "الفرع": row.branch,
+      "الحالة": row.status,
+      "المصدر": row.source,
+      "المسؤول": row.assignedName,
+      "معرّف العميل": row.leadId,
+      "القيمة المصححة": "",
+      "ملاحظة التصحيح": "",
+    })), "مراجعة البيانات");
+  }
+
+  async function previewDataReviewFile(file: File) {
+    setReviewLoading(true);
+    setNotice("");
+    try {
+      const rows = await readXlsx(file);
+      const result = await crmFetch<any>("/api/crm/data-review", { method: "POST", body: JSON.stringify({ action: "preview", rows }) });
+      setReviewRows(rows);
+      setReviewPreview(result);
+      setNotice(`تمت مراجعة ${rows.length} صف: ${result.validCount} صالح و${result.invalidCount} يحتاج تصحيح.`);
+    } catch (error) {
+      setReviewRows([]);
+      setReviewPreview(null);
+      setNotice(error instanceof Error ? error.message : "تعذر قراءة شيت التصحيح");
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  async function executeDataReviewCorrections() {
+    if (!reviewRows.length || !reviewPreview || reviewPreview.invalidCount) return;
+    if (!window.confirm(`سيتم تعديل ${reviewPreview.validCount} سجل داخل Transaction واحدة. هل تريد المتابعة؟`)) return;
+    setReviewLoading(true);
+    try {
+      const result = await crmFetch<any>("/api/crm/data-review", { method: "POST", body: JSON.stringify({ action: "execute", rows: reviewRows }) });
+      setNotice(`تم تصحيح ${result.updatedCount} سجل وتسجيل كل التغييرات في Audit Log.`);
+      setReviewRows([]);
+      setReviewPreview(null);
+      await loadDataReview();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تنفيذ التصحيحات");
+    } finally {
+      setReviewLoading(false);
     }
   }
 
@@ -343,6 +422,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
                 <label><span>اسم المصدر بالعربي</span><input placeholder="مثال: فعالية المعرض" value={sourceForm.name} onChange={(event) => setSourceForm((current) => ({ ...current, name: event.target.value }))} /></label>
                 <label><span>ترتيب الظهور</span><input type="number" value={sourceForm.sortOrder} onChange={(event) => setSourceForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
                 <label><span>قناة الإرسال</span><select value={sourceForm.deliveryRoute} onChange={(event) => setSourceForm((current) => ({ ...current, deliveryRoute: event.target.value }))}><option value="whatsapp">واتساب</option><option value="facebook">فيسبوك</option><option value="instagram">إنستجرام</option><option value="tiktok">تيك توك</option></select></label>
+                <label><span>تصنيف المصدر في التقارير</span><select value={sourceForm.reportGroup} onChange={(event) => setSourceForm((current) => ({ ...current, reportGroup: event.target.value }))}><option value="digital">تسويق رقمي</option><option value="direct">تسويق مباشر</option><option value="other">أخرى</option></select></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={sourceForm.allowFreeText} onChange={(event) => setSourceForm((current) => ({ ...current, allowFreeText: event.target.checked }))} /><span>السماح بالنص الحر</span></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={sourceForm.isActive} onChange={(event) => setSourceForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>المصدر نشط</span></label>
                 <div className="crm-field-wide"><span className="crm-field-caption">يُستخدم في</span><div className="crm-check-grid"><label><input type="checkbox" checked={sourceForm.systemCodes.includes("crm")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "crm") }))} />CRM</label><label><input type="checkbox" checked={sourceForm.systemCodes.includes("marketing")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "marketing") }))} />التسويق</label><label><input type="checkbox" checked={sourceForm.systemCodes.includes("operations")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "operations") }))} />العمليات</label><label><input type="checkbox" checked={sourceForm.systemCodes.includes("tracking")} onChange={() => setSourceForm((current) => ({ ...current, systemCodes: toggleList(current.systemCodes, "tracking") }))} />التتبع</label></div></div>
@@ -353,7 +433,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
           list={(
             <section className="crm-panel crm-list-panel crm-settings-full-table">
               <header><h2>المصادر الموحدة</h2><span>{data.sources.length}</span></header>
-              <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>المصدر</th><th>الكود</th><th>الأنظمة</th><th>الإرسال</th><th>الاستخدام</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.sources.map((row: any) => <tr key={row.code}><td><strong>{row.name}</strong></td><td>{row.code}</td><td>{(row.system_codes || []).map((code: string) => code === "crm" ? "CRM" : code === "marketing" ? "التسويق" : code === "operations" ? "العمليات" : "التتبع").join("، ")}</td><td>{row.delivery_route === "whatsapp" ? `واتساب ${row.allow_free_text ? "نص وقوالب" : "قوالب فقط"}` : sourceLabel(row.delivery_route)}</td><td>{Number(row.crm_usage_count || 0) + Number(row.request_usage_count || 0)}</td><td>{row.is_active ? "نشط" : "موقوف"}</td><td><div className="crm-row-actions"><button onClick={() => setSourceForm({ code: row.code, name: row.name, sortOrder: row.sort_order, systemCodes: row.system_codes || [], deliveryRoute: row.delivery_route || "whatsapp", allowFreeText: row.allow_free_text, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("source", "", { code: row.code })}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div>
+              <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>المصدر</th><th>الكود</th><th>تصنيف التقارير</th><th>الأنظمة</th><th>الإرسال</th><th>الاستخدام</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.sources.map((row: any) => <tr key={row.code}><td><strong>{row.name}</strong></td><td>{row.code}</td><td>{row.report_group === "digital" ? "رقمي" : row.report_group === "direct" ? "مباشر" : "أخرى"}</td><td>{(row.system_codes || []).map((code: string) => code === "crm" ? "CRM" : code === "marketing" ? "التسويق" : code === "operations" ? "العمليات" : "التتبع").join("، ")}</td><td>{row.delivery_route === "whatsapp" ? `واتساب ${row.allow_free_text ? "نص وقوالب" : "قوالب فقط"}` : sourceLabel(row.delivery_route)}</td><td>{Number(row.crm_usage_count || 0) + Number(row.request_usage_count || 0)}</td><td>{row.is_active ? "نشط" : "موقوف"}</td><td><div className="crm-row-actions"><button onClick={() => setSourceForm({ code: row.code, name: row.name, sortOrder: row.sort_order, systemCodes: row.system_codes || [], deliveryRoute: row.delivery_route || "whatsapp", reportGroup: row.report_group || "other", allowFreeText: row.allow_free_text, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("source", "", { code: row.code })}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div>
             </section>
           )}
         />
@@ -412,7 +492,49 @@ export function CrmAdminPage({ embedded = false }: Props) {
       ) : null}
 
       {tab === "quality" ? (
-        <div className="crm-quality-settings"><section className="crm-panel"><h2>إعدادات مؤشرات التقارير</h2><p>المعادلات تتحكم بها الحالات المختارة هنا، بدون تعديل السورس.</p></section>{["marketing", "sales"].map((type) => { const marketing = type === "marketing"; const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses"; const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses"; const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode"; return <section className="crm-panel quality-card" key={type}><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><strong>حالات البسط</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div><label className="crm-form-label"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(event) => setQuality((current) => ({ ...current, [modeKey]: event.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>{(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}</section>; })}<button className="crm-primary-button" onClick={() => void save("quality", quality)}><FloppyDisk size={18} />حفظ إعدادات المؤشرات</button></div>
+        <div className="crm-quality-settings">
+          <section className="crm-panel"><h2>إعدادات مؤشرات التقارير</h2><p>كل كارت ومعادلة يقرأ الحالات المحفوظة هنا من PostgreSQL، ولا يسمح بحفظ حالة غير موجودة.</p></section>
+
+          <section className="crm-panel quality-card">
+            <h2>تعريف كروت النتائج</h2>
+            <strong>حالات لم يتم الاتصال</strong>
+            <div className="crm-check-grid">{allStatusValues.map((status) => <label key={`not-${status}`}><input type="checkbox" checked={quality.notContactedStatuses.includes(status)} onChange={() => toggleQuality("notContactedStatuses", status)} />{status}</label>)}</div>
+            <strong>حالات العميل المؤهل</strong>
+            <div className="crm-check-grid">{allStatusValues.map((status) => <label key={`qualified-${status}`}><input type="checkbox" checked={quality.qualifiedStatuses.includes(status)} onChange={() => toggleQuality("qualifiedStatuses", status)} />{status}</label>)}</div>
+            <label className="crm-form-label"><span>إجمالي العملاء</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>
+            {quality.totalMode === "statuses" ? <div className="crm-check-grid">{allStatusValues.map((status) => <label key={`total-${status}`}><input type="checkbox" checked={quality.totalStatuses.includes(status)} onChange={() => toggleQuality("totalStatuses", status)} />{status}</label>)}</div> : null}
+          </section>
+
+          {["marketing", "sales"].map((type) => {
+            const marketing = type === "marketing";
+            const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses";
+            const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses";
+            const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode";
+            return <section className="crm-panel quality-card" key={type}><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><strong>حالات البسط</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div><label className="crm-form-label"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(event) => setQuality((current) => ({ ...current, [modeKey]: event.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>{(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}</section>;
+          })}
+
+          <section className="crm-panel quality-card">
+            <h2>ترتيب وإظهار كروت النتائج</h2>
+            <div className="crm-rule-list">{quality.summaryCards.map((card: string, index: number) => {
+              const labels: Record<string, string> = { marketing: "جودة التسويق", total: "إجمالي العملاء", notContacted: "لم يتم الاتصال", waste: "غير مؤهل", qualified: "مؤهل", delayed: "مؤجل", potential: "لم يتم الرد", sold: "تم البيع", sales: "جودة المبيعات" };
+              return <article key={card}><header><strong>{index + 1}. {labels[card] || card}</strong><div className="crm-row-actions"><button disabled={index === 0} onClick={() => setQuality((current) => { const next = [...current.summaryCards]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return { ...current, summaryCards: next }; })}><CaretUp size={16} /></button><button disabled={index === quality.summaryCards.length - 1} onClick={() => setQuality((current) => { const next = [...current.summaryCards]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return { ...current, summaryCards: next }; })}><CaretDown size={16} /></button><button title="إخفاء" onClick={() => setQuality((current) => ({ ...current, summaryCards: current.summaryCards.filter((item: string) => item !== card) }))}><Trash size={16} /></button></div></header></article>;
+            })}</div>
+            <div className="crm-check-grid">{Object.entries({ marketing: "جودة التسويق", total: "إجمالي العملاء", notContacted: "لم يتم الاتصال", waste: "غير مؤهل", qualified: "مؤهل", delayed: "مؤجل", potential: "لم يتم الرد", sold: "تم البيع", sales: "جودة المبيعات" }).filter(([key]) => !quality.summaryCards.includes(key)).map(([key, label]) => <label key={key}><input type="checkbox" onChange={() => setQuality((current) => ({ ...current, summaryCards: [...current.summaryCards, key] }))} />{label}</label>)}</div>
+          </section>
+          <button className="crm-primary-button" onClick={() => void save("quality", quality)}><FloppyDisk size={18} />حفظ إعدادات المؤشرات</button>
+        </div>
+      ) : null}
+
+      {tab === "data_review" ? (
+        <div className="crm-quality-settings">
+          <section className="crm-panel"><header><div><h2>مراجعة أخطاء بيانات CRM</h2><p>افحص البيانات، نزّل شيت Excel، اكتب القيمة المصححة، ثم ارفعه للمعاينة قبل تنفيذ أي تعديل.</p></div><div className="crm-head-actions"><button className="crm-secondary-button" disabled={!dataReview?.issues?.length} onClick={exportDataReview}><FileXls size={18} />تنزيل شيت المراجعة</button><label className="crm-secondary-button" aria-disabled={reviewLoading}><FileXls size={18} />رفع شيت التصحيح<input hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={reviewLoading} onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewDataReviewFile(file); event.currentTarget.value = ""; }} /></label><button className="crm-primary-button" disabled={reviewLoading} onClick={() => void loadDataReview()}><ArrowClockwise size={18} />{reviewLoading ? "جاري الفحص..." : "بدء الفحص"}</button></div></header></section>
+          {reviewPreview ? <section className="crm-panel crm-list-panel crm-settings-full-table"><header><div><h2>معاينة التصحيحات</h2><p>لن يتم تعديل أي سجل حتى تكون كل الصفوف صالحة وتضغط تنفيذ.</p></div><button className="crm-primary-button" disabled={reviewLoading || reviewPreview.invalidCount > 0} onClick={() => void executeDataReviewCorrections()}><CheckCircle size={18} />تنفيذ {reviewPreview.validCount} تصحيح</button></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الصف</th><th>العميل</th><th>الحقل</th><th>القيمة القديمة</th><th>القيمة الجديدة</th><th>النتيجة</th></tr></thead><tbody>{reviewPreview.corrections.map((row: any) => <tr key={`${row.rowNumber}-${row.leadId}`} className={!row.valid ? "crm-row-inactive" : ""}><td>{row.rowNumber}</td><td>{row.customerName}</td><td>{row.field}</td><td>{row.oldValue || "—"}</td><td>{row.resolvedLabel || row.resolvedValue || row.newValue}</td><td>{row.valid ? "صالح للتنفيذ" : row.error}</td></tr>)}</tbody></table></div></section> : null}
+          {dataReview ? <>
+            <section className="crm-report-summary"><article><span>العملاء المفحوصون</span><strong>{dataReview.checkedLeads}</strong></article><article><span>السجلات المتأثرة</span><strong>{dataReview.affectedLeads}</strong></article><article><span>إجمالي الأخطاء</span><strong>{dataReview.issueCount}</strong></article></section>
+            <section className="crm-panel crm-list-panel"><header><h2>ملخص الأخطاء</h2></header><div className="crm-check-grid">{dataReview.summary.map((row: any) => <label key={row.code}><strong>{row.count}</strong><span>{row.label}</span></label>)}</div></section>
+            <section className="crm-panel crm-list-panel crm-settings-full-table"><header><h2>تفاصيل الأخطاء</h2><span>{dataReview.issues.length}</span></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>العميل</th><th>الجوال</th><th>سبب الخطأ</th><th>القيمة الحالية</th><th>القسم</th><th>الفرع</th><th>الحالة</th><th>المصدر</th><th>المسؤول</th></tr></thead><tbody>{dataReview.issues.map((row: any, index: number) => <tr key={`${row.leadId}-${row.issueCode}-${index}`}><td>{row.customerName}</td><td>{row.phone}</td><td>{row.issue}</td><td>{row.currentValue}</td><td>{departmentLabel(row.department)}</td><td>{row.branch}</td><td>{row.status}</td><td>{sourceLabel(row.source)}</td><td>{row.assignedName}</td></tr>)}</tbody></table></div></section>
+          </> : <section className="crm-panel"><div className="crm-empty-state">اضغط بدء الفحص لعرض أخطاء البيانات الحالية.</div></section>}
+        </div>
       ) : null}
 
       {tab === "endpoints" ? (

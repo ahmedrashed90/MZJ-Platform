@@ -17,6 +17,7 @@ import crmHistoryHandler from "../server/crm/history.js";
 import crmConversationsHandler from "../server/crm/conversations.js";
 import crmManualLeadsHandler from "../server/crm/manual-leads.js";
 import crmReportsHandler from "../server/crm/reports.js";
+import crmDataReviewHandler from "../server/crm/data-review.js";
 import crmKpiHandler from "../server/crm/kpi.js";
 import crmTransferHandler from "../server/crm/transfer.js";
 import crmSettingsHandler from "../server/crm/settings.js";
@@ -54,6 +55,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/conversations", crmConversationsHandler],
   ["crm/manual-leads", crmManualLeadsHandler],
   ["crm/reports", crmReportsHandler],
+  ["crm/data-review", crmDataReviewHandler],
   ["crm/kpi", crmKpiHandler],
   ["crm/transfer", crmTransferHandler],
   ["crm/settings", crmSettingsHandler],
@@ -92,7 +94,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.14.6" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.15.0" });
   }
 
   if (route === "integrations/media") {

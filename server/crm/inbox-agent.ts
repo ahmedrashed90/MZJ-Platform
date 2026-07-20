@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { clean, isCrmManager, parseBody, positiveInt, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -8,12 +8,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [settings, managers, logs] = await Promise.all([
+    const limit = positiveInt(request.query.limit, 100, 200);
+    const offset = Math.max(0, Number(request.query.offset || 0) || 0);
+    const [settings, managers, logs, logCounts] = await Promise.all([
       sql`select * from crm.inbox_agent_settings where id='default'`,
       sql`select *,id::text,updated_by::text from crm.inbox_agent_managers order by scope_code`,
-      sql`select *,id::text,conversation_id::text,lead_id::text from crm.inbox_agent_logs order by created_at desc limit 500`,
+      sql`select *,id::text,conversation_id::text,lead_id::text from crm.inbox_agent_logs order by created_at desc limit ${limit} offset ${offset}`,
+      sql<{ total: number; today: number }[]>`
+        select count(*)::int as total,
+          count(*) filter (where (created_at at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date)::int as today
+        from crm.inbox_agent_logs
+      `,
     ]);
-    return response.status(200).json({ ok: true, settings: settings[0], managers, logs });
+    return response.status(200).json({ ok: true, settings: settings[0], managers, logs, logsTotal: Number(logCounts[0]?.total || 0), logsToday: Number(logCounts[0]?.today || 0), limit, offset });
   }
 
   if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لحفظ إعدادات الوكيل" });

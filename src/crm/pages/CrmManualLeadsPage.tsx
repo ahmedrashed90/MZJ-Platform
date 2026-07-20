@@ -12,6 +12,11 @@ const initialForm = {
   paymentType: "كاش",
   serviceKey: "cash",
   carName: "",
+  carCategory: "",
+  carModel: "",
+  color: "",
+  financeType: "",
+  registeredAt: "",
   location: "",
   branchCode: "",
   assignedTo: "",
@@ -23,7 +28,11 @@ export function CrmManualLeadsPage() {
   const [tab, setTab] = useState<"add" | "list">("add");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [form, setForm] = useState(initialForm);
+  const [editingId, setEditingId] = useState("");
   const [rows, setRows] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const pageSize = 100;
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
@@ -38,7 +47,7 @@ export function CrmManualLeadsPage() {
     if (tab !== "list") return;
     const timer = window.setTimeout(() => void loadRows(), 180);
     return () => window.clearTimeout(timer);
-  }, [q, status, tab]);
+  }, [q, status, tab, page]);
 
   async function loadMeta() {
     try { setMeta(await crmFetch<CrmMeta>("/api/crm/meta")); }
@@ -47,8 +56,9 @@ export function CrmManualLeadsPage() {
 
   async function loadRows() {
     try {
-      const result = await crmFetch<{ ok: boolean; rows: any[] }>(`/api/crm/manual-leads${queryString({ q, status })}`);
+      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/manual-leads${queryString({ q, status, page, pageSize })}`);
       setRows(result.rows || []);
+      setTotal(Number(result.total || 0));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل العملاء المسجلة");
     }
@@ -68,11 +78,12 @@ export function CrmManualLeadsPage() {
     setNotice("");
     try {
       const result = await crmFetch<{ ok: boolean; duplicate?: any; approvalStatus: string }>("/api/crm/manual-leads", {
-        method: "POST",
-        body: JSON.stringify(form),
+        method: editingId ? "PATCH" : "POST",
+        body: JSON.stringify(editingId ? { ...form, id: editingId, action: "edit" } : form),
       });
-      setNotice(result.duplicate ? "رقم الجوال مسجل بالفعل وتم إرسال الطلب لموافقة الإدارة." : "تم حفظ العميل بنجاح.");
+      setNotice(editingId ? "تم تعديل بيانات العميل وتسجيل التغييرات." : result.duplicate ? "رقم الجوال مسجل بالفعل وتم إرسال الطلب لموافقة الإدارة." : "تم حفظ العميل بنجاح.");
       setForm(initialForm);
+      setEditingId("");
       setTab("list");
       await loadRows();
     } catch (error) {
@@ -80,6 +91,35 @@ export function CrmManualLeadsPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function resetForm() {
+    setForm(initialForm);
+    setEditingId("");
+  }
+
+  function editRow(row: any) {
+    setEditingId(row.id);
+    setForm({
+      customerName: row.customer_name || "",
+      phone: row.phone || "",
+      sourceCode: row.source_code || "branch",
+      paymentType: row.payment_type || "كاش",
+      serviceKey: row.service_key || (row.payment_type === "تمويل" ? "finance" : row.payment_type === "خدمة عملاء" ? "service" : "cash"),
+      carName: row.car_name || "",
+      carCategory: row.car_category || "",
+      carModel: row.car_model || "",
+      color: row.color || "",
+      financeType: row.finance_type || "",
+      registeredAt: row.registered_at ? String(row.registered_at).slice(0, 10) : "",
+      location: row.location || "",
+      branchCode: row.branch_code || "",
+      assignedTo: row.requested_assigned_to || "",
+      callCenterAssignedTo: row.requested_call_center_to || "",
+      notes: row.notes || "",
+    });
+    setTab("add");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   async function review(action: "approve" | "reject") {
@@ -113,7 +153,7 @@ export function CrmManualLeadsPage() {
     <div className="crm-page crm-manual-leads-page">
       <header className="crm-page-head">
         <div><h1>إضافة العملاء</h1><p>تسجيل العميل يدويًا ومنع تكرار رقم الجوال، مع عرض الطلبات المسجلة داخل نفس الصفحة.</p></div>
-        <button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : setForm(initialForm)}>
+        <button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
           <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
         </button>
       </header>
@@ -127,13 +167,18 @@ export function CrmManualLeadsPage() {
 
       {tab === "add" ? (
         <section className="crm-panel crm-form-panel crm-manual-form-panel">
-          <header><h2>بيانات العميل</h2><span>العميل اليدوي يتم التواصل معه عن طريق واتساب بالقوالب فقط.</span></header>
+          <header><h2>{editingId ? "تعديل بيانات العميل" : "بيانات العميل"}</h2><span>العميل اليدوي يتم التواصل معه عن طريق واتساب بالقوالب فقط.</span></header>
           <div className="crm-form-grid crm-manual-form-grid">
             <label><span>اسم العميل</span><input value={form.customerName} onChange={(event) => set("customerName", event.target.value)} /></label>
             <label><span>رقم الجوال</span><input value={form.phone} onChange={(event) => set("phone", event.target.value)} placeholder="05xxxxxxxx" /></label>
             <label><span>المصدر</span><select value={form.sourceCode} onChange={(event) => set("sourceCode", event.target.value)}>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>
             <label><span>الدفع</span><select value={form.paymentType} onChange={(event) => { const payment = event.target.value; set("paymentType", payment); const serviceKey = payment === "تمويل" ? "finance" : payment === "خدمة عملاء" ? "service" : "cash"; set("serviceKey", serviceKey); set("branchCode", serviceKey === "finance" ? "online" : serviceKey === "service" ? "customer_service" : ""); }}><option>كاش</option><option>تمويل</option><option>خدمة عملاء</option></select></label>
             <label><span>السيارة</span><input value={form.carName} onChange={(event) => set("carName", event.target.value)} placeholder="اختياري" /></label>
+            <label><span>الفئة</span><input value={form.carCategory} onChange={(event) => set("carCategory", event.target.value)} placeholder="اختياري" /></label>
+            <label><span>الموديل</span><input value={form.carModel} onChange={(event) => set("carModel", event.target.value)} placeholder="اختياري" /></label>
+            <label><span>اللون</span><input value={form.color} onChange={(event) => set("color", event.target.value)} placeholder="اختياري" /></label>
+            {form.serviceKey === "finance" ? <label><span>نوع التمويل</span><input value={form.financeType} onChange={(event) => set("financeType", event.target.value)} placeholder="اختياري" /></label> : null}
+            <label><span>تاريخ تسجيل العميل</span><input type="date" value={form.registeredAt} onChange={(event) => set("registeredAt", event.target.value)} /></label>
             <label><span>المكان</span><input value={form.location} onChange={(event) => set("location", event.target.value)} /></label>
             <label><span>الفرع</span><select value={form.branchCode} onChange={(event) => set("branchCode", event.target.value)}><option value="">اختر الفرع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
             <label><span>المندوب المسؤول</span><select value={form.assignedTo} onChange={(event) => set("assignedTo", event.target.value)}><option value="">توزيع تلقائي</option>{agents.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
@@ -141,18 +186,18 @@ export function CrmManualLeadsPage() {
             <label className="crm-field-wide"><span>ملاحظات</span><textarea rows={5} value={form.notes} onChange={(event) => set("notes", event.target.value)} /></label>
           </div>
           <div className="crm-form-actions">
-            <button className="crm-secondary-button" onClick={() => setForm(initialForm)}>جديد</button>
-            <button className="crm-primary-button" disabled={saving || !form.customerName || !form.phone} onClick={() => void save()}>{saving ? "جاري الحفظ..." : "حفظ العميل"}</button>
+            <button className="crm-secondary-button" onClick={resetForm}>جديد</button>
+            <button className="crm-primary-button" disabled={saving || !form.customerName || !form.phone} onClick={() => void save()}>{saving ? "جاري الحفظ..." : editingId ? "حفظ التعديلات" : "حفظ العميل"}</button>
           </div>
         </section>
       ) : null}
 
       {tab === "list" ? (
         <section className="crm-panel crm-list-panel crm-manual-list-panel">
-          <header><h2>العملاء المسجلة</h2><span>{rows.length.toLocaleString("ar-SA")} سجل</span></header>
+          <header><h2>العملاء المسجلة</h2><span>{total.toLocaleString("ar-SA")} سجل</span></header>
           <div className="crm-toolbar compact">
-            <label className="crm-search-box"><MagnifyingGlass size={17} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="بحث بالاسم أو الرقم" /></label>
-            <select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">كل الحالات</option><option value="pending">بانتظار موافقة الإدارة</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select>
+            <label className="crm-search-box"><MagnifyingGlass size={17} /><input value={q} onChange={(event) => { setQ(event.target.value); setPage(1); }} placeholder="بحث بالاسم أو الرقم" /></label>
+            <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">كل الحالات</option><option value="pending">بانتظار موافقة الإدارة</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select>
           </div>
           <div className="crm-table-shell compact">
             <table className="crm-table">
@@ -168,13 +213,14 @@ export function CrmManualLeadsPage() {
                     <td>{row.requested_call_center_name || "—"}</td>
                     <td>{formatDate(row.updated_at)}</td>
                     <td><span className={`crm-status-pill ${row.approval_status}`}>{row.approval_status === "pending" ? "بانتظار موافقة الإدارة" : row.approval_status === "approved" ? "تمت الموافقة" : "مرفوض"}</span></td>
-                    <td><div className="crm-row-actions">{row.approval_status === "pending" ? <button title="موافقة" onClick={() => { setApproval(row); setApprovalAgent(row.requested_assigned_to || ""); }}><Check size={16} /></button> : null}<button title="تعديل"><PencilSimple size={16} /></button><button title="مسح" onClick={() => void remove(row.id)}><Trash size={16} /></button></div></td>
+                    <td><div className="crm-row-actions">{row.approval_status === "pending" ? <button title="موافقة" onClick={() => { setApproval(row); setApprovalAgent(row.requested_assigned_to || ""); }}><Check size={16} /></button> : null}<button title="تعديل" onClick={() => editRow(row)}><PencilSimple size={16} /></button><button title="مسح" onClick={() => void remove(row.id)}><Trash size={16} /></button></div></td>
                   </tr>
                 ))}
                 {!rows.length ? <tr><td colSpan={9}><div className="crm-empty-state">لا توجد سجلات</div></td></tr> : null}
               </tbody>
             </table>
           </div>
+          <div className="crm-form-actions"><button className="crm-secondary-button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>السابق</button><span>صفحة {page} من {Math.max(1, Math.ceil(total / pageSize))}</span><button className="crm-secondary-button" disabled={page * pageSize >= total} onClick={() => setPage((current) => current + 1)}>التالي</button></div>
         </section>
       ) : null}
 

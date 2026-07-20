@@ -42,6 +42,9 @@ export function CrmFinanceHistoryPage() {
   const [differenceDates, setDifferenceDates] = useState({ from: "", to: "" });
   const [differences, setDifferences] = useState<DifferenceResponse | null>(null);
   const [rows, setRows] = useState<CrmLead[]>([]);
+  const pageSize = 50;
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<{ lead: CrmLead; events: any[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -56,7 +59,7 @@ export function CrmFinanceHistoryPage() {
     if (activeTab !== "history") return;
     const timer = window.setTimeout(() => void loadRows(), 180);
     return () => window.clearTimeout(timer);
-  }, [activeTab, filters]);
+  }, [activeTab, filters, page]);
 
   useEffect(() => {
     if (activeTab !== "differences" || !differenceDates.from || !differenceDates.to) {
@@ -71,8 +74,9 @@ export function CrmFinanceHistoryPage() {
     setLoading(true);
     setNotice("");
     try {
-      const result = await crmFetch<{ ok: boolean; rows: CrmLead[] }>(`/api/crm/history${queryString(filters)}`);
+      const result = await crmFetch<{ ok: boolean; rows: CrmLead[]; total: number }>(`/api/crm/history${queryString({ ...filters, limit: pageSize, offset: page * pageSize })}`);
       setRows(result.rows || []);
+      setTotal(result.total || 0);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل السجل");
     } finally {
@@ -119,6 +123,7 @@ export function CrmFinanceHistoryPage() {
   const notesCount = selected?.events.filter((event) => Boolean(event.note)).length || 0;
   const currentStatuses = new Set(rows.map((row) => row.status_label || "عميل جديد")).size;
   const differenceDatesInvalid = Boolean(differenceDates.from && differenceDates.to && differenceDates.from > differenceDates.to);
+  function setHistoryFilter(key: keyof typeof filters, value: string) { setPage(0); setFilters((current) => ({ ...current, [key]: value })); }
 
   return (
     <div className="crm-page crm-finance-history-page">
@@ -134,17 +139,17 @@ export function CrmFinanceHistoryPage() {
       {activeTab === "history" ? (
         <>
           <div className="crm-filter-panel history">
-            <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
-            <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
-            <label><span>الحالة الحالية</span><select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="">كل الحالات الحالية</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-            <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="اسم العميل أو الجوال أو الحالة أو الموظف" /></label>
-            <button className="crm-secondary-button" onClick={() => setFilters({ from: "", to: "", status: "", q: "" })}>مسح الفلاتر</button>
+            <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setHistoryFilter("from", event.target.value)} /></label>
+            <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setHistoryFilter("to", event.target.value)} /></label>
+            <label><span>الحالة الحالية</span><select value={filters.status} onChange={(event) => setHistoryFilter("status", event.target.value)}><option value="">كل الحالات الحالية</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+            <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setHistoryFilter("q", event.target.value)} placeholder="اسم العميل أو الجوال أو الحالة أو الموظف" /></label>
+            <button className="crm-secondary-button" onClick={() => { setPage(0); setFilters({ from: "", to: "", status: "", q: "" }); }}>مسح الفلاتر</button>
           </div>
 
           <section className="crm-history-stats crm-history-stats-wide">
-            <article><UsersThree size={24} /><span>العملاء الظاهرون</span><strong>{rows.length.toLocaleString("ar-SA")}</strong></article>
-            <article><ClockCounterClockwise size={24} /><span>إجمالي الحركات</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
-            <article><ArrowRight size={24} /><span>الحالات الحالية</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
+            <article><UsersThree size={24} /><span>إجمالي العملاء</span><strong>{total.toLocaleString("ar-SA")}</strong></article>
+            <article><ClockCounterClockwise size={24} /><span>حركات الصفحة</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
+            <article><ArrowRight size={24} /><span>حالات الصفحة</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
           </section>
 
           <div className="crm-finance-directory">
@@ -169,6 +174,7 @@ export function CrmFinanceHistoryPage() {
             {!loading && !rows.length ? <div className="crm-empty-state panel">لا يوجد عملاء مطابقون للفلاتر المحددة</div> : null}
             {loading ? <div className="crm-loading-panel">جاري تحميل سجل العملاء...</div> : null}
           </div>
+          {total > pageSize ? <div className="crm-pagination"><button className="crm-secondary-button" disabled={page === 0 || loading} onClick={() => setPage((current) => Math.max(0, current - 1))}>السابق</button><span>صفحة {page + 1} من {Math.max(1, Math.ceil(total / pageSize))}</span><button className="crm-secondary-button" disabled={(page + 1) * pageSize >= total || loading} onClick={() => setPage((current) => current + 1)}>التالي</button></div> : null}
         </>
       ) : (
         <>
