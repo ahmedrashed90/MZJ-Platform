@@ -25,6 +25,27 @@ export default async function handler(request: VercelRequest, response: VercelRe
           u.can_receive_tasks,
           u.last_login_at,
           u.created_at,
+          (
+            select ur2.role_id::text
+            from core.user_roles ur2
+            where ur2.user_id = u.id
+            order by ur2.role_id
+            limit 1
+          ) as role_id,
+          (
+            select ud2.department_id::text
+            from core.user_departments ud2
+            where ud2.user_id = u.id
+            order by ud2.is_primary desc, ud2.department_id
+            limit 1
+          ) as department_id,
+          (
+            select ub2.branch_id::text
+            from core.user_branches ub2
+            where ub2.user_id = u.id
+            order by ub2.is_primary desc, ub2.branch_id
+            limit 1
+          ) as branch_id,
           coalesce(string_agg(distinct r.name, '، '), '') as roles,
           coalesce(string_agg(distinct d.name, '، '), '') as departments,
           coalesce(string_agg(distinct b.name, '، '), '') as branches
@@ -94,6 +115,97 @@ export default async function handler(request: VercelRequest, response: VercelRe
       });
 
       return response.status(201).json({ ok: true, user: created });
+    }
+
+    if (request.method === "PUT") {
+      const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body ?? {};
+      const userId = cleanText(body.userId);
+      const fullName = cleanText(body.fullName);
+      const employeeNo = cleanText(body.employeeNo) || null;
+      const email = cleanText(body.email).toLowerCase() || null;
+      const mobile = cleanText(body.mobile) || null;
+      const password = cleanText(body.password);
+      const roleId = cleanText(body.roleId) || null;
+      const departmentId = cleanText(body.departmentId) || null;
+      const branchId = cleanText(body.branchId) || null;
+      const canReceiveLeads = body.canReceiveLeads === true;
+      const canReceiveTasks = body.canReceiveTasks === true;
+
+      if (!userId) return response.status(400).json({ ok: false, error: "المستخدم المطلوب تعديله غير محدد" });
+      if (!fullName) return response.status(400).json({ ok: false, error: "اسم المستخدم مطلوب" });
+      if (!email && !mobile) return response.status(400).json({ ok: false, error: "البريد أو رقم الجوال مطلوب" });
+      if (password && password.length < 10) return response.status(400).json({ ok: false, error: "كلمة المرور الجديدة يجب ألا تقل عن 10 أحرف" });
+      if (!roleId) return response.status(400).json({ ok: false, error: "اختر دور المستخدم" });
+
+      const updated = await sql.begin(async (tx) => {
+        const [before] = await tx`
+          select id::text, employee_no, full_name, email, mobile,
+                 can_receive_leads, can_receive_tasks
+          from core.users
+          where id = ${userId}::uuid
+          for update
+        `;
+        if (!before) return null;
+
+        const [user] = password
+          ? await tx`
+              update core.users
+              set employee_no = ${employeeNo},
+                  full_name = ${fullName},
+                  email = ${email},
+                  mobile = ${mobile},
+                  password_hash = crypt(${password}, gen_salt('bf')),
+                  must_change_password = true,
+                  password_changed_at = null,
+                  can_receive_leads = ${canReceiveLeads},
+                  can_receive_tasks = ${canReceiveTasks},
+                  updated_at = now()
+              where id = ${userId}::uuid
+              returning id::text, employee_no, full_name, email, mobile, is_active,
+                        can_receive_leads, can_receive_tasks, updated_at
+            `
+          : await tx`
+              update core.users
+              set employee_no = ${employeeNo},
+                  full_name = ${fullName},
+                  email = ${email},
+                  mobile = ${mobile},
+                  can_receive_leads = ${canReceiveLeads},
+                  can_receive_tasks = ${canReceiveTasks},
+                  updated_at = now()
+              where id = ${userId}::uuid
+              returning id::text, employee_no, full_name, email, mobile, is_active,
+                        can_receive_leads, can_receive_tasks, updated_at
+            `;
+
+        await tx`delete from core.user_roles where user_id = ${userId}::uuid`;
+        await tx`insert into core.user_roles(user_id, role_id) values (${userId}::uuid, ${roleId}::uuid)`;
+
+        await tx`delete from core.user_departments where user_id = ${userId}::uuid`;
+        if (departmentId) await tx`insert into core.user_departments(user_id, department_id, is_primary) values (${userId}::uuid, ${departmentId}::uuid, true)`;
+
+        await tx`delete from core.user_branches where user_id = ${userId}::uuid`;
+        if (branchId) await tx`insert into core.user_branches(user_id, branch_id, is_primary) values (${userId}::uuid, ${branchId}::uuid, true)`;
+
+        await tx`
+          insert into audit.activity_log(user_id, system_code, action, entity_type, entity_id, before_data, after_data, ip_address)
+          values (
+            ${currentUser.id}::uuid,
+            'core',
+            'user_updated',
+            'user',
+            ${userId},
+            ${tx.json(before)},
+            ${tx.json({ fullName, employeeNo, email, mobile, roleId, departmentId, branchId, canReceiveLeads, canReceiveTasks, passwordChanged: Boolean(password) })},
+            ${requestIp(request)}
+          )
+        `;
+
+        return user;
+      });
+
+      if (!updated) return response.status(404).json({ ok: false, error: "المستخدم غير موجود" });
+      return response.status(200).json({ ok: true, user: updated });
     }
 
     return response.status(405).json({ ok: false, error: "Method not allowed" });
