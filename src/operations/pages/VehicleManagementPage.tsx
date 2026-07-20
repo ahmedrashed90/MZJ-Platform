@@ -84,13 +84,46 @@ export function VehicleManagementPage() {
         </section>
 
         <section className="panel operations-import-panel">
-          <div className="operations-section-title"><FileArrowUp size={21} /><div><h2>استيراد من Excel</h2><p>المكان والحالة لا يتم تعديلهما للسيارات الموجودة حتى لا يتم تجاوز فلو الحركة.</p></div></div>
-          <div className="operations-import-modes">
-            <label><input type="radio" checked={importMode === "replace"} onChange={() => setImportMode("replace")} /><span><b>استبدال كامل</b><small>تعطيل السيارات غير الموجودة من المخزون النشط بدون حذف التاريخ.</small></span></label>
-            <label><input type="radio" checked={importMode === "add"} onChange={() => setImportMode("add")} /><span><b>إضافة فوق الحالي</b><small>إضافة السيارات الجديدة فقط بدون تعديل الموجود.</small></span></label>
-            <label><input type="radio" checked={importMode === "update"} onChange={() => setImportMode("update")} /><span><b>تحديث من الشيت</b><small>تحديث السيارات الموجودة فقط وعدم إضافة أرقام هياكل جديدة.</small></span></label>
+          <div className="operations-section-title operations-import-title">
+            <FileArrowUp size={21} />
+            <div>
+              <h2>استيراد من Excel</h2>
+              <p>اختر طريقة الاستيراد أولًا، ثم ارفع الملف. المكان والحالة للسيارات الموجودة لا يتغيران خارج فلو الحركة.</p>
+            </div>
           </div>
-          <div className="operations-import-actions"><button type="button" onClick={downloadTemplate}><FileArrowDown size={18} />تصدير قالب فاضي</button><button type="button" onClick={() => fileRef.current?.click()} disabled={saving || !meta.permissions.canImport}><FileArrowUp size={18} />اختيار الملف والاستيراد</button><input ref={fileRef} type="file" accept=".xlsx,.xls,.html,.csv,.txt" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); }} /></div>
+
+          <div className="operations-import-modes" role="radiogroup" aria-label="طريقة استيراد السيارات">
+            <label className={`operations-import-mode ${importMode === "replace" ? "selected" : ""}`}>
+              <input type="radio" checked={importMode === "replace"} onChange={() => setImportMode("replace")} />
+              <span className="operations-import-mode-copy">
+                <b>استبدال كامل</b>
+                <small>يُبقي السيارات الموجودة في الملف نشطة، ويعطّل غير الموجودة بدون حذف تاريخها.</small>
+              </span>
+            </label>
+            <label className={`operations-import-mode ${importMode === "add" ? "selected" : ""}`}>
+              <input type="radio" checked={importMode === "add"} onChange={() => setImportMode("add")} />
+              <span className="operations-import-mode-copy">
+                <b>إضافة فوق الحالي</b>
+                <small>يضيف أرقام الهياكل الجديدة فقط، ولا يغيّر بيانات السيارات الموجودة.</small>
+              </span>
+            </label>
+            <label className={`operations-import-mode ${importMode === "update" ? "selected" : ""}`}>
+              <input type="radio" checked={importMode === "update"} onChange={() => setImportMode("update")} />
+              <span className="operations-import-mode-copy">
+                <b>تحديث من الشيت</b>
+                <small>يحدّث بيانات السيارات الموجودة فقط، ولا يضيف أرقام هياكل جديدة.</small>
+              </span>
+            </label>
+          </div>
+
+          <div className="operations-import-actions">
+            <button type="button" onClick={downloadTemplate}><FileArrowDown size={18} />تصدير قالب فارغ</button>
+            <button type="button" className="primary" onClick={() => fileRef.current?.click()} disabled={saving || !meta.permissions.canImport}>
+              <FileArrowUp size={18} />{saving ? "جاري الاستيراد..." : "اختيار الملف والاستيراد"}
+            </button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls,.html,.csv,.txt" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void importFile(file); }} />
+          </div>
+
           {importReport ? <div className="operations-import-report"><div><span>المقروء</span><b>{importReport.total}</b></div><div><span>المضاف</span><b>{importReport.inserted}</b></div><div><span>المحدث</span><b>{importReport.updated}</b></div><div><span>المتجاهل</span><b>{importReport.skipped}</b></div><div><span>الفاشل</span><b>{importReport.failed}</b></div>{importReport.deactivated !== undefined ? <div><span>خرج من النشط</span><b>{importReport.deactivated}</b></div> : null}<details><summary>تفاصيل التقرير</summary><pre>{JSON.stringify(importReport, null, 2)}</pre></details></div> : null}
         </section>
       </div>

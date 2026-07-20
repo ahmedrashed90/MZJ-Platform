@@ -548,16 +548,27 @@ export function DashboardPage() {
           </div>
 
           <div className="operations-grid lower-row">
-            <OperationCard title="كارت الموافقة المالية والإدارية" badge={operations?.approvals.total ?? null} onView={() => open("كارت الموافقة المالية والإدارية", [
-              { label: "الإجمالي", value: operations?.approvals.total ?? null },
-              { label: "ناقص موافقة مالية", value: operations?.approvals.missingFinancial ?? null },
-              { label: "ناقص موافقة إدارية", value: operations?.approvals.missingAdministrative ?? null },
-              { label: "موافقات مكتملة", value: operations?.approvals.completed ?? null },
-            ])}>
+            <OperationCard
+              title="كارت الموافقة المالية والإدارية"
+              badge={operations?.approvals.total ?? null}
+              onView={() => setOperationsSelection({ mode: "approvals", filter: "", title: "كل سيارات الموافقات المالية والإدارية" })}
+            >
               <div className="operation-metrics-grid">
-                <OperationMetric label="ناقص موافقة مالية" value={operations?.approvals.missingFinancial ?? null} onOpen={() => open("ناقص موافقة مالية", [{ label: "ناقص موافقة مالية", value: operations?.approvals.missingFinancial ?? null }])} />
-                <OperationMetric label="ناقص موافقة إدارية" value={operations?.approvals.missingAdministrative ?? null} onOpen={() => open("ناقص موافقة إدارية", [{ label: "ناقص موافقة إدارية", value: operations?.approvals.missingAdministrative ?? null }])} />
-                <OperationMetric label="موافقات مكتملة" value={operations?.approvals.completed ?? null} onOpen={() => open("موافقات مكتملة", [{ label: "موافقات مكتملة", value: operations?.approvals.completed ?? null }])} />
+                <OperationMetric
+                  label="ناقص موافقة مالية"
+                  value={operations?.approvals.missingFinancial ?? null}
+                  onOpen={() => setOperationsSelection({ mode: "approvals", filter: "missing_financial", title: "السيارات الناقصة موافقة مالية" })}
+                />
+                <OperationMetric
+                  label="ناقص موافقة إدارية"
+                  value={operations?.approvals.missingAdministrative ?? null}
+                  onOpen={() => setOperationsSelection({ mode: "approvals", filter: "missing_administrative", title: "السيارات الناقصة موافقة إدارية" })}
+                />
+                <OperationMetric
+                  label="موافقات مكتملة"
+                  value={operations?.approvals.completed ?? null}
+                  onOpen={() => setOperationsSelection({ mode: "approvals", filter: "completed", title: "السيارات مكتملة الموافقات" })}
+                />
               </div>
             </OperationCard>
 
