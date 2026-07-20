@@ -75,19 +75,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
       },
       phone,
       source: "sales.html",
-      status: "pending",
+      status: "queued",
       to: phone,
     });
 
     await sql`
       insert into tracking.sms_messages(order_id,vehicle_id,stage_id,phone,message,firestore_document_id,status,queued_by,queued_by_name)
-      values (${orderId}::uuid,${vehicleId}::uuid,${stageId}::uuid,${phone},${message},${queued.documentId},'pending',${user.id}::uuid,${user.fullName})
+      values (${orderId}::uuid,${vehicleId}::uuid,${stageId}::uuid,${phone},${message},${queued.documentId},'queued',${user.id}::uuid,${user.fullName})
     `;
     await sql`
       insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
       values (${user.id}::uuid,'tracking','sms_queued','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, firestoreDocumentId: queued.documentId })})
     `;
-    return response.status(200).json({ ok: true, status: "pending", documentId: queued.documentId, message: "تم إرسال الرسالة إلى SMS+ وجارٍ إرسالها من التطبيق" });
+    return response.status(200).json({ ok: true, status: "queued", documentId: queued.documentId, message: "تم إرسال الرسالة إلى SMS+ وجارٍ إرسالها من التطبيق" });
   } catch (error) {
     console.error("Firebase SMS queue failed", error);
     return response.status(500).json({ ok: false, error: error instanceof Error ? error.message : "تعذر إرسال الرسالة إلى SMS+" });

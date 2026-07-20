@@ -6,7 +6,7 @@ const checks = [
   ["server/_tracking-schema.ts", "tracking.vehicle_stages"],
   ["server/_tracking-schema.ts", "tracking.deleted_order_blocks"],
   ["server/_firebase-sms.ts", "sms_outbox"],
-  ["server/tracking/sms.ts", 'status: "pending"'],
+  ["server/tracking/sms.ts", 'status: "queued"'],
   ["server/tracking/sms.ts", 'source: "sales.html"'],
   ["server/integrations/tracking-orders.ts", "google-sheets-next-erp"],
   ["src/App.tsx", 'path="/tracking"'],

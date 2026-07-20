@@ -106,13 +106,14 @@ create table if not exists tracking.sms_messages (
   phone text not null,
   message text not null,
   firestore_document_id text,
-  status text not null default 'pending',
+  status text not null default 'queued',
   queued_by uuid references core.users(id),
   queued_by_name text,
   queued_at timestamptz not null default now(),
   sent_at timestamptz,
   error_message text
 );
+alter table tracking.sms_messages alter column status set default 'queued';
 create index if not exists tracking_sms_messages_order_idx on tracking.sms_messages(order_id, queued_at desc);
 
 create table if not exists tracking.system_migrations (
