@@ -35,7 +35,11 @@ function fieldMap(source: JsonRecord) {
 
 function hasUsefulValue(value: unknown) {
   if (value === null || value === undefined) return false;
-  if (typeof value === "string") return value.trim() !== "";
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return false;
+    return !["none", "null", "undefined", "nan"].includes(text.toLowerCase());
+  }
   return true;
 }
 
@@ -232,14 +236,20 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedSalesOrder
   vehicleItems.forEach((rawItem, index) => {
     const itemNo = pickText(rawItem, ["item_no", "ItemNo", "idx", "row_no", "no", "name", "item_code"]) || String(index + 1);
     const itemType = pickText(rawItem, ["item_type", "ItemType", "vehicle_type", "type", "item_name", "item_code"]);
-    const itemCategory = pickText(rawItem, ["item_category", "ItemCategory", "vehicle_category", "category", "item_group"]);
+    const itemCategory = pickText(rawItem, [
+      "item_category", "ItemCategory", "vehicle_category", "category", "class", "vehicle_class", "item_group",
+    ]);
     const itemModel = pickText(rawItem, ["item_model", "ItemModel", "vehicle_model", "model", "model_year", "year"]);
     const vin = pickText(rawItem, [
       "vin", "VIN", "vehicle_identification_number", "serial_no", "serial_number", "chassis_no", "chassis_number", "vehicle_vin",
     ]);
-    const interiorColor = pickText(rawItem, ["interior_color", "InteriorColor", "inside_color", "int_color", "vehicle_interior_color"]);
-    const exteriorColor = pickText(rawItem, ["exterior_color", "ExteriorColor", "outside_color", "ext_color", "color", "vehicle_exterior_color"]);
-    const dealer = pickText(rawItem, ["dealer", "Dealer", "dealer_name", "supplier", "supplier_name"]);
+    const interiorColor = pickText(rawItem, [
+      "interior_color", "InteriorColor", "internal_color", "custom_internal_color", "inside_color", "int_color", "vehicle_interior_color",
+    ]);
+    const exteriorColor = pickText(rawItem, [
+      "exterior_color", "ExteriorColor", "external_color", "custom_external_color", "outside_color", "ext_color", "color", "vehicle_exterior_color",
+    ]);
+    const dealer = pickText(rawItem, ["dealer", "Dealer", "dealer_name", "agent", "agent_name", "supplier", "supplier_name"]);
     const qty = numberValue(pick(rawItem, ["qty", "Qty", "quantity", "stock_qty"])) || 1;
     const unitPrice = numberValue(pick(rawItem, ["unit_price", "UnitPrice", "net_rate", "rate", "base_net_rate", "base_rate", "price_list_rate"]));
     const itemValue = numberValue(pick(rawItem, ["item_value", "ItemValue", "net_amount", "amount", "base_net_amount", "base_amount", "value"])) || (qty * unitPrice);
