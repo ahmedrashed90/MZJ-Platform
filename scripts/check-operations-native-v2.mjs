@@ -85,6 +85,9 @@ if (!transferPage.includes('"stage_completed"') || !transferPage.includes("تف�
 if (!operationsApi.includes('insert into operations.movement_batches(batch_no')) {
   throw new Error("Operations V2 check failed: movement batches must write the legacy required batch_no value");
 }
+if (!operationsApi.includes("where v.id=${vehicleId}::uuid and v.is_deleted=false for update of v")) {
+  throw new Error("Operations V2 check failed: approval vehicle locking must target vehicles only when locations are left joined");
+}
 
 const trackingDelete = fs.readFileSync("server/tracking/delete.ts", "utf8");
 if (trackingDelete.includes("deleted_order_blocks")) {

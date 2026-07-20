@@ -758,7 +758,7 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
     const [v] = await tx<any[]>`
       select v.*,v.id::text,l.branch_code,l.code as location_code
       from operations.vehicles v left join operations.locations l on l.id=v.location_id
-      where v.id=${vehicleId}::uuid and v.is_deleted=false for update
+      where v.id=${vehicleId}::uuid and v.is_deleted=false for update of v
     `;
     if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
     assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية تنفيذ موافقة على سيارة في هذا الفرع");
