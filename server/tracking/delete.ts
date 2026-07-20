@@ -69,22 +69,26 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       for (const vehicle of vehicles) {
         try {
-          await tx`
-            insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
-            values ('tracking.request.deleted','tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${tx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
-          `;
+          await tx.savepoint(async (eventTx) => {
+            await eventTx`
+              insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
+              values ('tracking.request.deleted','tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${eventTx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
+            `;
+          });
         } catch (outboxError) {
-          console.error('[tracking/delete] event_outbox insert failed', outboxError);
+          console.error('Tracking delete outbox failed', { traceId, vin: vehicle.vin, outboxError });
         }
       }
       await tx`delete from tracking.orders where id=${orderId}::uuid`;
       try {
-        await tx`
-          insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
-          values (${user.id}::uuid,'tracking','order_deleted','tracking_order',${order.sales_order_no},${tx.json(snapshot)},${tx.json({ reason, requestId: traceId, sourceIdentity: order.source_identity })})
-        `;
-      } catch (logError) {
-        console.error('[tracking/delete] audit log insert failed', logError);
+        await tx.savepoint(async (auditTx) => {
+          await auditTx`
+            insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+            values (${user.id}::uuid,'tracking','order_deleted','tracking_order',${order.sales_order_no},${auditTx.json(snapshot)},${auditTx.json({ reason, requestId: traceId, sourceIdentity: order.source_identity })})
+          `;
+        });
+      } catch (auditError) {
+        console.error('Tracking delete audit failed', { traceId, auditError });
       }
       return { vins: vehicles.map((vehicle) => vehicle.vin).filter(Boolean), vehiclesCount: vehicles.length };
     });

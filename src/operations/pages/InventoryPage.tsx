@@ -47,7 +47,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
   }
 
   const title = archived ? "أرشيف السيارات" : showAll ? "جميع السيارات" : "مخزون السيارات";
-  const description = archived ? "السيارات المؤرشفة مع الحفاظ على تاريخها الكامل." : showAll ? "بحث وفلترة وعرض جميع بيانات السيارات المسجلة في PostgreSQL." : "عرض وفلاتر المخزون النشط الجاهز للعمل.";
+  const description = archived ? "السيارات المؤرشفة مع الحفاظ على تاريخها الكامل." : showAll ? "بحث وفلترة وعرض جميع السيارات المسجلة في PostgreSQL." : "بحث وفلترة وعرض المخزون النشط الجاهز للعمل.";
   return (
     <div className="module-page operations-page">
       <header className="module-page-head"><div><h1>{title}</h1><p>{description}</p></div><div className="operations-header-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span><button type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />تحديث</button>{meta.permissions.canExport ? <button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button> : null}</div></header>

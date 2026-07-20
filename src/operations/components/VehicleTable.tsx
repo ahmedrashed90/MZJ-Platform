@@ -58,15 +58,21 @@ export function VehicleTable({ rows, onOpen, emptyText = "لا توجد سيار
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = widths[column.key] || column.width;
+    let liveWidth = startWidth;
+    document.body.classList.add("operations-column-resizing");
     const move = (moveEvent: PointerEvent) => {
-      const nextWidth = Math.min(column.max, Math.max(column.min, startWidth + (startX - moveEvent.clientX)));
-      setWidths((current) => ({ ...current, [column.key]: nextWidth }));
+      liveWidth = Math.min(column.max, Math.max(column.min, startWidth + (startX - moveEvent.clientX)));
+      setWidths((current) => ({ ...current, [column.key]: liveWidth }));
     };
-    const end = (endEvent: PointerEvent) => {
+    const end = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", end);
-      const nextWidth = Math.min(column.max, Math.max(column.min, startWidth + (startX - endEvent.clientX)));
-      save({ ...widths, [column.key]: nextWidth });
+      document.body.classList.remove("operations-column-resizing");
+      setWidths((current) => {
+        const next = { ...current, [column.key]: liveWidth };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
     };
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", end, { once: true });
@@ -88,7 +94,7 @@ export function VehicleTable({ rows, onOpen, emptyText = "لا توجد سيار
       <div className="operations-table-scroll">
         <table className="operations-table" style={{ width: `${Math.max(1250, tableWidth)}px`, minWidth: "100%" }}>
           <colgroup>{columns.map((column) => <col key={column.key} style={{ width: `${widths[column.key] || column.width}px` }} />)}</colgroup>
-          <thead><tr>{columns.map((column) => <th key={column.key} style={{ width: widths[column.key] || column.width }}><span>{column.label}</span><span className="operations-column-resizer" role="separator" aria-label={`تغيير عرض عمود ${column.label}`} onPointerDown={(event) => beginResize(event, column)} onDoubleClick={() => autoFit(column)} /></th>)}</tr></thead>
+          <thead><tr>{columns.map((column) => <th key={column.key} style={{ width: widths[column.key] || column.width }}><span>{column.label}</span><span className="operations-column-resizer" role="separator" aria-orientation="vertical" aria-label={`اسحب لتغيير عرض عمود ${column.label}`} title="اسحب يمينًا أو يسارًا لتغيير العرض — ضغطتان للضبط التلقائي" onPointerDown={(event) => beginResize(event, column)} onDoubleClick={() => autoFit(column)} /></th>)}</tr></thead>
           <tbody>
             {!rows.length ? <tr><td colSpan={columns.length} className="table-empty">{emptyText}</td></tr> : rows.map((row) => (
               <tr key={row.id}>{columns.map((column) => <td key={column.key}>{column.render(row, onOpen)}</td>)}</tr>

@@ -59,6 +59,24 @@ if (!operationsApi.includes("tx.savepoint")) {
   throw new Error("Operations V2 check failed: import row failures must be isolated with savepoints");
 }
 
+
+const operationsSchema = fs.readFileSync("server/_operations-schema.ts", "utf8");
+for (const requiredSql of [
+  "alter table operations.event_outbox add column if not exists event_type",
+  "alter table operations.movements add column if not exists vehicle_id",
+  "alter table operations.transfer_requests add column if not exists request_no",
+  "alter table operations.transfer_request_vehicles add column if not exists transfer_request_id",
+]) {
+  if (!operationsSchema.includes(requiredSql)) throw new Error(`Operations V2 check failed: schema compatibility missing ${requiredSql}`);
+}
+if (!operationsApi.includes("Operations movement outbox failed") || !operationsApi.includes("Operations transfer create event failed") || !operationsApi.includes("tx.savepoint")) {
+  throw new Error("Operations V2 check failed: optional movement/transfer events must not abort the core transaction");
+}
+const vehicleTable = fs.readFileSync("src/operations/components/VehicleTable.tsx", "utf8");
+if (!vehicleTable.includes("operations-column-resizer") || !vehicleTable.includes("اسحب يمينًا أو يسارًا")) {
+  throw new Error("Operations V2 check failed: inventory table must expose visible resizable columns");
+}
+
 const trackingDelete = fs.readFileSync("server/tracking/delete.ts", "utf8");
 if (trackingDelete.includes("deleted_order_blocks")) {
   throw new Error("Operations V2 check failed: tracking deletion must not create a permanent order-number block");

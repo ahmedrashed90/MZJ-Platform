@@ -69,7 +69,16 @@ function assertBranchAccess(
 async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const [locations, statuses, checkItems] = await Promise.all([
     sql<any[]>`select id::text,code,name,branch_code,is_agency,sort_order from operations.locations where is_active=true order by sort_order,name`,
-    sql<any[]>`select code,name,sort_order,is_actual_stock,is_delivery_status,is_terminal from operations.vehicle_statuses where is_active=true order by sort_order`,
+    sql<any[]>`
+      select code,name,sort_order,is_actual_stock,is_delivery_status,is_terminal
+      from (
+        select distinct on (lower(trim(name))) code,name,sort_order,is_actual_stock,is_delivery_status,is_terminal
+        from operations.vehicle_statuses
+        where is_active=true and nullif(trim(name),'') is not null
+        order by lower(trim(name)),case when code in ('available_for_sale','reserved','has_notes','under_delivery','delivered') then 0 else 1 end,sort_order,code
+      ) deduped
+      order by sort_order,name
+    `,
     sql<any[]>`select code,name,sort_order from operations.check_item_definitions where is_active=true order by sort_order`,
   ]);
   return {
@@ -573,7 +582,13 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
           await tx`insert into operations.vehicle_check_history(vehicle_id,item_code,old_status,new_status,note,movement_id,changed_by,changed_by_name) values (${vehicleId}::uuid,${itemCode},${old?.status||null},${clean(check.status)||'unknown'},${clean(check.note)||null},${movement.id}::uuid,${who.id}::uuid,${who.name})`;
         }
       }
-      await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values ('operations.vehicle.moved','vehicle',${vehicleId},${vehicleId}::uuid,${v.vin},${who.id}::uuid,${who.name},${destination.branch_code},'تم تحريك سيارة',${`${v.vin} إلى ${destination.name}`},${tx.json({ movementId: movement.id, batchId: batch.id })})`;
+      try {
+        await tx.savepoint(async (eventTx) => {
+          await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values ('operations.vehicle.moved','vehicle',${vehicleId},${vehicleId}::uuid,${v.vin},${who.id}::uuid,${who.name},${destination.branch_code},'تم تحريك سيارة',${`${v.vin} إلى ${destination.name}`},${eventTx.json({ movementId: movement.id, batchId: batch.id })})`;
+        });
+      } catch (outboxError) {
+        console.error('Operations movement outbox failed', { vehicleId, outboxError });
+      }
       moved.push({ vehicleId, vin: v.vin, movementId: movement.id });
     }
     return { ok: true, batchId: batch.id, moved, message: `تم تنفيذ الحركة على ${moved.length} سيارة` };
@@ -609,8 +624,20 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
       values (${requestNo},'operations','transfer','transfer',${source.location_id},${destinationLocationId}::uuid,'request_received',${who.id}::uuid,${who.name},${who.role},${who.branch},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null}) returning *,id::text
     `;
     for (const v of cars) await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status) values (${request.id}::uuid,${v.id}::uuid,${v.location_id},${v.status_code})`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values (${request.id}::uuid,'request_received','created',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json({ requestNo, vehicleIds })})`;
-    await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values ('operations.transfer_request.created','transfer_request',${request.id},${who.id}::uuid,${who.name},${request.source_branch_code},${request.destination_branch_code},'طلب نقل جديد',${requestNo},${tx.json({ vehicleIds })})`;
+    try {
+      await tx.savepoint(async (eventTx) => {
+        await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values (${request.id}::uuid,'request_received','created',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json({ requestNo, vehicleIds })})`;
+      });
+    } catch (eventError) {
+      console.error('Operations transfer create event failed', { requestId: request.id, eventError });
+    }
+    try {
+      await tx.savepoint(async (eventTx) => {
+        await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values ('operations.transfer_request.created','transfer_request',${request.id},${who.id}::uuid,${who.name},${request.source_branch_code},${request.destination_branch_code},'طلب نقل جديد',${requestNo},${eventTx.json({ vehicleIds })})`;
+      });
+    } catch (outboxError) {
+      console.error('Operations transfer create outbox failed', { requestId: request.id, outboxError });
+    }
     return { ok: true, request, message: "تم إنشاء طلب النقل" };
   });
 }
@@ -633,14 +660,26 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
       if (r.status !== "request_received" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
       await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${who.id}::uuid,updated_at=now() where id=${id}::uuid`;
-      await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'deleted',${reason||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json({ request:r,items })})`;
+      try {
+        await tx.savepoint(async (eventTx) => {
+          await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'deleted',${reason||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json({ request:r,items })})`;
+        });
+      } catch (eventError) {
+        console.error('Operations transfer delete event failed', { requestId: id, eventError });
+      }
       return { ok: true, message: "تم حذف طلب النقل قبل بدء التنفيذ" };
     }
     if (action === "cancel") {
       if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
       if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء طلب النقل");
       await tx`update operations.transfer_requests set cancelled_at=now(),cancelled_by=${who.id}::uuid,cancellation_reason=${reason},updated_at=now(),version=version+1 where id=${id}::uuid`;
-      await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'cancelled',${reason},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json(r)})`;
+      try {
+        await tx.savepoint(async (eventTx) => {
+          await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'cancelled',${reason},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json(r)})`;
+        });
+      } catch (eventError) {
+        console.error('Operations transfer cancel event failed', { requestId: id, eventError });
+      }
       return { ok: true, message: "تم إلغاء طلب النقل مع الحفاظ على السجل" };
     }
     const currentIndex = transferOrder.indexOf(r.status);
@@ -662,8 +701,20 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       }
     }
     await tx`update operations.transfer_requests set status=${next},completed_at=case when ${next}='completed' then now() else completed_at end,updated_at=now(),version=version+1 where id=${id}::uuid`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data,after_data) values (${id}::uuid,${next},'stage_completed',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json(r)},${tx.json({ status: next })})`;
-    await tx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.transfer_request.${next}`},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},'تحديث طلب نقل',${r.request_no},${tx.json({ status: next })})`;
+    try {
+      await tx.savepoint(async (eventTx) => {
+        await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data,after_data) values (${id}::uuid,${next},'stage_completed',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json(r)},${eventTx.json({ status: next })})`;
+      });
+    } catch (eventError) {
+      console.error('Operations transfer stage event failed', { requestId: id, next, eventError });
+    }
+    try {
+      await tx.savepoint(async (eventTx) => {
+        await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.transfer_request.${next}`},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},'تحديث طلب نقل',${r.request_no},${eventTx.json({ status: next })})`;
+      });
+    } catch (outboxError) {
+      console.error('Operations transfer stage outbox failed', { requestId: id, next, outboxError });
+    }
     return { ok: true, message: next === "completed" ? "تم إنهاء طلب النقل" : "تم تحديث مرحلة طلب النقل" };
   });
 }

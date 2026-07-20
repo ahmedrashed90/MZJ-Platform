@@ -233,7 +233,24 @@ create table if not exists operations.movement_batches (
   performed_by_branch text,
   created_at timestamptz not null default now()
 );
+alter table operations.movement_batches add column if not exists destination_location_id uuid references operations.locations(id);
+alter table operations.movement_batches add column if not exists new_status text;
+alter table operations.movement_batches add column if not exists general_note text;
+alter table operations.movement_batches add column if not exists requested_count integer not null default 0;
+alter table operations.movement_batches add column if not exists performed_by uuid references core.users(id);
+alter table operations.movement_batches add column if not exists performed_by_name text;
+alter table operations.movement_batches add column if not exists performed_by_role text;
+alter table operations.movement_batches add column if not exists performed_by_branch text;
+alter table operations.movement_batches add column if not exists created_at timestamptz not null default now();
 
+alter table operations.movements add column if not exists vehicle_id uuid references operations.vehicles(id);
+alter table operations.movements add column if not exists from_location_id uuid references operations.locations(id);
+alter table operations.movements add column if not exists to_location_id uuid references operations.locations(id);
+alter table operations.movements add column if not exists old_status text;
+alter table operations.movements add column if not exists new_status text;
+alter table operations.movements add column if not exists note text;
+alter table operations.movements add column if not exists performed_by uuid references core.users(id);
+alter table operations.movements add column if not exists created_at timestamptz not null default now();
 alter table operations.movements add column if not exists batch_id uuid references operations.movement_batches(id);
 alter table operations.movements add column if not exists transfer_request_id uuid references operations.transfer_requests(id);
 alter table operations.movements add column if not exists movement_type text not null default 'direct';
@@ -247,6 +264,15 @@ alter table operations.movements add column if not exists after_data jsonb;
 create index if not exists operations_movements_vehicle_time_idx on operations.movements(vehicle_id,created_at desc);
 create index if not exists operations_movements_batch_idx on operations.movements(batch_id);
 
+alter table operations.transfer_requests add column if not exists request_no text;
+alter table operations.transfer_requests add column if not exists department_code text;
+alter table operations.transfer_requests add column if not exists transfer_type text;
+alter table operations.transfer_requests add column if not exists source_location_id uuid references operations.locations(id);
+alter table operations.transfer_requests add column if not exists destination_location_id uuid references operations.locations(id);
+alter table operations.transfer_requests add column if not exists status text not null default 'request_received';
+alter table operations.transfer_requests add column if not exists requested_by uuid references core.users(id);
+alter table operations.transfer_requests add column if not exists requested_at timestamptz not null default now();
+alter table operations.transfer_requests add column if not exists completed_at timestamptz;
 alter table operations.transfer_requests add column if not exists request_kind text not null default 'transfer';
 alter table operations.transfer_requests add column if not exists source_branch_code text;
 alter table operations.transfer_requests add column if not exists destination_branch_code text;
@@ -264,6 +290,8 @@ alter table operations.transfer_requests add column if not exists version intege
 alter table operations.transfer_requests add column if not exists updated_at timestamptz not null default now();
 create index if not exists operations_transfer_requests_status_idx on operations.transfer_requests(request_kind,status,is_deleted,requested_at desc);
 
+alter table operations.transfer_request_vehicles add column if not exists transfer_request_id uuid references operations.transfer_requests(id) on delete cascade;
+alter table operations.transfer_request_vehicles add column if not exists vehicle_id uuid references operations.vehicles(id) on delete cascade;
 alter table operations.transfer_request_vehicles add column if not exists source_location_id uuid references operations.locations(id);
 alter table operations.transfer_request_vehicles add column if not exists source_status text;
 alter table operations.transfer_request_vehicles add column if not exists created_at timestamptz not null default now();
@@ -298,6 +326,20 @@ alter table operations.transfer_request_events add column if not exists after_da
 alter table operations.transfer_request_events add column if not exists is_override boolean not null default false;
 alter table operations.transfer_request_events add column if not exists override_reason text;
 alter table operations.transfer_request_events add column if not exists created_at timestamptz not null default now();
+-- Legacy versions used other request-link columns and sometimes marked them NOT NULL.
+-- They must not block new native events after transfer_request_id is added.
+do $$
+declare legacy_col text;
+begin
+  foreach legacy_col in array array['request_id','transfer_id'] loop
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema='operations' and table_name='transfer_request_events' and column_name=legacy_col
+    ) then
+      execute format('alter table operations.transfer_request_events alter column %I drop not null', legacy_col);
+    end if;
+  end loop;
+end $$;
 -- Preserve legacy history when the previous table used request_id or transfer_id.
 update operations.transfer_request_events e
 set transfer_request_id = coalesce(to_jsonb(e)->>'request_id',to_jsonb(e)->>'transfer_id')::uuid
@@ -391,6 +433,29 @@ create table if not exists operations.event_outbox (
   created_at timestamptz not null default now(),
   processed_at timestamptz
 );
+-- Compatibility with any partially-created or legacy outbox table. The three
+-- critical flows (movement, transfer requests, tracking delete) must never fail
+-- because an optional notification table is missing a newer column.
+alter table operations.event_outbox add column if not exists event_type text;
+alter table operations.event_outbox add column if not exists system_code text not null default 'operations';
+alter table operations.event_outbox add column if not exists entity_type text;
+alter table operations.event_outbox add column if not exists entity_id text;
+alter table operations.event_outbox add column if not exists vehicle_id uuid;
+alter table operations.event_outbox add column if not exists vin text;
+alter table operations.event_outbox add column if not exists actor_id uuid;
+alter table operations.event_outbox add column if not exists actor_name text;
+alter table operations.event_outbox add column if not exists source_branch text;
+alter table operations.event_outbox add column if not exists destination_branch text;
+alter table operations.event_outbox add column if not exists title text;
+alter table operations.event_outbox add column if not exists description text;
+alter table operations.event_outbox add column if not exists internal_url text;
+alter table operations.event_outbox add column if not exists metadata jsonb not null default '{}'::jsonb;
+alter table operations.event_outbox add column if not exists status text not null default 'pending';
+alter table operations.event_outbox add column if not exists attempts integer not null default 0;
+alter table operations.event_outbox add column if not exists created_at timestamptz not null default now();
+alter table operations.event_outbox add column if not exists processed_at timestamptz;
+update operations.event_outbox set event_type=coalesce(nullif(event_type,''),'legacy.event') where event_type is null or event_type='';
+alter table operations.event_outbox alter column event_type set not null;
 create index if not exists operations_event_outbox_status_idx on operations.event_outbox(status,created_at);
 
 alter table tracking.orders add column if not exists source_identity text;
