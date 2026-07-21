@@ -5,6 +5,7 @@ export type MovementHistoryRow = {
   id: string;
   batch_id?: string | null;
   transfer_request_id?: string | null;
+  request_no?: string | null;
   created_at: string;
   movement_type: string;
   old_status?: string | null;
@@ -21,6 +22,25 @@ export type MovementHistoryRow = {
   vin: string;
   car_name?: string | null;
   statement?: string | null;
+  agent_name?: string | null;
+  interior_color?: string | null;
+  exterior_color?: string | null;
+  model_year?: string | null;
+  plate_no?: string | null;
+  batch_no?: string | null;
+  vehicle_notes?: string | null;
+  sensor_status?: string | null;
+  camera_status?: string | null;
+  ac_status?: string | null;
+  radio_status?: string | null;
+  screen_status?: string | null;
+  remote_status?: string | null;
+  mats_status?: string | null;
+  extinguisher_status?: string | null;
+  safety_bag_status?: string | null;
+  spare_tire_status?: string | null;
+  financial_approved?: boolean;
+  administrative_approved?: boolean;
   from_location_code?: string | null;
   from_location_name?: string | null;
   to_location_code?: string | null;
@@ -41,7 +61,7 @@ const columns: ResizableOperationsColumn<MovementHistoryRow>[] = [
   { key: "note", label: "الملاحظات", width: 220, min: 140, max: 480, value: (row) => row.note, render: (row) => <span title={row.note || ""}>{row.note || "—"}</span> },
   { key: "stateNote", label: "ملاحظات الحالة", width: 200, min: 140, max: 440, value: (row) => row.state_note, render: (row) => <span title={row.state_note || ""}>{row.state_note || "—"}</span> },
   { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 230, min: 160, max: 500, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
-  { key: "request", label: "رقم الطلب", width: 155, min: 115, max: 260, value: (row) => row.transfer_request_id, render: (row) => row.transfer_request_id || "—" },
+  { key: "request", label: "رقم الطلب", width: 155, min: 115, max: 260, value: (row) => row.request_no || row.transfer_request_id, render: (row) => row.request_no || row.transfer_request_id || "—" },
   { key: "batch", label: "Batch ID", width: 155, min: 115, max: 260, value: (row) => row.batch_id, render: (row) => row.batch_id || "—" },
 ];
 

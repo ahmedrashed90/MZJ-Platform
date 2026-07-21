@@ -3377,3 +3377,82 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .crm-report-section-metrics span { flex:1; min-width:0; }
   .crm-report-customers-toolbar { align-items:stretch; flex-direction:column; }
 }
+
+/* Dashboard and operations refinements v1.16.1 */
+.details-drawer:not(.tracking-orders-drawer) { width: min(720px, 94vw); }
+.drawer-customer-row { align-items: start; }
+.drawer-customer-row > div:first-child { min-width: 0; }
+.drawer-customer-row strong,
+.drawer-customer-row span,
+.drawer-customer-row small { overflow-wrap: anywhere; white-space: normal; line-height: 1.65; }
+.drawer-customer-row small { overflow: visible; text-overflow: clip; }
+.drawer-row { gap: 16px; }
+.drawer-row span:first-child { min-width: 0; overflow-wrap: anywhere; }
+
+.dashboard-operations-modal { width: min(1480px, calc(100vw - 30px)); }
+.dashboard-operations-modal .mzj-modal-body { min-width: 0; }
+.dashboard-operations-modal .operations-table-scroll { max-height: calc(100vh - 250px); border: 1px solid var(--line); border-radius: 12px; }
+.dashboard-drilldown-table { width: max(100%, 2280px); }
+.dashboard-drilldown-table th,
+.dashboard-drilldown-table td,
+.dashboard-shortages-table th,
+.dashboard-shortages-table td { white-space: normal; line-height: 1.55; vertical-align: top; overflow-wrap: anywhere; }
+.dashboard-drilldown-table th,
+.dashboard-shortages-table th { min-width: 110px; }
+.dashboard-drilldown-table th:first-child,
+.dashboard-drilldown-table td:first-child { min-width: 150px; white-space: nowrap; }
+.dashboard-wrap-cell { min-width: 220px; }
+.dashboard-shortages-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 13px; padding: 13px 15px; background: #fcfaf9; }
+.dashboard-shortages-summary > div { display: grid; gap: 4px; }
+.dashboard-shortages-summary span { color: var(--muted); font-size: 12px; line-height: 1.65; }
+.dashboard-shortages-summary > b { min-width: 46px; height: 38px; display: grid; place-items: center; border-radius: 999px; background: var(--brand); color: #fff; }
+.dashboard-shortages-table { width: max(100%, 1620px); }
+.dashboard-shortages-table th:nth-child(2),
+.dashboard-shortages-table td:nth-child(2),
+.dashboard-shortages-table th:nth-child(3),
+.dashboard-shortages-table td:nth-child(3) { min-width: 185px; }
+.operations-quantity-badge { display: inline-grid; place-items: center; min-width: 34px; height: 28px; padding: 0 8px; border-radius: 999px; background: #eaf6ed; color: #25723f; }
+.dashboard-request-detail-modal { width: min(1240px, calc(100vw - 30px)); }
+.dashboard-request-detail-modal .operations-request-vehicle-list article { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 14px; }
+.dashboard-request-detail-modal .operations-request-vehicle-list article > div { min-width: 0; display: grid; gap: 4px; padding: 10px; border-radius: 9px; background: #faf7f5; }
+.dashboard-request-detail-modal .operations-request-vehicle-list strong { overflow-wrap: anywhere; }
+
+.operations-tracking-open { width: 100%; min-height: 54px; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 5px 8px; border: 1px solid #d9c0b6; border-radius: 11px; background: linear-gradient(180deg,#fff,#fff8f4); color: var(--brand); padding: 7px 9px; cursor: pointer; text-align: right; font: inherit; }
+.operations-tracking-open:hover { border-color: var(--brand-2); box-shadow: 0 4px 13px rgba(96,52,39,.10); }
+.operations-tracking-open > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 900; }
+.operations-tracking-open > b { font-size: 11px; }
+.operations-tracking-open > i { grid-column: 1 / -1; height: 5px; border-radius: 999px; overflow: hidden; background: #eaded8; }
+.operations-tracking-open > i > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#b75637,#7e3828); }
+
+.operations-detail-modal { width: min(1320px, calc(100vw - 30px)); }
+.operations-detail-tabs { justify-content: center; flex-wrap: wrap; overflow: visible; gap: 9px; padding: 4px 0 13px; }
+.operations-detail-tabs button { min-width: 112px; text-align: center; box-shadow: 0 2px 8px rgba(62,38,30,.04); }
+.operations-detail-tabs button.active { box-shadow: 0 7px 18px rgba(90,51,39,.18); }
+.operations-detail-grid > div { background: linear-gradient(180deg,#fff,#fcfaf8); border-color: #e4d8d2; }
+.operations-detail-grid small { font-size: 12px; font-weight: 800; }
+.operations-detail-grid strong { font-size: 15px; line-height: 1.6; }
+.operations-detail-tracking-list { display: grid; gap: 10px; }
+.operations-tracking-detail-button { width: 100%; display: grid; grid-template-columns: 36px minmax(0,1fr); gap: 11px; align-items: center; border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 12px 14px; color: inherit; text-align: right; cursor: pointer; }
+.operations-tracking-detail-button:hover { border-color: var(--brand-2); background: #fffaf7; }
+.operations-tracking-detail-button > svg { color: var(--brand-2); }
+.operations-tracking-detail-button > div { min-width: 0; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 10px; align-items: center; }
+.operations-tracking-detail-button strong { font-size: 14px; }
+.operations-tracking-detail-button span { color: var(--muted); font-size: 12px; }
+.operations-tracking-detail-button i { grid-column: 1 / -1; height: 7px; border-radius: 999px; overflow: hidden; background: #eee4df; }
+.operations-tracking-detail-button i span { display: block; height: 100%; background: var(--brand); border-radius: inherit; }
+.operations-tracking-detail-button small { grid-column: 1 / -1; color: var(--muted); }
+
+.operations-history-page .operations-apply-filters-button { min-height: 46px; border-color: var(--brand)!important; background: linear-gradient(135deg,#7c392b,#9a4d39)!important; color: #fff; padding-inline: 20px; box-shadow: 0 8px 18px rgba(104,53,40,.18); }
+.operations-history-page .operations-apply-filters-button:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(104,53,40,.23); }
+.operations-header-actions .operations-pdf-button { background: #8b342f; border-color: #8b342f; color: #fff; }
+.operations-header-actions .operations-pdf-button:hover { background: #732925; border-color: #732925; }
+
+@media (max-width: 900px) {
+  .dashboard-request-detail-modal .operations-request-vehicle-list article { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .operations-detail-tabs { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
+  .operations-detail-tabs button { min-width: auto; }
+}
+@media (max-width: 640px) {
+  .details-drawer:not(.tracking-orders-drawer) { width: 100vw; }
+  .dashboard-request-detail-modal .operations-request-vehicle-list article { grid-template-columns: 1fr; }
+}

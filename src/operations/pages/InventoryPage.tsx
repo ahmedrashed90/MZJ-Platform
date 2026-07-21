@@ -14,6 +14,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [location, setLocation] = useState("");
   const [status, setStatus] = useState("");
   const [model, setModel] = useState("");
@@ -23,14 +24,21 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
   const pageSize = 50;
   const showAll = all && !archived;
 
-  const params = useMemo(() => ({ resource: "vehicles", search, location, status, model, archived: archived ? 1 : undefined, all: showAll ? 1 : undefined, page, pageSize }), [search, location, status, model, archived, showAll, page]);
+  const params = useMemo(() => ({ resource: "vehicles", search: appliedSearch, location, status, model, archived: archived ? 1 : undefined, all: showAll ? 1 : undefined, page, pageSize }), [appliedSearch, location, status, model, archived, showAll, page]);
   async function load() {
     setLoading(true); setError("");
     try { const payload = await operationsFetch<ListResponse>(`/api/operations${queryString(params)}`); setRows(payload.rows); setTotal(payload.total); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل المخزون"); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, [page, location, status, model, archived, showAll]);
+  useEffect(() => { void load(); }, [page, appliedSearch, location, status, model, archived, showAll]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPage(1);
+      setAppliedSearch(search.trim());
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   async function exportAll() {
     setLoading(true); setError("");
@@ -54,11 +62,11 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-filters sticky">
-          <label className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { setPage(1); void load(); } }} placeholder="بحث جزئي برقم الهيكل أو السيارة أو البيان" /></label>
+          <label className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث فوري برقم الهيكل أو السيارة أو البيان" /></label>
           <select value={location} onChange={(event) => { setLocation(event.target.value); setPage(1); }}><option value="">كل الأماكن</option>{meta.locations.map((item) => <option key={item.id} value={item.code}>{item.name}</option>)}</select>
           <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">كل الحالات</option>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select>
           <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="الموديل" />
-          <button type="button" onClick={() => { setPage(1); void load(); }}><MagnifyingGlass size={17} />بحث</button>
+          <button type="button" onClick={() => { setPage(1); setAppliedSearch(search.trim()); }}><MagnifyingGlass size={17} />بحث</button>
         </div>
         <VehicleTable rows={rows} onOpen={setSelectedId} />
         <div className="operations-pagination"><button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)}>السابق</button><span>صفحة {page} من {Math.max(1, Math.ceil(total / pageSize))}</span><button type="button" disabled={page * pageSize >= total || loading} onClick={() => setPage((value) => value + 1)}>التالي</button></div>

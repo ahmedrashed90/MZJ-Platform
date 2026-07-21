@@ -29,7 +29,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
-      c.id::text as conversation_id, c.legacy_id as conversation_legacy_id, c.status as conversation_status, c.channel_code, c.preview_text,
+      c.id::text as conversation_id, c.legacy_id as conversation_legacy_id,
+      case when c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' then 'open' else 'closed' end as conversation_status,
+      c.channel_code, c.preview_text,
       greatest(coalesce(l.unread_count,0),coalesce(c.unread_count,0))::int as unread_count,
       greatest(l.last_message_at,c.last_message_at) as last_message_at
     from crm.leads l

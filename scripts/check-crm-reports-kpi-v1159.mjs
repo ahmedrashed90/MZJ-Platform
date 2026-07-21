@@ -15,7 +15,7 @@ const [app, layout, api, kpi, reports, finance, drawer, styles, pkg] = await Pro
 ]);
 
 const checks = [
-  ['Version is 1.16.0', pkg.includes('"version": "1.16.0"')],
+  ['Version is 1.16.1', pkg.includes('"version": "1.16.1"')],
   ['Ownership page route remains removed', !app.includes('CrmOwnershipPage') && !app.includes('path="ownership"')],
   ['Ownership navigation remains removed', !layout.includes('/crm/ownership') && !layout.includes('سجل ملكية العملاء')],
   ['Ownership dedicated API remains removed', !api.includes('crmOwnershipHandler') && !api.includes('["crm/ownership"')],

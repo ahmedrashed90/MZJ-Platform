@@ -15,7 +15,7 @@ function emptyData(): DashboardData {
     connected: false,
     generatedAt: new Date().toISOString(),
     sectionErrors: {},
-    crm: { totalCustomers: null, openConversations: null, noAnswerCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
+    crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
     marketing: { campaigns: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
@@ -48,7 +48,10 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
     const [[row], recent, series] = await Promise.all([
       sql<any[]>`select
         (select count(*) from crm.leads where is_deleted=false) as total_customers,
-        (select count(*) from crm.conversations where status='open') as open_conversations,
+        (select count(*) from crm.conversations where status='open' and closed_at is null and coalesce(classification_state,'')<>'closed') as open_conversations,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,''))='cash_sales') as open_cash_conversations,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,'')) in ('finance_sales','call_center')) as open_finance_conversations,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,''))='customer_service') as open_service_conversations,
         (select count(*) from crm.leads where status_label='لم يتم الرد' and is_deleted=false) as no_answer_customers,
         (select count(*) from crm.leads where status_label='تم البيع' and is_deleted=false) as sold,
         (select count(*) from crm.leads where department_code='cash_sales' and is_deleted=false) as cash_sales,
@@ -60,7 +63,7 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
       sql<any[]>`select to_char(day,'DD/MM') as label,count(l.id)::int as value from generate_series((now() at time zone 'Asia/Riyadh')::date-interval '6 days',(now() at time zone 'Asia/Riyadh')::date,interval '1 day') day left join crm.leads l on (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date=day::date and l.is_deleted=false group by day order by day`,
     ]);
     data.crm = {
-      totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
+      totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations), openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
       recentConversations: recent.map((item) => ({ id: item.id, customerName: item.customer_name, preview: item.preview_text, time: item.last_message_at ? new Date(item.last_message_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "", unreadCount: asNumber(item.unread_count), leadId: item.lead_id, department: item.department_code === "finance_sales" || item.department_code === "call_center" ? "finance" : item.department_code === "customer_service" ? "service" : "cash" })),
       newCustomersSeries: series.map((item) => ({ label: item.label, value: asNumber(item.value) })),
     };
@@ -82,6 +85,9 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
   try {
     const globalOperationsAccess = user.roleCodes.includes("system_admin") || user.roleCodes.includes("admin") || user.branchCodes.length === 0;
     const operationBranches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+    const canSeeMultaqa = globalOperationsAccess || operationBranches.includes("multaqa");
+    const canSeeHall = globalOperationsAccess || operationBranches.includes("hall");
+    const canSeeQadisiyah = globalOperationsAccess || operationBranches.includes("qadisiyah");
     const [locations, [inventory], [approval], [shortage], [transfer], [photo]] = await Promise.all([
       sql<any[]>`select l.code as key,l.name,
         count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true))::int as actual_total,
@@ -106,9 +112,36 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
       sql<any[]>`select count(*)::int as total,count(*) filter(where a.financial_approved=false)::int as missing_financial,count(*) filter(where a.administrative_approved=false)::int as missing_administrative,count(*) filter(where a.financial_approved=true and a.administrative_approved=true)::int as completed
         from operations.vehicle_approvals a join operations.vehicles v on v.id=a.vehicle_id left join operations.locations l on l.id=v.location_id
         where a.is_active=true and (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})`,
-      sql<any[]>`select count(*) filter(where s.is_resolved=false)::int as total,count(*) filter(where s.is_resolved=false and l.code='multaqa')::int as multaqa,count(*) filter(where s.is_resolved=false and l.code='hall')::int as hall,count(*) filter(where s.is_resolved=false and l.code='qadisiyah')::int as qadisiyah
-        from operations.vehicle_shortages s join operations.vehicles v on v.id=s.vehicle_id left join operations.locations l on l.id=v.location_id
-        where (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})`,
+      sql<any[]>`with combinations as (
+          select
+            coalesce(nullif(trim(v.car_name),''),'—') as car_name,
+            coalesce(nullif(trim(v.statement),''),'—') as statement,
+            coalesce(nullif(trim(v.model_year),''),'—') as model_year,
+            coalesce(nullif(trim(v.exterior_color),''),'—') as exterior_color,
+            coalesce(nullif(trim(v.interior_color),''),'—') as interior_color,
+            count(*) filter(where l.code='warehouse')::int as warehouse_qty,
+            count(*) filter(where l.code='hall')::int as hall_qty,
+            count(*) filter(where l.code='multaqa')::int as multaqa_qty,
+            count(*) filter(where l.code='qadisiyah')::int as qadisiyah_qty
+          from operations.vehicles v
+          join operations.locations l on l.id=v.location_id
+          where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true
+            and v.status_code in ('available_for_sale','reserved','has_notes')
+            and l.code in ('warehouse','hall','multaqa','qadisiyah')
+            and regexp_replace(coalesce(v.statement,''), '[[:space:]]+', '', 'g') !~* '(حساس|كاميرا|شاشة|مسجل|ريموت|فرشات|طفاية|شنطةسلامة|اسبير|إسبير)'
+          group by coalesce(nullif(trim(v.car_name),''),'—'),coalesce(nullif(trim(v.statement),''),'—'),coalesce(nullif(trim(v.model_year),''),'—'),coalesce(nullif(trim(v.exterior_color),''),'—'),coalesce(nullif(trim(v.interior_color),''),'—')
+        ), shortages as (
+          select *,warehouse_qty+hall_qty+multaqa_qty+qadisiyah_qty as total_qty
+          from combinations
+        )
+        select
+          (count(*) filter(where multaqa_qty=0 and total_qty>0 and ${canSeeMultaqa}=true)
+           + count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)
+           + count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true))::int as total,
+          count(*) filter(where multaqa_qty=0 and total_qty>0 and ${canSeeMultaqa}=true)::int as multaqa,
+          count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)::int as hall,
+          count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true)::int as qadisiyah
+        from shortages`,
       sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total,count(*) filter(where r.is_deleted=false and r.status='request_received')::int as request_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_received')::int as vehicle_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_sent')::int as vehicle_sent,count(*) filter(where r.is_deleted=false and r.status='completed')::int as completed
         from operations.transfer_requests r
         where (${globalOperationsAccess}=true or r.source_branch_code in ${sql(operationBranches)} or r.destination_branch_code in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,

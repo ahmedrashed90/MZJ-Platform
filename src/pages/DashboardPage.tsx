@@ -475,17 +475,17 @@ export function DashboardPage() {
             <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
               { label: "العملاء", value: crm?.cashSales ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
-              { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
+              { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
             ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
             <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
               { label: "العملاء", value: crm?.financeSales ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
-              { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
+              { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
             ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
             <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
               { label: "العملاء", value: crm?.customerService ?? null },
               { label: "تم البيع", value: crm?.sold ?? null },
-              { label: "محادثات مفتوحة", value: crm?.openConversations ?? null },
+              { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
             ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
             <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
               { label: "الحملات", value: marketing?.campaigns ?? null },
@@ -577,16 +577,11 @@ export function DashboardPage() {
               </div>
             </OperationCard>
 
-            <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => open("نواقص السيارات", [
-              { label: "الإجمالي", value: operations?.shortages.total ?? null },
-              { label: "الملتقى", value: operations?.shortages.multaqa ?? null },
-              { label: "الصالة", value: operations?.shortages.hall ?? null },
-              { label: "القادسية", value: operations?.shortages.qadisiyah ?? null },
-            ])}>
+            <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => setOperationsSelection({ mode: "shortages", locationCode: "", locationName: "كل الفروع" })}>
               <div className="operation-metrics-grid three-columns">
-                <OperationMetric label="الملتقى" value={operations?.shortages.multaqa ?? null} onOpen={() => open("نواقص السيارات - الملتقى", [{ label: "الملتقى", value: operations?.shortages.multaqa ?? null }])} />
-                <OperationMetric label="الصالة" value={operations?.shortages.hall ?? null} onOpen={() => open("نواقص السيارات - الصالة", [{ label: "الصالة", value: operations?.shortages.hall ?? null }])} />
-                <OperationMetric label="القادسية" value={operations?.shortages.qadisiyah ?? null} onOpen={() => open("نواقص السيارات - القادسية", [{ label: "القادسية", value: operations?.shortages.qadisiyah ?? null }])} />
+                <OperationMetric label="الملتقى" value={operations?.shortages.multaqa ?? null} onOpen={() => setOperationsSelection({ mode: "shortages", locationCode: "multaqa", locationName: "الملتقى" })} />
+                <OperationMetric label="الصالة" value={operations?.shortages.hall ?? null} onOpen={() => setOperationsSelection({ mode: "shortages", locationCode: "hall", locationName: "الصالة" })} />
+                <OperationMetric label="القادسية" value={operations?.shortages.qadisiyah ?? null} onOpen={() => setOperationsSelection({ mode: "shortages", locationCode: "qadisiyah", locationName: "القادسية" })} />
               </div>
             </OperationCard>
 

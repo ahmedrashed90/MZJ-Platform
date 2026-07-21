@@ -7,6 +7,7 @@ import { ResizableOperationsTable, type ResizableOperationsColumn } from "./Resi
 export type DashboardOperationsSelection =
   | { mode: "vehicles"; locationCode: string; locationName: string; metric: string; metricName: string }
   | { mode: "requests" }
+  | { mode: "shortages"; locationCode: string; locationName: string }
   | { mode: "approvals"; filter: "" | "missing_financial" | "missing_administrative" | "completed"; title: string };
 
 type Vehicle = {
@@ -14,14 +15,19 @@ type Vehicle = {
   vin: string;
   car_name?: string;
   statement?: string;
+  agent_name?: string;
   model_year?: string;
   interior_color?: string;
   exterior_color?: string;
+  plate_no?: string;
+  batch_no?: string;
+  notes?: string;
+  shortage_note?: string;
   location_name?: string;
   status_name?: string;
 };
 
-type RequestVehicle = { vin?: string; car_name?: string; statement?: string };
+type RequestVehicle = { vin?: string; car_name?: string; statement?: string; model_year?: string; interior_color?: string; exterior_color?: string; current_location_name?: string; current_status_name?: string };
 type RequestRow = {
   id: string;
   request_no?: string;
@@ -30,6 +36,23 @@ type RequestRow = {
   creator_name?: string;
   requested_at?: string;
   vehicles?: RequestVehicle[];
+};
+
+
+type ShortageRow = {
+  id: string;
+  location_code: string;
+  location_name: string;
+  car_name: string;
+  statement: string;
+  model_year: string;
+  exterior_color: string;
+  interior_color: string;
+  warehouse_qty: number;
+  hall_qty: number;
+  multaqa_qty: number;
+  qadisiyah_qty: number;
+  total_qty: number;
 };
 
 type ApprovalVehicle = {
@@ -58,6 +81,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
   const [rows, setRows] = useState<Vehicle[]>([]);
   const [requestRows, setRequestRows] = useState<RequestRow[]>([]);
   const [approvalRows, setApprovalRows] = useState<ApprovalVehicle[]>([]);
+  const [shortageRows, setShortageRows] = useState<ShortageRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [kind, setKind] = useState<"transfer" | "photo">("transfer");
@@ -78,6 +102,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         setRows(payload.rows || []);
         setRequestRows([]);
         setApprovalRows([]);
+        setShortageRows([]);
         setTotal(Number(payload.total || 0));
       } else if (selection.mode === "requests") {
         const payload = await operationsFetch<{ rows: RequestRow[]; total: number }>(
@@ -85,6 +110,16 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         );
         setRequestRows(payload.rows || []);
         setRows([]);
+        setApprovalRows([]);
+        setShortageRows([]);
+        setTotal(Number(payload.total || 0));
+      } else if (selection.mode === "shortages") {
+        const payload = await operationsFetch<{ rows: ShortageRow[]; total: number }>(
+          `/api/operations${queryString({ resource: "dashboard_shortages", location: selection.locationCode, search, page, pageSize })}`,
+        );
+        setShortageRows(payload.rows || []);
+        setRows([]);
+        setRequestRows([]);
         setApprovalRows([]);
         setTotal(Number(payload.total || 0));
       } else {
@@ -94,6 +129,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         setApprovalRows(payload.rows || []);
         setRows([]);
         setRequestRows([]);
+        setShortageRows([]);
         setTotal((payload.rows || []).length);
       }
     } catch (failure) {
@@ -110,6 +146,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     setRows([]);
     setRequestRows([]);
     setApprovalRows([]);
+    setShortageRows([]);
     setTotal(0);
   }, [selection, kind]);
 
@@ -131,8 +168,8 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
       }
       exportExcel(
         `${selection.locationName}-${selection.metricName}.xlsx`,
-        ["رقم الهيكل", "السيارة", "البيان", "موديل", "داخلي", "خارجي", "المكان", "الحالة"],
-        all.map((row) => [row.vin, row.car_name, row.statement, row.model_year, row.interior_color, row.exterior_color, row.location_name, row.status_name]),
+        ["رقم الهيكل", "السيارة", "البيان", "الوكيل", "موديل", "داخلي", "خارجي", "اللوحة", "اسم الدفعة", "المكان", "الحالة", "ملاحظات السيارة", "حجز - نواقص - تحديد مكان"],
+        all.map((row) => [row.vin, row.car_name, row.statement, row.agent_name, row.model_year, row.interior_color, row.exterior_color, row.plate_no, row.batch_no, row.location_name, row.status_name, row.notes, row.shortage_note]),
       );
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تصدير Excel");
@@ -201,13 +238,16 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
   const title = useMemo(() => {
     if (!selection) return "";
     if (selection.mode === "vehicles") return `${selection.locationName} — ${selection.metricName}`;
+    if (selection.mode === "shortages") return `نواقص السيارات — ${selection.locationName}`;
     if (selection.mode === "approvals") return selection.title;
     return "طلبات النقل والتصوير";
   }, [selection]);
 
   const searchPlaceholder = selection?.mode === "requests"
     ? "بحث برقم الهيكل أو السيارة أو البيان أو الطلب"
-    : "بحث برقم الهيكل أو السيارة أو البيان";
+    : selection?.mode === "shortages"
+      ? "بحث بالسيارة أو البيان أو الموديل أو اللون"
+      : "بحث برقم الهيكل أو السيارة أو البيان";
 
   return (
     <>
@@ -249,10 +289,32 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
           <>
             <div className="operations-table-scroll">
               <table className="operations-table dashboard-drilldown-table">
-                <thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>موديل</th><th>داخلي</th><th>خارجي</th><th>المكان</th><th>الحالة</th></tr></thead>
+                <thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>الوكيل</th><th>موديل</th><th>داخلي</th><th>خارجي</th><th>اللوحة</th><th>اسم الدفعة</th><th>المكان</th><th>الحالة</th><th>ملاحظات السيارة</th><th>حجز - نواقص - تحديد مكان</th></tr></thead>
                 <tbody>
-                  {!loading && !rows.length ? <tr><td colSpan={8} className="table-empty">لا توجد نتائج</td></tr> : rows.map((row) => (
-                    <tr key={row.id}><td><b>{row.vin}</b></td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.model_year || "—"}</td><td>{row.interior_color || "—"}</td><td>{row.exterior_color || "—"}</td><td>{row.location_name || "—"}</td><td>{row.status_name || "—"}</td></tr>
+                  {!loading && !rows.length ? <tr><td colSpan={13} className="table-empty">لا توجد نتائج</td></tr> : rows.map((row) => (
+                    <tr key={row.id}><td><b dir="ltr">{row.vin}</b></td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.agent_name || "—"}</td><td>{row.model_year || "—"}</td><td>{row.interior_color || "—"}</td><td>{row.exterior_color || "—"}</td><td>{row.plate_no || "—"}</td><td>{row.batch_no || "—"}</td><td>{row.location_name || "—"}</td><td>{row.status_name || "—"}</td><td className="dashboard-wrap-cell">{row.notes || "—"}</td><td className="dashboard-wrap-cell">{row.shortage_note || "—"}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="operations-pagination">
+              <button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)}>السابق</button>
+              <span>صفحة {page} من {Math.max(1, Math.ceil(total / pageSize))}</span>
+              <button type="button" disabled={page * pageSize >= total || loading} onClick={() => setPage((value) => value + 1)}>التالي</button>
+            </div>
+          </>
+        ) : selection?.mode === "shortages" ? (
+          <>
+            <div className="dashboard-shortages-summary">
+              <div><strong>التركيبات غير الموجودة في الفرع</strong><span>الرقم المتاح هو إجمالي نفس التركيبة في المستودع وباقي الفروع، مع استبعاد الوكالة والإكسسوارات.</span></div>
+              <b>{total.toLocaleString("ar-SA")}</b>
+            </div>
+            <div className="operations-table-scroll dashboard-shortages-table-wrap">
+              <table className="operations-table dashboard-shortages-table">
+                <thead><tr><th>الفرع الناقص</th><th>السيارة</th><th>البيان</th><th>الموديل</th><th>الخارجي</th><th>الداخلي</th><th>الإجمالي المتاح</th><th>المستودع</th><th>الصالة</th><th>الملتقى</th><th>القادسية</th></tr></thead>
+                <tbody>
+                  {!loading && !shortageRows.length ? <tr><td colSpan={11} className="table-empty">لا توجد تركيبات ناقصة مطابقة</td></tr> : shortageRows.map((row) => (
+                    <tr key={row.id}><td><strong>{row.location_name}</strong></td><td>{row.car_name}</td><td>{row.statement}</td><td>{row.model_year}</td><td>{row.exterior_color}</td><td>{row.interior_color}</td><td><b className="operations-quantity-badge">{row.total_qty}</b></td><td>{row.warehouse_qty}</td><td>{row.hall_qty}</td><td>{row.multaqa_qty}</td><td>{row.qadisiyah_qty}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -302,9 +364,14 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         <div className="operations-request-vehicle-list">
           {(detail?.vehicles || []).map((vehicle, index) => (
             <article key={`${vehicle.vin || index}`}>
-              <div><small>رقم الهيكل</small><strong>{vehicle.vin || "—"}</strong></div>
+              <div><small>رقم الهيكل</small><strong dir="ltr">{vehicle.vin || "—"}</strong></div>
               <div><small>السيارة</small><strong>{vehicle.car_name || "—"}</strong></div>
               <div><small>البيان</small><strong>{vehicle.statement || "—"}</strong></div>
+              <div><small>الموديل</small><strong>{vehicle.model_year || "—"}</strong></div>
+              <div><small>اللون الداخلي</small><strong>{vehicle.interior_color || "—"}</strong></div>
+              <div><small>اللون الخارجي</small><strong>{vehicle.exterior_color || "—"}</strong></div>
+              <div><small>المكان الحالي</small><strong>{vehicle.current_location_name || "—"}</strong></div>
+              <div><small>الحالة الحالية</small><strong>{vehicle.current_status_name || "—"}</strong></div>
             </article>
           ))}
         </div>

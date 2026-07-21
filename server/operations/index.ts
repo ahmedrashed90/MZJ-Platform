@@ -241,16 +241,41 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "tl");
   const rows = await sql<any[]>`
-    select m.id::text,m.batch_id::text,m.transfer_request_id::text,m.created_at,m.movement_type,m.old_status,m.new_status,
+    select m.id::text,m.batch_id::text,m.transfer_request_id::text,tr.request_no,m.created_at,m.movement_type,m.old_status,m.new_status,
       coalesce(os.name,m.old_status) as old_status_name,coalesce(ns.name,m.new_status) as new_status_name,
-      m.note,m.state_note,m.shortage_note,m.performed_by_name,m.performed_by_role,m.performed_by_branch,
-      v.id::text as vehicle_id,v.vin,v.car_name,v.statement,
-      fl.code as from_location_code,fl.name as from_location_name,tl.code as to_location_code,tl.name as to_location_name
+      m.note,m.state_note,coalesce(m.shortage_note,v.shortage_note) as shortage_note,m.performed_by_name,m.performed_by_role,m.performed_by_branch,
+      v.id::text as vehicle_id,v.vin,v.car_name,v.statement,v.agent_name,v.interior_color,v.exterior_color,v.model_year,v.plate_no,v.batch_no,v.notes as vehicle_notes,
+      fl.code as from_location_code,fl.name as from_location_name,tl.code as to_location_code,tl.name as to_location_name,
+      coalesce(checks.sensor_status,'unknown') as sensor_status,coalesce(checks.camera_status,'unknown') as camera_status,
+      coalesce(checks.ac_status,'unknown') as ac_status,coalesce(checks.radio_status,'unknown') as radio_status,
+      coalesce(checks.screen_status,'unknown') as screen_status,coalesce(checks.remote_status,'unknown') as remote_status,
+      coalesce(checks.mats_status,'unknown') as mats_status,coalesce(checks.extinguisher_status,'unknown') as extinguisher_status,
+      coalesce(checks.safety_bag_status,'unknown') as safety_bag_status,coalesce(checks.spare_tire_status,'unknown') as spare_tire_status,
+      coalesce(approval.financial_approved,false) as financial_approved,coalesce(approval.administrative_approved,false) as administrative_approved
     from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
     left join operations.locations fl on fl.id=m.from_location_id
     left join operations.locations tl on tl.id=m.to_location_id
     left join operations.vehicle_statuses os on os.code=m.old_status
     left join operations.vehicle_statuses ns on ns.code=m.new_status
+    left join operations.transfer_requests tr on tr.id=m.transfer_request_id
+    left join lateral (
+      select
+        max(status) filter(where item_code='sensor') as sensor_status,
+        max(status) filter(where item_code='camera') as camera_status,
+        max(status) filter(where item_code='ac') as ac_status,
+        max(status) filter(where item_code='radio') as radio_status,
+        max(status) filter(where item_code='screen') as screen_status,
+        max(status) filter(where item_code='remote') as remote_status,
+        max(status) filter(where item_code='mats') as mats_status,
+        max(status) filter(where item_code='extinguisher') as extinguisher_status,
+        max(status) filter(where item_code='safety_bag') as safety_bag_status,
+        max(status) filter(where item_code='spare_tire') as spare_tire_status
+      from operations.vehicle_check_values cv where cv.vehicle_id=v.id
+    ) checks on true
+    left join lateral (
+      select financial_approved,administrative_approved from operations.vehicle_approvals va
+      where va.vehicle_id=v.id and va.is_active=true order by va.cycle_no desc,va.created_at desc limit 1
+    ) approval on true
     where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
       and (${status}='' or m.new_status=${status})
@@ -379,9 +404,64 @@ async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: Vercel
   `;
   const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code where ${base}`;
   const rows = await sql<any[]>`
-    select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.interior_color,v.exterior_color,l.name as location_name,coalesce(s.name,v.status_code) as status_name
+    select v.id::text,v.vin,v.car_name,v.statement,v.agent_name,v.model_year,v.interior_color,v.exterior_color,v.plate_no,v.batch_no,
+      v.notes,v.shortage_note,l.name as location_name,coalesce(s.name,v.status_code) as status_name
     from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
     where ${base} order by v.vin limit ${pageSize} offset ${offset}
+  `;
+  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
+}
+
+async function dashboardShortages(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const { page, pageSize, offset } = pageValues(request);
+  const location = clean(request.query.location);
+  const search = clean(request.query.search);
+  const pattern = `%${search}%`;
+  const unrestricted = isSystemAdmin(user) || user.branchCodes.length === 0;
+  const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+  const base = sql`
+    with combinations as (
+      select
+        coalesce(nullif(trim(v.car_name),''),'—') as car_name,
+        coalesce(nullif(trim(v.statement),''),'—') as statement,
+        coalesce(nullif(trim(v.model_year),''),'—') as model_year,
+        coalesce(nullif(trim(v.exterior_color),''),'—') as exterior_color,
+        coalesce(nullif(trim(v.interior_color),''),'—') as interior_color,
+        count(*) filter(where l.code='warehouse')::int as warehouse_qty,
+        count(*) filter(where l.code='hall')::int as hall_qty,
+        count(*) filter(where l.code='multaqa')::int as multaqa_qty,
+        count(*) filter(where l.code='qadisiyah')::int as qadisiyah_qty
+      from operations.vehicles v
+      join operations.locations l on l.id=v.location_id
+      where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true
+        and v.status_code in ('available_for_sale','reserved','has_notes')
+        and l.code in ('warehouse','hall','multaqa','qadisiyah')
+        and regexp_replace(coalesce(v.statement,''), '[[:space:]]+', '', 'g') !~* '(حساس|كاميرا|شاشة|مسجل|ريموت|فرشات|طفاية|شنطةسلامة|اسبير|إسبير)'
+      group by coalesce(nullif(trim(v.car_name),''),'—'),coalesce(nullif(trim(v.statement),''),'—'),coalesce(nullif(trim(v.model_year),''),'—'),coalesce(nullif(trim(v.exterior_color),''),'—'),coalesce(nullif(trim(v.interior_color),''),'—')
+    ), expanded as (
+      select c.*,target.location_code,target.location_name,target.location_qty,
+        c.warehouse_qty+c.hall_qty+c.multaqa_qty+c.qadisiyah_qty as total_qty
+      from combinations c
+      cross join lateral (values
+        ('multaqa','الملتقى',c.multaqa_qty),
+        ('hall','الصالة',c.hall_qty),
+        ('qadisiyah','القادسية',c.qadisiyah_qty)
+      ) as target(location_code,location_name,location_qty)
+      where target.location_qty=0
+        and c.warehouse_qty+c.hall_qty+c.multaqa_qty+c.qadisiyah_qty>0
+        and (${location}='' or target.location_code=${location})
+        and (${unrestricted}=true or target.location_code in ${sql(branches)})
+        and (${search}='' or c.car_name ilike ${pattern} or c.statement ilike ${pattern} or c.model_year ilike ${pattern} or c.exterior_color ilike ${pattern} or c.interior_color ilike ${pattern})
+    )
+  `;
+  const [count] = await sql<{ total: number }[]>`${base} select count(*)::int as total from expanded`;
+  const rows = await sql<any[]>`${base}
+    select concat(location_code,':',md5(concat_ws('|',car_name,statement,model_year,exterior_color,interior_color))) as id,
+      location_code,location_name,car_name,statement,model_year,exterior_color,interior_color,
+      warehouse_qty,hall_qty,multaqa_qty,qadisiyah_qty,total_qty
+    from expanded
+    order by location_name,car_name,statement,model_year,exterior_color,interior_color
+    limit ${pageSize} offset ${offset}
   `;
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
@@ -920,6 +1000,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (resource === "transfers") return response.status(200).json(await listTransfers(sql, request, user));
       if (resource === "approvals") return response.status(200).json(await listApprovals(sql, request, user));
       if (resource === "dashboard_vehicles") return response.status(200).json(await dashboardVehicles(sql, request, user));
+      if (resource === "dashboard_shortages") return response.status(200).json(await dashboardShortages(sql, request, user));
       if (resource === "dashboard_requests") return response.status(200).json(await dashboardRequests(sql, request, user));
       return response.status(404).json({ ok: false, code: "VALIDATION_ERROR", error: "المورد المطلوب غير موجود", requestId: traceId });
     }
