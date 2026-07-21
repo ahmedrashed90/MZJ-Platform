@@ -4,6 +4,7 @@ import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
+import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
 import {
   hasPermission,
   isSystemAdmin,
@@ -541,9 +542,9 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
   const who = actor(user);
   return sql.begin(async (tx) => {
     const [before] = await tx<any[]>`
-      select v.*,v.id::text,l.branch_code,l.code as location_code
+      select v.*,v.id::text,l.branch_code,l.code as location_code,l.name as location_name
       from operations.vehicles v left join operations.locations l on l.id=v.location_id
-      where v.id=${id}::uuid and v.is_deleted=false for update
+      where v.id=${id}::uuid and v.is_deleted=false and v.archived_at is null for update of v
     `;
     if (!before) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
     assertBranchAccess(user, before.branch_code, before.location_code, "لا تملك صلاحية تعديل سيارة في هذا الفرع");
@@ -551,18 +552,75 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
     if (vin !== before.vin && !isSystemAdmin(user)) throw new OperationError(403, "FORBIDDEN", "تغيير رقم الهيكل متاح لمدير النظام فقط");
     const locationId = clean(body.locationId) || before.location_id;
     const statusCode = clean(body.statusCode) || before.status_code;
-    if (String(locationId) !== String(before.location_id) || statusCode !== before.status_code) {
-      throw new OperationError(400, "INVALID_STATUS_TRANSITION", "تغيير المكان أو الحالة يجب أن يتم من تبويب الحركة للحفاظ على سجل الحركات");
+    if (String(locationId) !== String(before.location_id)) {
+      throw new OperationError(400, "INVALID_STATUS_TRANSITION", "تغيير المكان يجب أن يتم من تبويب الحركة أو طلبات النقل");
     }
-    const [row] = await tx<any[]>`
+    const [validStatus] = await tx<any[]>`select code,name from operations.vehicle_statuses where code=${statusCode} and is_active=true`;
+    if (!validStatus) throw new OperationError(400, "INVALID_STATUS_TRANSITION", "الحالة الجديدة غير صحيحة");
+    if (statusCode === "has_notes" && !clean(body.stateNote) && !clean(body.notes)) {
+      throw new OperationError(400, "VALIDATION_ERROR", "ملاحظات الحالة مطلوبة عند اختيار حالة بها ملاحظات");
+    }
+
+    const [detailsRow] = await tx<any[]>`
       update operations.vehicles set vin=${vin},car_name=${clean(body.carName)||null},statement=${clean(body.statement)||null},agent_name=${clean(body.agentName)||null},
         exterior_color=${clean(body.exteriorColor)||null},interior_color=${clean(body.interiorColor)||null},model_year=${clean(body.modelYear)||null},plate_no=${clean(body.plateNo)||null},batch_no=${clean(body.batchNo)||null},
         source_type=${clean(body.sourceType)||null},notes=${clean(body.notes)||null},state_note=${clean(body.stateNote)||null},shortage_note=${clean(body.shortageNote)||null},
         has_notes=${statusCode==='has_notes' || Boolean(clean(body.notes))},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
       where id=${id}::uuid returning *,id::text
     `;
+
+    let row = detailsRow;
+    let pendingApproval = false;
+    if (statusCode !== before.status_code) {
+      if (statusCode === "delivered") {
+        const approval = await ensureActiveVehicleApprovalCycle(tx, id);
+        const approvalsComplete = Boolean(approval?.financial_approved && approval?.administrative_approved);
+        if (!approvalsComplete) {
+          const pending: PendingDeliveryPayload = {
+            destinationLocationId: String(before.location_id),
+            note: clean(body.notes),
+            stateNote: clean(body.stateNote) || clean(body.notes),
+            shortageNote: clean(body.shortageNote),
+            checks: [],
+            requestedBy: who,
+            requestedAt: new Date().toISOString(),
+          };
+          await tx`update operations.vehicle_approvals set pending_delivery=${tx.json(pending)},updated_at=now() where id=${approval.id}::uuid`;
+          pendingApproval = true;
+        }
+      }
+
+      if (!pendingApproval) {
+        if (statusCode === "under_delivery") await startFreshVehicleApprovalCycle(tx, id);
+        else if (!['under_delivery','delivered'].includes(statusCode) && before.status_code === 'under_delivery') await closeActiveVehicleApprovalCycle(tx, id);
+
+        const movementBatchNo = requestId("MB").toUpperCase();
+        const [batch] = await tx<any[]>`
+          insert into operations.movement_batches(batch_no,destination_location_id,new_status,general_note,requested_count,performed_by,performed_by_name,performed_by_role,performed_by_branch)
+          values (${movementBatchNo},${before.location_id}::uuid,${statusCode},${clean(body.notes)||null},1,${who.id}::uuid,${who.name},${who.role},${who.branch}) returning id::text,batch_no
+        `;
+        const movementResult = await persistVehicleMovement(tx, {
+          vehicle: { ...detailsRow, status_code: before.status_code, location_id: before.location_id, vin },
+          destination: { id: before.location_id, code: before.location_code, name: before.location_name, branch_code: before.branch_code },
+          newStatus: statusCode,
+          raw: { note: clean(body.notes), stateNote: clean(body.stateNote) || (statusCode === 'has_notes' ? clean(body.notes) : ''), shortageNote: clean(body.shortageNote), checks: [] },
+          generalNote: clean(body.notes),
+          who,
+          batchId: batch.id,
+          movementType: "vehicle_management",
+        });
+        row = movementResult.vehicle;
+        if (statusCode === "delivered") await closeActiveVehicleApprovalCycle(tx, id);
+      }
+    }
+
     await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data) values (${who.id}::uuid,'operations','vehicle_updated','vehicle',${id},${tx.json(before)},${tx.json(row)})`;
-    return { ok: true, vehicle: row, message: "تم تحديث بيانات السيارة" };
+    return {
+      ok: true,
+      vehicle: row,
+      pendingApproval,
+      message: pendingApproval ? "تم تحديث بيانات السيارة وإرسال حالة مباع تم التسليم للموافقات" : "تم تحديث بيانات السيارة",
+    };
   });
 }
 
@@ -765,18 +823,9 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (newStatus === "has_notes" && !clean(raw.stateNote)) throw new OperationError(400, "VALIDATION_ERROR", `ملاحظات الحالة مطلوبة للسيارة ${v.vin}`);
 
       if (newStatus === "delivered") {
-        let [approval] = await tx<any[]>`
-          select *,id::text from operations.vehicle_approvals
-          where vehicle_id=${vehicleId}::uuid
-          order by is_active desc,cycle_no desc,updated_at desc limit 1 for update
-        `;
+        const approval = await ensureActiveVehicleApprovalCycle(tx, vehicleId);
         const approvalsComplete = Boolean(approval?.financial_approved && approval?.administrative_approved);
         if (!approvalsComplete) {
-          if (!approval?.is_active) {
-            await tx`update operations.vehicle_approvals set is_active=false where vehicle_id=${vehicleId}::uuid and is_active=true`;
-            const [cycle] = await tx<{ next: number }[]>`select coalesce(max(cycle_no),0)+1 as next from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid`;
-            [approval] = await tx<any[]>`insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active) values (${vehicleId}::uuid,${Number(cycle?.next || 1)},true) returning *,id::text`;
-          }
           const pending: PendingDeliveryPayload = {
             destinationLocationId,
             note: clean(raw.note) || clean(body.note),
@@ -786,24 +835,18 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
             requestedBy: who,
             requestedAt: new Date().toISOString(),
           };
-          [approval] = await tx<any[]>`update operations.vehicle_approvals set pending_delivery=${tx.json(pending)},updated_at=now() where id=${approval.id}::uuid returning *,id::text`;
-          pendingApprovals.push({ vehicleId, vin: v.vin, approvalId: approval.id });
+          const [updatedApproval] = await tx<any[]>`update operations.vehicle_approvals set pending_delivery=${tx.json(pending)},updated_at=now() where id=${approval.id}::uuid returning *,id::text`;
+          pendingApprovals.push({ vehicleId, vin: v.vin, approvalId: updatedApproval.id });
           continue;
         }
       }
 
-      if (newStatus === "under_delivery" && v.status_code !== "under_delivery") {
-        await tx`update operations.vehicle_approvals set is_active=false,pending_delivery=null where vehicle_id=${vehicleId}::uuid and is_active=true`;
-        const [cycle] = await tx<{ next: number }[]>`select coalesce(max(cycle_no),0)+1 as next from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid`;
-        await tx`insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active,pending_delivery) values (${vehicleId}::uuid,${Number(cycle?.next || 1)},true,null)`;
-      }
-      if (!['under_delivery','delivered'].includes(newStatus)) {
-        await tx`update operations.vehicle_approvals set is_active=false,pending_delivery=null where vehicle_id=${vehicleId}::uuid and is_active=true and (${v.status_code}='under_delivery' or pending_delivery is not null)`;
-      }
+      if (newStatus === "under_delivery" && v.status_code !== "under_delivery") await startFreshVehicleApprovalCycle(tx, vehicleId);
+      if (!['under_delivery','delivered'].includes(newStatus) && v.status_code === 'under_delivery') await closeActiveVehicleApprovalCycle(tx, vehicleId);
 
       const activeBatch = await ensureBatch();
       const result = await persistVehicleMovement(tx, { vehicle: v, destination, newStatus, raw, generalNote: clean(body.note), who, batchId: activeBatch.id });
-      if (newStatus === "delivered") await tx`update operations.vehicle_approvals set pending_delivery=null,is_active=false,updated_at=now() where vehicle_id=${vehicleId}::uuid and is_active=true`;
+      if (newStatus === "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
       moved.push({ vehicleId, vin: v.vin, movementId: result.movement.id });
     }
 
@@ -966,11 +1009,7 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
     `;
     if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
     assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية تنفيذ موافقة على سيارة في هذا الفرع");
-    let [a] = await tx<any[]>`select *,id::text from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid and is_active=true order by cycle_no desc limit 1 for update`;
-    if (!a) {
-      const [cycle] = await tx<{ next: number }[]>`select coalesce(max(cycle_no),0)+1 as next from operations.vehicle_approvals where vehicle_id=${vehicleId}::uuid`;
-      [a] = await tx<any[]>`insert into operations.vehicle_approvals(vehicle_id,cycle_no,is_active) values (${vehicleId}::uuid,${Number(cycle?.next || 1)},true) returning *,id::text`;
-    }
+    let a = await ensureActiveVehicleApprovalCycle(tx, vehicleId);
     if (v.status_code !== "under_delivery" && !a.pending_delivery) throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "الموافقات متاحة للسيارات مباع تحت التسليم أو المنتظرة للتسليم النهائي");
     const before = { ...a };
     if (action === "reset") {

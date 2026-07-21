@@ -62,7 +62,7 @@ export function VehicleManagementPage() {
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}{message ? <div className="operations-alert success">{message}</div> : null}
       <div className="operations-management-grid">
         <section className="panel operations-form-panel">
-          <div className="operations-section-title"><Plus size={21} /><div><h2>{form.id ? "تعديل بيانات السيارة" : "إضافة سيارة"}</h2><p>{form.id ? "المكان والحالة يتم تغييرهما من تبويب الحركة فقط." : "يتم التحقق من رقم الهيكل والمكان والحالة قبل الحفظ."}</p></div></div>
+          <div className="operations-section-title"><Plus size={21} /><div><h2>{form.id ? "تعديل بيانات السيارة" : "إضافة سيارة"}</h2><p>{form.id ? "يمكن تعديل بيانات السيارة وحالتها، بينما يظل تغيير المكان من فلو الحركة." : "يتم التحقق من رقم الهيكل والمكان والحالة قبل الحفظ."}</p></div></div>
           {form.id ? <button type="button" className="operations-reset-form" onClick={() => setForm(emptyForm)}>إلغاء التعديل وإضافة سيارة جديدة</button> : null}
           <form className="operations-form-grid" onSubmit={save}>
             <label><span>رقم الهيكل VIN</span><input required value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} /></label>
@@ -75,7 +75,7 @@ export function VehicleManagementPage() {
             <label><span>اللوحة</span><input value={form.plateNo} onChange={(e) => setForm({ ...form, plateNo: e.target.value })} /></label>
             <label><span>اسم الدفعة بالتاريخ</span><input value={form.batchNo} onChange={(e) => setForm({ ...form, batchNo: e.target.value })} /></label>
             <label><span>المكان</span><select required disabled={Boolean(form.id)} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label><span>الحالة</span><select disabled={Boolean(form.id)} value={form.statusCode} onChange={(e) => setForm({ ...form, statusCode: e.target.value })}>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+            <label><span>الحالة</span><select value={form.statusCode} onChange={(e) => setForm({ ...form, statusCode: e.target.value })}>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
             <label><span>المصدر</span><input value={form.sourceType} onChange={(e) => setForm({ ...form, sourceType: e.target.value })} /></label>
             <label className="wide"><span>ملاحظات في السيارة</span><textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label>
             <label className="wide"><span>حجز - نواقص - تحديد مكان</span><textarea value={form.shortageNote} onChange={(e) => setForm({ ...form, shortageNote: e.target.value })} /></label>

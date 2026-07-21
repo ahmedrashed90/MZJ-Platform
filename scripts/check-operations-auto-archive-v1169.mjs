@@ -9,7 +9,7 @@ const reject = (file, needle, label = needle) => {
 };
 
 const packageJson = JSON.parse(read("package.json"));
-if (packageJson.version !== "1.16.9") throw new Error("Operations automatic archive check failed: package version must be 1.16.9");
+if (packageJson.version !== "1.17.0") throw new Error("Operations automatic archive check failed: package version must be 1.17.0");
 
 expect("server/_operations-auto-archive.ts", "va.financial_approved and va.administrative_approved", "financial and administrative approval gate");
 expect("server/_operations-auto-archive.ts", "r.status<>'completed'", "incomplete transfer gate");

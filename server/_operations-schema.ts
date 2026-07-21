@@ -256,6 +256,44 @@ alter table operations.vehicle_approvals add column if not exists administrative
 alter table operations.vehicle_approvals add column if not exists pending_delivery jsonb;
 alter table operations.vehicle_approvals add column if not exists is_active boolean not null default true;
 alter table operations.vehicle_approvals add column if not exists created_at timestamptz not null default now();
+
+-- Remove legacy one-row-per-vehicle uniqueness. Approval history is cycle-based:
+-- only the current active cycle is unique, while prior inactive cycles remain.
+alter table operations.vehicle_approvals drop constraint if exists operations_vehicle_current_approval_unique;
+drop index if exists operations.operations_vehicle_current_approval_unique;
+do $operations_approval_legacy_unique$
+declare
+  legacy_constraint record;
+  legacy_index record;
+begin
+  for legacy_constraint in
+    select c.conname
+    from pg_constraint c
+    where c.conrelid='operations.vehicle_approvals'::regclass
+      and c.contype='u'
+      and regexp_replace(pg_get_constraintdef(c.oid),'\s+','','g')='UNIQUE(vehicle_id)'
+  loop
+    execute format('alter table operations.vehicle_approvals drop constraint %I',legacy_constraint.conname);
+  end loop;
+
+  for legacy_index in
+    select ns.nspname as schema_name,idx.relname as index_name
+    from pg_index i
+    join pg_class tbl on tbl.oid=i.indrelid
+    join pg_class idx on idx.oid=i.indexrelid
+    join pg_namespace ns on ns.oid=idx.relnamespace
+    where i.indrelid='operations.vehicle_approvals'::regclass
+      and i.indisunique=true
+      and i.indisprimary=false
+      and i.indpred is null
+      and i.indnkeyatts=1
+      and i.indkey[0]=(select attnum from pg_attribute where attrelid=i.indrelid and attname='vehicle_id' and not attisdropped)
+  loop
+    execute format('drop index if exists %I.%I',legacy_index.schema_name,legacy_index.index_name);
+  end loop;
+end
+$operations_approval_legacy_unique$;
+
 with ranked as (
   select id,row_number() over(partition by vehicle_id order by created_at desc,id desc) as row_no
   from operations.vehicle_approvals where is_active=true

@@ -1,11 +1,11 @@
 {
   "name": "mzj-platform",
-  "version": "1.16.9",
+  "version": "1.17.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-service-reclassification-v1156.mjs && node scripts/check-crm-reports-kpi-v1159.mjs && node scripts/check-crm-manual-leads-v1160.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-reference-v39.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-tracking-module-v112.mjs && node scripts/check-operations-native-v2.mjs && node scripts/check-dashboard-operations-v1161.mjs && node scripts/check-operations-workflow-v1162.mjs && node scripts/check-operations-fk-delete-v1163.mjs && node scripts/check-erpnext-unified-sales-link-v1166.mjs && node scripts/check-tracking-deleted-release-v1168.mjs && node scripts/check-operations-auto-archive-v1169.mjs && tsc -b",
+    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-service-reclassification-v1156.mjs && node scripts/check-crm-reports-kpi-v1159.mjs && node scripts/check-crm-manual-leads-v1160.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-reference-v39.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-tracking-module-v112.mjs && node scripts/check-operations-native-v2.mjs && node scripts/check-dashboard-operations-v1161.mjs && node scripts/check-operations-workflow-v1162.mjs && node scripts/check-operations-fk-delete-v1163.mjs && node scripts/check-erpnext-unified-sales-link-v1166.mjs && node scripts/check-tracking-deleted-release-v1168.mjs && node scripts/check-operations-auto-archive-v1169.mjs && node scripts/check-operations-approval-cycles-v1170.mjs && tsc -b",
     "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "check:crm": "node scripts/check-crm-module.mjs",

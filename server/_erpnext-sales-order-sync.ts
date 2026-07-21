@@ -2,6 +2,7 @@ import { ensureCrmSchema } from "./_crm-schema.js";
 import { getSql } from "./_db.js";
 import { ensureErpNextSalesOrderSchema, ensureErpNextUserMappingSchema } from "./_erpnext-integration-schema.js";
 import { ensureOperationsSchema } from "./_operations-schema.js";
+import { ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "./_operations-approval-cycle.js";
 import { ensureTrackingSchema } from "./_tracking-schema.js";
 import { clean, dateValue, numberValue } from "./_tracking-utils.js";
 import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
@@ -437,6 +438,7 @@ async function linkOperationsVehicles(input: {
             appliedStatus = "delivered";
             warnings.push({ code: "OPERATIONS_STATUS_PRESERVED", message: "السيارة مسجلة مباع تم التسليم؛ لم يتم إرجاع حالتها", vin, itemNo });
           } else if (operationsVehicle.status_code === "under_delivery") {
+            await ensureActiveVehicleApprovalCycle(tx, operationsVehicle.id);
             appliedStatus = "under_delivery";
           } else {
             const oldStatus = clean(operationsVehicle.status_code);
@@ -472,6 +474,7 @@ async function linkOperationsVehicles(input: {
                 ${mapping?.id||null}::uuid,${actorName}
               )
             `;
+            await startFreshVehicleApprovalCycle(tx, operationsVehicle.id);
           }
         }
       }

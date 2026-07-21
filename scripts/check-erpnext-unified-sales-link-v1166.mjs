@@ -5,7 +5,7 @@ function expect(file, needle, label = needle) { if (!read(file).includes(needle)
 function reject(file, needle, label = needle) { if (read(file).includes(needle)) throw new Error(`ERPNext unified link check failed: ${file} contains forbidden ${label}`); }
 
 const packageJson = JSON.parse(read("package.json"));
-if (packageJson.version !== "1.16.9") throw new Error("ERPNext unified link check failed: package version must be 1.16.9");
+if (packageJson.version !== "1.17.0") throw new Error("ERPNext unified link check failed: package version must be 1.17.0");
 expect("api/index.ts", '"integrations/erpnext/sales-order"', "single ERPNext endpoint");
 expect("server/integrations/erpnext-sales-order.ts", "ingestTrackingOrder(payload)", "canonical tracking ingest");
 expect("server/integrations/erpnext-sales-order.ts", "syncErpNextSalesOrder", "unified CRM/operations sync");
