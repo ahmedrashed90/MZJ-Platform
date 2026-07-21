@@ -111,5 +111,43 @@ async function invoke(path, body, env = {}, headers = {}) {
   assert(Array.isArray(data.templates) && data.templates.length === 1, 'template synchronization payload missing');
 }
 
+
+// 6) Every explicit service button, including finance, must request trusted reclassification.
+{
+  const expected = [
+    ["مبيعات الكاش", "cash"],
+    ["مبيعات التمويل", "finance"],
+    ["خدمة العملاء", "service"],
+  ];
+  for (const [title, key] of expected) {
+    let platformBody = null;
+    globalThis.fetch = async (_url, options) => {
+      platformBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ ok: true, result: { conversationId: `conv-${key}`, messageId: `msg-${key}` } }), { status: 202 });
+    };
+    const response = await invoke('/webhook/mersal', {
+      entry: [{
+        changes: [{
+          value: {
+            contacts: [{ wa_id: '201004400083', profile: { name: 'اختبار تغيير القسم' } }],
+            messages: [{
+              id: `wamid.selection.${key}`,
+              from: '201004400083',
+              type: 'interactive',
+              interactive: { type: 'button_reply', button_reply: { id: `btn-${key}`, title } },
+            }],
+          },
+        }],
+      }],
+    });
+    const data = await response.json();
+    assert(response.status === 200 && data.processed === 1, `${key} selection was not accepted`);
+    assert(platformBody.serviceSelectionKey === key, `${key} service key was not forwarded`);
+    assert(platformBody.trustedServiceClassification === true, `${key} selection was not trusted`);
+    assert(platformBody.forceServiceReclassification === true, `${key} selection did not force reclassification`);
+    assert(platformBody.flowAction === 'service_selection', `${key} flow action is wrong`);
+  }
+}
+
 globalThis.fetch = originalFetch;
 console.log('Mersal worker tests passed');

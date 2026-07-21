@@ -25,10 +25,12 @@
  *   DEBUG_KV
  *
  * This Worker contains no Firebase/Firestore storage. CRM messages, conversations,
- * unread state, assignments, and automations are owned by PostgreSQL in the platform.
+ * unread state, assignments, service changes, finance-data collection, and automations
+ * are owned by PostgreSQL in the platform. Mersal keeps the visible welcome flow; this
+ * Worker identifies the customer selection and forwards a trusted flow instruction.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.11.5";
+const VERSION = "mzj-mersal-postgres-v1.12.3-service-reclassification";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
@@ -49,6 +51,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/debug/last") {
       return json({
         ok: true,
+        version: VERSION,
         inbound: await kvGetJson(env, "DEBUG_LAST_PAYLOAD"),
         forward: await kvGetJson(env, "DEBUG_LAST_FORWARD"),
       }, 200);
@@ -357,10 +360,26 @@ function normalizeInboundEvents(incoming) {
   for (const entry of entries) {
     for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
       const value = change?.value || {};
-      const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
-      const messages = Array.isArray(value?.messages) ? value.messages : [];
+      const contacts = Array.isArray(value?.contacts)
+        ? value.contacts
+        : value?.contacts && typeof value.contacts === "object"
+          ? [value.contacts]
+          : [];
+      const messages = Array.isArray(value?.messages)
+        ? value.messages
+        : value?.messages && typeof value.messages === "object"
+          ? [value.messages]
+          : [];
       for (const message of messages) {
-        const phone = normalizePhone(message?.from || contacts?.[0]?.wa_id || "");
+        const phone = normalizePhone(first(
+          message?.from,
+          message?.wa_id,
+          message?.waId,
+          contacts?.[0]?.wa_id,
+          contacts?.[0]?.waId,
+          contacts?.[0]?.user_id,
+          contacts?.[0]?.userId,
+        ));
         if (!phone) continue;
         const messageId = first(message?.id, message?.message_id, message?.fb_message_id) || stableEventId({ phone, message });
         events.push({
@@ -428,6 +447,8 @@ async function buildPlatformInboundPayload(event, env) {
         mediaId: attachment.mediaId,
         messageType: attachment.attachmentType,
         messageTimestamp: event.timestamp,
+        fileName: normalizeMediaType(attachment.attachmentType) === "document" ? attachment.fileName : "",
+        mimeType: normalizeMediaType(attachment.attachmentType) === "document" ? attachment.mimeType : "",
       });
       if (!resolved?.url) {
         throw new Error(`Inbound media could not be matched safely for ${event.eventId}: ${resolved?.error || "media URL not found"}`);
@@ -464,6 +485,7 @@ async function buildPlatformInboundPayload(event, env) {
   }
 
   const messageText = text || attachment?.caption || (attachment?.hasAttachment ? attachmentLabel(attachment.attachmentType) : "");
+  const serviceSelection = detectMersalServiceSelection(message, event.generic || {});
   const base = {
     eventId: event.eventId,
     event_id: event.eventId,
@@ -501,6 +523,26 @@ async function buildPlatformInboundPayload(event, env) {
     media_asset_id: attachment?.mediaAssetId || "",
     mediaStatus: attachment?.mediaStatus || "",
     isSensitive: attachment?.isSensitive === true,
+    providerEntryFlowHandled: true,
+    provider_entry_flow_handled: true,
+    entryFlowProvider: "mersal",
+    entry_flow_provider: "mersal",
+    flowAction: serviceSelection ? "service_selection" : "customer_input",
+    flow_action: serviceSelection ? "service_selection" : "customer_input",
+    serviceSelectionKey: serviceSelection?.key || "",
+    service_selection_key: serviceSelection?.key || "",
+    serviceSelectionLabel: serviceSelection?.label || "",
+    service_selection_label: serviceSelection?.label || "",
+    serviceSelectionId: serviceSelection?.id || "",
+    service_selection_id: serviceSelection?.id || "",
+    trustedServiceClassification: Boolean(serviceSelection),
+    trusted_service_classification: Boolean(serviceSelection),
+    forceServiceReclassification: Boolean(serviceSelection),
+    force_service_reclassification: Boolean(serviceSelection),
+    financeDetailsRequired: serviceSelection?.key === "finance",
+    finance_details_required: serviceSelection?.key === "finance",
+    entryFlowInputText: messageText,
+    entry_flow_input_text: messageText,
   };
 
   return event.envelope ? { ...event.envelope, ...base } : base;
@@ -535,6 +577,67 @@ async function forwardToPlatform(payload, env) {
   } catch (error) {
     return { ok: false, status: 0, error: errorMessage(error) };
   }
+}
+
+function normalizedChoiceToken(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/[ـًٌٍَُِّْ]/g, "")
+    .replace(/[_\-–—|/\\]+/g, " ")
+    .replace(/[\s،,:؛.!?؟]+/g, " ")
+    .trim();
+}
+
+function detectMersalServiceSelection(message, generic) {
+  const idValue = first(
+    message?.interactive?.button_reply?.id,
+    message?.interactive?.list_reply?.id,
+    message?.button?.payload,
+    message?.button?.id,
+    generic?.button_id,
+    generic?.buttonId,
+    generic?.reply_id,
+    generic?.replyId,
+    generic?.selected_option_id,
+    generic?.selectedOptionId,
+  );
+  const labelValue = first(
+    message?.interactive?.button_reply?.title,
+    message?.interactive?.list_reply?.title,
+    message?.button?.text,
+    generic?.button_text,
+    generic?.buttonText,
+    generic?.selected_option,
+    generic?.selectedOption,
+    inboundText(message),
+  );
+  const candidates = [idValue, labelValue].map(normalizedChoiceToken).filter(Boolean);
+  const definitions = [
+    {
+      key: "cash",
+      label: "مبيعات الكاش",
+      aliases: ["cash", "cash sales", "sales cash", "1", "مبيعات الكاش", "مبيعات كاش", "كاش"],
+    },
+    {
+      key: "finance",
+      label: "مبيعات التمويل",
+      aliases: ["finance", "finance sales", "sales finance", "2", "مبيعات التمويل", "مبيعات تمويل", "تمويل"],
+    },
+    {
+      key: "service",
+      label: "خدمة العملاء",
+      aliases: ["service", "customer service", "customer_service", "3", "خدمة العملاء", "خدمه العملاء"],
+    },
+  ];
+  for (const definition of definitions) {
+    const aliases = definition.aliases.map(normalizedChoiceToken);
+    if (candidates.some((candidate) => aliases.includes(candidate))) {
+      return { key: definition.key, label: definition.label, id: idValue || labelValue };
+    }
+  }
+  return null;
 }
 
 function inboundText(message) {
@@ -595,25 +698,117 @@ async function resolveInboundMedia(env, input) {
   const contactId = await findMersalContactId(env, token, input.phone);
   if (!contactId) return { ok: false, error: "Mersal contact not found" };
 
-  const attempts = [0, 900, 1600, 2500, 3500];
+  const targetType = normalizeMediaType(input.messageType);
+  const targetMessageId = clean(input.providerMessageId);
+  const targetMediaId = clean(input.mediaId);
+  const supportedTypes = new Set(["image", "audio", "video", "document", "sticker"]);
+  if (!supportedTypes.has(targetType)) {
+    return { ok: false, error: `Unsupported inbound media type: ${targetType || "unknown"}` };
+  }
+  if (!targetMessageId && !targetMediaId) {
+    return { ok: false, error: "Inbound media has no WhatsApp message id or media id" };
+  }
+
+  // Postman verification showed that Mersal can create the final media row around
+  // 11-15 seconds after the WhatsApp webhook. Poll by elapsed time for up to 21
+  // seconds, and accept only the row that belongs to this exact webhook message.
+  const startedAt = Date.now();
+  const pollAtMs = [0, 2000, 5000, 8000, 11000, 14000, 17000, 21000];
   let messagesChecked = 0;
-  for (const delay of attempts) {
-    if (delay) await sleep(delay);
-    const messages = await mersalApiPost(`${mersalBase(env)}/api/wpbox/getMessages`, { token, contact_id: contactId });
+  let exactRowDetected = false;
+
+  for (const targetElapsedMs of pollAtMs) {
+    const waitMs = targetElapsedMs - (Date.now() - startedAt);
+    if (waitMs > 0) await sleep(waitMs);
+
+    const messages = await mersalApiPost(`${mersalBase(env)}/api/wpbox/getMessages`, {
+      token,
+      contact_id: contactId,
+    });
     const rows = normalizeMersalRows(messages);
     messagesChecked = rows.length;
-    const found = findMersalMedia(rows, { ...input, contactId, mediaBase: mersalBase(env) });
-    if (found?.url) return { ok: true, ...found };
+
+    const matched = findExactInboundMersalMedia(rows, {
+      contactId,
+      mediaBase: mersalBase(env),
+      targetType,
+      targetMessageId,
+      targetMediaId,
+    });
+
+    if (matched?.rowDetected) exactRowDetected = true;
+    if (matched?.media?.url) {
+      return {
+        ok: true,
+        ...matched.media,
+        matchReason: matched.matchReason,
+        waitedMs: Date.now() - startedAt,
+      };
+    }
   }
 
   return {
     ok: false,
-    error: "Mersal media URL not found with a safe exact match",
+    error: exactRowDetected
+      ? "The exact Mersal message row was found, but its media URL was not ready"
+      : "The exact Mersal message row was not found before the media wait timeout",
     contactId,
     messagesChecked,
-    providerMessageId: clean(input.providerMessageId),
-    mediaId: clean(input.mediaId),
+    providerMessageId: targetMessageId,
+    mediaId: targetMediaId,
+    messageType: targetType,
+    waitedMs: Date.now() - startedAt,
   };
+}
+
+function findExactInboundMersalMedia(rows, input) {
+  const list = Array.isArray(rows) ? rows : [];
+  const targetMessageId = clean(input.targetMessageId);
+  const targetMediaId = clean(input.targetMediaId);
+  const targetType = normalizeMediaType(input.targetType);
+
+  if (targetMessageId) {
+    const exactRows = list.filter((row) =>
+      isInboundMersalRow(row) && mersalRowMessageId(row) === targetMessageId
+    );
+
+    for (const row of exactRows) {
+      const media = mediaFromMersalRowForType(row, input.contactId, input.mediaBase, targetType);
+      if (media?.url) {
+        return {
+          rowDetected: true,
+          media,
+          matchReason: "exact_fb_message_id",
+        };
+      }
+    }
+
+    if (exactRows.length) {
+      return { rowDetected: true, media: null, matchReason: "exact_fb_message_id_waiting_for_url" };
+    }
+  }
+
+  // Generic webhook formats may omit fb_message_id. In that case only an exact
+  // WhatsApp media id match is allowed. No timestamp or newest-media fallback is used.
+  if (!targetMessageId && targetMediaId) {
+    for (const row of list) {
+      if (!isInboundMersalRow(row)) continue;
+      const media = mediaFromMersalRowForType(row, input.contactId, input.mediaBase, targetType);
+      if (!media?.url) continue;
+      const exactMediaId = mersalRowMediaIds(row).includes(targetMediaId) ||
+        clean(media.url).includes(`/${targetMediaId}.`) ||
+        clean(media.fileName).startsWith(`${targetMediaId}.`);
+      if (exactMediaId) {
+        return {
+          rowDetected: true,
+          media,
+          matchReason: "exact_media_id",
+        };
+      }
+    }
+  }
+
+  return { rowDetected: false, media: null, matchReason: "not_found" };
 }
 
 async function findMersalContactId(env, token, phone) {
@@ -734,57 +929,6 @@ function isInboundMersalRow(row) {
   return ["customer", "contact", "client"].includes(sender);
 }
 
-function uniqueMediaMatches(rows, input, requireInbound = false) {
-  const matches = [];
-  const seen = new Set();
-  for (const row of rows) {
-    if (requireInbound && !isInboundMersalRow(row)) continue;
-    const media = mediaFromMersalRow(row, input.contactId, input.mediaBase);
-    if (!media?.url) continue;
-    if (input.targetType && normalizeMediaType(media.attachmentType) !== input.targetType) continue;
-    const key = `${normalizeMediaType(media.attachmentType)}|${media.url}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    matches.push(media);
-  }
-  return matches;
-}
-
-function findMersalMedia(rows, input) {
-  const targetMessageId = clean(input.providerMessageId);
-  const targetMediaId = clean(input.mediaId);
-  const targetType = normalizeMediaType(input.messageType);
-  const matchInput = { ...input, targetType: ["image", "audio", "video", "document", "sticker"].includes(targetType) ? targetType : "" };
-
-  if (targetMessageId) {
-    const matches = uniqueMediaMatches(rows.filter((row) => mersalRowMessageId(row) === targetMessageId), matchInput);
-    if (matches.length === 1) return { ...matches[0], matchReason: "provider_message_id" };
-    if (matches.length > 1) return null;
-  }
-
-  if (targetMediaId) {
-    const fieldMatches = uniqueMediaMatches(rows.filter((row) => mersalRowMediaIds(row).includes(targetMediaId)), matchInput);
-    if (fieldMatches.length === 1) return { ...fieldMatches[0], matchReason: "media_id_field" };
-    if (fieldMatches.length > 1) return null;
-
-    const urlMatches = uniqueMediaMatches(rows, matchInput).filter((media) => media.url.includes(targetMediaId) || clean(media.fileName).includes(targetMediaId));
-    if (urlMatches.length === 1) return { ...urlMatches[0], matchReason: "media_id_in_url_or_filename" };
-    if (urlMatches.length > 1) return null;
-  }
-
-  const eventTime = timestampMs(input.messageTimestamp);
-  if (eventTime) {
-    const timedRows = rows.filter((row) => {
-      const rowTime = mersalRowTimestamp(row);
-      return rowTime > 0 && Math.abs(rowTime - eventTime) <= 5 * 60 * 1000;
-    });
-    const timedMatches = uniqueMediaMatches(timedRows, matchInput, true);
-    if (timedMatches.length === 1) return { ...timedMatches[0], matchReason: "unique_inbound_type_and_timestamp" };
-  }
-
-  return null;
-}
-
 function mersalMediaField(...values) {
   for (const value of values) {
     const direct = clean(value);
@@ -805,29 +949,40 @@ function mersalMediaField(...values) {
   return "";
 }
 
-function mediaFromMersalRow(row, contactId, mediaBase) {
+function mediaFromMersalRowForType(row, contactId, mediaBase, requestedType) {
   if (!row) return null;
-  const values = [
-    ["image", mersalMediaField(row?.header_image, row?.image, row?.image_url, row?.media_image)],
-    ["audio", mersalMediaField(row?.header_audio, row?.audio, row?.audio_url, row?.voice, row?.voice_url, row?.media_audio)],
-    ["video", mersalMediaField(row?.header_video, row?.video, row?.video_url, row?.media_video)],
-    ["document", mersalMediaField(row?.header_document, row?.document, row?.document_url, row?.file, row?.file_url, row?.media_document)],
-  ];
-  const match = values.find(([, value]) => clean(value));
-  if (!match) return null;
-  const attachmentType = match[0];
-  const url = normalizePublicMediaUrl(match[1], mediaBase || DEFAULT_MERSAL_BASE);
+  const targetType = normalizeMediaType(requestedType);
+  const fieldsByType = {
+    image: [row?.header_image, row?.image, row?.image_url, row?.media_image],
+    audio: [row?.header_audio, row?.audio, row?.audio_url, row?.voice, row?.voice_url, row?.media_audio],
+    video: [row?.header_video, row?.video, row?.video_url, row?.media_video],
+    document: [row?.header_document, row?.document, row?.document_url, row?.file, row?.file_url, row?.media_document],
+    sticker: [row?.sticker, row?.sticker_url, row?.media_sticker, row?.header_image, row?.image, row?.image_url],
+  };
+  const values = fieldsByType[targetType];
+  if (!values) return null;
+  const rawUrl = mersalMediaField(...values);
+  const url = normalizePublicMediaUrl(rawUrl, mediaBase || DEFAULT_MERSAL_BASE);
   if (!url || isProtectedWhatsappMediaUrl(url)) return null;
   return {
     url,
-    attachmentType,
+    attachmentType: targetType,
     contactId: contactId || first(row?.contact_id),
     providerMessageId: mersalRowMessageId(row),
     mediaId: mersalRowMediaIds(row)[0] || "",
     createdAt: row?.created_at || row?.createdAt || "",
     fileName: fileNameFromUrl(url),
-    mimeType: guessMimeType(url, attachmentType),
+    mimeType: guessMimeType(url, targetType),
   };
+}
+
+function mediaFromMersalRow(row, contactId, mediaBase) {
+  if (!row) return null;
+  for (const type of ["image", "audio", "video", "document", "sticker"]) {
+    const media = mediaFromMersalRowForType(row, contactId, mediaBase, type);
+    if (media?.url) return media;
+  }
+  return null;
 }
 
 function normalizePublicMediaUrl(value, base) {
@@ -986,11 +1141,20 @@ function normalizeStatus(value) {
 }
 
 function normalizePhone(value) {
-  let phone = String(value || "").replace(/[^\d]/g, "");
+  let phone = String(value || "")
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
+    .replace(/[^\d]/g, "");
+
   if (phone.startsWith("00")) phone = phone.slice(2);
-  if (/^05\d{8}$/.test(phone)) phone = `966${phone.slice(1)}`;
-  if (/^5\d{8}$/.test(phone)) phone = `966${phone}`;
-  return /^9665\d{8}$/.test(phone) ? phone : "";
+
+  if (/^05\d{8}$/.test(phone)) {
+    phone = `966${phone.slice(1)}`;
+  } else if (/^5\d{8}$/.test(phone)) {
+    phone = `966${phone}`;
+  }
+
+  return /^\d{8,15}$/.test(phone) ? phone : "";
 }
 
 function stableEventId(value) {

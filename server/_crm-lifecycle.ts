@@ -152,11 +152,15 @@ export async function classifyConversationService(input: {
     where c.id=${input.conversationId}::uuid limit 1
   `;
   if (!conversation) throw new Error("المحادثة غير موجودة");
+
   const existing = await findOpenServiceRequest(conversation.contact_id);
-  if (existing) {
+  const existingServiceKey = existing ? departmentKey(existing.service_key || existing.department_code) : "";
+
+  // Selecting the same service must not create another request. It only completes a
+  // missing assignment, then keeps the current request, lead and conversation linked.
+  if (existing && existingServiceKey === serviceKey) {
     let activeRequest = existing;
     if (!existing.assigned_to) {
-      const existingServiceKey = departmentKey(existing.service_key || existing.department_code);
       const assignment = await chooseAssignment(existingServiceKey, existing.branch_code || branchForDepartment(existingServiceKey), existing.source_code || conversation.channel_code || "whatsapp");
       const callCenter = existingServiceKey === "finance" && !existing.call_center_assigned_to
         ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
@@ -190,9 +194,9 @@ export async function classifyConversationService(input: {
       update crm.conversations set service_request_id=${activeRequest.id}::uuid,lead_id=${activeRequest.lead_id||null}::uuid,
         service_key=${activeRequest.service_key},department_code=${activeRequest.department_code},branch_code=${activeRequest.branch_code},
         assigned_to=${activeRequest.assigned_to||null}::uuid,call_center_assigned_to=${activeRequest.call_center_assigned_to||null}::uuid,
-        classification_state='classified',updated_at=now() where id=${conversation.id}::uuid
+        classification_state='classified',closed_at=null,updated_at=now() where id=${conversation.id}::uuid
     `;
-    return { request: activeRequest, leadId: activeRequest.lead_id, reused: true };
+    return { request: activeRequest, leadId: activeRequest.lead_id, reused: true, reclassified: false };
   }
 
   const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
@@ -207,18 +211,50 @@ export async function classifyConversationService(input: {
     sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
   });
 
+  // A different explicit selection ends only the current service request. The customer,
+  // lead, messages and history remain; a fresh request is then distributed to the new
+  // department according to its own assignment rules.
+  if (existing && existingServiceKey !== serviceKey) {
+    await sql`
+      update crm.service_requests set request_state='closed',closed_at=now(),closed_by=${input.actor?.id||null}::uuid,
+        closure_reason='العميل اختار قسمًا آخر',
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
+          reclassifiedTo: serviceKey,
+          reclassifiedToDepartment: departmentCode,
+          reclassificationEventKey: input.eventKey || null,
+        })}::jsonb,
+        updated_at=now()
+      where id=${existing.id}::uuid and request_state='open'
+    `;
+    await sql`
+      insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,note,details)
+      values (${lead.id}::uuid,'service_request_reclassified',${existing.status_label||"عميل جديد"},'عميل جديد',${existing.department_code||null},${departmentCode},
+        ${existing.branch_code||null},${branchCode},${input.actor?.id||null}::uuid,${input.actor?.fullName||"Automation Engine"},
+        'غيّر العميل القسم المطلوب وتم إغلاق الطلب السابق وإعادة التوزيع',${sql.json({
+          previousRequestId: existing.id,
+          previousServiceKey: existingServiceKey,
+          newServiceKey: serviceKey,
+          eventKey: input.eventKey || null,
+        })})
+    `;
+  }
+
   const [request] = await sql<any[]>`
     insert into crm.service_requests(
       contact_id,lead_id,conversation_id,service_key,department_code,branch_code,status_label,request_state,source_code,
       classification_method,assigned_to,call_center_assigned_to,metadata
     ) values (
       ${conversation.contact_id}::uuid,${lead.id}::uuid,${conversation.id}::uuid,${serviceKey},${departmentCode},${branchCode},'عميل جديد','open',
-      ${sourceCode},${input.classificationMethod},${assignment.assignedTo}::uuid,${callCenter.assignedTo}::uuid,${sql.json({ eventKey: input.eventKey || null })}
+      ${sourceCode},${input.classificationMethod},${assignment.assignedTo}::uuid,${callCenter.assignedTo}::uuid,${sql.json({
+        eventKey: input.eventKey || null,
+        previousRequestId: existing?.id || null,
+        reclassifiedFrom: existingServiceKey || null,
+      })}
     ) returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
   `;
   await sql`
     update crm.leads set contact_id=${conversation.contact_id}::uuid,current_request_id=${request.id}::uuid,service_key=${serviceKey},
-      department_code=${departmentCode},branch_code=${branchCode},status_label='عميل جديد',
+      department_code=${departmentCode},branch_code=${branchCode},status_label='عميل جديد',status_code=null,
       payment_type=${serviceKey === "finance" ? "تمويل" : serviceKey === "service" ? "خدمة عملاء" : "كاش"},
       source_code=${sourceCode},source_name=${sourceName},platform_code=${conversation.channel_code || sourceCode},
       assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
@@ -237,16 +273,26 @@ export async function classifyConversationService(input: {
   await sql`
     insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,note,details)
     values (${lead.id}::uuid,'service_request_created','عميل جديد',${departmentCode},${branchCode},${input.actor?.id||null}::uuid,
-      ${input.actor?.fullName||"Automation Engine"},'تم إنشاء طلب خدمة وتصنيف المحادثة',${sql.json({ requestId: request.id, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null })})
+      ${input.actor?.fullName||"Automation Engine"},${existing ? 'تم إنشاء طلب خدمة جديد بعد تغيير القسم' : 'تم إنشاء طلب خدمة وتصنيف المحادثة'},
+      ${sql.json({ requestId: request.id, classificationMethod: input.classificationMethod, eventKey: input.eventKey || null, previousRequestId: existing?.id || null })})
   `;
   await recordOwnershipEvent({
     contactId: conversation.contact_id, requestId: request.id, leadId: lead.id,
+    previousAssignedTo: existing?.assigned_to || null, previousAssignedName: existing?.assigned_name || null,
     newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
-    newDepartmentCode: departmentCode, newBranchCode: branchCode,
-    actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "توزيع طلب خدمة جديد",
-    metadata: { classificationMethod: input.classificationMethod, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
+    previousDepartmentCode: existing?.department_code || null, newDepartmentCode: departmentCode,
+    previousBranchCode: existing?.branch_code || null, newBranchCode: branchCode,
+    actor: input.actor, actorType: input.actor ? "user" : "automation",
+    reason: existing ? "إعادة توزيع بعد اختيار قسم جديد" : "توزيع طلب خدمة جديد",
+    metadata: {
+      classificationMethod: input.classificationMethod,
+      previousRequestId: existing?.id || null,
+      previousServiceKey: existingServiceKey || null,
+      callCenterAssignedTo: callCenter.assignedTo,
+      callCenterName: callCenter.assignedName,
+    },
   });
-  return { request, leadId: lead.id, reused: false, assignment, callCenter };
+  return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter };
 }
 
 export async function closeCurrentServiceRequest(input: { leadId: string; statusLabel: string; actor?: SessionUser | null; reason?: string }) {

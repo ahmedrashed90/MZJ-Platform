@@ -310,9 +310,18 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   const knownService = trustedKnownService(routeSource, payload);
+  const explicitServiceSelection = bool(payload.forceServiceReclassification) ||
+    bool(payload.force_service_reclassification) ||
+    [payload.flowAction, payload.flow_action].some((value) => clean(value).toLowerCase() === "service_selection");
   let createdByKnownSource = false;
-  if (!openRequest && knownService) {
-    const classified = await classifyConversationService({ conversationId: conversation.id, serviceKey: knownService, sourceCode: source, classificationMethod: "source_mapping", eventKey: eventId });
+  if (knownService && (!openRequest || explicitServiceSelection)) {
+    const classified = await classifyConversationService({
+      conversationId: conversation.id,
+      serviceKey: knownService,
+      sourceCode: source,
+      classificationMethod: explicitServiceSelection ? "customer_service_selection" : "source_mapping",
+      eventKey: eventId,
+    });
     openRequest = classified.request;
     createdByKnownSource = classified.reused !== true;
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;

@@ -216,3 +216,10 @@ Before deploying, read:
 - إضافة حذف إداري كامل ومؤكد برقم الجوال لملفات الاختبار، ويشمل العميل وطلبات الخدمة والمحادثات والرسائل والسجلات المرتبطة.
 - جعل زر تعديل العميل في قاعدة البيانات يفتح نموذج البيانات داخل نفس الصفحة دون فتح واجهة المحادثة.
 - استكمال توزيع أي طلب خدمة مفتوح غير موزع عند إعادة استخدامه، مع تحديث العميل والمحادثة وسجل الملكية.
+
+
+## v1.15.6 - WhatsApp service reclassification and redistribution
+
+- Treats every trusted Mersal service button (cash, finance, customer service) as an explicit selection.
+- Selecting a different department closes only the previous open service request, preserves the customer file and message history, creates a new request, resets the lead to `عميل جديد`, and redistributes using the new department rules.
+- Selecting the same department keeps the current request and only completes a missing assignment.
