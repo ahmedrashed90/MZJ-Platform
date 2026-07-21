@@ -311,7 +311,8 @@ insert into crm.sources(code, name, sort_order) values
 ('other_website','موقع آخر',100),
 ('branch','خلال الفرع',110),
 ('friend','صديق',120),
-('unified_number','اتصال الرقم الموحد',130)
+('unified_number','اتصال الرقم الموحد',130),
+('next_erp','NEXT ERP',140)
 on conflict (code) do update set name = excluded.name, sort_order = excluded.sort_order;
 
 insert into crm.integration_endpoints(source_code, display_name) values

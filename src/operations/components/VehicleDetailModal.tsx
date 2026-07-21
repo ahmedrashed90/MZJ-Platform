@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, Car, CheckCircle, ClockCounterClockwise, LinkSimple, ShieldCheck, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
+import { Archive, Car, CheckCircle, ClockCounterClockwise, LinkSimple, Receipt, ShieldCheck, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { formatOperationsDate, operationsFetch } from "../api";
 import type { OperationsMeta, VehicleDetail } from "../types";
 
 const tabs = [
-  ["details", "البيانات"], ["checks", "التشيك"], ["approvals", "الموافقات"], ["movements", "الحركات"],
+  ["details", "البيانات"], ["sales", "طلب البيع"], ["checks", "التشيك"], ["approvals", "الموافقات"], ["movements", "الحركات"],
   ["transfers", "طلبات النقل"], ["tracking", "التراكينج"], ["audit", "السجل"],
 ] as const;
 
@@ -16,6 +16,17 @@ function trackingProgressTone(value?: number | null) {
   if (progress >= 75) return "high";
   if (progress >= 40) return "medium";
   return "low";
+}
+
+function formatMoney(value: unknown) {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? amount.toLocaleString("ar-SA", { style: "currency", currency: "SAR" }) : "—";
+}
+
+function linkStatusLabel(value: unknown) {
+  const key = String(value || "");
+  const labels: Record<string, string> = { linked: "تم الربط", created: "تم الإنشاء", updated: "تم التحديث", partial: "ربط جزئي", not_linked: "غير مربوط", missing_user_id: "إيميل NEXT ERP مفقود", user_not_mapped: "المستخدم غير مربوط", erp_branch_missing: "فرع NEXT ERP مفقود", branch_not_configured: "فرع NEXT ERP غير محفوظ", branch_mismatch: "فرع NEXT ERP غير مطابق", department_not_configured: "قسم المنصة غير محدد", platform_branch_not_configured: "فرع المنصة غير محدد", unsupported_department: "قسم غير صالح لـCRM", missing_phone: "رقم الجوال مفقود", ambiguous_phone: "رقم الجوال مكرر", skipped_status: "تم تخطي الربط" };
+  return labels[key] || key || "—";
 }
 
 export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: string | null; meta: OperationsMeta; onClose: () => void; onChanged?: () => void }) {
@@ -67,6 +78,33 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
                   ["اسم الدفعة", vehicle.batch_no], ["المكان الحالي", vehicle.location_name], ["الحالة الحالية", vehicle.status_name], ["ملاحظات السيارة", vehicle.notes],
                   ["ملاحظات الحالة", vehicle.state_note], ["حجز - نواقص - تحديد مكان", vehicle.shortage_note], ["المنشئ", vehicle.created_by_name], ["آخر تعديل", formatOperationsDate(vehicle.updated_at)],
                 ].map(([label, value]) => <div key={label}><small>{label}</small><strong>{value || "—"}</strong></div>)}
+              </div>
+            ) : null}
+            {tab === "sales" ? (
+              <div className="operations-sales-order-list">
+                {vehicle.salesOrders?.length ? vehicle.salesOrders.map((order) => (
+                  <article key={`${order.id}-${order.item_no || order.sales_order_no}`} className="operations-sales-order-card">
+                    <header><Receipt size={22} /><div><strong>{order.sales_order_no}</strong><span>{order.erp_status || "To Deliver and Bill"}</span></div></header>
+                    <div className="operations-detail-grid">
+                      {[
+                        ["العميل الحقيقي", order.actual_customer_name], ["رقم الجوال", order.actual_customer_phone],
+                        ["Customer في NEXT ERP", order.accounting_customer_name], ["فرع البيع في NEXT ERP", order.erp_branch],
+                        ["مندوب NEXT ERP", order.erp_sales_person], ["إيميل مستخدم NEXT ERP", order.erp_user_id],
+                        ["مندوب المنصة", order.platform_user_name], ["فرع المنصة", order.platform_branch_name || order.platform_branch_code], ["تاريخ الطلب", order.order_date ? formatOperationsDate(order.order_date) : "—"],
+                        ["السيارة", [order.item_type, order.item_category, order.item_model].filter(Boolean).join(" ")],
+                        ["إجمالي السيارة", formatMoney(order.vehicle_total_incl_vat)], ["إجمالي الطلب", formatMoney(order.total_incl_vat)],
+                        ["ربط CRM", linkStatusLabel(order.crm_link_status)], ["ربط العمليات", linkStatusLabel(order.operations_link_status)],
+                        ["ربط المستخدم", linkStatusLabel(order.user_link_status)],
+                      ].map(([label, value]) => <div key={label}><small>{label}</small><strong>{value || "—"}</strong></div>)}
+                    </div>
+                    <div className="operations-sales-order-actions">
+                      {order.crm_lead_id ? <button type="button" onClick={() => window.location.assign(`/crm?lead=${encodeURIComponent(order.crm_lead_id || "")}`)}>فتح العميل في CRM</button> : null}
+                      {order.tracking_order_id ? <button type="button" onClick={() => window.location.assign(`/tracking?order=${encodeURIComponent(order.tracking_order_id || "")}`)}>فتح التراكينج</button> : null}
+                    </div>
+                    {Array.isArray(order.warnings) && order.warnings.length ? <div className="operations-sales-order-warnings">{order.warnings.map((warning, index) => <span key={`${warning.code || index}`}>{warning.message || warning.code}</span>)}</div> : null}
+                    <footer>مكان السيارة الحالي: <b>{vehicle.location_name || "—"}</b> · آخر تحديث: {formatOperationsDate(order.updated_at)}</footer>
+                  </article>
+                )) : <p>لا يوجد طلب بيع مرتبط بهذه السيارة.</p>}
               </div>
             ) : null}
             {tab === "checks" ? (

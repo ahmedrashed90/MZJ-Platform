@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAdmin, requestIp } from "./_auth.js";
 import { getSql } from "./_db.js";
+import { ensureErpNextUserMappingSchema } from "./_erpnext-integration-schema.js";
 
 function cleanText(value: unknown) {
   return String(value ?? "").trim();
@@ -10,6 +11,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const currentUser = await requireAdmin(request, response);
   if (!currentUser) return;
 
+  await ensureErpNextUserMappingSchema();
   const sql = getSql();
   try {
     if (request.method === "GET") {
@@ -20,6 +22,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
           u.full_name,
           u.email,
           u.mobile,
+          u.next_erp_user_id,
+          u.next_erp_branch,
           u.is_active,
           u.can_receive_leads,
           u.can_receive_tasks,
@@ -92,6 +96,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const employeeNo = cleanText(body.employeeNo) || null;
       const email = cleanText(body.email).toLowerCase() || null;
       const mobile = cleanText(body.mobile) || null;
+      const nextErpUserId = cleanText(body.nextErpUserId).toLowerCase() || null;
+      const nextErpBranch = cleanText(body.nextErpBranch) || null;
       const password = cleanText(body.password);
       const roleId = cleanText(body.roleId) || null;
       const departmentId = cleanText(body.departmentId) || null;
@@ -100,6 +106,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const canReceiveTasks = body.canReceiveTasks === true;
 
       if (!fullName) return response.status(400).json({ ok: false, error: "اسم المستخدم مطلوب" });
+      if (Boolean(nextErpUserId) !== Boolean(nextErpBranch)) return response.status(400).json({ ok: false, error: "لازم تدخل إيميل مستخدم NEXT ERP واسم الفرع معًا، أو تسيب الحقلين فاضيين" });
+      if (nextErpUserId && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextErpUserId)) return response.status(400).json({ ok: false, error: "اكتب إيميل مستخدم NEXT ERP بشكل صحيح" });
       if (!email && !mobile) return response.status(400).json({ ok: false, error: "البريد أو رقم الجوال مطلوب" });
       if (password.length < 10) return response.status(400).json({ ok: false, error: "كلمة المرور المؤقتة يجب ألا تقل عن 10 أحرف" });
       if (!roleId) return response.status(400).json({ ok: false, error: "اختر دور المستخدم" });
@@ -107,14 +115,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const created = await sql.begin(async (tx) => {
         const [user] = await tx`
           insert into core.users (
-            employee_no, full_name, email, mobile, password_hash,
+            employee_no, full_name, email, mobile, next_erp_user_id, next_erp_branch, password_hash,
             must_change_password, can_receive_leads, can_receive_tasks
           ) values (
-            ${employeeNo}, ${fullName}, ${email}, ${mobile},
+            ${employeeNo}, ${fullName}, ${email}, ${mobile}, ${nextErpUserId}, ${nextErpBranch},
             crypt(${password}, gen_salt('bf')), true,
             ${canReceiveLeads}, ${canReceiveTasks}
           )
-          returning id::text, employee_no, full_name, email, mobile, is_active,
+          returning id::text, employee_no, full_name, email, mobile, next_erp_user_id, next_erp_branch, is_active,
                     can_receive_leads, can_receive_tasks, created_at
         `;
 
@@ -130,7 +138,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             'user_created',
             'user',
             ${user.id},
-            ${tx.json({ fullName, employeeNo, email, mobile, roleId, departmentId, branchId, canReceiveLeads, canReceiveTasks })},
+            ${tx.json({ fullName, employeeNo, email, mobile, nextErpUserId, nextErpBranch, roleId, departmentId, branchId, canReceiveLeads, canReceiveTasks })},
             ${requestIp(request)}
           )
         `;
@@ -148,6 +156,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const employeeNo = cleanText(body.employeeNo) || null;
       const email = cleanText(body.email).toLowerCase() || null;
       const mobile = cleanText(body.mobile) || null;
+      const nextErpUserId = cleanText(body.nextErpUserId).toLowerCase() || null;
+      const nextErpBranch = cleanText(body.nextErpBranch) || null;
       const password = cleanText(body.password);
       const roleId = cleanText(body.roleId) || null;
       const departmentId = cleanText(body.departmentId) || null;
@@ -157,13 +167,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       if (!userId) return response.status(400).json({ ok: false, error: "المستخدم المطلوب تعديله غير محدد" });
       if (!fullName) return response.status(400).json({ ok: false, error: "اسم المستخدم مطلوب" });
+      if (Boolean(nextErpUserId) !== Boolean(nextErpBranch)) return response.status(400).json({ ok: false, error: "لازم تدخل إيميل مستخدم NEXT ERP واسم الفرع معًا، أو تسيب الحقلين فاضيين" });
+      if (nextErpUserId && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextErpUserId)) return response.status(400).json({ ok: false, error: "اكتب إيميل مستخدم NEXT ERP بشكل صحيح" });
       if (!email && !mobile) return response.status(400).json({ ok: false, error: "البريد أو رقم الجوال مطلوب" });
       if (password && password.length < 10) return response.status(400).json({ ok: false, error: "كلمة المرور الجديدة يجب ألا تقل عن 10 أحرف" });
       if (!roleId) return response.status(400).json({ ok: false, error: "اختر دور المستخدم" });
 
       const updated = await sql.begin(async (tx) => {
         const [before] = await tx`
-          select id::text, employee_no, full_name, email, mobile,
+          select id::text, employee_no, full_name, email, mobile, next_erp_user_id, next_erp_branch,
                  can_receive_leads, can_receive_tasks
           from core.users
           where id = ${userId}::uuid
@@ -178,6 +190,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
                   full_name = ${fullName},
                   email = ${email},
                   mobile = ${mobile},
+                  next_erp_user_id = ${nextErpUserId},
+                  next_erp_branch = ${nextErpBranch},
                   password_hash = crypt(${password}, gen_salt('bf')),
                   must_change_password = true,
                   password_changed_at = null,
@@ -185,7 +199,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
                   can_receive_tasks = ${canReceiveTasks},
                   updated_at = now()
               where id = ${userId}::uuid
-              returning id::text, employee_no, full_name, email, mobile, is_active,
+              returning id::text, employee_no, full_name, email, mobile, next_erp_user_id, next_erp_branch, is_active,
                         can_receive_leads, can_receive_tasks, updated_at
             `
           : await tx`
@@ -194,11 +208,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
                   full_name = ${fullName},
                   email = ${email},
                   mobile = ${mobile},
+                  next_erp_user_id = ${nextErpUserId},
+                  next_erp_branch = ${nextErpBranch},
                   can_receive_leads = ${canReceiveLeads},
                   can_receive_tasks = ${canReceiveTasks},
                   updated_at = now()
               where id = ${userId}::uuid
-              returning id::text, employee_no, full_name, email, mobile, is_active,
+              returning id::text, employee_no, full_name, email, mobile, next_erp_user_id, next_erp_branch, is_active,
                         can_receive_leads, can_receive_tasks, updated_at
             `;
 
@@ -220,7 +236,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             'user',
             ${userId},
             ${tx.json(before)},
-            ${tx.json({ fullName, employeeNo, email, mobile, roleId, departmentId, branchId, canReceiveLeads, canReceiveTasks, passwordChanged: Boolean(password) })},
+            ${tx.json({ fullName, employeeNo, email, mobile, nextErpUserId, nextErpBranch, roleId, departmentId, branchId, canReceiveLeads, canReceiveTasks, passwordChanged: Boolean(password) })},
             ${requestIp(request)}
           )
         `;
@@ -235,7 +251,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(405).json({ ok: false, error: "Method not allowed" });
   } catch (error: any) {
     console.error(error);
-    if (error?.code === "23505") return response.status(409).json({ ok: false, error: "رقم الموظف أو البريد أو الجوال مستخدم بالفعل" });
+    if (error?.code === "23505") return response.status(409).json({ ok: false, error: "رقم الموظف أو البريد أو الجوال أو إيميل NEXT ERP مستخدم بالفعل" });
     if (error?.code === "23503") return response.status(400).json({ ok: false, error: "القسم أو الفرع أو الدور المحدد غير صحيح" });
     return response.status(500).json({ ok: false, error: "تعذر حفظ بيانات المستخدم" });
   }

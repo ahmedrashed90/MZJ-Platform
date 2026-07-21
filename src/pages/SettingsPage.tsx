@@ -23,6 +23,8 @@ type UserRow = {
   full_name: string;
   email: string | null;
   mobile: string | null;
+  next_erp_user_id: string | null;
+  next_erp_branch: string | null;
   is_active: boolean;
   can_receive_leads: boolean;
   can_receive_tasks: boolean;
@@ -49,6 +51,8 @@ const initialForm = {
   fullName: "",
   email: "",
   mobile: "",
+  nextErpUserId: "",
+  nextErpBranch: "",
   password: "",
   roleId: "",
   departmentId: "",
@@ -137,6 +141,9 @@ export function SettingsPage() {
     setMessage("");
     setError("");
     try {
+      const hasErpUser = Boolean(form.nextErpUserId.trim());
+      const hasErpBranch = Boolean(form.nextErpBranch.trim());
+      if (hasErpUser !== hasErpBranch) throw new Error("لازم تدخل إيميل مستخدم NEXT ERP واسم الفرع معًا، أو تسيب الحقلين فاضيين");
       const response = await fetch("/api/users", {
         method: editingUserId ? "PUT" : "POST",
         headers: { "content-type": "application/json" },
@@ -162,6 +169,8 @@ export function SettingsPage() {
       fullName: row.full_name,
       email: row.email || "",
       mobile: row.mobile || "",
+      nextErpUserId: row.next_erp_user_id || "",
+      nextErpBranch: row.next_erp_branch || "",
       password: "",
       roleId: row.role_id || "",
       departmentId: row.department_id || "",
@@ -198,7 +207,7 @@ export function SettingsPage() {
         <div className="settings-grid">
           <section className="panel settings-table-card">
             <div className="settings-card-title"><div><UsersThree size={22} weight="duotone" /><h2>المستخدمون</h2></div><span>{loading ? "—" : users.length}</span></div>
-            <div className="users-table-wrap"><table className="users-table"><thead><tr><th>المستخدم</th><th>رقم الموظف</th><th>القسم</th><th>الفرع</th><th>الصلاحية</th><th>استقبال العملاء</th><th>الحالة</th></tr></thead><tbody>{!loading && users.length === 0 ? <tr><td colSpan={7} className="table-empty">لا يوجد مستخدمون حتى الآن</td></tr> : users.map((row) => <tr key={row.id} onClick={() => editUser(row)}><td><strong>{row.full_name}</strong><small>{row.email || row.mobile || "—"}</small></td><td>{row.employee_no || "—"}</td><td>{row.departments || "—"}</td><td>{row.branches || "—"}</td><td>{row.roles || "—"}</td><td>{row.can_receive_leads ? "مفعّل" : "موقوف"}</td><td><span className={`user-status ${row.is_active ? "active" : "inactive"}`}>{row.is_active ? "فعال" : "موقوف"}</span></td></tr>)}</tbody></table></div>
+            <div className="users-table-wrap"><table className="users-table"><thead><tr><th>المستخدم</th><th>رقم الموظف</th><th>ربط NEXT ERP</th><th>القسم</th><th>الفرع</th><th>الصلاحية</th><th>استقبال العملاء</th><th>الحالة</th></tr></thead><tbody>{!loading && users.length === 0 ? <tr><td colSpan={8} className="table-empty">لا يوجد مستخدمون حتى الآن</td></tr> : users.map((row) => <tr key={row.id} onClick={() => editUser(row)}><td><strong>{row.full_name}</strong><small>{row.email || row.mobile || "—"}</small></td><td>{row.employee_no || "—"}</td><td><strong>{row.next_erp_user_id || "—"}</strong><small>{row.next_erp_branch || "—"}</small></td><td>{row.departments || "—"}</td><td>{row.branches || "—"}</td><td>{row.roles || "—"}</td><td>{row.can_receive_leads ? "مفعّل" : "موقوف"}</td><td><span className={`user-status ${row.is_active ? "active" : "inactive"}`}>{row.is_active ? "فعال" : "موقوف"}</span></td></tr>)}</tbody></table></div>
           </section>
 
           <section className="panel user-form-card">
@@ -207,6 +216,7 @@ export function SettingsPage() {
               <label><span>اسم المستخدم</span><input required value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} /></label>
               <div className="form-row"><label><span>رقم الموظف</span><input value={form.employeeNo} onChange={(event) => setForm({ ...form, employeeNo: event.target.value })} /></label><label><span>رقم الجوال</span><input value={form.mobile} onChange={(event) => setForm({ ...form, mobile: event.target.value })} /></label></div>
               <label><span>البريد الإلكتروني</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
+              <div className="form-row"><label><span>ID المستخدم في NEXT ERP (الإيميل)</span><input type="email" value={form.nextErpUserId} onChange={(event) => setForm({ ...form, nextErpUserId: event.target.value })} placeholder="الإيميل المسجل داخل NEXT ERP" /></label><label><span>اسم الفرع في NEXT ERP</span><input value={form.nextErpBranch} onChange={(event) => setForm({ ...form, nextErpBranch: event.target.value })} placeholder="اكتبه كما يظهر في NEXT ERP" /></label></div>
               <label><span>{editingUserId ? "كلمة مرور جديدة (اختياري)" : "كلمة مرور مؤقتة"}</span><input required={!editingUserId} minLength={10} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
               <div className="form-row"><label><span>القسم</span><select value={form.departmentId} onChange={(event) => setForm({ ...form, departmentId: event.target.value })}><option value="">اختر القسم</option>{meta?.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>الفرع</span><select value={form.branchId} onChange={(event) => setForm({ ...form, branchId: event.target.value })}><option value="">اختر الفرع</option>{meta?.branches.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
               <label><span>الدور والصلاحية</span><select value={form.roleId} onChange={(event) => setForm({ ...form, roleId: event.target.value })}><option value="">اختر الدور</option>{visibleRoles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>

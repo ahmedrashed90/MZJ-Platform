@@ -11,7 +11,7 @@ const checks = [
   ["server/integrations/tracking-orders.ts", "google-sheets-next-erp"],
   ["server/integrations/tracking-orders.ts", "sales_order_no=${orderNo}"],
   ["api/index.ts", "integrations/erpnext/sales-order"],
-  ["server/integrations/erpnext-sales-order.ts", "erpnext-webhook"],
+  ["server/_erpnext-sales-order-normalizer.ts", "erpnext-webhook"],
   ["server/integrations/erpnext-sales-order.ts", "registrationFeeRowsIgnoredAsVehicles"],
   [".env.example", "ERPNEXT_WEBHOOK_KEY"],
   ["docs/ERPNEXT-WEBHOOK-TRACKING-AR.md", "X-MZJ-ERPNext-Key"],

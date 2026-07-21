@@ -3492,3 +3492,18 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .dashboard-request-detail-modal .operations-request-vehicle-list article { grid-template-columns: 1fr; }
   .mzj-modal-card.dashboard-operations-modal-fullscreen { inset: 0; border-radius: 0; }
 }
+
+.operations-sales-order-list { display: grid; gap: 14px; }
+.operations-sales-order-list > p { margin: 0; padding: 28px; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; background: #fcfaf9; }
+.operations-sales-order-card { display: grid; gap: 14px; padding: 16px; border: 1px solid #e3d7d1; border-radius: 15px; background: linear-gradient(180deg,#fff,#fcfaf8); box-shadow: 0 7px 22px rgba(79,45,34,.06); }
+.operations-sales-order-card > header { display: flex; align-items: center; gap: 11px; padding-bottom: 12px; border-bottom: 1px solid #eee5e0; }
+.operations-sales-order-card > header > svg { color: var(--brand-2); }
+.operations-sales-order-card > header > div { display: grid; gap: 2px; }
+.operations-sales-order-card > header strong { font-size: 16px; direction: ltr; text-align: right; }
+.operations-sales-order-card > header span { color: var(--muted); font-size: 12px; }
+.operations-sales-order-card > footer { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.operations-sales-order-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.operations-sales-order-actions button { border: 1px solid #d9c0b6; border-radius: 9px; background: #fff; color: var(--brand); padding: 8px 12px; font: inherit; font-weight: 800; cursor: pointer; }
+.operations-sales-order-actions button:hover { border-color: var(--brand-2); background: #fff7f3; }
+.operations-sales-order-warnings { display: grid; gap: 7px; padding: 11px 13px; border: 1px solid #efc9a6; border-radius: 10px; background: #fff9ef; color: #87541c; }
+.operations-sales-order-warnings span { font-size: 12px; line-height: 1.65; }

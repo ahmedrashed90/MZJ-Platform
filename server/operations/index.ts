@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
+import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import {
   hasPermission,
   isSystemAdmin,
@@ -192,7 +193,7 @@ async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: N
   `;
   if (!vehicle) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة أو لا تملك صلاحية عرضها");
 
-  const [checks, checkHistory, approvals, approvalEvents, movements, transfers, tracking, archiveEvents, notes] = await Promise.all([
+  const [checks, checkHistory, approvals, approvalEvents, movements, transfers, tracking, salesOrders, archiveEvents, notes] = await Promise.all([
     sql<any[]>`
       select d.code,d.name,d.sort_order,coalesce(v.status,'unknown') as status,v.note,v.updated_by_name,v.updated_at
       from operations.check_item_definitions d left join operations.vehicle_check_values v on v.item_code=d.code and v.vehicle_id=${id}::uuid
@@ -221,10 +222,24 @@ async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: N
       where ov.vehicle_id=${id}::uuid or (ov.vehicle_id is null and ov.vin=${vehicle.vin})
       group by o.id order by o.updated_at desc
     `,
+    sql<any[]>`
+      select so.id::text,so.sales_order_no,so.erp_status,so.erp_event,so.erp_sales_person,so.accounting_customer_name,so.actual_customer_name,
+        so.actual_customer_phone,so.customer_vat,so.order_date,so.delivery_date,so.erp_user_id,so.erp_branch,
+        so.platform_user_id::text,so.platform_user_name,so.platform_department_code,so.platform_department_name,so.platform_branch_code,so.platform_branch_name,
+        so.crm_lead_id::text,so.tracking_order_id::text,so.subtotal_before_tax,so.tax_value,so.total_incl_vat,so.registration_fee,
+        so.user_link_status,so.crm_link_status,so.operations_link_status,so.warnings,so.received_at,so.updated_at,
+        sov.id::text as sales_order_vehicle_id,sov.item_no,sov.vin,sov.item_type,sov.item_category,sov.item_model,
+        sov.interior_color,sov.exterior_color,sov.dealer,sov.qty,sov.unit_price,sov.item_value,sov.total_incl_vat as vehicle_total_incl_vat,
+        sov.tracking_vehicle_id::text,sov.operations_status_code,sov.operations_status_applied_at
+      from integrations.erpnext_sales_order_vehicles sov
+      join integrations.erpnext_sales_orders so on so.id=sov.sales_order_id
+      where sov.operations_vehicle_id=${id}::uuid
+      order by so.order_date desc nulls last,so.updated_at desc
+    `,
     sql<any[]>`select * from operations.vehicle_archive_events where vehicle_id=${id}::uuid order by created_at desc`,
     sql<any[]>`select * from operations.vehicle_status_notes where vehicle_id=${id}::uuid order by created_at desc`,
   ]);
-  return { ok: true, vehicle: { ...vehicle, checks, checkHistory, approvals, approvalEvents, movements, transfers, tracking, archiveEvents, statusNotes: notes } };
+  return { ok: true, vehicle: { ...vehicle, checks, checkHistory, approvals, approvalEvents, movements, transfers, tracking, salesOrders, archiveEvents, statusNotes: notes } };
 }
 
 async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -1134,6 +1149,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   try {
     await ensureTrackingSchema();
     await ensureOperationsSchema();
+    await ensureErpNextSalesOrderSchema();
     const user = await requireOperationsUser(request, response);
     if (!user) return;
     const sql = getSql();
