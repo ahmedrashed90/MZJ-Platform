@@ -2,6 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { requireTrackingUser } from "../_tracking-auth.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
+import { ensureOperationsSchema } from "../_operations-schema.js";
+import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.js";
 import { clean, ensureVehicleStageRows, recalculateTrackingOrder } from "../_tracking-utils.js";
 
 async function getOrderDetail(id: string) {
@@ -65,6 +67,7 @@ async function getOrderDetail(id: string) {
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   await ensureTrackingSchema();
+  await ensureOperationsSchema();
   const user = await requireTrackingUser(request, response);
   if (!user) return;
   const sql = getSql();
@@ -188,6 +191,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
             values (${row.order_id}::uuid,${vehicleId}::uuid,${stageId}::uuid,'completed',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
           `;
+          await tryArchiveVehicleForTrackingRecord(tx, vehicleId, { id: user.id, name: user.fullName });
         });
       }
     } else if (row.status === "completed") {

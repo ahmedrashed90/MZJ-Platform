@@ -3,6 +3,7 @@ import { getSql } from "../_db.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
+import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
 import {
   hasPermission,
   isSystemAdmin,
@@ -645,30 +646,21 @@ async function archiveVehicle(sql: ReturnType<typeof getSql>, body: Record<strin
   return sql.begin(async (tx) => {
     const [v] = await tx<any[]>`
       select v.*,v.id::text,l.branch_code,l.code as location_code
-      from operations.vehicles v left join operations.locations l on l.id=v.location_id
-      where v.id=${id}::uuid and v.is_deleted=false and v.archived_at is null for update
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id=${id}::uuid and v.is_deleted=false
+      for update of v
     `;
-    if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة أو مؤرشفة بالفعل");
+    if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
     assertBranchAccess(user, v.branch_code, v.location_code, "لا تملك صلاحية أرشفة سيارة في هذا الفرع");
-    if (v.status_code !== "delivered") throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة قبل وصول السيارة إلى حالة مباع تم التسليم");
-    const [state] = await tx<any[]>`
-      select
-        exists(select 1 from operations.vehicle_approvals where vehicle_id=${id}::uuid and financial_approved=true and administrative_approved=true) as approvals,
-        exists(select 1 from operations.movements where vehicle_id=${id}::uuid) as movement,
-        exists(select 1 from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${id}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed') as active_transfer,
-        exists(
-          select 1 from tracking.order_vehicles ov join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false
-          where (ov.vehicle_id=${id}::uuid or (ov.vehicle_id is null and ov.vin=${v.vin})) and o.status='completed'
-            and not exists(select 1 from tracking.vehicle_stages vs where vs.vehicle_id=ov.id and vs.status<>'completed')
-        ) as tracking_complete
-    `;
-    if (!state.approvals) throw new OperationError(409, "APPROVALS_REQUIRED", "لا يمكن الأرشفة قبل اكتمال الموافقة المالية والإدارية");
-    if (!state.movement) throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة بدون سجل حركة");
-    if (state.active_transfer) throw new OperationError(409, "CONFLICT", "لا يمكن الأرشفة لوجود طلب نقل نشط");
-    if (!state.tracking_complete) throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة قبل اكتمال طلب التراكينج بنسبة 100%");
-    const [updated] = await tx`update operations.vehicles set archived_at=now(),archived_by=${who.id}::uuid,archived_by_name=${who.name},archive_reason=${reason},is_inventory_active=false,updated_at=now() where id=${id}::uuid returning *,id::text`;
-    await tx`insert into operations.vehicle_archive_events(vehicle_id,action,reason,actor_id,actor_name,snapshot) values (${id}::uuid,'archived',${reason},${who.id}::uuid,${who.name},${tx.json(updated)})`;
-    return { ok: true, message: "تمت أرشفة السيارة", vehicle: updated };
+
+    const archive = await tryArchiveEligibleVehicle(tx, id, who, { reason, action: "archived" });
+    if (archive.archived) return { ok: true, message: "تمت أرشفة السيارة", vehicle: archive.vehicle };
+    if (archive.reason === "already_archived") throw new OperationError(409, "CONFLICT", "السيارة مؤرشفة بالفعل");
+    if (archive.reason === "approvals_incomplete") throw new OperationError(409, "APPROVALS_REQUIRED", "لا يمكن الأرشفة قبل اكتمال الموافقة المالية والإدارية");
+    if (archive.reason === "active_transfer") throw new OperationError(409, "CONFLICT", "لا يمكن الأرشفة لوجود طلب نقل جاري أو غير مكتمل");
+    if (archive.reason === "tracking_incomplete") throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "لا يمكن الأرشفة قبل اكتمال التراكينج بنسبة 100%");
+    throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
   });
 }
 
@@ -882,6 +874,14 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     if (!r) throw new OperationError(404, "CONFLICT", "طلب النقل غير موجود");
     if (r.cancelled_at) throw new OperationError(409, "CONFLICT", "طلب النقل ملغي");
     const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
+    async function archiveEligibleItems() {
+      const archivedVehicleIds: string[] = [];
+      for (const item of items) {
+        const archive = await tryArchiveEligibleVehicle(tx, item.id, who);
+        if (archive.archived) archivedVehicleIds.push(item.id);
+      }
+      return archivedVehicleIds;
+    }
     if (action === "delete") {
       if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "الحذف متاح لمنشئ الطلب أو صاحب الصلاحية فقط");
       const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
@@ -894,7 +894,8 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       } catch (eventError) {
         console.error('Operations transfer delete event failed', { requestId: id, eventError });
       }
-      return { ok: true, message: "تم حذف طلب النقل قبل بدء التنفيذ" };
+      const autoArchivedVehicleIds = await archiveEligibleItems();
+      return { ok: true, autoArchivedVehicleIds, message: "تم حذف طلب النقل قبل بدء التنفيذ" };
     }
     if (action === "cancel") {
       if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
@@ -907,7 +908,8 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       } catch (eventError) {
         console.error('Operations transfer cancel event failed', { requestId: id, eventError });
       }
-      return { ok: true, message: "تم إلغاء طلب النقل مع الحفاظ على السجل" };
+      const autoArchivedVehicleIds = await archiveEligibleItems();
+      return { ok: true, autoArchivedVehicleIds, message: "تم إلغاء طلب النقل مع الحفاظ على السجل" };
     }
     const currentIndex = transferOrder.indexOf(r.status);
     const next = clean(body.nextStatus) || transferOrder[currentIndex + 1];
@@ -942,7 +944,8 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     } catch (outboxError) {
       console.error('Operations transfer stage outbox failed', { requestId: id, next, outboxError });
     }
-    return { ok: true, message: next === "completed" ? "تم إنهاء طلب النقل" : "تم تحديث مرحلة طلب النقل" };
+    const autoArchivedVehicleIds = next === "completed" ? await archiveEligibleItems() : [];
+    return { ok: true, autoArchivedVehicleIds, message: next === "completed" ? "تم إنهاء طلب النقل" : "تم تحديث مرحلة طلب النقل" };
   });
 }
 
@@ -1029,7 +1032,18 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
       [a] = await tx<any[]>`update operations.vehicle_approvals set pending_delivery=null,is_active=false,updated_at=now() where id=${a.id}::uuid returning *,id::text`;
       delivered = true;
     }
-    return { ok: true, approval: a, delivered, message: delivered ? "اكتملت الموافقتان وتم تسليم السيارة نهائيًا" : "تم تحديث الموافقات" };
+    const autoArchive = await tryArchiveEligibleVehicle(tx, vehicleId, who);
+    return {
+      ok: true,
+      approval: a,
+      delivered,
+      autoArchived: autoArchive.archived,
+      message: autoArchive.archived
+        ? "تم تحديث الموافقات وأرشفة السيارة تلقائيًا"
+        : delivered
+          ? "اكتملت الموافقتان وتم تسليم السيارة نهائيًا"
+          : "تم تحديث الموافقات",
+    };
   });
 }
 

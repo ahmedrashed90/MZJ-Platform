@@ -5,7 +5,7 @@ function expect(file, needle, label = needle) { if (!read(file).includes(needle)
 function reject(file, needle, label = needle) { if (read(file).includes(needle)) throw new Error(`ERPNext unified link check failed: ${file} contains forbidden ${label}`); }
 
 const packageJson = JSON.parse(read("package.json"));
-if (packageJson.version !== "1.16.8") throw new Error("ERPNext unified link check failed: package version must be 1.16.8");
+if (packageJson.version !== "1.16.9") throw new Error("ERPNext unified link check failed: package version must be 1.16.9");
 expect("api/index.ts", '"integrations/erpnext/sales-order"', "single ERPNext endpoint");
 expect("server/integrations/erpnext-sales-order.ts", "ingestTrackingOrder(payload)", "canonical tracking ingest");
 expect("server/integrations/erpnext-sales-order.ts", "syncErpNextSalesOrder", "unified CRM/operations sync");
@@ -41,4 +41,4 @@ expect("integration-assets/MZJ-ERPNext-Sales-Order-Webhook-JSON.txt", '"user_nam
 expect("integration-assets/MZJ-ERPNext-Sales-Order-Webhook-JSON.txt", '"user_phone"');
 expect("integration-assets/MZJ-ERPNext-Sales-Order-Webhook-JSON.txt", '"branch"', "sales branch metadata");
 reject("integration-assets/MZJ-ERPNext-Sales-Order-Webhook-JSON.txt", "Completed", "second status flow");
-console.log("ERPNext unified Sales Order -> Tracking + CRM + Operations v1.16.8 check passed.");
+console.log("ERPNext unified Sales Order -> Tracking + CRM + Operations v1.16.9 check passed.");
