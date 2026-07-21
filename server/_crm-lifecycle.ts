@@ -110,7 +110,7 @@ async function ensureLeadForContact(input: {
     ) values (
       ${input.contactId}::uuid,${input.displayName||"عميل"},${input.phone||input.phoneNormalized},${input.phoneNormalized||null},
       ${input.sourceCode},${input.sourceName},${input.platformCode},'cash','cash_sales','عميل جديد','كاش',now(),
-      ${sql.json([{ source: input.sourceCode, at: new Date().toISOString() }])},${sql.json({ contactModel: true })},0
+      ${sql.json([{ source: input.sourceCode, at: new Date().toISOString() }])},jsonb_build_object('contactModel',true),0
     ) returning *,id::text
   `;
   return lead;
