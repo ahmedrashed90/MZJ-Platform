@@ -20,6 +20,7 @@
  *   MERSAL_SEND_URL
  *   MERSAL_TEMPLATE_URL
  *   MERSAL_MEDIA_SEND_URL
+ *   MERSAL_ATTACHMENT_SEND_URL
  *
  * Optional binding:
  *   DEBUG_KV
@@ -30,7 +31,7 @@
  * Worker identifies the customer selection and forwards a trusted flow instruction.
  */
 
-const VERSION = "mzj-mersal-postgres-v1.12.3-service-reclassification";
+const VERSION = "mzj-mersal-postgres-v1.12.4-attachment-formdata";
 const DEFAULT_MERSAL_BASE = "https://w-mersal.com";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp";
 const FAILURE_STATUSES = new Set(["error", "failed", "failure", "rejected", "invalid"]);
@@ -209,26 +210,54 @@ async function sendMersalTemplate(env, input) {
 async function sendMersalMedia(env, input) {
   const token = clean(env?.MERSAL_TOKEN);
   if (!token) return failedProviderResult("Missing MERSAL_TOKEN");
-  if (!clean(input.mediaUrl)) return failedProviderResult("missing media_url");
+  const mediaUrl = clean(input.mediaUrl);
+  const phone = normalizePhone(input.phone);
+  if (!mediaUrl) return failedProviderResult("missing media_url");
+  if (!phone) return failedProviderResult("missing or invalid phone");
 
-  const mediaType = normalizeMediaType(input.mediaType);
-  const payload = {
-    token,
-    phone: normalizePhone(input.phone),
-    type: mediaType,
-    media_url: clean(input.mediaUrl),
-  };
-  if (clean(input.caption)) payload.caption = clean(input.caption);
-  if (mediaType === "document" && clean(input.fileName)) payload.filename = clean(input.fileName);
+  try {
+    const mediaResponse = await fetch(mediaUrl, { method: "GET", headers: { accept: "*/*" } });
+    if (!mediaResponse.ok) return failedProviderResult(`Unable to download attachment: HTTP ${mediaResponse.status}`);
+    const mediaType = normalizeMediaType(input.mediaType);
+    const mimeType = clean(mediaResponse.headers.get("content-type")) || guessMimeType(mediaUrl, mediaType);
+    const fileName = ensureMediaFileName(
+      first(input.fileName, contentDispositionFileName(mediaResponse.headers.get("content-disposition")), fileNameFromUrl(mediaUrl)),
+      mediaType,
+      mimeType,
+      `out-${Date.now()}`,
+    );
+    const bytes = await mediaResponse.arrayBuffer();
+    const form = new FormData();
+    form.set("token", token);
+    form.set("phone", phone);
+    form.set("message", clean(input.caption) || fileName || "مرفق");
+    form.set("media_url", mediaUrl);
+    form.set("type", mediaType);
+    form.set("image", new Blob([bytes], { type: mimeType || "application/octet-stream" }), fileName);
 
-  return postMersalProvider(exactEndpoint(env, "media"), payload);
+    return postMersalMultipartProvider(exactEndpoint(env, "attachment"), form);
+  } catch (error) {
+    return failedProviderResult(errorMessage(error));
+  }
 }
 
 function exactEndpoint(env, type) {
   const base = clean(env?.MERSAL_API_ENDPOINT || DEFAULT_MERSAL_BASE).replace(/\/+$/, "");
   if (type === "template") return clean(env?.MERSAL_TEMPLATE_URL) || `${base}/api/wpbox/sendtemplatemessage`;
+  if (type === "attachment") return clean(env?.MERSAL_ATTACHMENT_SEND_URL || env?.MERSAL_MEDIA_SEND_URL || env?.MERSAL_SEND_URL) || `${base}/api/wpbox/sendmessage`;
   if (type === "media") return clean(env?.MERSAL_MEDIA_SEND_URL) || `${base}/api/wpbox/sendmedia`;
   return clean(env?.MERSAL_SEND_URL) || `${base}/api/wpbox/sendmessage`;
+}
+
+async function postMersalMultipartProvider(url, form) {
+  try {
+    const response = await fetch(url, { method: "POST", headers: { accept: "application/json" }, body: form });
+    const rawText = await response.text();
+    const raw = parseJson(rawText);
+    return normalizeProviderResponse(response.status, response.ok, raw, rawText);
+  } catch (error) {
+    return failedProviderResult(errorMessage(error));
+  }
 }
 
 async function postMersalProvider(url, payload) {

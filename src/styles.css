@@ -3182,3 +3182,116 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .crm-contact-custom-data h4 { margin: 0 0 12px; font-size: 15px; color: var(--crm-ink, #4d2a23); }
 .crm-contact-custom-data pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; color: inherit; }
+
+/* CRM v1.15.7: premium finance history, ownership log and native KPI rebuild */
+.crm-eyebrow { display:block; margin-bottom:7px; color:#9a6a5d; font-size:9px; font-weight:900; letter-spacing:.04em; }
+.crm-department-tabs.centered,.crm-inner-page-tabs.centered { justify-content:center; }
+.crm-department-tabs.centered button,.crm-inner-page-tabs.centered button { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
+
+.crm-finance-history-page { gap:16px; }
+.crm-finance-history-hero { position:relative; overflow:hidden; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:24px; padding:25px 28px; border:1px solid #e5cfc4; border-radius:24px; background:linear-gradient(135deg,#fffdfb 0%,#f8ebe4 58%,#f2ddd2 100%); box-shadow:0 20px 50px rgba(91,48,35,.08); }
+.crm-finance-history-hero::after { content:""; position:absolute; width:240px; height:240px; left:-85px; bottom:-145px; border-radius:50%; background:rgba(132,60,47,.08); }
+.crm-finance-history-title { position:relative; z-index:1; }
+.crm-finance-history-title h1 { margin:0; color:#49251c; font-size:29px; line-height:1.25; }
+.crm-finance-history-title p { max-width:760px; margin:9px 0 0; color:#7d5d53; font-size:11px; line-height:1.9; }
+.crm-finance-history-hero-stats { position:relative; z-index:1; display:grid; grid-template-columns:repeat(2,minmax(150px,1fr)); gap:10px; }
+.crm-finance-history-hero-stats article { min-width:155px; min-height:105px; padding:14px; border:1px solid rgba(132,60,47,.14); border-radius:17px; background:rgba(255,255,255,.8); backdrop-filter:blur(8px); display:grid; grid-template-columns:auto 1fr; align-items:center; gap:8px; box-shadow:0 12px 28px rgba(77,36,24,.05); }
+.crm-finance-history-hero-stats article svg { color:#843c2f; }
+.crm-finance-history-hero-stats article span { color:#8b6a60; font-size:9px; font-weight:800; }
+.crm-finance-history-hero-stats article strong { grid-column:2; color:#3d2018; font-size:26px; }
+.crm-finance-history-tabs { width:min(620px,100%); margin-inline:auto; padding:7px; border-radius:16px; box-shadow:0 10px 28px rgba(81,44,34,.05); }
+.crm-finance-history-tabs button { flex:1; min-height:43px; }
+.crm-finance-history-mini-stats { justify-content:center; }
+.crm-finance-directory { display:grid; gap:12px; }
+.crm-finance-record { border-radius:19px; border-color:#ead7cd; box-shadow:0 12px 32px rgba(78,42,31,.055); transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
+.crm-finance-record:hover { transform:translateY(-2px); border-color:#cda99b; box-shadow:0 18px 40px rgba(78,42,31,.09); }
+.crm-finance-record-open { min-height:122px; grid-template-columns:1.1fr .72fr 1.25fr; padding:19px 20px; }
+.crm-finance-record-main .crm-customer-name-link { font-size:15px; }
+.crm-finance-record-main span { margin-top:5px; font-size:10px; }
+.crm-finance-record-main small { margin-top:8px; }
+.crm-finance-record-status b { padding:8px 12px; background:linear-gradient(135deg,#f4dfd5,#f9ece6); color:#76372c; }
+.crm-finance-record-meta { gap:8px; padding:12px 14px; border:1px solid #f0dfd6; border-radius:13px; background:#fffaf7; }
+.crm-open-conversation-button { min-height:42px; margin:0 0 0 14px; border-radius:11px; }
+
+.crm-ownership-page { gap:16px; }
+.crm-ownership-head { padding:20px 22px; border:1px solid #ead7cd; border-radius:20px; background:linear-gradient(135deg,#fff,#fbf0ea); box-shadow:0 14px 34px rgba(80,43,32,.055); }
+.crm-ownership-head h1 { margin:0; }
+.crm-ownership-tabs { width:min(520px,100%); margin-inline:auto; padding:7px; border:1px solid var(--line); border-radius:15px; background:#fff; }
+.crm-ownership-tabs button { flex:1; min-height:42px; }
+.crm-ownership-summary { display:grid; grid-template-columns:repeat(2,minmax(0,220px)); justify-content:center; gap:12px; }
+.crm-ownership-summary article { min-height:98px; padding:14px; border:1px solid #ead7cd; border-radius:16px; background:#fff; display:grid; grid-template-columns:auto 1fr; align-items:center; gap:9px; box-shadow:0 10px 26px rgba(79,41,31,.045); }
+.crm-ownership-summary article svg { color:#843c2f; }
+.crm-ownership-summary span { color:var(--muted); font-size:9px; font-weight:800; }
+.crm-ownership-summary strong { grid-column:2; font-size:25px; }
+.crm-ownership-event { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:stretch; gap:14px; padding:16px; border-radius:18px; }
+.crm-ownership-event>div { display:block; }
+.crm-ownership-event .crm-ownership-icon { width:50px; min-width:50px; height:50px; display:grid; place-items:center; border-radius:15px; background:linear-gradient(135deg,#f5e3da,#fff7f2); color:#843c2f; }
+.crm-ownership-content { min-width:0; display:grid !important; gap:12px !important; }
+.crm-ownership-content>header { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; margin:0; }
+.crm-ownership-content>header strong,.crm-ownership-content>header small { display:block; }
+.crm-ownership-content>header strong { font-size:14px; }
+.crm-ownership-content>header small { margin-top:4px; color:var(--muted); font-size:9px; }
+.crm-ownership-content>header time { color:var(--muted); font-size:9px; white-space:nowrap; }
+.crm-ownership-route { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:11px; padding:11px; border:1px solid #efddd4; border-radius:13px; background:#fffaf7; }
+.crm-ownership-route>span { display:grid; gap:3px; }
+.crm-ownership-route small { color:var(--muted); font-size:8px; }
+.crm-ownership-route b { font-size:11px; }
+.crm-ownership-route svg { color:#a36b5d; }
+.crm-ownership-meta { display:flex; flex-wrap:wrap; gap:7px; }
+.crm-ownership-meta span { padding:7px 9px; border:1px solid #eddad1; border-radius:999px; color:var(--muted); font-size:8px; background:#fff; }
+.crm-ownership-meta b { color:#56352c; }
+
+.kpi-page-v2 { gap:16px; }
+.kpi-page-hero { padding:22px 24px; border:1px solid #e6d0c5; border-radius:22px; background:linear-gradient(135deg,#fffdfb,#f6e5dc); box-shadow:0 16px 40px rgba(80,43,32,.065); }
+.kpi-page-hero h1 { margin:0; font-size:26px; }
+.kpi-page-hero p { max-width:760px; margin:8px 0 0; line-height:1.8; }
+.kpi-main-tabs { width:min(520px,100%); margin-inline:auto; padding:7px; border:1px solid var(--line); border-radius:15px; background:#fff; }
+.kpi-main-tabs button { flex:1; min-height:42px; }
+.kpi-agents-section { display:grid; gap:12px; }
+.kpi-section-head { display:flex; align-items:center; justify-content:space-between; gap:15px; padding:17px 19px; border:1px solid #ead6cc; border-radius:18px; background:#fff; box-shadow:0 10px 28px rgba(75,40,30,.045); }
+.kpi-section-head h2 { margin:0; font-size:17px; }
+.kpi-section-head p { margin:5px 0 0; color:var(--muted); font-size:9px; }
+.kpi-section-head>div:last-child { display:flex; gap:7px; }
+.kpi-section-head>div:last-child span { padding:7px 10px; border-radius:999px; background:#f7e9e2; color:#7e4034; font-size:9px; font-weight:900; }
+.kpi-agents-table { border-radius:18px; box-shadow:0 14px 34px rgba(75,40,30,.05); }
+.kpi-rate-pill,.kpi-rating-pill { display:inline-flex; align-items:center; justify-content:center; min-width:58px; padding:6px 10px; border-radius:999px; font-size:9px; font-weight:900; }
+.kpi-rate-pill.good,.kpi-rating-pill.good,.kpi-manager-score.good { background:#dcfce7; color:#166534; }
+.kpi-rate-pill.mid,.kpi-rating-pill.mid,.kpi-manager-score.mid { background:#fef3c7; color:#92400e; }
+.kpi-rate-pill.bad,.kpi-rating-pill.bad,.kpi-manager-score.bad { background:#fee2e2; color:#991b1b; }
+.kpi-reports-stack { display:grid; gap:15px; }
+.kpi-report-summary article { position:relative; overflow:hidden; box-shadow:0 10px 28px rgba(76,41,31,.045); }
+.kpi-report-summary article svg { color:#843c2f; }
+.kpi-branch-report { padding:0; overflow:hidden; border-radius:20px; box-shadow:0 16px 38px rgba(76,41,31,.06); }
+.kpi-branch-report>header { display:flex; justify-content:space-between; align-items:center; gap:15px; padding:18px 20px; border-bottom:1px solid var(--line); background:linear-gradient(135deg,#fffaf7,#f7e7df); }
+.kpi-branch-report>header h2 { margin:0; font-size:19px; }
+.kpi-branch-report>header p { margin:5px 0 0; color:var(--muted); font-size:9px; }
+.kpi-manager-score { min-width:105px; padding:10px 14px; border-radius:15px; display:grid; text-align:center; font-size:21px; font-weight:900; }
+.kpi-manager-score small { margin-top:3px; font-size:8px; }
+.kpi-branch-matrix th,.kpi-branch-matrix td { text-align:center; }
+.kpi-branch-matrix th:first-child,.kpi-branch-matrix td:first-child { text-align:right; min-width:180px; }
+.kpi-branch-report>footer { padding:14px 18px; border-top:1px solid var(--line); background:#fffaf7; }
+.kpi-branch-report>footer>div { display:flex; align-items:center; flex-wrap:wrap; gap:14px; }
+.kpi-branch-report>footer svg { color:#9b5d2e; }
+.kpi-branch-report>footer span { display:grid; gap:3px; color:var(--muted); font-size:8px; }
+.kpi-branch-report>footer strong { color:var(--ink); font-size:12px; }
+.kpi-modal-v2 { border-radius:23px; box-shadow:0 30px 90px rgba(53,28,20,.25); }
+.kpi-modal-v2>header { background:linear-gradient(135deg,#fffdfb,#f8e9e1); }
+.kpi-week-card { margin-bottom:12px; padding:12px; border:1px solid #ead7cd; border-radius:14px; background:#fffaf7; }
+.kpi-week-card>h4 { display:flex; justify-content:space-between; gap:10px; margin:0 0 10px; font-size:12px; }
+.kpi-week-card>h4 span { color:var(--muted); font-size:8px; font-weight:700; }
+.kpi-week-card .kpi-daily-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+
+@media (max-width:1100px) {
+  .crm-finance-history-hero { grid-template-columns:1fr; }
+  .crm-finance-history-hero-stats { justify-self:stretch; }
+  .kpi-week-card .kpi-daily-list { grid-template-columns:1fr; }
+}
+@media (max-width:760px) {
+  .crm-finance-history-hero { padding:18px; }
+  .crm-finance-history-hero-stats,.crm-ownership-summary { grid-template-columns:1fr; }
+  .crm-finance-record-open { grid-template-columns:1fr; }
+  .crm-ownership-event { grid-template-columns:1fr; }
+  .crm-ownership-route { grid-template-columns:1fr; }
+  .crm-ownership-route svg { transform:rotate(90deg); justify-self:center; }
+  .kpi-section-head { align-items:flex-start; flex-direction:column; }
+}

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, isCrmManager, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 
 function number(value: unknown, fallback = 0) {
@@ -13,7 +13,7 @@ function clamp(value: unknown, minimum = 0, maximum = 100) {
 
 function rating(total: number) {
   if (total >= 100) return "ممتاز";
-  if (total >= 90) return "جيد جدًا";
+  if (total >= 90) return "جيد جداً";
   if (total >= 80) return "جيد";
   if (total >= 60) return "مقبول";
   if (total >= 50) return "ضعيف";
@@ -30,6 +30,10 @@ type DailyPerformance = Record<string, {
 
 type KpiDetails = {
   workDays?: unknown;
+  branchCode?: string;
+  branchName?: string;
+  departmentCode?: string;
+  departmentName?: string;
   speed?: {
     maxAllowedMinutes?: unknown;
     dailyDelaySales?: Record<string, unknown[] | unknown>;
@@ -50,9 +54,20 @@ type KpiDetails = {
   finalKpi?: Record<string, unknown>;
 };
 
-function calculate(detailsInput: KpiDetails, fallbackWorkDays = 1) {
+function businessDays(from: string, to: string) {
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 1;
+  let count = 0;
+  for (const current = new Date(start); current <= end && count < 370; current.setUTCDate(current.getUTCDate() + 1)) {
+    if (current.getUTCDay() !== 5) count += 1;
+  }
+  return Math.max(1, count);
+}
+
+function calculate(detailsInput: KpiDetails, workDaysInput: number) {
   const details = detailsInput || {};
-  const workDays = Math.max(1, Math.floor(number(details.workDays, fallbackWorkDays)));
+  const workDays = Math.max(1, Math.floor(workDaysInput));
   const maximumAllowed = Math.max(0.01, number(details.speed?.maxAllowedMinutes, 3));
   const dailyDelaySales = details.speed?.dailyDelaySales || {};
   const delayValues: number[] = [];
@@ -62,6 +77,7 @@ function calculate(detailsInput: KpiDetails, fallbackWorkDays = 1) {
       if (String(value ?? "").trim() !== "") delayValues.push(Math.max(0, number(value)));
     });
   });
+
   const totalDelay = delayValues.reduce((sum, value) => sum + value, 0);
   const averageDelay = delayValues.length ? totalDelay / delayValues.length : 0;
   const delayRate = delayValues.length ? clamp((averageDelay / maximumAllowed) * 100) : 0;
@@ -69,11 +85,7 @@ function calculate(detailsInput: KpiDetails, fallbackWorkDays = 1) {
 
   const personality = details.efficiency?.personality || {};
   const technical = details.efficiency?.technical || {};
-  const personalityRate = (
-    clamp(personality.customerFitHonesty) +
-    clamp(personality.carNotesHonesty) +
-    speedRate
-  ) / 3;
+  const personalityRate = (clamp(personality.customerFitHonesty) + clamp(personality.carNotesHonesty) + speedRate) / 3;
   const technicalRate = (
     clamp(technical.currentPrices) +
     clamp(technical.oldPrices) +
@@ -159,51 +171,99 @@ function calculate(detailsInput: KpiDetails, fallbackWorkDays = 1) {
   };
 }
 
-function inclusiveDays(from: string, to: string) {
-  const start = new Date(`${from}T00:00:00Z`);
-  const end = new Date(`${to}T00:00:00Z`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 1;
-  return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
-}
-
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
   const sql = getSql();
+  const scope = userScope(user);
 
   if (request.method === "GET") {
     const from = clean(request.query.from);
     const to = clean(request.query.to);
     const agent = clean(request.query.agent);
     const branch = clean(request.query.branch);
+
     const rows = await sql<any[]>`
-      select e.*,e.id::text,e.user_id::text,u.full_name,u.employee_no,
-        coalesce((select array_agg(distinct d.name order by d.name) from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id),'{}') as departments,
-        coalesce((select array_agg(distinct b.name order by b.name) from core.user_branches ub join core.branches b on b.id=ub.branch_id where ub.user_id=u.id),'{}') as branches,
-        coalesce((select count(*)::int from crm.leads l where l.assigned_to=u.id and l.status_label='تم البيع' and l.is_deleted=false and l.updated_at::date between e.period_start and e.period_end),0) as calculated_sales
-      from crm.kpi_evaluations e join core.users u on u.id=e.user_id
+      select
+        e.*,
+        e.id::text,
+        e.user_id::text,
+        u.full_name,
+        u.employee_no,
+        coalesce(e.details->>'branchCode', primary_branch.code) as branch_code,
+        coalesce(e.details->>'branchName', primary_branch.name) as branch_name,
+        coalesce(e.details->>'departmentCode', primary_department.code) as department_code,
+        coalesce(e.details->>'departmentName', primary_department.name) as department_name,
+        coalesce((
+          select count(*)::int
+          from crm.leads l
+          where l.assigned_to=u.id
+            and l.status_label='تم البيع'
+            and l.is_deleted=false
+            and l.updated_at::date between e.period_start and e.period_end
+            and (coalesce(e.details->>'branchCode','')='' or l.branch_code=e.details->>'branchCode')
+            and (coalesce(e.details->>'departmentCode','')='' or l.department_code=e.details->>'departmentCode')
+        ),0) as calculated_sales
+      from crm.kpi_evaluations e
+      join core.users u on u.id=e.user_id
+      left join lateral (
+        select b.code,b.name
+        from core.user_branches ub join core.branches b on b.id=ub.branch_id
+        where ub.user_id=u.id order by b.sort_order,b.name limit 1
+      ) primary_branch on true
+      left join lateral (
+        select d.code,d.name
+        from core.user_departments ud join core.departments d on d.id=ud.department_id
+        where ud.user_id=u.id and d.code in ('cash_sales','finance_sales') order by d.name limit 1
+      ) primary_department on true
       where (${from || null}::date is null or e.period_end >= ${from || null}::date)
         and (${to || null}::date is null or e.period_start <= ${to || null}::date)
         and (${agent || null}::uuid is null or e.user_id=${agent || null}::uuid)
-        and (${branch || null}::text is null or exists (
-          select 1 from core.user_branches ub join core.branches b on b.id=ub.branch_id
-          where ub.user_id=u.id and b.code=${branch || null}
-        ))
+        and (${branch || null}::text is null or coalesce(e.details->>'branchCode',primary_branch.code)=${branch || null})
+        and (
+          ${scope.all}::boolean
+          or exists (
+            select 1
+            from core.user_departments sud
+            join core.departments sd on sd.id=sud.department_id
+            where sud.user_id=u.id and sd.code=any(${scope.departmentCodes}::text[])
+          )
+        )
+        and (
+          ${scope.all}::boolean
+          or ${scope.branchCodes.length === 0}::boolean
+          or exists (
+            select 1 from core.user_branches sub join core.branches sb on sb.id=sub.branch_id
+            where sub.user_id=u.id and sb.code=any(${scope.branchCodes}::text[])
+          )
+        )
       order by e.period_start desc,u.full_name
     `;
+
     const agents = await sql<any[]>`
-      select distinct u.id::text,u.full_name,u.employee_no,
-        coalesce(array_agg(distinct d.name) filter (where d.name is not null),'{}') as departments,
-        coalesce(array_agg(distinct b.name) filter (where b.name is not null),'{}') as branches,
-        coalesce(array_agg(distinct b.code) filter (where b.code is not null),'{}') as branch_codes
+      select
+        u.id::text,
+        u.full_name,
+        u.employee_no,
+        min(d.code) as department_code,
+        min(d.name) as department_name,
+        min(b.code) as branch_code,
+        min(b.name) as branch_name,
+        coalesce(array_agg(distinct d.name order by d.name) filter (where d.name is not null),'{}') as departments,
+        coalesce(array_agg(distinct b.name order by b.name) filter (where b.name is not null),'{}') as branches,
+        coalesce(array_agg(distinct b.code order by b.code) filter (where b.code is not null),'{}') as branch_codes
       from core.users u
       join core.user_departments ud on ud.user_id=u.id
-      join core.departments d on d.id=ud.department_id and d.code in ('cash_sales','finance_sales','customer_service','call_center')
+      join core.departments d on d.id=ud.department_id and d.code in ('cash_sales','finance_sales')
       left join core.user_branches ub on ub.user_id=u.id
       left join core.branches b on b.id=ub.branch_id
       where u.is_active=true
-      group by u.id order by u.full_name
+        and (${scope.all}::boolean or d.code=any(${scope.departmentCodes}::text[]))
+        and (${scope.all}::boolean or ${scope.branchCodes.length === 0}::boolean or b.code=any(${scope.branchCodes}::text[]))
+      group by u.id
+      order by min(b.sort_order),u.full_name
     `;
+
     return response.status(200).json({ ok: true, rows, agents });
   }
 
@@ -216,23 +276,53 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!userId || !periodStart || !periodEnd) return response.status(400).json({ ok: false, error: "اختر المندوب والفترة" });
     if (periodEnd < periodStart) return response.status(400).json({ ok: false, error: "تاريخ النهاية يجب أن يكون بعد تاريخ البداية" });
 
+    const [agent] = await sql<any[]>`
+      select u.id::text,u.full_name,u.employee_no,
+        min(d.code) as department_code,min(d.name) as department_name,
+        min(b.code) as branch_code,min(b.name) as branch_name
+      from core.users u
+      join core.user_departments ud on ud.user_id=u.id
+      join core.departments d on d.id=ud.department_id and d.code in ('cash_sales','finance_sales')
+      left join core.user_branches ub on ub.user_id=u.id
+      left join core.branches b on b.id=ub.branch_id
+      where u.id=${userId}::uuid and u.is_active=true
+        and (${scope.all}::boolean or d.code=any(${scope.departmentCodes}::text[]))
+        and (${scope.all}::boolean or ${scope.branchCodes.length === 0}::boolean or b.code=any(${scope.branchCodes}::text[]))
+      group by u.id
+    `;
+    if (!agent) return response.status(404).json({ ok: false, error: "المندوب غير موجود أو خارج صلاحيتك" });
+
     const details = body.details && typeof body.details === "object" ? body.details as KpiDetails : {};
-    const calculated = calculate(details, inclusiveDays(periodStart, periodEnd));
+    details.branchCode = clean(body.branchCode || details.branchCode || agent.branch_code);
+    details.branchName = clean(body.branchName || details.branchName || agent.branch_name);
+    details.departmentCode = clean(body.departmentCode || details.departmentCode || agent.department_code);
+    details.departmentName = clean(body.departmentName || details.departmentName || agent.department_name);
+    const calculated = calculate(details, businessDays(periodStart, periodEnd));
+
     const [row] = await sql<any[]>`
       insert into crm.kpi_evaluations(user_id,period_start,period_end,total_sales,speed_score,efficiency_score,discipline_score,value_score,total_score,rating,details,notes,evaluated_by)
       values (
         ${userId}::uuid,${periodStart}::date,${periodEnd}::date,${Math.round(calculated.salesCount)},
         ${calculated.speedRate},${calculated.efficiencyRate},${calculated.disciplineRate},${calculated.valueRate},${calculated.finalRate},${calculated.rating},
-        ${sql.json(calculated.details as any)},${clean(body.notes)||null},${user.id}::uuid
+        ${sql.json(calculated.details as any)},${clean(body.notes) || null},${user.id}::uuid
       )
       on conflict (user_id,period_start,period_end) do update set
-        total_sales=excluded.total_sales,speed_score=excluded.speed_score,efficiency_score=excluded.efficiency_score,
-        discipline_score=excluded.discipline_score,value_score=excluded.value_score,total_score=excluded.total_score,rating=excluded.rating,
-        details=excluded.details,notes=excluded.notes,evaluated_by=excluded.evaluated_by,updated_at=now()
+        total_sales=excluded.total_sales,
+        speed_score=excluded.speed_score,
+        efficiency_score=excluded.efficiency_score,
+        discipline_score=excluded.discipline_score,
+        value_score=excluded.value_score,
+        total_score=excluded.total_score,
+        rating=excluded.rating,
+        details=excluded.details,
+        notes=excluded.notes,
+        evaluated_by=excluded.evaluated_by,
+        updated_at=now()
       returning *,id::text,user_id::text
     `;
     await audit(user, "kpi_evaluation_saved", "kpi_evaluation", row.id, row);
     return response.status(200).json({ ok: true, row, calculated });
   }
+
   return response.status(405).json({ ok: false, error: "Method not allowed" });
 }

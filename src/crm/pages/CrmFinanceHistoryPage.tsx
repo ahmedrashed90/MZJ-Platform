@@ -127,13 +127,21 @@ export function CrmFinanceHistoryPage() {
 
   return (
     <div className="crm-page crm-finance-history-page">
-      <header className="crm-page-head">
-        <div><h1>سجل عملاء التمويل</h1><p>سجل كامل من لحظة دخول العميل، مع كل تغيير حالة والمستخدم والتاريخ والملاحظات.</p></div>
-      </header>
+      <section className="crm-finance-history-hero">
+        <div className="crm-finance-history-title">
+          <span className="crm-eyebrow">CRM / مبيعات التمويل</span>
+          <h1>سجل عملاء التمويل</h1>
+          <p>ملف زمني واضح لكل عميل من لحظة دخوله، مع الحالات والملاحظات والمسؤولين وتوقيت كل حركة.</p>
+        </div>
+        <div className="crm-finance-history-hero-stats">
+          <article><UsersThree size={25} weight="duotone" /><span>إجمالي العملاء</span><strong>{total.toLocaleString("ar-SA")}</strong></article>
+          <article><ClockCounterClockwise size={25} weight="duotone" /><span>الحركات المعروضة</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
+        </div>
+      </section>
 
-      <div className="crm-inner-page-tabs crm-finance-history-tabs">
-        <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}>سجل العملاء</button>
-        <button type="button" className={activeTab === "differences" ? "active" : ""} onClick={() => setActiveTab("differences")}>فروقات حالات العملاء</button>
+      <div className="crm-inner-page-tabs crm-finance-history-tabs centered">
+        <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}><UsersThree size={18} />سجل العملاء</button>
+        <button type="button" className={activeTab === "differences" ? "active" : ""} onClick={() => setActiveTab("differences")}><ClockCounterClockwise size={18} />فروقات حالات العملاء</button>
       </div>
 
       {activeTab === "history" ? (
@@ -146,10 +154,10 @@ export function CrmFinanceHistoryPage() {
             <button className="crm-secondary-button" onClick={() => { setPage(0); setFilters({ from: "", to: "", status: "", q: "" }); }}>مسح الفلاتر</button>
           </div>
 
-          <section className="crm-history-stats crm-history-stats-wide">
-            <article><UsersThree size={24} /><span>إجمالي العملاء</span><strong>{total.toLocaleString("ar-SA")}</strong></article>
-            <article><ClockCounterClockwise size={24} /><span>حركات الصفحة</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
-            <article><ArrowRight size={24} /><span>حالات الصفحة</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
+          <section className="crm-history-stats crm-history-stats-wide crm-finance-history-mini-stats">
+            <article><UsersThree size={24} /><span>نتائج الفلتر</span><strong>{rows.length.toLocaleString("ar-SA")}</strong></article>
+            <article><ClockCounterClockwise size={24} /><span>إجمالي الحركات</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
+            <article><ArrowRight size={24} /><span>الحالات الحالية</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
           </section>
 
           <div className="crm-finance-directory">

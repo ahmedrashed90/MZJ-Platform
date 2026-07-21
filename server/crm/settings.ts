@@ -334,7 +334,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!sourceCode) return response.status(400).json({ ok: false, error: "المصدر مطلوب" });
     const textSendUrl = clean(body.textSendUrl || body.sendUrl);
     const templateSendUrl = clean(body.templateSendUrl) || (["whatsapp", "mersal"].includes(sourceCode) ? textSendUrl : "");
-    const mediaSendUrl = ["whatsapp", "mersal"].includes(sourceCode) ? textSendUrl : clean(body.mediaSendUrl);
+    const mediaSendUrl = clean(body.mediaSendUrl) || textSendUrl;
     const templatesSyncUrl = clean(body.templatesSyncUrl);
     const inboundWebhookUrl = clean(body.inboundWebhookUrl || body.webhookUrl);
     const [row] = await sql<any[]>`

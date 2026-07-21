@@ -223,3 +223,12 @@ Before deploying, read:
 - Treats every trusted Mersal service button (cash, finance, customer service) as an explicit selection.
 - Selecting a different department closes only the previous open service request, preserves the customer file and message history, creates a new request, resets the lead to `عميل جديد`, and redistributes using the new department rules.
 - Selecting the same department keeps the current request and only completes a missing assignment.
+
+## v1.15.7 - CRM attachments, KPI rebuild and history polish
+
+- إرسال الصور والصوت والفيديو وPDF من محادثة العميل عبر Worker مرسال؛ الوركر يحمل المرفق من رابط التخزين المؤقت ويرسله إلى `/api/wpbox/sendmessage` بصيغة `multipart/form-data` في الحقل `image`.
+- إضافة مسار مستقل لمرفقات واتساب داخل إعدادات Endpoints، مع الرجوع تلقائيًا لمسار الإرسال العادي عند عدم ضبطه.
+- إعادة تصميم سجل عملاء التمويل بواجهة أوضح وإحصاءات وتبويبات مركزية، مع الحفاظ على الفلاتر والسجل والفروقات الحالية.
+- إصلاح سجل ملكية العملاء، وإعادة تسمية التبويب إلى «عملاء تم نقلهم»، وتوسيعه لعرض كل عمليات النقل الحقيقية الواقعة داخل صلاحية المستخدم.
+- إعادة بناء صفحة تقييم المناديب KPI اعتمادًا على منطق النظام القديم: السرعة والكفاءة والانضباط والقيمة والنتيجة، استبعاد الجمعة، التقارير حسب الفروع، وتصدير PDF.
+- لا توجد طبقة Patch مستقلة؛ كل التعديلات مدمجة داخل المصدر الكامل للمنصة والوركر.

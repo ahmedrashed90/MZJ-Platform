@@ -24,3 +24,8 @@ wrangler secret put MERSAL_API_TOKEN
 ## v1.12.3
 
 Every recognized service button is forwarded as a trusted explicit reclassification instruction. The platform keeps the same contact and message history, closes the previous open request only when the selected service changes, then creates and redistributes the new request.
+
+
+## v1.12.4 - إرسال المرفقات
+
+المرفقات الصادرة تُحمّل من رابط التخزين الآمن ثم تُرسل إلى `POST /api/wpbox/sendmessage` بصيغة `multipart/form-data` في الحقل `image`، مع `token` و`phone` و`message`. يمكن تغيير المسار عبر `MERSAL_ATTACHMENT_SEND_URL`.

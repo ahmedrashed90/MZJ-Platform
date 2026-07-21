@@ -56,7 +56,32 @@ async function invoke(path, body, env = {}, headers = {}) {
   assert(data.provider_message_id === 'wamid.text.1', 'free text provider id missing');
 }
 
-// 3) Incoming phone reply must be forwarded to PostgreSQL endpoint.
+
+// 3) Outbound attachments must use the SendImage endpoint as multipart/form-data.
+{
+  let calls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    calls += 1;
+    if (calls === 1) {
+      assert(String(url) === 'https://files.example.com/test.pdf', 'worker did not download the stored attachment');
+      return new Response(new Uint8Array([37, 80, 68, 70]), { status: 200, headers: { 'content-type': 'application/pdf', 'content-disposition': 'attachment; filename="test.pdf"' } });
+    }
+    assert(String(url).endsWith('/api/wpbox/sendmessage'), 'wrong attachment endpoint');
+    assert(options.body instanceof FormData, 'attachment body must be multipart FormData');
+    assert(options.body.get('token') === 'token', 'attachment token missing');
+    assert(options.body.get('phone') === '966541421013', 'attachment phone missing');
+    assert(options.body.get('message') === 'ملف اختبار', 'attachment caption missing');
+    const file = options.body.get('image');
+    assert(file && typeof file.arrayBuffer === 'function', 'attachment file field image missing');
+    return new Response(JSON.stringify({ ok: true, status: 'success', message_wamid: 'wamid.media.1' }), { status: 200 });
+  };
+  const response = await invoke('/send/mersal', { type: 'media', phone: '0541421013', media_url: 'https://files.example.com/test.pdf', media_type: 'document', file_name: 'test.pdf', caption: 'ملف اختبار' }, { MERSAL_ATTACHMENT_SEND_URL: 'https://w-mersal.com/api/wpbox/sendmessage' });
+  const data = await response.json();
+  assert(response.status === 200 && data.ok === true, 'attachment should succeed');
+  assert(data.provider_message_id === 'wamid.media.1', 'attachment provider id missing');
+}
+
+// 4) Incoming phone reply must be forwarded to PostgreSQL endpoint.
 {
   let platformBody = null;
   let platformHeaders = null;
@@ -87,7 +112,7 @@ async function invoke(path, body, env = {}, headers = {}) {
   assert(platformHeaders['x-event-id'] === 'wamid.in.1', 'x-event-id missing');
 }
 
-// 4) A rejected PostgreSQL write must not be acknowledged to Mersal.
+// 5) A rejected PostgreSQL write must not be acknowledged to Mersal.
 {
   globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, error: 'db rejected' }), { status: 500 });
   const response = await invoke('/webhook/mersal', {
@@ -98,7 +123,7 @@ async function invoke(path, body, env = {}, headers = {}) {
 }
 
 
-// 5) Template synchronization remains available on the exact /templates/mersal route.
+// 6) Template synchronization remains available on the exact /templates/mersal route.
 {
   globalThis.fetch = async (url, options) => {
     assert(String(url).includes('/api/wpbox/getTemplates?token='), 'wrong templates provider endpoint');
@@ -112,7 +137,7 @@ async function invoke(path, body, env = {}, headers = {}) {
 }
 
 
-// 6) Every explicit service button, including finance, must request trusted reclassification.
+// 7) Every explicit service button, including finance, must request trusted reclassification.
 {
   const expected = [
     ["مبيعات الكاش", "cash"],

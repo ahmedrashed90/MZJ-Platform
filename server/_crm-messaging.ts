@@ -121,8 +121,10 @@ function unifiedWhatsappSendUrl(endpoint: Record<string, unknown>) {
   return clean(endpoint.text_send_url || endpoint.send_url || endpoint.template_send_url);
 }
 
-function whatsappRouteCandidates(endpoint: Record<string, unknown>, _kind: DeliveryKind) {
-  const configured = unifiedWhatsappSendUrl(endpoint);
+function whatsappRouteCandidates(endpoint: Record<string, unknown>, kind: DeliveryKind) {
+  const configured = kind === "media"
+    ? clean(endpoint.media_send_url || unifiedWhatsappSendUrl(endpoint))
+    : unifiedWhatsappSendUrl(endpoint);
   return configured ? [configured] : [];
 }
 

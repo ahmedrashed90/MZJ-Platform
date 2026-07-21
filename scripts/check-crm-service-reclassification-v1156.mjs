@@ -29,7 +29,7 @@ for (const token of requiredProcessor) {
 }
 
 const requiredWorker = [
-  'mzj-mersal-postgres-v1.12.3-service-reclassification',
+  'mzj-mersal-postgres-v1.12.4-attachment-formdata',
   "trustedServiceClassification: Boolean(serviceSelection)",
   "forceServiceReclassification: Boolean(serviceSelection)",
   "financeDetailsRequired: serviceSelection?.key === \"finance\"",

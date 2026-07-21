@@ -2,11 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
   CalendarBlank,
+  ChartBar,
   FilePdf,
+  FloppyDisk,
   MagnifyingGlass,
   Minus,
   PencilSimple,
   Plus,
+  Trophy,
+  UsersThree,
   X,
 } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
@@ -14,15 +18,20 @@ import { crmFetch, queryString } from "../api";
 import type { CrmMeta } from "../types";
 
 type ModalTab = "speed" | "efficiency" | "discipline" | "value" | "result";
+type DailyRow = { attendance: number; appearance: number; behavior: number; customerRating: number; salesCount: number };
 
 type KpiDetails = {
   workDays: number;
+  branchCode?: string;
+  branchName?: string;
+  departmentCode?: string;
+  departmentName?: string;
   speed: { maxAllowedMinutes: number; dailyDelaySales: Record<string, Array<string | number>> };
   efficiency: {
     personality: { customerFitHonesty: number; carNotesHonesty: number };
     technical: { currentPrices: number; oldPrices: number; carSpecs: number; competitorsComparison: number; salesChannels: number };
   };
-  dailyPerformance: Record<string, { attendance: number; appearance: number; behavior: number; customerRating: number; salesCount: number }>;
+  dailyPerformance: Record<string, DailyRow>;
   finalKpi?: Record<string, unknown>;
 };
 
@@ -30,23 +39,13 @@ type FormState = {
   userId: string;
   periodStart: string;
   periodEnd: string;
+  branchCode: string;
+  branchName: string;
+  departmentCode: string;
+  departmentName: string;
   notes: string;
   details: KpiDetails;
 };
-
-function emptyDetails(): KpiDetails {
-  return {
-    workDays: 1,
-    speed: { maxAllowedMinutes: 3, dailyDelaySales: {} },
-    efficiency: {
-      personality: { customerFitHonesty: 0, carNotesHonesty: 0 },
-      technical: { currentPrices: 0, oldPrices: 0, carSpecs: 0, competitorsComparison: 0, salesChannels: 0 },
-    },
-    dailyPerformance: {},
-  };
-}
-
-const emptyForm: FormState = { userId: "", periodStart: "", periodEnd: "", notes: "", details: emptyDetails() };
 
 function number(value: unknown, fallback = 0) {
   const result = Number(value);
@@ -57,34 +56,98 @@ function clamp(value: unknown, minimum = 0, maximum = 100) {
   return Math.max(minimum, Math.min(maximum, number(value)));
 }
 
-function dateKeys(from: string, to: string) {
+function currentMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthPeriod(month: string) {
+  if (!month) return { from: "", to: "" };
+  const [year, monthNo] = month.split("-").map(Number);
+  const lastDay = new Date(year, monthNo, 0).getDate();
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, "0")}` };
+}
+
+function businessDates(from: string, to: string) {
   if (!from || !to) return [];
-  const start = new Date(`${from}T00:00:00`);
-  const end = new Date(`${to}T00:00:00`);
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return [];
   const result: string[] = [];
-  for (const current = new Date(start); current <= end && result.length < 370; current.setDate(current.getDate() + 1)) {
-    result.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(current.getDate()).padStart(2, "0")}`);
+  for (const current = new Date(start); current <= end && result.length < 370; current.setUTCDate(current.getUTCDate() + 1)) {
+    if (current.getUTCDay() === 5) continue;
+    result.push(`${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, "0")}-${String(current.getUTCDate()).padStart(2, "0")}`);
   }
   return result;
 }
 
-function arabicDate(value: string) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("ar-SA", { weekday: "long", year: "numeric", month: "short", day: "numeric" }).format(new Date(`${value}T00:00:00`));
+function weekGroups(dates: string[]) {
+  const groups: string[][] = [];
+  let group: string[] = [];
+  dates.forEach((date) => {
+    group.push(date);
+    if (new Date(`${date}T00:00:00Z`).getUTCDay() === 4) {
+      groups.push(group);
+      group = [];
+    }
+  });
+  if (group.length) groups.push(group);
+  return groups;
 }
 
-function calculate(details: KpiDetails) {
+function arabicDate(value: string) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("ar-SA", { weekday: "long", year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+}
+
+function rating(total: number) {
+  if (total >= 100) return "ممتاز";
+  if (total >= 90) return "جيد جداً";
+  if (total >= 80) return "جيد";
+  if (total >= 60) return "مقبول";
+  if (total >= 50) return "ضعيف";
+  return "غير مناسب";
+}
+
+function emptyDetails(workDays = 1): KpiDetails {
+  return {
+    workDays: Math.max(1, workDays),
+    speed: { maxAllowedMinutes: 3, dailyDelaySales: {} },
+    efficiency: {
+      personality: { customerFitHonesty: 0, carNotesHonesty: 0 },
+      technical: { currentPrices: 0, oldPrices: 0, carSpecs: 0, competitorsComparison: 0, salesChannels: 0 },
+    },
+    dailyPerformance: {},
+  };
+}
+
+function normalizeDetails(input: any, workDays: number): KpiDetails {
+  const base = emptyDetails(workDays);
+  return {
+    ...base,
+    ...(input || {}),
+    workDays: Math.max(1, workDays),
+    speed: { ...base.speed, ...(input?.speed || {}), dailyDelaySales: input?.speed?.dailyDelaySales || {} },
+    efficiency: {
+      personality: { ...base.efficiency.personality, ...(input?.efficiency?.personality || {}) },
+      technical: { ...base.efficiency.technical, ...(input?.efficiency?.technical || {}) },
+    },
+    dailyPerformance: input?.dailyPerformance || {},
+  };
+}
+
+function calculate(detailsInput: KpiDetails) {
+  const details = detailsInput || emptyDetails();
   const workDays = Math.max(1, Math.floor(number(details.workDays, 1)));
-  const maximumAllowed = Math.max(0.01, number(details.speed.maxAllowedMinutes, 3));
-  const delayValues = Object.values(details.speed.dailyDelaySales || {}).flatMap((entry) => entry || [])
+  const maximumAllowed = Math.max(0.01, number(details.speed?.maxAllowedMinutes, 3));
+  const delayValues = Object.values(details.speed?.dailyDelaySales || {}).flatMap((entry) => Array.isArray(entry) ? entry : [entry])
     .filter((entry) => String(entry ?? "").trim() !== "")
     .map((entry) => Math.max(0, number(entry)));
   const totalDelay = delayValues.reduce((sum, value) => sum + value, 0);
   const averageDelay = delayValues.length ? totalDelay / delayValues.length : 0;
   const speedRate = delayValues.length ? clamp(100 - (averageDelay / maximumAllowed) * 100) : 100;
-  const personality = details.efficiency.personality;
-  const technical = details.efficiency.technical;
+  const personality = details.efficiency?.personality || basePersonality;
+  const technical = details.efficiency?.technical || baseTechnical;
   const personalityRate = (clamp(personality.customerFitHonesty) + clamp(personality.carNotesHonesty) + speedRate) / 3;
   const technicalRate = (clamp(technical.currentPrices) + clamp(technical.oldPrices) + clamp(technical.carSpecs) + clamp(technical.competitorsComparison) + clamp(technical.salesChannels)) / 5;
   const efficiencyRate = (personalityRate + technicalRate) / 2;
@@ -99,75 +162,68 @@ function calculate(details: KpiDetails) {
   const valueRate = clamp(((customerPoints + salesCount) / 80) * 100);
   const finalRate = ((efficiencyRate + disciplineRate) / 2 + valueRate) / 2;
   const totalPoints = attendancePoints + appearancePoints + behaviorPoints + efficiencyPoints + customerPoints + salesCount;
-  const rating = finalRate >= 100 ? "ممتاز" : finalRate >= 90 ? "جيد جدًا" : finalRate >= 80 ? "جيد" : finalRate >= 60 ? "مقبول" : finalRate >= 50 ? "ضعيف" : "غير مناسب";
-  return { workDays, totalDelay, averageDelay, speedRate, personalityRate, technicalRate, efficiencyRate, efficiencyPoints, attendancePoints, appearancePoints, behaviorPoints, customerPoints, salesCount, disciplineRate, valueRate, finalRate, totalPoints, rating };
+  return { workDays, totalDelay, averageDelay, speedRate, personalityRate, technicalRate, efficiencyRate, efficiencyPoints, attendancePoints, appearancePoints, behaviorPoints, customerPoints, salesCount, disciplineRate, valueRate, finalRate, totalPoints, rating: rating(finalRate) };
 }
 
-function percent(value: unknown) {
-  return `${Math.round(number(value) * 100) / 100}%`;
-}
+const basePersonality = { customerFitHonesty: 0, carNotesHonesty: 0 };
+const baseTechnical = { currentPrices: 0, oldPrices: 0, carSpecs: 0, competitorsComparison: 0, salesChannels: 0 };
+
+function percent(value: unknown) { return `${Math.round(number(value) * 100) / 100}%`; }
+function rateClass(value: unknown) { const n = number(value); return n >= 80 ? "good" : n >= 50 ? "mid" : "bad"; }
 
 export function CrmKpiPage() {
+  const defaultMonth = currentMonth();
+  const defaultPeriod = monthPeriod(defaultMonth);
   const [tab, setTab] = useState<"add" | "reports">("add");
   const [modalTab, setModalTab] = useState<ModalTab>("speed");
-  const [filters, setFilters] = useState({ month: "", from: "", to: "", branch: "", agent: "", q: "" });
+  const [filters, setFilters] = useState({ month: defaultMonth, from: defaultPeriod.from, to: defaultPeriod.to, branch: "", agent: "", q: "" });
   const [rows, setRows] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
   const [meta, setMeta] = useState<CrmMeta | null>(null);
-  const [form, setForm] = useState<FormState>(emptyForm);
+  const [form, setForm] = useState<FormState>({ userId: "", periodStart: defaultPeriod.from, periodEnd: defaultPeriod.to, branchCode: "", branchName: "", departmentCode: "", departmentName: "", notes: "", details: emptyDetails(businessDates(defaultPeriod.from, defaultPeriod.to).length) });
   const [modal, setModal] = useState(false);
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
-
-  const period = useMemo(() => {
-    if (!filters.month) return { from: filters.from, to: filters.to };
-    const [year, month] = filters.month.split("-").map(Number);
-    const lastDay = new Date(year, month, 0).getDate();
-    return { from: `${filters.month}-01`, to: `${filters.month}-${String(lastDay).padStart(2, "0")}` };
-  }, [filters.month, filters.from, filters.to]);
+  const [loading, setLoading] = useState(false);
 
   useEscapeToClose(modal, () => setModal(false));
 
-  useEffect(() => {
-    void crmFetch<CrmMeta>("/api/crm/meta").then(setMeta).catch(() => undefined);
-  }, []);
+  const period = useMemo(() => filters.month ? monthPeriod(filters.month) : { from: filters.from, to: filters.to }, [filters.month, filters.from, filters.to]);
+  const modalDays = useMemo(() => businessDates(form.periodStart, form.periodEnd), [form.periodStart, form.periodEnd]);
+  const weeks = useMemo(() => weekGroups(modalDays), [modalDays]);
+  const calculated = useMemo(() => calculate({ ...form.details, workDays: Math.max(1, modalDays.length) }), [form.details, modalDays.length]);
 
+  useEffect(() => { void crmFetch<CrmMeta>("/api/crm/meta").then(setMeta).catch(() => undefined); }, []);
   useEffect(() => { void load(); }, [period.from, period.to, filters.branch, filters.agent]);
 
   async function load() {
+    setLoading(true);
+    setNotice("");
     try {
       const result = await crmFetch<{ ok: boolean; rows: any[]; agents: any[] }>(`/api/crm/kpi${queryString({ from: period.from, to: period.to, branch: filters.branch, agent: filters.agent })}`);
       setRows(result.rows || []);
       setAgents(result.agents || []);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل تقييمات KPI");
+    } finally {
+      setLoading(false);
     }
   }
 
   const visibleAgents = useMemo(() => agents.filter((agent) => {
     if (filters.branch && !(agent.branch_codes || []).includes(filters.branch)) return false;
-    return !filters.q || [agent.full_name, agent.employee_no, ...(agent.departments || []), ...(agent.branches || [])].join(" ").toLowerCase().includes(filters.q.toLowerCase());
-  }), [agents, filters.branch, filters.q]);
+    if (filters.agent && agent.id !== filters.agent) return false;
+    const search = [agent.full_name, agent.employee_no, agent.department_name, agent.branch_name, ...(agent.departments || []), ...(agent.branches || [])].join(" ").toLowerCase();
+    return !filters.q || search.includes(filters.q.toLowerCase());
+  }), [agents, filters.branch, filters.agent, filters.q]);
 
-  const visibleRows = useMemo(() => rows.filter((row) => !filters.q || [row.full_name, row.rating, ...(row.departments || []), ...(row.branches || [])].join(" ").toLowerCase().includes(filters.q.toLowerCase())), [rows, filters.q]);
-  const modalDays = useMemo(() => dateKeys(form.periodStart, form.periodEnd), [form.periodStart, form.periodEnd]);
-  const calculated = useMemo(() => calculate(form.details), [form.details]);
+  const visibleRows = useMemo(() => rows.filter((row) => {
+    const search = [row.full_name, row.rating, row.department_name, row.branch_name].join(" ").toLowerCase();
+    return !filters.q || search.includes(filters.q.toLowerCase());
+  }), [rows, filters.q]);
 
-  const reportSummary = useMemo(() => {
-    const count = visibleRows.length || 1;
-    const average = (key: string) => visibleRows.length ? visibleRows.reduce((sum, row) => sum + number(row[key]), 0) / count : 0;
-    return {
-      count: visibleRows.length,
-      speed: average("speed_score"),
-      efficiency: average("efficiency_score"),
-      discipline: average("discipline_score"),
-      value: average("value_score"),
-      total: average("total_score"),
-    };
-  }, [visibleRows]);
-
-  function updateForm(key: keyof Omit<FormState, "details">, value: string) {
-    setForm((current) => ({ ...current, [key]: value }));
+  function rowForAgent(agent: any) {
+    return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code)) || rows.find((row) => row.user_id === agent.id);
   }
 
   function updateDetails(mutator: (draft: KpiDetails) => void) {
@@ -178,44 +234,44 @@ export function CrmKpiPage() {
     });
   }
 
-  function performanceFor(date: string) {
+  function performanceFor(date: string): DailyRow {
     return form.details.dailyPerformance[date] || { attendance: 0, appearance: 0, behavior: 0, customerRating: 0, salesCount: 0 };
   }
 
-  function setPerformance(date: string, key: "attendance" | "appearance" | "behavior" | "customerRating" | "salesCount", value: string) {
-    updateDetails((draft) => {
-      draft.dailyPerformance[date] = { ...performanceFor(date), [key]: number(value) };
-    });
+  function setPerformance(date: string, key: keyof DailyRow, value: string) {
+    updateDetails((draft) => { draft.dailyPerformance[date] = { ...performanceFor(date), [key]: number(value) }; });
   }
 
   function open(agent?: any, row?: any) {
-    const details = row?.details && typeof row.details === "object" ? row.details : emptyDetails();
-    const safeDetails: KpiDetails = {
-      ...emptyDetails(),
-      ...details,
-      speed: { ...emptyDetails().speed, ...(details.speed || {}) },
-      efficiency: {
-        personality: { ...emptyDetails().efficiency.personality, ...(details.efficiency?.personality || {}) },
-        technical: { ...emptyDetails().efficiency.technical, ...(details.efficiency?.technical || {}) },
-      },
-      dailyPerformance: details.dailyPerformance || {},
-    };
-    setForm(row ? {
-      userId: row.user_id,
-      periodStart: String(row.period_start).slice(0, 10),
-      periodEnd: String(row.period_end).slice(0, 10),
-      notes: row.notes || "",
-      details: safeDetails,
-    } : { ...emptyForm, userId: agent?.id || "", periodStart: period.from, periodEnd: period.to, details: emptyDetails() });
+    const start = row ? String(row.period_start).slice(0, 10) : period.from;
+    const end = row ? String(row.period_end).slice(0, 10) : period.to;
+    const selectedAgent = agent || agents.find((item) => item.id === row?.user_id);
+    const days = businessDates(start, end);
+    const details = normalizeDetails(row?.details, days.length);
+    setForm({
+      userId: row?.user_id || selectedAgent?.id || "",
+      periodStart: start,
+      periodEnd: end,
+      branchCode: row?.branch_code || selectedAgent?.branch_code || details.branchCode || "",
+      branchName: row?.branch_name || selectedAgent?.branch_name || details.branchName || "",
+      departmentCode: row?.department_code || selectedAgent?.department_code || details.departmentCode || "",
+      departmentName: row?.department_name || selectedAgent?.department_name || details.departmentName || "",
+      notes: row?.notes || "",
+      details,
+    });
     setModalTab("speed");
     setModal(true);
   }
 
   async function save() {
     setSaving(true);
+    setNotice("");
     try {
-      await crmFetch("/api/crm/kpi", { method: "POST", body: JSON.stringify(form) });
-      setNotice("تم حفظ تقييم المندوب بنفس معادلات KPI المعتمدة في النظام القديم");
+      await crmFetch("/api/crm/kpi", {
+        method: "POST",
+        body: JSON.stringify({ ...form, details: { ...form.details, workDays: Math.max(1, modalDays.length), branchCode: form.branchCode, branchName: form.branchName, departmentCode: form.departmentCode, departmentName: form.departmentName } }),
+      });
+      setNotice("تم حفظ تقييم المندوب بنفس معادلات KPI المعتمدة");
       setModal(false);
       await load();
     } catch (error) {
@@ -225,93 +281,107 @@ export function CrmKpiPage() {
     }
   }
 
-  function print(rowOrForm: any, target: ModalTab | "all" = "all") {
-    const isForm = rowOrForm?.details && rowOrForm?.userId;
-    const details: KpiDetails = isForm ? rowOrForm.details : rowOrForm.details || emptyDetails();
+  function printReport(rowOrForm: any, target: ModalTab | "all" = "all") {
+    const isForm = Boolean(rowOrForm?.userId);
+    const details = normalizeDetails(rowOrForm?.details, number(rowOrForm?.details?.workDays, 1));
     const result = calculate(details);
-    const agentName = isForm ? agents.find((agent) => agent.id === rowOrForm.userId)?.full_name || "المندوب" : rowOrForm.full_name;
+    const agentName = isForm ? agents.find((agent) => agent.id === rowOrForm.userId)?.full_name || "المندوب" : rowOrForm.full_name || "المندوب";
     const from = isForm ? rowOrForm.periodStart : String(rowOrForm.period_start).slice(0, 10);
     const to = isForm ? rowOrForm.periodEnd : String(rowOrForm.period_end).slice(0, 10);
-    const headings: Record<string, string> = { speed: "السرعة", efficiency: "الكفاءة", discipline: "الانضباط", value: "القيمة", result: "النتيجة", all: "التقييم الكامل" };
-    const cards = [
-      ["السرعة", percent(result.speedRate)], ["الكفاءة", percent(result.efficiencyRate)], ["الانضباط", percent(result.disciplineRate)], ["القيمة", percent(result.valueRate)], ["KPI", percent(result.finalRate)], ["إجمالي النقاط", Math.round(result.totalPoints)], ["التقييم", result.rating],
-    ];
-    const win = window.open("", "_blank", "width=1150,height=850");
+    const branch = isForm ? rowOrForm.branchName : rowOrForm.branch_name;
+    const labels: Record<string, string> = { speed: "السرعة", efficiency: "الكفاءة", discipline: "الانضباط", value: "القيمة", result: "النتيجة", all: "التقييم الكامل" };
+    const cards = [["السرعة", percent(result.speedRate)], ["الكفاءة", percent(result.efficiencyRate)], ["الانضباط", percent(result.disciplineRate)], ["القيمة", percent(result.valueRate)], ["KPI", percent(result.finalRate)], ["إجمالي النقاط", Math.round(result.totalPoints)], ["التقييم", result.rating]];
+    const win = window.open("", "_blank", "width=1200,height=900");
     if (!win) return;
-    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقييم KPI</title><style>body{font-family:Tajawal,Arial;padding:24px;color:#35221c}.cover,.card{border:1px solid #e5cdbf;border-radius:18px;padding:18px;margin-bottom:14px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card b{display:block;font-size:25px;margin-top:8px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #e5cdbf;padding:8px}th{background:#f7ebe4}</style></head><body><div class="cover"><h1>تقييم KPI - ${headings[target]}</h1><h2>${agentName}</h2><p>الفترة: ${from || "—"} إلى ${to || "—"}</p></div><div class="grid">${cards.map(([label, value]) => `<div class="card">${label}<b>${value}</b></div>`).join("")}</div><div class="card"><h2>تفاصيل المعادلة المعتمدة</h2><table><tbody><tr><th>إجمالي دقائق التأخير</th><td>${Math.round(result.totalDelay * 100) / 100}</td><th>متوسط التأخير</th><td>${Math.round(result.averageDelay * 100) / 100}</td></tr><tr><th>نقاط الحضور</th><td>${result.attendancePoints}</td><th>نقاط الهيئة</th><td>${result.appearancePoints}</td></tr><tr><th>نقاط السلوك</th><td>${result.behaviorPoints}</td><th>نقاط العملاء</th><td>${result.customerPoints}</td></tr><tr><th>عدد المبيعات</th><td>${result.salesCount}</td><th>أيام العمل</th><td>${result.workDays}</td></tr></tbody></table></div><script>window.onload=()=>window.print()</script></body></html>`);
+    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${agentName}</title><style>body{font-family:Tajawal,Arial;padding:25px;color:#35221c;background:#fffaf7}.cover,.box{background:#fff;border:1px solid #e5cdbf;border-radius:20px;padding:20px;margin-bottom:14px}.cover{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff}.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.box b{display:block;font-size:26px;margin-top:8px}.result{font-size:34px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ead5ca;padding:10px}th{background:#f8ece5}@media print{body{padding:0}.box,.cover{break-inside:avoid}}</style></head><body><section class="cover"><h1>تقييم KPI - ${labels[target]}</h1><h2>${agentName}</h2><div class="meta"><span>الفرع: ${branch || "—"}</span><span>الفترة: ${from} إلى ${to}</span><span>أيام العمل: ${result.workDays}</span></div></section><section class="grid">${cards.map(([label, value]) => `<div class="box"><span>${label}</span><b>${value}</b></div>`).join("")}</section><section class="box"><h2>تفاصيل النتيجة</h2><table><tbody><tr><th>إجمالي التأخير</th><td>${result.totalDelay.toFixed(2)}</td><th>متوسط التأخير</th><td>${result.averageDelay.toFixed(2)}</td></tr><tr><th>الحضور</th><td>${result.attendancePoints}</td><th>الهيئة</th><td>${result.appearancePoints}</td></tr><tr><th>السلوك</th><td>${result.behaviorPoints}</td><th>تقييم العملاء</th><td>${result.customerPoints}</td></tr><tr><th>المبيعات</th><td>${result.salesCount}</td><th>إجمالي النقاط</th><td>${Math.round(result.totalPoints)}</td></tr></tbody></table></section><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
     win.document.close();
   }
 
+  const reportSummary = useMemo(() => {
+    const average = (key: string) => visibleRows.length ? visibleRows.reduce((sum, row) => sum + number(row[key]), 0) / visibleRows.length : 0;
+    return { count: visibleRows.length, speed: average("speed_score"), efficiency: average("efficiency_score"), discipline: average("discipline_score"), value: average("value_score"), total: average("total_score") };
+  }, [visibleRows]);
+
+  const branchReports = useMemo(() => {
+    const grouped = new Map<string, any[]>();
+    visibleRows.forEach((row) => {
+      const key = row.branch_name || row.branch_code || "بدون فرع";
+      grouped.set(key, [...(grouped.get(key) || []), row]);
+    });
+    return [...grouped.entries()].map(([branchName, branchRows]) => {
+      const details = branchRows.map((row) => ({ row, calc: calculate(normalizeDetails(row.details, number(row.details?.workDays, 1))) }));
+      const total = details.reduce((acc, item) => ({
+        attendance: acc.attendance + item.calc.attendancePoints,
+        appearance: acc.appearance + item.calc.appearancePoints,
+        behavior: acc.behavior + item.calc.behaviorPoints,
+        efficiency: acc.efficiency + item.calc.efficiencyPoints,
+        customer: acc.customer + item.calc.customerPoints,
+        sales: acc.sales + item.calc.salesCount,
+        points: acc.points + item.calc.totalPoints,
+      }), { attendance: 0, appearance: 0, behavior: 0, efficiency: 0, customer: 0, sales: 0, points: 0 });
+      const workDays = Math.max(1, businessDates(period.from, period.to).length);
+      const count = Math.max(1, branchRows.length);
+      const discipline = clamp(((total.attendance + total.appearance + total.behavior) / (count * workDays * 9)) * 100);
+      const excellence = clamp((total.efficiency / (count * workDays * 3)) * 100);
+      const value = clamp(((total.customer + total.sales) / (count * 80)) * 100);
+      const managerRate = (discipline + excellence + value) / 3;
+      const best = details.slice().sort((a, b) => b.calc.totalPoints - a.calc.totalPoints)[0];
+      return { branchName, rows: details, total, managerRate, managerRating: rating(managerRate), best };
+    });
+  }, [visibleRows, period.from, period.to]);
+
   return (
-    <div className="crm-page kpi-page">
-      <header className="crm-page-head">
-        <div><h1>تقييم المناديب KPI</h1><p>السرعة والكفاءة والانضباط والقيمة والنتيجة بنفس معادلات شاشة KPI في النظام القديم.</p></div>
-        <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
+    <div className="crm-page kpi-page kpi-page-v2">
+      <header className="crm-page-head kpi-page-hero">
+        <div><span className="crm-eyebrow">إدارة أداء المبيعات</span><h1>تقييم المناديب KPI</h1><p>نظام تقييم يومي متكامل للسرعة والكفاءة والانضباط والقيمة، مع استبعاد يوم الجمعة تلقائيًا.</p></div>
+        <button className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button>
       </header>
 
-      <div className="crm-department-tabs"><button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}>إضافة التقييم</button><button className={tab === "reports" ? "active" : ""} onClick={() => setTab("reports")}>التقارير</button></div>
+      <div className="crm-department-tabs kpi-main-tabs centered"><button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><UsersThree size={18} />إضافة التقييم</button><button className={tab === "reports" ? "active" : ""} onClick={() => setTab("reports")}><ChartBar size={18} />التقارير</button></div>
 
       <div className="crm-filter-panel reports kpi-filters">
-        <label><span>الشهر</span><input type="month" value={filters.month} onChange={(event) => setFilters((current) => ({ ...current, month: event.target.value }))} /></label>
-        <label><span>من تاريخ</span><input type="date" disabled={Boolean(filters.month)} value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
-        <label><span>إلى تاريخ</span><input type="date" disabled={Boolean(filters.month)} value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
+        <label><span>الشهر</span><input type="month" value={filters.month} onChange={(event) => { const value = event.target.value; const selected = monthPeriod(value); setFilters((current) => ({ ...current, month: value, from: selected.from, to: selected.to })); }} /></label>
+        <label><span>من تاريخ</span><input type="date" value={period.from} onChange={(event) => setFilters((current) => ({ ...current, month: "", from: event.target.value }))} /></label>
+        <label><span>إلى تاريخ</span><input type="date" value={period.to} onChange={(event) => setFilters((current) => ({ ...current, month: "", to: event.target.value }))} /></label>
         <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilters((current) => ({ ...current, branch: event.target.value }))}><option value="">كل الفروع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
-        <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label>
-        <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="بحث باسم المندوب" /></label>
-        <button className="crm-secondary-button" onClick={() => setFilters({ month: "", from: "", to: "", branch: "", agent: "", q: "" })}>مسح الفلاتر</button>
+        <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilters((current) => ({ ...current, agent: event.target.value }))}><option value="">كل المناديب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name} - {agent.branch_name || "بدون فرع"}</option>)}</select></label>
+        <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))} placeholder="بحث باسم المندوب أو الفرع" /></label>
+        <button className="crm-secondary-button" onClick={() => setFilters({ month: defaultMonth, from: defaultPeriod.from, to: defaultPeriod.to, branch: "", agent: "", q: "" })}>مسح الفلاتر</button>
       </div>
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
-      {tab === "add" ? (
-        <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الفرع</th><th>المندوب</th><th>القسم</th><th>المبيعات</th><th>السرعة</th><th>الكفاءة</th><th>الانضباط</th><th>القيمة</th><th>KPI %</th><th>التقييم</th><th>الإجراء</th></tr></thead><tbody>
-          {visibleAgents.map((agent) => { const last = rows.find((row) => row.user_id === agent.id); return <tr key={agent.id}><td>{(agent.branches || []).join("، ") || "—"}</td><td><div className="kpi-agent-cell"><strong>{agent.full_name}</strong><small>{agent.employee_no || ""}</small></div></td><td>{(agent.departments || []).join("، ") || "—"}</td><td>{last?.total_sales ?? last?.calculated_sales ?? 0}</td><td>{last ? percent(last.speed_score) : "—"}</td><td>{last ? percent(last.efficiency_score) : "—"}</td><td>{last ? percent(last.discipline_score) : "—"}</td><td>{last ? percent(last.value_score) : "—"}</td><td>{last ? <strong>{percent(last.total_score)}</strong> : "—"}</td><td>{last?.rating || "—"}</td><td><button className="crm-primary-button small" onClick={() => open(agent, last)}>تقييم</button></td></tr>; })}
-          {!visibleAgents.length ? <tr><td colSpan={11}><div className="crm-empty-state">لا يوجد مستخدمون مطابقون للفلاتر</div></td></tr> : null}
+      {tab === "add" ? <section className="kpi-agents-section">
+        <header className="kpi-section-head"><div><h2>إضافة تقييم المناديب</h2><p>كل مندوب يظهر حسب فرعه وقسمه، وتُعرض آخر نتيجة محفوظة داخل الفترة المحددة.</p></div><div><span>{visibleAgents.length} مندوب</span><span>{businessDates(period.from, period.to).length} يوم عمل</span></div></header>
+        <div className="crm-table-shell kpi-agents-table"><table className="crm-table"><thead><tr><th>الفرع</th><th>المندوب</th><th>القسم</th><th>المبيعات</th><th>درجة المندوب</th><th>السرعة</th><th>الكفاءة</th><th>الانضباط</th><th>القيمة</th><th>KPI</th><th>التقييم</th><th>الإجراء</th></tr></thead><tbody>
+          {visibleAgents.map((agent) => { const last = rowForAgent(agent); const result = last ? calculate(normalizeDetails(last.details, number(last.details?.workDays, 1))) : null; return <tr key={agent.id}><td>{agent.branch_name || (agent.branches || []).join("، ") || "—"}</td><td><div className="kpi-agent-cell"><strong>{agent.full_name}</strong><small>{agent.employee_no || ""}</small></div></td><td>{agent.department_name || (agent.departments || []).join("، ") || "—"}</td><td><strong>{last?.total_sales ?? last?.calculated_sales ?? 0}</strong></td><td><strong>{result ? Math.round(result.totalPoints) : 0}</strong></td>{[last?.speed_score,last?.efficiency_score,last?.discipline_score,last?.value_score,last?.total_score].map((score,index) => <td key={index}>{last ? <span className={`kpi-rate-pill ${rateClass(score)}`}>{percent(score)}</span> : "—"}</td>)}<td>{last ? <span className={`kpi-rating-pill ${rateClass(last.total_score)}`}>{last.rating || "—"}</span> : "—"}</td><td><button className="crm-primary-button small" onClick={() => open(agent, last)}>{last ? "تعديل التقييم" : "تقييم"}</button></td></tr>; })}
+          {!visibleAgents.length ? <tr><td colSpan={12}><div className="crm-empty-state">لا يوجد مناديب مبيعات مطابقون للفلاتر</div></td></tr> : null}
         </tbody></table></div>
-      ) : null}
+      </section> : null}
 
-      {tab === "reports" ? (
-        <>
-          <section className="crm-report-summary kpi-report-summary"><article><span>عدد المناديب</span><strong>{reportSummary.count}</strong></article><article><span>متوسط السرعة</span><strong>{percent(reportSummary.speed)}</strong></article><article><span>متوسط الكفاءة</span><strong>{percent(reportSummary.efficiency)}</strong></article><article><span>متوسط الانضباط</span><strong>{percent(reportSummary.discipline)}</strong></article><article><span>متوسط القيمة</span><strong>{percent(reportSummary.value)}</strong></article><article><span>متوسط KPI</span><strong>{percent(reportSummary.total)}</strong></article></section>
-          <div className="kpi-report-cards">{visibleRows.map((row) => <article key={row.id} className="crm-panel kpi-report-card"><header><div><span>{(row.branches || []).join("، ") || "بدون فرع"}</span><h2>{row.full_name}</h2><p>{String(row.period_start).slice(0,10)} إلى {String(row.period_end).slice(0,10)}</p></div><strong>{percent(row.total_score)}</strong></header><div className="kpi-card-score-grid"><span>السرعة<b>{percent(row.speed_score)}</b></span><span>الكفاءة<b>{percent(row.efficiency_score)}</b></span><span>الانضباط<b>{percent(row.discipline_score)}</b></span><span>القيمة<b>{percent(row.value_score)}</b></span><span>النقاط<b>{Math.round(number(row.details?.finalKpi?.repTotalScore))}</b></span><span>التقييم<b>{row.rating || "—"}</b></span></div><footer><button className="crm-row-actions-button" onClick={() => open(null, row)}><PencilSimple size={16} />تعديل</button><button className="crm-row-actions-button" onClick={() => print(row, "all")}><FilePdf size={16} />PDF كامل</button></footer></article>)}</div>
-          {!visibleRows.length ? <div className="crm-empty-state panel">لا توجد تقييمات ضمن الفترة والفلاتر المحددة</div> : null}
-        </>
-      ) : null}
+      {tab === "reports" ? <div className="kpi-reports-stack">
+        <section className="crm-report-summary kpi-report-summary"><article><UsersThree size={22} /><span>عدد المناديب</span><strong>{reportSummary.count}</strong></article><article><span>متوسط السرعة</span><strong>{percent(reportSummary.speed)}</strong></article><article><span>متوسط الكفاءة</span><strong>{percent(reportSummary.efficiency)}</strong></article><article><span>متوسط الانضباط</span><strong>{percent(reportSummary.discipline)}</strong></article><article><span>متوسط القيمة</span><strong>{percent(reportSummary.value)}</strong></article><article><Trophy size={22} /><span>متوسط KPI</span><strong>{percent(reportSummary.total)}</strong></article></section>
+        {branchReports.map((report) => <section className="crm-panel kpi-branch-report" key={report.branchName}><header><div><span className="crm-eyebrow">تقرير مدير الفرع</span><h2>{report.branchName}</h2><p>{period.from} إلى {period.to}</p></div><span className={`kpi-manager-score ${rateClass(report.managerRate)}`}>{percent(report.managerRate)}<small>{report.managerRating}</small></span></header><div className="crm-table-shell"><table className="crm-table kpi-branch-matrix"><thead><tr><th>البند</th>{report.rows.map(({ row }) => <th key={row.id}>{row.full_name}</th>)}<th>الإجمالي</th></tr></thead><tbody>{[
+          ["الحضور","attendancePoints"],["الهيئة","appearancePoints"],["السلوك","behaviorPoints"],["الكفاءة (التميز)","efficiencyPoints"],["تقييم العملاء","customerPoints"],["عدد المبيعات","salesCount"],["إجمالي نقاط المندوب","totalPoints"],
+        ].map(([label,key]) => <tr key={key}><td><strong>{label}</strong></td>{report.rows.map(({ row, calc }) => <td key={row.id}>{Math.round(number((calc as any)[key]))}</td>)}<td><strong>{key === "attendancePoints" ? report.total.attendance : key === "appearancePoints" ? report.total.appearance : key === "behaviorPoints" ? report.total.behavior : key === "efficiencyPoints" ? Math.round(report.total.efficiency) : key === "customerPoints" ? report.total.customer : key === "salesCount" ? report.total.sales : Math.round(report.total.points)}</strong></td></tr>)}</tbody></table></div><footer><div><Trophy size={25} weight="duotone" /><span>مندوب الفرع<strong>{report.best?.row?.full_name || "—"}</strong></span><span>إجمالي النقاط<strong>{report.best ? Math.round(report.best.calc.totalPoints) : 0}</strong></span><span>KPI<strong>{report.best ? percent(report.best.calc.finalRate) : "—"}</strong></span></div></footer></section>)}
+        {!visibleRows.length ? <div className="crm-empty-state panel">لا توجد تقييمات ضمن الفترة والفلاتر المحددة</div> : null}
+      </div> : null}
 
-      {modal ? (
-        <div className="crm-modal-backdrop" onMouseDown={() => setModal(false)}>
-          <div className="crm-modal-card kpi-modal-card pro" onMouseDown={(event) => event.stopPropagation()}>
-            <header><div><h2>إضافة تقييم المناديب</h2><p>جميع النتائج تحسب تلقائيًا من المدخلات اليومية بنفس منطق النظام القديم.</p></div><button className="crm-icon-button" onClick={() => setModal(false)}><X size={18} /></button></header>
-
-            <section className="kpi-period-card">
-              <label><span>المندوب</span><select value={form.userId} onChange={(event) => updateForm("userId", event.target.value)}><option value="">اختر المندوب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label>
-              <label><span>من تاريخ</span><input type="date" value={form.periodStart} onChange={(event) => updateForm("periodStart", event.target.value)} /></label>
-              <label><span>إلى تاريخ</span><input type="date" value={form.periodEnd} onChange={(event) => updateForm("periodEnd", event.target.value)} /></label>
-              <label><span>أيام العمل</span><input type="number" min="1" value={form.details.workDays} onChange={(event) => updateDetails((draft) => { draft.workDays = Math.max(1, number(event.target.value)); })} /></label>
-            </section>
-
-            <div className="kpi-pdf-actions"><button onClick={() => print(form, "speed")}><FilePdf size={15} />PDF السرعة</button><button onClick={() => print(form, "efficiency")}><FilePdf size={15} />PDF الكفاءة</button><button onClick={() => print(form, "discipline")}><FilePdf size={15} />PDF الانضباط</button><button onClick={() => print(form, "value")}><FilePdf size={15} />PDF القيمة</button><button onClick={() => print(form, "all")}><FilePdf size={15} />PDF كامل</button></div>
-
-            <nav className="kpi-modal-tabs">{(["speed","efficiency","discipline","value","result"] as ModalTab[]).map((item) => <button key={item} className={modalTab === item ? "active" : ""} onClick={() => setModalTab(item)}>{item === "speed" ? "السرعة" : item === "efficiency" ? "الكفاءة" : item === "discipline" ? "الانضباط" : item === "value" ? "القيمة" : "النتيجة"}</button>)}</nav>
-
-            <div className="kpi-modal-scroll">
-              {modalTab === "speed" ? <section className="kpi-panel"><header><div><h3>تقييم السرعة - دقائق التأخير اليومية</h3><p>كل خانة تمثل تأخير عملية بيع؛ يمكن إضافة أكثر من تأخير في نفس اليوم.</p></div><label><span>الحد المسموح بالدقائق</span><input type="number" min="0.01" step="0.1" value={form.details.speed.maxAllowedMinutes} onChange={(event) => updateDetails((draft) => { draft.speed.maxAllowedMinutes = Math.max(.01, number(event.target.value, 3)); })} /></label></header><div className="kpi-daily-list">{modalDays.map((date) => { const values = form.details.speed.dailyDelaySales[date] || [""]; return <article className="kpi-day-card" key={date}><header><CalendarBlank size={18} /><strong>{arabicDate(date)}</strong><button onClick={() => updateDetails((draft) => { draft.speed.dailyDelaySales[date] = [...(draft.speed.dailyDelaySales[date] || [""]), ""]; })}><Plus size={15} />إضافة تأخير</button></header><div className="kpi-delay-list">{values.map((value, index) => <div key={`${date}-${index}`}><input type="number" min="0" step="0.1" value={value} placeholder="دقائق التأخير" onChange={(event) => updateDetails((draft) => { const list = [...(draft.speed.dailyDelaySales[date] || [""])]; list[index] = event.target.value; draft.speed.dailyDelaySales[date] = list; })} /><button title="حذف" onClick={() => updateDetails((draft) => { const list = [...(draft.speed.dailyDelaySales[date] || [""])]; list.splice(index, 1); draft.speed.dailyDelaySales[date] = list.length ? list : [""]; })}><Minus size={15} /></button></div>)}</div></article>; })}</div><div className="kpi-modal-stats"><span>إجمالي التأخير<b>{Math.round(calculated.totalDelay * 100) / 100} دقيقة</b></span><span>متوسط التأخير<b>{Math.round(calculated.averageDelay * 100) / 100} دقيقة</b></span><span>نسبة السرعة<b>{percent(calculated.speedRate)}</b></span></div></section> : null}
-
-              {modalTab === "efficiency" ? <section className="kpi-panel"><h3>الكفاءة</h3><div className="kpi-two-cols"><article className="kpi-sub-card"><h4>الشخصية</h4><label><span>المصداقية في إعطاء العميل السيارة التي تناسبه</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.customerFitHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.customerFitHonesty = clamp(event.target.value); })} /></label><label><span>المصداقية فيما يتواجد من ملاحظات في السيارة</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.carNotesHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.carNotesHonesty = clamp(event.target.value); })} /></label><div className="kpi-readonly-box"><small>نتيجة السرعة من تبويب السرعة</small><strong>{percent(calculated.speedRate)}</strong></div></article><article className="kpi-sub-card"><h4>الفنية</h4>{([ ["currentPrices","حفظ الأسعار الحالية"], ["oldPrices","حفظ الأسعار السابقة"], ["carSpecs","معرفة مواصفات السيارات"], ["competitorsComparison","مقارنة المنافسين"], ["salesChannels","معرفة قنوات البيع"] ] as const).map(([key,label]) => <label key={key}><span>{label}</span><input type="number" min="0" max="100" value={form.details.efficiency.technical[key]} onChange={(event) => updateDetails((draft) => { draft.efficiency.technical[key] = clamp(event.target.value); })} /></label>)}</article></div><div className="kpi-modal-stats"><span>متوسط الشخصية<b>{percent(calculated.personalityRate)}</b></span><span>متوسط الفنية<b>{percent(calculated.technicalRate)}</b></span><span>نسبة الكفاءة<b>{percent(calculated.efficiencyRate)}</b></span><span>نقاط الكفاءة<b>{calculated.efficiencyPoints}</b></span></div></section> : null}
-
-              {modalTab === "discipline" ? <section className="kpi-panel"><h3>الانضباط اليومي</h3><div className="kpi-daily-list">{modalDays.map((date) => { const row = performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={18} /><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid"><label><span>الحضور من 3</span><input type="number" min="0" max="3" value={row.attendance} onChange={(event) => setPerformance(date,"attendance",event.target.value)} /></label><label><span>الهيئة من 3</span><input type="number" min="0" max="3" value={row.appearance} onChange={(event) => setPerformance(date,"appearance",event.target.value)} /></label><label><span>السلوك من 3</span><input type="number" min="0" max="3" value={row.behavior} onChange={(event) => setPerformance(date,"behavior",event.target.value)} /></label></div></article>; })}</div><div className="kpi-modal-stats"><span>إجمالي نقاط الحضور<b>{calculated.attendancePoints}</b></span><span>إجمالي نقاط الهيئة<b>{calculated.appearancePoints}</b></span><span>إجمالي نقاط السلوك<b>{calculated.behaviorPoints}</b></span><span>نسبة الانضباط<b>{percent(calculated.disciplineRate)}</b></span></div></section> : null}
-
-              {modalTab === "value" ? <section className="kpi-panel"><h3>القيمة اليومية</h3><div className="kpi-daily-list">{modalDays.map((date) => { const row = performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={18} /><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid two"><label><span>تقييم العملاء من 3</span><input type="number" min="0" max="3" value={row.customerRating} onChange={(event) => setPerformance(date,"customerRating",event.target.value)} /></label><label><span>عدد المبيعات</span><input type="number" min="0" value={row.salesCount} onChange={(event) => setPerformance(date,"salesCount",event.target.value)} /></label></div></article>; })}</div><div className="kpi-modal-stats"><span>إجمالي نقاط تقييم العملاء<b>{calculated.customerPoints}</b></span><span>إجمالي عدد المبيعات<b>{calculated.salesCount}</b></span><span>نسبة القيمة<b>{percent(calculated.valueRate)}</b></span></div></section> : null}
-
-              {modalTab === "result" ? <section className="kpi-panel"><h3>النتيجة النهائية</h3><div className="kpi-result-hero"><div><span>نسبة KPI</span><strong>{percent(calculated.finalRate)}</strong><b>{calculated.rating}</b></div><div><span>إجمالي النقاط</span><strong>{Math.round(calculated.totalPoints)}</strong></div></div><div className="kpi-result-table"><span>السرعة<b>{percent(calculated.speedRate)}</b></span><span>الكفاءة<b>{percent(calculated.efficiencyRate)}</b></span><span>الانضباط<b>{percent(calculated.disciplineRate)}</b></span><span>القيمة<b>{percent(calculated.valueRate)}</b></span><span>المبيعات<b>{calculated.salesCount}</b></span><span>أيام العمل<b>{calculated.workDays}</b></span></div><label className="kpi-notes"><span>ملاحظات التقييم</span><textarea rows={5} value={form.notes} onChange={(event) => updateForm("notes", event.target.value)} /></label></section> : null}
-
-              {!modalDays.length && modalTab !== "result" && modalTab !== "efficiency" ? <div className="crm-empty-state panel">حدد فترة التقييم أولًا لعرض الأيام.</div> : null}
-            </div>
-
-            <div className="crm-modal-actions"><button className="crm-secondary-button" onClick={() => setModal(false)}>إلغاء</button><button className="crm-primary-button" disabled={saving || !form.userId || !form.periodStart || !form.periodEnd} onClick={() => void save()}>{saving ? "جاري الحفظ..." : "حفظ التقييم"}</button></div>
-          </div>
+      {modal ? <div className="crm-modal-backdrop" onMouseDown={() => setModal(false)}><div className="crm-modal-card kpi-modal-card pro kpi-modal-v2" onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><span className="crm-eyebrow">نموذج التقييم</span><h2>{agents.find((agent) => agent.id === form.userId)?.full_name || "إضافة تقييم مندوب"}</h2><p>{form.departmentName || "مبيعات"} • {form.branchName || "بدون فرع"}</p></div><button className="crm-icon-button" onClick={() => setModal(false)}><X size={18} /></button></header>
+        <section className="kpi-period-card"><label><span>المندوب</span><select value={form.userId} onChange={(event) => { const selected = agents.find((agent) => agent.id === event.target.value); setForm((current) => ({ ...current, userId: event.target.value, branchCode: selected?.branch_code || "", branchName: selected?.branch_name || "", departmentCode: selected?.department_code || "", departmentName: selected?.department_name || "" })); }}><option value="">اختر المندوب</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label><label><span>من تاريخ</span><input type="date" value={form.periodStart} onChange={(event) => setForm((current) => ({ ...current, periodStart: event.target.value }))} /></label><label><span>إلى تاريخ</span><input type="date" value={form.periodEnd} onChange={(event) => setForm((current) => ({ ...current, periodEnd: event.target.value }))} /></label><label><span>أيام العمل</span><input readOnly value={modalDays.length} /></label></section>
+        <div className="kpi-pdf-actions">{(["speed","efficiency","discipline","value","result","all"] as const).map((target) => <button key={target} onClick={() => printReport(form,target)}><FilePdf size={15} />{target === "all" ? "PDF كامل" : `PDF ${target === "speed" ? "السرعة" : target === "efficiency" ? "الكفاءة" : target === "discipline" ? "الانضباط" : target === "value" ? "القيمة" : "النتيجة"}`}</button>)}</div>
+        <nav className="kpi-modal-tabs">{(["speed","efficiency","discipline","value","result"] as ModalTab[]).map((item) => <button key={item} className={modalTab === item ? "active" : ""} onClick={() => setModalTab(item)}>{item === "speed" ? "السرعة" : item === "efficiency" ? "الكفاءة" : item === "discipline" ? "الانضباط" : item === "value" ? "القيمة" : "النتيجة"}</button>)}</nav>
+        <div className="kpi-modal-scroll">
+          {modalTab === "speed" ? <section className="kpi-panel"><header><div><h3>تقييم السرعة</h3><p>أدخل دقائق تأخير كل عملية بيع يوميًا. الجمعة مستبعدة من الفترة.</p></div><label><span>الحد المسموح</span><input type="number" min="0.01" step="0.1" value={form.details.speed.maxAllowedMinutes} onChange={(event) => updateDetails((draft) => { draft.speed.maxAllowedMinutes = Math.max(.01,number(event.target.value,3)); })} /></label></header>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}<span>من السبت إلى الخميس</span></h4><div className="kpi-daily-list">{week.map((date) => { const values = form.details.speed.dailyDelaySales[date] || [""]; return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17} /><strong>{arabicDate(date)}</strong><button onClick={() => updateDetails((draft) => { draft.speed.dailyDelaySales[date] = [...(draft.speed.dailyDelaySales[date] || [""]),""]; })}><Plus size={14} />إضافة</button></header><div className="kpi-delay-list">{values.map((value,index) => <div key={`${date}-${index}`}><input type="number" min="0" step="0.1" value={value} placeholder="دقائق التأخير" onChange={(event) => updateDetails((draft) => { const list=[...(draft.speed.dailyDelaySales[date] || [""])]; list[index]=event.target.value; draft.speed.dailyDelaySales[date]=list; })} /><button title="حذف" onClick={() => updateDetails((draft) => { const list=[...(draft.speed.dailyDelaySales[date] || [""])]; list.splice(index,1); draft.speed.dailyDelaySales[date]=list.length?list:[""]; })}><Minus size={14} /></button></div>)}</div></article>; })}</div></div>)}<div className="kpi-modal-stats"><span>إجمالي التأخير<b>{calculated.totalDelay.toFixed(2)} دقيقة</b></span><span>متوسط التأخير<b>{calculated.averageDelay.toFixed(2)} دقيقة</b></span><span>نسبة السرعة<b>{percent(calculated.speedRate)}</b></span></div></section> : null}
+          {modalTab === "efficiency" ? <section className="kpi-panel"><h3>الكفاءة</h3><div className="kpi-two-cols"><article className="kpi-sub-card"><h4>الشخصية</h4><label><span>المصداقية في إعطاء العميل السيارة المناسبة</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.customerFitHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.customerFitHonesty=clamp(event.target.value); })} /></label><label><span>المصداقية في توضيح ملاحظات السيارة</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.carNotesHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.carNotesHonesty=clamp(event.target.value); })} /></label><div className="kpi-readonly-box"><small>نتيجة السرعة</small><strong>{percent(calculated.speedRate)}</strong></div></article><article className="kpi-sub-card"><h4>الفنية</h4>{([ ["currentPrices","حفظ الأسعار الحالية"],["oldPrices","حفظ الأسعار السابقة"],["carSpecs","معرفة مواصفات السيارات"],["competitorsComparison","مقارنة المنافسين"],["salesChannels","معرفة قنوات البيع"] ] as const).map(([key,label]) => <label key={key}><span>{label}</span><input type="number" min="0" max="100" value={form.details.efficiency.technical[key]} onChange={(event) => updateDetails((draft) => { draft.efficiency.technical[key]=clamp(event.target.value); })} /></label>)}</article></div><div className="kpi-modal-stats"><span>الشخصية<b>{percent(calculated.personalityRate)}</b></span><span>الفنية<b>{percent(calculated.technicalRate)}</b></span><span>الكفاءة<b>{percent(calculated.efficiencyRate)}</b></span><span>نقاط التميز<b>{calculated.efficiencyPoints}</b></span></div></section> : null}
+          {modalTab === "discipline" ? <section className="kpi-panel"><h3>الانضباط اليومي</h3>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}</h4><div className="kpi-daily-list">{week.map((date) => { const row=performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17}/><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid"><label><span>الحضور / 3</span><input type="number" min="0" max="3" value={row.attendance} onChange={(event)=>setPerformance(date,"attendance",event.target.value)}/></label><label><span>الهيئة / 3</span><input type="number" min="0" max="3" value={row.appearance} onChange={(event)=>setPerformance(date,"appearance",event.target.value)}/></label><label><span>السلوك / 3</span><input type="number" min="0" max="3" value={row.behavior} onChange={(event)=>setPerformance(date,"behavior",event.target.value)}/></label></div></article>; })}</div></div>)}<div className="kpi-modal-stats"><span>الحضور<b>{calculated.attendancePoints}</b></span><span>الهيئة<b>{calculated.appearancePoints}</b></span><span>السلوك<b>{calculated.behaviorPoints}</b></span><span>الانضباط<b>{percent(calculated.disciplineRate)}</b></span></div></section> : null}
+          {modalTab === "value" ? <section className="kpi-panel"><h3>القيمة اليومية</h3>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}</h4><div className="kpi-daily-list">{week.map((date) => { const row=performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17}/><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid two"><label><span>تقييم العملاء / 3</span><input type="number" min="0" max="3" value={row.customerRating} onChange={(event)=>setPerformance(date,"customerRating",event.target.value)}/></label><label><span>عدد المبيعات</span><input type="number" min="0" value={row.salesCount} onChange={(event)=>setPerformance(date,"salesCount",event.target.value)}/></label></div></article>; })}</div></div>)}<div className="kpi-modal-stats"><span>تقييم العملاء<b>{calculated.customerPoints}</b></span><span>المبيعات<b>{calculated.salesCount}</b></span><span>القيمة<b>{percent(calculated.valueRate)}</b></span></div></section> : null}
+          {modalTab === "result" ? <section className="kpi-panel"><h3>النتيجة النهائية</h3><div className="kpi-result-hero"><div><span>نسبة KPI</span><strong>{percent(calculated.finalRate)}</strong><b>{calculated.rating}</b></div><div><span>إجمالي النقاط</span><strong>{Math.round(calculated.totalPoints)}</strong></div></div><div className="kpi-result-table"><span>السرعة<b>{percent(calculated.speedRate)}</b></span><span>الكفاءة<b>{percent(calculated.efficiencyRate)}</b></span><span>الانضباط<b>{percent(calculated.disciplineRate)}</b></span><span>القيمة<b>{percent(calculated.valueRate)}</b></span><span>المبيعات<b>{calculated.salesCount}</b></span><span>أيام العمل<b>{calculated.workDays}</b></span></div><label className="kpi-notes"><span>ملاحظات التقييم</span><textarea rows={5} value={form.notes} onChange={(event)=>setForm((current)=>({...current,notes:event.target.value}))}/></label></section> : null}
+          {!modalDays.length && modalTab !== "efficiency" && modalTab !== "result" ? <div className="crm-empty-state panel">حدد فترة تقييم صحيحة أولًا.</div> : null}
         </div>
-      ) : null}
+        <div className="crm-modal-actions"><button className="crm-secondary-button" onClick={() => setModal(false)}>إلغاء</button><button className="crm-primary-button" disabled={saving || !form.userId || !form.periodStart || !form.periodEnd} onClick={() => void save()}><FloppyDisk size={18}/>{saving ? "جاري الحفظ..." : "حفظ تقييم الشهر"}</button></div>
+      </div></div> : null}
     </div>
   );
 }
