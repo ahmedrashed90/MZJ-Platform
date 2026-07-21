@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, Check, MagnifyingGlass, PencilSimple, PlusCircle, Trash, UsersThree, X } from "@phosphor-icons/react";
+import { useAuth } from "../../auth/AuthContext";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
@@ -9,22 +10,18 @@ const initialForm = {
   customerName: "",
   phone: "",
   sourceCode: "branch",
-  paymentType: "كاش",
-  serviceKey: "cash",
+  serviceKey: "",
   carName: "",
   carCategory: "",
   carModel: "",
   color: "",
   financeType: "",
-  registeredAt: "",
   location: "",
-  branchCode: "",
-  assignedTo: "",
-  callCenterAssignedTo: "",
   notes: "",
 };
 
 export function CrmManualLeadsPage() {
+  const { user } = useAuth();
   const [tab, setTab] = useState<"add" | "list">("add");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [form, setForm] = useState(initialForm);
@@ -64,9 +61,8 @@ export function CrmManualLeadsPage() {
     }
   }
 
-  const targetDepartment = form.serviceKey === "finance" ? "finance_sales" : form.serviceKey === "service" ? "customer_service" : "cash_sales";
-  const agents = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.includes(targetDepartment)), [meta, targetDepartment]);
-  const callCenters = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.includes("call_center")), [meta]);
+  const currentUserService = user?.departmentCodes.includes("finance_sales") ? "finance" : user?.departmentCodes.includes("customer_service") ? "service" : user?.departmentCodes.includes("cash_sales") ? "cash" : "";
+  const activeServiceKey = editingId ? form.serviceKey : currentUserService;
   const approvalAgents = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
 
   function set(key: string, next: string) {
@@ -104,18 +100,13 @@ export function CrmManualLeadsPage() {
       customerName: row.customer_name || "",
       phone: row.phone || "",
       sourceCode: row.source_code || "branch",
-      paymentType: row.payment_type || "كاش",
       serviceKey: row.service_key || (row.payment_type === "تمويل" ? "finance" : row.payment_type === "خدمة عملاء" ? "service" : "cash"),
       carName: row.car_name || "",
       carCategory: row.car_category || "",
       carModel: row.car_model || "",
       color: row.color || "",
       financeType: row.finance_type || "",
-      registeredAt: row.registered_at ? String(row.registered_at).slice(0, 10) : "",
       location: row.location || "",
-      branchCode: row.branch_code || "",
-      assignedTo: row.requested_assigned_to || "",
-      callCenterAssignedTo: row.requested_call_center_to || "",
       notes: row.notes || "",
     });
     setTab("add");
@@ -167,22 +158,17 @@ export function CrmManualLeadsPage() {
 
       {tab === "add" ? (
         <section className="crm-panel crm-form-panel crm-manual-form-panel">
-          <header><h2>{editingId ? "تعديل بيانات العميل" : "بيانات العميل"}</h2><span>العميل اليدوي يتم التواصل معه عن طريق واتساب بالقوالب فقط.</span></header>
+          <header><h2>{editingId ? "تعديل بيانات العميل" : "بيانات العميل"}</h2></header>
           <div className="crm-form-grid crm-manual-form-grid">
             <label><span>اسم العميل</span><input value={form.customerName} onChange={(event) => set("customerName", event.target.value)} /></label>
             <label><span>رقم الجوال</span><input value={form.phone} onChange={(event) => set("phone", event.target.value)} placeholder="05xxxxxxxx" /></label>
             <label><span>المصدر</span><select value={form.sourceCode} onChange={(event) => set("sourceCode", event.target.value)}>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>
-            <label><span>الدفع</span><select value={form.paymentType} onChange={(event) => { const payment = event.target.value; set("paymentType", payment); const serviceKey = payment === "تمويل" ? "finance" : payment === "خدمة عملاء" ? "service" : "cash"; set("serviceKey", serviceKey); set("branchCode", serviceKey === "finance" ? "online" : serviceKey === "service" ? "customer_service" : ""); }}><option>كاش</option><option>تمويل</option><option>خدمة عملاء</option></select></label>
             <label><span>السيارة</span><input value={form.carName} onChange={(event) => set("carName", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الفئة</span><input value={form.carCategory} onChange={(event) => set("carCategory", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الموديل</span><input value={form.carModel} onChange={(event) => set("carModel", event.target.value)} placeholder="اختياري" /></label>
             <label><span>اللون</span><input value={form.color} onChange={(event) => set("color", event.target.value)} placeholder="اختياري" /></label>
-            {form.serviceKey === "finance" ? <label><span>نوع التمويل</span><input value={form.financeType} onChange={(event) => set("financeType", event.target.value)} placeholder="اختياري" /></label> : null}
-            <label><span>تاريخ تسجيل العميل</span><input type="date" value={form.registeredAt} onChange={(event) => set("registeredAt", event.target.value)} /></label>
+            {activeServiceKey === "finance" ? <label><span>نوع التمويل</span><input value={form.financeType} onChange={(event) => set("financeType", event.target.value)} placeholder="اختياري" /></label> : null}
             <label><span>المكان</span><input value={form.location} onChange={(event) => set("location", event.target.value)} /></label>
-            <label><span>الفرع</span><select value={form.branchCode} onChange={(event) => set("branchCode", event.target.value)}><option value="">اختر الفرع</option>{(meta?.branches || []).map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
-            <label><span>المندوب المسؤول</span><select value={form.assignedTo} onChange={(event) => set("assignedTo", event.target.value)}><option value="">توزيع تلقائي</option>{agents.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
-            {form.serviceKey === "finance" ? <label><span>الكول سنتر</span><select value={form.callCenterAssignedTo} onChange={(event) => set("callCenterAssignedTo", event.target.value)}><option value="">توزيع تلقائي</option>{callCenters.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label> : null}
             <label className="crm-field-wide"><span>ملاحظات</span><textarea rows={5} value={form.notes} onChange={(event) => set("notes", event.target.value)} /></label>
           </div>
           <div className="crm-form-actions">
@@ -209,7 +195,7 @@ export function CrmManualLeadsPage() {
                     <td>{row.phone}</td>
                     <td>{sourceLabel(row.source_code, row.source_name)}</td>
                     <td>{row.payment_type || "—"}</td>
-                    <td>{row.requested_assigned_name || "توزيع تلقائي"}</td>
+                    <td>{row.requested_assigned_name || row.requested_by_name || "—"}</td>
                     <td>{row.requested_call_center_name || "—"}</td>
                     <td>{formatDate(row.updated_at)}</td>
                     <td><span className={`crm-status-pill ${row.approval_status}`}>{row.approval_status === "pending" ? "بانتظار موافقة الإدارة" : row.approval_status === "approved" ? "تمت الموافقة" : "مرفوض"}</span></td>

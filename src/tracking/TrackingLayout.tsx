@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Archive, ListMagnifyingGlass, Trash, SlidersHorizontal } from "@phosphor-icons/react";
+import { Archive, ListMagnifyingGlass, Trash } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 
 export function TrackingLayout() {
@@ -20,12 +20,6 @@ export function TrackingLayout() {
           <NavLink to="/tracking/delete" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
             <Trash size={18} weight="duotone" />
             <span>حذف طلبات التتبع</span>
-          </NavLink>
-        ) : null}
-        {isAdmin ? (
-          <NavLink to="/settings?section=tracking" className="crm-system-link">
-            <SlidersHorizontal size={18} weight="duotone" />
-            <span>إعدادات التتبع</span>
           </NavLink>
         ) : null}
       </nav>

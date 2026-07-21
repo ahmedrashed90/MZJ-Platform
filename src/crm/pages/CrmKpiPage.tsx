@@ -324,7 +324,37 @@ export function CrmKpiPage() {
 
     const win = window.open("", "_blank", "width=1200,height=900");
     if (!win) return;
-    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${safe(agentName)} - ${safe(labels[target])}</title><style>@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:Tajawal,Arial;padding:18px;color:#35221c;background:#fff;font-size:12px;font-weight:700}.cover,.box{background:#fff;border:1px solid #e5cdbf;border-radius:16px;padding:17px;margin-bottom:13px}.cover{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff}.cover h1{margin:0 0 8px}.cover h2{margin:0 0 12px;font-size:24px}.meta{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.meta span{padding:9px;border:1px solid rgba(255,255,255,.25);border-radius:9px}.box h2{margin:0 0 12px;font-size:19px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-bottom:13px}.metric{border:1px solid #ead5ca;border-radius:11px;padding:10px;background:#fffaf7}.metric span{display:block;color:#765e55}.metric b{display:block;font-size:20px;margin-top:5px}.metric.good{background:#edf8ef;border-color:#b8dfc1}.metric.mid{background:#fff8df;border-color:#ead88d}.metric.bad{background:#fff0f0;border-color:#efb7b7}.result-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}table{width:100%;border-collapse:collapse;margin-top:4px}th,td{border:1px solid #ead5ca;padding:8px;text-align:right}th{background:#f8ece5;font-weight:800}.notes{margin-top:12px;padding:12px;border:1px solid #ead5ca;border-radius:10px;background:#fffaf7}.notes p{white-space:pre-wrap;margin:6px 0 0}@media print{body{padding:0}.box,.cover{break-inside:avoid}.cover{print-color-adjust:exact;-webkit-print-color-adjust:exact}}@media(max-width:800px){.meta,.metrics,.result-metrics,.two{grid-template-columns:1fr 1fr}}</style></head><body><section class="cover"><h1>تقييم KPI — ${safe(labels[target])}</h1><h2>${safe(agentName)}</h2><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></section>${body}<script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
+    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>KPI - ${safe(agentName)} - ${safe(labels[target])}</title><style>
+@page{size:A4 landscape;margin:7mm}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#fff}
+body{font-family:Tajawal,Arial,sans-serif;color:#35221c;font-size:10px;font-weight:700;line-height:1.45}
+.report-head{background:linear-gradient(135deg,#4f2419,#8a4938);color:#fff;border-radius:11px;padding:10px 12px;margin:0 0 8px;break-inside:avoid;page-break-after:avoid}
+.report-title{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.report-title h1{margin:0;font-size:17px}
+.report-title h2{margin:0;font-size:20px}
+.meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:7px}
+.meta span{padding:5px 7px;border:1px solid rgba(255,255,255,.28);border-radius:7px;font-size:9px}
+.box{background:#fff;border:1px solid #e5cdbf;border-radius:10px;padding:9px;margin:0 0 8px;break-inside:auto;page-break-inside:auto}
+.box h2{margin:0 0 8px;font-size:15px}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px}
+.metric{border:1px solid #ead5ca;border-radius:8px;padding:6px 8px;background:#fffaf7;break-inside:avoid}
+.metric span{display:block;color:#765e55;font-size:9px}
+.metric b{display:block;font-size:15px;margin-top:2px}
+.metric.good{background:#edf8ef;border-color:#b8dfc1}
+.metric.mid{background:#fff8df;border-color:#ead88d}
+.metric.bad{background:#fff0f0;border-color:#efb7b7}
+.result-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+table{width:100%;border-collapse:collapse;margin:0;font-size:9px}
+thead{display:table-header-group}
+tr{break-inside:avoid;page-break-inside:avoid}
+th,td{border:1px solid #ead5ca;padding:4px 6px;text-align:right;vertical-align:middle}
+th{background:#f8ece5;font-weight:900}
+.notes{margin-top:8px;padding:8px;border:1px solid #ead5ca;border-radius:8px;background:#fffaf7;break-inside:avoid}
+.notes p{white-space:pre-wrap;margin:4px 0 0}
+@media print{.report-head{-webkit-print-color-adjust:exact;print-color-adjust:exact}.box{break-inside:auto;page-break-inside:auto}.metric,.notes,.two>table{break-inside:avoid;page-break-inside:avoid}}
+</style></head><body><header class="report-head"><div class="report-title"><h1>تقييم KPI — ${safe(labels[target])}</h1><h2>${safe(agentName)}</h2></div><div class="meta"><span>الفرع: ${safe(branch || "—")}</span><span>القسم: ${safe(department || "—")}</span><span>الفترة: ${safe(from)} إلى ${safe(to)}</span><span>أيام العمل: ${safe(result.workDays)}</span></div></header><main>${body}</main><script>window.onload=()=>setTimeout(()=>window.print(),200)<\/script></body></html>`);
     win.document.close();
   }
 

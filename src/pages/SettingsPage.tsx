@@ -114,6 +114,16 @@ export function SettingsPage() {
     [meta, form.departmentId],
   );
 
+  const visibleRoles = useMemo(() => {
+    const names = new Set<string>();
+    return (meta?.roles || []).filter((item) => {
+      const key = item.name.trim().toLocaleLowerCase("ar");
+      if (!key || names.has(key)) return false;
+      names.add(key);
+      return true;
+    });
+  }, [meta]);
+
   function chooseSection(next: Section) {
     setSection(next);
     setSearchParams(next === "users" ? {} : { section: next }, { replace: true });
@@ -199,7 +209,7 @@ export function SettingsPage() {
               <label><span>البريد الإلكتروني</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
               <label><span>{editingUserId ? "كلمة مرور جديدة (اختياري)" : "كلمة مرور مؤقتة"}</span><input required={!editingUserId} minLength={10} type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
               <div className="form-row"><label><span>القسم</span><select value={form.departmentId} onChange={(event) => setForm({ ...form, departmentId: event.target.value })}><option value="">اختر القسم</option>{meta?.departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>الفرع</span><select value={form.branchId} onChange={(event) => setForm({ ...form, branchId: event.target.value })}><option value="">اختر الفرع</option>{meta?.branches.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
-              <label><span>الدور والصلاحية</span><select value={form.roleId} onChange={(event) => setForm({ ...form, roleId: event.target.value })}><option value="">اختر الدور</option>{meta?.roles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              <label><span>الدور والصلاحية</span><select value={form.roleId} onChange={(event) => setForm({ ...form, roleId: event.target.value })}><option value="">اختر الدور</option>{visibleRoles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
               <div className="form-checks"><label><input type="checkbox" checked={form.canReceiveLeads} onChange={(event) => setForm({ ...form, canReceiveLeads: event.target.checked })} /><span>يستقبل عملاء ويدخل في قواعد التوزيع</span></label><label><input type="checkbox" checked={form.canReceiveTasks} onChange={(event) => setForm({ ...form, canReceiveTasks: event.target.checked })} /><span>يستقبل تاسكات</span></label></div>
               {selectedDepartment ? <p className="selected-department">النظام المرتبط بالقسم: {selectedDepartment.system_code}</p> : null}
               <button className="save-user-button" type="submit" disabled={saving || !meta?.ok}><FloppyDisk size={19} />{saving ? "جاري الحفظ..." : editingUserId ? "تحديث المستخدم" : "حفظ المستخدم"}</button>

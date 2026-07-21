@@ -26,10 +26,34 @@ export default async function handler(request: VercelRequest, response: VercelRe
           u.last_login_at,
           u.created_at,
           (
-            select ur2.role_id::text
+            select canonical.id::text
             from core.user_roles ur2
+            join core.roles assigned_role on assigned_role.id = ur2.role_id
+            join lateral (
+              select candidate.id
+              from core.roles candidate
+              where lower(trim(candidate.name)) = lower(trim(assigned_role.name))
+              order by
+                case candidate.code
+                  when 'admin' then 1
+                  when 'sales_manager' then 2
+                  when 'branch_manager' then 3
+                  when 'finance_manager' then 4
+                  when 'operations_manager' then 5
+                  when 'call_center_agent' then 6
+                  when 'sales_user' then 7
+                  when 'marketing_user' then 8
+                  when 'operations_user' then 9
+                  when 'tracking_user' then 10
+                  when 'system_admin' then 11
+                  else 100
+                end,
+                candidate.created_at,
+                candidate.code
+              limit 1
+            ) canonical on true
             where ur2.user_id = u.id
-            order by ur2.role_id
+            order by canonical.id
             limit 1
           ) as role_id,
           (
