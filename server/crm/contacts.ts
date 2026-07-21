@@ -218,13 +218,19 @@ async function purgeContact(request: VercelRequest, response: VercelResponse, us
   const sql = getSql();
   const body = parseBody(request);
   const id = clean(body.id || request.query.id);
-  const confirmPhone = normalizePhone(body.confirmPhone ?? body.confirm_phone);
-  if (!id || !confirmPhone) return response.status(400).json({ ok: false, error: "اكتب رقم الجوال المسجل لتأكيد حذف الملف بالكامل" });
+  const confirmation = clean(body.confirmPhone ?? body.confirm_phone);
+  if (!id || !confirmation) return response.status(400).json({ ok: false, error: "اكتب رقم الجوال المسجل أو كلمة التأكيد الأساسية لحذف الملف بالكامل" });
 
   const [contact] = await sql<any[]>`select *,id::text from crm.contacts where id=${id}::uuid limit 1`;
   if (!contact) return response.status(404).json({ ok: false, error: "جهة الاتصال غير موجودة" });
   const storedPhone = normalizePhone(contact.primary_phone_normalized || contact.primary_phone);
-  if (!storedPhone || storedPhone !== confirmPhone) return response.status(400).json({ ok: false, error: "رقم التأكيد لا يطابق رقم جهة الاتصال" });
+  const hasStoredPhone = Boolean(storedPhone);
+  if (hasStoredPhone) {
+    const confirmPhone = normalizePhone(confirmation);
+    if (!confirmPhone || storedPhone !== confirmPhone) return response.status(400).json({ ok: false, error: "رقم التأكيد لا يطابق رقم جهة الاتصال" });
+  } else if (confirmation !== "2106") {
+    return response.status(400).json({ ok: false, error: "كلمة التأكيد الأساسية غير صحيحة" });
+  }
 
   const result = await sql.begin(async (tx) => {
     const [counts] = await tx<any[]>`
@@ -233,10 +239,10 @@ async function purgeContact(request: VercelRequest, response: VercelResponse, us
         (select count(*) from crm.service_requests where contact_id=${id}::uuid)::int as requests,
         (select count(*) from crm.conversations where contact_id=${id}::uuid)::int as conversations,
         (select count(*) from crm.messages m join crm.conversations c on c.id=m.conversation_id where c.contact_id=${id}::uuid)::int as messages,
-        (select count(*) from crm.manual_lead_requests where phone_normalized=${storedPhone} or duplicate_lead_id in (select id from crm.leads where contact_id=${id}::uuid) or created_lead_id in (select id from crm.leads where contact_id=${id}::uuid))::int as manual_requests
+        (select count(*) from crm.manual_lead_requests where (${hasStoredPhone}::boolean and phone_normalized=${storedPhone}) or duplicate_lead_id in (select id from crm.leads where contact_id=${id}::uuid) or created_lead_id in (select id from crm.leads where contact_id=${id}::uuid))::int as manual_requests
     `;
-    await tx`delete from crm.manual_lead_requests where phone_normalized=${storedPhone} or duplicate_lead_id in (select id from crm.leads where contact_id=${id}::uuid) or created_lead_id in (select id from crm.leads where contact_id=${id}::uuid)`;
-    await tx`delete from crm.inbox_agent_logs where lead_id in (select id from crm.leads where contact_id=${id}::uuid) or conversation_id in (select id from crm.conversations where contact_id=${id}::uuid) or customer_phone in (${contact.primary_phone},${contact.primary_phone_normalized},${storedPhone})`;
+    await tx`delete from crm.manual_lead_requests where (${hasStoredPhone}::boolean and phone_normalized=${storedPhone}) or duplicate_lead_id in (select id from crm.leads where contact_id=${id}::uuid) or created_lead_id in (select id from crm.leads where contact_id=${id}::uuid)`;
+    await tx`delete from crm.inbox_agent_logs where lead_id in (select id from crm.leads where contact_id=${id}::uuid) or conversation_id in (select id from crm.conversations where contact_id=${id}::uuid) or (${hasStoredPhone}::boolean and customer_phone in (${contact.primary_phone},${contact.primary_phone_normalized},${storedPhone}))`;
     await tx`delete from crm.assignment_logs where lead_id in (select id from crm.leads where contact_id=${id}::uuid)`;
     await tx`delete from crm.automation_events where contact_id=${id}::uuid or lead_id in (select id from crm.leads where contact_id=${id}::uuid) or conversation_id in (select id from crm.conversations where contact_id=${id}::uuid) or service_request_id in (select id from crm.service_requests where contact_id=${id}::uuid)`;
     await tx`delete from crm.ownership_events where contact_id=${id}::uuid or lead_id in (select id from crm.leads where contact_id=${id}::uuid) or service_request_id in (select id from crm.service_requests where contact_id=${id}::uuid)`;
@@ -247,7 +253,7 @@ async function purgeContact(request: VercelRequest, response: VercelResponse, us
     return counts || { leads: 0, requests: 0, conversations: 0, messages: 0, manual_requests: 0 };
   });
 
-  await audit(user, "contact_file_purged", "contact", id, { ...result, phone: storedPhone }, contact);
+  await audit(user, "contact_file_purged", "contact", id, { ...result, phone: storedPhone || null, confirmationMode: hasStoredPhone ? "phone" : "default_password" }, contact);
   return response.status(200).json({ ok: true, deleted: result });
 }
 

@@ -5,6 +5,131 @@ import { publishAutomationEvent } from "../_crm-automation.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead } from "../_crm-unread-state.js";
 
+function preferredChannelForLead(lead: any) {
+  const value = [lead?.source_code, lead?.source_name, lead?.platform_code].map((item) => clean(item).toLowerCase()).filter(Boolean).join(" ");
+  if (value.includes("instagram") || value.includes("انستجرام") || value.includes("انستغرام")) return "instagram";
+  if (value.includes("facebook") || value.includes("فيسبوك") || value === "fb") return "facebook";
+  if (value.includes("tiktok") || value.includes("تيك توك")) return "tiktok";
+  if (value.includes("whatsapp") || value.includes("mersal") || value.includes("واتساب") || value === "wa") return "whatsapp";
+  return lead?.phone_normalized || lead?.phone ? "whatsapp" : "";
+}
+
+async function loadAccessibleLead(sql: any, scope: any, leadId: string) {
+  const [lead] = await sql`
+    select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
+      exists(select 1 from crm.manual_lead_requests r where r.created_lead_id=l.id) as is_manual_entry
+    from crm.leads l
+    where l.id=${leadId}::uuid and l.is_deleted=false
+      and (
+        ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+        or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+      )
+    limit 1
+  `;
+  return lead || null;
+}
+
+async function ensureConversationForLead(sql: any, lead: any) {
+  const preferredChannel = preferredChannelForLead(lead);
+  let [conversation] = await sql`
+    select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
+    from crm.conversations c
+    where c.lead_id=${lead.id}::uuid
+      or (${lead.contact_id || null}::uuid is not null and c.contact_id=${lead.contact_id || null}::uuid)
+    order by
+      (${preferredChannel || null}::text is not null and c.channel_code=${preferredChannel || null}) desc,
+      (${lead.current_request_id || null}::uuid is not null and c.service_request_id=${lead.current_request_id || null}::uuid) desc,
+      (c.lead_id=${lead.id}::uuid) desc,
+      c.last_message_at desc nulls last,c.updated_at desc
+    limit 1
+  `;
+
+  if (conversation) {
+    [conversation] = await sql`
+      update crm.conversations set
+        lead_id=${lead.id}::uuid,
+        contact_id=coalesce(${lead.contact_id || null}::uuid,contact_id),
+        service_request_id=coalesce(${lead.current_request_id || null}::uuid,service_request_id),
+        customer_name=coalesce(nullif(${lead.customer_name || ""},''),customer_name),
+        service_key=coalesce(nullif(${lead.service_key || ""},''),service_key),
+        department_code=coalesce(nullif(${lead.department_code || ""},''),department_code),
+        branch_code=coalesce(nullif(${lead.branch_code || ""},''),branch_code),
+        assigned_to=${lead.assigned_to || null}::uuid,
+        call_center_assigned_to=${lead.call_center_assigned_to || null}::uuid,
+        classification_state=case when ${Boolean(lead.current_request_id)} then 'classified' else classification_state end,
+        updated_at=now()
+      where id=${conversation.id}::uuid
+      returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
+    `;
+    if (lead.current_request_id) await sql`update crm.service_requests set conversation_id=${conversation.id}::uuid,lead_id=${lead.id}::uuid,updated_at=now() where id=${lead.current_request_id}::uuid`;
+    return conversation;
+  }
+
+  let identity: any = null;
+  if (lead.contact_id) {
+    [identity] = await sql`
+      select *,id::text,contact_id::text from crm.contact_identities
+      where contact_id=${lead.contact_id}::uuid and channel_code<>'crm_manual'
+      order by (${preferredChannel || null}::text is not null and channel_code=${preferredChannel || null}) desc,updated_at desc
+      limit 1
+    `;
+  }
+
+  const identityChannel = clean(identity?.channel_code).toLowerCase();
+  const channelCode = ["facebook","instagram","tiktok","whatsapp","mersal"].includes(identityChannel)
+    ? (identityChannel === "mersal" ? "whatsapp" : identityChannel)
+    : preferredChannel;
+
+  if (identity && channelCode) {
+    const participantId = clean(identity.participant_id || identity.external_id);
+    const externalId = clean(identity.external_id || participantId);
+    const pageId = clean(identity.page_id);
+    if (participantId && externalId) {
+      const legacyId = channelCode === "whatsapp" ? externalId : `${channelCode}:${pageId || "default"}:${externalId}`;
+      [conversation] = await sql`
+        insert into crm.conversations(
+          legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,status,
+          service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,metadata,last_message_at
+        ) values(
+          ${legacyId},${lead.id}::uuid,${lead.contact_id || null}::uuid,${lead.current_request_id || null}::uuid,${channelCode},${lead.customer_name || identity.display_name || "عميل"},${participantId},'open',
+          ${lead.service_key || null},${lead.department_code || null},${lead.branch_code || null},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,
+          ${channelCode},${pageId || null},${lead.current_request_id ? "classified" : "new"},${sql.json({ autoCreatedFromContactIdentity: true, identityId: identity.id, sourceCode: lead.source_code, sourceName: lead.source_name })},null
+        )
+        on conflict (legacy_id) do update set
+          lead_id=excluded.lead_id,contact_id=coalesce(excluded.contact_id,crm.conversations.contact_id),service_request_id=coalesce(excluded.service_request_id,crm.conversations.service_request_id),
+          customer_name=excluded.customer_name,participant_id=coalesce(excluded.participant_id,crm.conversations.participant_id),service_key=coalesce(excluded.service_key,crm.conversations.service_key),
+          department_code=coalesce(excluded.department_code,crm.conversations.department_code),branch_code=coalesce(excluded.branch_code,crm.conversations.branch_code),
+          assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,page_id=coalesce(excluded.page_id,crm.conversations.page_id),
+          classification_state=case when excluded.service_request_id is not null then 'classified' else crm.conversations.classification_state end,updated_at=now()
+        returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
+      `;
+    }
+  }
+
+  if (!conversation && (lead.phone_normalized || lead.phone)) {
+    const legacyId = `crm-manual:${lead.id}`;
+    [conversation] = await sql`
+      insert into crm.conversations(
+        legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,assigned_to,call_center_assigned_to,
+        service_key,department_code,branch_code,classification_state,metadata,last_message_at
+      ) values (
+        ${legacyId},${lead.id}::uuid,${lead.contact_id || null}::uuid,${lead.current_request_id || null}::uuid,'whatsapp',${lead.customer_name || "عميل"},${lead.phone_normalized || lead.phone},
+        ${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,${lead.service_key || null},${lead.department_code || null},${lead.branch_code || null},
+        ${lead.current_request_id ? "classified" : "new"},${sql.json({ manualEntry: Boolean(lead.is_manual_entry), sourceCode: lead.source_code, sourceName: lead.source_name, autoCreated: true })},null
+      )
+      on conflict (legacy_id) do update set
+        lead_id=excluded.lead_id,contact_id=coalesce(excluded.contact_id,crm.conversations.contact_id),service_request_id=coalesce(excluded.service_request_id,crm.conversations.service_request_id),
+        assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,customer_name=excluded.customer_name,participant_id=excluded.participant_id,
+        service_key=coalesce(excluded.service_key,crm.conversations.service_key),department_code=coalesce(excluded.department_code,crm.conversations.department_code),
+        branch_code=coalesce(excluded.branch_code,crm.conversations.branch_code),updated_at=now()
+      returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
+    `;
+  }
+
+  if (conversation && lead.current_request_id) await sql`update crm.service_requests set conversation_id=${conversation.id}::uuid,lead_id=${lead.id}::uuid,updated_at=now() where id=${lead.current_request_id}::uuid`;
+  return conversation || null;
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
@@ -45,7 +170,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true, conversation: { ...conversation, unread_count: 0 }, messages });
     }
 
-    let rows: any[] = [...await sql<any[]>`
+    let lead: any = null;
+    if (leadId) {
+      lead = await loadAccessibleLead(sql, scope, leadId);
+      if (lead) await ensureConversationForLead(sql, lead);
+    }
+
+    const rows: any[] = [...await sql<any[]>`
       select c.*, c.id::text, c.lead_id::text, l.phone, l.phone_normalized, l.customer_name as lead_customer_name,
         l.source_code,coalesce(src.name,l.source_name) as source_name,l.platform_code,l.service_key,
         sales.full_name as assigned_name, cc.full_name as call_center_name
@@ -62,44 +193,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by c.last_message_at desc nulls last,c.updated_at desc
       limit ${limit}
     `];
-
-    if (leadId && !rows.length) {
-      const [lead] = await sql<any[]>`
-        select l.*,l.id::text,l.assigned_to::text,l.call_center_assigned_to::text,
-          exists(select 1 from crm.manual_lead_requests r where r.created_lead_id=l.id) as is_manual_entry
-        from crm.leads l
-        where l.id=${leadId}::uuid and l.is_deleted=false
-          and (
-            ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
-            or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
-          )
-      `;
-      if (lead?.phone_normalized || lead?.phone) {
-        const legacyId = `crm-manual:${lead.id}`;
-        const [created] = await sql<any[]>`
-          insert into crm.conversations(
-            legacy_id,lead_id,channel_code,customer_name,assigned_to,call_center_assigned_to,metadata,last_message_at
-          ) values (
-            ${legacyId},${lead.id}::uuid,'whatsapp',${lead.customer_name || "عميل"},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,
-            ${sql.json({ manualEntry: Boolean(lead.is_manual_entry), sourceCode: lead.source_code, sourceName: lead.source_name, autoCreated: true })},null
-          )
-          on conflict (legacy_id) do update set
-            lead_id=excluded.lead_id,assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,
-            customer_name=excluded.customer_name,updated_at=now()
-          returning *,id::text,lead_id::text
-        `;
-        rows = [{
-          ...created,
-          phone: lead.phone,
-          phone_normalized: lead.phone_normalized,
-          lead_customer_name: lead.customer_name,
-          source_code: lead.source_code,
-          source_name: lead.source_name,
-          platform_code: lead.platform_code,
-          service_key: lead.service_key,
-        }];
-      }
-    }
 
     return response.status(200).json({ ok: true, rows });
   }

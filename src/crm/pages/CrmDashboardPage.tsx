@@ -60,6 +60,11 @@ function isDashboardTerminalStatus(department: string, value: string) {
   return false;
 }
 
+function isDangerStatusColumn(department: string, value: string) {
+  const status = String(value || "").trim();
+  return (department === "cash" || department === "finance") && ["غير مؤهل", "تم البيع"].includes(status);
+}
+
 export function CrmDashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedLeadId = searchParams.get("lead") || "";
@@ -249,7 +254,7 @@ export function CrmDashboardPage() {
       {!loading ? (
         <div className="crm-board crm-board-five">
           {groups.map((group) => (
-            <section className={`crm-status-column ${group.unread_messages ? "crm-unread-status-column" : ""}`} key={group.id}>
+            <section className={`crm-status-column ${group.unread_messages ? "crm-unread-status-column" : ""} ${isDangerStatusColumn(department, String(group.value || group.label)) ? "crm-danger-status-column" : ""}`} key={group.id}>
               <header>
                 <div><h2>{group.label}</h2></div>
                 <strong>{group.leads.length.toLocaleString("ar-SA")}</strong>

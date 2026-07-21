@@ -720,6 +720,7 @@ button.small-metric { cursor: pointer; }
 .crm-status-column > header h2 { margin: 0; font-size: 13px; line-height: 1.5; }
 .crm-status-column > header span { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .crm-status-column > header > strong { min-width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--brand); }
+.crm-status-column.crm-danger-status-column > header > strong { background: #d9343f; }
 .crm-status-cards { max-height: calc(100vh - 300px); min-height: 130px; overflow-y: auto; padding: 10px; display: grid; align-content: start; gap: 9px; }
 .crm-lead-card { width: 100%; border: 1px solid #eaded8; border-radius: 13px; padding: 12px; background: #fff; text-align: right; cursor: pointer; transition: .18s ease; }
 .crm-lead-card:hover { transform: translateY(-1px); border-color: #d7b3a4; box-shadow: 0 10px 22px rgba(82,45,34,.07); }
@@ -3199,7 +3200,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 /* CRM v1.16.0: compact attachment action and wider message writing area */
 .crm-message-composer { grid-template-columns:minmax(0,1fr) auto auto; align-items:end; }
 .crm-message-composer textarea { min-height:210px; }
-.crm-composer-attachments { display:flex; align-items:flex-end; align-self:end; }
+.crm-composer-attachments { display:flex; align-items:flex-end; align-self:end; gap:8px; }
 .crm-composer-attachments .crm-attachment-button {
   width:96px;
   min-width:96px;
@@ -3211,6 +3212,23 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   align-self:end;
 }
 .crm-message-composer > button { width:96px; min-width:96px; height:42px; justify-content:center; }
+.crm-voice-record-button {
+  width:96px;
+  min-width:96px;
+  height:42px;
+  min-height:42px;
+  justify-content:center;
+  border:1px solid #dcc4ba !important;
+  background:#fffaf7 !important;
+  color:var(--brand) !important;
+  font-weight:900;
+}
+.crm-voice-record-button.recording {
+  border-color:#d9343f !important;
+  background:#fff1f2 !important;
+  color:#b4232c !important;
+}
+
 
 /* Finance history: neutral header and separated filter rows */
 .crm-finance-history-page { gap:15px; }

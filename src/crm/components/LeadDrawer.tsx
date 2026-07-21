@@ -10,6 +10,8 @@ import {
   ImageSquare,
   FileAudio,
   FileVideo,
+  Microphone,
+  StopCircle,
   Phone,
   UserCircle,
   WhatsappLogo,
@@ -169,8 +171,14 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
+  const recordingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!lead) {
@@ -196,6 +204,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setNoteDraft("");
     setNotice("");
     setPendingFile(null);
+    setRecording(false);
+    setRecordingSeconds(0);
     setMediaUrls({});
     if (showConversation) {
       void loadConversation(lead.id, lead.conversation_id || "", false);
@@ -216,6 +226,20 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
     }
   }, [lead?.id, showConversation]);
+
+  useEffect(() => () => {
+    if (recordingTimerRef.current != null) window.clearInterval(recordingTimerRef.current);
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.stop();
+    }
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaRecorderRef.current = null;
+    recordingStreamRef.current = null;
+    recordingChunksRef.current = [];
+  }, [lead?.id]);
 
   useEscapeToClose(Boolean(lead), onClose);
 
@@ -241,6 +265,16 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     } finally {
       if (!silent) setLoadingMessages(false);
     }
+  }
+
+  async function ensureConversationId() {
+    if (conversationId) return conversationId;
+    if (!lead?.id) return "";
+    const result = await crmFetch<{ ok: boolean; rows: Array<{ id: string; channel_code?: string | null }> }>(`/api/crm/conversations?leadId=${encodeURIComponent(lead.id)}&limit=1`);
+    const resolvedId = result.rows[0]?.id || "";
+    setConversationId(resolvedId);
+    setConversationChannel(result.rows[0]?.channel_code || "");
+    return resolvedId;
   }
 
   useEffect(() => {
@@ -438,11 +472,75 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     return "document";
   }
 
+  function stopRecordingResources() {
+    if (recordingTimerRef.current != null) window.clearInterval(recordingTimerRef.current);
+    recordingTimerRef.current = null;
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+  }
 
-  async function uploadPendingFile(file: File) {
+  function voiceFileExtension(mimeType: string) {
+    if (mimeType.includes("mp4") || mimeType.includes("m4a")) return "m4a";
+    if (mimeType.includes("ogg")) return "ogg";
+    return "webm";
+  }
+
+  async function startVoiceRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setNotice("المتصفح الحالي لا يدعم تسجيل الصوت");
+      return;
+    }
+    try {
+      setNotice("");
+      setPendingFile(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find((item) => MediaRecorder.isTypeSupported(item)) || "";
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recordingStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const finalType = recorder.mimeType || mimeType || "audio/webm";
+        const blob = new Blob(recordingChunksRef.current, { type: finalType });
+        recordingChunksRef.current = [];
+        mediaRecorderRef.current = null;
+        stopRecordingResources();
+        setRecording(false);
+        setRecordingSeconds(0);
+        if (!blob.size) {
+          setNotice("لم يتم التقاط صوت في التسجيل");
+          return;
+        }
+        const file = new File([blob], `voice-note-${Date.now()}.${voiceFileExtension(finalType)}`, { type: finalType });
+        setPendingFile(file);
+        setSelectedTemplate("");
+        setNotice("تم تجهيز التسجيل الصوتي، اضغط إرسال");
+      };
+      recorder.start(250);
+      setRecording(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = window.setInterval(() => setRecordingSeconds((current) => current + 1), 1000);
+    } catch (error) {
+      stopRecordingResources();
+      mediaRecorderRef.current = null;
+      setRecording(false);
+      setRecordingSeconds(0);
+      setNotice(error instanceof Error ? error.message : "تعذر تشغيل الميكروفون");
+    }
+  }
+
+  function stopVoiceRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === "recording") recorder.stop();
+  }
+
+  async function uploadPendingFile(file: File, targetConversationId: string) {
     const prepared = await crmFetch<{ ok: boolean; assetId: string; uploadUrl: string }>("/api/crm/media", {
       method: "POST",
-      body: JSON.stringify({ action: "prepare_upload", conversationId, mediaType: mediaTypeForFile(file), fileName: file.name, mimeType: file.type || "application/octet-stream", fileSize: file.size, isSensitive: true }),
+      body: JSON.stringify({ action: "prepare_upload", conversationId: targetConversationId, mediaType: mediaTypeForFile(file), fileName: file.name, mimeType: file.type || "application/octet-stream", fileSize: file.size, isSensitive: true }),
     });
     const upload = await fetch(prepared.uploadUrl, { method: "PUT", headers: { "content-type": file.type || "application/octet-stream" }, body: file });
     if (!upload.ok) throw new Error("فشل رفع الملف إلى التخزين الآمن");
@@ -514,8 +612,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   }
 
   async function sendMessage() {
-    if (!conversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
     if (!messageText.trim() && !selectedTemplate && !pendingFile) return;
+    let targetConversationId = "";
+    try {
+      targetConversationId = await ensureConversationId();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تجهيز قناة الإرسال لهذا العميل");
+      return;
+    }
+    if (!targetConversationId) return setNotice("تعذر تجهيز قناة الإرسال لهذا العميل");
 
     const draftText = messageText;
     const draftTemplate = selectedTemplate;
@@ -543,17 +648,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setNotice("");
 
     try {
-      const mediaAssetId = draftFile ? await uploadPendingFile(draftFile) : "";
+      const mediaAssetId = draftFile ? await uploadPendingFile(draftFile, targetConversationId) : "";
       const result = await crmFetch<{ ok: boolean; message: CrmMessage; providerStatus: string }>("/api/crm/conversations", {
         method: "POST",
-        body: JSON.stringify({ conversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
+        body: JSON.stringify({ conversationId: targetConversationId, text: draftText, templateId: draftTemplate, mediaAssetId }),
       });
       setMessages((current) => current.map((message) => message.id === tempId
         ? { ...result.message, media_asset_id: mediaAssetId || result.message.media_asset_id }
         : message));
       setNotice(result.providerStatus === "queued" ? "تم تسليم الرسالة للإرسال" : "تم إرسال الرسالة");
-      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 1200);
-      window.setTimeout(() => void loadConversation(activeForm.id, conversationId, true), 3500);
+      window.setTimeout(() => void loadConversation(activeForm.id, targetConversationId, true), 1200);
+      window.setTimeout(() => void loadConversation(activeForm.id, targetConversationId, true), 3500);
     } catch (error) {
       setMessages((current) => current.filter((message) => message.id !== tempId));
       setMessageText((current) => current.trim() ? current : draftText);
@@ -611,6 +716,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 }
               }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <div className="crm-composer-attachments">
+                <button type="button" className={`crm-voice-record-button ${recording ? "recording" : ""}`} title={recording ? "إيقاف التسجيل" : "تسجيل رسالة صوتية"} disabled={sending} onClick={() => recording ? stopVoiceRecording() : void startVoiceRecording()}>{recording ? <StopCircle size={19} weight="fill" /> : <Microphone size={19} />}<span>{recording ? `${Math.floor(recordingSeconds / 60)}:${String(recordingSeconds % 60).padStart(2, "0")}` : "تسجيل"}</span></button>
                 <label className="crm-attachment-button" title="إرفاق صورة أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
               </div>
               <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
