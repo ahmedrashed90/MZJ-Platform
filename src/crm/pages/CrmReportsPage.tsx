@@ -169,17 +169,25 @@ export function CrmReportsPage() {
         </div>
       </header>
 
-      <div className="crm-filter-panel reports crm-reports-filter-panel">
-        <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
-        <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
-        <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
-        <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
-        <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilter("agent", event.target.value)}><option value="">كل المناديب</option>{salesUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
-        <label><span>الكول سنتر</span><select value={filters.callCenter} onChange={(event) => setFilter("callCenter", event.target.value)}><option value="">كل مناديب الكول سنتر</option>{callCenterUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
-        <label><span>المصدر</span><select value={filters.source} onChange={(event) => setFilter("source", event.target.value)}><option value="">كل المصادر</option>{(meta?.sources || []).map((item) => <option key={item.code} value={item.code}>{sourceLabel(item.code, item.name)}</option>)}</select></label>
-        <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="بحث بالاسم أو الجوال أو السيارة أو المصدر" /></label>
-        <button className="crm-secondary-button" onClick={() => setFilters(emptyFilters)}>مسح الفلاتر</button>
-      </div>
+      <section className="crm-reports-filters-pro">
+        <header><div><h2>فلاتر التقارير</h2><p>حدد الفترة والقسم والمسؤول والمصدر، ثم استخدم البحث لتضييق النتائج.</p></div><button type="button" className="crm-secondary-button" onClick={() => setFilters(emptyFilters)}>مسح الفلاتر</button></header>
+        <div className="crm-report-filter-row crm-report-filter-row-primary">
+          <div className="crm-report-filter-group dates">
+            <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
+            <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
+          </div>
+          <div className="crm-report-filter-group organization">
+            <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
+            <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+          </div>
+        </div>
+        <div className="crm-report-filter-row crm-report-filter-row-secondary">
+          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilter("agent", event.target.value)}><option value="">كل المناديب</option>{salesUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
+          <label><span>الكول سنتر</span><select value={filters.callCenter} onChange={(event) => setFilter("callCenter", event.target.value)}><option value="">كل مناديب الكول سنتر</option>{callCenterUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
+          <label><span>المصدر</span><select value={filters.source} onChange={(event) => setFilter("source", event.target.value)}><option value="">كل المصادر</option>{(meta?.sources || []).map((item) => <option key={item.code} value={item.code}>{sourceLabel(item.code, item.name)}</option>)}</select></label>
+          <label className="crm-search-box wide crm-report-search"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="بحث بالاسم أو الجوال أو السيارة أو المصدر" /></label>
+        </div>
+      </section>
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       {loading ? <div className="crm-loading-panel">جاري تحميل التقارير...</div> : null}
@@ -201,7 +209,7 @@ export function CrmReportsPage() {
                 <tbody>
                   {section.rows.map((row) => (
                     <tr key={`${section.title}-${row.name}`}>
-                      <td><strong>{row.name}</strong>{section.title === "تقرير خدمة العملاء" ? <small>جاري العمل: {row.working || 0} - تم الانتهاء: {row.done || 0}</small> : null}</td>
+                      <td><strong className="crm-report-row-name">{row.name}</strong>{section.title === "تقرير خدمة العملاء" ? <small>جاري العمل: {row.working || 0} - تم الانتهاء: {row.done || 0}</small> : null}</td>
                       <td>{row.total}</td><td>{row.notContacted}</td><td>{row.notQualified}</td><td>{row.qualified}</td><td>{row.delayed}</td><td>{row.potential}</td><td>{row.sold}</td>
                       <td><span className="crm-quality-pill">{row.marketingQuality}%</span></td>
                       <td><span className="crm-quality-pill sales">{row.salesQuality}%</span></td>
@@ -221,7 +229,7 @@ export function CrmReportsPage() {
           <div className="crm-modal-card report-customers-modal" onMouseDown={(event) => event.stopPropagation()}>
             <header><div><h2>تقرير عملاء: {popup.name}</h2><p>عدد النتائج: {popupTotal.toLocaleString("ar-SA")}</p></div><button className="crm-icon-button" onClick={() => setPopup(null)}><X size={18} /></button></header>
             <div className="crm-toolbar compact"><label className="crm-search-box wide"><MagnifyingGlass size={17} /><input value={popupQ} onChange={(event) => { setPopupQ(event.target.value); setPopupPage(1); }} placeholder="اكتب حالة أو ملاحظة أو اسم عميل" /></label></div>
-            <div className="crm-table-shell popup-table"><table className="crm-table"><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>التحديثات</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>{popupRows.map((row: any) => <tr key={row.id}><td>{row.customer_name || "—"}</td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.car_name || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{row.status_label || "—"}</td><td>{row.status_note || row.notes || "—"}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}{!popupLoading && !popupRows.length ? <tr><td colSpan={9}><div className="crm-empty-state">لا توجد نتائج</div></td></tr> : null}</tbody></table></div>
+            <div className="crm-table-shell popup-table"><table className="crm-table"><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>التحديثات</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>{popupRows.map((row: any) => <tr key={row.id}><td><strong className="crm-report-customer-name">{row.customer_name || "—"}</strong></td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.car_name || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{row.status_label || "—"}</td><td>{row.status_note || row.notes || "—"}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}{!popupLoading && !popupRows.length ? <tr><td colSpan={9}><div className="crm-empty-state">لا توجد نتائج</div></td></tr> : null}</tbody></table></div>
             <div className="crm-form-actions"><button className="crm-secondary-button" disabled={popupLoading || popupPage <= 1} onClick={() => setPopupPage((current) => Math.max(1, current - 1))}>السابق</button><span>{popupLoading ? "جاري التحميل..." : `صفحة ${popupPage} من ${Math.max(1, Math.ceil(popupTotal / popupPageSize))}`}</span><button className="crm-secondary-button" disabled={popupLoading || popupPage * popupPageSize >= popupTotal} onClick={() => setPopupPage((current) => current + 1)}>التالي</button></div>
           </div>
         </div>

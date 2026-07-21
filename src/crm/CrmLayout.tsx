@@ -7,7 +7,6 @@ import {
   Gauge,
   PlusCircle,
   Robot,
-  UserSwitch,
   ChatsCircle,
   AddressBook,
 } from "@phosphor-icons/react";
@@ -20,7 +19,6 @@ const items = [
   { href: "/crm/inbox", label: "رسائل غير مصنفة", icon: ChatsCircle },
   { href: "/crm/contacts", label: "جهات الاتصال", icon: AddressBook },
   { href: "/crm/inbox-agent", label: "وكيل صندوق الوارد", icon: Robot },
-  { href: "/crm/ownership", label: "سجل ملكية العملاء", icon: UserSwitch },
   { href: "/crm/reports", label: "التقارير", icon: ChartBar },
   { href: "/crm/kpi", label: "تقييم المناديب KPI", icon: ChatCircleDots },
 ];

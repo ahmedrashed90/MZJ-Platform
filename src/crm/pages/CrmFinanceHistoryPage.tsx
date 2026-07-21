@@ -127,17 +127,17 @@ export function CrmFinanceHistoryPage() {
 
   return (
     <div className="crm-page crm-finance-history-page">
-      <section className="crm-finance-history-hero">
-        <div className="crm-finance-history-title">
+      <header className="crm-page-head crm-finance-history-head-clean">
+        <div>
           <span className="crm-eyebrow">CRM / مبيعات التمويل</span>
           <h1>سجل عملاء التمويل</h1>
           <p>ملف زمني واضح لكل عميل من لحظة دخوله، مع الحالات والملاحظات والمسؤولين وتوقيت كل حركة.</p>
         </div>
-        <div className="crm-finance-history-hero-stats">
-          <article><UsersThree size={25} weight="duotone" /><span>إجمالي العملاء</span><strong>{total.toLocaleString("ar-SA")}</strong></article>
-          <article><ClockCounterClockwise size={25} weight="duotone" /><span>الحركات المعروضة</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
+        <div className="crm-finance-history-head-stats">
+          <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA")}</b> عميل</span>
+          <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA")}</b> حركة</span>
         </div>
-      </section>
+      </header>
 
       <div className="crm-inner-page-tabs crm-finance-history-tabs centered">
         <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}><UsersThree size={18} />سجل العملاء</button>
@@ -146,13 +146,17 @@ export function CrmFinanceHistoryPage() {
 
       {activeTab === "history" ? (
         <>
-          <div className="crm-filter-panel history">
-            <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setHistoryFilter("from", event.target.value)} /></label>
-            <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setHistoryFilter("to", event.target.value)} /></label>
-            <label><span>الحالة الحالية</span><select value={filters.status} onChange={(event) => setHistoryFilter("status", event.target.value)}><option value="">كل الحالات الحالية</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-            <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setHistoryFilter("q", event.target.value)} placeholder="اسم العميل أو الجوال أو الحالة أو الموظف" /></label>
-            <button className="crm-secondary-button" onClick={() => { setPage(0); setFilters({ from: "", to: "", status: "", q: "" }); }}>مسح الفلاتر</button>
-          </div>
+          <section className="crm-finance-history-filters">
+            <div className="crm-finance-history-filter-row dates">
+              <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setHistoryFilter("from", event.target.value)} /></label>
+              <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setHistoryFilter("to", event.target.value)} /></label>
+              <label><span>الحالة الحالية</span><select value={filters.status} onChange={(event) => setHistoryFilter("status", event.target.value)}><option value="">كل الحالات الحالية</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+            </div>
+            <div className="crm-finance-history-filter-row search">
+              <label className="crm-search-box wide"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setHistoryFilter("q", event.target.value)} placeholder="ابحث باسم العميل أو الجوال أو الحالة أو الموظف" /></label>
+              <button type="button" className="crm-secondary-button" onClick={() => { setPage(0); setFilters({ from: "", to: "", status: "", q: "" }); }}>مسح الفلاتر</button>
+            </div>
+          </section>
 
           <section className="crm-history-stats crm-history-stats-wide crm-finance-history-mini-stats">
             <article><UsersThree size={24} /><span>نتائج الفلتر</span><strong>{rows.length.toLocaleString("ar-SA")}</strong></article>
