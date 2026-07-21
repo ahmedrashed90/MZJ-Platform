@@ -154,13 +154,45 @@ export async function classifyConversationService(input: {
   if (!conversation) throw new Error("المحادثة غير موجودة");
   const existing = await findOpenServiceRequest(conversation.contact_id);
   if (existing) {
+    let activeRequest = existing;
+    if (!existing.assigned_to) {
+      const existingServiceKey = departmentKey(existing.service_key || existing.department_code);
+      const assignment = await chooseAssignment(existingServiceKey, existing.branch_code || branchForDepartment(existingServiceKey), existing.source_code || conversation.channel_code || "whatsapp");
+      const callCenter = existingServiceKey === "finance" && !existing.call_center_assigned_to
+        ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
+        : { assignedTo: existing.call_center_assigned_to || null, assignedName: existing.call_center_name || "" };
+      const branchCode = assignment.branchCode || existing.branch_code || branchForDepartment(existingServiceKey) || null;
+      const [updatedRequest] = await sql<any[]>`
+        update crm.service_requests set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
+          branch_code=${branchCode},updated_at=now()
+        where id=${existing.id}::uuid and request_state='open'
+        returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
+      `;
+      activeRequest = { ...existing, ...updatedRequest, assigned_name: assignment.assignedName, call_center_name: callCenter.assignedName };
+      if (existing.lead_id) {
+        await sql`
+          update crm.leads set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
+            branch_code=${branchCode},responsible_name_snapshot=${assignment.assignedName||null},call_center_name_snapshot=${callCenter.assignedName||null},updated_at=now()
+          where id=${existing.lead_id}::uuid and is_deleted=false
+        `;
+      }
+      await recordOwnershipEvent({
+        contactId: conversation.contact_id, requestId: existing.id, leadId: existing.lead_id,
+        previousAssignedTo: null, previousAssignedName: "غير موزع",
+        newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
+        previousDepartmentCode: existing.department_code, newDepartmentCode: existing.department_code,
+        previousBranchCode: existing.branch_code, newBranchCode: branchCode,
+        actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "استكمال توزيع طلب خدمة مفتوح غير موزع",
+        metadata: { reusedRequest: true, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
+      });
+    }
     await sql`
-      update crm.conversations set service_request_id=${existing.id}::uuid,lead_id=${existing.lead_id||null}::uuid,
-        service_key=${existing.service_key},department_code=${existing.department_code},branch_code=${existing.branch_code},
-        assigned_to=${existing.assigned_to||null}::uuid,call_center_assigned_to=${existing.call_center_assigned_to||null}::uuid,
+      update crm.conversations set service_request_id=${activeRequest.id}::uuid,lead_id=${activeRequest.lead_id||null}::uuid,
+        service_key=${activeRequest.service_key},department_code=${activeRequest.department_code},branch_code=${activeRequest.branch_code},
+        assigned_to=${activeRequest.assigned_to||null}::uuid,call_center_assigned_to=${activeRequest.call_center_assigned_to||null}::uuid,
         classification_state='classified',updated_at=now() where id=${conversation.id}::uuid
     `;
-    return { request: existing, leadId: existing.lead_id, reused: true };
+    return { request: activeRequest, leadId: activeRequest.lead_id, reused: true };
   }
 
   const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");

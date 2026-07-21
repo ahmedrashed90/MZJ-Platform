@@ -9,6 +9,7 @@ import {
   Robot,
   UserSwitch,
   ChatsCircle,
+  AddressBook,
 } from "@phosphor-icons/react";
 
 const items = [
@@ -16,7 +17,8 @@ const items = [
   { href: "/crm/database", label: "قاعدة البيانات", icon: Database },
   { href: "/crm/manual-leads", label: "إضافة العملاء", icon: PlusCircle },
   { href: "/crm/finance-history", label: "سجل عملاء التمويل", icon: ClipboardText },
-  { href: "/crm/inbox", label: "صندوق الوارد الموحد", icon: ChatsCircle },
+  { href: "/crm/inbox", label: "رسائل غير مصنفة", icon: ChatsCircle },
+  { href: "/crm/contacts", label: "جهات الاتصال", icon: AddressBook },
   { href: "/crm/inbox-agent", label: "وكيل صندوق الوارد", icon: Robot },
   { href: "/crm/ownership", label: "سجل ملكية العملاء", icon: UserSwitch },
   { href: "/crm/reports", label: "التقارير", icon: ChartBar },

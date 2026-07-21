@@ -19,6 +19,7 @@ const CrmInboxAgentPage = lazy(() => import("./crm/pages/CrmInboxAgentPage").the
 const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((module) => ({ default: module.CrmReportsPage })));
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
+const CrmContactsPage = lazy(() => import("./crm/pages/CrmContactsPage").then((module) => ({ default: module.CrmContactsPage })));
 const CrmOwnershipPage = lazy(() => import("./crm/pages/CrmOwnershipPage").then((module) => ({ default: module.CrmOwnershipPage })));
 const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((module) => ({ default: module.TrackingLayout })));
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
@@ -47,6 +48,7 @@ function PlatformRoutes() {
             <Route path="manual-leads" element={<CrmManualLeadsPage />} />
             <Route path="finance-history" element={<CrmFinanceHistoryPage />} />
             <Route path="inbox" element={<CrmInboxPage />} />
+            <Route path="contacts" element={<CrmContactsPage />} />
             <Route path="inbox-agent" element={<CrmInboxAgentPage />} />
             <Route path="ownership" element={<CrmOwnershipPage />} />
             <Route path="reports" element={<CrmReportsPage />} />

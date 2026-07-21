@@ -54,6 +54,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         (${department} = 'finance' and l.department_code in ('finance_sales','call_center')) or
         (${department} = 'service' and l.department_code = 'customer_service')
       )
+      and not (
+        (l.department_code in ('cash_sales','finance_sales','call_center') and l.status_label in ('تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'))
+        or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
+      )
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})

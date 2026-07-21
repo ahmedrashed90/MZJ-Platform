@@ -50,7 +50,7 @@ function dbToQuality(raw: any) {
     marketingNumeratorStatuses: raw?.marketing_numerator_statuses || ["مؤهل"],
     marketingDenominatorMode: raw?.marketing_denominator_mode || "all",
     marketingDenominatorStatuses: raw?.marketing_denominator_statuses || [],
-    salesNumeratorStatuses: raw?.sales_numerator_statuses || ["تم البيع", "تم الانتهاء - إنشاء طلب البيع"],
+    salesNumeratorStatuses: raw?.sales_numerator_statuses || ["تم البيع"],
     salesDenominatorMode: raw?.sales_denominator_mode || "statuses",
     salesDenominatorStatuses: raw?.sales_denominator_statuses || [],
     qualifiedStatuses: raw?.qualified_statuses || ["مؤهل"],

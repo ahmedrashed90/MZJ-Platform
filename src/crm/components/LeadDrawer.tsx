@@ -26,6 +26,7 @@ type Props = {
   onClose: () => void;
   onSaved: (lead: CrmLead) => void;
   onRead?: (lead: CrmLead) => void;
+  mode?: "workspace" | "edit";
 };
 
 type ServiceKey = "cash" | "finance" | "service";
@@ -154,7 +155,8 @@ function editedTextStillMatchesTemplate(renderedTemplate: string, editedText: st
   return new RegExp(pattern, "i").test(String(editedText || "").trim());
 }
 
-export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
+export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "workspace" }: Props) {
+  const showConversation = mode !== "edit";
   const [form, setForm] = useState<CustomerForm | null>(null);
   const [messages, setMessages] = useState<CrmMessage[]>(emptyMessages);
   const [conversationId, setConversationId] = useState("");
@@ -195,23 +197,25 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
     setNotice("");
     setPendingFile(null);
     setMediaUrls({});
-    void loadConversation(lead.id, lead.conversation_id || "", false);
-    const readLead = {
-      ...lead,
-      unread_count: 0,
-      dashboard_unread: false,
-      has_unread_message: false,
-      has_unread_messages: false,
-      message_unread: false,
-      is_unread: false,
-      dashboard_message_read_at: new Date().toISOString(),
-    };
-    onRead?.(readLead);
-    void crmFetch("/api/crm/unread", {
-      method: "POST",
-      body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
-    }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
-  }, [lead?.id]);
+    if (showConversation) {
+      void loadConversation(lead.id, lead.conversation_id || "", false);
+      const readLead = {
+        ...lead,
+        unread_count: 0,
+        dashboard_unread: false,
+        has_unread_message: false,
+        has_unread_messages: false,
+        message_unread: false,
+        is_unread: false,
+        dashboard_message_read_at: new Date().toISOString(),
+      };
+      onRead?.(readLead);
+      void crmFetch("/api/crm/unread", {
+        method: "POST",
+        body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
+      }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
+    }
+  }, [lead?.id, showConversation]);
 
   useEscapeToClose(Boolean(lead), onClose);
 
@@ -240,12 +244,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
   }
 
   useEffect(() => {
-    if (!lead || !conversationId) return;
+    if (!showConversation || !lead || !conversationId) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void loadConversation(activeForm.id, conversationId, true);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [lead?.id, conversationId]);
+  }, [lead?.id, conversationId, showConversation]);
 
   useEffect(() => {
     const list = messagesListRef.current;
@@ -305,6 +309,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
   }
 
   useEffect(() => {
+    if (!showConversation) return;
     const missing = messages.filter((message) => message.media_asset_id && !mediaUrls[message.media_asset_id]);
     if (!missing.length) return;
     let cancelled = false;
@@ -318,7 +323,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
       setMediaUrls((current) => ({ ...current, ...Object.fromEntries(entries.filter((entry) => entry[0] && entry[1])) }));
     });
     return () => { cancelled = true; };
-  }, [messages, mediaUrls]);
+  }, [messages, mediaUrls, showConversation]);
 
   const credit = useMemo(() => {
     if (!form || form.serviceKey !== "finance") return null;
@@ -577,16 +582,16 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
   }
 
   return (
-    <div className="crm-drawer-backdrop crm-customer-workspace-backdrop" onMouseDown={onClose}>
-      <aside className="crm-lead-drawer crm-customer-workspace" onMouseDown={(event) => event.stopPropagation()}>
+    <div className={`crm-drawer-backdrop crm-customer-workspace-backdrop ${showConversation ? "" : "crm-edit-customer-backdrop"}`} onMouseDown={onClose}>
+      <aside className={`crm-lead-drawer crm-customer-workspace ${showConversation ? "" : "crm-edit-customer-workspace"}`} onMouseDown={(event) => event.stopPropagation()}>
         <header className="crm-drawer-head crm-customer-workspace-head">
-          <div className="crm-customer-title"><span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span><div><span>محادثة العميل</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div></div>
+          <div className="crm-customer-title"><span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span><div><span>{showConversation ? "محادثة العميل" : "تعديل بيانات العميل"}</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div></div>
           <div className="crm-customer-head-meta"><span><b>المسؤول:</b> {lead.assigned_name || "غير موزع"}</span>{department === "finance" ? <span><b>الكول سنتر:</b> {lead.call_center_name || "غير موزع"}</span> : null}<span><CalendarBlank size={14} /><b>دخول السيستم:</b> {formatDate(lead.registered_at || lead.created_at)}</span></div>
           <button className="crm-icon-button" type="button" onClick={onClose}><X size={21} /></button>
         </header>
 
-        <div className="crm-drawer-grid crm-customer-workspace-grid">
-          <section className="crm-conversation-panel crm-customer-conversation">
+        <div className={`crm-drawer-grid crm-customer-workspace-grid ${showConversation ? "" : "crm-edit-customer-grid"}`}>
+          {showConversation ? <section className="crm-conversation-panel crm-customer-conversation">
             <header><div><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div><button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)}><ArrowClockwise size={18} /></button></header>
             <div className="crm-messages-list" ref={messagesListRef}>
               {loadingMessages ? <div className="crm-empty-state">جاري تحميل رسائل المحادثة...</div> : null}
@@ -607,7 +612,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead }: Props) {
               <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
               <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
-          </section>
+          </section> : null}
 
           <section className="crm-drawer-details crm-customer-details-panel">
             <header className="crm-customer-details-title"><h3>بيانات العميل</h3><span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span></header>

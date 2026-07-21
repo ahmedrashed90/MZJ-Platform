@@ -180,7 +180,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       select e.*,e.id::text,e.user_id::text,u.full_name,u.employee_no,
         coalesce((select array_agg(distinct d.name order by d.name) from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id),'{}') as departments,
         coalesce((select array_agg(distinct b.name order by b.name) from core.user_branches ub join core.branches b on b.id=ub.branch_id where ub.user_id=u.id),'{}') as branches,
-        coalesce((select count(*)::int from crm.leads l where l.assigned_to=u.id and l.status_label in ('تم البيع','تم الإنتهاء - إنشاء طلب البيع','تم الانتهاء - إنشاء طلب البيع') and l.is_deleted=false and l.updated_at::date between e.period_start and e.period_end),0) as calculated_sales
+        coalesce((select count(*)::int from crm.leads l where l.assigned_to=u.id and l.status_label='تم البيع' and l.is_deleted=false and l.updated_at::date between e.period_start and e.period_end),0) as calculated_sales
       from crm.kpi_evaluations e join core.users u on u.id=e.user_id
       where (${from || null}::date is null or e.period_end >= ${from || null}::date)
         and (${to || null}::date is null or e.period_start <= ${to || null}::date)

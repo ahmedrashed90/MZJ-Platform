@@ -51,6 +51,15 @@ function readPatch(lead: CrmLead): CrmLead {
   };
 }
 
+function isDashboardTerminalStatus(department: string, value: string) {
+  const status = String(value || "").trim();
+  if (department === "cash" || department === "finance") {
+    return ["تم البيع", "تم الانتهاء - إنشاء طلب البيع", "تم الإنتهاء - إنشاء طلب البيع"].includes(status);
+  }
+  if (department === "service") return ["تم الانتهاء", "تم الإنتهاء"].includes(status);
+  return false;
+}
+
 export function CrmDashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedLeadId = searchParams.get("lead") || "";
@@ -181,7 +190,7 @@ export function CrmDashboardPage() {
     const newCount = leads.filter((lead) => leadStatus(lead) === "عميل جديد").length;
     const unread = leads.reduce((sum, lead) => sum + Math.max(Number(lead.unread_count || 0), leadHasUnreadMessage(lead) ? 1 : 0), 0);
     const assigned = leads.filter((lead) => Boolean(lead.assigned_to || lead.assigned_name)).length;
-    const completed = leads.filter((lead) => ["تم البيع", "تم الانتهاء", "تم الإنتهاء - إنشاء طلب البيع", "تم الانتهاء - إنشاء طلب البيع"].includes(leadStatus(lead))).length;
+    const completed = leads.filter((lead) => ["تم البيع", "تم الانتهاء"].includes(leadStatus(lead))).length;
     return { total: leads.length, newCount, unread, assigned, completed };
   }, [leads]);
 
@@ -222,7 +231,7 @@ export function CrmDashboardPage() {
         <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الجدد", "العملاء الموجودون في حالة عميل جديد", (lead) => leadStatus(lead) === "عميل جديد")}><span className="icon"><UserPlus size={23} /></span><div><small>عملاء جدد</small><strong>{summary.newCount.toLocaleString("ar-SA")}</strong></div></button>
         <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("الرسائل غير المقروءة", "العملاء الذين لديهم رسائل واردة لم يفتحها المندوب بعد", leadHasUnreadMessage)}><span className="icon"><ChatCircleDots size={23} /></span><div><small>رسائل غير مقروءة</small><strong>{summary.unread.toLocaleString("ar-SA")}</strong></div></button>
         <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الموزعون", "العملاء المرتبطون بمندوب أو مسؤول", (lead) => Boolean(lead.assigned_to || lead.assigned_name))}><span className="icon"><PhoneCall size={23} /></span><div><small>عملاء موزعون</small><strong>{summary.assigned.toLocaleString("ar-SA")}</strong></div></button>
-        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("مكتمل / تم البيع", "العملاء الموجودون في الحالات المكتملة أو تم البيع", (lead) => ["تم البيع", "تم الانتهاء", "تم الإنتهاء - إنشاء طلب البيع", "تم الانتهاء - إنشاء طلب البيع"].includes(leadStatus(lead)))}><span className="icon"><CheckCircle size={23} /></span><div><small>مكتمل / تم البيع</small><strong>{summary.completed.toLocaleString("ar-SA")}</strong></div></button>
+        <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("مكتمل / تم البيع", "العملاء الموجودون في الحالات المكتملة أو تم البيع", (lead) => ["تم البيع", "تم الانتهاء"].includes(leadStatus(lead)))}><span className="icon"><CheckCircle size={23} /></span><div><small>مكتمل / تم البيع</small><strong>{summary.completed.toLocaleString("ar-SA")}</strong></div></button>
       </section>
 
       <div className="crm-toolbar crm-dashboard-toolbar">
@@ -301,6 +310,13 @@ export function CrmDashboardPage() {
           setSelected((current) => current?.id === updated.id ? { ...current, ...updated } : current);
         }}
         onSaved={(updated) => {
+          if (isDashboardTerminalStatus(department, leadStatus(updated))) {
+            setLeads((current) => current.filter((lead) => lead.id !== updated.id));
+            setSummaryView((current) => current ? { ...current, leads: current.leads.filter((lead) => lead.id !== updated.id) } : current);
+            setSelected(null);
+            void loadDashboard(true);
+            return;
+          }
           setLeads((current) => current.map((lead) => lead.id === updated.id ? { ...lead, ...updated } : lead));
           setSelected((current) => current ? { ...current, ...updated } : current);
         }}

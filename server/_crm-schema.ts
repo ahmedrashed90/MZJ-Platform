@@ -168,9 +168,9 @@ create table if not exists crm.report_quality_settings (
   marketing_numerator_statuses text[] not null default array['مؤهل'],
   marketing_denominator_mode text not null default 'all',
   marketing_denominator_statuses text[] not null default '{}',
-  sales_numerator_statuses text[] not null default array['تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'],
+  sales_numerator_statuses text[] not null default array['تم البيع'],
   sales_denominator_mode text not null default 'statuses',
-  sales_denominator_statuses text[] not null default array['مؤهل','مؤجل','لم يتم الرد','غير مؤهل','تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'],
+  sales_denominator_statuses text[] not null default array['مؤهل','مؤجل','لم يتم الرد','غير مؤهل','تم البيع'],
   qualified_statuses text[] not null default array['مؤهل'],
   total_mode text not null default 'all',
   total_statuses text[] not null default '{}',
@@ -345,7 +345,7 @@ insert into crm.dashboard_statuses(id, department_code, label, value, sort_order
 ('finance-contract-call','finance','تم الإتصال لتوقيع العقد','تم الإتصال لتوقيع العقد',170),
 ('finance-contract-not-signed','finance','لم يتم توقيع العقد','لم يتم توقيع العقد',180),
 ('finance-contract-signed','finance','تم توقيع العقد','تم توقيع العقد',190),
-('finance-done-sale-request','finance','تم الإنتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع',200),
+('finance-done-sale-request','finance','تم البيع','تم البيع',200),
 ('finance-no-answer','finance','لم يتم الرد','لم يتم الرد',210),
 ('service-new','service','إجمالي العملاء','عميل جديد',10),
 ('service-working','service','جاري العمل','جاري العمل',20),
@@ -700,7 +700,7 @@ create table if not exists crm.automation_settings (
   ask_for_branch boolean not null default false,
   no_match_behavior text not null default 'wait',
   unclassified_label text not null default 'بانتظار اختيار الخدمة',
-  closed_statuses jsonb not null default '{"cash":["تم البيع"],"finance":["تم الانتهاء - إنشاء طلب البيع","تم الإنتهاء - إنشاء طلب البيع"],"service":["تم الانتهاء"]}'::jsonb,
+  closed_statuses jsonb not null default '{"cash":["تم البيع"],"finance":["تم البيع"],"service":["تم الانتهاء"]}'::jsonb,
   updated_by uuid references core.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
@@ -806,6 +806,74 @@ where lower(coalesce(sender_type,''))='customer'
 insert into core.schema_migrations(version) values('crm-inbound-direction-v1.11.7') on conflict(version) do nothing;
 `;
 
+
+const CRM_COMPLETED_WORKFLOW_V1155_SQL = String.raw`
+update crm.dashboard_statuses
+set label='تم البيع',value='تم البيع',updated_at=now()
+where id='finance-done-sale-request';
+
+update crm.leads
+set status_label='تم البيع',updated_at=now()
+where department_code in ('finance_sales','call_center')
+  and status_label in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع');
+
+update crm.service_requests
+set status_label='تم البيع',
+    closure_reason=case when closure_reason in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع') then 'تم البيع' else closure_reason end,
+    updated_at=now()
+where department_code in ('finance_sales','call_center')
+  and status_label in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع');
+
+with preferred_old_mapping as (
+  select id
+  from crm.status_template_mappings
+  where department_code='finance'
+    and status_value in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع')
+  order by updated_at desc,id desc
+  limit 1
+)
+delete from crm.status_template_mappings old_mapping
+where old_mapping.department_code='finance'
+  and old_mapping.status_value in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع')
+  and (
+    exists (
+      select 1 from crm.status_template_mappings sold_mapping
+      where sold_mapping.department_code='finance' and sold_mapping.status_value='تم البيع'
+    )
+    or old_mapping.id<>(select id from preferred_old_mapping)
+  );
+
+update crm.status_template_mappings
+set status_value='تم البيع',status_label='تم البيع',updated_at=now()
+where department_code='finance'
+  and status_value in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع');
+
+update crm.report_quality_settings
+set sales_numerator_statuses=array['تم البيع'],
+    sales_denominator_statuses=(
+      select coalesce(array_agg(value order by position),array[]::text[])
+      from (
+        select distinct on (value) value,position
+        from (
+          select case when item in ('تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع') then 'تم البيع' else item end as value,
+                 ordinality::int as position
+          from unnest(coalesce(sales_denominator_statuses,array[]::text[])) with ordinality as statuses(item,ordinality)
+          union all select 'تم البيع',100000
+        ) normalized
+        where nullif(trim(value),'') is not null
+        order by value,position
+      ) unique_values
+    ),
+    updated_at=now()
+where id='default';
+
+update crm.automation_settings
+set closed_statuses=jsonb_set(coalesce(closed_statuses,'{}'::jsonb),'{finance}','["تم البيع"]'::jsonb,true),updated_at=now()
+where id='default';
+
+insert into core.schema_migrations(version) values('crm-completed-workflow-v1.15.5') on conflict(version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -840,6 +908,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-inbound-direction-v1.11.7'
       `;
       if (!inboundDirectionFix) await runSqlScript(CRM_INBOUND_DIRECTION_FIX_V1117_SQL);
+      const [completedWorkflowMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-completed-workflow-v1.15.5'
+      `;
+      if (!completedWorkflowMigration) await runSqlScript(CRM_COMPLETED_WORKFLOW_V1155_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

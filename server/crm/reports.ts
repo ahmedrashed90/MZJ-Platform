@@ -172,8 +172,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const quality = storedQuality || {};
   const marketingNum = setOf(quality.marketing_numerator_statuses, ["مؤهل"]);
   const marketingDenStatuses = setOf(quality.marketing_denominator_statuses);
-  const salesNum = setOf(quality.sales_numerator_statuses, ["تم البيع", "تم الانتهاء - إنشاء طلب البيع", "تم الإنتهاء - إنشاء طلب البيع"]);
-  const salesDenStatuses = setOf(quality.sales_denominator_statuses, ["مؤهل", "مؤجل", "لم يتم الرد", "غير مؤهل", "تم البيع", "تم الانتهاء - إنشاء طلب البيع", "تم الإنتهاء - إنشاء طلب البيع"]);
+  const salesNum = setOf(quality.sales_numerator_statuses, ["تم البيع"]);
+  const salesDenStatuses = setOf(quality.sales_denominator_statuses, ["مؤهل", "مؤجل", "لم يتم الرد", "غير مؤهل", "تم البيع"]);
   const qualifiedStatuses = setOf(quality.qualified_statuses, ["مؤهل"]);
   const totalStatuses = setOf(quality.total_statuses);
   const notContactedStatuses = setOf(quality.not_contacted_statuses, ["عميل جديد"]);
