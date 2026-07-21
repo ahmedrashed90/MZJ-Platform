@@ -89,17 +89,81 @@ function messageBody(payload: any, media: ReturnType<typeof mediaData>) {
   );
 }
 
+function listValues(value: unknown) {
+  if (Array.isArray(value)) return value.map(clean).filter(Boolean);
+  if (value && typeof value === "object") return Object.values(value as Record<string, unknown>).map(clean).filter(Boolean);
+  const text = clean(value);
+  return text ? [text] : [];
+}
+
 function identityData(source: string, payload: any) {
   const wa = nestedWhatsapp(payload);
   const msg = wa?.messages?.[0] || {};
   const contact = wa?.contacts?.[0] || {};
-  const participant = first(payload.participantId, payload.participant_id, payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId, payload.user_id, payload.userId, payload.igId, payload.tiktokId, payload.fbId, payload.waId, msg?.from, contact?.wa_id);
   const pageId = first(payload.pageId, payload.page_id);
-  const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, payload.conversationId, payload.conversation_id, payload.convId) || crypto.randomUUID();
-  const conversationExternalId = first(payload.conversationId, payload.conversation_id, payload.convId) || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`);
-  const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.clientNumber, payload.leadPhone, msg?.from, contact?.wa_id);
-  const displayName = first(payload.customerName, payload.displayName, payload.full_name, payload.fullName, payload.leadName, payload.name, contact?.profile?.name, "عميل");
-  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName };
+  const requestedConversationId = first(payload.conversationId, payload.conversation_id, payload.convId);
+  const parsedParticipant = source === "facebook" && requestedConversationId.startsWith("facebook:")
+    ? requestedConversationId.split(":").slice(2).join(":")
+    : "";
+  const facebookPsid = first(
+    payload.facebookPsid, payload.facebook_psid, payload.fbPsid, payload.fb_psid,
+    payload.metaSenderId, payload.meta_sender_id, payload.fbId, payload.fb_id,
+  );
+  const participant = first(
+    facebookPsid,
+    payload.participantId, payload.participant_id,
+    payload.user_id, payload.userId, payload.igId, payload.tiktokId,
+    parsedParticipant,
+    payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId,
+    payload.manychatContactId, payload.manychat_contact_id,
+    payload.waId, msg?.from, contact?.wa_id,
+  );
+  const aliases = [...new Set([
+    participant,
+    facebookPsid,
+    parsedParticipant,
+    payload.participantId, payload.participant_id,
+    payload.subscriber_id, payload.subscriberId,
+    payload.contact_id, payload.contactId,
+    payload.manychatContactId, payload.manychat_contact_id,
+    payload.user_id, payload.userId,
+    payload.fbId, payload.fb_id,
+    payload.fbPsid, payload.fb_psid,
+    payload.metaSenderId, payload.meta_sender_id,
+    ...listValues(payload.identityAliases),
+    ...listValues(payload.identity_aliases),
+    msg?.from, contact?.wa_id,
+  ].map(clean).filter(Boolean))];
+  const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, requestedConversationId) || crypto.randomUUID();
+  const conversationExternalId = requestedConversationId || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`);
+  const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.phone_number, payload.clientNumber, payload.leadPhone, payload.lead_phone, msg?.from, contact?.wa_id);
+  const displayName = first(payload.leadName, payload.lead_name, payload.customerName, payload.customer_name, payload.displayName, payload.display_name, payload.full_name, payload.fullName, payload.name, contact?.profile?.name, "عميل");
+  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName, aliases, facebookPsid };
+}
+
+function capturedLeadData(payload: any, identity: ReturnType<typeof identityData>) {
+  const name = first(payload.leadName, payload.lead_name, payload.customerName, payload.customer_name, payload.fullName, payload.full_name, payload.name, identity.displayName);
+  const car = first(payload.leadCar, payload.lead_car, payload.car, payload.carName, payload.car_name, payload.vehicle);
+  const phone = first(payload.leadPhone, payload.lead_phone, payload.phone, payload.mobile, payload.phoneNumber, payload.phone_number, identity.phone);
+  return { name, car, phone, phoneNormalized: normalizePhone(phone) };
+}
+
+async function syncCapturedLeadData(sql: any, contactId: string, payload: any, identity: ReturnType<typeof identityData>) {
+  const captured = capturedLeadData(payload, identity);
+  const meaningfulName = ["عميل", "facebook user"].includes(clean(captured.name).toLowerCase()) ? "" : clean(captured.name);
+  if (!meaningfulName && !captured.car && !captured.phoneNormalized) return null;
+  const [lead] = await sql<any[]>`
+    update crm.leads set
+      customer_name=coalesce(nullif(${meaningfulName},''),customer_name),
+      phone=coalesce(nullif(${captured.phone},''),phone),
+      phone_normalized=coalesce(nullif(${captured.phoneNormalized},''),phone_normalized),
+      car_name=coalesce(nullif(${captured.car},''),car_name),
+      car_type=coalesce(nullif(${captured.car},''),car_type),
+      updated_at=now()
+    where contact_id=${contactId}::uuid and is_deleted=false
+    returning *,id::text,contact_id::text,current_request_id::text
+  `;
+  return lead || null;
 }
 
 function trustedKnownService(routeSource: string, payload: any) {
@@ -138,10 +202,11 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     pageId: identity.pageId,
     phone: identity.phone,
     displayName: identity.displayName,
-    metadata: { routeSource, lastEventId: eventId },
+    aliases: identity.aliases,
+    metadata: { routeSource, lastEventId: eventId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null },
   });
   let openRequest = await findOpenServiceRequest(contact.id);
-  let matchedLead: any = null;
+  let matchedLead: any = await syncCapturedLeadData(sql, contact.id, payload, identity);
 
   // Mersal currently sends the WhatsApp phone number in conversationId. That value
   // identifies the provider contact, not necessarily the PostgreSQL conversation UUID.
@@ -220,6 +285,21 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     `;
   }
 
+  if (!conversation && source !== "whatsapp") {
+    [conversation] = await sql<any[]>`
+      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
+      from crm.conversations
+      where contact_id=${contact.id}::uuid and channel_code=${source}
+        and (${identity.pageId || null}::text is null or page_id is null or page_id=${identity.pageId || null})
+      order by
+        (service_request_id is not null) desc,
+        (lead_id is not null) desc,
+        (legacy_id=${identity.conversationExternalId}) desc,
+        last_message_at desc nulls last,updated_at desc
+      limit 1
+    `;
+  }
+
   if (!conversation) {
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -244,7 +324,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         ${identity.conversationExternalId},${openRequest?.lead_id || matchedLead?.id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
         ${text || null},0,${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
         ${openRequest?.assigned_to || null}::uuid,${openRequest?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${identity.pageId || null},
-        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}
+        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null })}
       ) returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
     `;
   } else if (!existingMessage) {
@@ -254,7 +334,10 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         lead_id=coalesce(${openRequest?.lead_id || matchedLead?.id || null}::uuid,lead_id),
         service_request_id=coalesce(${openRequest?.id || null}::uuid,service_request_id),
         customer_name=coalesce(nullif(${identity.displayName},''),customer_name),
-        participant_id=coalesce(nullif(${identity.participant || identity.externalId},''),participant_id),
+        participant_id=case
+          when lower(coalesce(${first(payload.provider, payload.providerName, payload.provider_name, routeSource)},'')) in ('meta','facebook_graph') then coalesce(nullif(${identity.participant || identity.externalId},''),participant_id)
+          else coalesce(nullif(participant_id,''),nullif(${identity.participant || identity.externalId},''))
+        end,
         preview_text=coalesce(nullif(${text},''),preview_text),
         unread_count=unread_count,
         last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
@@ -267,7 +350,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
         last_customer_message_at=case when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
         last_human_reply_at=case when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId })}::jsonb,
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null })}::jsonb,
         updated_at=now()
       where id=${conversation.id}::uuid
       returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -325,6 +408,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     openRequest = classified.request;
     createdByKnownSource = classified.reused !== true;
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
+    matchedLead = await syncCapturedLeadData(sql, contact.id, payload, identity) || matchedLead;
   }
 
   if (direction === "in") {

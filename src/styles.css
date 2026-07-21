@@ -3200,7 +3200,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 /* CRM v1.16.0: compact attachment action and wider message writing area */
 .crm-message-composer { grid-template-columns:minmax(0,1fr) auto auto; align-items:end; }
 .crm-message-composer textarea { min-height:210px; }
-.crm-composer-attachments { display:flex; align-items:flex-end; align-self:end; gap:8px; }
+.crm-composer-attachments { display:flex; align-items:flex-end; align-self:end; }
 .crm-composer-attachments .crm-attachment-button {
   width:96px;
   min-width:96px;
@@ -3212,23 +3212,6 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   align-self:end;
 }
 .crm-message-composer > button { width:96px; min-width:96px; height:42px; justify-content:center; }
-.crm-voice-record-button {
-  width:96px;
-  min-width:96px;
-  height:42px;
-  min-height:42px;
-  justify-content:center;
-  border:1px solid #dcc4ba !important;
-  background:#fffaf7 !important;
-  color:var(--brand) !important;
-  font-weight:900;
-}
-.crm-voice-record-button.recording {
-  border-color:#d9343f !important;
-  background:#fff1f2 !important;
-  color:#b4232c !important;
-}
-
 
 /* Finance history: neutral header and separated filter rows */
 .crm-finance-history-page { gap:15px; }

@@ -40,12 +40,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users cc on cc.id = l.call_center_assigned_to
     left join lateral (
       select c.* from crm.conversations c
-      where c.lead_id = l.id or (l.contact_id is not null and c.contact_id = l.contact_id)
-      order by
-        (c.lead_id = l.id) desc,
-        (l.current_request_id is not null and c.service_request_id = l.current_request_id) desc,
-        c.last_message_at desc nulls last,
-        c.updated_at desc
+      where c.lead_id = l.id
+      order by c.last_message_at desc nulls last, c.updated_at desc
       limit 1
     ) c on true
     where l.is_deleted = false

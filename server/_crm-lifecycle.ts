@@ -19,6 +19,7 @@ export type ContactIdentityInput = {
   pageId?: string;
   phone?: string;
   displayName?: string;
+  aliases?: string[];
   metadata?: Record<string, unknown>;
 };
 
@@ -27,56 +28,122 @@ function contactKey(phoneNormalized: string, channelCode: string, externalId: st
   return `identity:${channelCode}:${externalId || crypto.randomUUID()}`;
 }
 
+function uniqueIdentityValues(input: ContactIdentityInput) {
+  return [...new Set([
+    input.externalId,
+    input.participantId,
+    ...(Array.isArray(input.aliases) ? input.aliases : []),
+  ].map(clean).filter(Boolean))];
+}
+
+async function mergeDuplicateContacts(tx: any, targetId: string, duplicateIds: string[]) {
+  const sources = [...new Set(duplicateIds.map(clean).filter((id) => id && id !== targetId))];
+  if (!sources.length) return;
+  const allIds = [targetId, ...sources];
+
+  const openRequests = await tx<any[]>`
+    select id::text,contact_id::text,lead_id::text,conversation_id::text,service_key,department_code,opened_at,updated_at
+    from crm.service_requests
+    where contact_id=any(${allIds}::uuid[]) and request_state='open'
+    order by opened_at desc,updated_at desc
+  `;
+  const keepOpen = openRequests[0] || null;
+  const closeIds = openRequests.slice(1).map((row: any) => row.id);
+  if (closeIds.length) {
+    await tx`
+      update crm.service_requests set request_state='closed',closed_at=coalesce(closed_at,now()),
+        closure_reason=coalesce(nullif(closure_reason,''),'دمج جهة اتصال مكررة'),
+        metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('mergedIntoContactId',${targetId},'mergedAt',now()),updated_at=now()
+      where id=any(${closeIds}::uuid[])
+    `;
+    await tx`update crm.leads set current_request_id=null,updated_at=now() where current_request_id=any(${closeIds}::uuid[])`;
+  }
+
+  for (const sourceId of sources) {
+    await tx`update crm.contact_identities set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`update crm.leads set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`update crm.service_requests set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`update crm.conversations set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`update crm.ownership_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
+    await tx`update crm.automation_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
+    await tx`update crm.automation_jobs set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`delete from crm.contacts where id=${sourceId}::uuid`;
+  }
+
+  if (keepOpen) {
+    await tx`update crm.service_requests set contact_id=${targetId}::uuid,updated_at=now() where id=${keepOpen.id}::uuid`;
+    if (keepOpen.lead_id) await tx`update crm.leads set current_request_id=${keepOpen.id}::uuid,updated_at=now() where id=${keepOpen.lead_id}::uuid`;
+  }
+}
+
 export async function ensureContactIdentity(input: ContactIdentityInput) {
   const sql = getSql();
   const channelCode = clean(input.channelCode).toLowerCase() || "unknown";
   const externalId = clean(input.externalId);
   if (!externalId) throw new Error("معرف العميل الخارجي مطلوب");
   const phoneNormalized = normalizePhone(input.phone);
+  const aliases = uniqueIdentityValues(input);
+  const pageId = clean(input.pageId);
 
-  const [identity] = await sql<any[]>`
-    select i.*,i.id::text,i.contact_id::text,c.contact_key,c.display_name as contact_display_name,
-      c.primary_phone,c.primary_phone_normalized
-    from crm.contact_identities i join crm.contacts c on c.id=i.contact_id
-    where i.channel_code=${channelCode} and i.external_id=${externalId} limit 1
-  `;
-  let contact: any = identity ? {
-    id: identity.contact_id,
-    contact_key: identity.contact_key,
-    display_name: identity.contact_display_name,
-    primary_phone: identity.primary_phone,
-    primary_phone_normalized: identity.primary_phone_normalized,
-  } : null;
+  return sql.begin(async (tx) => {
+    const identityContacts = aliases.length ? await tx<any[]>`
+      select distinct c.*,c.id::text,
+        exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='open') as has_open_request,
+        exists(select 1 from crm.leads l where l.contact_id=c.id and l.is_deleted=false) as has_active_lead,
+        exists(select 1 from crm.conversations cv where cv.contact_id=c.id) as has_conversation
+      from crm.contact_identities i
+      join crm.contacts c on c.id=i.contact_id
+      where i.channel_code=${channelCode}
+        and (i.external_id=any(${aliases}::text[]) or coalesce(i.participant_id,'')=any(${aliases}::text[]))
+        and (${pageId || null}::text is null or i.page_id is null or i.page_id=${pageId || null})
+      order by has_open_request desc,has_active_lead desc,has_conversation desc,c.updated_at desc
+    ` : [];
 
-  if (!contact && phoneNormalized) {
-    [contact] = await sql<any[]>`select *,id::text from crm.contacts where primary_phone_normalized=${phoneNormalized} limit 1`;
-  }
-  if (!contact) {
-    [contact] = await sql<any[]>`
-      insert into crm.contacts(contact_key,display_name,primary_phone,primary_phone_normalized,metadata)
-      values (${contactKey(phoneNormalized,channelCode,externalId)},${clean(input.displayName)||"عميل"},${clean(input.phone)||null},${phoneNormalized||null},${sql.json((input.metadata || {}) as any)})
-      returning *,id::text
-    `;
-  } else {
-    [contact] = await sql<any[]>`
-      update crm.contacts set display_name=coalesce(nullif(${clean(input.displayName)},''),display_name),
-        primary_phone=coalesce(nullif(${clean(input.phone)},''),primary_phone),
-        primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json((input.metadata || {}) as any)}::jsonb,updated_at=now()
-      where id=${contact.id}::uuid returning *,id::text
-    `;
-  }
+    let phoneContact: any = null;
+    if (phoneNormalized) {
+      [phoneContact] = await tx<any[]>`select *,id::text from crm.contacts where primary_phone_normalized=${phoneNormalized} limit 1 for update`;
+    }
 
-  const [savedIdentity] = await sql<any[]>`
-    insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
-    values (${contact.id}::uuid,${channelCode},${externalId},${clean(input.participantId)||null},${clean(input.pageId)||null},${clean(input.displayName)||null},${sql.json((input.metadata || {}) as any)})
-    on conflict(channel_code,external_id) do update set
-      contact_id=excluded.contact_id,participant_id=coalesce(excluded.participant_id,crm.contact_identities.participant_id),
-      page_id=coalesce(excluded.page_id,crm.contact_identities.page_id),display_name=coalesce(excluded.display_name,crm.contact_identities.display_name),
-      metadata=crm.contact_identities.metadata||excluded.metadata,updated_at=now()
-    returning *,id::text,contact_id::text
-  `;
-  return { contact, identity: savedIdentity };
+    const candidateMap = new Map<string, any>();
+    for (const row of identityContacts) candidateMap.set(String(row.id), row);
+    if (phoneContact) candidateMap.set(String(phoneContact.id), phoneContact);
+    const candidates = [...candidateMap.values()];
+    let contact: any = phoneContact || candidates[0] || null;
+
+    if (!contact) {
+      [contact] = await tx<any[]>`
+        insert into crm.contacts(contact_key,display_name,primary_phone,primary_phone_normalized,metadata)
+        values (${contactKey(phoneNormalized,channelCode,externalId)},${clean(input.displayName)||"عميل"},${clean(input.phone)||null},${phoneNormalized||null},${tx.json((input.metadata || {}) as any)})
+        returning *,id::text
+      `;
+    } else {
+      const duplicateIds = candidates.map((row: any) => String(row.id)).filter((id: string) => id !== String(contact.id));
+      await mergeDuplicateContacts(tx, String(contact.id), duplicateIds);
+      [contact] = await tx<any[]>`
+        update crm.contacts set display_name=coalesce(nullif(${clean(input.displayName)},''),display_name),
+          primary_phone=coalesce(nullif(${clean(input.phone)},''),primary_phone),
+          primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
+          metadata=coalesce(metadata,'{}'::jsonb)||${tx.json((input.metadata || {}) as any)}::jsonb,updated_at=now()
+        where id=${contact.id}::uuid returning *,id::text
+      `;
+    }
+
+    let savedIdentity: any = null;
+    for (const alias of aliases) {
+      const [row] = await tx<any[]>`
+        insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
+        values (${contact.id}::uuid,${channelCode},${alias},${clean(input.participantId)||alias},${pageId||null},${clean(input.displayName)||null},${tx.json((input.metadata || {}) as any)})
+        on conflict(channel_code,external_id) do update set
+          contact_id=excluded.contact_id,participant_id=coalesce(nullif(excluded.participant_id,''),crm.contact_identities.participant_id),
+          page_id=coalesce(nullif(excluded.page_id,''),crm.contact_identities.page_id),display_name=coalesce(nullif(excluded.display_name,''),crm.contact_identities.display_name),
+          metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
+        returning *,id::text,contact_id::text
+      `;
+      if (alias === externalId || !savedIdentity) savedIdentity = row;
+    }
+
+    return { contact, identity: savedIdentity };
+  });
 }
 
 export async function findOpenServiceRequest(contactId: string) {

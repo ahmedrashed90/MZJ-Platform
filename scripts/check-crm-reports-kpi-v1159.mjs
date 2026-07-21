@@ -20,7 +20,7 @@ const checks = [
   ['Ownership page route remains removed', !app.includes('CrmOwnershipPage') && !app.includes('path="ownership"')],
   ['Ownership navigation remains removed', !layout.includes('/crm/ownership') && !layout.includes('سجل ملكية العملاء')],
   ['Ownership dedicated API remains removed', !api.includes('crmOwnershipHandler') && !api.includes('["crm/ownership"')],
-  ['Browser voice recording is available through the existing attachment flow', drawer.includes('MediaRecorder') && drawer.includes('startVoiceRecording') && drawer.includes('crm-voice-record-button') && styles.includes('crm-voice-record-button')],
+  ['Browser voice recording is fully removed', !drawer.includes('MediaRecorder') && !drawer.includes('startVoiceRecording') && !drawer.includes('تسجيل فويس') && !styles.includes('crm-voice-recorder')],
   ['Existing attachment upload remains available', drawer.includes('uploadPendingFile') && drawer.includes('crm-attachment-button') && drawer.includes('mediaTypeForFile')],
   ['Reports show requested count labels', reports.includes('إجمالي المصادر') && reports.includes('إجمالي الأقسام والفروع') && reports.includes('إجمالي المناديب')],
   ['Report sales totals are calculated from sold', reports.includes('sum + Number(row.sold || 0)') && reports.includes('إجمالي المبيعات')],
