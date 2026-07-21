@@ -85,6 +85,7 @@ export async function findOpenServiceRequest(contactId: string) {
     select r.*,r.id::text,r.contact_id::text,r.lead_id::text,r.conversation_id::text,r.assigned_to::text,r.call_center_assigned_to::text,
       sales.full_name as assigned_name,cc.full_name as call_center_name
     from crm.service_requests r
+    join crm.leads l on l.id=r.lead_id and l.is_deleted=false
     left join core.users sales on sales.id=r.assigned_to
     left join core.users cc on cc.id=r.call_center_assigned_to
     where r.contact_id=${contactId}::uuid and r.request_state='open'
