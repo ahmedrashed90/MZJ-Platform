@@ -104,8 +104,17 @@ function identityData(source: string, payload: any) {
 
 function trustedKnownService(routeSource: string, payload: any) {
   if (["installment-calculator", "tiktok-snapchat"].includes(routeSource)) return "finance";
-  if (bool(payload.trustedServiceClassification || payload.trusted_service_classification)) return departmentKey(first(payload.serviceKey, payload.service_key));
-  return "";
+  if (!bool(payload.trustedServiceClassification || payload.trusted_service_classification)) return "";
+
+  const declaredService = first(
+    payload.serviceSelectionKey,
+    payload.service_selection_key,
+    payload.serviceKey,
+    payload.service_key,
+    payload.serviceSelectionLabel,
+    payload.service_selection_label,
+  );
+  return declaredService ? departmentKey(declaredService) : "";
 }
 
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
