@@ -256,7 +256,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         title={title}
         subtitle={`عدد النتائج: ${total.toLocaleString("ar-SA")}`}
         onClose={onClose}
-        className={`wide dashboard-operations-modal ${selection?.mode === "approvals" ? "dashboard-approvals-modal" : ""}`.trim()}
+        className={`wide dashboard-operations-modal ${selection?.mode === "vehicles" || selection?.mode === "shortages" ? "dashboard-operations-modal-fullscreen" : ""} ${selection?.mode === "approvals" ? "dashboard-approvals-modal" : ""}`.trim()}
       >
         <div className="dashboard-operations-toolbar">
           {selection?.mode === "requests" ? (

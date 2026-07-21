@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 const read = (path) => fs.readFileSync(path, "utf8");
 const pkg = read("package.json");
+const packageVersion = JSON.parse(pkg).version;
 const dashboardData = read("server/_dashboard-data.ts");
 const dashboardPage = read("src/pages/DashboardPage.tsx");
 const crmDashboard = read("server/crm/dashboard.ts");
@@ -22,7 +23,7 @@ const pdfHeaders = [
 ];
 
 const checks = [
-  ["Version is 1.16.1", pkg.includes('"version": "1.16.1"')],
+  ["Package version includes dashboard operations v1.16.1", packageVersion.localeCompare("1.16.1", undefined, { numeric: true }) >= 0],
   ["Department cards use department-specific open conversation totals", ["openCashConversations", "openFinanceConversations", "openServiceConversations"].every((key) => dashboardData.includes(key) && dashboardPage.includes(key))],
   ["Open conversations exclude closed rows", dashboardData.includes("status='open' and closed_at is null") && dashboardData.includes("classification_state,'')<>'closed'")],
   ["Transferred conversations follow the current lead department", dashboardData.includes("coalesce(nullif(l.department_code,''),nullif(c.department_code,''))")],

@@ -1,15 +1,15 @@
 {
   "name": "mzj-platform",
-  "version": "1.16.1",
+  "version": "1.16.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-service-reclassification-v1156.mjs && node scripts/check-crm-reports-kpi-v1159.mjs && node scripts/check-crm-manual-leads-v1160.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-reference-v39.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-tracking-module-v112.mjs && node scripts/check-operations-native-v2.mjs && node scripts/check-dashboard-operations-v1161.mjs && tsc -b",
+    "typecheck": "node scripts/check-api-imports.mjs && node scripts/check-crm-service-reclassification-v1156.mjs && node scripts/check-crm-reports-kpi-v1159.mjs && node scripts/check-crm-manual-leads-v1160.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-reference-v39.mjs && node scripts/check-crm-entry-distribution-v192.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-tracking-module-v112.mjs && node scripts/check-operations-native-v2.mjs && node scripts/check-dashboard-operations-v1161.mjs && node scripts/check-operations-workflow-v1162.mjs && tsc -b",
     "build": "pnpm run typecheck && vite build",
     "preview": "vite preview",
     "check:crm": "node scripts/check-crm-module.mjs",
-    "check:operations": "node scripts/check-operations-native-v2.mjs"
+    "check:operations": "node scripts/check-operations-native-v2.mjs && node scripts/check-dashboard-operations-v1161.mjs && node scripts/check-operations-workflow-v1162.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

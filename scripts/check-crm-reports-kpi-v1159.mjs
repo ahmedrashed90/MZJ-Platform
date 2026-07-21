@@ -13,9 +13,10 @@ const [app, layout, api, kpi, reports, finance, drawer, styles, pkg] = await Pro
   read('src/styles.css'),
   read('package.json'),
 ]);
+const packageVersion = JSON.parse(pkg).version;
 
 const checks = [
-  ['Version is 1.16.1', pkg.includes('"version": "1.16.1"')],
+  ['Package version includes the CRM reports release', packageVersion.localeCompare('1.15.9', undefined, { numeric: true }) >= 0],
   ['Ownership page route remains removed', !app.includes('CrmOwnershipPage') && !app.includes('path="ownership"')],
   ['Ownership navigation remains removed', !layout.includes('/crm/ownership') && !layout.includes('سجل ملكية العملاء')],
   ['Ownership dedicated API remains removed', !api.includes('crmOwnershipHandler') && !api.includes('["crm/ownership"')],

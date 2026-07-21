@@ -72,7 +72,7 @@ export function ApprovalsPage() {
       setRows(payload.rows);
       if (selected) {
         const updated = payload.rows.find((row) => row.vehicle_id === selected.vehicle_id);
-        if (updated) setSelected(updated);
+        setSelected(updated || null);
       }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تحميل الموافقات");

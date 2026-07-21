@@ -187,6 +187,17 @@ create table if not exists operations.vehicle_check_history (
   changed_by_name text,
   created_at timestamptz not null default now()
 );
+-- Upgrade older production copies of the history table in place. CREATE TABLE IF NOT EXISTS
+-- does not add columns to a table that already exists.
+alter table operations.vehicle_check_history add column if not exists vehicle_id uuid references operations.vehicles(id);
+alter table operations.vehicle_check_history add column if not exists item_code text;
+alter table operations.vehicle_check_history add column if not exists old_status text;
+alter table operations.vehicle_check_history add column if not exists new_status text;
+alter table operations.vehicle_check_history add column if not exists note text;
+alter table operations.vehicle_check_history add column if not exists movement_id uuid;
+alter table operations.vehicle_check_history add column if not exists changed_by uuid references core.users(id);
+alter table operations.vehicle_check_history add column if not exists changed_by_name text;
+alter table operations.vehicle_check_history add column if not exists created_at timestamptz not null default now();
 create index if not exists operations_vehicle_check_history_idx on operations.vehicle_check_history(vehicle_id,created_at desc);
 
 alter table operations.vehicle_approvals add column if not exists cycle_no integer not null default 1;
@@ -196,6 +207,7 @@ alter table operations.vehicle_approvals add column if not exists financial_appr
 alter table operations.vehicle_approvals add column if not exists administrative_approved_at timestamptz;
 alter table operations.vehicle_approvals add column if not exists financial_approved_by_name text;
 alter table operations.vehicle_approvals add column if not exists administrative_approved_by_name text;
+alter table operations.vehicle_approvals add column if not exists pending_delivery jsonb;
 alter table operations.vehicle_approvals add column if not exists is_active boolean not null default true;
 alter table operations.vehicle_approvals add column if not exists created_at timestamptz not null default now();
 with ranked as (

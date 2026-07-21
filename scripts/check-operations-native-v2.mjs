@@ -11,7 +11,7 @@ const required = [
   ["server/_operations-schema.ts", "tracking_orders_source_identity_unique"],
   ["server/_operations-schema.ts", "transfer_request_no_seq"],
   ["server/_operations-utils.ts", "DATABASE_ERROR"],
-  ["server/operations/index.ts", "VEHICLE_HAS_HISTORY"],
+  ["server/operations/index.ts", "deletedCompletely"],
   ["server/operations/index.ts", "APPROVALS_REQUIRED"],
   ["server/operations/index.ts", "movement_batches"],
   ["server/operations/index.ts", "for update"],
@@ -39,8 +39,11 @@ const operationsApi = fs.readFileSync("server/operations/index.ts", "utf8");
 if (operationsApi.includes('user.departmentCodes.includes("operations")')) {
   throw new Error("Operations V2 check failed: department membership must not bypass branch scope");
 }
-if (!operationsApi.includes('v.status_code !== "under_delivery"')) {
-  throw new Error("Operations V2 check failed: delivered transition must require under-delivery state");
+if (!operationsApi.includes("pending_delivery") || !operationsApi.includes('newStatus === "delivered"')) {
+  throw new Error("Operations V2 check failed: delivered transition must support approval-gated pending delivery");
+}
+if (operationsApi.includes("قبل التسليم النهائي") && operationsApi.includes('v.status_code !== "under_delivery"')) {
+  throw new Error("Operations V2 check failed: delivered transition must not force the legacy under-delivery hop");
 }
 
 if (!operationsApi.includes("assertBranchAccess(user, valid.branch_code")) {

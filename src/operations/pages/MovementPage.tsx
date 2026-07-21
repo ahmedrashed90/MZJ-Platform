@@ -144,7 +144,18 @@ export function MovementPage() {
             {selected.filter((item) => item.location_code === "agency").map((item) => (
               <details key={`checks-${item.id}`} className="operations-agency-checks">
                 <summary>تشيك الوكالة للسيارة <b dir="ltr">{item.vin}</b></summary>
-                <div className="operations-check-editor">{meta.checkItems.map((check) => <label key={check.code}><span>{check.name}</span><select value={item.checks[check.code]?.status || "unknown"} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...item.checks[check.code], status: event.target.value } } })}><option value="unknown">غير محدد</option><option value="ok">موجود</option><option value="missing">ناقص</option></select><input placeholder="ملاحظة" value={item.checks[check.code]?.note || ""} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...item.checks[check.code], note: event.target.value } } })} /></label>)}</div>
+                <div className="operations-check-editor">
+                  {meta.checkItems.map((check) => {
+                    const checkValue = item.checks[check.code] || { status: "unknown", note: "" };
+                    return (
+                      <article key={check.code} className={`operations-check-edit-card status-${checkValue.status}`}>
+                        <header><strong>{check.name}</strong><span>{checkValue.status === "ok" ? "موجود" : checkValue.status === "missing" ? "ناقص" : "غير محدد"}</span></header>
+                        <label><span>الحالة</span><select value={checkValue.status} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: event.target.value } } })}><option value="unknown">غير محدد</option><option value="ok">موجود</option><option value="missing">ناقص</option></select></label>
+                        <label><span>الملاحظة</span><input placeholder="اكتب ملاحظة اختيارية" value={checkValue.note} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, note: event.target.value } } })} /></label>
+                      </article>
+                    );
+                  })}
+                </div>
               </details>
             ))}
           </div>

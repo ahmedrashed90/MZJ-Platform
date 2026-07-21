@@ -13,6 +13,14 @@ type Column = {
 
 const STORAGE_KEY = "mzj.operations.vehicleTable.columnWidths.v1";
 
+
+function trackingProgressTone(value?: number | null) {
+  const progress = Math.max(0, Math.min(100, Number(value || 0)));
+  if (progress >= 75) return "high";
+  if (progress >= 40) return "medium";
+  return "low";
+}
+
 const columns: Column[] = [
   { key: "vin", label: "الهيكل VIN", width: 190, min: 135, max: 360, value: (row) => row.vin, render: (row, onOpen) => <button type="button" className="operations-vin-link" onClick={() => onOpen(row.id)}>{row.vin}</button> },
   { key: "car", label: "السيارة", width: 150, min: 110, max: 300, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
@@ -27,7 +35,14 @@ const columns: Column[] = [
   { key: "notes", label: "ملاحظات في السيارة", width: 175, min: 125, max: 420, value: (row) => row.notes, render: (row) => <span title={row.notes || ""}>{row.notes || "—"}</span> },
   { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 205, min: 150, max: 460, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
   { key: "status", label: "الحالة", width: 145, min: 115, max: 260, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
-  { key: "tracking", label: "Tracking", width: 190, min: 155, max: 320, value: (row) => row.tracking_order_no, render: (row) => row.tracking_order_id ? <button type="button" className="operations-tracking-open" onClick={() => window.location.assign(`/tracking?order=${encodeURIComponent(row.tracking_order_id || "")}`)}><span>{row.tracking_order_no || "فتح الطلب"}</span><b>{Math.max(0, Math.min(100, Number(row.tracking_progress || 0)))}%</b><i><span style={{ width: `${Math.max(0, Math.min(100, Number(row.tracking_progress || 0)))}%` }} /></i></button> : <span className="operations-muted-badge">لا يوجد طلب</span> },
+  { key: "tracking", label: "Tracking", width: 150, min: 130, max: 220, value: (row) => row.tracking_order_no, render: (row) => {
+    const progress = Math.max(0, Math.min(100, Number(row.tracking_progress || 0)));
+    return row.tracking_order_id ? (
+      <button type="button" className={`operations-tracking-open ${trackingProgressTone(progress)}`} onClick={() => window.location.assign(`/tracking?order=${encodeURIComponent(row.tracking_order_id || "")}`)} title={`فتح طلب ${row.tracking_order_no || "التراكينج"}`}>
+        <span>{row.tracking_order_no || "فتح الطلب"}</span><b>{progress}%</b><i><span style={{ width: `${progress}%` }} /></i>
+      </button>
+    ) : <span className="operations-muted-badge">لا يوجد طلب</span>;
+  } },
   { key: "approvals", label: "الموافقات", width: 170, min: 135, max: 260, value: (row) => `${row.financial_approved ? "مالي تم" : "مالي لم يتم"} ${row.administrative_approved ? "إداري تم" : "إداري لم يتم"}`, render: (row) => <span className={row.financial_approved && row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "مالي ✓" : "مالي —"} / {row.administrative_approved ? "إداري ✓" : "إداري —"}</span> },
   { key: "checks", label: "التشيك", width: 95, min: 80, max: 150, value: () => "عرض", render: (row, onOpen) => <button type="button" className="operations-inline-link" onClick={() => onOpen(row.id)}>عرض</button> },
   { key: "transfers", label: "طلبات النقل", width: 115, min: 95, max: 190, value: (row) => row.active_transfer_requests, render: (row) => Number(row.active_transfer_requests || 0) > 0 ? <span className="operations-warn-badge">{row.active_transfer_requests}</span> : <span className="operations-muted-badge">لا يوجد</span> },
