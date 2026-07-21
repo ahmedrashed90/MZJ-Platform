@@ -44,7 +44,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
           where id=${deletedId}::uuid
           for update
         `;
-        if (!deletedOrder) throw new OperationError(404, "DELETED_TRACKING_REQUEST_NOT_FOUND", "سجل الطلب المحذوف غير موجود أو تم حذفه مسبقًا");
+        if (!deletedOrder) {
+          throw new OperationError(
+            404,
+            "DELETED_TRACKING_REQUEST_NOT_FOUND",
+            "سجل الطلب المحذوف غير موجود أو تم حذفه مسبقًا",
+          );
+        }
 
         await tx`delete from tracking.deleted_orders where id=${deletedId}::uuid`;
 
@@ -59,7 +65,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             `;
           });
         } catch (auditError) {
-          console.error('Tracking deleted record audit failed', { traceId, deletedId, auditError });
+          console.error("Tracking deleted record audit failed", { traceId, deletedId, auditError });
         }
 
         return {

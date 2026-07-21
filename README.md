@@ -273,9 +273,9 @@ Before deploying, read:
 - رقم الجوال غير الموجود في CRM يؤدي إلى إنشاء عميل جديد تلقائيًا بحالة `تم البيع`.
 - رقم الجوال الفارغ أو المكرر لا ينشئ أو يعدل عميلًا بالاسم فقط.
 
-## v1.16.7 — Release deleted tracking source
+## v1.16.8 — Deleted tracking order release
 
-- Renamed the deleted-tracking list to `الطلبات المحذوفة`.
-- Added an admin action to remove a selected deleted-order record.
-- Removing that record releases its source identity so the same ERPNext Sales Order can be received again.
-- No tracking, CRM, operations, approval, layout, or styling logic was otherwise changed.
+- غيّر اسم قائمة `الطلبات الممسوحة` إلى `الطلبات المحذوفة`.
+- أضاف حذف سجل محدد من الطلبات المحذوفة للسماح باستقبال نفس هوية طلب NEXT ERP مرة أخرى.
+- أضاف كود الخطأ `DELETED_TRACKING_REQUEST_NOT_FOUND` إلى النوع المركزي للأخطاء، حتى ينجح TypeScript build بدون تجاوز أو تحويل غير آمن.
+- لم يغيّر منطق التراكينج أو CRM أو العمليات أو الموافقات أو التصميم خارج الطلب المطلوب.
