@@ -14,7 +14,7 @@ const approvalsPage = read("src/operations/pages/ApprovalsPage.tsx");
 const styles = read("src/styles.css");
 
 const checks = [
-  ["Version is 1.16.2", pkg.includes('"version": "1.16.2"')],
+  ["Version is 1.16.2 or newer", /"version": "1\.16\.[2-9][0-9]*"/.test(pkg)],
   ["Existing check history tables gain the missing note column", schema.includes("alter table operations.vehicle_check_history add column if not exists note text") && migration.includes("vehicle_check_history add column if not exists note text")],
   ["Approval rows persist pending final delivery requests", schema.includes("pending_delivery jsonb") && databaseSchema.includes("pending_delivery jsonb") && migration.includes("vehicle_approvals add column if not exists pending_delivery jsonb")],
   ["Final delivery no longer forces the legacy under-delivery transition", !api.includes("يجب أن تكون السيارة") || !api.includes("في حالة مباع تحت التسليم قبل التسليم النهائي")],

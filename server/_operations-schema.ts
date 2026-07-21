@@ -198,6 +198,48 @@ alter table operations.vehicle_check_history add column if not exists movement_i
 alter table operations.vehicle_check_history add column if not exists changed_by uuid references core.users(id);
 alter table operations.vehicle_check_history add column if not exists changed_by_name text;
 alter table operations.vehicle_check_history add column if not exists created_at timestamptz not null default now();
+
+-- Production compatibility: an older copy of vehicle_check_history referenced
+-- operations.check_items. The native operations module uses the canonical
+-- operations.check_item_definitions table. Preserve every historical code,
+-- then repoint the foreign key to the canonical table before movements write.
+insert into operations.check_item_definitions(code,name,sort_order,is_active)
+select distinct h.item_code,h.item_code,1000,true
+from operations.vehicle_check_history h
+where nullif(trim(h.item_code),'') is not null
+on conflict (code) do nothing;
+do $operations_check_history_fk$
+declare
+  fk record;
+  canonical_fk_exists boolean := false;
+begin
+  for fk in
+    select c.conname,n_ref.nspname as ref_schema,t_ref.relname as ref_table
+    from pg_constraint c
+    join pg_class t on t.oid=c.conrelid
+    join pg_namespace n on n.oid=t.relnamespace
+    join pg_class t_ref on t_ref.oid=c.confrelid
+    join pg_namespace n_ref on n_ref.oid=t_ref.relnamespace
+    where n.nspname='operations' and t.relname='vehicle_check_history' and c.contype='f'
+      and exists (
+        select 1 from unnest(c.conkey) as k(attnum)
+        join pg_attribute a on a.attrelid=c.conrelid and a.attnum=k.attnum
+        where a.attname='item_code'
+      )
+  loop
+    if fk.ref_schema='operations' and fk.ref_table='check_item_definitions' then
+      canonical_fk_exists := true;
+    else
+      execute format('alter table operations.vehicle_check_history drop constraint %I',fk.conname);
+    end if;
+  end loop;
+  if not canonical_fk_exists then
+    alter table operations.vehicle_check_history
+      add constraint vehicle_check_history_item_code_fkey
+      foreign key (item_code) references operations.check_item_definitions(code);
+  end if;
+end
+$operations_check_history_fk$;
 create index if not exists operations_vehicle_check_history_idx on operations.vehicle_check_history(vehicle_id,created_at desc);
 
 alter table operations.vehicle_approvals add column if not exists cycle_no integer not null default 1;

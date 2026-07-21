@@ -602,8 +602,12 @@ async function deleteVehicle(sql: ReturnType<typeof getSql>, body: Record<string
       await tx`delete from operations.photography_requests r where r.id in ${tx(photoIds)} and not exists (select 1 from operations.photography_request_vehicles rv where rv.request_id=r.id)`;
     }
 
-    if (trackingVehicleIds.length) await tx`delete from tracking.order_vehicles where id in ${tx(trackingVehicleIds)}`;
+    if (trackingVehicleIds.length) {
+      await tx`delete from tracking.sms_messages where vehicle_id in ${tx(trackingVehicleIds)}`;
+      await tx`delete from tracking.order_vehicles where id in ${tx(trackingVehicleIds)}`;
+    }
     if (trackingOrderIds.length) {
+      await tx`delete from tracking.sms_messages where order_id in ${tx(trackingOrderIds)}`;
       await tx`delete from tracking.orders o where o.id in ${tx(trackingOrderIds)} and not exists (select 1 from tracking.order_vehicles ov where ov.order_id=o.id)`;
     }
 

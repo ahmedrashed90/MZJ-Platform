@@ -173,7 +173,7 @@ create table if not exists operations.vehicle_check_values (
 create table if not exists operations.vehicle_check_history (
   id bigserial primary key,
   vehicle_id uuid not null references operations.vehicles(id),
-  item_code text not null,
+  item_code text not null references operations.check_item_definitions(code),
   old_status text,
   new_status text,
   note text,
