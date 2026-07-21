@@ -38,8 +38,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     await ensureOperationsSchema();
 
     const sql = getSql();
-    const [count] = await sql<{ count: number }[]>`select count(*)::int as count from core.users`;
-    if (Number(count?.count || 0) > 0) {
+    const [admin] = await sql<{ exists: boolean }[]>`
+      select exists(
+        select 1
+        from core.users u
+        join core.user_roles ur on ur.user_id = u.id
+        join core.roles r on r.id = ur.role_id
+        where u.is_active = true and r.code = 'admin'
+      ) as exists
+    `;
+    if (Boolean(admin?.exists)) {
       return response.status(409).json({ ok: false, error: "تمت تهيئة المنصة من قبل ولا يمكن إنشاء مدير أول جديد" });
     }
 
