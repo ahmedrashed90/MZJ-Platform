@@ -2,16 +2,18 @@ begin;
 
 create schema if not exists integrations;
 
+create schema if not exists operations;
+alter table operations.vehicle_status_notes add column if not exists movement_id uuid;
+alter table operations.vehicle_status_notes add column if not exists created_by uuid references core.users(id);
+alter table operations.vehicle_status_notes add column if not exists created_by_name text;
+alter table operations.vehicle_status_notes add column if not exists created_at timestamptz not null default now();
+
 alter table core.users add column if not exists next_erp_user_id text;
-alter table core.users add column if not exists next_erp_branch text;
 
 create unique index if not exists core_users_next_erp_user_id_unique
 on core.users(lower(trim(next_erp_user_id)))
 where nullif(trim(next_erp_user_id),'') is not null;
 
-create index if not exists core_users_next_erp_branch_idx
-on core.users(lower(trim(next_erp_branch)))
-where nullif(trim(next_erp_branch),'') is not null;
 
 create table if not exists crm.sources (
   code text primary key,

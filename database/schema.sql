@@ -57,7 +57,6 @@ create table if not exists core.users (
   email text unique,
   mobile text unique,
   next_erp_user_id text,
-  next_erp_branch text,
   password_hash text,
   must_change_password boolean not null default true,
   password_changed_at timestamptz,
@@ -70,13 +69,9 @@ create table if not exists core.users (
 );
 
 alter table core.users add column if not exists next_erp_user_id text;
-alter table core.users add column if not exists next_erp_branch text;
 create unique index if not exists core_users_next_erp_user_id_unique
 on core.users(lower(trim(next_erp_user_id)))
 where nullif(trim(next_erp_user_id),'') is not null;
-create index if not exists core_users_next_erp_branch_idx
-on core.users(lower(trim(next_erp_branch)))
-where nullif(trim(next_erp_branch),'') is not null;
 
 create table if not exists core.sessions (
   token_hash text primary key,

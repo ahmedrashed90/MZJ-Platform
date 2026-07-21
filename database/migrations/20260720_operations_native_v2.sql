@@ -146,6 +146,10 @@ create table if not exists operations.vehicle_status_notes (
   created_by_name text,
   created_at timestamptz not null default now()
 );
+alter table operations.vehicle_status_notes add column if not exists movement_id uuid;
+alter table operations.vehicle_status_notes add column if not exists created_by uuid references core.users(id);
+alter table operations.vehicle_status_notes add column if not exists created_by_name text;
+alter table operations.vehicle_status_notes add column if not exists created_at timestamptz not null default now();
 create index if not exists operations_vehicle_status_notes_idx on operations.vehicle_status_notes(vehicle_id,created_at desc);
 
 create table if not exists operations.check_item_definitions (

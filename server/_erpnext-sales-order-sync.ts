@@ -11,7 +11,6 @@ type PlatformUserMapping = {
   id: string;
   full_name: string;
   next_erp_user_id: string | null;
-  next_erp_branch: string | null;
   department_code: string | null;
   department_name: string | null;
   branch_code: string | null;
@@ -22,9 +21,6 @@ type UserLinkStatus =
   | "linked"
   | "missing_user_id"
   | "user_not_mapped"
-  | "erp_branch_missing"
-  | "branch_not_configured"
-  | "branch_mismatch"
   | "department_not_configured"
   | "platform_branch_not_configured"
   | "unsupported_department";
@@ -69,7 +65,7 @@ function uniqueWarnings(warnings: LinkWarning[]) {
   });
 }
 
-async function resolvePlatformUser(erpUserId: string, erpBranch: string): Promise<{
+async function resolvePlatformUser(erpUserId: string): Promise<{
   status: UserLinkStatus;
   mapping: PlatformUserMapping | null;
   candidate: PlatformUserMapping | null;
@@ -77,7 +73,7 @@ async function resolvePlatformUser(erpUserId: string, erpBranch: string): Promis
   if (!erpUserId) return { status: "missing_user_id", mapping: null, candidate: null };
   const sql = getSql();
   const [candidate] = await sql<PlatformUserMapping[]>`
-    select u.id::text,u.full_name,u.next_erp_user_id,u.next_erp_branch,
+    select u.id::text,u.full_name,u.next_erp_user_id,
       dep.code as department_code,dep.name as department_name,
       br.code as branch_code,br.name as branch_name
     from core.users u
@@ -99,11 +95,6 @@ async function resolvePlatformUser(erpUserId: string, erpBranch: string): Promis
     limit 1
   `;
   if (!candidate) return { status: "user_not_mapped", mapping: null, candidate: null };
-  if (!erpBranch) return { status: "erp_branch_missing", mapping: null, candidate };
-  if (!clean(candidate.next_erp_branch)) return { status: "branch_not_configured", mapping: null, candidate };
-  if (normalizeComparable(candidate.next_erp_branch) !== normalizeComparable(erpBranch)) {
-    return { status: "branch_mismatch", mapping: null, candidate };
-  }
   if (!clean(candidate.department_code)) return { status: "department_not_configured", mapping: null, candidate };
   if (!isSupportedCrmDepartment(candidate.department_code)) return { status: "unsupported_department", mapping: null, candidate };
   if (!clean(candidate.branch_code)) return { status: "platform_branch_not_configured", mapping: null, candidate };
@@ -313,7 +304,7 @@ async function linkCrmCustomer(input: {
           ) values(
             ${contact.id}::uuid,null,${existing.id}::uuid,${oldAssignedTo||null}::uuid,${existing.assigned_name||null},${mapping.id}::uuid,${mapping.full_name},
             ${oldDepartment||null},${departmentCode},${oldBranch||null},${branchCode},${mapping.id}::uuid,${mapping.full_name},'erpnext',
-            ${`ربط المندوب والفرع من طلب البيع ${normalized.orderNo}`},${tx.json(sourceMetadata)}
+            ${`ربط المندوب وبياناته التنظيمية من طلب البيع ${normalized.orderNo}`},${tx.json(sourceMetadata)}
           )
         `;
       }
@@ -546,21 +537,12 @@ export async function syncErpNextSalesOrder(input: {
       itemNo: warning.itemNo,
     }));
 
-  const userResolution = await resolvePlatformUser(normalized.erpUserId, normalized.erpBranch);
+  const userResolution = await resolvePlatformUser(normalized.erpUserId);
   const mapping = userResolution.mapping;
   if (userResolution.status === "missing_user_id") {
     warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مستخدم NEXT ERP غير موجود في بيانات طلب البيع" });
   } else if (userResolution.status === "user_not_mapped") {
     warnings.push({ code: "ERP_USER_NOT_MAPPED", message: `لا يوجد مستخدم في المنصة مربوط بإيميل NEXT ERP: ${normalized.erpUserId}` });
-  } else if (userResolution.status === "erp_branch_missing") {
-    warnings.push({ code: "ERP_BRANCH_MISSING", message: "فرع البيع غير موجود في بيانات طلب NEXT ERP" });
-  } else if (userResolution.status === "branch_not_configured") {
-    warnings.push({ code: "ERP_BRANCH_NOT_CONFIGURED", message: `المستخدم ${userResolution.candidate?.full_name || normalized.erpUserId} ليس له فرع NEXT ERP محفوظ في الإعدادات` });
-  } else if (userResolution.status === "branch_mismatch") {
-    warnings.push({
-      code: "ERP_BRANCH_MISMATCH",
-      message: `فرع الطلب (${normalized.erpBranch}) مختلف عن فرع NEXT ERP المحفوظ للمستخدم (${userResolution.candidate?.next_erp_branch || "غير محدد"})`,
-    });
   } else if (userResolution.status === "department_not_configured") {
     warnings.push({ code: "PLATFORM_DEPARTMENT_MISSING", message: "المستخدم المربوط لا يملك قسمًا أساسيًا في المنصة" });
   } else if (userResolution.status === "unsupported_department") {
@@ -591,7 +573,7 @@ export async function syncErpNextSalesOrder(input: {
     status: eligibleStatus ? userResolution.status : "skipped_status",
     leadId: null as string | null,
     created: false,
-    message: eligibleStatus ? "لم يتم ربط CRM لعدم اكتمال ربط مستخدم وفرع NEXT ERP" : "لم يتم تشغيل ربط CRM بسبب حالة الطلب",
+    message: eligibleStatus ? "لم يتم ربط CRM لعدم اكتمال ربط مستخدم NEXT ERP" : "لم يتم تشغيل ربط CRM بسبب حالة الطلب",
   };
 
   if (canApplyBusinessLink && !normalized.actualCustomerPhoneNormalized) {

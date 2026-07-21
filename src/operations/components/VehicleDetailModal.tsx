@@ -25,7 +25,7 @@ function formatMoney(value: unknown) {
 
 function linkStatusLabel(value: unknown) {
   const key = String(value || "");
-  const labels: Record<string, string> = { linked: "تم الربط", created: "تم الإنشاء", updated: "تم التحديث", partial: "ربط جزئي", not_linked: "غير مربوط", missing_user_id: "إيميل NEXT ERP مفقود", user_not_mapped: "المستخدم غير مربوط", erp_branch_missing: "فرع NEXT ERP مفقود", branch_not_configured: "فرع NEXT ERP غير محفوظ", branch_mismatch: "فرع NEXT ERP غير مطابق", department_not_configured: "قسم المنصة غير محدد", platform_branch_not_configured: "فرع المنصة غير محدد", unsupported_department: "قسم غير صالح لـCRM", missing_phone: "رقم الجوال مفقود", ambiguous_phone: "رقم الجوال مكرر", skipped_status: "تم تخطي الربط" };
+  const labels: Record<string, string> = { linked: "تم الربط", created: "تم الإنشاء", updated: "تم التحديث", partial: "ربط جزئي", not_linked: "غير مربوط", missing_user_id: "إيميل NEXT ERP مفقود", user_not_mapped: "المستخدم غير مربوط", department_not_configured: "قسم المنصة غير محدد", platform_branch_not_configured: "فرع المنصة غير محدد", unsupported_department: "قسم غير صالح لـCRM", missing_phone: "رقم الجوال مفقود", ambiguous_phone: "رقم الجوال مكرر", skipped_status: "تم تخطي الربط" };
   return labels[key] || key || "—";
 }
 
