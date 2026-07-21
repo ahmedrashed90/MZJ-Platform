@@ -1,0 +1,16 @@
+name = "mersal-crm"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+[vars]
+PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/whatsapp"
+MERSAL_API_ENDPOINT = "https://w-mersal.com"
+MERSAL_SEND_URL = "https://w-mersal.com/api/wpbox/sendmessage"
+MERSAL_TEMPLATE_URL = "https://w-mersal.com/api/wpbox/sendtemplatemessage"
+MERSAL_MEDIA_SEND_URL = "https://w-mersal.com/api/wpbox/sendmedia"
+MERSAL_ATTACHMENT_SEND_URL = "https://w-mersal.com/api/wpbox/sendmessage"
+
+# Required secrets:
+# wrangler secret put MZJ_GATEWAY_SECRET
+# wrangler secret put MERSAL_TOKEN
+# wrangler secret put MERSAL_API_TOKEN
