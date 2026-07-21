@@ -32,6 +32,51 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed", requestId: traceId });
     const body = typeof request.body === "string" ? JSON.parse(request.body || "{}") : request.body || {};
     const action = clean(body.action);
+
+    if (action === "delete_deleted_record") {
+      const deletedId = clean(body.deletedId);
+      if (!deletedId) throw new OperationError(400, "VALIDATION_ERROR", "اختر الطلب المحذوف المراد حذفه");
+
+      const removed = await sql.begin(async (tx) => {
+        const [deletedOrder] = await tx<any[]>`
+          select *,id::text,order_internal_id::text
+          from tracking.deleted_orders
+          where id=${deletedId}::uuid
+          for update
+        `;
+        if (!deletedOrder) throw new OperationError(404, "DELETED_TRACKING_REQUEST_NOT_FOUND", "سجل الطلب المحذوف غير موجود أو تم حذفه مسبقًا");
+
+        await tx`delete from tracking.deleted_orders where id=${deletedId}::uuid`;
+
+        try {
+          await tx.savepoint(async (auditTx) => {
+            await auditTx`
+              insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+              values (
+                ${user.id}::uuid,'tracking','deleted_order_record_removed','tracking_deleted_order',${deletedOrder.sales_order_no},
+                ${auditTx.json(deletedOrder)},${auditTx.json({ requestId: traceId, sourceIdentity: deletedOrder.source_identity || null })}
+              )
+            `;
+          });
+        } catch (auditError) {
+          console.error('Tracking deleted record audit failed', { traceId, deletedId, auditError });
+        }
+
+        return {
+          deletedId,
+          orderNo: deletedOrder.sales_order_no,
+          sourceIdentity: deletedOrder.source_identity || null,
+        };
+      });
+
+      return response.status(200).json({
+        ok: true,
+        message: "تم حذف سجل الطلب المحذوف، ويمكن استقبال نفس الطلب من NEXT ERP مرة أخرى.",
+        requestId: traceId,
+        ...removed,
+      });
+    }
+
     if (action !== "delete") throw new OperationError(400, "VALIDATION_ERROR", "الإجراء غير مدعوم");
 
     const orderId = clean(body.orderId);

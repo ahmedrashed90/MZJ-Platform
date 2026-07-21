@@ -272,3 +272,10 @@ Before deploying, read:
 - فرع طلب البيع يظل محفوظًا للعرض فقط ولا يوقف CRM أو العمليات.
 - رقم الجوال غير الموجود في CRM يؤدي إلى إنشاء عميل جديد تلقائيًا بحالة `تم البيع`.
 - رقم الجوال الفارغ أو المكرر لا ينشئ أو يعدل عميلًا بالاسم فقط.
+
+## v1.16.7 — Release deleted tracking source
+
+- Renamed the deleted-tracking list to `الطلبات المحذوفة`.
+- Added an admin action to remove a selected deleted-order record.
+- Removing that record releases its source identity so the same ERPNext Sales Order can be received again.
+- No tracking, CRM, operations, approval, layout, or styling logic was otherwise changed.
