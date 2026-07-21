@@ -11,9 +11,6 @@ import {
   FileAudio,
   FileVideo,
   Phone,
-  Microphone,
-  StopCircle,
-  Trash,
   UserCircle,
   WhatsappLogo,
   X,
@@ -172,15 +169,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const messagesListRef = useRef<HTMLDivElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingStreamRef = useRef<MediaStream | null>(null);
-  const recordingChunksRef = useRef<Blob[]>([]);
-  const recordingTimerRef = useRef<number | null>(null);
-  const recordingActionRef = useRef<"keep" | "discard">("keep");
 
   useEffect(() => {
     if (!lead) {
@@ -206,8 +196,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setNoteDraft("");
     setNotice("");
     setPendingFile(null);
-    setRecording(false);
-    setRecordingSeconds(0);
     setMediaUrls({});
     if (showConversation) {
       void loadConversation(lead.id, lead.conversation_id || "", false);
@@ -228,13 +216,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
     }
   }, [lead?.id, showConversation]);
-
-  useEffect(() => () => {
-    recordingActionRef.current = "discard";
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== "inactive") recorder.stop();
-    stopRecordingTracks();
-  }, []);
 
   useEscapeToClose(Boolean(lead), onClose);
 
@@ -458,93 +439,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   }
 
 
-  function formatRecordingTime(totalSeconds: number) {
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  function stopRecordingTracks() {
-    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
-    recordingStreamRef.current = null;
-    if (recordingTimerRef.current !== null) {
-      window.clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
-  }
-
-  async function startVoiceRecording() {
-    if (recording || sending) return;
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setNotice("المتصفح الحالي لا يدعم تسجيل الصوت");
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const candidates = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/webm"];
-      const mimeType = candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || "";
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-      recordingStreamRef.current = stream;
-      mediaRecorderRef.current = recorder;
-      recordingChunksRef.current = [];
-      recordingActionRef.current = "keep";
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        const chunks = recordingChunksRef.current;
-        const action = recordingActionRef.current;
-        const finalType = recorder.mimeType || mimeType || "audio/webm";
-        stopRecordingTracks();
-        setRecording(false);
-        setRecordingSeconds(0);
-        mediaRecorderRef.current = null;
-        recordingChunksRef.current = [];
-        if (action === "discard" || !chunks.length) return;
-        const extension = finalType.includes("ogg") ? "ogg" : finalType.includes("mp4") ? "m4a" : "webm";
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const blob = new Blob(chunks, { type: finalType });
-        setPendingFile(new File([blob], `voice-${stamp}.${extension}`, { type: finalType, lastModified: Date.now() }));
-        setNotice("تم تجهيز التسجيل الصوتي كمرفق. اضغط إرسال لاختباره على نفس Endpoint.");
-      };
-      recorder.onerror = () => {
-        stopRecordingTracks();
-        setRecording(false);
-        setRecordingSeconds(0);
-        setNotice("تعذر تسجيل الصوت");
-      };
-      recorder.start(250);
-      setPendingFile(null);
-      setRecordingSeconds(0);
-      setRecording(true);
-      setNotice("");
-      recordingTimerRef.current = window.setInterval(() => setRecordingSeconds((value) => value + 1), 1000);
-    } catch (error) {
-      stopRecordingTracks();
-      setRecording(false);
-      setNotice(error instanceof Error ? error.message : "تعذر الوصول إلى الميكروفون");
-    }
-  }
-
-  function finishVoiceRecording() {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") return;
-    recordingActionRef.current = "keep";
-    recorder.stop();
-  }
-
-  function cancelVoiceRecording() {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") {
-      stopRecordingTracks();
-      setRecording(false);
-      setRecordingSeconds(0);
-      return;
-    }
-    recordingActionRef.current = "discard";
-    recorder.stop();
-  }
-
   async function uploadPendingFile(file: File) {
     const prepared = await crmFetch<{ ok: boolean; assetId: string; uploadUrl: string }>("/api/crm/media", {
       method: "POST",
@@ -717,13 +611,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 }
               }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <div className="crm-composer-attachments">
-                <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => { if (recording) cancelVoiceRecording(); setPendingFile(event.target.files?.[0] || null); }} /></label>
-                <div className={`crm-voice-recorder ${recording ? "recording" : ""}`}>
-                  <button type="button" className="crm-voice-main" disabled={sending} onClick={() => recording ? finishVoiceRecording() : void startVoiceRecording()} title={recording ? "إنهاء التسجيل" : "تسجيل رسالة صوتية"}>{recording ? <StopCircle size={19} weight="fill" /> : <Microphone size={19} weight="fill" />}<span>{recording ? formatRecordingTime(recordingSeconds) : "تسجيل فويس"}</span></button>
-                  {recording ? <button type="button" className="crm-voice-cancel" onClick={cancelVoiceRecording} title="إلغاء التسجيل"><Trash size={17} /></button> : null}
-                </div>
+                <label className="crm-attachment-button" title="إرفاق صورة أو صوت أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,audio/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
               </div>
-              <button type="button" disabled={sending || recording || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
             </div>
           </section> : null}
 

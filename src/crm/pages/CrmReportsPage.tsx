@@ -23,7 +23,7 @@ type ReportRow = {
   detailValue: string;
 };
 
-type ReportSection = { title: string; rows: ReportRow[]; firstColumn: string; description: string };
+type ReportSection = { title: string; rows: ReportRow[]; firstColumn: string; description: string; countLabel?: string };
 
 const emptyFilters = { from: "", to: "", department: "", branch: "", agent: "", callCenter: "", source: "", q: "" };
 const summaryCards = {
@@ -68,6 +68,7 @@ export function CrmReportsPage() {
   const [popupTotal, setPopupTotal] = useState(0);
   const [popupPage, setPopupPage] = useState(1);
   const [popupLoading, setPopupLoading] = useState(false);
+  const [popupPdfLoading, setPopupPdfLoading] = useState(false);
   const popupPageSize = 100;
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
@@ -128,11 +129,11 @@ export function CrmReportsPage() {
   const salesUsers = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
   const callCenterUsers = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.includes("call_center")), [meta]);
   const sections: ReportSection[] = [
-    { title: "مصادر التسويق الرقمي", rows: data?.digitalSources || [], firstColumn: "المصدر", description: "المصادر الرقمية المصنفة من إعدادات المصدر، بما فيها حاسبة التقسيط واتصال الرقم الموحد." },
-    { title: "مصادر التسويق المباشر", rows: data?.directSources || [], firstColumn: "المصدر", description: "المصادر المباشرة المعتمدة في قاعدة البيانات بدون تصنيف نصي داخل الواجهة." },
-    ...(data?.otherSources?.length ? [{ title: "مصادر أخرى", rows: data.otherSources, firstColumn: "المصدر", description: "مصادر لم يتم تصنيفها بعد كرقمية أو مباشرة." }] : []),
-    { title: "تقرير الأقسام والفروع", rows: data?.departments || [], firstColumn: "القسم / الفرع", description: "إجمالي حالات المبيعات حسب القسم والفرع." },
-    { title: "تقارير المناديب", rows: data?.agents || [], firstColumn: "المندوب", description: "أرقام كل مندوب مبيعات مع فتح تقرير العملاء المرتبطين به." },
+    { title: "مصادر التسويق الرقمي", rows: data?.digitalSources || [], firstColumn: "المصدر", description: "المصادر الرقمية المصنفة من إعدادات المصدر، بما فيها حاسبة التقسيط واتصال الرقم الموحد.", countLabel: "إجمالي المصادر" },
+    { title: "مصادر التسويق المباشر", rows: data?.directSources || [], firstColumn: "المصدر", description: "المصادر المباشرة المعتمدة في قاعدة البيانات بدون تصنيف نصي داخل الواجهة.", countLabel: "إجمالي المصادر" },
+    ...(data?.otherSources?.length ? [{ title: "مصادر أخرى", rows: data.otherSources, firstColumn: "المصدر", description: "مصادر لم يتم تصنيفها بعد كرقمية أو مباشرة.", countLabel: "إجمالي المصادر" }] : []),
+    { title: "تقرير الأقسام والفروع", rows: data?.departments || [], firstColumn: "القسم / الفرع", description: "إجمالي حالات المبيعات حسب القسم والفرع.", countLabel: "إجمالي الأقسام والفروع" },
+    { title: "تقارير المناديب", rows: data?.agents || [], firstColumn: "المندوب", description: "أرقام كل مندوب مبيعات مع فتح تقرير العملاء المرتبطين به.", countLabel: "إجمالي المناديب" },
     { title: "تقرير خدمة العملاء", rows: data?.service ? [data.service] : [], firstColumn: "القسم", description: "متابعة جاري العمل وتم الانتهاء داخل خدمة العملاء." },
   ];
 
@@ -154,6 +155,41 @@ export function CrmReportsPage() {
       </tbody></table></section>`).join("");
     win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقارير CRM</title><style>body{font-family:Tajawal,Arial;padding:22px;color:#38231d}h1{margin-bottom:4px}h2{margin-top:26px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dbc8bd;padding:7px;text-align:center}th{background:#f5e8df}section{break-inside:avoid}</style></head><body><h1>تقارير CRM</h1><p>الفترة: ${htmlEscape(filters.from || "—")} إلى ${htmlEscape(filters.to || "—")}</p>${sectionHtml}<script>window.onload=()=>window.print()</script></body></html>`);
     win.document.close();
+  }
+
+  async function exportPopupPdf() {
+    if (!popup || popupPdfLoading) return;
+    const win = window.open("", "_blank", "width=1400,height=900");
+    if (!win) {
+      setNotice("تعذر فتح نافذة تصدير PDF. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.");
+      return;
+    }
+    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>جاري تجهيز التقرير</title><style>body{font-family:Tajawal,Arial;padding:30px;text-align:center;font-weight:700;color:#38231d}</style></head><body>جاري تجهيز تقرير العملاء...</body></html>`);
+    win.document.close();
+    setPopupPdfLoading(true);
+    try {
+      const allRows: any[] = [];
+      let page = 1;
+      let total = 0;
+      do {
+        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailPage: page, detailPageSize: 200 })}`);
+        const pageRows = result.rows || [];
+        allRows.push(...pageRows);
+        total = Number(result.total || 0);
+        if (!pageRows.length) break;
+        page += 1;
+      } while (allRows.length < total && page <= 500);
+
+      const rowsHtml = allRows.map((row) => `<tr><td>${htmlEscape(row.customer_name || "—")}</td><td>${htmlEscape(row.phone || row.phone_normalized || "—")}</td><td>${htmlEscape(row.car_name || "—")}</td><td>${htmlEscape(sourceLabel(row.source_code, row.source_name))}</td><td>${htmlEscape(row.branch_name || row.branch_code || "—")}</td><td>${htmlEscape(row.status_label || "—")}</td><td>${htmlEscape(row.status_note || row.notes || "—")}</td><td>${htmlEscape(formatDate(row.registered_at || row.created_at))}</td><td>${htmlEscape(formatDate(row.updated_at))}</td></tr>`).join("");
+      win.document.open();
+      win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير عملاء - ${htmlEscape(popup.name)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Tajawal,Arial;color:#38231d;font-size:11px;font-weight:700}h1{margin:0 0 6px;font-size:23px}p{margin:0 0 16px;color:#6d554d}table{width:100%;border-collapse:collapse}th,td{border:1px solid #dbc8bd;padding:7px;text-align:right;vertical-align:top}th{background:#f5e8df;font-weight:800}td:first-child{font-weight:800}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><h1>تقرير عملاء: ${htmlEscape(popup.name)}</h1><p>إجمالي العملاء: ${total.toLocaleString("ar-SA")} — الفترة: ${htmlEscape(filters.from || "—")} إلى ${htmlEscape(filters.to || "—")}${popupQ ? ` — البحث: ${htmlEscape(popupQ)}` : ""}</p><table><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>التحديثات</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="9">لا توجد نتائج</td></tr>'}</tbody></table><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
+      win.document.close();
+    } catch (error) {
+      win.close();
+      setNotice(error instanceof Error ? error.message : "تعذر تصدير تقرير العملاء PDF");
+    } finally {
+      setPopupPdfLoading(false);
+    }
   }
 
   const configuredCards = (data?.quality?.summary_cards || Object.keys(summaryCards)).filter((key: string) => key in summaryCards);
@@ -202,7 +238,7 @@ export function CrmReportsPage() {
       <div className="crm-report-sections">
         {sections.map((section) => (
           <section className="crm-panel crm-report-section" key={section.title}>
-            <header><div><h2>{section.title}</h2><p>{section.description}</p></div><span>{section.rows.length} صف</span></header>
+            <header><div><h2>{section.title}</h2><p>{section.description}</p></div>{section.countLabel ? <div className="crm-report-section-metrics"><span>{section.countLabel}<b>{section.rows.length.toLocaleString("ar-SA")}</b></span><span>إجمالي المبيعات<b>{section.rows.reduce((sum, row) => sum + Number(row.sold || 0), 0).toLocaleString("ar-SA")}</b></span></div> : <span>{section.rows.length} صف</span>}</header>
             <div className="crm-table-shell">
               <table className="crm-table reports">
                 <thead><tr><th>{section.firstColumn}</th><th>إجمالي العملاء</th><th>لم يتم الاتصال</th><th>غير مؤهل</th><th>مؤهل</th><th>مؤجل</th><th>لم يتم الرد</th><th>تم البيع</th><th>جودة التسويق</th><th>جودة المبيعات</th><th>تقارير العملاء</th></tr></thead>
@@ -228,7 +264,7 @@ export function CrmReportsPage() {
         <div className="crm-modal-backdrop" onMouseDown={() => setPopup(null)}>
           <div className="crm-modal-card report-customers-modal" onMouseDown={(event) => event.stopPropagation()}>
             <header><div><h2>تقرير عملاء: {popup.name}</h2><p>عدد النتائج: {popupTotal.toLocaleString("ar-SA")}</p></div><button className="crm-icon-button" onClick={() => setPopup(null)}><X size={18} /></button></header>
-            <div className="crm-toolbar compact"><label className="crm-search-box wide"><MagnifyingGlass size={17} /><input value={popupQ} onChange={(event) => { setPopupQ(event.target.value); setPopupPage(1); }} placeholder="اكتب حالة أو ملاحظة أو اسم عميل" /></label></div>
+            <div className="crm-toolbar compact crm-report-customers-toolbar"><label className="crm-search-box wide"><MagnifyingGlass size={17} /><input value={popupQ} onChange={(event) => { setPopupQ(event.target.value); setPopupPage(1); }} placeholder="اكتب حالة أو ملاحظة أو اسم عميل" /></label><button type="button" className="crm-secondary-button" disabled={popupLoading || popupPdfLoading} onClick={() => void exportPopupPdf()}><FilePdf size={17} />{popupPdfLoading ? "جاري تجهيز PDF..." : "تصدير PDF"}</button></div>
             <div className="crm-table-shell popup-table"><table className="crm-table"><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>التحديثات</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>{popupRows.map((row: any) => <tr key={row.id}><td><strong className="crm-report-customer-name">{row.customer_name || "—"}</strong></td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.car_name || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{row.status_label || "—"}</td><td>{row.status_note || row.notes || "—"}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}{!popupLoading && !popupRows.length ? <tr><td colSpan={9}><div className="crm-empty-state">لا توجد نتائج</div></td></tr> : null}</tbody></table></div>
             <div className="crm-form-actions"><button className="crm-secondary-button" disabled={popupLoading || popupPage <= 1} onClick={() => setPopupPage((current) => Math.max(1, current - 1))}>السابق</button><span>{popupLoading ? "جاري التحميل..." : `صفحة ${popupPage} من ${Math.max(1, Math.ceil(popupTotal / popupPageSize))}`}</span><button className="crm-secondary-button" disabled={popupLoading || popupPage * popupPageSize >= popupTotal} onClick={() => setPopupPage((current) => current + 1)}>التالي</button></div>
           </div>
