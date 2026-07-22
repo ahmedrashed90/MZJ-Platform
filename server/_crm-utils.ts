@@ -130,10 +130,10 @@ export function sourceLabel(source: string, fallback = "") {
   return raw || "غير محدد";
 }
 
-export async function resolveSourceName(sourceCode: string, fallback = "") {
+export async function resolveSourceName(sourceCode: string, fallback = "", db?: any) {
   const code = clean(sourceCode);
   if (!code) return sourceLabel(fallback);
-  const sql = getSql();
+  const sql = db || getSql();
   const [row] = await sql<{ name: string }[]>`select name from core.sources where code=${code} limit 1`;
   return clean(row?.name) || sourceLabel(code || fallback);
 }
@@ -164,8 +164,8 @@ type AssignmentResult = {
   ruleName?: string;
 };
 
-async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string): Promise<AssignmentResult | null> {
-  const sql = getSql();
+async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string, db?: any): Promise<AssignmentResult | null> {
+  const sql = db || getSql();
   const [rule] = await sql<any[]>`
     select r.*, r.id::text,
       state.last_user_id::text,
@@ -217,8 +217,8 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: requestedBranch, ruleId: rule.id, ruleName: rule.name };
 }
 
-async function fallbackAssignment(departmentCode: string, branch: string, sourceCode: string): Promise<AssignmentResult> {
-  const sql = getSql();
+async function fallbackAssignment(departmentCode: string, branch: string, sourceCode: string, db?: any): Promise<AssignmentResult> {
+  const sql = db || getSql();
   const candidates = await sql<{ id: string; full_name: string; branch_code: string | null }[]>`
     select u.id::text, u.full_name, min(b.code) as branch_code
     from core.users u
@@ -248,15 +248,15 @@ async function fallbackAssignment(departmentCode: string, branch: string, source
   return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: selected.branch_code || branch };
 }
 
-export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {
+export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "", db?: any) {
   const department = departmentCodeFromKey(serviceKey);
   const branch = requestedBranch || branchForDepartment(serviceKey);
-  return (await chooseFromConfiguredRule(department, branch, sourceCode)) || fallbackAssignment(department, branch, sourceCode);
+  return (await chooseFromConfiguredRule(department, branch, sourceCode, db)) || fallbackAssignment(department, branch, sourceCode, db);
 }
 
-export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online") {
-  const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
+export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online", db?: any) {
+  const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode, db);
   if (configured) return configured;
-  const fallback = await fallbackAssignment("call_center", "", sourceCode);
+  const fallback = await fallbackAssignment("call_center", "", sourceCode, db);
   return { assignedTo: fallback.assignedTo, assignedName: fallback.assignedName };
 }

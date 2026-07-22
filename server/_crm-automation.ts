@@ -1,6 +1,5 @@
 import type { SessionUser } from "./_auth.js";
 import { clean, normalizePhone } from "./_crm-utils.js";
-import { processCustomerAutomationInbound } from "./_crm-customer-automation.js";
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 import { getSql } from "./_db.js";
 
@@ -56,7 +55,6 @@ async function loadContext(event: any) {
     payload,
   };
 }
-
 
 function jobKey(type: string, conversationId: string, messageId: string, attempt: number) {
   return `${type}:${conversationId}:${messageId}:${attempt}`;
@@ -190,12 +188,6 @@ export async function publishAutomationEvent(input: AutomationEventInput) {
   `;
 
   if (event.status === "processed") return { ok: true, duplicate: true, eventId: event.id, actions: [] };
-  const claimed = await sql<any[]>`
-    update crm.automation_events set status='processing',processed_at=null
-    where id=${event.id}::uuid and status in ('received','failed')
-    returning id::text
-  `;
-  if (!claimed.length) return { ok: true, duplicate: true, eventId: event.id, actions: [] };
 
   const context = await loadContext(event);
   const actions: any[] = [];
@@ -204,10 +196,12 @@ export async function publishAutomationEvent(input: AutomationEventInput) {
 
   try {
     if (event.event_type === "message.received" && direction === "in") {
-      const customerAutomation = await processCustomerAutomationInbound({ event, context, actor: input.actor });
-      actions.push({ type: "customer_automation", ...customerAutomation });
-      if (!customerAutomation.consumed && context.conversation?.hasOpenRequest) {
+      if (context.payload?.entryAutomationHandled === true) {
+        actions.push({ type: "conversation_automation", handled: true, sessionId: context.payload?.conversationAutomationSessionId || null });
+      } else if (context.conversation?.hasOpenRequest) {
         actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
+      } else {
+        actions.push({ type: "no_entry_action", skipped: true, reason: "conversation_automation_is_the_single_entry_flow" });
       }
     } else if (event.event_type === "message.sent" && senderType === "human") {
       actions.push({ type: "cancel_inbox_agent", ...(await cancelInboxAgent(event)) });

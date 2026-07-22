@@ -1,0 +1,34 @@
+MZJ CRM Automation v1.18.0 - File inventory
+
+MODIFIED FILES
+api/index.ts
+package.json
+scripts/check-crm-entry-distribution-v192.mjs
+server/_crm-automation.ts
+server/_crm-lifecycle.ts
+server/_crm-messaging.ts
+server/_crm-schema.ts
+server/_crm-utils.ts
+server/_integration-processor.ts
+server/crm/entry-routing.ts
+src/crm/components/CrmEntryRoutingSettings.tsx
+src/crm/pages/CrmAdminPage.tsx
+src/styles.css
+
+NEW FILES
+database/migrations/20260722_crm_automation_flow_v1180.sql
+database/migrations/20260722_crm_automation_flow_v1180_rollback.sql
+database/verification/20260722_crm_automation_v1180_postcheck.sql
+facebook-worker/README.md
+facebook-worker/package.json
+facebook-worker/src/index.js
+facebook-worker/wrangler.toml
+scripts/check-crm-automation-v1180.mjs
+scripts/test-facebook-worker-v1180.mjs
+server/_crm-conversation-automation.ts
+server/crm/automation-settings.ts
+src/crm/components/CrmAutomationSettings.tsx
+workers/MZJ-Facebook-Automation-Transport-v1.18.0-FULL.txt
+
+DELETED FILES
+(none)

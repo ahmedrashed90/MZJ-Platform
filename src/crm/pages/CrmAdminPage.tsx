@@ -366,7 +366,6 @@ export function CrmAdminPage({ embedded = false }: Props) {
 
 
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
-      {tab === "automation" ? <CrmAutomationSettings /> : null}
 
       {tab === "statuses" ? (
         <AdminStack
@@ -499,6 +498,8 @@ export function CrmAdminPage({ embedded = false }: Props) {
           )}
         />
       ) : null}
+
+      {tab === "automation" ? <CrmAutomationSettings /> : null}
 
       {tab === "automatic_templates" ? (
         <section className="crm-panel crm-form-panel">
