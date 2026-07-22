@@ -21,7 +21,10 @@ for (const token of [
 ]) if (!admin.includes(token)) throw new Error(`Automation tab check failed: missing ${token}`);
 
 for (const token of [
-  'الفلو ثابت حسب السيناريو المعتمد',
+  'الفلو الثلاثي ثابتًا حسب السيناريو المعتمد',
+  'الحالة العامة',
+  'المنصات والـ Workers',
+  'تشغيل الأوتوميشن على المنصة',
   'رسالة العميل الجديد',
   '💰 مبيعات الكاش',
   '🏦 مبيعات التمويل',
@@ -36,7 +39,6 @@ for (const forbidden of [
   'نوع الفلو',
   'القسم المرتبط',
   'الفرع الافتراضي',
-  'المنصات والـ Workers',
   'متى يتم تشغيل الأوتوميشن؟',
 ]) if (ui.includes(forbidden)) throw new Error(`Fixed automation UI must not expose ${forbidden}`);
 
@@ -54,11 +56,12 @@ for (const token of [
 
 for (const token of [
   'isCrmManager(user)',
-  'Only message text, validation text and accepted replies are accepted',
-  'settings.platformWorkers = before.platformWorkers',
+  'Only general activation, platform/Worker bindings, message text and accepted replies are editable',
+  'submitted?.platformWorkers || before.platformWorkers',
+  'allowedBindings',
   'clearCustomerAutomationSettingsCache',
   'crm_customer_automation_settings_saved',
-  'تم حفظ رسائل وردود الأوتوميشن',
+  'تم حفظ إعدادات الأوتوميشن',
 ]) if (!settingsApi.includes(token)) throw new Error(`Automation settings API check failed: missing ${token}`);
 
 for (const token of [
@@ -71,6 +74,9 @@ for (const token of [
   'validateAnswer',
   'saveLeadAnswer',
   'continueFlow',
+  'nextAutomationStepIndex',
+  'FINANCE_STEP_ORDER',
+  "status='awaiting_step',current_step_index=${index},current_step_key=${next.key}",
   'departmentCode: plan.option.departmentCode',
   'branchCode: plan.option.defaultBranch',
   'settingsForRun',
@@ -162,7 +168,8 @@ const normalized = settingsRuntime.normalizeCustomerAutomationSettings({
     { key: "finance", label: "اسم متغير", active: false, departmentCode: "wrong", aliases: ["قسط"], steps: [{ key: "phone", fieldKey: "wrong", prompt: "جوالك", errorMessage: "رقم غير صحيح" }] },
   ],
 });
-if (!normalized.enabled) throw new Error("Fixed automation must stay enabled");
+if (normalized.enabled !== false) throw new Error("General automation activation must remain editable");
+if (normalized.name !== "أوتوميشن استقبال عملاء CRM") throw new Error("Automation name must normalize safely");
 if (normalized.triggerMode !== "every_message") throw new Error("Trigger policy must stay fixed");
 if (normalized.serviceOptions.length !== 3) throw new Error("Fixed flow must always contain exactly three services");
 const fixedFinance = normalized.serviceOptions.find((row) => row.key === "finance");
@@ -185,5 +192,8 @@ if (detect("1")?.key !== "cash") throw new Error("Exact numeric service choice 1
 if (detect("10") !== null) throw new Error("Numeric choice matching must not accept 10 as 1");
 if (detect("مبيعات التمويل")?.key !== "finance") throw new Error("Arabic service label must be accepted exactly");
 if (detect("", { buttonPayload: "service" })?.key !== "service") throw new Error("Interactive payload key must select customer service");
+if (engineRuntime.nextAutomationStepIndex(fixedFinance, "name") !== 1) throw new Error("Finance name must advance to car");
+if (engineRuntime.nextAutomationStepIndex(fixedFinance, "car") !== 2) throw new Error("Finance car must advance to phone");
+if (engineRuntime.nextAutomationStepIndex(fixedFinance, "phone") !== 3) throw new Error("Finance phone must advance to the end message");
 
-console.log('CRM customer automation v1.18.1 fixed three-scenario flow checks passed.');
+console.log('CRM customer automation v1.18.2 controls and finance progression checks passed.');

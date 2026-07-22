@@ -22,6 +22,7 @@ function optionDisplay(option: any) {
 
 export function CrmAutomationSettings() {
   const [form, setForm] = useState<any>(null);
+  const [workers, setWorkers] = useState<any[]>([]);
   const [savedSnapshot, setSavedSnapshot] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -39,6 +40,7 @@ export function CrmAutomationSettings() {
     try {
       const result = await crmFetch<any>("/api/crm/automation-settings");
       setForm(result.settings);
+      setWorkers(Array.isArray(result.workers) ? result.workers : []);
       setSavedSnapshot(JSON.stringify(result.settings));
       setNotice("");
     } catch (error) {
@@ -69,12 +71,26 @@ export function CrmAutomationSettings() {
       });
       setForm(result.settings);
       setSavedSnapshot(JSON.stringify(result.settings));
-      setNotice(result.message || "تم حفظ رسائل وردود الأوتوميشن");
+      setNotice(result.message || "تم حفظ إعدادات الأوتوميشن");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر حفظ إعدادات الأوتوميشن");
     } finally {
       setSaving(false);
     }
+  }
+
+  function patch(key: string, value: any) {
+    setForm((current: any) => ({ ...current, [key]: value }));
+  }
+
+  function patchWorkerBinding(platformCode: string, workerCode: string, enabled: boolean) {
+    setForm((current: any) => {
+      const existing = (current.platformWorkers || []).filter((row: any) => row.platformCode !== platformCode);
+      return {
+        ...current,
+        platformWorkers: [...existing, { platformCode, workerCode, enabled }],
+      };
+    });
   }
 
   function patchMessage(key: string, text: string) {
@@ -128,17 +144,45 @@ export function CrmAutomationSettings() {
           <Robot size={32} weight="duotone" />
           <span>
             <h2>إعدادات الأوتوميشن</h2>
-            <p>الفلو ثابت حسب السيناريو المعتمد. المتاح هنا فقط تعديل نصوص الرسائل والردود المقبولة.</p>
+            <p>تحكم في تشغيل الأوتوميشن وربطه بالمنصات والـWorkers، مع بقاء الفلو الثلاثي ثابتًا حسب السيناريو المعتمد.</p>
           </span>
         </div>
         <nav>
           <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />إعادة تحميل</button>
-          <button className="crm-primary-button" onClick={() => void save()} disabled={saving || !dirty}><FloppyDisk size={17} />{saving ? "جاري الحفظ..." : "حفظ الرسائل والردود"}</button>
+          <button className="crm-primary-button" onClick={() => void save()} disabled={saving || !dirty}><FloppyDisk size={17} />{saving ? "جاري الحفظ..." : "حفظ الإعدادات"}</button>
         </nav>
       </section>
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       {dirty ? <div className="crm-automation-unsaved">لديك تعديلات غير محفوظة.</div> : null}
+
+      <section className="crm-panel crm-automation-section">
+        <header><div><h2>الحالة العامة</h2><p>عند إيقاف الأوتوميشن تستمر رسائل العملاء في الوصول والحفظ، بدون إرسال أي رد آلي.</p></div></header>
+        <div className="crm-form-grid crm-form-grid-wide">
+          <label className="crm-switch-row"><input type="checkbox" checked={form.enabled === true} onChange={(event) => patch("enabled", event.target.checked)} /><span>الأوتوميشن نشط</span></label>
+          <label><span>اسم الأوتوميشن</span><input value={form.name || ""} onChange={(event) => patch("name", event.target.value)} /></label>
+        </div>
+      </section>
+
+      <section className="crm-panel crm-automation-section">
+        <header><div><h2>المنصات والـ Workers</h2><p>حدد المنصات والـWorkers التقنية التي يعمل عليها هذا الأوتوميشن. هذا الربط لا يغير قواعد توزيع الموظفين.</p></div></header>
+        <div className="crm-automation-worker-grid">
+          {[...new Set(workers.map((worker: any) => String(worker.platformCode)))].map((platformCode) => {
+            const choices = workers.filter((worker: any) => worker.platformCode === platformCode);
+            const current = (form.platformWorkers || []).find((row: any) => row.platformCode === platformCode);
+            const selectedCode = current?.workerCode || choices[0]?.workerCode || "";
+            const selected = choices.find((worker: any) => worker.workerCode === selectedCode) || choices[0];
+            const platformNames: Record<string, string> = { facebook: "Facebook", instagram: "Instagram", whatsapp: "WhatsApp", tiktok: "TikTok", snapchat: "Snapchat", installment_calculator: "حاسبة التقسيط" };
+            return <article key={platformCode} className={current?.enabled ? "active" : ""}>
+              <div><strong>{platformNames[platformCode] || platformCode}</strong><small>{selected?.displayName || selectedCode || "لا يوجد Worker"}</small></div>
+              <label><span>الـWorker المرتبط</span><select value={selectedCode} disabled={!choices.length} onChange={(event) => patchWorkerBinding(platformCode, event.target.value, current?.enabled === true)}>{choices.map((worker: any) => <option key={`${platformCode}:${worker.workerCode}`} value={worker.workerCode}>{worker.displayName}</option>)}</select></label>
+              <span>{selected?.inboundConnected ? "استقبال مربوط" : "مسار الاستقبال غير مسجل"} · {selected?.outboundConnected ? "إرسال مربوط" : "مسار الإرسال غير مسجل"}</span>
+              <label className="crm-switch-row"><input type="checkbox" disabled={!selected || selected.active === false} checked={current?.enabled === true} onChange={(event) => patchWorkerBinding(platformCode, selectedCode, event.target.checked)} /><span>تشغيل الأوتوميشن على المنصة</span></label>
+            </article>;
+          })}
+          {!workers.length ? <div className="crm-empty-state">لا توجد Workers معرفة في ربط المنصات.</div> : null}
+        </div>
+      </section>
 
       <section className="crm-panel crm-automation-section">
         <header>
@@ -197,7 +241,7 @@ export function CrmAutomationSettings() {
 
       <div className="crm-settings-save">
         <button className="crm-secondary-button" disabled={!dirty} onClick={() => setForm(JSON.parse(savedSnapshot))}>إلغاء التغييرات</button>
-        <button className="crm-primary-button" disabled={saving || !dirty} onClick={() => void save()}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ الرسائل والردود"}</button>
+        <button className="crm-primary-button" disabled={saving || !dirty} onClick={() => void save()}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ الإعدادات"}</button>
       </div>
     </div>
   );

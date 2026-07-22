@@ -13,6 +13,8 @@ function canonicalChoiceToken(value: unknown) {
 
 function validate(settings: ReturnType<typeof normalizeCustomerAutomationSettings>) {
   if (!settings.name) throw new Error("اسم الأوتوميشن مطلوب");
+  const bindingKeys = settings.platformWorkers.map((row) => `${row.platformCode}:${row.workerCode}`);
+  if (new Set(bindingKeys).size !== bindingKeys.length) throw new Error("لا يمكن تكرار نفس ربط المنصة والـWorker");
   if (!settings.messages.welcome.text) throw new Error("رسالة الترحيب مطلوبة");
   if (!settings.messages.servicePrompt.text) throw new Error("رسالة اختيار الخدمة مطلوبة");
   const optionKeys = settings.serviceOptions.map((row) => row.key).join(",");
@@ -48,24 +50,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [settings, endpoints, fields, departments, branches] = await Promise.all([
+    const [settings, endpoints] = await Promise.all([
       getCustomerAutomationSettings(true),
       sql<any[]>`
         select source_code,display_name,is_active,text_send_url,send_url,inbound_webhook_url,webhook_url,health_url
         from crm.integration_endpoints order by display_name
       `,
-      sql<any[]>`
-        select field_key,label,field_type,options,is_system,is_locked,is_active
-        from crm.customer_field_definitions where is_active=true order by sort_order,label
-      `,
-      sql<any[]>`select code,name from core.departments order by name`,
-      sql<any[]>`select code,name from core.branches where is_active=true order by sort_order,name`,
     ]);
-    const systemFields = [
-      { field_key: "car_name", label: "السيارة", field_type: "text", options: [], is_system: true, is_locked: false, is_active: true },
-    ];
-    const knownFieldKeys = new Set(fields.map((row: any) => row.field_key));
-    const customerFields = [...fields, ...systemFields.filter((row) => !knownFieldKeys.has(row.field_key))];
     const workers = endpoints.flatMap((row: any) => {
       const platformCodes = row.source_code === "tiktok-snapchat"
         ? ["tiktok", "snapchat"]
@@ -79,7 +70,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         outboundConnected: Boolean(row.text_send_url || row.send_url),
       }));
     });
-    return response.status(200).json({ ok: true, settings, workers, fields: customerFields, departments, branches });
+    return response.status(200).json({ ok: true, settings, workers });
   }
 
   if (!["PUT", "POST", "PATCH"].includes(request.method || "")) {
@@ -91,14 +82,43 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const submitted = parseBody(request);
     const settings = normalizeCustomerAutomationSettings({
       ...before,
+      enabled: submitted?.enabled ?? before.enabled,
+      name: submitted?.name ?? before.name,
       messages: submitted?.messages || before.messages,
       serviceOptions: submitted?.serviceOptions || before.serviceOptions,
-      platformWorkers: before.platformWorkers,
+      platformWorkers: submitted?.platformWorkers || before.platformWorkers,
       version: before.version,
     });
-    // The scenario structure and technical routing are not editable from this page.
-    // Only message text, validation text and accepted replies are accepted.
-    settings.platformWorkers = before.platformWorkers;
+
+    const endpointRows = await sql<any[]>`
+      select source_code,is_active from crm.integration_endpoints
+    `;
+    const allowedBindings = new Set<string>();
+    const activeBindings = new Set<string>();
+    for (const row of endpointRows) {
+      const workerCode = clean(row.source_code);
+      if (!workerCode) continue;
+      const platformCodes = workerCode === "tiktok-snapchat"
+        ? ["tiktok", "snapchat"]
+        : [workerCode === "installment-calculator" ? "installment_calculator" : workerCode];
+      for (const platformCode of platformCodes) {
+        const key = `${platformCode}:${workerCode}`;
+        allowedBindings.add(key);
+        if (row.is_active !== false) activeBindings.add(key);
+      }
+    }
+    for (const binding of settings.platformWorkers) {
+      const key = `${binding.platformCode}:${binding.workerCode}`;
+      if (!allowedBindings.has(key)) {
+        throw new Error(`الـWorker ${binding.workerCode} غير تابع لمنصة ${binding.platformCode}`);
+      }
+      if (binding.enabled && !activeBindings.has(key)) {
+        throw new Error(`لا يمكن تشغيل الأوتوميشن على Worker غير نشط: ${binding.workerCode}`);
+      }
+    }
+
+    // The three service scenarios, departments, branches and answer fields remain fixed.
+    // Only general activation, platform/Worker bindings, message text and accepted replies are editable.
     validate(settings);
     const [row] = await sql<any[]>`
       update crm.automation_settings set
@@ -129,7 +149,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     clearCustomerAutomationSettingsCache();
     const saved = normalizeCustomerAutomationSettings(row);
     await audit(user, "crm_customer_automation_settings_saved", "automation_settings", "default", saved, before);
-    return response.status(200).json({ ok: true, settings: saved, message: "تم حفظ رسائل وردود الأوتوميشن" });
+    return response.status(200).json({ ok: true, settings: saved, message: "تم حفظ إعدادات الأوتوميشن" });
   } catch (error: any) {
     return response.status(400).json({ ok: false, error: error?.message || "تعذر حفظ إعدادات الأوتوميشن" });
   }

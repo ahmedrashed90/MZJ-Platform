@@ -138,6 +138,14 @@ function number(value: unknown, fallback: number, min = 0, max = 100000) {
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
 }
 
+function boolean(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") return value;
+  const token = clean(value).toLowerCase();
+  if (["1", "true", "yes", "on", "active", "enabled"].includes(token)) return true;
+  if (["0", "false", "no", "off", "inactive", "disabled"].includes(token)) return false;
+  return fallback;
+}
+
 function textList(value: unknown, fallback: string[] = []) {
   const list = Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
   return list.length ? [...new Set(list)] : [...fallback];
@@ -229,8 +237,8 @@ export function normalizeCustomerAutomationSettings(raw: any): CustomerAutomatio
   if (servicePromptText === "برجاء اختيار الخدمة المطلوبة 👇") servicePromptText = defaults.messages.servicePrompt.text;
 
   return {
-    enabled: true,
-    name: defaults.name,
+    enabled: boolean(raw?.automation_enabled ?? raw?.enabled, defaults.enabled),
+    name: editableText(raw?.automation_name ?? raw?.name, defaults.name),
     platformWorkers: platformWorkers.length ? platformWorkers : defaults.platformWorkers,
     triggerMode: "every_message",
     customIntervalValue: defaults.customIntervalValue,

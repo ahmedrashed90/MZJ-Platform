@@ -93,9 +93,21 @@ function keywordMatch(text: unknown, keywords: string[]) {
   return Boolean(value && keywords.map(normalized).some((word) => word && value === word));
 }
 
+const FINANCE_STEP_ORDER = ["name", "car", "phone"] as const;
+
 function activeSteps(option: AutomationServiceOption) {
   if (option.flowType === "message") return [];
+  if (option.key === "finance") {
+    const byKey = new Map(option.steps.filter((row) => row.active).map((row) => [row.key, row]));
+    return FINANCE_STEP_ORDER.map((key) => byKey.get(key)).filter((row): row is AutomationStep => Boolean(row));
+  }
   return option.steps.filter((row) => row.active).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+export function nextAutomationStepIndex(option: AutomationServiceOption, answeredStepKey: string) {
+  const steps = activeSteps(option);
+  const answeredIndex = steps.findIndex((row) => row.key === clean(answeredStepKey));
+  return answeredIndex < 0 ? 0 : answeredIndex + 1;
 }
 
 function validateAnswer(step: AutomationStep, raw: unknown) {
@@ -319,7 +331,11 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
       return { type: "skip", reason: "option_missing" };
     }
     const steps = activeSteps(option);
-    const step = steps[Number(run.current_step_index || 0)];
+    const storedStepIndex = run.current_step_key
+      ? steps.findIndex((row) => row.key === clean(run.current_step_key))
+      : Number(run.current_step_index || 0);
+    const currentStepIndex = storedStepIndex >= 0 ? storedStepIndex : Number(run.current_step_index || 0);
+    const step = steps[currentStepIndex];
     if (!step) return { type: "skip", reason: "step_missing" };
     const validated = validateAnswer(step, incomingText);
     const availability = validated.ok ? await validateAnswerAvailability(tx, run.lead_id || null, run.contact_id || null, step, validated.value) : { ok: true as const };
@@ -357,11 +373,14 @@ async function continueFlow(run: any, option: AutomationServiceOption, startInde
   const sql = getSql();
   if (next) {
     const text = [introText, next.prompt].filter(Boolean).join("\n");
-    await send(run.id, run.conversation_id, introText ? `flow-start-question:${next.key}` : `question:${next.key}`, text);
+    // Persist the exact expected step before queueing its outbound message. This prevents
+    // a completed answer from leaving the run in the transient "classifying" state if
+    // the process is interrupted between the database update and the Worker dispatch.
     await sql`
-      update crm.customer_automation_runs set status='awaiting_step',current_step_index=${index},current_step_key=${next.key},current_attempt=0,updated_at=now()
+      update crm.customer_automation_runs set status='awaiting_step',current_step_index=${index},current_step_key=${next.key},current_attempt=0,termination_reason=null,updated_at=now()
       where id=${run.id}::uuid
     `;
+    await send(run.id, run.conversation_id, introText ? `flow-start-question:${next.key}` : `question:${next.key}`, text);
     return { completed: false, nextStepKey: next.key };
   }
   if (introText) await send(run.id, run.conversation_id, "flow-start", introText);
@@ -463,7 +482,7 @@ export async function processCustomerAutomationInbound(event: any, context: any,
     return { ok: true, action: "service_selected", runId: plan.run.id, serviceKey: plan.option.serviceKey, requestId: classified.request?.id, leadId: classified.leadId, assignedTo: classified.assignment?.assignedTo || null, distributionError: classified.distributionError || null, status: progress.completed ? "completed" : "awaiting_step", nextStepKey: progress.nextStepKey };
   }
 
-  const nextIndex = Number(plan.run.current_step_index || 0) + 1;
+  const nextIndex = nextAutomationStepIndex(plan.option, plan.step.key);
   const progress = await continueFlow(plan.run, plan.option, nextIndex);
   return { ok: true, action: progress.completed ? "completed" : "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: progress.nextStepKey };
 }
