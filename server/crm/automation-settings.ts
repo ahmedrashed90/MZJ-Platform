@@ -2,7 +2,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import {
   clearCustomerAutomationSettingsCache,
-  DEFAULT_CUSTOMER_AUTOMATION_SETTINGS,
   getCustomerAutomationSettings,
   normalizeCustomerAutomationSettings,
 } from "../_crm-customer-automation-settings.js";
@@ -12,22 +11,17 @@ function canonicalChoiceToken(value: unknown) {
   return clean(value).toLowerCase().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/[ـ]/g, "").replace(/[\s_-]+/g, " ");
 }
 
-function validate(settings: ReturnType<typeof normalizeCustomerAutomationSettings>, reference?: { departments: Set<string>; branches: Set<string>; fields: Set<string> }) {
+function validate(settings: ReturnType<typeof normalizeCustomerAutomationSettings>) {
   if (!settings.name) throw new Error("اسم الأوتوميشن مطلوب");
-  if (!settings.serviceOptions.length) throw new Error("أضف اختيار خدمة واحدًا على الأقل");
-  if (!settings.serviceOptions.some((row) => row.active)) throw new Error("يجب تفعيل اختيار خدمة واحد على الأقل");
-  if (settings.scheduleEnabled && !settings.scheduleDays.length) throw new Error("حدد يوم تشغيل واحدًا على الأقل");
-  const optionKeys = settings.serviceOptions.map((row) => row.key);
-  if (new Set(optionKeys).size !== optionKeys.length) throw new Error("كود اختيار الخدمة يجب أن يكون فريدًا");
-  const workerKeys = settings.platformWorkers.map((row) => `${row.platformCode}:${row.workerCode}`);
-  if (new Set(workerKeys).size !== workerKeys.length) throw new Error("لا يمكن تكرار نفس ربط المنصة والـWorker");
+  if (!settings.messages.welcome.text) throw new Error("رسالة الترحيب مطلوبة");
+  if (!settings.messages.servicePrompt.text) throw new Error("رسالة اختيار الخدمة مطلوبة");
+  const optionKeys = settings.serviceOptions.map((row) => row.key).join(",");
+  if (optionKeys !== "cash,finance,service") throw new Error("بنية فلو الأوتوميشن غير صحيحة");
   const activeChoiceTokens = new Map<string, string>();
   for (const option of settings.serviceOptions) {
-    if (!option.serviceKey || !option.departmentCode) throw new Error(`حدد الخدمة والقسم للاختيار: ${option.label}`);
-    if (!["cash", "finance", "service"].includes(option.serviceKey)) throw new Error(`الخدمة غير معتمدة للاختيار: ${option.label}`);
-    if (!["questions", "message"].includes(option.flowType)) throw new Error(`نوع الفلو غير صحيح للاختيار: ${option.label}`);
-    if (reference && !reference.departments.has(option.departmentCode)) throw new Error(`القسم المرتبط غير موجود: ${option.departmentCode}`);
-    if (reference && option.defaultBranch && !reference.branches.has(option.defaultBranch)) throw new Error(`الفرع الافتراضي غير موجود: ${option.defaultBranch}`);
+    if (!option.aliases.length) throw new Error(`أضف ردًا مقبولًا واحدًا على الأقل لاختيار ${option.label}`);
+    if (!option.endMessage.text) throw new Error(`رسالة ${option.label} مطلوبة`);
+    if (option.key === "finance" && !option.startMessage.text) throw new Error("رسالة بداية فلو التمويل مطلوبة");
     if (option.active) {
       for (const rawToken of [option.key, option.label, ...option.aliases]) {
         const token = canonicalChoiceToken(rawToken);
@@ -41,9 +35,8 @@ function validate(settings: ReturnType<typeof normalizeCustomerAutomationSetting
     if (new Set(stepKeys).size !== stepKeys.length) throw new Error(`أكواد خطوات ${option.label} يجب أن تكون فريدة`);
     for (const step of option.steps) {
       if (step.answerType !== "message" && !step.prompt) throw new Error(`نص السؤال مطلوب في ${option.label}`);
-      if (step.answerType !== "message" && !step.fieldKey) throw new Error(`حدد حقل حفظ إجابة خطوة ${step.name}`);
-      if (reference && step.answerType !== "message" && !reference.fields.has(step.fieldKey)) throw new Error(`حقل حفظ الإجابة غير موجود: ${step.fieldKey}`);
-      if (step.answerType === "select" && !step.options.length) throw new Error(`أضف اختيارات لخطوة ${step.name}`);
+      if (step.answerType !== "message" && !step.fieldKey) throw new Error(`حقل حفظ إجابة خطوة ${step.name} غير مضبوط`);
+      if (!step.errorMessage) throw new Error(`رسالة التحقق مطلوبة في خطوة ${step.name}`);
     }
   }
 }
@@ -95,38 +88,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   try {
     const before = await getCustomerAutomationSettings(true);
-    const settings = normalizeCustomerAutomationSettings(parseBody(request));
-    const protectedKeys = new Set(DEFAULT_CUSTOMER_AUTOMATION_SETTINGS.serviceOptions.filter((row) => row.system).map((row) => row.key));
-    settings.serviceOptions = settings.serviceOptions.map((row) => ({ ...row, system: protectedKeys.has(row.key) }));
-    for (const protectedKey of protectedKeys) {
-      if (!settings.serviceOptions.some((row) => row.key === protectedKey)) throw new Error("لا يمكن حذف اختيارات الخدمات الأساسية؛ يمكن تعطيلها فقط");
-    }
-    const [endpointRows, departmentRows, branchRows, fieldRows] = await Promise.all([
-      sql<any[]>`select source_code,is_active from crm.integration_endpoints`,
-      sql<any[]>`select code from core.departments`,
-      sql<any[]>`select code from core.branches where is_active=true`,
-      sql<any[]>`select field_key from crm.customer_field_definitions where is_active=true`,
-    ]);
-    validate(settings, {
-      departments: new Set(departmentRows.map((row: any) => clean(row.code))),
-      branches: new Set(branchRows.map((row: any) => clean(row.code))),
-      fields: new Set([...fieldRows.map((row: any) => clean(row.field_key)), "car_name"]),
+    const submitted = parseBody(request);
+    const settings = normalizeCustomerAutomationSettings({
+      ...before,
+      messages: submitted?.messages || before.messages,
+      serviceOptions: submitted?.serviceOptions || before.serviceOptions,
+      platformWorkers: before.platformWorkers,
+      version: before.version,
     });
-    const endpointMap = new Map(endpointRows.map((row: any) => [clean(row.source_code), row.is_active !== false]));
-    const endpointKeys = new Set(endpointMap.keys());
-    for (const binding of settings.platformWorkers) {
-      if (!endpointKeys.has(binding.workerCode)) throw new Error(`الـWorker غير موجود في المشروع: ${binding.workerCode}`);
-      if (binding.enabled && endpointMap.get(binding.workerCode) === false) throw new Error(`لا يمكن تشغيل Worker غير نشط: ${binding.workerCode}`);
-      const expectedPlatform = binding.workerCode === "tiktok-snapchat" ? new Set(["tiktok", "snapchat"]) : new Set([binding.workerCode === "installment-calculator" ? "installment_calculator" : binding.workerCode]);
-      if (!expectedPlatform.has(binding.platformCode)) throw new Error(`الـWorker ${binding.workerCode} غير تابع للمنصة ${binding.platformCode}`);
-    }
-
-    const nextKeys = new Set(settings.serviceOptions.map((row) => row.key));
-    const removedKeys = before.serviceOptions.filter((row) => !row.system && !nextKeys.has(row.key)).map((row) => row.key);
-    if (removedKeys.length) {
-      const [usage] = await sql<any[]>`select count(*)::int as count from crm.customer_automation_runs where option_key=any(${removedKeys}::text[])`;
-      if (Number(usage?.count || 0) > 0) throw new Error("لا يمكن حذف اختيار مستخدم في سجل أوتوميشن سابق؛ قم بتعطيله بدلًا من حذفه");
-    }
+    // The scenario structure and technical routing are not editable from this page.
+    // Only message text, validation text and accepted replies are accepted.
+    settings.platformWorkers = before.platformWorkers;
+    validate(settings);
     const [row] = await sql<any[]>`
       update crm.automation_settings set
         automation_enabled=${settings.enabled},
@@ -156,7 +129,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     clearCustomerAutomationSettingsCache();
     const saved = normalizeCustomerAutomationSettings(row);
     await audit(user, "crm_customer_automation_settings_saved", "automation_settings", "default", saved, before);
-    return response.status(200).json({ ok: true, settings: saved, message: "تم حفظ إعدادات الأوتوميشن" });
+    return response.status(200).json({ ok: true, settings: saved, message: "تم حفظ رسائل وردود الأوتوميشن" });
   } catch (error: any) {
     return response.status(400).json({ ok: false, error: error?.message || "تعذر حفظ إعدادات الأوتوميشن" });
   }

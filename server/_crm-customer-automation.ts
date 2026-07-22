@@ -46,8 +46,8 @@ function withinSchedule(settings: CustomerAutomationSettings, now = new Date()) 
 }
 
 
-function optionDisplay(option: AutomationServiceOption, index: number) {
-  return `${index + 1}- ${option.emoji ? `${option.emoji} ` : ""}${option.label}`;
+function optionDisplay(option: AutomationServiceOption) {
+  return `${option.emoji ? `${option.emoji} ` : ""}${option.label}`;
 }
 
 function optionCandidates(event: any, context: any) {
@@ -192,12 +192,16 @@ async function send(runId: string, conversationId: string, stage: string, text: 
 }
 
 async function sendStartSequence(run: any, settings: CustomerAutomationSettings) {
-  if (settings.messages.start.enabled) await send(run.id, run.conversation_id, "start", settings.messages.start.text);
-  if (settings.messages.welcome.enabled) await send(run.id, run.conversation_id, "welcome", settings.messages.welcome.text);
   const options = settings.serviceOptions.filter((row) => row.active).sort((a, b) => a.sortOrder - b.sortOrder);
   const list = options.map(optionDisplay).join("\n");
-  const prompt = [settings.messages.servicePrompt.enabled ? settings.messages.servicePrompt.text : "", list].filter(Boolean).join("\n\n");
-  const buttons = options.length <= 3 ? options.map((row) => ({ id: row.key, title: `${row.emoji ? `${row.emoji} ` : ""}${row.label}`.slice(0, 20) })) : [];
+  const prompt = [
+    settings.messages.welcome.enabled ? settings.messages.welcome.text : "",
+    settings.messages.servicePrompt.enabled ? settings.messages.servicePrompt.text : "",
+    list,
+  ].filter(Boolean).join("\n\n");
+  const buttons = options.length <= 3
+    ? options.map((row) => ({ id: row.key, title: `${row.emoji ? `${row.emoji} ` : ""}${row.label}`.slice(0, 20) }))
+    : [];
   await send(run.id, run.conversation_id, "service-list", prompt, buttons);
 }
 
@@ -273,6 +277,12 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
     }
 
     if (!run) {
+      const [openRequest] = await tx<any[]>`
+        select id from crm.service_requests
+        where conversation_id=${conversationId}::uuid and request_state='open'
+        order by opened_at desc limit 1
+      `;
+      if (openRequest) return { type: "skip", reason: "open_service_request_exists" };
       if (!withinSchedule(settings)) return { type: "skip", reason: "outside_schedule" };
       if (!(await triggerAllowed(tx, conversationId, settings))) return { type: "skip", reason: "trigger_cooldown" };
 
@@ -333,24 +343,28 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
   });
 }
 
-async function continueFlow(run: any, option: AutomationServiceOption, startIndex: number) {
+async function continueFlow(run: any, option: AutomationServiceOption, startIndex: number, introText = "") {
   const steps = activeSteps(option);
   let index = startIndex;
   while (index < steps.length && steps[index].answerType === "message") {
     const step = steps[index];
-    if (step.prompt) await send(run.id, run.conversation_id, `message-step:${step.key}`, step.prompt);
+    const text = [introText, step.prompt].filter(Boolean).join("\n");
+    if (text) await send(run.id, run.conversation_id, `message-step:${step.key}`, text);
+    introText = "";
     index += 1;
   }
   const next = steps[index];
   const sql = getSql();
   if (next) {
-    await send(run.id, run.conversation_id, `question:${next.key}`, next.prompt);
+    const text = [introText, next.prompt].filter(Boolean).join("\n");
+    await send(run.id, run.conversation_id, introText ? `flow-start-question:${next.key}` : `question:${next.key}`, text);
     await sql`
       update crm.customer_automation_runs set status='awaiting_step',current_step_index=${index},current_step_key=${next.key},current_attempt=0,updated_at=now()
       where id=${run.id}::uuid
     `;
     return { completed: false, nextStepKey: next.key };
   }
+  if (introText) await send(run.id, run.conversation_id, "flow-start", introText);
   if (option.endMessage.enabled) await send(run.id, run.conversation_id, "flow-end", option.endMessage.text);
   await sql`
     update crm.customer_automation_runs set status='completed',current_step_index=${index},current_step_key=null,current_attempt=0,completed_at=now(),termination_reason='flow_completed',updated_at=now()
@@ -440,8 +454,12 @@ export async function processCustomerAutomationInbound(event: any, context: any,
       update crm.customer_automation_runs set service_request_id=${classified.request?.id||null}::uuid,lead_id=${classified.leadId||null}::uuid,status='classifying',current_step_index=0,current_step_key=null,current_attempt=0,updated_at=now()
       where id=${plan.run.id}::uuid returning *,id::text,conversation_id::text,contact_id::text,lead_id::text,service_request_id::text
     `;
-    if (plan.option.startMessage.enabled) await send(plan.run.id, plan.run.conversation_id, "flow-start", plan.option.startMessage.text);
-    const progress = await continueFlow(updated || plan.run, plan.option, 0);
+    const progress = await continueFlow(
+      updated || plan.run,
+      plan.option,
+      0,
+      plan.option.startMessage.enabled ? plan.option.startMessage.text : "",
+    );
     return { ok: true, action: "service_selected", runId: plan.run.id, serviceKey: plan.option.serviceKey, requestId: classified.request?.id, leadId: classified.leadId, assignedTo: classified.assignment?.assignedTo || null, distributionError: classified.distributionError || null, status: progress.completed ? "completed" : "awaiting_step", nextStepKey: progress.nextStepKey };
   }
 
