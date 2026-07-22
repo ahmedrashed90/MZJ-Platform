@@ -65,6 +65,27 @@ function isDangerStatusColumn(department: string, value: string) {
   return (department === "cash" || department === "finance") && ["غير مؤهل", "تم البيع"].includes(status);
 }
 
+function riyadhDateKey(value: unknown) {
+  if (!value) return "";
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const part = (type: "year" | "month" | "day") => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function leadHasDueFollowUp(lead: CrmLead) {
+  if (leadStatus(lead) !== "مؤجل") return false;
+  const followUpDate = riyadhDateKey(lead.follow_up_at);
+  if (!followUpDate) return false;
+  return followUpDate <= riyadhDateKey(new Date());
+}
+
 export function CrmDashboardPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedLeadId = searchParams.get("lead") || "";
@@ -168,13 +189,24 @@ export function CrmDashboardPage() {
       const unreadDifference = Number(leadHasUnreadMessage(right)) - Number(leadHasUnreadMessage(left));
       return unreadDifference || Number(originalOrder.get(left.id) || 0) - Number(originalOrder.get(right.id) || 0);
     };
+    const byPostponedPriority = (left: CrmLead, right: CrmLead) => {
+      const followUpDifference = Number(leadHasDueFollowUp(right)) - Number(leadHasDueFollowUp(left));
+      if (followUpDifference) return followUpDifference;
+      if (leadHasDueFollowUp(left) && leadHasDueFollowUp(right)) {
+        const dateDifference = riyadhDateKey(left.follow_up_at).localeCompare(riyadhDateKey(right.follow_up_at));
+        if (dateDifference) return dateDifference;
+      }
+      return byUnreadFirst(left, right);
+    };
     const statusGroups = statuses
       .filter((status) => status.is_active !== false)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
       .map((status) => ({
         ...status,
         unread_messages: false,
-        leads: leads.filter((lead) => leadStatus(lead) === String(status.value || status.label).trim()).sort(byUnreadFirst),
+        leads: leads
+          .filter((lead) => leadStatus(lead) === String(status.value || status.label).trim())
+          .sort(String(status.value || status.label).trim() === "مؤجل" ? byPostponedPriority : byUnreadFirst),
       }));
     return [
       ...statusGroups,
@@ -273,6 +305,7 @@ export function CrmDashboardPage() {
                         <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
                       </div>
                       <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
+                      {leadHasDueFollowUp(lead) ? <span className="crm-follow-up-badge" aria-label="متابعة مستحقة" title="متابعة مستحقة">متابعة</span> : null}
                       {leadHasUnreadMessage(lead) ? <span className="crm-unread-dot" aria-label="رسالة غير مقروءة" title="رسالة غير مقروءة" /> : null}
                     </div>
                     <div className="crm-lead-card-grid compact">

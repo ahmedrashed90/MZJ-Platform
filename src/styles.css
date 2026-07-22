@@ -1275,6 +1275,21 @@ button.small-metric { cursor: pointer; }
   box-shadow: 0 0 0 3px rgba(22,163,74,.14);
   align-self: center;
 }
+.crm-follow-up-badge {
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #9a4d00;
+  background: #fff1d6;
+  border: 1px solid #f2b45f;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
 .crm-unread-status-column > header { border-bottom-color: rgba(22,163,74,.22); }
 .crm-finance-history-tabs {
   display: flex;

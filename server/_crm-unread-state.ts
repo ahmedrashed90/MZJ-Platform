@@ -16,8 +16,7 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
       set
         unread_count=case
           when coalesce(extra_data->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
-          when last_incoming_message_at is null or last_incoming_message_at<=${input.createdAt}::timestamptz then greatest(1,coalesce(unread_count,0)+1)
-          else greatest(1,coalesce(unread_count,0))
+          else greatest(1,coalesce(unread_count,0)+1)
         end,
         dashboard_unread=true,
         has_unread_message=true,
@@ -33,7 +32,6 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
         ) || jsonb_build_object('lastUnreadMessageKey',${input.messageKey}::text),
         updated_at=now()
       where id=${input.leadId}::uuid
-        and (dashboard_message_read_at is null or dashboard_message_read_at<${input.createdAt}::timestamptz)
       returning *,id::text,assigned_to::text,call_center_assigned_to::text
     `;
 
@@ -42,8 +40,7 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
         update crm.conversations
         set unread_count=case
               when coalesce(metadata->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
-              when last_message_at is null or last_message_at<=${input.createdAt}::timestamptz then greatest(1,coalesce(unread_count,0)+1)
-              else greatest(1,coalesce(unread_count,0))
+              else greatest(1,coalesce(unread_count,0)+1)
             end,
             last_message_at=greatest(coalesce(last_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
             metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${input.messageKey}::text),true),

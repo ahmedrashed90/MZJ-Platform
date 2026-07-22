@@ -701,7 +701,7 @@ create table if not exists crm.automation_settings (
   ask_for_branch boolean not null default false,
   no_match_behavior text not null default 'wait',
   unclassified_label text not null default 'بانتظار اختيار الخدمة',
-  closed_statuses jsonb not null default '{"cash":["تم البيع"],"finance":["تم البيع"],"service":["تم الانتهاء"]}'::jsonb,
+  closed_statuses jsonb not null default '{"cash":["تم البيع","غير مؤهل"],"finance":["تم البيع","غير مؤهل"],"service":["تم الانتهاء"]}'::jsonb,
   updated_by uuid references core.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
@@ -875,6 +875,43 @@ where id='default';
 insert into core.schema_migrations(version) values('crm-completed-workflow-v1.15.5') on conflict(version) do nothing;
 `;
 
+const CRM_CLOSED_NOT_QUALIFIED_V1171_SQL = String.raw`
+update crm.automation_settings
+set closed_statuses=jsonb_set(
+      jsonb_set(coalesce(closed_statuses,'{}'::jsonb),'{cash}','["تم البيع","غير مؤهل"]'::jsonb,true),
+      '{finance}','["تم البيع","غير مؤهل"]'::jsonb,true
+    ),
+    updated_at=now()
+where id='default';
+
+update crm.service_requests request
+set request_state='closed',
+    status_label=lead.status_label,
+    closed_at=coalesce(request.closed_at,now()),
+    closure_reason=coalesce(nullif(request.closure_reason,''),lead.status_label),
+    updated_at=now()
+from crm.leads lead
+where lead.current_request_id=request.id
+  and request.request_state='open'
+  and lead.department_code in ('cash_sales','finance_sales','call_center')
+  and lead.status_label='غير مؤهل';
+
+update crm.conversations conversation
+set service_request_id=null,classification_state='closed',service_selection_sent_at=null,closed_at=coalesce(conversation.closed_at,now()),updated_at=now()
+from crm.leads lead
+where lead.current_request_id=conversation.service_request_id
+  and lead.department_code in ('cash_sales','finance_sales','call_center')
+  and lead.status_label='غير مؤهل';
+
+update crm.leads
+set current_request_id=null,updated_at=now()
+where current_request_id is not null
+  and department_code in ('cash_sales','finance_sales','call_center')
+  and status_label='غير مؤهل';
+
+insert into core.schema_migrations(version) values('crm-closed-not-qualified-v1.17.1') on conflict(version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -913,6 +950,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-completed-workflow-v1.15.5'
       `;
       if (!completedWorkflowMigration) await runSqlScript(CRM_COMPLETED_WORKFLOW_V1155_SQL);
+      const [closedNotQualifiedMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-closed-not-qualified-v1.17.1'
+      `;
+      if (!closedNotQualifiedMigration) await runSqlScript(CRM_CLOSED_NOT_QUALIFIED_V1171_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;
