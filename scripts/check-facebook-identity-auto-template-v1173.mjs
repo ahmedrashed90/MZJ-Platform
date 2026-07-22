@@ -9,7 +9,7 @@ const admin = fs.readFileSync(new URL("../src/crm/pages/CrmAdminPage.tsx", impor
 const route = fs.readFileSync(new URL("../server/integrations/[source].ts", import.meta.url), "utf8");
 
 for (const token of [
-  "Facebook PSID is required; ManyChat Contact ID cannot be used as PSID",
+  "Facebook PSID is required unless a finance completion is resolved by a verified Saudi phone",
   "facebook:${pageId}:${facebookPsid}",
   "crm.service_selection_state",
   "serviceSelectionAccepted",
