@@ -220,9 +220,9 @@ insert into crm.automation_flow_aliases(flow_id,alias_type,alias_value,normalize
 select f.id,v.alias_type,v.alias_value,v.normalized_value
 from crm.automation_flows f
 join (values
-  ('cash','payload','service_cash','service cash'),('cash','text','💰 مبيعات الكاش','مبيعات الكاش'),('cash','text','مبيعات الكاش','مبيعات الكاش'),('cash','text','كاش','كاش'),('cash','number','1','1'),
-  ('finance','payload','service_finance','service finance'),('finance','text','🏦 مبيعات التمويل','مبيعات التمويل'),('finance','text','مبيعات التمويل','مبيعات التمويل'),('finance','text','تمويل','تمويل'),('finance','number','2','2'),
-  ('service','payload','service_cs','service cs'),('service','text','🛠 خدمة العملاء','خدمة العملاء'),('service','text','خدمة العملاء','خدمة العملاء'),('service','text','خدمه العملاء','خدمه العملاء'),('service','number','3','3')
+  ('cash','payload','service_cash','service cash'),('cash','text','💰 مبيعات الكاش','مبيعات الكاش'),('cash','text','كاش','كاش'),('cash','number','1','1'),
+  ('finance','payload','service_finance','service finance'),('finance','text','🏦 مبيعات التمويل','مبيعات التمويل'),('finance','text','تمويل','تمويل'),('finance','number','2','2'),
+  ('service','payload','service_cs','service cs'),('service','text','🛠 خدمة العملاء','خدمة العملاء'),('service','text','خدمه العملاء','خدمه العملاء'),('service','number','3','3')
 ) as v(flow_code,alias_type,alias_value,normalized_value) on v.flow_code=f.flow_code
 on conflict(flow_id,alias_type,normalized_value) do update set alias_value=excluded.alias_value;
 

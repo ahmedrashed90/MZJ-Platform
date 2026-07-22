@@ -45,6 +45,11 @@ expectAll("migration", migration, [
   "سيتم التواصل معك في أقرب وقت\\nنسعد بخدمتكم دائمًا 🌹",
   "سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧",
 ]);
+forbidAll("migration duplicate alias seeds", migration, [
+  "('cash','text','مبيعات الكاش','مبيعات الكاش')",
+  "('finance','text','مبيعات التمويل','مبيعات التمويل')",
+  "('service','text','خدمة العملاء','خدمة العملاء')",
+]);
 expectAll("embedded migration", schema, ["CRM_CONVERSATION_AUTOMATION_V1180_SQL", "crm-conversation-automation-v1.18.0"]);
 const embeddedMigration = schema.match(/const CRM_CONVERSATION_AUTOMATION_V1180_SQL = String\.raw`([\s\S]*?)`;\n/)?.[1]?.trim();
 if (!embeddedMigration || embeddedMigration !== migration.trim()) throw new Error("Embedded automation migration differs from the deployment migration");
