@@ -580,7 +580,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
           text,
           payload: { ...payload, direction, senderType, messageId: message.id, providerMessageId, createdAt: occurredAt },
         })
-      : { handled: false, reason: "not_conversation_automation_source" };
+      : { handled: false, reason: "not_conversation_automation_source", sessionId: null };
 
     const [currentContext] = await sql<any[]>`
       select contact_id::text,service_request_id::text,lead_id::text

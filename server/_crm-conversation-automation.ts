@@ -608,7 +608,7 @@ export async function processConversationAutomationEvent(input: ConversationAuto
   const contactId = clean(input.contactId);
   const platformCode = clean(input.platformCode).toLowerCase();
   if (!eventKey || !conversationId || !contactId || !platformCode) {
-    return { handled: false, reason: "missing_automation_identity" };
+    return { handled: false, reason: "missing_automation_identity", sessionId: null };
   }
 
   const sql = getSql();
@@ -616,12 +616,12 @@ export async function processConversationAutomationEvent(input: ConversationAuto
     await tx`select pg_advisory_xact_lock(hashtext(${conversationId}))`;
 
     const [settings] = await tx<any[]>`select * from crm.automation_settings where id='default' limit 1`;
-    if (!settings?.automation_enabled) return { handled: false, reason: "automation_disabled" };
+    if (!settings?.automation_enabled) return { handled: false, reason: "automation_disabled", sessionId: null };
 
     const platform = await loadPlatform(tx, platformCode);
-    if (!platform?.is_enabled) return { handled: false, reason: "platform_disabled" };
+    if (!platform?.is_enabled) return { handled: false, reason: "platform_disabled", sessionId: null };
     if (!platform.worker_code || platform.worker_is_active !== true || !clean(platform.worker_send_url)) {
-      return { handled: false, reason: "worker_unavailable" };
+      return { handled: false, reason: "worker_unavailable", sessionId: null };
     }
 
     const providerMessageId = clean(input.providerMessageId);
@@ -676,7 +676,7 @@ export async function processConversationAutomationEvent(input: ConversationAuto
       const lastAt = previous ? new Date(previous.completed_at || previous.last_activity_at || previous.started_at).getTime() : 0;
       if (cooldown > 0 && lastAt && Date.now() - lastAt < cooldown) {
         await tx`update crm.automation_inbound_events set status='ignored',processed_at=now() where id=${inbound.id}::uuid`;
-        return { handled: false, reason: "trigger_policy_cooldown" };
+        return { handled: false, reason: "trigger_policy_cooldown", sessionId: null };
       }
       try {
         const started = await startSession(tx, input, settings, platform, inbound.id);
