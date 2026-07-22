@@ -430,6 +430,25 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     `;
   }
 
+  const knownService = trustedKnownService(routeSource, payload);
+  const explicitServiceSelection = bool(payload.forceServiceReclassification) ||
+    bool(payload.force_service_reclassification) ||
+    [payload.flowAction, payload.flow_action].some((value) => clean(value).toLowerCase() === "service_selection");
+  let createdByKnownSource = false;
+  if (knownService && (!openRequest || explicitServiceSelection)) {
+    const classified = await classifyConversationService({
+      conversationId: conversation.id,
+      serviceKey: knownService,
+      sourceCode: source,
+      classificationMethod: explicitServiceSelection ? "customer_service_selection" : "source_mapping",
+      eventKey: eventId,
+    });
+    openRequest = classified.request;
+    createdByKnownSource = classified.reused !== true;
+    [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
+    matchedLead = await syncCapturedLeadData(sql, contact.id, payload, identity) || matchedLead;
+  }
+
   if (existingMessage) {
     if (direction === "in") {
       [existingMessage] = await sql<any[]>`
@@ -442,7 +461,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     }
     await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
     const resolvedLeadId = conversation.lead_id || matchedLead?.id || openRequest?.lead_id || null;
-    return { lead: resolvedLeadId ? { id: resolvedLeadId } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
+    return { lead: resolvedLeadId ? { id: resolvedLeadId } : null, conversation, message: existingMessage, createLead: createdByKnownSource, contact, automation: null };
   }
 
   let [message] = await sql<any[]>`
@@ -465,25 +484,6 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
         is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
     `;
-  }
-
-  const knownService = trustedKnownService(routeSource, payload);
-  const explicitServiceSelection = bool(payload.forceServiceReclassification) ||
-    bool(payload.force_service_reclassification) ||
-    [payload.flowAction, payload.flow_action].some((value) => clean(value).toLowerCase() === "service_selection");
-  let createdByKnownSource = false;
-  if (knownService && (!openRequest || explicitServiceSelection)) {
-    const classified = await classifyConversationService({
-      conversationId: conversation.id,
-      serviceKey: knownService,
-      sourceCode: source,
-      classificationMethod: explicitServiceSelection ? "customer_service_selection" : "source_mapping",
-      eventKey: eventId,
-    });
-    openRequest = classified.request;
-    createdByKnownSource = classified.reused !== true;
-    [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
-    matchedLead = await syncCapturedLeadData(sql, contact.id, payload, identity) || matchedLead;
   }
 
   if (direction === "in") {
