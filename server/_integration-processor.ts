@@ -4,6 +4,7 @@ import { getSql } from "./_db.js";
 import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService } from "./_crm-lifecycle.js";
 import { publishAutomationEvent } from "./_crm-automation.js";
 import { markCrmLeadUnread } from "./_crm-unread-state.js";
+import { customerAutomationBindingEnabled, getCustomerAutomationSettings } from "./_crm-customer-automation-settings.js";
 
 function first(...values: unknown[]) {
   for (const value of values) {
@@ -516,6 +517,13 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
 
   const knownService = trustedKnownService(routeSource, payload);
   const explicitServiceSelection = isExplicitServiceSelection(payload);
+  let customerAutomationSettings: any = null;
+  try { customerAutomationSettings = await getCustomerAutomationSettings(); } catch (error) {
+    console.error("Customer automation settings unavailable during source classification", error);
+  }
+  const automationOwnsServiceSelection = Boolean(
+    customerAutomationSettings && customerAutomationBindingEnabled(customerAutomationSettings, source, routeSource)
+  );
   const serviceSelectionOccurredAt = dateValue({
     timestamp: payload.eventOccurredAt ?? payload.event_occurred_at ?? payload.selectionOccurredAt ?? payload.selection_occurred_at ?? occurredAt,
   });
@@ -524,7 +532,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const selectionAccepted = knownService && explicitServiceSelection
     ? await claimLatestServiceSelection({ conversationId: conversation.id, eventKey: eventId, occurredAt: serviceSelectionOccurredAt, serviceKey: knownService })
     : true;
-  if (knownService && selectionAccepted && (!openRequest || explicitServiceSelection)) {
+  if (knownService && selectionAccepted && !automationOwnsServiceSelection && (!openRequest || explicitServiceSelection)) {
     const classified = await classifyConversationService({
       conversationId: conversation.id,
       serviceKey: knownService,
@@ -567,14 +575,19 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   let automationError = "";
   try {
     automation = await publishAutomationEvent({
-      eventKey: `${source}:${eventId}:message`,
+      eventKey: `${source}:message:${inboundFingerprint}`,
       eventType: direction === "in" ? "message.received" : "message.sent",
       source,
       contactId: contact.id,
       conversationId: conversation.id,
       serviceRequestId: conversation.service_request_id || openRequest?.id || null,
       leadId: conversation.lead_id || openRequest?.lead_id || null,
-      payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
+      payload: {
+        ...payload,
+        ...(automationOwnsServiceSelection && knownService ? { serviceSelectionKey: knownService } : {}),
+        direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt,
+        hasAttachment: media.hasAttachment, mediaType: media.type, workerCode: routeSource, routeSource,
+      },
       actor: null,
     });
   } catch (error: any) {

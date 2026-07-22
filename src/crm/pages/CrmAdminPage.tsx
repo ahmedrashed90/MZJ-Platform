@@ -22,7 +22,7 @@ import { readXlsx } from "../xlsxReader";
 
 const tabs = [
   { key: "entry_routing", label: "دخول وتوزيع العملاء" },
-  { key: "automation", label: "أوتوميشن العملاء" },
+  { key: "automation", label: "إعدادات الأوتوميشن" },
   { key: "statuses", label: "حالات العملاء" },
   { key: "customer_fields", label: "بيانات العميل" },
   { key: "sources", label: "المصادر" },
@@ -132,7 +132,7 @@ function templateStatusLabel(row: any) {
 
 export function CrmAdminPage({ embedded = false }: Props) {
   const [tab, setTab] = useState<Tab>("entry_routing");
-  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, automationFlowSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
+  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
   const [customerFieldForm, setCustomerFieldForm] = useState(blankCustomerField);
   const [sourceForm, setSourceForm] = useState(blankSource);
@@ -365,9 +365,8 @@ export function CrmAdminPage({ embedded = false }: Props) {
       {loading ? <div className="crm-loading-panel">جاري تحميل الإعدادات...</div> : null}
 
 
-      {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
-
-      {tab === "automation" ? <CrmAutomationSettings initial={data.automationFlowSettings} endpoints={data.endpoints || []} sources={data.sources || []} onSaved={load} onNotice={setNotice} /> : null}
+      {tab === "entry_routing" ? <CrmEntryRoutingSettings onOpenAutomation={() => setTab("automation")} onOpenDistribution={() => setTab("distribution")} /> : null}
+      {tab === "automation" ? <CrmAutomationSettings /> : null}
 
       {tab === "statuses" ? (
         <AdminStack
