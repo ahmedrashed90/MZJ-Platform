@@ -68,9 +68,9 @@ async function mergeDuplicateContacts(tx: any, targetId: string, duplicateIds: s
     await tx`update crm.ownership_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
     await tx`update crm.automation_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
     await tx`update crm.automation_jobs set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
-    await tx`update crm.automation_inbound_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`.catch(()=>undefined);
-    await tx`update crm.automation_final_actions set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`.catch(()=>undefined);
-    await tx`update crm.automation_sessions set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`.catch(()=>undefined);
+    await tx`update crm.conversation_automation_inbound_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`.catch(()=>undefined);
+    await tx`update crm.conversation_automation_final_actions set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`.catch(()=>undefined);
+    await tx`update crm.conversation_automation_sessions set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`.catch(()=>undefined);
     await tx`delete from crm.contacts where id=${sourceId}::uuid`;
   }
 
@@ -124,7 +124,7 @@ export async function ensureContactIdentity(input: ContactIdentityInput) {
       const duplicateIds = candidates.map((row: any) => String(row.id)).filter((id: string) => id !== String(contact.id));
       await mergeDuplicateContacts(tx, String(contact.id), duplicateIds);
       [contact] = await tx<any[]>`
-        update crm.contacts set display_name=case when coalesce(metadata->>'automationCustomerNameLocked','false')='true' then display_name else coalesce(nullif(${clean(input.displayName)},''),display_name) end,
+        update crm.contacts set display_name=case when coalesce(metadata->>'conversationAutomationCustomerNameLocked','false')='true' then display_name else coalesce(nullif(${clean(input.displayName)},''),display_name) end,
           primary_phone=coalesce(nullif(${clean(input.phone)},''),primary_phone),
           primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
           metadata=coalesce(metadata,'{}'::jsonb)||${tx.json((input.metadata || {}) as any)}::jsonb,updated_at=now()

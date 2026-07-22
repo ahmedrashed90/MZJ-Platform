@@ -1,5 +1,5 @@
 /*
-MZJ Facebook Transport Worker v1.18.0
+MZJ Facebook Transport Worker v1.18.1
 
 The MZJ platform is the single source of truth for:
 - automation configuration and trigger policy
@@ -14,7 +14,7 @@ messages and media, forwards normalized events to MZJ, and sends platform-reques
 text/buttons/media through Facebook Graph API with an optional ManyChat text fallback.
 */
 
-const VERSION = "mzj-facebook-transport-v1.18.0";
+const VERSION = "mzj-facebook-transport-v1.18.1";
 const DEFAULT_PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/facebook";
 const DEFAULT_GRAPH_API_VERSION = "v20.0";
 const DEFAULT_MAX_MEDIA_BYTES = 50 * 1024 * 1024;

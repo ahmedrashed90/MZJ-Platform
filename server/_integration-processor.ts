@@ -3,7 +3,7 @@ import { clean, departmentKey, normalizePhone } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService } from "./_crm-lifecycle.js";
 import { publishAutomationEvent } from "./_crm-automation.js";
-import { processConversationAutomationEvent } from "./_crm-conversation-automation.js";
+import { processCrmConversationFlowEvent } from "./_crm-conversation-flow.js";
 import { markCrmLeadUnread } from "./_crm-unread-state.js";
 
 function first(...values: unknown[]) {
@@ -188,7 +188,7 @@ async function syncCapturedLeadData(sql: any, contactId: string, payload: any, i
   if (!meaningfulName && !captured.car && !captured.phoneNormalized) return null;
   const [lead] = await sql<any[]>`
     update crm.leads set
-      customer_name=case when exists(select 1 from crm.contacts c where c.id=${contactId}::uuid and c.metadata->>'automationCustomerNameLocked'='true') then customer_name else coalesce(nullif(${meaningfulName},''),customer_name) end,
+      customer_name=case when exists(select 1 from crm.contacts c where c.id=${contactId}::uuid and c.metadata->>'conversationAutomationCustomerNameLocked'='true') then customer_name else coalesce(nullif(${meaningfulName},''),customer_name) end,
       phone=coalesce(nullif(${captured.phone},''),phone),
       phone_normalized=coalesce(nullif(${captured.phoneNormalized},''),phone_normalized),
       car_name=coalesce(nullif(${captured.car},''),car_name),
@@ -456,7 +456,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         contact_id=${contact.id}::uuid,
         lead_id=coalesce(${openRequest?.lead_id || matchedLead?.id || null}::uuid,lead_id),
         service_request_id=coalesce(${openRequest?.id || null}::uuid,service_request_id),
-        customer_name=case when coalesce(metadata->>'automationCustomerNameLocked','false')='true' then customer_name else coalesce(nullif(${identity.displayName},''),customer_name) end,
+        customer_name=case when coalesce(metadata->>'conversationAutomationCustomerNameLocked','false')='true' then customer_name else coalesce(nullif(${identity.displayName},''),customer_name) end,
         participant_id=case
           when lower(coalesce(${first(payload.provider, payload.providerName, payload.provider_name, routeSource)},'')) in ('meta','facebook_graph') then coalesce(nullif(${identity.participant || identity.externalId},''),participant_id)
           else coalesce(nullif(participant_id,''),nullif(${identity.participant || identity.externalId},''))
@@ -570,7 +570,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   let automationError = "";
   try {
     const conversationFlow = direction === "in" && conversationAutomationSource
-      ? await processConversationAutomationEvent({
+      ? await processCrmConversationFlowEvent({
           eventKey: `${source}:${eventId}:conversation-flow`,
           providerMessageId,
           platformCode: source,

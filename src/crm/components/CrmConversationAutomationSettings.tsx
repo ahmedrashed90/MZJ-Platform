@@ -4,6 +4,8 @@ import {
   CaretDown,
   CaretUp,
   CheckCircle,
+  ChatCircleDots,
+  Database,
   FloppyDisk,
   FlowArrow,
   GearSix,
@@ -61,7 +63,7 @@ type Section = "general" | "platforms" | "messages" | "flows" | "sessions";
 function toGeneral(settings: any) {
   return {
     automationName: settings?.automation_name || "أوتوميشن استقبال العملاء",
-    automationEnabled: settings?.automation_enabled !== false,
+    automationEnabled: settings ? settings.automation_enabled !== false : false,
     triggerPolicy: settings?.trigger_policy || "every_message",
     customIntervalValue: Number(settings?.custom_interval_value || 24),
     customIntervalUnit: settings?.custom_interval_unit || "hour",
@@ -113,29 +115,35 @@ function statusLabel(value: string) {
   return labels[value] || value || "—";
 }
 
-export function CrmAutomationSettings() {
+export function CrmConversationAutomationSettings() {
   const [section, setSection] = useState<Section>("general");
   const [data, setData] = useState<any>({ settings: null, startMessages: [], platforms: [], workers: [], flows: [], sessions: [] });
   const [general, setGeneral] = useState(toGeneral(null));
   const [messageForm, setMessageForm] = useState<any>(blankMessage);
   const [flowForm, setFlowForm] = useState<any>(blankFlow);
   const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const result = await crmFetch<any>("/api/crm/automation-settings");
+      const result = await crmFetch<any>("/api/crm/conversation-automation");
       setData(result);
       setGeneral(toGeneral(result.settings));
       if (flowForm.id) {
         const refreshed = (result.flows || []).find((row: any) => row.id === flowForm.id);
         if (refreshed) setFlowForm(fromFlow(refreshed));
       }
+      setLoadError("");
+      setLoaded(true);
       setNotice("");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر تحميل إعدادات الأوتوميشن");
+      const message = error instanceof Error ? error.message : "تعذر تحميل إعدادات الأوتوميشن";
+      setLoadError(message);
+      setNotice("");
     } finally {
       setLoading(false);
     }
@@ -146,7 +154,7 @@ export function CrmAutomationSettings() {
   async function save(sectionName: string, payload: any) {
     setSaving(true);
     try {
-      const result = await crmFetch<any>("/api/crm/automation-settings", {
+      const result = await crmFetch<any>("/api/crm/conversation-automation", {
         method: "POST",
         body: JSON.stringify({ section: sectionName, ...payload }),
       });
@@ -164,7 +172,7 @@ export function CrmAutomationSettings() {
   async function remove(sectionName: string, id: string) {
     if (!window.confirm("متأكد من تنفيذ الحذف؟")) return;
     try {
-      const result = await crmFetch<any>("/api/crm/automation-settings", {
+      const result = await crmFetch<any>("/api/crm/conversation-automation", {
         method: "DELETE",
         body: JSON.stringify({ section: sectionName, id }),
       });
@@ -179,7 +187,7 @@ export function CrmAutomationSettings() {
 
   async function healthCheck(platformCode: string) {
     try {
-      const result = await crmFetch<any>("/api/crm/automation-settings", {
+      const result = await crmFetch<any>("/api/crm/conversation-automation", {
         method: "POST",
         body: JSON.stringify({ section: "platform_health", platformCode }),
       });
@@ -202,6 +210,33 @@ export function CrmAutomationSettings() {
     setFlowForm((current: any) => ({ ...current, aliases: current.aliases.map((alias: any, itemIndex: number) => itemIndex === index ? { ...alias, ...patch } : alias) }));
   }
 
+  const previewMessages = useMemo(() => (data.startMessages || []).filter((row: any) => row.is_active !== false), [data.startMessages]);
+  const previewFlows = useMemo(() => (data.flows || []).filter((row: any) => row.is_active !== false), [data.flows]);
+
+  if (!loaded && !loadError) {
+    return (
+      <section className="crm-panel crm-automation-load-state">
+        <Pulse size={34} weight="duotone" />
+        <div><h2>جاري تحميل إعدادات الأوتوميشن</h2><p>يتم التحقق من قاعدة البيانات والمنصات والـWorkers.</p></div>
+      </section>
+    );
+  }
+
+  if (loadError && !data.settings) {
+    const migrationRequired = loadError.includes("20260723_crm_conversation_automation_v1181.sql") || loadError.includes("غير جاهزة");
+    return (
+      <section className="crm-panel crm-automation-load-error">
+        <Database size={42} weight="duotone" />
+        <div>
+          <span>{migrationRequired ? "إعداد قاعدة البيانات مطلوب" : "تعذر تحميل إعدادات الأوتوميشن"}</span>
+          <h2>{loadError}</h2>
+          <p>{migrationRequired ? "نفّذ ملف الـMigration المرفق مرة واحدة على PostgreSQL، ثم اضغط إعادة المحاولة. لن تعرض الصفحة بيانات افتراضية أو حالة وهمية قبل اكتمال الإعداد." : "تم إيقاف عرض وحفظ الإعدادات لحماية البيانات حتى يعود اتصال الخادم بصورة صحيحة."}</p>
+          <button className="crm-primary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحقق" : "إعادة المحاولة"}</button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <div className="crm-automation-settings">
       <section className="crm-automation-summary">
@@ -221,6 +256,7 @@ export function CrmAutomationSettings() {
       </div>
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
+      {general.automationEnabled && enabledPlatforms === 0 ? <div className="crm-automation-warning"><LinkSimple size={19} /><span><strong>الأوتوميشن جاهز لكنه لن يعمل قبل تفعيل منصة واحدة على الأقل.</strong><small>اربط Facebook أو أي منصة من تبويب المنصات والـWorkers ثم نفّذ Health Check.</small></span></div> : null}
 
       {section === "general" ? (
         <section className="crm-panel crm-automation-general">
@@ -243,7 +279,7 @@ export function CrmAutomationSettings() {
               <header><div><h2>{platform.platform_code}</h2><p>{platform.worker_name || "لم يتم اختيار Worker"}</p></div><b>{statusLabel(platform.connection_status)}</b></header>
               <div className="crm-form-grid crm-form-grid-wide">
                 <label><span>كود المنصة</span><input value={platform.platform_code} disabled /></label>
-                <label><span>الـWorker المرتبط</span><select value={platform.worker_code || ""} onChange={(event) => setData((current: any) => ({ ...current, platforms: current.platforms.map((row: any) => row.id === platform.id ? { ...row, worker_code: event.target.value } : row) }))}><option value="">اختر Worker</option>{(data.workers || []).filter((worker: any) => worker.code === platform.platform_code).map((worker: any) => <option key={worker.code} value={worker.code}>{worker.display_name} ({worker.code})</option>)}</select></label>
+                <label><span>الـWorker المرتبط</span><select value={platform.worker_code || ""} onChange={(event) => setData((current: any) => ({ ...current, platforms: current.platforms.map((row: any) => row.id === platform.id ? { ...row, worker_code: event.target.value } : row) }))}><option value="">اختر Worker</option>{(data.workers || []).filter((worker: any) => String(worker.code || "").toLowerCase() === String(platform.platform_code || "").toLowerCase()).map((worker: any) => <option key={worker.code} value={worker.code}>{worker.display_name} ({worker.code})</option>)}</select></label>
                 <label><span>Health Check</span><input value={platform.health_url || platform.endpoint_health_url || ""} onChange={(event) => setData((current: any) => ({ ...current, platforms: current.platforms.map((row: any) => row.id === platform.id ? { ...row, health_url: event.target.value } : row) }))} /></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={platform.is_enabled !== false} onChange={(event) => setData((current: any) => ({ ...current, platforms: current.platforms.map((row: any) => row.id === platform.id ? { ...row, is_enabled: event.target.checked } : row) }))} /><span>تشغيل الأوتوميشن على المنصة</span></label>
               </div>
@@ -256,7 +292,8 @@ export function CrmAutomationSettings() {
       ) : null}
 
       {section === "messages" ? (
-        <div className="crm-admin-stack">
+        <div className="crm-automation-message-workspace">
+          <div className="crm-admin-stack">
           <section className="crm-panel crm-form-panel">
             <header><div><h2>{messageForm.id ? "تعديل رسالة بداية" : "إضافة رسالة بداية"}</h2><p>تُرسل الرسائل النشطة حسب الترتيب، وتظهر أزرار الخدمات مع آخر رسالة.</p></div></header>
             <div className="crm-form-grid crm-form-grid-wide"><label><span>المعرف الداخلي</span><input value={messageForm.messageKey} onChange={(event) => setMessageForm((current: any) => ({ ...current, messageKey: event.target.value }))} /></label><label><span>الترتيب</span><input type="number" value={messageForm.sortOrder} onChange={(event) => setMessageForm((current: any) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label></div>
@@ -265,6 +302,18 @@ export function CrmAutomationSettings() {
             <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setMessageForm(blankMessage)}><Plus size={17} />رسالة جديدة</button><button className="crm-primary-button" onClick={async () => { if (await save("start_message", messageForm)) setMessageForm(blankMessage); }}><FloppyDisk size={17} />حفظ الرسالة</button></div>
           </section>
           <section className="crm-panel crm-list-panel"><header><h2>ترتيب رسائل البداية</h2><span>{data.startMessages?.length || 0}</span></header><div className="crm-automation-message-list">{(data.startMessages || []).map((row: any, index: number) => <article key={row.id} className={!row.is_active ? "inactive" : ""}><b>{index + 1}</b><div><strong>{row.message_key}</strong><p>{row.message_text}</p></div><span>{row.is_active ? "نشطة" : "موقوفة"}</span><nav><button onClick={() => setMessageForm({ id: row.id, messageKey: row.message_key, messageText: row.message_text, isActive: row.is_active, sortOrder: row.sort_order })}>تعديل</button><button onClick={() => void remove("start_message", row.id)}><Trash size={16} /></button></nav></article>)}</div></section>
+          </div>
+          <aside className="crm-panel crm-automation-preview">
+            <header><ChatCircleDots size={25} weight="duotone" /><div><h2>معاينة بداية المحادثة</h2><p>المعاينة تُظهر الرسائل النشطة وترتيب الاختيارات المحفوظ حاليًا.</p></div></header>
+            <div className="crm-automation-phone-preview">
+              <div className="crm-automation-phone-head"><span>MZJ</span><small>رد تلقائي</small></div>
+              <div className="crm-automation-phone-body">
+                {previewMessages.map((row: any) => <p key={row.id || row.message_key}>{row.message_text}</p>)}
+                <div className="crm-automation-preview-buttons">{previewFlows.map((flow: any) => <button key={flow.id || flow.flow_code}>{flow.emoji ? `${flow.emoji} ` : ""}{flow.display_name}</button>)}</div>
+                {!previewMessages.length ? <em>لا توجد رسائل بداية نشطة.</em> : null}
+              </div>
+            </div>
+          </aside>
         </div>
       ) : null}
 

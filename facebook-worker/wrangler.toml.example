@@ -1,0 +1,17 @@
+name = "mzj-facebook-transport"
+main = "index.js"
+compatibility_date = "2026-07-23"
+
+[vars]
+WORKER_CODE = "facebook"
+PLATFORM_INBOUND_URL = "https://mzj-platform.vercel.app/api/integrations/facebook"
+FB_GRAPH_API_VERSION = "v20.0"
+
+# Configure these as Cloudflare secrets:
+# MZJ_GATEWAY_SECRET
+# FB_VERIFY_TOKEN
+# FB_APP_SECRET
+# FB_PAGE_ID
+# FB_PAGE_ACCESS_TOKEN
+# MANYCHAT_API_TOKEN (optional text fallback)
+# MANYCHAT_WEBHOOK_SECRET (optional compatibility endpoint protection)

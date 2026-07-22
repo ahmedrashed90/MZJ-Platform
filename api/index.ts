@@ -25,7 +25,7 @@ import crmInboxAgentHandler from "../server/crm/inbox-agent.js";
 import crmUnreadHandler from "../server/crm/unread.js";
 import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
 import crmEntryRoutingHandler from "../server/crm/entry-routing.js";
-import crmAutomationSettingsHandler from "../server/crm/automation-settings.js";
+import crmConversationAutomationHandler from "../server/crm/conversation-automation.js";
 import crmInboxHandler from "../server/crm/inbox.js";
 import crmMediaHandler from "../server/crm/media.js";
 import crmContactsHandler from "../server/crm/contacts.js";
@@ -65,7 +65,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/unread", crmUnreadHandler],
   ["crm/mersal-templates", crmMersalTemplatesHandler],
   ["crm/entry-routing", crmEntryRoutingHandler],
-  ["crm/automation-settings", crmAutomationSettingsHandler],
+  ["crm/conversation-automation", crmConversationAutomationHandler],
   ["crm/inbox", crmInboxHandler],
   ["crm/media", crmMediaHandler],
   ["crm/contacts", crmContactsHandler],
@@ -98,7 +98,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.18.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.18.1" });
   }
 
   if (route === "integrations/media") {

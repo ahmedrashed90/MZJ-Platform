@@ -16,13 +16,13 @@ import {
 import { crmFetch, formatDate } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
-import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
+import { CrmConversationAutomationSettings } from "../components/CrmConversationAutomationSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
 
 const tabs = [
   { key: "entry_routing", label: "دخول وتوزيع العملاء" },
-  { key: "automation", label: "إعدادات الأوتوميشن" },
+  { key: "conversation_automation", label: "إعدادات الأوتوميشن" },
   { key: "statuses", label: "حالات العملاء" },
   { key: "customer_fields", label: "بيانات العميل" },
   { key: "sources", label: "المصادر" },
@@ -499,7 +499,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
         />
       ) : null}
 
-      {tab === "automation" ? <CrmAutomationSettings /> : null}
+      {tab === "conversation_automation" ? <CrmConversationAutomationSettings /> : null}
 
       {tab === "automatic_templates" ? (
         <section className="crm-panel crm-form-panel">
