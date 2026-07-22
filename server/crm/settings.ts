@@ -15,7 +15,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [statuses, templates, mappings, quality, automaticTemplateSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
+    const [statuses, templates, mappings, quality, automaticTemplateSettings, automationFlowSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
       sql`
@@ -25,6 +25,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `,
       sql`select * from crm.report_quality_settings where id='default'`,
       sql`select cash_total_customers_template_enabled,finance_call_center_template_enabled from crm.automation_settings where id='default'`,
+      sql`select service_selection_enabled,service_selection_message,service_options,
+        coalesce(automation_enabled,true) as automation_enabled,
+        coalesce(trigger_mode,'every_message') as trigger_mode,
+        coalesce(trigger_interval_minutes,1440) as trigger_interval_minutes,
+        coalesce(enabled_platforms,'[]'::jsonb) as enabled_platforms,
+        coalesce(enabled_workers,'[]'::jsonb) as enabled_workers,
+        coalesce(welcome_message,'مرحباً بك في مجموعة محمد بن ذعار العجمي للسيارات 👋') as welcome_message,
+        coalesce(finance_intro_message,'برجاء إدخال بيانات التمويل 👇') as finance_intro_message,
+        coalesce(field_prompts,'{"finance":[{"key":"customer_name","label":"الاسم"},{"key":"car_name","label":"السيارة"},{"key":"phone","label":"رقم الجوال"}]}'::jsonb) as field_prompts,
+        coalesce(completion_messages,'{"cash":"تم تحويل طلبك إلى قسم مبيعات الكاش ✅\nسيتم التواصل معك قريباً","finance":"سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹","service":"سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧"}'::jsonb) as completion_messages
+      from crm.automation_settings where id='default'`,
       sql`select * from crm.integration_endpoints order by display_name`,
       sql`select code,name,is_active,sort_order from core.branches order by sort_order,name`,
       sql`
@@ -101,6 +112,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       mappings,
       quality: quality[0],
       automaticTemplateSettings: automaticTemplateSettings[0] || { cash_total_customers_template_enabled: false, finance_call_center_template_enabled: false },
+      automationFlowSettings: automationFlowSettings[0] || null,
       endpoints,
       branches,
       sources,
@@ -115,6 +127,48 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const body = parseBody(request);
   const section = clean(body.section);
   const action = clean(body.action || (request.method === "DELETE" ? "delete" : "save"));
+
+  if (section === "automation_flow") {
+    const options = Array.isArray(body.serviceOptions) ? body.serviceOptions : [];
+    const normalizedOptions = options.map((option: any, index: number) => ({
+      key: clean(option?.key).toLowerCase().replace(/[^a-z0-9_]+/g, "_"),
+      label: clean(option?.label),
+      aliases: stringList(option?.aliases),
+      departmentCode: clean(option?.departmentCode || option?.department_code),
+      isActive: option?.isActive !== false,
+      sortOrder: Number(option?.sortOrder ?? index),
+    })).filter((option: any) => option.key && option.label);
+    if (!normalizedOptions.length) return response.status(400).json({ ok: false, error: "أضف اختيار خدمة واحدًا على الأقل" });
+
+    const triggerMode = ["every_message", "24_hours", "custom_interval"].includes(clean(body.triggerMode))
+      ? clean(body.triggerMode)
+      : "every_message";
+    const interval = Math.max(1, Math.min(10080, Number(body.triggerIntervalMinutes || 1440)));
+    const fieldPrompts = body.fieldPrompts && typeof body.fieldPrompts === "object" ? body.fieldPrompts : {};
+    const completionMessages = body.completionMessages && typeof body.completionMessages === "object" ? body.completionMessages : {};
+
+    const [row] = await sql<any[]>`
+      update crm.automation_settings set
+        automation_enabled=${body.automationEnabled !== false},
+        service_selection_enabled=${body.serviceSelectionEnabled !== false},
+        welcome_message=${clean(body.welcomeMessage)},
+        service_selection_message=${clean(body.serviceSelectionMessage)},
+        service_options=${sql.json(normalizedOptions)},
+        finance_intro_message=${clean(body.financeIntroMessage)},
+        field_prompts=${sql.json(fieldPrompts as any)},
+        completion_messages=${sql.json(completionMessages as any)},
+        trigger_mode=${triggerMode},
+        trigger_interval_minutes=${interval},
+        enabled_platforms=${sql.json(stringList(body.enabledPlatforms))},
+        enabled_workers=${sql.json(stringList(body.enabledWorkers))},
+        updated_by=${user.id}::uuid,
+        updated_at=now()
+      where id='default'
+      returning *
+    `;
+    await audit(user, "crm_automation_flow_saved", "automation_settings", "default", row);
+    return response.status(200).json({ ok: true, row, message: "تم حفظ إعدادات الأوتوميشن" });
+  }
 
   if (section === "status") {
     const id = clean(body.id);

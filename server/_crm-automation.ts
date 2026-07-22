@@ -50,6 +50,10 @@ async function loadContext(event: any) {
       ...conversation,
       hasOpenRequest: Boolean(conversation.has_open_request),
       serviceSelectionSent: Boolean(conversation.service_selection_sent_at),
+      serviceSelectionSentAt: conversation.service_selection_sent_at,
+      automationFlowKey: conversation.automation_flow_key,
+      automationStep: Number(conversation.automation_step || 0),
+      automationAnswers: conversation.automation_answers || {},
       classificationState: conversation.classification_state,
     } : { hasOpenRequest: false, serviceSelectionSent: false, classificationState: "" },
     request: request || null,
@@ -66,12 +70,12 @@ async function getEntryRoutingSettings() {
 export function detectServiceChoice(text: unknown, options: any[]) {
   const normalized = normalizedText(text);
   if (!normalized) return "";
-  for (const option of Array.isArray(options) ? options : []) {
+  for (const option of (Array.isArray(options) ? options : []).filter((row: any) => row?.isActive !== false)) {
     const aliases = [option?.key, option?.label, ...(Array.isArray(option?.aliases) ? option.aliases : [])]
       .map(normalizedText)
       .filter(Boolean);
     if (aliases.some((alias) => normalized === alias || normalized.includes(alias))) {
-      return departmentKey(option?.key || option?.label);
+      return departmentKey(option?.departmentCode || option?.department_code || option?.key || option?.label);
     }
   }
   return "";
@@ -79,18 +83,50 @@ export function detectServiceChoice(text: unknown, options: any[]) {
 
 async function sendServiceSelection(event: any, context: any) {
   const settings = await getEntryRoutingSettings();
-  if (settings.service_selection_enabled === false || !event.conversation_id) {
-    return { skipped: true, reason: "selection_disabled_or_no_conversation" };
+  if (settings.automation_enabled === false || settings.service_selection_enabled === false || !event.conversation_id) {
+    return { skipped: true, reason: "automation_or_selection_disabled_or_no_conversation" };
   }
-  if (context.conversation?.hasOpenRequest || context.conversation?.serviceSelectionSent) {
-    return { skipped: true, reason: "already_classified_or_sent" };
+
+  const platform = clean(event.source || context.conversation?.channel_code);
+  const enabledPlatforms = Array.isArray(settings.enabled_platforms) ? settings.enabled_platforms.map(clean).filter(Boolean) : [];
+  if (enabledPlatforms.length && !enabledPlatforms.includes(platform)) {
+    return { skipped: true, reason: "platform_not_enabled" };
   }
-  const text = clean(settings.service_selection_message);
+
+  const workerCode = clean(event.payload?.workerCode || event.payload?.worker_code || event.payload?.integrationCode || event.payload?.integration_code || platform);
+  const enabledWorkers = Array.isArray(settings.enabled_workers) ? settings.enabled_workers.map(clean).filter(Boolean) : [];
+  if (enabledWorkers.length && !enabledWorkers.includes(workerCode)) {
+    return { skipped: true, reason: "worker_not_enabled" };
+  }
+
+  if (context.conversation?.hasOpenRequest) {
+    return { skipped: true, reason: "already_classified" };
+  }
+
+  const triggerMode = clean(settings.trigger_mode) || "every_message";
+  const sentAt = context.conversation?.serviceSelectionSentAt ? new Date(context.conversation.serviceSelectionSentAt).getTime() : 0;
+  const elapsedMinutes = sentAt ? (Date.now() - sentAt) / 60000 : Number.POSITIVE_INFINITY;
+  const intervalMinutes = triggerMode === "24_hours" ? 1440 : Math.max(1, Number(settings.trigger_interval_minutes || 1440));
+  if (triggerMode !== "every_message" && sentAt && elapsedMinutes < intervalMinutes) {
+    return { skipped: true, reason: "trigger_interval_not_elapsed" };
+  }
+  if (context.conversation?.classificationState === "awaiting_service" && triggerMode !== "every_message") {
+    return { skipped: true, reason: "already_awaiting_service" };
+  }
+
+  const options = (Array.isArray(settings.service_options) ? settings.service_options : [])
+    .filter((option: any) => option?.isActive !== false)
+    .sort((left: any, right: any) => Number(left?.sortOrder || 0) - Number(right?.sortOrder || 0));
+  const welcome = clean(settings.welcome_message);
+  const selection = clean(settings.service_selection_message);
+  const optionLines = options.map((option: any) => clean(option?.label)).filter(Boolean);
+  const text = [welcome, selection, optionLines.length ? optionLines.join("\n") : ""].filter(Boolean).join("\n\n");
   if (!text) return { skipped: true, reason: "empty_selection_message" };
-  const options = Array.isArray(settings.service_options) ? settings.service_options : [];
+
   const buttons = options.slice(0, 3)
-    .map((option: any) => ({ id: clean(option?.key), title: clean(option?.label) }))
+    .map((option: any) => ({ id: clean(option?.key), title: clean(option?.label).replace(/^[^\p{L}\p{N}]+/u, "").slice(0, 20) }))
     .filter((button: any) => button.id && button.title);
+
   const result = await deliverConversationMessage({
     conversationId: event.conversation_id,
     text,
@@ -125,6 +161,127 @@ async function classifyFromMessage(event: any, context: any, actor?: SessionUser
     eventKey: event.event_key,
   });
   return { ok: true, serviceKey: choice, reused: result.reused, requestId: result.request?.id, leadId: result.leadId };
+}
+
+function automationServiceKey(value: unknown) {
+  const key = departmentKey(value);
+  if (key === "cash_sales") return "cash";
+  if (key === "finance_sales") return "finance";
+  if (key === "customer_service") return "service";
+  return key;
+}
+
+async function sendConfiguredMessage(conversationId: string, text: unknown, reason: string, eventId: string) {
+  const content = clean(text);
+  if (!content) return { skipped: true, reason: "empty_message" };
+  const result = await deliverConversationMessage({
+    conversationId,
+    text: content,
+    senderType: "bot",
+    idempotencyKey: `${reason}:${conversationId}:${eventId}`,
+    reason,
+  });
+  return { ok: true, providerStatus: result.providerStatus };
+}
+
+async function startConfiguredFlow(event: any, serviceKey: string) {
+  if (!event.conversation_id) return { skipped: true, reason: "no_conversation" };
+  const settings = await getEntryRoutingSettings();
+  const normalized = automationServiceKey(serviceKey);
+  const prompts = settings.field_prompts && typeof settings.field_prompts === "object"
+    ? (settings.field_prompts[normalized] || [])
+    : [];
+  const completionMessages = settings.completion_messages && typeof settings.completion_messages === "object"
+    ? settings.completion_messages
+    : {};
+
+  if (normalized === "finance" && Array.isArray(prompts) && prompts.length) {
+    const sql = getSql();
+    await sql`
+      update crm.conversations set
+        classification_state='collecting_fields',
+        automation_flow_key=${normalized},
+        automation_step=0,
+        automation_answers='{}'::jsonb,
+        updated_at=now()
+      where id=${event.conversation_id}::uuid
+    `;
+    const intro = await sendConfiguredMessage(event.conversation_id, settings.finance_intro_message, "automation_finance_intro", event.id);
+    const firstPrompt = await sendConfiguredMessage(event.conversation_id, prompts[0]?.label, "automation_field_prompt_0", event.id);
+    return { ok: true, flow: normalized, intro, firstPrompt };
+  }
+
+  const completion = await sendConfiguredMessage(event.conversation_id, completionMessages[normalized], `automation_${normalized}_completion`, event.id);
+  const sql = getSql();
+  await sql`
+    update crm.conversations set
+      classification_state='classified',
+      automation_flow_key=${normalized},
+      automation_step=0,
+      automation_answers='{}'::jsonb,
+      updated_at=now()
+    where id=${event.conversation_id}::uuid
+  `;
+  return { ok: true, flow: normalized, completion };
+}
+
+async function continueConfiguredFlow(event: any, context: any) {
+  if (!event.conversation_id) return { skipped: true, reason: "no_conversation" };
+  const settings = await getEntryRoutingSettings();
+  const flowKey = automationServiceKey(context.conversation?.automationFlowKey || context.request?.service_key || context.conversation?.service_key);
+  const prompts = settings.field_prompts && typeof settings.field_prompts === "object"
+    ? (settings.field_prompts[flowKey] || [])
+    : [];
+  if (!Array.isArray(prompts) || !prompts.length) return { skipped: true, reason: "no_prompts" };
+
+  const step = Math.max(0, Number(context.conversation?.automationStep || 0));
+  const current = prompts[step];
+  if (!current) return { skipped: true, reason: "step_out_of_range" };
+  const answer = clean(context.event.text);
+  if (!answer) return { skipped: true, reason: "empty_answer" };
+
+  const key = clean(current.key);
+  const sql = getSql();
+  const answers = { ...(context.conversation?.automationAnswers || {}), [key]: answer };
+  const leadId = clean(context.request?.lead_id || context.conversation?.lead_id || event.lead_id);
+
+  if (leadId) {
+    if (key === "customer_name") await sql`update crm.leads set customer_name=${answer},updated_at=now() where id=${leadId}::uuid`;
+    else if (key === "car_name") await sql`update crm.leads set car_name=${answer},updated_at=now() where id=${leadId}::uuid`;
+    else if (key === "phone") {
+      const normalizedPhone = normalizePhone(answer);
+      await sql`update crm.leads set phone=${answer},phone_normalized=${normalizedPhone || null},updated_at=now() where id=${leadId}::uuid`;
+    } else {
+      await sql`update crm.leads set extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({ [key]: answer })}::jsonb,updated_at=now() where id=${leadId}::uuid`;
+    }
+  }
+
+  const nextStep = step + 1;
+  if (nextStep < prompts.length) {
+    await sql`
+      update crm.conversations set
+        automation_step=${nextStep},
+        automation_answers=${sql.json(answers as any)},
+        updated_at=now()
+      where id=${event.conversation_id}::uuid
+    `;
+    const prompt = await sendConfiguredMessage(event.conversation_id, prompts[nextStep]?.label, `automation_field_prompt_${nextStep}`, event.id);
+    return { ok: true, flow: flowKey, savedKey: key, nextStep, prompt };
+  }
+
+  const completionMessages = settings.completion_messages && typeof settings.completion_messages === "object"
+    ? settings.completion_messages
+    : {};
+  await sql`
+    update crm.conversations set
+      classification_state='classified',
+      automation_step=${nextStep},
+      automation_answers=${sql.json(answers as any)},
+      updated_at=now()
+    where id=${event.conversation_id}::uuid
+  `;
+  const completion = await sendConfiguredMessage(event.conversation_id, completionMessages[flowKey], `automation_${flowKey}_completion`, event.id);
+  return { ok: true, flow: flowKey, savedKey: key, completed: true, completion };
 }
 
 function jobKey(type: string, conversationId: string, messageId: string, attempt: number) {
@@ -267,14 +424,17 @@ export async function publishAutomationEvent(input: AutomationEventInput) {
 
   try {
     if (event.event_type === "message.received" && direction === "in") {
-      if (context.conversation?.hasOpenRequest) {
-        actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
+      if (context.conversation?.classificationState === "collecting_fields") {
+        actions.push({ type: "continue_configured_flow", ...(await continueConfiguredFlow(event, context)) });
       } else if (context.conversation?.classificationState === "awaiting_service") {
         const classification = await classifyFromMessage(event, context, input.actor);
         actions.push({ type: "classify_service", ...classification });
         if (classification.ok) {
+          actions.push({ type: "start_configured_flow", ...(await startConfiguredFlow(event, classification.serviceKey)) });
           actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, await loadContext(event))) });
         }
+      } else if (context.conversation?.hasOpenRequest) {
+        actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
       } else {
         actions.push({ type: "service_selection", ...(await sendServiceSelection(event, context)) });
       }

@@ -626,6 +626,11 @@ alter table crm.conversations add column if not exists service_request_id uuid r
 alter table crm.conversations add column if not exists classification_state text not null default 'new';
 alter table crm.conversations add column if not exists service_selection_sent_at timestamptz;
 alter table crm.conversations add column if not exists service_selection_version integer not null default 0;
+
+alter table crm.conversations add column if not exists automation_flow_key text;
+alter table crm.conversations add column if not exists automation_step integer not null default 0;
+alter table crm.conversations add column if not exists automation_answers jsonb not null default '{}'::jsonb;
+
 alter table crm.conversations add column if not exists last_customer_message_at timestamptz;
 alter table crm.conversations add column if not exists last_human_reply_at timestamptz;
 alter table crm.conversations add column if not exists last_bot_reply_at timestamptz;
@@ -706,6 +711,17 @@ create table if not exists crm.automation_settings (
   updated_at timestamptz not null default now()
 );
 insert into crm.automation_settings(id) values('default') on conflict(id) do nothing;
+
+alter table crm.automation_settings add column if not exists automation_enabled boolean not null default true;
+alter table crm.automation_settings add column if not exists trigger_mode text not null default 'every_message';
+alter table crm.automation_settings add column if not exists trigger_interval_minutes integer not null default 1440;
+alter table crm.automation_settings add column if not exists enabled_platforms jsonb not null default '[]'::jsonb;
+alter table crm.automation_settings add column if not exists enabled_workers jsonb not null default '[]'::jsonb;
+alter table crm.automation_settings add column if not exists welcome_message text not null default 'مرحباً بك في مجموعة محمد بن ذعار العجمي للسيارات 👋';
+alter table crm.automation_settings add column if not exists finance_intro_message text not null default 'برجاء إدخال بيانات التمويل 👇';
+alter table crm.automation_settings add column if not exists field_prompts jsonb not null default '{"finance":[{"key":"customer_name","label":"الاسم"},{"key":"car_name","label":"السيارة"},{"key":"phone","label":"رقم الجوال"}]}'::jsonb;
+alter table crm.automation_settings add column if not exists completion_messages jsonb not null default '{"cash":"تم تحويل طلبك إلى قسم مبيعات الكاش ✅\nسيتم التواصل معك قريباً","finance":"سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹","service":"سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧"}'::jsonb;
+
 
 create table if not exists crm.automation_events (
   id uuid primary key default gen_random_uuid(),
