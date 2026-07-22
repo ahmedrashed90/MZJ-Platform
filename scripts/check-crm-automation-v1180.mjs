@@ -39,6 +39,7 @@ expectAll("migration", migration, [
   "crm_automation_sessions_one_active_conversation_idx",
   "crm_automation_sessions_one_active_contact_idx",
   "crm-conversation-automation-v1.18.0",
+  "v.max_attempts::integer",
   "تم تحويل طلبك إلى قسم مبيعات الكاش ✅\\nسيتم التواصل معك قريباً",
   "برجاء إدخال بيانات التمويل 👇\\nالاسم",
   "سيتم التواصل معك في أقرب وقت\\nنسعد بخدمتكم دائمًا 🌹",

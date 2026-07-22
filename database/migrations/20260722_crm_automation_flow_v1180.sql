@@ -227,7 +227,7 @@ join (values
 on conflict(flow_id,alias_type,normalized_value) do update set alias_value=excluded.alias_value;
 
 insert into crm.automation_flow_steps(flow_id,step_key,step_name,prompt_text,step_type,customer_field,is_required,validation_rules,validation_error,max_attempts,is_active,sort_order)
-select f.id,v.step_key,v.step_name,v.prompt_text,v.step_type,v.customer_field,v.is_required,v.validation_rules::jsonb,v.validation_error,v.max_attempts,v.is_active,v.sort_order
+select f.id,v.step_key,v.step_name,v.prompt_text,v.step_type,v.customer_field,v.is_required,v.validation_rules::jsonb,v.validation_error,v.max_attempts::integer,v.is_active,v.sort_order
 from crm.automation_flows f
 join (values
   ('finance','finance_name','الاسم','برجاء إدخال بيانات التمويل 👇\nالاسم','text','customer_name',true,'{"minLength":2}','برجاء كتابة الاسم بشكل صحيح.',null,true,10),
