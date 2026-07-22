@@ -35,11 +35,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       returning id::text,status,received_at
     `;
     const result = await processIntegrationEvent(source,eventKey,payload);
-    return response.status(202).json({
-      ok: true,
+    const responseBody = {
+      ok: !result.automationError,
       source,
       eventKey,
       event,
+      retryable: Boolean(result.automationError),
+      error: result.automationError || undefined,
       result: {
         leadId: result.lead?.id || null,
         conversationId: result.conversation?.id || null,
@@ -47,8 +49,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         createdLead: result.createLead,
         serviceSelectionAccepted: result.serviceSelectionAccepted,
         automaticTemplate: result.automaticTemplate,
+        automation: result.automation || null,
       },
-    });
+    };
+    return response.status(result.automationError ? 503 : 202).json(responseBody);
   } catch (error: any) {
     console.error("Integration processing failed", error);
     await sql`update integrations.inbound_events set status='failed',error_message=${error?.message||String(error)} where source=${source} and event_key=${eventKey}`.catch(()=>undefined);

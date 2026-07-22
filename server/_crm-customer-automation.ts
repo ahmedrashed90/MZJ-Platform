@@ -218,6 +218,155 @@ async function sendStartSequence(run: any, settings: CustomerAutomationSettings)
   await send(run.id, run.conversation_id, "service-list", prompt, buttons);
 }
 
+
+async function queuePendingDelivery(input: {
+  runId: string;
+  stage: string;
+  text: string;
+  buttons?: any[];
+  targetStatus: "awaiting_service" | "awaiting_step" | "completed";
+  stepKey?: string | null;
+  stepIndex?: number | null;
+  eventKey?: string | null;
+}) {
+  const sql = getSql();
+  const [run] = await sql<any[]>`
+    update crm.customer_automation_runs set
+      status='pending_delivery',
+      pending_stage=${clean(input.stage)},
+      pending_text=${clean(input.text)},
+      pending_buttons=${sql.json(Array.isArray(input.buttons) ? input.buttons : [])}::jsonb,
+      pending_target_status=${input.targetStatus},
+      pending_step_key=${clean(input.stepKey) || null},
+      pending_step_index=${Number.isFinite(Number(input.stepIndex)) ? Number(input.stepIndex) : null},
+      pending_event_key=${clean(input.eventKey) || null},
+      delivery_attempts=0,
+      last_delivery_error=null,
+      updated_at=now()
+    where id=${input.runId}::uuid
+    returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
+  `;
+  return run || null;
+}
+
+async function dispatchPendingDelivery(run: any) {
+  if (!run || clean(run.status) !== "pending_delivery") return run;
+  const runId = clean(run.id);
+  const text = clean(run.pending_text);
+  const targetStatus = clean(run.pending_target_status) || "awaiting_step";
+  const sql = getSql();
+  try {
+    if (text) {
+      await send(
+        runId,
+        clean(run.conversation_id),
+        clean(run.pending_stage) || `pending:${clean(run.pending_step_key) || "message"}`,
+        text,
+        Array.isArray(run.pending_buttons) ? run.pending_buttons : [],
+      );
+    }
+    const completed = targetStatus === "completed";
+    const [updated] = await sql<any[]>`
+      update crm.customer_automation_runs set
+        status=${completed ? "completed" : targetStatus},
+        current_step_key=${completed ? null : clean(run.pending_step_key) || null},
+        current_step_index=${completed ? Number(run.pending_step_index || 0) : Number(run.pending_step_index || 0)},
+        current_attempt=0,
+        completed_at=case when ${completed} then now() else null end,
+        termination_reason=case when ${completed} then 'flow_completed' else null end,
+        pending_stage=null,
+        pending_text=null,
+        pending_buttons='[]'::jsonb,
+        pending_target_status=null,
+        pending_step_key=null,
+        pending_step_index=null,
+        pending_event_key=null,
+        delivery_attempts=0,
+        last_delivery_error=null,
+        updated_at=now()
+      where id=${runId}::uuid
+      returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
+    `;
+    return updated || run;
+  } catch (error: any) {
+    const message = clean(error?.message || error) || "customer_automation_delivery_failed";
+    await sql`
+      update crm.customer_automation_runs set
+        delivery_attempts=delivery_attempts+1,
+        last_delivery_error=${message},
+        termination_reason=${`delivery_error:${message}`},
+        updated_at=now()
+      where id=${runId}::uuid
+    `.catch(() => undefined);
+    throw error;
+  }
+}
+
+async function findRunForConversation(conversationId: string, contactId: string, statuses: string[]) {
+  const sql = getSql();
+  const [run] = await sql<any[]>`
+    select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
+    from crm.customer_automation_runs
+    where (conversation_id=${conversationId}::uuid or (${contactId || null}::uuid is not null and contact_id=${contactId || null}::uuid))
+      and status = any(${statuses})
+    order by case when conversation_id=${conversationId}::uuid then 0 else 1 end,started_at desc
+    limit 1
+  `;
+  return run || null;
+}
+
+async function recoverLegacyClassifyingRun(settings: CustomerAutomationSettings, conversationId: string, contactId: string) {
+  const run = await findRunForConversation(conversationId, contactId, ["classifying"]);
+  if (!run) return null;
+  const updatedAt = new Date(run.updated_at || run.started_at || 0).getTime();
+  if (Number.isFinite(updatedAt) && Date.now() - updatedAt < 5000) return null;
+  const effectiveSettings = settingsForRun(settings, run);
+  const option = effectiveSettings.serviceOptions.find((row) => row.key === clean(run.option_key));
+  if (!option) {
+    const options = effectiveSettings.serviceOptions.filter((row) => row.active).sort((a, b) => a.sortOrder - b.sortOrder);
+    const list = options.map(optionDisplay).join("\n");
+    const prompt = [
+      effectiveSettings.messages.welcome.enabled ? effectiveSettings.messages.welcome.text : "",
+      effectiveSettings.messages.servicePrompt.enabled ? effectiveSettings.messages.servicePrompt.text : "",
+      list,
+    ].filter(Boolean).join("\n\n");
+    return queuePendingDelivery({
+      runId: run.id,
+      stage: "service-list",
+      text: prompt,
+      buttons: options.length <= 3 ? options.map((row) => ({ id: row.key, title: `${row.emoji ? `${row.emoji} ` : ""}${row.label}`.slice(0, 20) })) : [],
+      targetStatus: "awaiting_service",
+      eventKey: run.last_event_key,
+    });
+  }
+  const steps = activeSteps(option);
+  let stepIndex = clean(run.current_step_key)
+    ? steps.findIndex((row) => row.key === clean(run.current_step_key))
+    : Number(run.current_step_index || 0);
+  if (stepIndex < 0) stepIndex = 0;
+  const step = steps[stepIndex] || null;
+  if (step) {
+    const includeIntro = stepIndex === 0 && option.startMessage.enabled;
+    return queuePendingDelivery({
+      runId: run.id,
+      stage: includeIntro ? `flow-start-question:${step.key}` : `question:${step.key}`,
+      text: [includeIntro ? option.startMessage.text : "", step.prompt].filter(Boolean).join("\n"),
+      targetStatus: "awaiting_step",
+      stepKey: step.key,
+      stepIndex,
+      eventKey: run.last_event_key,
+    });
+  }
+  return queuePendingDelivery({
+    runId: run.id,
+    stage: "flow-end",
+    text: option.endMessage.enabled ? option.endMessage.text : "",
+    targetStatus: "completed",
+    stepIndex: steps.length,
+    eventKey: run.last_event_key,
+  });
+}
+
 async function triggerAllowed(tx: any, conversationId: string, contactId: string, settings: CustomerAutomationSettings) {
   if (settings.triggerMode === "every_message") return true;
   const seconds = settings.triggerMode === "once_24h" ? 86400 : intervalSeconds(settings.customIntervalValue, settings.customIntervalUnit);
@@ -255,7 +404,7 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
       select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
       from crm.customer_automation_runs
       where (conversation_id=${conversationId}::uuid or (${contactId || null}::uuid is not null and contact_id=${contactId || null}::uuid))
-        and status in ('awaiting_service','classifying','awaiting_step')
+        and status in ('awaiting_service','classifying','awaiting_step','pending_delivery')
       order by case when conversation_id=${conversationId}::uuid then 0 else 1 end,started_at desc
       limit 1 for update
     `;
@@ -270,15 +419,6 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
 
     const effectiveSettings = run ? settingsForRun(settings, run) : settings;
     const incomingText = context?.event?.text;
-    if (run?.status === "classifying" && run.current_step_key) {
-      // A previous request may have persisted the next expected step before its response
-      // finished. Recover that durable state instead of leaving all later messages deferred.
-      [run] = await tx<any[]>`
-        update crm.customer_automation_runs set status='awaiting_step',updated_at=now()
-        where id=${run.id}::uuid
-        returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
-      `;
-    }
     if (run?.status === "classifying") {
       await tx`update crm.automation_events set status='deferred',processed_at=null where id=${event.id}::uuid and status='processing'`;
       return { type: "skip", reason: "flow_deferred" };
@@ -368,55 +508,36 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
     await saveLeadAnswer(tx, run.lead_id || null, run.contact_id || null, step, validated.value);
     const nextStepIndex = nextAutomationStepIndex(option, step.key);
     const nextStep = steps[nextStepIndex] || null;
+    const pendingText = nextStep
+      ? nextStep.prompt
+      : option.endMessage.enabled ? option.endMessage.text : "";
+    const pendingStage = nextStep ? `question:${nextStep.key}` : "flow-end";
+    const targetStatus = nextStep ? "awaiting_step" : "completed";
     [run] = await tx<any[]>`
       update crm.customer_automation_runs set
-        status='classifying',
-        current_step_index=${nextStepIndex},
-        current_step_key=${nextStep?.key || null},
+        status=${pendingText ? "pending_delivery" : targetStatus},
+        current_step_index=${currentStepIndex},
+        current_step_key=${step.key},
         current_attempt=0,
         last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,
-        answers=jsonb_set(coalesce(answers,'{}'::jsonb),${[step.key]},${tx.json(validated.value)}::jsonb,true),
-        history=history||${tx.json([{ at: new Date().toISOString(), action: "answer_saved", stepKey: step.key, nextStepKey: nextStep?.key || null }])}::jsonb,updated_at=now()
+        answers=coalesce(answers,'{}'::jsonb)||${tx.json({ [step.key]: validated.value })}::jsonb,
+        history=history||${tx.json([{ at: new Date().toISOString(), action: "answer_saved", stepKey: step.key, nextStepKey: nextStep?.key || null }])}::jsonb,
+        pending_stage=${pendingText ? pendingStage : null},
+        pending_text=${pendingText || null},
+        pending_buttons='[]'::jsonb,
+        pending_target_status=${pendingText ? targetStatus : null},
+        pending_step_key=${pendingText && nextStep ? nextStep.key : null},
+        pending_step_index=${pendingText ? nextStepIndex : null},
+        pending_event_key=${pendingText ? eventKey : null},
+        delivery_attempts=0,
+        last_delivery_error=null,
+        completed_at=case when ${!pendingText && !nextStep} then now() else completed_at end,
+        termination_reason=case when ${!pendingText && !nextStep} then 'flow_completed' else null end,
+        updated_at=now()
       where id=${run.id}::uuid returning *,id::text,conversation_id::text,contact_id::text,service_request_id::text,lead_id::text
     `;
     return { type: "answer", run, option, step, value: validated.value, nextStep, nextStepIndex };
   });
-}
-
-async function continueFlow(run: any, option: AutomationServiceOption, startIndex: number, introText = "") {
-  const steps = activeSteps(option);
-  let index = startIndex;
-  while (index < steps.length && steps[index].answerType === "message") {
-    const step = steps[index];
-    const text = [introText, step.prompt].filter(Boolean).join("\n");
-    if (text) await send(run.id, run.conversation_id, `message-step:${step.key}`, text);
-    introText = "";
-    index += 1;
-  }
-  const next = steps[index];
-  const sql = getSql();
-  if (next) {
-    const text = [introText, next.prompt].filter(Boolean).join("\n");
-    // Keep the run in a transition state until the Worker confirms delivery. The customer
-    // must never be moved to the next expected answer before its question is actually sent.
-    await sql`
-      update crm.customer_automation_runs set status='classifying',current_step_index=${index},current_step_key=${next.key},current_attempt=0,termination_reason=null,updated_at=now()
-      where id=${run.id}::uuid
-    `;
-    await send(run.id, run.conversation_id, introText ? `flow-start-question:${next.key}` : `question:${next.key}`, text);
-    await sql`
-      update crm.customer_automation_runs set status='awaiting_step',current_step_index=${index},current_step_key=${next.key},current_attempt=0,termination_reason=null,updated_at=now()
-      where id=${run.id}::uuid
-    `;
-    return { completed: false, nextStepKey: next.key };
-  }
-  if (introText) await send(run.id, run.conversation_id, "flow-start", introText);
-  if (option.endMessage.enabled) await send(run.id, run.conversation_id, "flow-end", option.endMessage.text);
-  await sql`
-    update crm.customer_automation_runs set status='completed',current_step_index=${index},current_step_key=null,current_attempt=0,completed_at=now(),termination_reason='flow_completed',updated_at=now()
-    where id=${run.id}::uuid
-  `;
-  return { completed: true, nextStepKey: null };
 }
 
 export async function processCustomerAutomationInbound(event: any, context: any, actor?: SessionUser | null) {
@@ -425,6 +546,26 @@ export async function processCustomerAutomationInbound(event: any, context: any,
   const workerCode = clean(context?.payload?.workerCode || context?.payload?.routeSource || event.source);
   if (!settings.enabled) return { skipped: true, reason: "automation_disabled" };
   if (!customerAutomationBindingEnabled(settings, platformCode, workerCode)) return { skipped: true, reason: "platform_or_worker_disabled", platformCode, workerCode };
+
+  const conversationId = clean(event.conversation_id);
+  const contactId = clean(context?.conversation?.contact_id || event.contact_id);
+  if (conversationId) {
+    await recoverLegacyClassifyingRun(settings, conversationId, contactId);
+    const pending = await findRunForConversation(conversationId, contactId, ["pending_delivery"]);
+    if (pending) {
+      const pendingEventKey = clean(pending.pending_event_key);
+      const resumed = await dispatchPendingDelivery(pending);
+      return {
+        ok: true,
+        action: pendingEventKey && pendingEventKey === clean(event.event_key)
+          ? "pending_delivery_resumed"
+          : "pending_delivery_recovered",
+        runId: resumed?.id || pending.id,
+        status: resumed?.status || null,
+        nextStepKey: resumed?.current_step_key || null,
+      };
+    }
+  }
 
   const plan = await planInbound(event, context, settings, platformCode, workerCode);
   if (plan.type === "skip") return { skipped: true, reason: plan.reason };
@@ -494,24 +635,27 @@ export async function processCustomerAutomationInbound(event: any, context: any,
       update crm.customer_automation_runs set service_request_id=${classified.request?.id||null}::uuid,lead_id=${classified.leadId||null}::uuid,status='classifying',current_step_index=0,current_step_key=null,current_attempt=0,updated_at=now()
       where id=${plan.run.id}::uuid returning *,id::text,conversation_id::text,contact_id::text,lead_id::text,service_request_id::text
     `;
-    const progress = await continueFlow(
-      updated || plan.run,
-      plan.option,
-      0,
-      plan.option.startMessage.enabled ? plan.option.startMessage.text : "",
-    );
-    return { ok: true, action: "service_selected", runId: plan.run.id, serviceKey: plan.option.serviceKey, requestId: classified.request?.id, leadId: classified.leadId, assignedTo: classified.assignment?.assignedTo || null, distributionError: classified.distributionError || null, status: progress.completed ? "completed" : "awaiting_step", nextStepKey: progress.nextStepKey };
+    const steps = activeSteps(plan.option);
+    const firstStep = steps[0] || null;
+    const pendingText = firstStep
+      ? [plan.option.startMessage.enabled ? plan.option.startMessage.text : "", firstStep.prompt].filter(Boolean).join("\n")
+      : plan.option.endMessage.enabled ? plan.option.endMessage.text : "";
+    const queued = await queuePendingDelivery({
+      runId: (updated || plan.run).id,
+      stage: firstStep ? `flow-start-question:${firstStep.key}` : "flow-end",
+      text: pendingText,
+      targetStatus: firstStep ? "awaiting_step" : "completed",
+      stepKey: firstStep?.key || null,
+      stepIndex: firstStep ? 0 : steps.length,
+      eventKey: event.event_key,
+    });
+    const progressed = queued ? await dispatchPendingDelivery(queued) : updated || plan.run;
+    return { ok: true, action: "service_selected", runId: plan.run.id, serviceKey: plan.option.serviceKey, requestId: classified.request?.id, leadId: classified.leadId, assignedTo: classified.assignment?.assignedTo || null, distributionError: classified.distributionError || null, status: progressed?.status || (firstStep ? "awaiting_step" : "completed"), nextStepKey: progressed?.current_step_key || null };
   }
 
-  if (plan.nextStep) {
-    await send(plan.run.id, plan.run.conversation_id, `question:${plan.nextStep.key}`, plan.nextStep.prompt);
-    const sql = getSql();
-    await sql`
-      update crm.customer_automation_runs set status='awaiting_step',current_step_index=${plan.nextStepIndex},current_step_key=${plan.nextStep.key},current_attempt=0,termination_reason=null,updated_at=now()
-      where id=${plan.run.id}::uuid
-    `;
-    return { ok: true, action: "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: plan.nextStep.key };
+  if (clean(plan.run.status) === "pending_delivery") {
+    const progressed = await dispatchPendingDelivery(plan.run);
+    return { ok: true, action: progressed?.status === "completed" ? "completed" : "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: progressed?.current_step_key || null };
   }
-  const progress = await continueFlow(plan.run, plan.option, plan.nextStepIndex);
-  return { ok: true, action: progress.completed ? "completed" : "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: progress.nextStepKey };
+  return { ok: true, action: "completed", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: null };
 }

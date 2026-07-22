@@ -189,7 +189,14 @@ async function publishAutomationEventInternal(input: AutomationEventInput, allow
   `;
 
   if (event.status === "processed") return { ok: true, duplicate: true, eventId: event.id, actions: [] };
-  if (event.status === "failed") return { ok: false, duplicate: true, failed: true, eventId: event.id, actions: [], error: event.payload?.error || "previous_processing_failed" };
+  if (event.status === "failed") {
+    [event] = await sql<any[]>`
+      update crm.automation_events set status='received',processed_at=null,
+        payload=coalesce(payload,'{}'::jsonb)-'error'
+      where id=${event.id}::uuid
+      returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
+    `;
+  }
   if (event.status === "processing") return { ok: true, duplicate: true, inProgress: true, eventId: event.id, actions: [] };
 
   const [claimed] = await sql<any[]>`

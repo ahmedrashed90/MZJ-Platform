@@ -72,26 +72,30 @@ for (const token of [
   'detectAutomationServiceChoice',
   'pg_advisory_xact_lock',
   'active_flow_on_another_conversation',
-  "status in ('awaiting_service','classifying','awaiting_step')",
+  "status in ('awaiting_service','classifying','awaiting_step','pending_delivery')",
   'keywordMatch(incomingText, effectiveSettings.cancelKeywords)',
   'keywordMatch(incomingText, effectiveSettings.restartKeywords)',
   'validateAnswer',
   'saveLeadAnswer',
-  'continueFlow',
   'nextAutomationStepIndex',
   'FINANCE_STEP_ORDER',
-  "status='awaiting_step',current_step_index=${index},current_step_key=${next.key}",
+  'queuePendingDelivery',
+  'dispatchPendingDelivery',
+  'recoverLegacyClassifyingRun',
+  "status='pending_delivery'",
+  'pending_step_key',
+  'pending_event_key',
+  'last_delivery_error',
   'departmentCode: plan.option.departmentCode',
   'branchCode: plan.option.defaultBranch',
   'settingsForRun',
   'settings_snapshot',
   'open_service_request_exists',
   'flow-start-question',
-  "status='classifying'",
   'waitForProvider: true',
-  'nextStepKey: nextStep?.key || null',
-  '`question:${plan.nextStep.key}`',
-]) if (!engine.includes(token)) throw new Error(`Fixed state machine check failed: missing ${token}`);
+  'answers=coalesce(answers',
+  'pending_delivery_resumed',
+]) if (!engine.includes(token)) throw new Error(`Durable state machine check failed: missing ${token}`);
 if (engine.includes('accepted.includes(candidate) || candidate.includes')) throw new Error('Service choices must use exact matching, not substring matching');
 const firstInboundBlock = engine.split('    if (!run) {')[1]?.split('    if (run.status === "awaiting_service")')[0] || '';
 if (!firstInboundBlock.includes('return { type: "start", run }')) throw new Error('First inbound message must start the automation');
@@ -106,6 +110,8 @@ for (const token of [
   'waitForProvider?: boolean',
   'await finishWorkerDelivery(deliveryInput)',
   'providerStatus !== "sent"',
+  'if (clean(job.status) === "failed")',
+  "status='queued',processed_at=null",
 ]) if (!messaging.includes(token)) throw new Error(`Provider acknowledgement check failed: missing ${token}`);
 
 for (const token of [
@@ -212,4 +218,4 @@ if (engineRuntime.nextAutomationStepIndex(fixedFinance, "name") !== 1) throw new
 if (engineRuntime.nextAutomationStepIndex(fixedFinance, "car") !== 2) throw new Error("Finance car must advance to phone");
 if (engineRuntime.nextAutomationStepIndex(fixedFinance, "phone") !== 3) throw new Error("Finance phone must advance to the end message");
 
-console.log('CRM customer automation v1.18.5 provider-confirmed finance progression checks passed.');
+console.log('CRM customer automation v1.18.6 durable finance flow checks passed.');

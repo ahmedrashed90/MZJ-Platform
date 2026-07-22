@@ -360,7 +360,30 @@ export async function deliverCrmMessage(input: {
 
   if (job.status !== "queued" && job.processed_at) {
     const [existing] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
-    return { message: existing, providerStatus: job.status, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
+    if (clean(job.status) === "failed") {
+      await sql`
+        update integrations.outbound_jobs set
+          status='queued',processed_at=null,response_payload=null,error_message=null
+        where id=${job.id}::uuid
+      `;
+      if (existing?.id) {
+        await sql`
+          update crm.messages set provider_status='queued',
+            metadata=coalesce(metadata,'{}'::jsonb)-'providerError'-'providerConfirmedAt'
+          where id=${existing.id}::uuid
+        `;
+      }
+      job.status = "queued";
+      job.processed_at = null;
+      job.response_payload = null;
+      job.error_message = null;
+    } else {
+      const providerStatus = clean(job.status) || "failed";
+      if (input.waitForProvider && providerStatus !== "sent") {
+        throw new Error(clean(job.error_message) || `تعذر تأكيد إرسال الرسالة عبر ${policy.sourceArabic}`);
+      }
+      return { message: existing, providerStatus, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
+    }
   }
 
   const payload = {
