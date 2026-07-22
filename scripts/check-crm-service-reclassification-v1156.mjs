@@ -21,10 +21,8 @@ const requiredProcessor = [
   "forceServiceReclassification",
   "force_service_reclassification",
   'clean(value).toLowerCase() === "service_selection"',
-  "knownService && selectionAccepted && (!openRequest || explicitServiceSelection || completesPendingFinance || financeDataCompletionAccepted)",
-  'const classificationMethod = completesPendingFinance',
-  '"meta_exact_service_selection"',
-  '"customer_service_selection"',
+  "knownService && selectionAccepted && (!openRequest || explicitServiceSelection)",
+  'classificationMethod: explicitServiceSelection ? "customer_service_selection" : "source_mapping"',
 ];
 for (const token of requiredProcessor) {
   if (!processor.includes(token)) throw new Error(`Missing integration reclassification token: ${token}`);

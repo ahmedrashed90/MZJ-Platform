@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { clean, departmentKey, normalizePhone } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
-import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService, recordOwnershipEvent } from "./_crm-lifecycle.js";
+import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService } from "./_crm-lifecycle.js";
 import { publishAutomationEvent } from "./_crm-automation.js";
 import { markCrmLeadUnread } from "./_crm-unread-state.js";
 
@@ -144,9 +144,6 @@ function identityData(source: string, payload: any) {
     payload.manychatContactId, payload.manychat_contact_id,
     payload.subscriberId, payload.subscriber_id,
   );
-  const resolveFacebookByPhone = source === "facebook" && bool(
-    payload.resolveCanonicalConversationByPhone || payload.resolve_canonical_conversation_by_phone,
-  );
   const participant = source === "facebook" ? facebookPsid : first(
     payload.participantId, payload.participant_id,
     payload.user_id, payload.userId, payload.igId, payload.tiktokId,
@@ -168,29 +165,13 @@ function identityData(source: string, payload: any) {
     ...listValues(payload.identity_aliases),
     msg?.from, contact?.wa_id,
   ]).map(clean).filter(Boolean))];
-  const externalId = participant || (source === "facebook" ? manychatContactId : "") || first(
-    payload.externalCustomerId,
-    payload.external_customer_id,
-    requestedConversationId,
-  ) || crypto.randomUUID();
+  const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, requestedConversationId) || crypto.randomUUID();
   const conversationExternalId = source === "facebook"
     ? (pageId && facebookPsid ? `facebook:${pageId}:${facebookPsid}` : "")
     : (requestedConversationId || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`));
   const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.phone_number, payload.clientNumber, payload.leadPhone, payload.lead_phone, msg?.from, contact?.wa_id);
   const displayName = first(payload.leadName, payload.lead_name, payload.customerName, payload.customer_name, payload.displayName, payload.display_name, payload.full_name, payload.fullName, payload.name, contact?.profile?.name, "عميل");
-  return {
-    participant,
-    pageId,
-    externalId,
-    conversationExternalId,
-    phone,
-    phoneNormalized: normalizePhone(phone),
-    displayName,
-    aliases,
-    facebookPsid,
-    manychatContactId,
-    resolveFacebookByPhone,
-  };
+  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName, aliases, facebookPsid, manychatContactId };
 }
 
 function capturedLeadData(payload: any, identity: ReturnType<typeof identityData>) {
@@ -218,25 +199,19 @@ async function syncCapturedLeadData(sql: any, contactId: string, payload: any, i
   return lead || null;
 }
 
-function declaredServiceSelection(payload: any) {
+function trustedKnownService(routeSource: string, payload: any) {
+  if (["installment-calculator", "tiktok-snapchat"].includes(routeSource)) return "finance";
+  if (!bool(payload.trustedServiceClassification || payload.trusted_service_classification)) return "";
+
   const declaredService = first(
     payload.serviceSelectionKey,
     payload.service_selection_key,
-    payload.requestedServiceKey,
-    payload.requested_service_key,
     payload.serviceKey,
     payload.service_key,
     payload.serviceSelectionLabel,
     payload.service_selection_label,
   );
-  return declaredService ? departmentKey(declaredService) : "";
-}
-
-function trustedKnownService(routeSource: string, payload: any) {
-  if (["installment-calculator", "tiktok-snapchat"].includes(routeSource)) return "finance";
-  if (!bool(payload.trustedServiceClassification || payload.trusted_service_classification)) return "";
-
-  const serviceKey = declaredServiceSelection(payload);
+  const serviceKey = declaredService ? departmentKey(declaredService) : "";
   if (serviceKey === "finance") {
     const phone = first(
       payload.leadPhone,
@@ -282,24 +257,12 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const sql = getSql();
   const source = routeSourceCode(routeSource, payload);
   const identity = identityData(source, payload);
-  const exactMetaSelection = source === "facebook" && bool(
-    payload.metaExactServiceSelection || payload.meta_exact_service_selection,
-  );
-  const financeDataCompletion = source === "facebook" && bool(
-    payload.financeDataCompletion || payload.finance_data_completion,
-  );
-  const phoneResolvedFacebook = source === "facebook" && identity.resolveFacebookByPhone &&
-    Boolean(identity.phoneNormalized) && Boolean(identity.manychatContactId);
   if (source === "facebook") {
     if (!identity.pageId) throw new Error("Facebook Page ID is required");
-    if (!identity.facebookPsid && !phoneResolvedFacebook) {
-      throw new Error("Facebook PSID is required unless a finance completion is resolved by a verified Saudi phone");
-    }
-    if (identity.facebookPsid && !identity.conversationExternalId) {
-      throw new Error("Canonical Facebook conversation ID could not be created");
-    }
-    if (isExplicitServiceSelection(payload) && !identity.manychatContactId && !exactMetaSelection) {
-      throw new Error("ManyChat Contact ID is required as an alias unless the exact selection came from Meta with the real PSID");
+    if (!identity.facebookPsid) throw new Error("Facebook PSID is required; ManyChat Contact ID cannot be used as PSID");
+    if (!identity.conversationExternalId) throw new Error("Canonical Facebook conversation ID could not be created");
+    if (isExplicitServiceSelection(payload) && !identity.manychatContactId) {
+      throw new Error("ManyChat Contact ID is required as an alias for Facebook service selection");
     }
   }
   const media = mediaData(payload);
@@ -327,23 +290,6 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     fileName: media.fileName,
     storageKey: media.storageKey,
   });
-  const suppressMessagePersistence = bool(
-    payload.suppressMessagePersistence || payload.suppress_message_persistence,
-  );
-
-  if (phoneResolvedFacebook) {
-    const [canonicalPhoneConversation] = await sql<any[]>`
-      select c.id::text
-      from crm.contacts ct
-      join crm.conversations c on c.contact_id=ct.id and c.channel_code='facebook'
-      where ct.primary_phone_normalized=${identity.phoneNormalized}
-      order by (c.legacy_id like 'facebook:%') desc,c.last_message_at desc nulls last,c.updated_at desc
-      limit 1
-    `;
-    if (!canonicalPhoneConversation) {
-      throw new Error("Canonical Facebook conversation was not found for the verified finance phone");
-    }
-  }
 
   const { contact } = await ensureContactIdentity({
     channelCode: source,
@@ -356,9 +302,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     metadata: { routeSource, lastEventId: eventId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null },
   });
   let openRequest = await findOpenServiceRequest(contact.id);
-  let matchedLead: any = financeDataCompletion
-    ? null
-    : await syncCapturedLeadData(sql, contact.id, payload, identity);
+  let matchedLead: any = await syncCapturedLeadData(sql, contact.id, payload, identity);
 
   // Mersal currently sends the WhatsApp phone number in conversationId. That value
   // identifies the provider contact, not necessarily the PostgreSQL conversation UUID.
@@ -452,19 +396,15 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     `;
   }
 
-  if (!conversation && identity.conversationExternalId) {
+  if (!conversation) {
     [conversation] = await sql<any[]>`
       select *,id::text,lead_id::text,contact_id::text,service_request_id::text
       from crm.conversations where legacy_id=${identity.conversationExternalId} limit 1
     `;
   }
 
-  if (!conversation && phoneResolvedFacebook) {
-    throw new Error("Canonical Facebook conversation was not found for the verified finance phone");
-  }
-
   let existingMessage: any = null;
-  if (conversation && !suppressMessagePersistence) {
+  if (conversation) {
     [existingMessage] = await sql<any[]>`
       select *,id::text,conversation_id::text from crm.messages
       where conversation_id=${conversation.id}::uuid
@@ -520,18 +460,18 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
           when lower(coalesce(${first(payload.provider, payload.providerName, payload.provider_name, routeSource)},'')) in ('meta','facebook_graph') then coalesce(nullif(${identity.participant || identity.externalId},''),participant_id)
           else coalesce(nullif(participant_id,''),nullif(${identity.participant || identity.externalId},''))
         end,
-        preview_text=case when ${suppressMessagePersistence} then preview_text else coalesce(nullif(${text},''),preview_text) end,
+        preview_text=coalesce(nullif(${text},''),preview_text),
         unread_count=unread_count,
-        last_message_at=case when ${suppressMessagePersistence} then last_message_at else greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz) end,
+        last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
         service_key=coalesce(${openRequest?.service_key || null},service_key),
         department_code=coalesce(${openRequest?.department_code || null},department_code),
         branch_code=coalesce(${openRequest?.branch_code || null},branch_code),
         assigned_to=coalesce(${openRequest?.assigned_to || null}::uuid,assigned_to),
         call_center_assigned_to=coalesce(${openRequest?.call_center_assigned_to || null}::uuid,call_center_assigned_to),
-        provider=case when ${suppressMessagePersistence} then provider else coalesce(nullif(${first(payload.provider, routeSource)},''),provider) end,
+        provider=coalesce(nullif(${first(payload.provider, routeSource)},''),provider),
         classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
-        last_customer_message_at=case when ${suppressMessagePersistence} then last_customer_message_at when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
-        last_human_reply_at=case when ${suppressMessagePersistence} then last_human_reply_at when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
+        last_customer_message_at=case when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
+        last_human_reply_at=case when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
         metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null })}::jsonb,
         updated_at=now()
       where id=${conversation.id}::uuid
@@ -540,176 +480,56 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   let message: any = existingMessage;
-  if (!suppressMessagePersistence) {
-    if (existingMessage) {
-      if (direction === "in") {
-        [message] = await sql<any[]>`
-          update crm.messages
-          set direction='in',provider_status='received',sender_type='customer',
-              metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId })}::jsonb
-          where id=${existingMessage.id}::uuid
-          returning *,id::text,conversation_id::text
-        `;
-      }
-    } else {
+  if (existingMessage) {
+    if (direction === "in") {
       [message] = await sql<any[]>`
-        insert into crm.messages(
-          conversation_id,legacy_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,is_sensitive,
-          provider_status,provider_message_id,sender_type,caption,created_at,metadata
-        ) values(
-          ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
-          ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-          ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId })}
-        ) returning *,id::text,conversation_id::text
+        update crm.messages
+        set direction='in',provider_status='received',sender_type='customer',
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId })}::jsonb
+        where id=${existingMessage.id}::uuid
+        returning *,id::text,conversation_id::text
       `;
-
-      if (media.storageKey) {
-        await sql`
-          insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
-          values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
-          on conflict(storage_key) do update set
-            conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
-            media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
-            is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
-        `;
-      }
     }
   } else {
-    message = null;
+    [message] = await sql<any[]>`
+      insert into crm.messages(
+        conversation_id,legacy_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,is_sensitive,
+        provider_status,provider_message_id,sender_type,caption,created_at,metadata
+      ) values(
+        ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
+        ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
+        ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId })}
+      ) returning *,id::text,conversation_id::text
+    `;
+
+    if (media.storageKey) {
+      await sql`
+        insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
+        values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
+        on conflict(storage_key) do update set
+          conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
+          media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
+          is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
+      `;
+    }
   }
 
-  let knownService = trustedKnownService(routeSource, payload);
+  const knownService = trustedKnownService(routeSource, payload);
   const explicitServiceSelection = isExplicitServiceSelection(payload);
-  const declaredSelection = explicitServiceSelection ? declaredServiceSelection(payload) : "";
   const serviceSelectionOccurredAt = dateValue({
     timestamp: payload.eventOccurredAt ?? payload.event_occurred_at ?? payload.selectionOccurredAt ?? payload.selection_occurred_at ?? occurredAt,
   });
   let createdByKnownSource = false;
   let automaticTemplate: any = null;
-  let selectionAccepted = true;
-
-  if (declaredSelection && explicitServiceSelection) {
-    selectionAccepted = await claimLatestServiceSelection({
-      conversationId: conversation.id,
-      eventKey: eventId,
-      occurredAt: serviceSelectionOccurredAt,
-      serviceKey: declaredSelection,
-    });
-  }
-
-  const pendingFinanceSelection = declaredSelection === "finance" && !knownService &&
-    bool(payload.financeDetailsRequired || payload.finance_details_required || payload.pendingPhone || payload.pending_phone) &&
-    Boolean(identity.facebookPsid);
-
-  if (pendingFinanceSelection && selectionAccepted) {
-    const existingPendingService = openRequest ? departmentKey(openRequest.service_key || openRequest.department_code) : "";
-    if (openRequest && existingPendingService !== "finance") {
-      await sql`
-        update crm.service_requests set
-          request_state='closed',closed_at=now(),closure_reason='العميل اختار مبيعات التمويل ويستكمل البيانات',
-          metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
-            reclassifiedTo: "finance",
-            reclassificationEventKey: eventId,
-            awaitingFinanceDetails: true,
-          })}::jsonb,
-          updated_at=now()
-        where id=${openRequest.id}::uuid and request_state='open'
-      `;
-      if (openRequest.lead_id) {
-        await sql`
-          update crm.leads set
-            current_request_id=null,service_key='finance',department_code=null,branch_code=null,
-            assigned_to=null,call_center_assigned_to=null,responsible_name_snapshot=null,call_center_name_snapshot=null,
-            payment_type='تمويل',extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
-              pendingServiceKey: "finance",
-              pendingServiceEventKey: eventId,
-              pendingServiceSelectedAt: serviceSelectionOccurredAt,
-            })}::jsonb,
-            updated_at=now()
-          where id=${openRequest.lead_id}::uuid and current_request_id=${openRequest.id}::uuid
-        `;
-        await sql`
-          insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_name,note,details)
-          values(${openRequest.lead_id}::uuid,'service_request_reclassified',${openRequest.status_label || "عميل جديد"},'بانتظار بيانات التمويل',
-            ${openRequest.department_code || null},'finance_sales',${openRequest.branch_code || null},'online','Automation Engine',
-            'اختار العميل مبيعات التمويل وتم إغلاق الطلب السابق لحين اكتمال رقم الجوال',${sql.json({
-              previousRequestId: openRequest.id,
-              previousServiceKey: existingPendingService,
-              newServiceKey: "finance",
-              eventKey: eventId,
-            })})
-        `;
-      }
-      await recordOwnershipEvent({
-        contactId: conversation.contact_id,
-        requestId: openRequest.id,
-        leadId: openRequest.lead_id || null,
-        previousAssignedTo: openRequest.assigned_to || null,
-        previousAssignedName: openRequest.assigned_name || null,
-        newAssignedTo: null,
-        newAssignedName: "بانتظار اكتمال بيانات التمويل",
-        previousDepartmentCode: openRequest.department_code || null,
-        newDepartmentCode: "finance_sales",
-        previousBranchCode: openRequest.branch_code || null,
-        newBranchCode: "online",
-        actorType: "automation",
-        reason: "اختيار مبيعات التمويل قبل اكتمال رقم الجوال",
-        metadata: { eventKey: eventId, awaitingFinanceDetails: true },
-      });
-      openRequest = null;
-    }
-
-    await sql`
-      update crm.conversations set
-        service_request_id=case when ${existingPendingService === "finance"} then service_request_id else null end,
-        service_key=case when ${existingPendingService === "finance"} then service_key else null end,
-        department_code=case when ${existingPendingService === "finance"} then department_code else null end,
-        branch_code=case when ${existingPendingService === "finance"} then branch_code else null end,
-        assigned_to=case when ${existingPendingService === "finance"} then assigned_to else null end,
-        call_center_assigned_to=case when ${existingPendingService === "finance"} then call_center_assigned_to else null end,
-        classification_state=case when ${existingPendingService === "finance"} then 'classified' else 'awaiting_details' end,
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
-          pendingServiceKey: "finance",
-          pendingServiceSelectedAt: serviceSelectionOccurredAt,
-          pendingServiceEventKey: eventId,
-          pendingServiceIdentity: "facebook_psid",
-        })}::jsonb,
-        updated_at=now()
-      where id=${conversation.id}::uuid
-    `;
-    [conversation] = await sql<any[]>`
-      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
-      from crm.conversations where id=${conversation.id}::uuid
-    `;
-  }
-
-  const [pendingSelectionState] = await sql<any[]>`
-    select service_key,last_event_key,last_event_at
-    from crm.service_selection_state
-    where conversation_id=${conversation.id}::uuid
-    limit 1
-  `;
-  const completesPendingFinance = !knownService && !explicitServiceSelection && !financeDataCompletion && !openRequest &&
-    pendingSelectionState?.service_key === "finance" && Boolean(identity.phoneNormalized) && source === "facebook";
-  const financeDataCompletionAccepted = financeDataCompletion &&
-    pendingSelectionState?.service_key === "finance" && Boolean(identity.phoneNormalized);
-  if (completesPendingFinance || financeDataCompletionAccepted) knownService = "finance";
-  if (financeDataCompletion && !financeDataCompletionAccepted) knownService = "";
-
-  const classificationMethod = completesPendingFinance
-    ? "pending_finance_phone_received"
-    : financeDataCompletionAccepted
-      ? "manychat_finance_data_completion"
-      : explicitServiceSelection
-        ? (exactMetaSelection ? "meta_exact_service_selection" : "customer_service_selection")
-        : "source_mapping";
-
-  if (knownService && selectionAccepted && (!openRequest || explicitServiceSelection || completesPendingFinance || financeDataCompletionAccepted)) {
+  const selectionAccepted = knownService && explicitServiceSelection
+    ? await claimLatestServiceSelection({ conversationId: conversation.id, eventKey: eventId, occurredAt: serviceSelectionOccurredAt, serviceKey: knownService })
+    : true;
+  if (knownService && selectionAccepted && (!openRequest || explicitServiceSelection)) {
     const classified = await classifyConversationService({
       conversationId: conversation.id,
       serviceKey: knownService,
       sourceCode: source,
-      classificationMethod,
+      classificationMethod: explicitServiceSelection ? "customer_service_selection" : "source_mapping",
       eventKey: eventId,
     });
     openRequest = classified.request;
@@ -717,23 +537,9 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
     matchedLead = await syncCapturedLeadData(sql, contact.id, payload, identity) || matchedLead;
     automaticTemplate = classified.automaticTemplate || null;
-    await sql`
-      update crm.conversations set
-        metadata=(coalesce(metadata,'{}'::jsonb)-'pendingServiceKey'-'pendingServiceSelectedAt'-'pendingServiceEventKey'-'pendingServiceIdentity'),
-        updated_at=now()
-      where id=${conversation.id}::uuid
-    `;
-    if (openRequest?.lead_id) {
-      await sql`
-        update crm.leads set
-          extra_data=(coalesce(extra_data,'{}'::jsonb)-'pendingServiceKey'-'pendingServiceSelectedAt'-'pendingServiceEventKey'),
-          updated_at=now()
-        where id=${openRequest.lead_id}::uuid
-      `;
-    }
   }
 
-  if (direction === "in" && !suppressMessagePersistence) {
+  if (direction === "in") {
     const unreadLeadId = conversation.lead_id || matchedLead?.id || openRequest?.lead_id || null;
     if (unreadLeadId) {
       await markCrmLeadUnread(sql, {
@@ -762,19 +568,13 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   try {
     automation = await publishAutomationEvent({
       eventKey: `${source}:${eventId}:message`,
-      eventType: financeDataCompletion
-        ? "finance.data_completed"
-        : explicitServiceSelection
-          ? "service.selection"
-          : direction === "in"
-            ? "message.received"
-            : "message.sent",
+      eventType: direction === "in" ? "message.received" : "message.sent",
       source,
       contactId: contact.id,
       conversationId: conversation.id,
       serviceRequestId: conversation.service_request_id || openRequest?.id || null,
       leadId: conversation.lead_id || openRequest?.lead_id || null,
-      payload: { ...payload, direction, senderType, text, messageId: message?.id || null, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
+      payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
       actor: null,
     });
   } catch (error: any) {
@@ -783,7 +583,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       routeSource,
       eventId,
       conversationId: conversation.id,
-      messageId: message?.id || null,
+      messageId: message.id,
       error: automationError,
     });
   }
@@ -802,10 +602,6 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     automation,
     automationError: automationError || null,
     automaticTemplate,
-    serviceSelectionAccepted: explicitServiceSelection
-      ? selectionAccepted
-      : financeDataCompletion
-        ? financeDataCompletionAccepted
-        : null,
+    serviceSelectionAccepted: explicitServiceSelection ? selectionAccepted : null,
   };
 }
