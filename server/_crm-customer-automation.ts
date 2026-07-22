@@ -217,12 +217,13 @@ async function sendStartSequence(run: any, settings: CustomerAutomationSettings)
   await send(run.id, run.conversation_id, "service-list", prompt, buttons);
 }
 
-async function triggerAllowed(tx: any, conversationId: string, settings: CustomerAutomationSettings) {
+async function triggerAllowed(tx: any, conversationId: string, contactId: string, settings: CustomerAutomationSettings) {
   if (settings.triggerMode === "every_message") return true;
   const seconds = settings.triggerMode === "once_24h" ? 86400 : intervalSeconds(settings.customIntervalValue, settings.customIntervalUnit);
   const [recent] = await tx`
     select id from crm.customer_automation_runs
-    where conversation_id=${conversationId}::uuid and started_at > now()-(${seconds}||' seconds')::interval
+    where (conversation_id=${conversationId}::uuid or (${contactId || null}::uuid is not null and contact_id=${contactId || null}::uuid))
+      and started_at > now()-(${seconds}||' seconds')::interval
     order by started_at desc limit 1
   `;
   return !recent;
@@ -237,7 +238,7 @@ type Plan =
   | { type: "choice"; run: any; option: AutomationServiceOption }
   | { type: "invalid"; run: any; step: AutomationStep; errorMessage?: string }
   | { type: "max_attempts"; run: any; step: AutomationStep }
-  | { type: "answer"; run: any; option: AutomationServiceOption; step: AutomationStep; value: any };
+  | { type: "answer"; run: any; option: AutomationServiceOption; step: AutomationStep; value: any; nextStep: AutomationStep | null; nextStepIndex: number };
 
 async function planInbound(event: any, context: any, settings: CustomerAutomationSettings, platformCode: string, workerCode: string): Promise<Plan> {
   const conversationId = clean(event.conversation_id);
@@ -268,6 +269,15 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
 
     const effectiveSettings = run ? settingsForRun(settings, run) : settings;
     const incomingText = context?.event?.text;
+    if (run?.status === "classifying" && run.current_step_key) {
+      // A previous request may have persisted the next expected step before its response
+      // finished. Recover that durable state instead of leaving all later messages deferred.
+      [run] = await tx<any[]>`
+        update crm.customer_automation_runs set status='awaiting_step',updated_at=now()
+        where id=${run.id}::uuid
+        returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
+      `;
+    }
     if (run?.status === "classifying") {
       await tx`update crm.automation_events set status='deferred',processed_at=null where id=${event.id}::uuid and status='processing'`;
       return { type: "skip", reason: "flow_deferred" };
@@ -296,7 +306,7 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
       `;
       if (openRequest) return { type: "skip", reason: "open_service_request_exists" };
       if (!withinSchedule(settings)) return { type: "skip", reason: "outside_schedule" };
-      if (!(await triggerAllowed(tx, conversationId, settings))) return { type: "skip", reason: "trigger_cooldown" };
+      if (!(await triggerAllowed(tx, conversationId, contactId, settings))) return { type: "skip", reason: "trigger_cooldown" };
 
       // The first inbound message only starts the automation. Its text or button payload
       // must never be consumed as a service choice, even when it equals 1, 2, 3, or an
@@ -314,8 +324,11 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
     if (run.status === "awaiting_service") {
       const option = detectAutomationServiceChoice(event, context, effectiveSettings.serviceOptions);
       if (!option) {
-        await tx`update crm.customer_automation_runs set status='classifying',last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,updated_at=now() where id=${run.id}::uuid`;
-        return { type: "no_match", run: { ...run, status: "classifying" } };
+        [run] = await tx<any[]>`
+          update crm.customer_automation_runs set status='awaiting_service',last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,updated_at=now()
+          where id=${run.id}::uuid returning *,id::text,conversation_id::text,contact_id::text
+        `;
+        return { type: "no_match", run };
       }
       [run] = await tx<any[]>`
         update crm.customer_automation_runs set status='classifying',option_key=${option.key},service_key=${option.serviceKey},last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,
@@ -345,17 +358,27 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
         [run] = await tx<any[]>`update crm.customer_automation_runs set status='cancelled',current_attempt=${attempt},termination_reason='max_attempts',completed_at=now(),last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),updated_at=now() where id=${run.id}::uuid returning *,id::text,conversation_id::text`;
         return { type: "max_attempts", run, step: availability.ok ? step : { ...step, errorMessage: availability.errorMessage } };
       }
-      await tx`update crm.customer_automation_runs set status='classifying',current_attempt=${attempt},last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,updated_at=now() where id=${run.id}::uuid`;
-      return { type: "invalid", run: { ...run, status: "classifying", current_attempt: attempt }, step, errorMessage: availability.ok ? undefined : availability.errorMessage };
+      [run] = await tx<any[]>`
+        update crm.customer_automation_runs set status='awaiting_step',current_attempt=${attempt},last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,updated_at=now()
+        where id=${run.id}::uuid returning *,id::text,conversation_id::text,contact_id::text,service_request_id::text,lead_id::text
+      `;
+      return { type: "invalid", run, step, errorMessage: availability.ok ? undefined : availability.errorMessage };
     }
     await saveLeadAnswer(tx, run.lead_id || null, run.contact_id || null, step, validated.value);
+    const nextStepIndex = nextAutomationStepIndex(option, step.key);
+    const nextStep = steps[nextStepIndex] || null;
     [run] = await tx<any[]>`
-      update crm.customer_automation_runs set status='classifying',last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,
+      update crm.customer_automation_runs set
+        status=${nextStep ? "awaiting_step" : "classifying"},
+        current_step_index=${nextStepIndex},
+        current_step_key=${nextStep?.key || null},
+        current_attempt=0,
+        last_event_key=${eventKey},last_message_id=${messageId||null},last_message_at=now(),expires_at=${flowExpiresAt(effectiveSettings)}::timestamptz,
         answers=jsonb_set(coalesce(answers,'{}'::jsonb),${[step.key]},${tx.json(validated.value)}::jsonb,true),
-        history=history||${tx.json([{ at: new Date().toISOString(), action: "answer_saved", stepKey: step.key }])}::jsonb,updated_at=now()
+        history=history||${tx.json([{ at: new Date().toISOString(), action: "answer_saved", stepKey: step.key, nextStepKey: nextStep?.key || null }])}::jsonb,updated_at=now()
       where id=${run.id}::uuid returning *,id::text,conversation_id::text,contact_id::text,service_request_id::text,lead_id::text
     `;
-    return { type: "answer", run, option, step, value: validated.value };
+    return { type: "answer", run, option, step, value: validated.value, nextStep, nextStepIndex };
   });
 }
 
@@ -482,7 +505,10 @@ export async function processCustomerAutomationInbound(event: any, context: any,
     return { ok: true, action: "service_selected", runId: plan.run.id, serviceKey: plan.option.serviceKey, requestId: classified.request?.id, leadId: classified.leadId, assignedTo: classified.assignment?.assignedTo || null, distributionError: classified.distributionError || null, status: progress.completed ? "completed" : "awaiting_step", nextStepKey: progress.nextStepKey };
   }
 
-  const nextIndex = nextAutomationStepIndex(plan.option, plan.step.key);
-  const progress = await continueFlow(plan.run, plan.option, nextIndex);
+  if (plan.nextStep) {
+    await send(plan.run.id, plan.run.conversation_id, `question:${plan.nextStep.key}`, plan.nextStep.prompt);
+    return { ok: true, action: "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: plan.nextStep.key };
+  }
+  const progress = await continueFlow(plan.run, plan.option, plan.nextStepIndex);
   return { ok: true, action: progress.completed ? "completed" : "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: progress.nextStepKey };
 }

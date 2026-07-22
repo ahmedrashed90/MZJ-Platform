@@ -24,6 +24,9 @@ for (const token of [
   'الفلو الثلاثي ثابتًا حسب السيناريو المعتمد',
   'الحالة العامة',
   'المنصات والـ Workers',
+  'متى يتم تشغيل الأوتوميشن؟',
+  'مرة كل 24 ساعة',
+  'مدة مخصصة',
   'تشغيل الأوتوميشن على المنصة',
   'رسالة العميل الجديد',
   '💰 مبيعات الكاش',
@@ -39,7 +42,6 @@ for (const forbidden of [
   'نوع الفلو',
   'القسم المرتبط',
   'الفرع الافتراضي',
-  'متى يتم تشغيل الأوتوميشن؟',
 ]) if (ui.includes(forbidden)) throw new Error(`Fixed automation UI must not expose ${forbidden}`);
 
 for (const token of [
@@ -56,7 +58,8 @@ for (const token of [
 
 for (const token of [
   'isCrmManager(user)',
-  'Only general activation, platform/Worker bindings, message text and accepted replies are editable',
+  'triggerMode: submitted?.triggerMode ?? before.triggerMode',
+  'customIntervalValue: submitted?.customIntervalValue ?? before.customIntervalValue',
   'submitted?.platformWorkers || before.platformWorkers',
   'allowedBindings',
   'clearCustomerAutomationSettingsCache',
@@ -83,6 +86,9 @@ for (const token of [
   'settings_snapshot',
   'open_service_request_exists',
   'flow-start-question',
+  'status=${nextStep ? "awaiting_step" : "classifying"}',
+  'nextStepKey: nextStep?.key || null',
+  '`question:${plan.nextStep.key}`',
 ]) if (!engine.includes(token)) throw new Error(`Fixed state machine check failed: missing ${token}`);
 if (engine.includes('accepted.includes(candidate) || candidate.includes')) throw new Error('Service choices must use exact matching, not substring matching');
 const firstInboundBlock = engine.split('    if (!run) {')[1]?.split('    if (run.status === "awaiting_service")')[0] || '';
@@ -170,7 +176,8 @@ const normalized = settingsRuntime.normalizeCustomerAutomationSettings({
 });
 if (normalized.enabled !== false) throw new Error("General automation activation must remain editable");
 if (normalized.name !== "أوتوميشن استقبال عملاء CRM") throw new Error("Automation name must normalize safely");
-if (normalized.triggerMode !== "every_message") throw new Error("Trigger policy must stay fixed");
+if (normalized.triggerMode !== "custom") throw new Error("Custom trigger policy must remain editable");
+if (normalized.customIntervalValue !== 24 || normalized.customIntervalUnit !== "hour") throw new Error("Custom trigger interval must normalize safely");
 if (normalized.serviceOptions.length !== 3) throw new Error("Fixed flow must always contain exactly three services");
 const fixedFinance = normalized.serviceOptions.find((row) => row.key === "finance");
 if (fixedFinance?.label !== "مبيعات التمويل" || fixedFinance?.departmentCode !== "finance_sales" || fixedFinance?.active !== true) throw new Error("Finance structure must not be user-editable");
@@ -196,4 +203,4 @@ if (engineRuntime.nextAutomationStepIndex(fixedFinance, "name") !== 1) throw new
 if (engineRuntime.nextAutomationStepIndex(fixedFinance, "car") !== 2) throw new Error("Finance car must advance to phone");
 if (engineRuntime.nextAutomationStepIndex(fixedFinance, "phone") !== 3) throw new Error("Finance phone must advance to the end message");
 
-console.log('CRM customer automation v1.18.2 controls and finance progression checks passed.');
+console.log('CRM customer automation v1.18.4 trigger policy and durable finance progression checks passed.');

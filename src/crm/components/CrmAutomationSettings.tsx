@@ -165,6 +165,32 @@ export function CrmAutomationSettings() {
       </section>
 
       <section className="crm-panel crm-automation-section">
+        <header><div><h2>متى يتم تشغيل الأوتوميشن؟</h2><p>تحدد هذه السياسة متى يبدأ فلو جديد للعميل، ولا تؤثر على الفلو النشط أو على قواعد توزيع الموظفين.</p></div></header>
+        <div className="crm-form-grid crm-form-grid-wide">
+          <label><span>سياسة التشغيل</span><select value={form.triggerMode || "every_message"} onChange={(event) => patch("triggerMode", event.target.value)}>
+            <option value="every_message">مع كل رسالة واردة خارج فلو نشط</option>
+            <option value="once_24h">مرة كل 24 ساعة</option>
+            <option value="custom">مدة مخصصة</option>
+          </select></label>
+          {form.triggerMode === "custom" ? <>
+            <label><span>قيمة المدة</span><input type="number" min={1} value={form.customIntervalValue || 1} onChange={(event) => patch("customIntervalValue", Math.max(1, Number(event.target.value || 1)))} /></label>
+            <label><span>وحدة المدة</span><select value={form.customIntervalUnit || "hour"} onChange={(event) => patch("customIntervalUnit", event.target.value)}>
+              <option value="minute">دقيقة</option>
+              <option value="hour">ساعة</option>
+              <option value="day">يوم</option>
+            </select></label>
+          </> : null}
+          <div className="crm-field-wide crm-automation-policy-note">
+            {form.triggerMode === "every_message"
+              ? "يبدأ فلو جديد مع كل رسالة واردة إذا لم يكن للعميل فلو نشط أو طلب خدمة مفتوح."
+              : form.triggerMode === "once_24h"
+                ? "لا يبدأ الأوتوميشن لنفس العميل أكثر من مرة خلال 24 ساعة."
+                : `لا يبدأ الأوتوميشن لنفس العميل إلا بعد مرور ${form.customIntervalValue || 1} ${form.customIntervalUnit === "day" ? "يوم" : form.customIntervalUnit === "minute" ? "دقيقة" : "ساعة"}.`}
+          </div>
+        </div>
+      </section>
+
+      <section className="crm-panel crm-automation-section">
         <header><div><h2>المنصات والـ Workers</h2><p>حدد المنصات والـWorkers التقنية التي يعمل عليها هذا الأوتوميشن. هذا الربط لا يغير قواعد توزيع الموظفين.</p></div></header>
         <div className="crm-automation-worker-grid">
           {[...new Set(workers.map((worker: any) => String(worker.platformCode)))].map((platformCode) => {

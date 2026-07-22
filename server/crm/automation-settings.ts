@@ -13,6 +13,11 @@ function canonicalChoiceToken(value: unknown) {
 
 function validate(settings: ReturnType<typeof normalizeCustomerAutomationSettings>) {
   if (!settings.name) throw new Error("اسم الأوتوميشن مطلوب");
+  if (!["every_message", "once_24h", "custom"].includes(settings.triggerMode)) throw new Error("سياسة تشغيل الأوتوميشن غير صحيحة");
+  if (settings.triggerMode === "custom" && (!Number.isInteger(settings.customIntervalValue) || settings.customIntervalValue < 1)) {
+    throw new Error("مدة تشغيل الأوتوميشن المخصصة يجب أن تكون أكبر من صفر");
+  }
+  if (!["minute", "hour", "day"].includes(settings.customIntervalUnit)) throw new Error("وحدة مدة تشغيل الأوتوميشن غير صحيحة");
   const bindingKeys = settings.platformWorkers.map((row) => `${row.platformCode}:${row.workerCode}`);
   if (new Set(bindingKeys).size !== bindingKeys.length) throw new Error("لا يمكن تكرار نفس ربط المنصة والـWorker");
   if (!settings.messages.welcome.text) throw new Error("رسالة الترحيب مطلوبة");
@@ -87,6 +92,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       messages: submitted?.messages || before.messages,
       serviceOptions: submitted?.serviceOptions || before.serviceOptions,
       platformWorkers: submitted?.platformWorkers || before.platformWorkers,
+      triggerMode: submitted?.triggerMode ?? before.triggerMode,
+      customIntervalValue: submitted?.customIntervalValue ?? before.customIntervalValue,
+      customIntervalUnit: submitted?.customIntervalUnit ?? before.customIntervalUnit,
       version: before.version,
     });
 
@@ -118,7 +126,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     // The three service scenarios, departments, branches and answer fields remain fixed.
-    // Only general activation, platform/Worker bindings, message text and accepted replies are editable.
+    // General activation, platform/Worker bindings, trigger policy, message text and accepted replies are editable.
     validate(settings);
     const [row] = await sql<any[]>`
       update crm.automation_settings set

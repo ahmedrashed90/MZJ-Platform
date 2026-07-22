@@ -83,8 +83,7 @@ export const DEFAULT_CUSTOMER_AUTOMATION_SETTINGS: CustomerAutomationSettings = 
     { platformCode: "tiktok", workerCode: "tiktok-snapchat", enabled: true },
     { platformCode: "snapchat", workerCode: "tiktok-snapchat", enabled: true },
   ],
-  // The flow starts only for a conversation that has no open service request. The
-  // generic trigger/schedule controls are deliberately fixed and are not user-editable.
+  // The flow structure is fixed, while the administrator controls when a new run may start.
   triggerMode: "every_message",
   customIntervalValue: 24,
   customIntervalUnit: "hour",
@@ -144,6 +143,20 @@ function boolean(value: unknown, fallback: boolean) {
   if (["1", "true", "yes", "on", "active", "enabled"].includes(token)) return true;
   if (["0", "false", "no", "off", "inactive", "disabled"].includes(token)) return false;
   return fallback;
+}
+
+function triggerMode(value: unknown, fallback: CustomerAutomationSettings["triggerMode"]) {
+  const token = clean(value);
+  return (["every_message", "once_24h", "custom"] as const).includes(token as any)
+    ? token as CustomerAutomationSettings["triggerMode"]
+    : fallback;
+}
+
+function intervalUnit(value: unknown, fallback: CustomerAutomationSettings["customIntervalUnit"]) {
+  const token = clean(value);
+  return (["minute", "hour", "day"] as const).includes(token as any)
+    ? token as CustomerAutomationSettings["customIntervalUnit"]
+    : fallback;
 }
 
 function textList(value: unknown, fallback: string[] = []) {
@@ -240,9 +253,9 @@ export function normalizeCustomerAutomationSettings(raw: any): CustomerAutomatio
     enabled: boolean(raw?.automation_enabled ?? raw?.enabled, defaults.enabled),
     name: editableText(raw?.automation_name ?? raw?.name, defaults.name),
     platformWorkers: platformWorkers.length ? platformWorkers : defaults.platformWorkers,
-    triggerMode: "every_message",
-    customIntervalValue: defaults.customIntervalValue,
-    customIntervalUnit: defaults.customIntervalUnit,
+    triggerMode: triggerMode(raw?.trigger_mode ?? raw?.triggerMode, defaults.triggerMode),
+    customIntervalValue: number(raw?.custom_interval_value ?? raw?.customIntervalValue, defaults.customIntervalValue, 1, 100000),
+    customIntervalUnit: intervalUnit(raw?.custom_interval_unit ?? raw?.customIntervalUnit, defaults.customIntervalUnit),
     scheduleEnabled: false,
     scheduleStart: defaults.scheduleStart,
     scheduleEnd: defaults.scheduleEnd,
