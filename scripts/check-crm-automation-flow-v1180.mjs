@@ -11,6 +11,8 @@ const messaging = read("server/_crm-messaging.ts");
 const lifecycle = read("server/_crm-lifecycle.ts");
 const background = read("server/_crm-background-jobs.ts");
 const ui = read("src/crm/components/CrmAutomationSettings.tsx");
+const contract = read("shared/crmAutomationContract.ts");
+const pageModel = read("src/crm/automationModel.ts");
 const admin = read("src/crm/pages/CrmAdminPage.tsx");
 const api = read("api/index.ts");
 const worker = read("facebook-worker/src/index.js");
@@ -108,13 +110,44 @@ requireTokens("settings API", settingsApi, [
   "platformCompatible",
   "is_archived=false",
   "is_archived=true",
+  "normalizeAutomationSettings",
+  "normalizeAutomationEndpoints",
+  "AutomationSettingsResponse",
+  "const automation = normalizeAutomationSettings",
+  "body.automation",
   "إعدادات الأوتوميشن متاحة لإدارة CRM فقط",
+]);
+forbidTokens("settings API request contract", settingsApi, [
+  "body.settings",
+  "automation.start_messages",
+  "automation.trigger_policy",
+]);
+requireTokens("shared automation contract", contract, [
+  "export type AutomationSettings",
+  "export type AutomationSettingsResponse",
+  "normalizeAutomationSettings",
+  "normalizeAutomationEndpoints",
+  "normalizeAutomationSettingsResponse",
+  "platforms: records(value.platforms).map",
+  "startMessages: records(value.startMessages).map",
+  "choices: records(value.choices).map",
+  "replies: records(choice.replies).map",
+  "steps: records(choice.steps).map",
+  "options: records(step.options).map",
+]);
+requireTokens("automation page model", pageModel, [
+  "automationResponseToDraft",
+  "automationDraftToSettings",
+  "normalizeAutomationSettingsResponse",
+  "triggerIntervalSeconds",
 ]);
 requireTokens("entry-routing boundary", entryApi, ["409", "إعدادات الأوتوميشن"]);
 requireTokens("API route", api, ['["crm/automation-settings", crmAutomationSettingsHandler]']);
 
 requireTokens("automation UI", ui, [
   "/api/crm/automation-settings",
+  "automationResponseToDraft",
+  "automationDraftToSettings",
   "الحالة العامة وسياسة التشغيل",
   "المنصات والـWorkers",
   "رسائل بداية الأوتوميشن",
@@ -124,6 +157,15 @@ requireTokens("automation UI", ui, [
   "إضافة اختيار",
   "إضافة خطوة",
   "حسب محرك التوزيع",
+]);
+forbidTokens("automation UI database field leakage", ui, [
+  "source_code",
+  "worker_code",
+  "is_enabled",
+  "start_messages",
+  "choice_code",
+  "step_code",
+  "health_url",
 ]);
 requireTokens("admin tab", admin, ["CrmAutomationSettings", "إعدادات الأوتوميشن"]);
 
