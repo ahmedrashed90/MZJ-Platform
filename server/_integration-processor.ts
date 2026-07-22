@@ -133,43 +133,45 @@ function identityData(source: string, payload: any) {
   const contact = wa?.contacts?.[0] || {};
   const pageId = first(payload.pageId, payload.page_id);
   const requestedConversationId = first(payload.conversationId, payload.conversation_id, payload.convId);
-  const parsedParticipant = source === "facebook" && requestedConversationId.startsWith("facebook:")
+  const parsedFacebookPsid = source === "facebook" && requestedConversationId.startsWith("facebook:")
     ? requestedConversationId.split(":").slice(2).join(":")
     : "";
   const facebookPsid = first(
     payload.facebookPsid, payload.facebook_psid, payload.fbPsid, payload.fb_psid,
-    payload.metaSenderId, payload.meta_sender_id, payload.fbId, payload.fb_id,
+    payload.metaSenderId, payload.meta_sender_id, parsedFacebookPsid,
   );
-  const participant = first(
-    facebookPsid,
+  const manychatContactId = first(
+    payload.manychatContactId, payload.manychat_contact_id,
+    payload.subscriberId, payload.subscriber_id,
+  );
+  const participant = source === "facebook" ? facebookPsid : first(
     payload.participantId, payload.participant_id,
     payload.user_id, payload.userId, payload.igId, payload.tiktokId,
-    parsedParticipant,
     payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId,
-    payload.manychatContactId, payload.manychat_contact_id,
     payload.waId, msg?.from, contact?.wa_id,
   );
-  const aliases = [...new Set([
-    participant,
+  const aliases = [...new Set((source === "facebook" ? [
     facebookPsid,
-    parsedParticipant,
+    manychatContactId,
+    ...listValues(payload.identityAliases),
+    ...listValues(payload.identity_aliases),
+  ] : [
+    participant,
     payload.participantId, payload.participant_id,
     payload.subscriber_id, payload.subscriberId,
     payload.contact_id, payload.contactId,
-    payload.manychatContactId, payload.manychat_contact_id,
     payload.user_id, payload.userId,
-    payload.fbId, payload.fb_id,
-    payload.fbPsid, payload.fb_psid,
-    payload.metaSenderId, payload.meta_sender_id,
     ...listValues(payload.identityAliases),
     ...listValues(payload.identity_aliases),
     msg?.from, contact?.wa_id,
-  ].map(clean).filter(Boolean))];
+  ]).map(clean).filter(Boolean))];
   const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, requestedConversationId) || crypto.randomUUID();
-  const conversationExternalId = requestedConversationId || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`);
+  const conversationExternalId = source === "facebook"
+    ? (pageId && facebookPsid ? `facebook:${pageId}:${facebookPsid}` : "")
+    : (requestedConversationId || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`));
   const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.phone_number, payload.clientNumber, payload.leadPhone, payload.lead_phone, msg?.from, contact?.wa_id);
   const displayName = first(payload.leadName, payload.lead_name, payload.customerName, payload.customer_name, payload.displayName, payload.display_name, payload.full_name, payload.fullName, payload.name, contact?.profile?.name, "عميل");
-  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName, aliases, facebookPsid };
+  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName, aliases, facebookPsid, manychatContactId };
 }
 
 function capturedLeadData(payload: any, identity: ReturnType<typeof identityData>) {
@@ -209,13 +211,60 @@ function trustedKnownService(routeSource: string, payload: any) {
     payload.serviceSelectionLabel,
     payload.service_selection_label,
   );
-  return declaredService ? departmentKey(declaredService) : "";
+  const serviceKey = declaredService ? departmentKey(declaredService) : "";
+  if (serviceKey === "finance") {
+    const phone = first(
+      payload.leadPhone,
+      payload.lead_phone,
+      payload.phone,
+      payload.mobile,
+      payload.phoneNumber,
+      payload.phone_number,
+    );
+    if (!normalizePhone(phone)) return "";
+  }
+  return serviceKey;
+}
+
+function isExplicitServiceSelection(payload: any) {
+  return bool(payload.forceServiceReclassification) ||
+    bool(payload.force_service_reclassification) ||
+    [payload.flowAction, payload.flow_action].some((value) => clean(value).toLowerCase() === "service_selection");
+}
+
+async function claimLatestServiceSelection(input: {
+  conversationId: string;
+  eventKey: string;
+  occurredAt: string;
+  serviceKey: string;
+}) {
+  const sql = getSql();
+  const rows = await sql<any[]>`
+    insert into crm.service_selection_state(conversation_id,last_event_key,last_event_at,service_key)
+    values(${input.conversationId}::uuid,${input.eventKey},${input.occurredAt}::timestamptz,${input.serviceKey})
+    on conflict(conversation_id) do update set
+      last_event_key=excluded.last_event_key,last_event_at=excluded.last_event_at,
+      service_key=excluded.service_key,updated_at=now()
+    where excluded.last_event_at > crm.service_selection_state.last_event_at
+       or (excluded.last_event_at = crm.service_selection_state.last_event_at
+           and excluded.last_event_key = crm.service_selection_state.last_event_key)
+    returning conversation_id::text,last_event_key,last_event_at,service_key
+  `;
+  return Boolean(rows[0]);
 }
 
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
   const sql = getSql();
   const source = routeSourceCode(routeSource, payload);
   const identity = identityData(source, payload);
+  if (source === "facebook") {
+    if (!identity.pageId) throw new Error("Facebook Page ID is required");
+    if (!identity.facebookPsid) throw new Error("Facebook PSID is required; ManyChat Contact ID cannot be used as PSID");
+    if (!identity.conversationExternalId) throw new Error("Canonical Facebook conversation ID could not be created");
+    if (isExplicitServiceSelection(payload) && !identity.manychatContactId) {
+      throw new Error("ManyChat Contact ID is required as an alias for Facebook service selection");
+    }
+  }
   const media = mediaData(payload);
   const text = messageBody(payload, media);
   const waMessage = whatsappMessage(payload);
@@ -430,12 +479,52 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     `;
   }
 
+  let message: any = existingMessage;
+  if (existingMessage) {
+    if (direction === "in") {
+      [message] = await sql<any[]>`
+        update crm.messages
+        set direction='in',provider_status='received',sender_type='customer',
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId })}::jsonb
+        where id=${existingMessage.id}::uuid
+        returning *,id::text,conversation_id::text
+      `;
+    }
+  } else {
+    [message] = await sql<any[]>`
+      insert into crm.messages(
+        conversation_id,legacy_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,is_sensitive,
+        provider_status,provider_message_id,sender_type,caption,created_at,metadata
+      ) values(
+        ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
+        ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
+        ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId })}
+      ) returning *,id::text,conversation_id::text
+    `;
+
+    if (media.storageKey) {
+      await sql`
+        insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
+        values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
+        on conflict(storage_key) do update set
+          conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
+          media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
+          is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
+      `;
+    }
+  }
+
   const knownService = trustedKnownService(routeSource, payload);
-  const explicitServiceSelection = bool(payload.forceServiceReclassification) ||
-    bool(payload.force_service_reclassification) ||
-    [payload.flowAction, payload.flow_action].some((value) => clean(value).toLowerCase() === "service_selection");
+  const explicitServiceSelection = isExplicitServiceSelection(payload);
+  const serviceSelectionOccurredAt = dateValue({
+    timestamp: payload.eventOccurredAt ?? payload.event_occurred_at ?? payload.selectionOccurredAt ?? payload.selection_occurred_at ?? occurredAt,
+  });
   let createdByKnownSource = false;
-  if (knownService && (!openRequest || explicitServiceSelection)) {
+  let automaticTemplate: any = null;
+  const selectionAccepted = knownService && explicitServiceSelection
+    ? await claimLatestServiceSelection({ conversationId: conversation.id, eventKey: eventId, occurredAt: serviceSelectionOccurredAt, serviceKey: knownService })
+    : true;
+  if (knownService && selectionAccepted && (!openRequest || explicitServiceSelection)) {
     const classified = await classifyConversationService({
       conversationId: conversation.id,
       serviceKey: knownService,
@@ -447,43 +536,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     createdByKnownSource = classified.reused !== true;
     [conversation] = await sql<any[]>`select *,id::text,lead_id::text,contact_id::text,service_request_id::text from crm.conversations where id=${conversation.id}::uuid`;
     matchedLead = await syncCapturedLeadData(sql, contact.id, payload, identity) || matchedLead;
-  }
-
-  if (existingMessage) {
-    if (direction === "in") {
-      [existingMessage] = await sql<any[]>`
-        update crm.messages
-        set direction='in',provider_status='received',sender_type='customer',
-            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId })}::jsonb
-        where id=${existingMessage.id}::uuid
-        returning *,id::text,conversation_id::text
-      `;
-    }
-    await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
-    const resolvedLeadId = conversation.lead_id || matchedLead?.id || openRequest?.lead_id || null;
-    return { lead: resolvedLeadId ? { id: resolvedLeadId } : null, conversation, message: existingMessage, createLead: createdByKnownSource, contact, automation: null };
-  }
-
-  let [message] = await sql<any[]>`
-    insert into crm.messages(
-      conversation_id,legacy_id,direction,message_type,body,attachment_url,attachment_type,file_name,mime_type,file_size,storage_key,media_status,is_sensitive,
-      provider_status,provider_message_id,sender_type,caption,created_at,metadata
-    ) values(
-      ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
-      ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId })}
-    ) returning *,id::text,conversation_id::text
-  `;
-
-  if (media.storageKey) {
-    await sql`
-      insert into crm.media_assets(conversation_id,message_id,storage_key,original_name,media_type,mime_type,file_size,is_sensitive,status,metadata)
-      values(${conversation.id}::uuid,${message.id}::uuid,${media.storageKey},${media.fileName || null},${media.type || 'document'},${media.mimeType || null},${media.fileSize},${media.isSensitive},'ready',${sql.json({ source, eventId })})
-      on conflict(storage_key) do update set
-        conversation_id=excluded.conversation_id,message_id=excluded.message_id,original_name=coalesce(excluded.original_name,crm.media_assets.original_name),
-        media_type=excluded.media_type,mime_type=coalesce(excluded.mime_type,crm.media_assets.mime_type),file_size=coalesce(excluded.file_size,crm.media_assets.file_size),
-        is_sensitive=excluded.is_sensitive,status='ready',updated_at=now()
-    `;
+    automaticTemplate = classified.automaticTemplate || null;
   }
 
   if (direction === "in") {
@@ -548,5 +601,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     contact,
     automation,
     automationError: automationError || null,
+    automaticTemplate,
+    serviceSelectionAccepted: explicitServiceSelection ? selectionAccepted : null,
   };
 }

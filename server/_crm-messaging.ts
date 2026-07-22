@@ -196,6 +196,7 @@ type BackgroundDeliveryInput = {
   messageId?: string | null;
   conversationId?: string | null;
   hasMedia?: boolean;
+  automaticDispatchId?: string | null;
 };
 
 async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
@@ -232,6 +233,16 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
       where id=${input.jobId}::uuid
     `;
 
+    if (input.automaticDispatchId) {
+      await sql`
+        update crm.automatic_template_dispatches set
+          status=${providerStatus},provider_response=${data ? sql.json(data) : null},error_message=${errorMessage || null},
+          sent_at=case when ${providerStatus}='sent' then now() else sent_at end,
+          failed_at=case when ${providerStatus}='failed' then now() else failed_at end,updated_at=now()
+        where id=${input.automaticDispatchId}::uuid
+      `;
+    }
+
     if (input.conversationId) await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
   } catch (error: any) {
     const errorMessage = clean(error?.message || error) || "تعذر إكمال إرسال الرسالة";
@@ -248,6 +259,12 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
       update integrations.outbound_jobs set status='failed',attempts=attempts+1,error_message=${errorMessage},processed_at=now()
       where id=${input.jobId}::uuid
     `.catch(()=>undefined);
+    if (input.automaticDispatchId) {
+      await sql`
+        update crm.automatic_template_dispatches set status='failed',error_message=${errorMessage},failed_at=now(),updated_at=now()
+        where id=${input.automaticDispatchId}::uuid
+      `.catch(()=>undefined);
+    }
   }
 }
 
@@ -315,6 +332,7 @@ export async function deliverCrmMessage(input: {
   senderType?: "human" | "bot" | "system";
   idempotencyKey?: string;
   reason?: string;
+  automaticDispatchId?: string;
   buttons?: unknown[];
   header?: string;
   footer?: string;
@@ -377,6 +395,7 @@ export async function deliverCrmMessage(input: {
     messageId: message.id,
     conversationId: conversation.id,
     hasMedia: Boolean(input.media),
+    automaticDispatchId: input.automaticDispatchId || null,
   });
 
   return {

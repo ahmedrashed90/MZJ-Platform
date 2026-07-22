@@ -11,6 +11,7 @@ import {
   resolveSourceName,
 } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
+import { dispatchAutomaticEntryTemplate } from "./_crm-auto-template.js";
 
 export type ContactIdentityInput = {
   channelCode: string;
@@ -359,7 +360,15 @@ export async function classifyConversationService(input: {
       callCenterName: callCenter.assignedName,
     },
   });
-  return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter };
+  const automaticTemplate = await dispatchAutomaticEntryTemplate({
+    contactId: conversation.contact_id,
+    conversationId: conversation.id,
+    serviceRequestId: request.id,
+    leadId: lead.id,
+    serviceKey,
+    callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
+  });
+  return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, automaticTemplate };
 }
 
 export async function closeCurrentServiceRequest(input: { leadId: string; statusLabel: string; actor?: SessionUser | null; reason?: string }) {

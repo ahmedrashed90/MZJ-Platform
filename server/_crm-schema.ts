@@ -875,6 +875,47 @@ where id='default';
 insert into core.schema_migrations(version) values('crm-completed-workflow-v1.15.5') on conflict(version) do nothing;
 `;
 
+
+const CRM_FACEBOOK_IDENTITY_AUTO_TEMPLATE_V1173_SQL = String.raw`
+alter table crm.automation_settings
+  add column if not exists cash_total_customers_template_enabled boolean not null default false;
+alter table crm.automation_settings
+  add column if not exists finance_call_center_template_enabled boolean not null default false;
+
+create table if not exists crm.service_selection_state (
+  conversation_id uuid primary key references crm.conversations(id) on delete cascade,
+  last_event_key text not null,
+  last_event_at timestamptz not null,
+  service_key text not null,
+  updated_at timestamptz not null default now()
+);
+create table if not exists crm.automatic_template_dispatches (
+  id uuid primary key default gen_random_uuid(),
+  contact_id uuid not null references crm.contacts(id) on delete cascade,
+  lead_id uuid not null references crm.leads(id) on delete cascade,
+  conversation_id uuid not null references crm.conversations(id) on delete cascade,
+  service_request_id uuid not null references crm.service_requests(id) on delete cascade,
+  template_name text not null,
+  reason text not null check(reason in ('cash_total_customers','finance_call_center')),
+  status text not null default 'pending' check(status in ('pending','queued','sent','failed')),
+  outbound_job_id uuid references integrations.outbound_jobs(id) on delete set null,
+  message_id uuid references crm.messages(id) on delete set null,
+  error_message text,
+  provider_response jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  sent_at timestamptz,
+  failed_at timestamptz,
+  unique(service_request_id,template_name,reason)
+);
+create index if not exists crm_automatic_template_dispatches_status_idx
+  on crm.automatic_template_dispatches(status,created_at);
+
+insert into core.schema_migrations(version)
+values('crm-facebook-identity-auto-template-v1.17.3')
+on conflict(version) do nothing;
+`;
+
 const CRM_CLOSED_NOT_QUALIFIED_V1172_SQL = String.raw`
 update crm.automation_settings
 set closed_statuses=jsonb_set(
@@ -929,6 +970,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-closed-not-qualified-v1.17.2'
       `;
       if (!closedNotQualifiedMigration) await runSqlScript(CRM_CLOSED_NOT_QUALIFIED_V1172_SQL);
+      const [facebookIdentityAutoTemplateMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-facebook-identity-auto-template-v1.17.3'
+      `;
+      if (!facebookIdentityAutoTemplateMigration) await runSqlScript(CRM_FACEBOOK_IDENTITY_AUTO_TEMPLATE_V1173_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

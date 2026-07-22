@@ -26,6 +26,7 @@ const tabs = [
   { key: "sources", label: "المصادر" },
   { key: "templates", label: "القوالب والرسائل" },
   { key: "mappings", label: "ربط الحالات بالقوالب" },
+  { key: "automatic_templates", label: "الإرسال التلقائي" },
   { key: "quality", label: "مؤشرات التقارير" },
   { key: "data_review", label: "مراجعة أخطاء البيانات" },
   { key: "endpoints", label: "ربط المنصات والـ Workers" },
@@ -129,7 +130,7 @@ function templateStatusLabel(row: any) {
 
 export function CrmAdminPage({ embedded = false }: Props) {
   const [tab, setTab] = useState<Tab>("entry_routing");
-  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
+  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
   const [customerFieldForm, setCustomerFieldForm] = useState(blankCustomerField);
   const [sourceForm, setSourceForm] = useState(blankSource);
@@ -139,6 +140,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
   const [branchForm, setBranchForm] = useState(blankBranch);
   const [ruleForm, setRuleForm] = useState(blankRule);
   const [quality, setQuality] = useState(dbToQuality(null));
+  const [automaticTemplates, setAutomaticTemplates] = useState({ cashTotalCustomersEnabled: false, financeCallCenterEnabled: false });
   const [dataReview, setDataReview] = useState<any | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewPreview, setReviewPreview] = useState<any | null>(null);
@@ -155,6 +157,10 @@ export function CrmAdminPage({ embedded = false }: Props) {
       const result = await crmFetch<any>("/api/crm/settings");
       setData(result);
       setQuality(dbToQuality(result.quality));
+      setAutomaticTemplates({
+        cashTotalCustomersEnabled: result.automaticTemplateSettings?.cash_total_customers_template_enabled === true,
+        financeCallCenterEnabled: result.automaticTemplateSettings?.finance_call_center_template_enabled === true,
+      });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل إعدادات CRM");
     } finally {
@@ -489,6 +495,17 @@ export function CrmAdminPage({ embedded = false }: Props) {
             </section>
           )}
         />
+      ) : null}
+
+      {tab === "automatic_templates" ? (
+        <section className="crm-panel crm-form-panel">
+          <header><div><h2>الإرسال التلقائي للقالب</h2><p>الإعدادان مستقلان، والقيمة الافتراضية بعد النشر غير نشطة. الإرسال اليدوي يظل متاحًا دائمًا.</p></div></header>
+          <div className="crm-form-grid crm-form-grid-wide">
+            <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.cashTotalCustomersEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, cashTotalCustomersEnabled: event.target.checked }))} /><span>إرسال finance_request_received تلقائيًا عند دخول عميل جديد إلى إجمالي العملاء في مبيعات الكاش</span></label>
+            <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.financeCallCenterEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, financeCallCenterEnabled: event.target.checked }))} /><span>إرسال finance_request_received تلقائيًا عند دخول عميل تمويل جديد إلى كارت الكول سنتر</span></label>
+          </div>
+          <div className="crm-form-actions"><button className="crm-primary-button" onClick={() => void save("automatic_template_settings", automaticTemplates)}><FloppyDisk size={18} />حفظ إعدادات الإرسال التلقائي</button></div>
+        </section>
       ) : null}
 
       {tab === "quality" ? (

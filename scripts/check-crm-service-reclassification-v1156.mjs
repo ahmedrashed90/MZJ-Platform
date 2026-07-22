@@ -21,7 +21,7 @@ const requiredProcessor = [
   "forceServiceReclassification",
   "force_service_reclassification",
   'clean(value).toLowerCase() === "service_selection"',
-  "knownService && (!openRequest || explicitServiceSelection)",
+  "knownService && selectionAccepted && (!openRequest || explicitServiceSelection)",
   'classificationMethod: explicitServiceSelection ? "customer_service_selection" : "source_mapping"',
 ];
 for (const token of requiredProcessor) {

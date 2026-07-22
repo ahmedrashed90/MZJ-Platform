@@ -15,7 +15,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [statuses, templates, mappings, quality, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
+    const [statuses, templates, mappings, quality, automaticTemplateSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
       sql`
@@ -24,6 +24,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         order by m.department_code,m.status_label
       `,
       sql`select * from crm.report_quality_settings where id='default'`,
+      sql`select cash_total_customers_template_enabled,finance_call_center_template_enabled from crm.automation_settings where id='default'`,
       sql`select * from crm.integration_endpoints order by display_name`,
       sql`select code,name,is_active,sort_order from core.branches order by sort_order,name`,
       sql`
@@ -99,6 +100,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       templates,
       mappings,
       quality: quality[0],
+      automaticTemplateSettings: automaticTemplateSettings[0] || { cash_total_customers_template_enabled: false, finance_call_center_template_enabled: false },
       endpoints,
       branches,
       sources,
@@ -275,6 +277,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
       returning *,id::text,template_id::text
     `;
     return response.status(200).json({ ok: true, row });
+  }
+
+  if (section === "automatic_template_settings") {
+    const [row] = await sql<any[]>`
+      update crm.automation_settings set
+        cash_total_customers_template_enabled=${body.cashTotalCustomersEnabled === true},
+        finance_call_center_template_enabled=${body.financeCallCenterEnabled === true},
+        updated_at=now()
+      where id='default'
+      returning cash_total_customers_template_enabled,finance_call_center_template_enabled
+    `;
+    await audit(user, "crm_automatic_template_settings_saved", "automation_settings", "default", row);
+    return response.status(200).json({ ok: true, row, message: "تم حفظ إعدادات الإرسال التلقائي" });
   }
 
   if (section === "quality") {
