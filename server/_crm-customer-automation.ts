@@ -275,15 +275,16 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
     if (!run) {
       if (!withinSchedule(settings)) return { type: "skip", reason: "outside_schedule" };
       if (!(await triggerAllowed(tx, conversationId, settings))) return { type: "skip", reason: "trigger_cooldown" };
-      const directOption = detectAutomationServiceChoice(event, context, settings.serviceOptions);
-      const initialStatus = 'classifying';
+
+      // The first inbound message only starts the automation. Its text or button payload
+      // must never be consumed as a service choice, even when it equals 1, 2, 3, or an
+      // option key. The customer chooses a service only after the start sequence is sent.
       [run] = await tx<any[]>`
         insert into crm.customer_automation_runs(contact_id,conversation_id,platform_code,worker_code,status,option_key,service_key,last_event_key,last_message_id,expires_at,automation_version,settings_snapshot,history)
-        values(${contactId||null}::uuid,${conversationId}::uuid,${platformCode},${workerCode},${initialStatus},${directOption?.key||null},${directOption?.serviceKey||null},${eventKey},${messageId||null},${flowExpiresAt(settings)}::timestamptz,${settings.version||1},${tx.json(settings)},
-          ${tx.json([{ at: new Date().toISOString(), action: directOption ? "service_selected_directly" : "started", eventKey, optionKey: directOption?.key || null }])})
+        values(${contactId||null}::uuid,${conversationId}::uuid,${platformCode},${workerCode},'classifying',null,null,${eventKey},${messageId||null},${flowExpiresAt(settings)}::timestamptz,${settings.version||1},${tx.json(settings)},
+          ${tx.json([{ at: new Date().toISOString(), action: "started", eventKey }])})
         returning *,id::text,conversation_id::text,contact_id::text
       `;
-      if (directOption) return { type: "choice", run, option: directOption };
       await tx`update crm.conversations set classification_state='awaiting_service',service_selection_sent_at=now(),service_selection_version=service_selection_version+1,updated_at=now() where id=${conversationId}::uuid`;
       return { type: "start", run };
     }

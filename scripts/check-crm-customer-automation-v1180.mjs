@@ -66,6 +66,10 @@ for (const token of [
   'automation_version',
 ]) if (!engine.includes(token)) throw new Error(`State machine check failed: missing ${token}`);
 if (engine.includes('accepted.includes(candidate) || candidate.includes')) throw new Error('Service choices must use exact matching, not substring matching');
+const firstInboundBlock = engine.split('    if (!run) {')[1]?.split('    if (run.status === "awaiting_service")')[0] || '';
+if (!firstInboundBlock.includes('return { type: "start", run }')) throw new Error('First inbound message must start the automation');
+if (!firstInboundBlock.includes("'classifying',null,null")) throw new Error('First inbound message must not preselect a service');
+if (firstInboundBlock.includes('detectAutomationServiceChoice')) throw new Error('First inbound message must not be consumed as a service choice');
 
 for (const token of [
   'status=\'processing\'',
