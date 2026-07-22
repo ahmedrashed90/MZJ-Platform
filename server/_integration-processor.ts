@@ -17,6 +17,37 @@ function bool(value: unknown) {
   return value === true || value === 1 || ["true", "1", "yes", "on"].includes(clean(value).toLowerCase());
 }
 
+function isoTimestamp(value: unknown) {
+  if (!value) return "";
+  const parsed = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? clean(value) : parsed.toISOString();
+}
+
+function inboundMessageFingerprint(input: {
+  source: string;
+  rawProviderMessageId: string;
+  occurredAt: unknown;
+  direction: string;
+  body: unknown;
+  messageType: unknown;
+  attachmentType: unknown;
+  fileName: unknown;
+  storageKey: unknown;
+}) {
+  const canonical = JSON.stringify({
+    source: clean(input.source).toLowerCase(),
+    rawProviderMessageId: clean(input.rawProviderMessageId),
+    occurredAt: isoTimestamp(input.occurredAt),
+    direction: clean(input.direction).toLowerCase(),
+    body: clean(input.body),
+    messageType: clean(input.messageType).toLowerCase(),
+    attachmentType: clean(input.attachmentType).toLowerCase(),
+    fileName: clean(input.fileName),
+    storageKey: clean(input.storageKey),
+  });
+  return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
 function nestedWhatsapp(payload: any) {
   return payload?.entry?.[0]?.changes?.[0]?.value || {};
 }
@@ -192,8 +223,24 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   const declaredDirection = first(payload.direction, payload.messageDirection, payload.message_direction, "in").toLowerCase();
   const direction = isWhatsappCustomerMessage ? "in" : (declaredDirection === "out" ? "out" : "in");
   const senderType = direction === "in" ? "customer" : first(payload.senderType, payload.sender_type, "system");
-  const providerMessageId = first(payload.providerMessageId, payload.provider_message_id, payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
+  const rawProviderMessageId = first(
+    payload.providerOriginalMessageId, payload.provider_original_message_id,
+    payload.providerMessageId, payload.provider_message_id,
+    payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId,
+  );
+  let providerMessageId = first(payload.providerMessageId, payload.provider_message_id, payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
   const occurredAt = dateValue(payload);
+  const inboundFingerprint = inboundMessageFingerprint({
+    source,
+    rawProviderMessageId,
+    occurredAt,
+    direction,
+    body: text,
+    messageType: media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text"),
+    attachmentType: media.type,
+    fileName: media.fileName,
+    storageKey: media.storageKey,
+  });
 
   const { contact } = await ensureContactIdentity({
     channelCode: source,
@@ -311,8 +358,34 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   if (conversation) {
     [existingMessage] = await sql<any[]>`
       select *,id::text,conversation_id::text from crm.messages
-      where conversation_id=${conversation.id}::uuid and provider_message_id=${providerMessageId} limit 1
+      where conversation_id=${conversation.id}::uuid
+        and (provider_message_id=${providerMessageId} or coalesce(metadata->>'inboundFingerprint','')=${inboundFingerprint})
+      limit 1
     `;
+
+    if (existingMessage) {
+      const existingFingerprint = clean(existingMessage.metadata?.inboundFingerprint) || inboundMessageFingerprint({
+        source: existingMessage.metadata?.source || source,
+        rawProviderMessageId: existingMessage.metadata?.rawProviderMessageId || existingMessage.provider_message_id || rawProviderMessageId,
+        occurredAt: existingMessage.created_at,
+        direction: existingMessage.direction,
+        body: existingMessage.body,
+        messageType: existingMessage.message_type,
+        attachmentType: existingMessage.attachment_type,
+        fileName: existingMessage.file_name,
+        storageKey: existingMessage.storage_key,
+      });
+
+      if (existingFingerprint !== inboundFingerprint) {
+        providerMessageId = `${providerMessageId}:${inboundFingerprint.slice(0, 16)}`;
+        [existingMessage] = await sql<any[]>`
+          select *,id::text,conversation_id::text from crm.messages
+          where conversation_id=${conversation.id}::uuid
+            and (provider_message_id=${providerMessageId} or coalesce(metadata->>'inboundFingerprint','')=${inboundFingerprint})
+          limit 1
+        `;
+      }
+    }
   }
 
   if (!conversation) {
@@ -361,13 +434,15 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     if (direction === "in") {
       [existingMessage] = await sql<any[]>`
         update crm.messages
-        set direction='in',provider_status='received',sender_type='customer'
+        set direction='in',provider_status='received',sender_type='customer',
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId })}::jsonb
         where id=${existingMessage.id}::uuid
         returning *,id::text,conversation_id::text
       `;
     }
     await sql`update integrations.inbound_events set status='processed',processed_at=now(),error_message=null where source=${routeSource} and event_key=${eventId}`;
-    return { lead: conversation.lead_id ? { id: conversation.lead_id } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
+    const resolvedLeadId = conversation.lead_id || matchedLead?.id || openRequest?.lead_id || null;
+    return { lead: resolvedLeadId ? { id: resolvedLeadId } : null, conversation, message: existingMessage, createLead: false, contact, automation: null };
   }
 
   let [message] = await sql<any[]>`
@@ -377,7 +452,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     ) values(
       ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
       ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null })}
+      ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId })}
     ) returning *,id::text,conversation_id::text
   `;
 
@@ -412,13 +487,21 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   if (direction === "in") {
-    if (conversation.lead_id) {
-      await markCrmLeadUnread(sql, { leadId: conversation.lead_id, conversationId: conversation.id, createdAt: occurredAt, messageId: providerMessageId, messageKey: providerMessageId, messagePath: "" });
+    const unreadLeadId = conversation.lead_id || matchedLead?.id || openRequest?.lead_id || null;
+    if (unreadLeadId) {
+      await markCrmLeadUnread(sql, {
+        leadId: unreadLeadId,
+        conversationId: conversation.id,
+        createdAt: occurredAt,
+        messageId: providerMessageId,
+        messageKey: inboundFingerprint,
+        messagePath: "",
+      });
     } else {
       await sql`
         update crm.conversations set
-          unread_count=case when coalesce(metadata->>'lastUnreadMessageKey','')=${providerMessageId} then greatest(1,unread_count) else unread_count+1 end,
-          metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${providerMessageId}::text),true),
+          unread_count=case when coalesce(metadata->>'lastUnreadMessageKey','')=${inboundFingerprint} then greatest(1,unread_count) else unread_count+1 end,
+          metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${inboundFingerprint}::text),true),
           updated_at=now()
         where id=${conversation.id}::uuid
       `;
@@ -458,7 +541,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     where source=${routeSource} and event_key=${eventId}
   `;
   return {
-    lead: conversation.lead_id ? { id: conversation.lead_id } : null,
+    lead: (conversation.lead_id || matchedLead?.id || openRequest?.lead_id) ? { id: conversation.lead_id || matchedLead?.id || openRequest?.lead_id } : null,
     conversation,
     message,
     createLead: createdByKnownSource,

@@ -413,6 +413,7 @@ function normalizeInboundEvents(incoming) {
         const messageId = first(message?.id, message?.message_id, message?.fb_message_id) || stableEventId({ phone, message });
         events.push({
           eventId: messageId,
+          providerMessageId: messageId,
           phone,
           displayName: first(contacts?.[0]?.profile?.name, contacts?.[0]?.name, "عميل"),
           timestamp: message?.timestamp || Date.now(),
@@ -432,7 +433,8 @@ function normalizeInboundEvents(incoming) {
     const roots = [incoming, incoming?.data, incoming?.body, incoming?.payload, incoming?.event]
       .filter((value) => value && typeof value === "object");
     for (const root of roots) {
-      const message = root?.message && typeof root.message === "object" ? root.message : root;
+      const hasNestedMessage = Boolean(root?.message && typeof root.message === "object");
+      const message = hasNestedMessage ? root.message : root;
       const direction = normalizeStatus(first(message?.direction, root?.direction, "in"));
       const isContact = message?.is_message_by_contact ?? message?.isMessageByContact ?? root?.is_message_by_contact ?? root?.isMessageByContact;
       if (["out", "outbound", "sent"].includes(direction) || Number(isContact) === 0) continue;
@@ -441,12 +443,32 @@ function normalizeInboundEvents(incoming) {
       const text = inboundText(message) || first(root?.text, root?.body, root?.customer_message, root?.last_input_text);
       const attachment = inboundAttachment(message) || genericAttachment(root);
       if (!text && !attachment) continue;
-      const messageId = first(message?.id, message?.message_id, message?.fb_message_id, root?.eventId, root?.event_id, root?.id) || stableEventId({ phone, message, text, attachment });
+      const providerMessageId = first(
+        message?.message_wamid, message?.messageWamid, message?.wamid,
+        message?.provider_message_id, message?.providerMessageId,
+        hasNestedMessage ? message?.id : "", message?.message_id, message?.messageId, message?.fb_message_id,
+        root?.eventId, root?.event_id,
+      );
+      const rawTimestamp = message?.timestamp || root?.timestamp || root?.createdAt || root?.created_at || root?.receivedAt || root?.received_at || "";
+      const eventId = providerMessageId || stableEventId({
+        phone,
+        timestamp: rawTimestamp,
+        text,
+        attachment: attachment ? {
+          type: attachment.attachmentType || "",
+          mediaId: attachment.mediaId || "",
+          fileName: attachment.fileName || "",
+          mimeType: attachment.mimeType || "",
+          caption: attachment.caption || "",
+        } : null,
+        message,
+      });
       events.push({
-        eventId: messageId,
+        eventId,
+        providerMessageId: providerMessageId || eventId,
         phone,
         displayName: first(root?.customerName, root?.displayName, root?.name, root?.contact?.name, "عميل"),
-        timestamp: message?.timestamp || root?.timestamp || root?.createdAt || Date.now(),
+        timestamp: rawTimestamp || Date.now(),
         message: { ...message, ...(text && !message?.text ? { text: { body: text } } : {}) },
         envelope: null,
         generic: root,
@@ -472,7 +494,7 @@ async function buildPlatformInboundPayload(event, env) {
     if (!direct || isProtectedWhatsappMediaUrl(direct)) {
       const resolved = await resolveInboundMedia(env, {
         phone: event.phone,
-        providerMessageId: event.eventId,
+        providerMessageId: event.providerMessageId || event.eventId,
         mediaId: attachment.mediaId,
         messageType: attachment.attachmentType,
         messageTimestamp: event.timestamp,
@@ -531,6 +553,8 @@ async function buildPlatformInboundPayload(event, env) {
     customerName: event.displayName,
     messageId: event.eventId,
     providerMessageId: event.eventId,
+    providerOriginalMessageId: event.providerMessageId || event.eventId,
+    provider_original_message_id: event.providerMessageId || event.eventId,
     text: messageText,
     message: messageText,
     messageType: attachment?.hasAttachment ? attachment.attachmentType : normalizeMediaType(message?.type || "text"),

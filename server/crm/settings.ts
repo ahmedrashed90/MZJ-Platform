@@ -212,7 +212,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const effectiveDepartments = locked ? (Array.isArray(existing.department_keys) ? existing.department_keys : []) : departmentKeys;
     const effectiveOptions = effectiveFieldType === "select" ? options : [];
     if (effectiveFieldType === "select" && !effectiveOptions.length) return response.status(400).json({ ok: false, error: "أضف اختيارات القائمة قبل الحفظ" });
-    const isActive = locked ? true : body.isActive !== false;
+    const canToggleVisibility = existing?.field_key === "department_transfer";
+    const isActive = locked && !canToggleVisibility ? true : body.isActive !== false;
     const isRequired = locked ? existing.is_required === true : body.isRequired === true;
 
     const [row] = existing

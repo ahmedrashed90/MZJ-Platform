@@ -40,7 +40,8 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
         update crm.conversations
         set unread_count=case
               when coalesce(metadata->>'lastUnreadMessageKey','')=${input.messageKey} then greatest(1,coalesce(unread_count,0))
-              else greatest(1,coalesce(unread_count,0)+1)
+              when last_message_at is null or last_message_at<=${input.createdAt}::timestamptz then greatest(1,coalesce(unread_count,0)+1)
+              else greatest(1,coalesce(unread_count,0))
             end,
             last_message_at=greatest(coalesce(last_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
             metadata=jsonb_set(coalesce(metadata,'{}'::jsonb),'{lastUnreadMessageKey}',to_jsonb(${input.messageKey}::text),true),
