@@ -30,7 +30,7 @@ export async function dispatchAutomaticEntryTemplate(input: {
 
   const [settings] = await sql<any[]>`
     select cash_total_customers_template_enabled,finance_call_center_template_enabled
-    from crm.automation_settings where id='default'
+    from crm.crm_runtime_settings where id='default'
   `;
   const enabled = reason === "cash_total_customers"
     ? settings?.cash_total_customers_template_enabled === true

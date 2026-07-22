@@ -1,0 +1,26 @@
+MZJ Platform v1.18.0 - CRM Automation Rebuild Test Results
+Date: 2026-07-23
+
+PASS - TypeScript/TSX syntax transpile (126 files)
+PASS - API and server import extensions
+PASS - CRM automation architecture/static checks
+PASS - Default cash flow simulation
+PASS - Default finance flow simulation
+PASS - Invalid then valid Saudi mobile flow simulation
+PASS - Default customer-service flow simulation
+PASS - Event/message/final-action idempotency simulation
+PASS - Trigger policies: every message, 24 hours, custom minutes/hours/days
+PASS - Facebook Worker mocked webhook/send/button/media tests
+PASS - CRM service reclassification checks
+PASS - Facebook canonical identity and auto-template checks
+PASS - CRM reports/KPI checks
+PASS - CRM manual leads checks
+PASS - CRM module/reference/settings checks
+PASS - Worker route discovery checks
+PASS - Tracking module checks
+PASS - Operations module/dashboard/workflow/FK/archive/approval checks
+PASS - ERPNext unified Sales Order link checks
+
+NOT RUN - Live PostgreSQL migration/integration test: DATABASE_URL is not configured.
+NOT RUN - Full Vite production build: project dependencies are not installed and network package installation was unavailable.
+The direct tsc command stopped on missing React/Node/module declarations, while syntax transpile of all source files passed.

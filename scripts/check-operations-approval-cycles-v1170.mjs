@@ -9,7 +9,8 @@ const reject = (file, needle, label = needle) => {
 };
 
 const packageJson = JSON.parse(read("package.json"));
-if (packageJson.version !== "1.17.0") throw new Error("Operations approval-cycle check failed: package version must be 1.17.0");
+const versionParts = String(packageJson.version || "0.0.0").split(".").map(Number);
+if (versionParts[0] < 1 || (versionParts[0] === 1 && versionParts[1] < 17)) throw new Error("Operations approval-cycle check failed: package version must be 1.17.0 or newer");
 
 expect("server/_operations-schema.ts", "drop constraint if exists operations_vehicle_current_approval_unique", "legacy approval constraint cleanup");
 expect("server/_operations-schema.ts", "i.indpred is null", "generic legacy full unique-index cleanup");

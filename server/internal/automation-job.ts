@@ -1,6 +1,6 @@
 import type { VercelRequest,VercelResponse } from "@vercel/node";
 import { safeSecretEquals } from "../_auth.js";
-import { processAutomationJobById } from "../_crm-automation.js";
+import { processBackgroundJobById } from "../_crm-background-jobs.js";
 import { ensureCrmSchema } from "../_crm-schema.js";
 
 function clean(value:unknown){return String(value??"").trim();}
@@ -19,6 +19,6 @@ export default async function handler(request:VercelRequest,response:VercelRespo
   const jobId=clean(body.jobId||body.job_id);
   if(!jobId)return response.status(400).json({ok:false,error:"jobId مطلوب"});
   await ensureCrmSchema();
-  const result=await processAutomationJobById(jobId);
+  const result=await processBackgroundJobById(jobId);
   return response.status(200).json({ok:true,...result});
 }

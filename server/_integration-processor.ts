@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import { clean, departmentKey, normalizePhone } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 import { ensureContactIdentity, findOpenServiceRequest, classifyConversationService } from "./_crm-lifecycle.js";
-import { publishAutomationEvent } from "./_crm-automation.js";
-import { processCrmConversationFlowEvent } from "./_crm-conversation-flow.js";
+import { publishBackgroundEvent } from "./_crm-background-jobs.js";
+import { handleAutomationInbound } from "./_crm-flow-engine.js";
 import { markCrmLeadUnread } from "./_crm-unread-state.js";
 
 function first(...values: unknown[]) {
@@ -188,7 +188,7 @@ async function syncCapturedLeadData(sql: any, contactId: string, payload: any, i
   if (!meaningfulName && !captured.car && !captured.phoneNormalized) return null;
   const [lead] = await sql<any[]>`
     update crm.leads set
-      customer_name=case when exists(select 1 from crm.contacts c where c.id=${contactId}::uuid and c.metadata->>'conversationAutomationCustomerNameLocked'='true') then customer_name else coalesce(nullif(${meaningfulName},''),customer_name) end,
+      customer_name=case when coalesce(extra_data->>'automationCustomerNameLocked','false')='true' then customer_name else coalesce(nullif(${meaningfulName},''),customer_name) end,
       phone=coalesce(nullif(${captured.phone},''),phone),
       phone_normalized=coalesce(nullif(${captured.phoneNormalized},''),phone_normalized),
       car_name=coalesce(nullif(${captured.car},''),car_name),
@@ -456,7 +456,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         contact_id=${contact.id}::uuid,
         lead_id=coalesce(${openRequest?.lead_id || matchedLead?.id || null}::uuid,lead_id),
         service_request_id=coalesce(${openRequest?.id || null}::uuid,service_request_id),
-        customer_name=case when coalesce(metadata->>'conversationAutomationCustomerNameLocked','false')='true' then customer_name else coalesce(nullif(${identity.displayName},''),customer_name) end,
+        customer_name=case when coalesce(metadata->>'automationCustomerNameLocked','false')='true' then customer_name else coalesce(nullif(${identity.displayName},''),customer_name) end,
         participant_id=case
           when lower(coalesce(${first(payload.provider, payload.providerName, payload.provider_name, routeSource)},'')) in ('meta','facebook_graph') then coalesce(nullif(${identity.participant || identity.externalId},''),participant_id)
           else coalesce(nullif(participant_id,''),nullif(${identity.participant || identity.externalId},''))
@@ -515,8 +515,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     }
   }
 
-  const conversationAutomationSource = ["facebook","instagram","whatsapp","tiktok"].includes(source);
-  const knownService = conversationAutomationSource ? "" : trustedKnownService(routeSource, payload);
+  const knownService = trustedKnownService(routeSource, payload);
   const explicitServiceSelection = isExplicitServiceSelection(payload);
   const serviceSelectionOccurredAt = dateValue({
     timestamp: payload.eventOccurredAt ?? payload.event_occurred_at ?? payload.selectionOccurredAt ?? payload.selection_occurred_at ?? occurredAt,
@@ -563,63 +562,56 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     }
   }
 
-  // The inbound message is already persisted at this point. The configurable conversation
-  // automation owns service selection and finance questions. Legacy automation remains only
-  // for unrelated inbox-agent jobs and must not start a second entry flow.
+  // The inbound message is already persisted at this point. Customer-flow automation
+  // and unrelated delayed background jobs are independent secondary effects.
   let automation: any = null;
-  let automationError = "";
+  const automationErrors: string[] = [];
+  if (direction === "in") {
+    try {
+      automation = await handleAutomationInbound({
+        eventKey: `${source}:${eventId}:customer-flow`,
+        providerMessageId,
+        conversationId: conversation.id,
+        contactId: contact.id,
+        platformCode: source,
+        workerCode: first(payload.workerCode, payload.worker_code, payload.providerName, payload.provider_name, payload.provider),
+        messageText: text,
+        payloadValue: first(
+          payload.payload,
+          payload.buttonPayload,
+          payload.button_payload,
+          payload.quickReplyPayload,
+          payload.quick_reply_payload,
+          whatsappMessage(payload)?.interactive?.button_reply?.id,
+          whatsappMessage(payload)?.interactive?.list_reply?.id,
+        ),
+        messageType: media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text"),
+        occurredAt,
+      });
+    } catch (error: any) {
+      const errorMessage = error?.message || String(error);
+      automationErrors.push(`customer-flow: ${errorMessage}`);
+      console.error("Inbound message persisted; customer automation failed", { routeSource, eventId, conversationId: conversation.id, messageId: message.id, error: errorMessage });
+    }
+  }
   try {
-    const conversationFlow = direction === "in" && conversationAutomationSource
-      ? await processCrmConversationFlowEvent({
-          eventKey: `${source}:${eventId}:conversation-flow`,
-          providerMessageId,
-          platformCode: source,
-          contactId: conversation.contact_id || contact.id,
-          conversationId: conversation.id,
-          messageId: message.id,
-          text,
-          payload: { ...payload, direction, senderType, messageId: message.id, providerMessageId, createdAt: occurredAt },
-        })
-      : { handled: false, reason: "not_conversation_automation_source", sessionId: null };
-
-    const [currentContext] = await sql<any[]>`
-      select contact_id::text,service_request_id::text,lead_id::text
-      from crm.conversations where id=${conversation.id}::uuid limit 1
-    `;
-    const legacy = await publishAutomationEvent({
-      eventKey: `${source}:${eventId}:message`,
+    await publishBackgroundEvent({
+      eventKey: `${source}:${eventId}:background`,
       eventType: direction === "in" ? "message.received" : "message.sent",
       source,
-      contactId: currentContext?.contact_id || contact.id,
+      contactId: contact.id,
       conversationId: conversation.id,
-      serviceRequestId: currentContext?.service_request_id || conversation.service_request_id || openRequest?.id || null,
-      leadId: currentContext?.lead_id || conversation.lead_id || openRequest?.lead_id || null,
-      payload: {
-        ...payload,
-        direction,
-        senderType,
-        text,
-        messageId: message.id,
-        providerMessageId,
-        createdAt: occurredAt,
-        hasAttachment: media.hasAttachment,
-        mediaType: media.type,
-        entryAutomationHandled: conversationFlow?.handled === true,
-        conversationAutomationSessionId: conversationFlow?.sessionId || null,
-      },
+      serviceRequestId: conversation.service_request_id || openRequest?.id || null,
+      leadId: conversation.lead_id || openRequest?.lead_id || null,
+      payload: { ...payload, direction, senderType, text, messageId: message.id, providerMessageId, createdAt: occurredAt, hasAttachment: media.hasAttachment, mediaType: media.type },
       actor: null,
     });
-    automation = { conversationFlow, legacy };
   } catch (error: any) {
-    automationError = error?.message || String(error);
-    console.error("Inbound message persisted; automation side effect failed", {
-      routeSource,
-      eventId,
-      conversationId: conversation.id,
-      messageId: message.id,
-      error: automationError,
-    });
+    const errorMessage = error?.message || String(error);
+    automationErrors.push(`background: ${errorMessage}`);
+    console.error("Inbound message persisted; background job side effect failed", { routeSource, eventId, conversationId: conversation.id, messageId: message.id, error: errorMessage });
   }
+  const automationError = automationErrors.join(" | ");
 
   await sql`
     update integrations.inbound_events

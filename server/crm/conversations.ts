@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { deliverCrmMessage, renderCrmTemplate } from "../_crm-messaging.js";
-import { publishAutomationEvent } from "../_crm-automation.js";
+import { publishBackgroundEvent } from "../_crm-background-jobs.js";
 import { getSql } from "../_db.js";
 import { markCrmLeadRead } from "../_crm-unread-state.js";
 
@@ -246,7 +246,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         reason: "manual",
       });
       if (media && delivery.message?.id) await sql`update crm.media_assets set message_id=${delivery.message.id}::uuid,status='ready',updated_at=now() where id=${media.id}::uuid`;
-      await publishAutomationEvent({
+      await publishBackgroundEvent({
         eventKey: `crm-message-sent:${delivery.message?.id || delivery.jobId}`,
         eventType: delivery.providerStatus === "queued" ? "message.queued" : "message.sent",
         source: conversation.channel_code,

@@ -3,7 +3,7 @@ import { clean, normalizePhone } from "./_crm-utils.js";
 import { deliverConversationMessage, deliverDirectWhatsapp } from "./_crm-messaging.js";
 import { getSql } from "./_db.js";
 
-export type AutomationEventInput = {
+export type BackgroundEventInput = {
   eventKey: string;
   eventType: string;
   source?: string;
@@ -81,7 +81,7 @@ async function scheduleAutomationWakeup(job: AutomationJobRow) {
   const secret = schedulerSecret();
   if (!base || !secret) {
     const sql = getSql();
-    await sql`update crm.automation_jobs set scheduler_status='failed',scheduler_error='AUTOMATION_SCHEDULER_URL/AUTOMATION_SCHEDULER_SECRET missing',updated_at=now() where id=${job.id}::uuid`;
+    await sql`update crm.background_jobs set scheduler_status='failed',scheduler_error='AUTOMATION_SCHEDULER_URL/AUTOMATION_SCHEDULER_SECRET missing',updated_at=now() where id=${job.id}::uuid`;
     throw new Error("AUTOMATION_SCHEDULER_URL و AUTOMATION_SCHEDULER_SECRET مطلوبان لتشغيل المهام المؤجلة بدون Vercel Cron");
   }
   const dueAt = new Date(job.due_at);
@@ -98,19 +98,19 @@ async function scheduleAutomationWakeup(job: AutomationJobRow) {
     try { data = JSON.parse(raw); } catch { data = { raw }; }
     if (!response.ok || data?.ok === false) throw new Error(clean(data?.error || data?.message || raw) || `scheduler_http_${response.status}`);
     const sql = getSql();
-    await sql`update crm.automation_jobs set scheduler_status='scheduled',scheduler_message_id=${clean(data?.messageId || data?.eventId) || payload.eventId},scheduler_error=null,scheduled_at=now(),updated_at=now() where id=${job.id}::uuid`;
+    await sql`update crm.background_jobs set scheduler_status='scheduled',scheduler_message_id=${clean(data?.messageId || data?.eventId) || payload.eventId},scheduler_error=null,scheduled_at=now(),updated_at=now() where id=${job.id}::uuid`;
     return { ok: true, eventId: data?.eventId || payload.eventId, dueAt: payload.dueAt };
   } catch (error: any) {
     const message = error?.message || String(error);
     const sql = getSql();
-    await sql`update crm.automation_jobs set scheduler_status='failed',scheduler_error=${message},updated_at=now() where id=${job.id}::uuid`;
+    await sql`update crm.background_jobs set scheduler_status='failed',scheduler_error=${message},updated_at=now() where id=${job.id}::uuid`;
     throw error;
   }
 }
 
 async function loadAutomationJob(jobId: string) {
   const sql = getSql();
-  const [job] = await sql<AutomationJobRow[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.automation_jobs where id=${jobId}::uuid limit 1`;
+  const [job] = await sql<AutomationJobRow[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.background_jobs where id=${jobId}::uuid limit 1`;
   return job || null;
 }
 
@@ -129,7 +129,7 @@ async function createAndScheduleJob(input: {
   const sql = getSql();
   const delay = Math.max(60, Math.round(Number(input.delaySeconds || 60)));
   const [job] = await sql<AutomationJobRow[]>`
-    insert into crm.automation_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload,scheduler_status)
+    insert into crm.background_jobs(idempotency_key,job_type,contact_id,conversation_id,service_request_id,lead_id,trigger_message_id,status,attempt,due_at,payload,scheduler_status)
     values (${input.idempotencyKey},${input.jobType},${input.contactId || null}::uuid,${input.conversationId || null}::uuid,${input.serviceRequestId || null}::uuid,${input.leadId || null}::uuid,${input.triggerMessageId || null}::uuid,'queued',${Math.max(1, Number(input.attempt || 1))},now()+(${delay}||' seconds')::interval,${sql.json((input.payload || {}) as any)},'pending')
     on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key
     returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text
@@ -170,17 +170,17 @@ async function scheduleInboxAgent(event: any, context: any) {
 async function cancelInboxAgent(event: any) {
   if (!event.conversation_id) return { skipped: true, reason: "no_conversation" };
   const sql = getSql();
-  const rows = await sql<any[]>`update crm.automation_jobs set status='cancelled',scheduler_status='cancelled',processed_at=now(),updated_at=now() where conversation_id=${event.conversation_id}::uuid and job_type like 'inbox_agent%' and status='queued' returning id::text`;
+  const rows = await sql<any[]>`update crm.background_jobs set status='cancelled',scheduler_status='cancelled',processed_at=now(),updated_at=now() where conversation_id=${event.conversation_id}::uuid and job_type like 'inbox_agent%' and status='queued' returning id::text`;
   return { ok: true, cancelled: rows.length };
 }
 
-export async function publishAutomationEvent(input: AutomationEventInput) {
+export async function publishBackgroundEvent(input: BackgroundEventInput) {
   const sql = getSql();
   const eventKey = clean(input.eventKey);
   if (!eventKey) throw new Error("eventKey مطلوب لمنع تكرار معالجة الحدث");
 
   const [event] = await sql<any[]>`
-    insert into crm.automation_events(event_key,event_type,source,contact_id,conversation_id,service_request_id,lead_id,payload,status)
+    insert into crm.background_events(event_key,event_type,source,contact_id,conversation_id,service_request_id,lead_id,payload,status)
     values (${eventKey},${clean(input.eventType)},${clean(input.source) || null},${input.contactId || null}::uuid,${input.conversationId || null}::uuid,
       ${input.serviceRequestId || null}::uuid,${input.leadId || null}::uuid,${sql.json((input.payload || {}) as any)},'received')
     on conflict(event_key) do update set event_key=excluded.event_key
@@ -195,25 +195,19 @@ export async function publishAutomationEvent(input: AutomationEventInput) {
   const senderType = clean(context.event.senderType).toLowerCase();
 
   try {
-    if (event.event_type === "message.received" && direction === "in") {
-      if (context.payload?.entryAutomationHandled === true) {
-        actions.push({ type: "conversation_automation", handled: true, sessionId: context.payload?.conversationAutomationSessionId || null });
-      } else if (context.conversation?.hasOpenRequest) {
-        actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
-      } else {
-        actions.push({ type: "no_entry_action", skipped: true, reason: "conversation_automation_is_the_single_entry_flow" });
-      }
+    if (event.event_type === "message.received" && direction === "in" && context.conversation?.hasOpenRequest) {
+      actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
     } else if (event.event_type === "message.sent" && senderType === "human") {
       actions.push({ type: "cancel_inbox_agent", ...(await cancelInboxAgent(event)) });
     } else {
-      actions.push({ type: "no_entry_action", skipped: true, reason: "event_outside_entry_distribution_scope" });
+      actions.push({ type: "no_background_action", skipped: true, reason: "event_outside_background_scope" });
     }
 
-    await sql`update crm.automation_events set status='processed',processed_at=now(),payload=payload||${sql.json({ actionResults: actions })}::jsonb where id=${event.id}::uuid`;
+    await sql`update crm.background_events set status='processed',processed_at=now(),payload=payload||${sql.json({ actionResults: actions })}::jsonb where id=${event.id}::uuid`;
     return { ok: true, eventId: event.id, actions };
   } catch (error: any) {
     const message = error?.message || String(error);
-    await sql`update crm.automation_events set status='failed',processed_at=now(),payload=payload||${sql.json({ error: message, actionResults: actions })}::jsonb where id=${event.id}::uuid`;
+    await sql`update crm.background_events set status='failed',processed_at=now(),payload=payload||${sql.json({ error: message, actionResults: actions })}::jsonb where id=${event.id}::uuid`;
     throw error;
   }
 }
@@ -259,11 +253,11 @@ function renderAgentAlert(template:any,fallback:string,conversation:any) {
 
 async function rescheduleJob(job:any,dueSeconds:number,payload:any={}) {
   const sql=getSql();
-  const [updated]=await sql<AutomationJobRow[]>`update crm.automation_jobs set status='queued',scheduler_status='pending',scheduler_error=null,due_at=now()+(${Math.max(60,dueSeconds)}||' seconds')::interval,payload=coalesce(payload,'{}'::jsonb)||${sql.json(payload)},updated_at=now() where id=${job.id}::uuid returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text`;
+  const [updated]=await sql<AutomationJobRow[]>`update crm.background_jobs set status='queued',scheduler_status='pending',scheduler_error=null,due_at=now()+(${Math.max(60,dueSeconds)}||' seconds')::interval,payload=coalesce(payload,'{}'::jsonb)||${sql.json(payload)},updated_at=now() where id=${job.id}::uuid returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text`;
   if(updated) await scheduleAutomationWakeup(updated);
 }
 
-async function finishJob(job:any,status:string,error?:string) { const sql=getSql(); await sql`update crm.automation_jobs set status=${status},scheduler_status=${status},error_message=${error||null},processed_at=now(),updated_at=now() where id=${job.id}::uuid`; }
+async function finishJob(job:any,status:string,error?:string) { const sql=getSql(); await sql`update crm.background_jobs set status=${status},scheduler_status=${status},error_message=${error||null},processed_at=now(),updated_at=now() where id=${job.id}::uuid`; }
 
 async function processInboxAgentJob(job:any) {
   const sql=getSql(); const [settings]=await sql<any[]>`select * from crm.inbox_agent_settings where id='default'`; const conversation=await conversationForJob(job);
@@ -324,7 +318,7 @@ async function processSalesEscalation(job:any) {
 
 async function executeAutomationJob(job:any) {
   const sql=getSql();
-  const claimed=await sql<any[]>`update crm.automation_jobs set status='processing',scheduler_status='processing',updated_at=now() where id=${job.id}::uuid and status='queued' returning id::text`;
+  const claimed=await sql<any[]>`update crm.background_jobs set status='processing',scheduler_status='processing',updated_at=now() where id=${job.id}::uuid and status='queued' returning id::text`;
   if(!claimed.length) return {id:job.id,status:"skipped",reason:"already_claimed_or_finished"};
   try {
     if(job.job_type==="inbox_agent_check") await processInboxAgentJob(job);
@@ -337,7 +331,7 @@ async function executeAutomationJob(job:any) {
   }
 }
 
-export async function processAutomationJobById(jobId:string) {
+export async function processBackgroundJobById(jobId:string) {
   const job=await loadAutomationJob(clean(jobId));
   if(!job) return {processed:0,status:"skipped",reason:"job_not_found"};
   if(job.status!=="queued") return {processed:0,status:"skipped",reason:`job_${job.status}`};
@@ -349,15 +343,15 @@ export async function processAutomationJobById(jobId:string) {
   return {processed:1,result:await executeAutomationJob(job)};
 }
 
-export async function processDueAutomationJobs(limit=50) {
+export async function processDueBackgroundJobs(limit=50) {
   const sql=getSql();
-  const jobs=await sql<any[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.automation_jobs where status='queued' and due_at<=now() order by due_at for update skip locked limit ${Math.max(1,Math.min(200,limit))}`;
+  const jobs=await sql<any[]>`select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text,trigger_message_id::text from crm.background_jobs where status='queued' and due_at<=now() order by due_at for update skip locked limit ${Math.max(1,Math.min(200,limit))}`;
   const results:any[]=[];
   for(const job of jobs) results.push(await executeAutomationJob(job));
   return {processed:jobs.length,results};
 }
 
-export async function retryAutomationJobSchedule(jobId:string) {
+export async function retryBackgroundJobSchedule(jobId:string) {
   const job=await loadAutomationJob(clean(jobId));
   if(!job) return {ok:false,reason:"job_not_found"};
   if(job.status!=="queued") return {ok:false,reason:`job_${job.status}`};

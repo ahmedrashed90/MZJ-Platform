@@ -16,13 +16,13 @@ import {
 import { crmFetch, formatDate } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
-import { CrmConversationAutomationSettings } from "../components/CrmConversationAutomationSettings";
+import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
 
 const tabs = [
+  { key: "automation", label: "إعدادات الأوتوميشن" },
   { key: "entry_routing", label: "دخول وتوزيع العملاء" },
-  { key: "conversation_automation", label: "إعدادات الأوتوميشن" },
   { key: "statuses", label: "حالات العملاء" },
   { key: "customer_fields", label: "بيانات العميل" },
   { key: "sources", label: "المصادر" },
@@ -131,7 +131,7 @@ function templateStatusLabel(row: any) {
 }
 
 export function CrmAdminPage({ embedded = false }: Props) {
-  const [tab, setTab] = useState<Tab>("entry_routing");
+  const [tab, setTab] = useState<Tab>("automation");
   const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
   const [customerFieldForm, setCustomerFieldForm] = useState(blankCustomerField);
@@ -365,6 +365,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
       {loading ? <div className="crm-loading-panel">جاري تحميل الإعدادات...</div> : null}
 
 
+      {tab === "automation" ? <CrmAutomationSettings /> : null}
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
 
       {tab === "statuses" ? (
@@ -498,8 +499,6 @@ export function CrmAdminPage({ embedded = false }: Props) {
           )}
         />
       ) : null}
-
-      {tab === "conversation_automation" ? <CrmConversationAutomationSettings /> : null}
 
       {tab === "automatic_templates" ? (
         <section className="crm-panel crm-form-panel">

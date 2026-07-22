@@ -131,7 +131,15 @@ function splitSqlStatements(sqlText: string) {
 
 export async function runSqlScript(sqlText: string) {
   const sql = getSql();
-  for (const statement of splitSqlStatements(sqlText)) {
-    await sql.unsafe(statement);
+  const statements = splitSqlStatements(sqlText);
+  const transactionWrapped = statements.length >= 2
+    && /^begin(?:\s+transaction)?$/i.test(statements[0].trim())
+    && /^(?:commit|end)(?:\s+transaction)?$/i.test(statements[statements.length - 1].trim());
+  if (transactionWrapped) {
+    await sql.begin(async (tx) => {
+      for (const statement of statements.slice(1, -1)) await tx.unsafe(statement);
+    });
+    return;
   }
+  for (const statement of statements) await sql.unsafe(statement);
 }

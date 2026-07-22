@@ -57,8 +57,8 @@ function normalized(value: unknown) {
 }
 function isLeadSource(value: string) { const text = normalized(value); return text.includes("lead") || text.includes("ليد"); }
 
-async function resolveDeliveryPolicy(conversation: ConversationContext, db?: any): Promise<DeliveryPolicy> {
-  const sql = db || getSql();
+async function resolveDeliveryPolicy(conversation: ConversationContext): Promise<DeliveryPolicy> {
+  const sql = getSql();
   const sourceCode = clean(conversation.source_code);
   const [sourceConfig] = sourceCode ? await sql<any[]>`select name,delivery_route,allow_free_text from core.sources where code=${sourceCode} limit 1` : [];
   const sourceArabic = clean(sourceConfig?.name) || sourceLabel(conversation.source_code || conversation.source_name || conversation.platform_code || conversation.channel_code);
@@ -138,8 +138,8 @@ function endpointUrlCandidates(route: DeliveryRoute, kind: DeliveryKind, endpoin
   return url ? [url] : [];
 }
 
-async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind, db?: any) {
-  const sql = db || getSql();
+async function resolveEndpoint(route: DeliveryRoute, kind: DeliveryKind) {
+  const sql = getSql();
   const candidates = endpointCandidates(route);
   const rows = await sql<any[]>`
     select * from crm.integration_endpoints where is_active=true and source_code = any(${candidates})
@@ -197,11 +197,10 @@ type BackgroundDeliveryInput = {
   conversationId?: string | null;
   hasMedia?: boolean;
   automaticDispatchId?: string | null;
-  db?: any;
 };
 
 async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
-  const sql = input.db || getSql();
+  const sql = getSql();
   try {
     const delivery = await postToWorker(input.urls, input.headers, input.payload);
     const data = delivery.response;
@@ -245,7 +244,7 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
     }
 
     if (input.conversationId) await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
-    return { providerStatus, providerMessageId, httpStatus: Number(delivery.provider?.status || 0), errorMessage, providerResponse: data, workerRoute: delivery.usedUrl, attempts };
+    return { providerStatus, providerMessageId, providerResponse: data, errorMessage, httpStatus: delivery.provider?.status || 0, workerRoute: delivery.usedUrl, attempts };
   } catch (error: any) {
     const errorMessage = clean(error?.message || error) || "تعذر إكمال إرسال الرسالة";
     if (input.messageId) {
@@ -267,7 +266,7 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
         where id=${input.automaticDispatchId}::uuid
       `.catch(()=>undefined);
     }
-    return { providerStatus: 'failed', providerMessageId: '', httpStatus: 0, errorMessage, providerResponse: null, workerRoute: clean(input.urls?.[0]), attempts: [] };
+    return { providerStatus: 'failed', providerMessageId: '', providerResponse: null, errorMessage, httpStatus: 0, workerRoute: input.urls[0] || '', attempts: [] };
   }
 }
 
@@ -315,8 +314,8 @@ function deliveryPayload(input: { route: DeliveryRoute; conversation: Conversati
   return { ...payload, type: "text", message: input.text, text: input.text, ...(Array.isArray(input.buttons) && input.buttons.length ? { buttons: input.buttons, header: input.header || "", footer: input.footer || "" } : {}) };
 }
 
-async function loadConversation(conversationId: string, db?: any): Promise<ConversationContext | null> {
-  const sql = db || getSql();
+async function loadConversation(conversationId: string): Promise<ConversationContext | null> {
+  const sql = getSql();
   const [row] = await sql<any[]>`
     select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text,
       l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.car_name,l.status_label,l.source_code,l.source_name,l.platform_code,l.service_key
@@ -339,18 +338,17 @@ export async function deliverCrmMessage(input: {
   buttons?: unknown[];
   header?: string;
   footer?: string;
-  awaitProvider?: boolean;
-  db?: any;
+  awaitProviderResult?: boolean;
 }) {
-  const sql = input.db || getSql();
+  const sql = getSql();
   const senderType = input.senderType || (input.actor ? "human" : "bot");
   const finalText = clean(input.text || input.media?.caption || input.template?.content);
   if (!finalText && !input.media) throw new Error("اكتب الرسالة أو اختر قالبًا أو ملفًا صالحًا");
 
   const conversation = input.conversation;
-  const policy = await resolveDeliveryPolicy(conversation, sql);
+  const policy = await resolveDeliveryPolicy(conversation);
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";
-  const { endpoint, urls } = await resolveEndpoint(policy.route, kind, sql);
+  const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;
   const proposedJobId = crypto.randomUUID();
   const baseWorkerPayload = deliveryPayload({ route: policy.route, conversation, text: finalText, template: input.template, media: input.media, policy, buttons: input.buttons, header: input.header, footer: input.footer });
@@ -363,15 +361,14 @@ export async function deliverCrmMessage(input: {
   `;
 
   if (job.status !== "queued" && job.processed_at) {
-    if (input.awaitProvider === true && job.status === "failed") {
-      await sql`
-        update integrations.outbound_jobs set status='queued',processed_at=null,error_message=null
-        where id=${job.id}::uuid
-      `;
-    } else {
-      const [existing] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
+    const [existing] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
+    if (job.status !== "failed") {
       return { message: existing, providerStatus: job.status, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
     }
+    await sql`update integrations.outbound_jobs set status='queued',processed_at=null,error_message=null,response_payload=null where id=${job.id}::uuid`;
+    if (existing?.id) await sql`update crm.messages set provider_status='queued',metadata=coalesce(metadata,'{}'::jsonb)-'providerError' where id=${existing.id}::uuid`;
+    job.status = "queued";
+    job.processed_at = null;
   }
 
   const payload = {
@@ -399,7 +396,7 @@ export async function deliverCrmMessage(input: {
   await sql.unsafe(`update crm.conversations set preview_text=$1,last_message_at=now(),updated_at=now(),unread_count=case when $3::boolean then 0 else unread_count end,${nowField}=now() where id=$2::uuid`, [finalText || input.media?.fileName || "مرفق", conversation.id, senderType === "human"]);
 
   const headers = gatewayHeaders(endpoint.secret_name);
-  const backgroundInput = {
+  const deliveryInput = {
     urls,
     headers,
     payload,
@@ -408,27 +405,26 @@ export async function deliverCrmMessage(input: {
     conversationId: conversation.id,
     hasMedia: Boolean(input.media),
     automaticDispatchId: input.automaticDispatchId || null,
-    db: input.awaitProvider === true ? sql : undefined,
   };
-  if (input.awaitProvider === true) {
-    const confirmed = await finishWorkerDelivery(backgroundInput);
+
+  if (input.awaitProviderResult) {
+    const providerResult = await finishWorkerDelivery(deliveryInput);
     const [confirmedMessage] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where id=${message.id}::uuid`;
     return {
       message: confirmedMessage || message,
-      providerStatus: confirmed.providerStatus,
-      providerResponse: confirmed.providerResponse,
-      providerMessageId: confirmed.providerMessageId,
-      httpStatus: confirmed.httpStatus,
-      errorMessage: confirmed.errorMessage,
+      providerStatus: providerResult.providerStatus,
+      providerResponse: providerResult.providerResponse,
+      errorMessage: providerResult.errorMessage,
       jobId: job.id,
       routing: policy,
-      workerRoute: confirmed.workerRoute,
-      workerAttempts: confirmed.attempts,
+      workerRoute: providerResult.workerRoute,
+      workerAttempts: providerResult.attempts,
+      providerMessageId: providerResult.providerMessageId,
+      httpStatus: providerResult.httpStatus,
     };
   }
 
-  startWorkerDelivery(backgroundInput);
-
+  startWorkerDelivery(deliveryInput);
   return {
     message: { ...message, provider_status: "queued", media_status: input.media ? "queued" : message.media_status },
     providerStatus: "queued",
@@ -442,7 +438,7 @@ export async function deliverCrmMessage(input: {
 }
 
 export async function deliverConversationMessage(input: Omit<Parameters<typeof deliverCrmMessage>[0],"conversation"> & { conversationId: string }) {
-  const conversation = await loadConversation(input.conversationId, input.db);
+  const conversation = await loadConversation(input.conversationId);
   if (!conversation) throw new Error("المحادثة غير موجودة");
   return deliverCrmMessage({ ...input, conversation });
 }

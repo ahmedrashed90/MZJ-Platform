@@ -37,7 +37,7 @@ function uniqueIdentityValues(input: ContactIdentityInput) {
   ].map(clean).filter(Boolean))];
 }
 
-async function mergeDuplicateContacts(tx: any, targetId: string, duplicateIds: string[]) {
+export async function mergeDuplicateContacts(tx: any, targetId: string, duplicateIds: string[]) {
   const sources = [...new Set(duplicateIds.map(clean).filter((id) => id && id !== targetId))];
   if (!sources.length) return;
   const allIds = [targetId, ...sources];
@@ -66,11 +66,11 @@ async function mergeDuplicateContacts(tx: any, targetId: string, duplicateIds: s
     await tx`update crm.service_requests set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
     await tx`update crm.conversations set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
     await tx`update crm.ownership_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
-    await tx`update crm.automation_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
-    await tx`update crm.automation_jobs set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
-    await tx`update crm.conversation_automation_inbound_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`.catch(()=>undefined);
-    await tx`update crm.conversation_automation_final_actions set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`.catch(()=>undefined);
-    await tx`update crm.conversation_automation_sessions set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`.catch(()=>undefined);
+    await tx`update crm.background_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
+    await tx`update crm.background_jobs set contact_id=${targetId}::uuid,updated_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`update crm.automation_sessions set contact_id=${targetId}::uuid,last_activity_at=now() where contact_id=${sourceId}::uuid`;
+    await tx`update crm.automation_inbound_events set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
+    await tx`update crm.automation_final_actions set contact_id=${targetId}::uuid where contact_id=${sourceId}::uuid`;
     await tx`delete from crm.contacts where id=${sourceId}::uuid`;
   }
 
@@ -124,7 +124,7 @@ export async function ensureContactIdentity(input: ContactIdentityInput) {
       const duplicateIds = candidates.map((row: any) => String(row.id)).filter((id: string) => id !== String(contact.id));
       await mergeDuplicateContacts(tx, String(contact.id), duplicateIds);
       [contact] = await tx<any[]>`
-        update crm.contacts set display_name=case when coalesce(metadata->>'conversationAutomationCustomerNameLocked','false')='true' then display_name else coalesce(nullif(${clean(input.displayName)},''),display_name) end,
+        update crm.contacts set display_name=coalesce(nullif(${clean(input.displayName)},''),display_name),
           primary_phone=coalesce(nullif(${clean(input.phone)},''),primary_phone),
           primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
           metadata=coalesce(metadata,'{}'::jsonb)||${tx.json((input.metadata || {}) as any)}::jsonb,updated_at=now()
@@ -150,8 +150,8 @@ export async function ensureContactIdentity(input: ContactIdentityInput) {
   });
 }
 
-export async function findOpenServiceRequest(contactId: string, db?: any) {
-  const sql = db || getSql();
+export async function findOpenServiceRequest(contactId: string) {
+  const sql = getSql();
   const [row] = await sql<any[]>`
     select r.*,r.id::text,r.contact_id::text,r.lead_id::text,r.conversation_id::text,r.assigned_to::text,r.call_center_assigned_to::text,
       sales.full_name as assigned_name,cc.full_name as call_center_name
@@ -168,8 +168,8 @@ export async function findOpenServiceRequest(contactId: string, db?: any) {
 async function ensureLeadForContact(input: {
   contactId: string; displayName: string; phone: string; phoneNormalized: string;
   sourceCode: string; sourceName: string; platformCode: string;
-}, db?: any) {
-  const sql = db || getSql();
+}) {
+  const sql = getSql();
   const [existing] = await sql<any[]>`
     select *,id::text,assigned_to::text,call_center_assigned_to::text from crm.leads
     where contact_id=${input.contactId}::uuid and is_deleted=false order by created_at limit 1
@@ -195,8 +195,8 @@ export async function recordOwnershipEvent(input: {
   previousDepartmentCode?: string | null; newDepartmentCode?: string | null;
   previousBranchCode?: string | null; newBranchCode?: string | null;
   actor?: SessionUser | null; actorType?: string; reason?: string; metadata?: Record<string,unknown>;
-}, db?: any) {
-  const sql = db || getSql();
+}) {
+  const sql = getSql();
   await sql`
     insert into crm.ownership_events(
       contact_id,service_request_id,lead_id,previous_assigned_to,previous_assigned_name,new_assigned_to,new_assigned_name,
@@ -212,14 +212,10 @@ export async function recordOwnershipEvent(input: {
 
 export async function classifyConversationService(input: {
   conversationId: string; serviceKey: string; sourceCode?: string; classificationMethod: string;
-  actor?: SessionUser | null; eventKey?: string;
-  branchCode?: string | null;
-  assignPrimary?: boolean;
-  assignCallCenter?: boolean;
-  suppressAutomaticTemplate?: boolean;
-  db?: any;
+  actor?: SessionUser | null; eventKey?: string; skipAutomaticTemplate?: boolean;
+  assignPrimary?: boolean; assignCallCenter?: boolean; requestedBranchCode?: string;
 }) {
-  const sql = input.db || getSql();
+  const sql = getSql();
   const serviceKey = departmentKey(input.serviceKey);
   const [conversation] = await sql<any[]>`
     select c.*,c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
@@ -229,26 +225,24 @@ export async function classifyConversationService(input: {
   `;
   if (!conversation) throw new Error("المحادثة غير موجودة");
 
-  const existing = await findOpenServiceRequest(conversation.contact_id, sql);
+  const existing = await findOpenServiceRequest(conversation.contact_id);
   const existingServiceKey = existing ? departmentKey(existing.service_key || existing.department_code) : "";
 
   // Selecting the same service must not create another request. It only completes a
   // missing assignment, then keeps the current request, lead and conversation linked.
   if (existing && existingServiceKey === serviceKey) {
     let activeRequest = existing;
-    const primaryAllowed = input.assignPrimary !== false;
-    const callCenterAllowed = existingServiceKey === "finance" && input.assignCallCenter !== false;
-    const primaryMissing = primaryAllowed && !existing.assigned_to;
-    const callCenterMissing = callCenterAllowed && !existing.call_center_assigned_to;
-    if (primaryMissing || callCenterMissing) {
-      const requestedBranch = clean(input.branchCode) || existing.branch_code || branchForDepartment(existingServiceKey);
-      const assignment = primaryMissing
-        ? await chooseAssignment(existingServiceKey, requestedBranch, existing.source_code || conversation.channel_code || "whatsapp", sql)
-        : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: requestedBranch };
-      const callCenter = callCenterMissing
-        ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", requestedBranch || "online", sql)
+    const needsPrimaryAssignment = input.assignPrimary !== false && !existing.assigned_to;
+    const needsCallCenterAssignment = existingServiceKey === "finance" && input.assignCallCenter !== false && !existing.call_center_assigned_to;
+    if (needsPrimaryAssignment || needsCallCenterAssignment) {
+      const requestedBranchCode = clean(input.requestedBranchCode) || existing.branch_code || branchForDepartment(existingServiceKey);
+      const assignment = needsPrimaryAssignment
+        ? await chooseAssignment(existingServiceKey, requestedBranchCode, existing.source_code || conversation.channel_code || "whatsapp")
+        : { assignedTo: existing.assigned_to || null, assignedName: existing.assigned_name || "", branchCode: existing.branch_code || branchForDepartment(existingServiceKey) || "" };
+      const callCenter = needsCallCenterAssignment
+        ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
         : { assignedTo: existing.call_center_assigned_to || null, assignedName: existing.call_center_name || "" };
-      const branchCode = assignment.branchCode || requestedBranch || null;
+      const branchCode = assignment.branchCode || existing.branch_code || branchForDepartment(existingServiceKey) || null;
       const [updatedRequest] = await sql<any[]>`
         update crm.service_requests set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
           branch_code=${branchCode},updated_at=now()
@@ -271,7 +265,7 @@ export async function classifyConversationService(input: {
         previousBranchCode: existing.branch_code, newBranchCode: branchCode,
         actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "استكمال توزيع طلب خدمة مفتوح غير موزع",
         metadata: { reusedRequest: true, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
-      }, sql);
+      });
     }
     await sql`
       update crm.conversations set service_request_id=${activeRequest.id}::uuid,lead_id=${activeRequest.lead_id||null}::uuid,
@@ -283,23 +277,21 @@ export async function classifyConversationService(input: {
   }
 
   const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
-  const sourceName = await resolveSourceName(sourceCode, "", sql);
-  const requestedBranch = clean(input.branchCode) || branchForDepartment(serviceKey);
-  const primaryAllowed = input.assignPrimary !== false;
-  const callCenterAllowed = serviceKey === "finance" && input.assignCallCenter !== false;
-  const assignment = primaryAllowed
-    ? await chooseAssignment(serviceKey, requestedBranch, sourceCode, sql)
-    : { assignedTo: null, assignedName: "", branchCode: requestedBranch };
-  const callCenter = callCenterAllowed
-    ? await chooseCallCenterAssignment(sourceCode, requestedBranch || "online", sql)
+  const sourceName = await resolveSourceName(sourceCode);
+  const requestedBranchCode = clean(input.requestedBranchCode) || branchForDepartment(serviceKey);
+  const assignment = input.assignPrimary === false
+    ? { assignedTo: null, assignedName: "", branchCode: requestedBranchCode }
+    : await chooseAssignment(serviceKey, requestedBranchCode, sourceCode);
+  const callCenter = serviceKey === "finance" && input.assignCallCenter !== false
+    ? await chooseCallCenterAssignment(sourceCode, "online")
     : { assignedTo: null, assignedName: "" };
   const departmentCode = departmentCodeFromKey(serviceKey);
-  const branchCode = assignment.branchCode || requestedBranch || null;
+  const branchCode = assignment.branchCode || requestedBranchCode || null;
   const lead = await ensureLeadForContact({
     contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
     phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
     sourceCode, sourceName, platformCode: conversation.channel_code || sourceCode,
-  }, sql);
+  });
 
   // A different explicit selection ends only the current service request. The customer,
   // lead, messages and history remain; a fresh request is then distributed to the new
@@ -381,23 +373,23 @@ export async function classifyConversationService(input: {
       callCenterAssignedTo: callCenter.assignedTo,
       callCenterName: callCenter.assignedName,
     },
-  }, sql);
-  const automaticTemplate = input.suppressAutomaticTemplate
-    ? { attempted: false, reason: "suppressed_by_conversation_automation" }
-    : await dispatchAutomaticEntryTemplate({
-    contactId: conversation.contact_id,
-    conversationId: conversation.id,
-    serviceRequestId: request.id,
-    leadId: lead.id,
-    serviceKey,
-    callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
   });
+  const automaticTemplate = input.skipAutomaticTemplate
+    ? { skipped: true, reason: "automation_flow_owns_customer_messages" }
+    : await dispatchAutomaticEntryTemplate({
+        contactId: conversation.contact_id,
+        conversationId: conversation.id,
+        serviceRequestId: request.id,
+        leadId: lead.id,
+        serviceKey,
+        callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
+      });
   return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, automaticTemplate };
 }
 
 export async function closeCurrentServiceRequest(input: { leadId: string; statusLabel: string; actor?: SessionUser | null; reason?: string }) {
   const sql = getSql();
-  const [settings] = await sql<any[]>`select closed_statuses from crm.automation_settings where id='default'`;
+  const [settings] = await sql<any[]>`select closed_statuses from crm.crm_runtime_settings where id='default'`;
   const [lead] = await sql<any[]>`select *,id::text,current_request_id::text from crm.leads where id=${input.leadId}::uuid`;
   if (!lead?.current_request_id) return { closed: false, reason: "no_open_request" };
   const key = departmentKey(lead.service_key || lead.department_code);
