@@ -9,8 +9,6 @@ const drawer = read("src/crm/components/LeadDrawer.tsx");
 const styles = read("src/styles.css");
 const schema = read("server/_crm-schema.ts");
 const engine = read("server/_crm-automation.ts");
-const customerEngine = read("server/_crm-customer-automation.ts");
-const lifecycle = read("server/_crm-lifecycle.ts");
 const entryApi = read("server/crm/entry-routing.ts");
 const settingsApi = read("server/crm/settings.ts");
 const messaging = read("server/_crm-messaging.ts");
@@ -30,15 +28,13 @@ for (const token of [
 }
 
 for (const token of [
-  '/api/crm/automation-settings',
-  'منطق دخول وتوزيع العملاء',
-  'فتح إعدادات الأوتوميشن',
-  'فتح توزيع العملاء',
-  'فشل التوزيع لا يوقف الأوتوميشن',
+  'استقبال العميل',
+  'إعدادات الأوتوميشن',
+  'إعدادات التوزيع',
+  'فصل المسؤوليات',
 ]) {
-  if (!entrySettings.includes(token)) throw new Error(`Entry routing settings check failed: missing ${token}`);
+  if (!entrySettings.includes(token)) throw new Error(`Entry routing boundary check failed: missing ${token}`);
 }
-if (entrySettings.includes('/api/crm/entry-routing')) throw new Error('Entry routing UI must not edit the legacy duplicated settings endpoint');
 
 for (const forbidden of [
   'CrmAutomationsPage',
@@ -79,29 +75,15 @@ for (const forbidden of ['.crm-rule-editor', '.crm-rules-toolbar', '.crm-automat
 
 for (const token of [
   'processCustomerAutomationInbound',
+  'context.conversation?.hasOpenRequest',
+  'event_outside_entry_distribution_scope',
   'scheduleInboxAgent',
   'cancelInboxAgent',
-  "status='processing'",
 ]) {
   if (!engine.includes(token)) throw new Error(`Deterministic entry engine check failed: missing ${token}`);
 }
-for (const token of [
-  'pg_advisory_xact_lock',
-  'detectAutomationServiceChoice',
-  'settings_snapshot',
-  'flow_deferred',
-  'departmentCode: plan.option.departmentCode',
-  'branchCode: plan.option.defaultBranch',
-]) {
-  if (!customerEngine.includes(token)) throw new Error(`Customer automation engine check failed: missing ${token}`);
-}
-for (const token of [
-  'async function resolveAssignments',
-  'distributionError',
-  'distributionStatus: assignment.assignedTo ? "assigned" : "pending"',
-  'input.classificationMethod === "customer_automation"',
-]) {
-  if (!lifecycle.includes(token)) throw new Error(`Distribution isolation check failed: missing ${token}`);
+for (const forbidden of ['sendServiceSelection', 'classifyFromMessage', 'detectServiceChoice']) {
+  if (engine.includes(forbidden)) throw new Error(`Legacy entry automation still remains: ${forbidden}`);
 }
 for (const forbidden of ['automation_rules', 'executeRule', 'evaluateCondition', 'previewAutomationRule']) {
   if (engine.includes(forbidden)) throw new Error(`Generic rule engine remains active: ${forbidden}`);
@@ -121,11 +103,7 @@ if (schema.includes('create table if not exists crm.automation_rules') || schema
   throw new Error('Generic rule tables must not be created');
 }
 
-for (const token of [
-  'source_of_truth: "crm/automation-settings"',
-  'تم توحيد إعدادات رسائل دخول العميل داخل تبويب إعدادات الأوتوميشن',
-  'status(409)',
-]) {
+for (const token of ['section !== "entry_routing"', 'service_selection_message', 'service_options', 'ask_for_branch=false']) {
   if (!entryApi.includes(token)) throw new Error(`Entry routing API check failed: missing ${token}`);
 }
 if (entryApi.includes('conditions') || entryApi.includes('actions_json') || entryApi.includes('automation_rules')) {

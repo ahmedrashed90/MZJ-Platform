@@ -57,6 +57,7 @@ async function loadContext(event: any) {
   };
 }
 
+
 function jobKey(type: string, conversationId: string, messageId: string, attempt: number) {
   return `${type}:${conversationId}:${messageId}:${attempt}`;
 }
@@ -175,12 +176,12 @@ async function cancelInboxAgent(event: any) {
   return { ok: true, cancelled: rows.length };
 }
 
-async function publishAutomationEventInternal(input: AutomationEventInput, allowDrain: boolean) {
+export async function publishAutomationEvent(input: AutomationEventInput) {
   const sql = getSql();
   const eventKey = clean(input.eventKey);
   if (!eventKey) throw new Error("eventKey مطلوب لمنع تكرار معالجة الحدث");
 
-  let [event] = await sql<any[]>`
+  const [event] = await sql<any[]>`
     insert into crm.automation_events(event_key,event_type,source,contact_id,conversation_id,service_request_id,lead_id,payload,status)
     values (${eventKey},${clean(input.eventType)},${clean(input.source) || null},${input.contactId || null}::uuid,${input.conversationId || null}::uuid,
       ${input.serviceRequestId || null}::uuid,${input.leadId || null}::uuid,${sql.json((input.payload || {}) as any)},'received')
@@ -189,23 +190,12 @@ async function publishAutomationEventInternal(input: AutomationEventInput, allow
   `;
 
   if (event.status === "processed") return { ok: true, duplicate: true, eventId: event.id, actions: [] };
-  if (event.status === "failed") {
-    [event] = await sql<any[]>`
-      update crm.automation_events set status='received',processed_at=null,
-        payload=coalesce(payload,'{}'::jsonb)-'error'
-      where id=${event.id}::uuid
-      returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
-    `;
-  }
-  if (event.status === "processing") return { ok: true, duplicate: true, inProgress: true, eventId: event.id, actions: [] };
-
-  const [claimed] = await sql<any[]>`
-    update crm.automation_events set status='processing'
-    where id=${event.id}::uuid and status in ('received','deferred')
-    returning *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
+  const claimed = await sql<any[]>`
+    update crm.automation_events set status='processing',processed_at=null
+    where id=${event.id}::uuid and status in ('received','failed')
+    returning id::text
   `;
-  if (!claimed) return { ok: true, duplicate: true, inProgress: true, eventId: event.id, actions: [] };
-  event = claimed;
+  if (!claimed.length) return { ok: true, duplicate: true, eventId: event.id, actions: [] };
 
   const context = await loadContext(event);
   const actions: any[] = [];
@@ -214,17 +204,10 @@ async function publishAutomationEventInternal(input: AutomationEventInput, allow
 
   try {
     if (event.event_type === "message.received" && direction === "in") {
-      const customerAutomation = await processCustomerAutomationInbound(event, context, input.actor);
+      const customerAutomation = await processCustomerAutomationInbound({ event, context, actor: input.actor });
       actions.push({ type: "customer_automation", ...customerAutomation });
-      if (customerAutomation.skipped === true && customerAutomation.reason === "flow_deferred") {
-        return { ok: true, deferred: true, eventId: event.id, actions };
-      }
-      const handledByCustomerAutomation = customerAutomation.ok === true || customerAutomation.skipped === true;
-      if (!handledByCustomerAutomation) {
-        const refreshed = await loadContext(event);
-        if (refreshed.conversation?.hasOpenRequest) {
-          actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, refreshed)) });
-        }
+      if (!customerAutomation.consumed && context.conversation?.hasOpenRequest) {
+        actions.push({ type: "inbox_agent", ...(await scheduleInboxAgent(event, context)) });
       }
     } else if (event.event_type === "message.sent" && senderType === "human") {
       actions.push({ type: "cancel_inbox_agent", ...(await cancelInboxAgent(event)) });
@@ -233,49 +216,12 @@ async function publishAutomationEventInternal(input: AutomationEventInput, allow
     }
 
     await sql`update crm.automation_events set status='processed',processed_at=now(),payload=payload||${sql.json({ actionResults: actions })}::jsonb where id=${event.id}::uuid`;
-    const drainedEvents = allowDrain && event.conversation_id
-      ? await drainDeferredAutomationEvents(event.conversation_id, input.actor)
-      : 0;
-    return { ok: true, eventId: event.id, actions, drainedEvents };
+    return { ok: true, eventId: event.id, actions };
   } catch (error: any) {
     const message = error?.message || String(error);
     await sql`update crm.automation_events set status='failed',processed_at=now(),payload=payload||${sql.json({ error: message, actionResults: actions })}::jsonb where id=${event.id}::uuid`;
     throw error;
   }
-}
-
-
-async function drainDeferredAutomationEvents(conversationId: string, actor?: SessionUser | null) {
-  const sql = getSql();
-  let drained = 0;
-  for (let index = 0; index < 25; index += 1) {
-    const [pending] = await sql<any[]>`
-      select *,id::text,contact_id::text,conversation_id::text,service_request_id::text,lead_id::text
-      from crm.automation_events
-      where conversation_id=${conversationId}::uuid and status='deferred'
-      order by received_at,id
-      limit 1
-    `;
-    if (!pending) break;
-    const result: any = await publishAutomationEventInternal({
-      eventKey: pending.event_key,
-      eventType: pending.event_type,
-      source: pending.source,
-      contactId: pending.contact_id,
-      conversationId: pending.conversation_id,
-      serviceRequestId: pending.service_request_id,
-      leadId: pending.lead_id,
-      payload: pending.payload || {},
-      actor,
-    }, false);
-    if (result?.deferred) break;
-    drained += 1;
-  }
-  return drained;
-}
-
-export async function publishAutomationEvent(input: AutomationEventInput) {
-  return publishAutomationEventInternal(input, true);
 }
 
 function withinBusinessHours(settings:any,date=new Date()) {

@@ -336,7 +336,7 @@ export async function deliverCrmMessage(input: {
   buttons?: unknown[];
   header?: string;
   footer?: string;
-  waitForProvider?: boolean;
+  awaitProvider?: boolean;
 }) {
   const sql = getSql();
   const senderType = input.senderType || (input.actor ? "human" : "bot");
@@ -360,30 +360,7 @@ export async function deliverCrmMessage(input: {
 
   if (job.status !== "queued" && job.processed_at) {
     const [existing] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where metadata->>'jobId'=${job.id} limit 1`;
-    if (clean(job.status) === "failed") {
-      await sql`
-        update integrations.outbound_jobs set
-          status='queued',processed_at=null,response_payload=null,error_message=null
-        where id=${job.id}::uuid
-      `;
-      if (existing?.id) {
-        await sql`
-          update crm.messages set provider_status='queued',
-            metadata=coalesce(metadata,'{}'::jsonb)-'providerError'-'providerConfirmedAt'
-          where id=${existing.id}::uuid
-        `;
-      }
-      job.status = "queued";
-      job.processed_at = null;
-      job.response_payload = null;
-      job.error_message = null;
-    } else {
-      const providerStatus = clean(job.status) || "failed";
-      if (input.waitForProvider && providerStatus !== "sent") {
-        throw new Error(clean(job.error_message) || `تعذر تأكيد إرسال الرسالة عبر ${policy.sourceArabic}`);
-      }
-      return { message: existing, providerStatus, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
-    }
+    return { message: existing, providerStatus: job.status, providerResponse: job.response_payload, errorMessage: job.error_message, jobId: job.id, routing: policy };
   }
 
   const payload = {
@@ -411,7 +388,7 @@ export async function deliverCrmMessage(input: {
   await sql.unsafe(`update crm.conversations set preview_text=$1,last_message_at=now(),updated_at=now(),unread_count=case when $3::boolean then 0 else unread_count end,${nowField}=now() where id=$2::uuid`, [finalText || input.media?.fileName || "مرفق", conversation.id, senderType === "human"]);
 
   const headers = gatewayHeaders(endpoint.secret_name);
-  const deliveryInput = {
+  const deliveryInput: BackgroundDeliveryInput = {
     urls,
     headers,
     payload,
@@ -422,33 +399,26 @@ export async function deliverCrmMessage(input: {
     automaticDispatchId: input.automaticDispatchId || null,
   };
 
-  if (input.waitForProvider) {
+  if (input.awaitProvider) {
     await finishWorkerDelivery(deliveryInput);
-    const [confirmedJob] = await sql<any[]>`
-      select status,response_payload,error_message from integrations.outbound_jobs where id=${job.id}::uuid limit 1
-    `;
-    const [confirmedMessage] = await sql<any[]>`
-      select *,id::text,conversation_id::text from crm.messages where id=${message.id}::uuid limit 1
-    `;
-    const providerStatus = clean(confirmedJob?.status) || clean(confirmedMessage?.provider_status) || "failed";
-    const errorMessage = clean(confirmedJob?.error_message) || clean(confirmedMessage?.metadata?.providerError);
-    if (providerStatus !== "sent") {
-      throw new Error(errorMessage || `تعذر تأكيد إرسال الرسالة عبر ${policy.sourceArabic}`);
+    const [finishedJob] = await sql<any[]>`select *,id::text from integrations.outbound_jobs where id=${job.id}::uuid limit 1`;
+    const [finishedMessage] = await sql<any[]>`select *,id::text,conversation_id::text from crm.messages where id=${message.id}::uuid limit 1`;
+    if (!finishedJob || finishedJob.status === "failed") {
+      throw new Error(clean(finishedJob?.error_message) || "تعذر إرسال رسالة الأوتوميشن عبر الـWorker");
     }
     return {
-      message: confirmedMessage || { ...message, provider_status: providerStatus },
-      providerStatus,
-      providerResponse: confirmedJob?.response_payload || { ok: true, status: providerStatus },
-      errorMessage: "",
+      message: finishedMessage || message,
+      providerStatus: finishedJob.status,
+      providerResponse: finishedJob.response_payload,
+      errorMessage: clean(finishedJob.error_message),
       jobId: job.id,
       routing: policy,
-      workerRoute: urls[0] || "",
-      workerAttempts: Array.isArray(confirmedMessage?.metadata?.workerAttempts) ? confirmedMessage.metadata.workerAttempts : [],
+      workerRoute: clean(finishedMessage?.metadata?.workerRoute || urls[0]),
+      workerAttempts: finishedMessage?.metadata?.workerAttempts || [],
     };
   }
 
   startWorkerDelivery(deliveryInput);
-
   return {
     message: { ...message, provider_status: "queued", media_status: input.media ? "queued" : message.media_status },
     providerStatus: "queued",

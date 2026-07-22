@@ -928,163 +928,115 @@ where id='default';
 insert into core.schema_migrations(version) values('crm-closed-not-qualified-v1.17.2') on conflict(version) do nothing;
 `;
 
+const CRM_CUSTOMER_AUTOMATION_REBUILD_V1187_SQL = String.raw`
+-- Clean rebuild of CRM customer-entry automation.
+-- These tables are owned only by this automation feature, so old experimental state is removed.
+drop table if exists crm.customer_automation_events cascade;
+drop table if exists crm.customer_automation_runs cascade;
+drop table if exists crm.customer_automation_session_events cascade;
+drop table if exists crm.customer_automation_sessions cascade;
+drop table if exists crm.customer_automation_settings cascade;
 
+create table crm.customer_automation_settings (
+  id text primary key default 'default',
+  enabled boolean not null default true,
+  automation_name text not null default 'أوتوميشن استقبال عملاء CRM',
+  trigger_policy text not null default 'every_message',
+  interval_value integer not null default 24,
+  interval_unit text not null default 'hour',
+  platform_bindings jsonb not null default '[]'::jsonb,
+  entry_messages jsonb not null default '{"greeting":"مرحباً بك في مجموعة محمد بن ذعار العجمي للسيارات 👋","servicePrompt":"برجاء اختيار الخدمة:","noMatch":"برجاء اختيار إحدى الخدمات الظاهرة في القائمة."}'::jsonb,
+  service_choices jsonb not null default '[{"key":"cash","label":"مبيعات الكاش","emoji":"💰","aliases":["1","كاش","مبيعات كاش","مبيعات الكاش","شراء كاش"],"enabled":true,"sortOrder":10},{"key":"finance","label":"مبيعات التمويل","emoji":"🏦","aliases":["2","تمويل","مبيعات تمويل","مبيعات التمويل","شراء تمويل"],"enabled":true,"sortOrder":20},{"key":"service","label":"خدمة العملاء","emoji":"🛠","aliases":["3","خدمة العملاء","خدمه العملاء","خدمة","خدمة عملاء"],"enabled":true,"sortOrder":30}]'::jsonb,
+  flow_messages jsonb not null default '{"cash":{"completionMessage":"تم تحويل طلبك إلى قسم مبيعات الكاش ✅\nسيتم التواصل معك قريباً"},"finance":{"startMessage":"برجاء إدخال بيانات التمويل 👇","nameQuestion":"الاسم","nameError":"برجاء إدخال الاسم.","carQuestion":"السيارة","carError":"برجاء إدخال السيارة المطلوبة.","phoneQuestion":"رقم الجوال","phoneError":"برجاء إدخال رقم جوال صحيح.","completionMessage":"سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹"},"service":{"completionMessage":"سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧"}}'::jsonb,
+  version integer not null default 1,
+  updated_by uuid references core.users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  constraint crm_customer_automation_trigger_policy_chk check(trigger_policy in ('every_message','every_24_hours','custom_interval')),
+  constraint crm_customer_automation_interval_unit_chk check(interval_unit in ('minute','hour','day')),
+  constraint crm_customer_automation_interval_value_chk check(interval_value > 0)
+);
 
-const CRM_CUSTOMER_AUTOMATION_V1180_SQL = String.raw`
-alter table crm.automation_settings add column if not exists automation_enabled boolean not null default true;
-alter table crm.automation_settings add column if not exists automation_name text not null default 'أوتوميشن استقبال عملاء CRM';
-alter table crm.automation_settings add column if not exists platform_workers jsonb not null default '[{"platformCode":"facebook","workerCode":"facebook","enabled":true},{"platformCode":"instagram","workerCode":"instagram","enabled":true},{"platformCode":"whatsapp","workerCode":"whatsapp","enabled":true},{"platformCode":"tiktok","workerCode":"tiktok-snapchat","enabled":true},{"platformCode":"snapchat","workerCode":"tiktok-snapchat","enabled":true}]'::jsonb;
-alter table crm.automation_settings add column if not exists trigger_mode text not null default 'every_message';
-alter table crm.automation_settings add column if not exists custom_interval_value integer not null default 24;
-alter table crm.automation_settings add column if not exists custom_interval_unit text not null default 'hour';
-alter table crm.automation_settings add column if not exists schedule_enabled boolean not null default false;
-alter table crm.automation_settings add column if not exists schedule_start time not null default '08:00';
-alter table crm.automation_settings add column if not exists schedule_end time not null default '23:00';
-alter table crm.automation_settings add column if not exists schedule_days integer[] not null default array[0,1,2,3,4,5,6];
-alter table crm.automation_settings add column if not exists automation_messages jsonb not null default '{"start":{"enabled":true,"text":"السلام عليكم ورحمة الله وبركاته"},"welcome":{"enabled":true,"text":"أهلًا وسهلًا بك في مجموعة محمد ذعار العجمي للسيارات 🌹"},"servicePrompt":{"enabled":true,"text":"برجاء اختيار الخدمة المطلوبة 👇"},"noMatch":{"enabled":true,"text":"برجاء اختيار إحدى الخدمات الظاهرة في القائمة."},"validationFallback":{"enabled":true,"text":"برجاء إدخال البيانات بصورة صحيحة."},"cancelled":{"enabled":true,"text":"تم إلغاء الطلب الحالي. يمكنك إرسال رسالة جديدة للبدء مرة أخرى."},"restarted":{"enabled":false,"text":"تمت إعادة بداية الطلب."}}'::jsonb;
-alter table crm.automation_settings add column if not exists flow_timeout_value integer not null default 24;
-alter table crm.automation_settings add column if not exists flow_timeout_unit text not null default 'hour';
-alter table crm.automation_settings add column if not exists restart_keywords text[] not null default array['البداية','ابدأ من جديد','القائمة'];
-alter table crm.automation_settings add column if not exists cancel_keywords text[] not null default array['إلغاء','الغاء','خروج'];
-alter table crm.automation_settings add column if not exists automation_version integer not null default 1;
+insert into crm.customer_automation_settings(id)
+values('default');
 
-update crm.automation_settings
-set automation_enabled=service_selection_enabled,
-    automation_messages=jsonb_set(
-      coalesce(automation_messages,'{}'::jsonb),
-      '{servicePrompt}',
-      jsonb_build_object('enabled',true,'text',coalesce(nullif(service_selection_message,''),'برجاء اختيار الخدمة المطلوبة 👇')),
-      true
-    ),
-    updated_at=now()
-where id='default';
+update crm.customer_automation_settings settings
+set platform_bindings = coalesce((
+  select jsonb_agg(
+    jsonb_build_object(
+      'platformCode', case
+        when lower(endpoint.source_code) like '%facebook%' then 'facebook'
+        when lower(endpoint.source_code) like '%instagram%' then 'instagram'
+        when lower(endpoint.source_code) like '%whatsapp%' or lower(endpoint.source_code) like '%mersal%' then 'whatsapp'
+        when lower(endpoint.source_code) like '%tiktok%' then 'tiktok'
+        when lower(endpoint.source_code) like '%snapchat%' then 'snapchat'
+        else lower(endpoint.source_code)
+      end,
+      'workerCode', lower(endpoint.source_code),
+      'enabled', true
+    ) order by endpoint.source_code
+  )
+  from crm.integration_endpoints endpoint
+  where endpoint.is_active=true and coalesce(endpoint.text_send_url,endpoint.send_url,'')<>''
+), '[]'::jsonb)
+where settings.id='default';
 
-create table if not exists crm.customer_automation_runs (
+create table crm.customer_automation_sessions (
   id uuid primary key default gen_random_uuid(),
-  contact_id uuid references crm.contacts(id) on delete cascade,
+  contact_id uuid not null references crm.contacts(id) on delete cascade,
   conversation_id uuid not null references crm.conversations(id) on delete cascade,
   service_request_id uuid references crm.service_requests(id) on delete set null,
   lead_id uuid references crm.leads(id) on delete set null,
-  platform_code text,
-  worker_code text,
-  option_key text,
+  platform_code text not null,
+  worker_code text not null,
+  choice_key text,
   service_key text,
-  status text not null default 'awaiting_service',
-  current_step_key text,
-  current_step_index integer not null default 0,
-  current_attempt integer not null default 0,
-  answers jsonb not null default '{}'::jsonb,
-  history jsonb not null default '[]'::jsonb,
-  last_event_key text,
-  last_message_id text,
-  last_automation_message text,
-  automation_version integer not null default 1,
-  settings_snapshot jsonb not null default '{}'::jsonb,
+  state text not null default 'awaiting_service',
+  customer_name text,
+  car_name text,
+  phone text,
+  phone_normalized text,
+  last_inbound_event_key text,
+  last_inbound_message_id text,
+  last_outbound_key text,
+  last_outbound_message_id uuid references crm.messages(id) on delete set null,
+  settings_version integer not null,
+  settings_snapshot jsonb not null,
   started_at timestamptz not null default now(),
-  last_message_at timestamptz not null default now(),
-  expires_at timestamptz,
+  last_activity_at timestamptz not null default now(),
   completed_at timestamptz,
-  termination_reason text,
-  updated_at timestamptz not null default now()
+  cancelled_at timestamptz,
+  updated_at timestamptz not null default now(),
+  constraint crm_customer_automation_session_state_chk check(state in (
+    'awaiting_service','awaiting_name','awaiting_car','awaiting_phone','completed','cancelled','failed'
+  )),
+  constraint crm_customer_automation_session_choice_chk check(choice_key is null or choice_key in ('cash','finance','service'))
 );
-alter table crm.customer_automation_runs add column if not exists automation_version integer not null default 1;
-alter table crm.customer_automation_runs add column if not exists settings_snapshot jsonb not null default '{}'::jsonb;
 
-create index if not exists crm_customer_automation_runs_conversation_idx on crm.customer_automation_runs(conversation_id,started_at desc);
-create index if not exists crm_customer_automation_runs_contact_idx on crm.customer_automation_runs(contact_id,started_at desc);
-create unique index if not exists crm_customer_automation_runs_one_active
-  on crm.customer_automation_runs(conversation_id)
-  where status in ('awaiting_service','classifying','awaiting_step');
-create unique index if not exists crm_customer_automation_runs_one_active_contact
-  on crm.customer_automation_runs(contact_id)
-  where contact_id is not null and status in ('awaiting_service','classifying','awaiting_step');
+create unique index crm_customer_automation_one_active_contact
+  on crm.customer_automation_sessions(contact_id)
+  where state in ('awaiting_service','awaiting_name','awaiting_car','awaiting_phone');
+create index crm_customer_automation_sessions_conversation_idx
+  on crm.customer_automation_sessions(conversation_id,started_at desc);
+create index crm_customer_automation_sessions_contact_idx
+  on crm.customer_automation_sessions(contact_id,started_at desc);
 
-insert into core.schema_migrations(version) values('crm-customer-automation-v1.18.0') on conflict(version) do nothing;
-`;
+create table crm.customer_automation_session_events (
+  id bigserial primary key,
+  session_id uuid not null references crm.customer_automation_sessions(id) on delete cascade,
+  event_key text not null unique,
+  event_type text not null,
+  state_before text,
+  state_after text,
+  message_id text,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index crm_customer_automation_session_events_session_idx
+  on crm.customer_automation_session_events(session_id,created_at);
 
-const CRM_CUSTOMER_AUTOMATION_FIXED_FLOW_V1181_SQL = String.raw`
-update crm.automation_settings
-set automation_enabled=true,
-    service_selection_enabled=true,
-    automation_name='أوتوميشن استقبال عملاء CRM',
-    trigger_mode='every_message',
-    schedule_enabled=false,
-    automation_messages=jsonb_build_object(
-      'start',jsonb_build_object('enabled',false,'text',''),
-      'welcome',jsonb_build_object('enabled',true,'text','مرحباً بك في مجموعة محمد بن ذعار العجمي للسيارات 👋'),
-      'servicePrompt',jsonb_build_object('enabled',true,'text','برجاء اختيار الخدمة:'),
-      'noMatch',jsonb_build_object('enabled',true,'text','برجاء اختيار إحدى الخدمات الظاهرة في القائمة.'),
-      'validationFallback',jsonb_build_object('enabled',true,'text','برجاء إدخال البيانات بصورة صحيحة.'),
-      'cancelled',jsonb_build_object('enabled',true,'text','تم إلغاء الطلب الحالي. يمكنك إرسال رسالة جديدة للبدء مرة أخرى.'),
-      'restarted',jsonb_build_object('enabled',false,'text','')
-    ),
-    service_selection_message='برجاء اختيار الخدمة:',
-    service_options=jsonb_build_array(
-      jsonb_build_object(
-        'key','cash','label','مبيعات الكاش','emoji','💰','active',true,'sortOrder',10,
-        'serviceKey','cash','departmentCode','cash_sales','defaultBranch','','flowType','message',
-        'aliases',to_jsonb(array['كاش','مبيعات كاش','مبيعات الكاش','شراء كاش']::text[]),
-        'startMessage',jsonb_build_object('enabled',false,'text',''),
-        'endMessage',jsonb_build_object('enabled',true,'text',E'تم تحويل طلبك إلى قسم مبيعات الكاش ✅\nسيتم التواصل معك قريباً'),
-        'steps','[]'::jsonb,'system',true
-      ),
-      jsonb_build_object(
-        'key','finance','label','مبيعات التمويل','emoji','🏦','active',true,'sortOrder',20,
-        'serviceKey','finance','departmentCode','finance_sales','defaultBranch','online','flowType','questions',
-        'aliases',to_jsonb(array['تمويل','مبيعات تمويل','مبيعات التمويل','شراء تمويل']::text[]),
-        'startMessage',jsonb_build_object('enabled',true,'text','برجاء إدخال بيانات التمويل 👇'),
-        'endMessage',jsonb_build_object('enabled',true,'text',E'سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹'),
-        'steps',jsonb_build_array(
-          jsonb_build_object('key','name','name','الاسم','prompt','الاسم','sortOrder',10,'answerType','text','fieldKey','customer_name','required',true,'errorMessage','برجاء إدخال الاسم.','maxAttempts',3,'active',true,'options','[]'::jsonb),
-          jsonb_build_object('key','car','name','السيارة','prompt','السيارة','sortOrder',20,'answerType','text','fieldKey','car_name','required',true,'errorMessage','برجاء إدخال السيارة المطلوبة.','maxAttempts',3,'active',true,'options','[]'::jsonb),
-          jsonb_build_object('key','phone','name','رقم الجوال','prompt','رقم الجوال','sortOrder',30,'answerType','phone','fieldKey','phone','required',true,'errorMessage','برجاء إدخال رقم جوال صحيح.','maxAttempts',3,'active',true,'options','[]'::jsonb)
-        ),
-        'system',true
-      ),
-      jsonb_build_object(
-        'key','service','label','خدمة العملاء','emoji','🛠','active',true,'sortOrder',30,
-        'serviceKey','service','departmentCode','customer_service','defaultBranch','customer_service','flowType','message',
-        'aliases',to_jsonb(array['خدمة العملاء','خدمه العملاء','خدمة','خدمة عملاء']::text[]),
-        'startMessage',jsonb_build_object('enabled',false,'text',''),
-        'endMessage',jsonb_build_object('enabled',true,'text','سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧'),
-        'steps','[]'::jsonb,'system',true
-      )
-    ),
-    flow_timeout_value=24,
-    flow_timeout_unit='hour',
-    restart_keywords=array['البداية','ابدأ من جديد','القائمة'],
-    cancel_keywords=array['إلغاء','الغاء','خروج'],
-    automation_version=automation_version+1,
-    updated_at=now()
-where id='default';
-
-insert into core.schema_migrations(version) values('crm-customer-automation-fixed-flow-v1.18.1') on conflict(version) do nothing;
-`;
-
-const CRM_CUSTOMER_AUTOMATION_DURABLE_FLOW_V1186_SQL = String.raw`
-alter table crm.customer_automation_runs add column if not exists pending_stage text;
-alter table crm.customer_automation_runs add column if not exists pending_text text;
-alter table crm.customer_automation_runs add column if not exists pending_buttons jsonb not null default '[]'::jsonb;
-alter table crm.customer_automation_runs add column if not exists pending_target_status text;
-alter table crm.customer_automation_runs add column if not exists pending_step_key text;
-alter table crm.customer_automation_runs add column if not exists pending_step_index integer;
-alter table crm.customer_automation_runs add column if not exists pending_event_key text;
-alter table crm.customer_automation_runs add column if not exists delivery_attempts integer not null default 0;
-alter table crm.customer_automation_runs add column if not exists last_delivery_error text;
-
-drop index if exists crm.crm_customer_automation_runs_one_active;
-drop index if exists crm.crm_customer_automation_runs_one_active_contact;
-drop index if exists crm_customer_automation_runs_one_active;
-drop index if exists crm_customer_automation_runs_one_active_contact;
-
-create unique index if not exists crm_customer_automation_runs_one_active
-  on crm.customer_automation_runs(conversation_id)
-  where status in ('awaiting_service','classifying','awaiting_step','pending_delivery');
-create unique index if not exists crm_customer_automation_runs_one_active_contact
-  on crm.customer_automation_runs(contact_id)
-  where contact_id is not null and status in ('awaiting_service','classifying','awaiting_step','pending_delivery');
-
-insert into core.schema_migrations(version) values('crm-customer-automation-durable-flow-v1.18.6') on conflict(version) do nothing;
+insert into core.schema_migrations(version)
+values('crm-customer-automation-rebuild-v1.18.7')
+on conflict(version) do nothing;
 `;
 
 export async function ensureCrmSchema() {
@@ -1133,18 +1085,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-facebook-identity-auto-template-v1.17.3'
       `;
       if (!facebookIdentityAutoTemplateMigration) await runSqlScript(CRM_FACEBOOK_IDENTITY_AUTO_TEMPLATE_V1173_SQL);
-      const [customerAutomationMigration] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-customer-automation-v1.18.0'
+      const [customerAutomationRebuildMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-customer-automation-rebuild-v1.18.7'
       `;
-      if (!customerAutomationMigration) await runSqlScript(CRM_CUSTOMER_AUTOMATION_V1180_SQL);
-      const [customerAutomationFixedFlowMigration] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-customer-automation-fixed-flow-v1.18.1'
-      `;
-      if (!customerAutomationFixedFlowMigration) await runSqlScript(CRM_CUSTOMER_AUTOMATION_FIXED_FLOW_V1181_SQL);
-      const [customerAutomationDurableFlowMigration] = await sql<{ version: string }[]>`
-        select version from core.schema_migrations where version = 'crm-customer-automation-durable-flow-v1.18.6'
-      `;
-      if (!customerAutomationDurableFlowMigration) await runSqlScript(CRM_CUSTOMER_AUTOMATION_DURABLE_FLOW_V1186_SQL);
+      if (!customerAutomationRebuildMigration) await runSqlScript(CRM_CUSTOMER_AUTOMATION_REBUILD_V1187_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

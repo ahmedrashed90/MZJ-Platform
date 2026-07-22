@@ -13,39 +13,6 @@ import {
 import { getSql } from "./_db.js";
 import { dispatchAutomaticEntryTemplate } from "./_crm-auto-template.js";
 
-
-async function resolveAssignments(serviceKey: string, requestedBranch: string, sourceCode: string, tolerateFailure: boolean) {
-  let assignment: Awaited<ReturnType<typeof chooseAssignment>> = {
-    assignedTo: null,
-    assignedName: "",
-    branchCode: requestedBranch || branchForDepartment(serviceKey) || "",
-  };
-  let callCenter: Awaited<ReturnType<typeof chooseCallCenterAssignment>> = {
-    assignedTo: null,
-    assignedName: "",
-    branchCode: requestedBranch || "",
-  };
-  const errors: string[] = [];
-  if (!tolerateFailure) {
-    assignment = await chooseAssignment(serviceKey, requestedBranch, sourceCode);
-    if (serviceKey === "finance") callCenter = await chooseCallCenterAssignment(sourceCode, requestedBranch || "online");
-    return { assignment, callCenter, distributionError: "" };
-  }
-  try {
-    assignment = await chooseAssignment(serviceKey, requestedBranch, sourceCode);
-  } catch (error: any) {
-    errors.push(`sales:${error?.message || String(error)}`);
-  }
-  if (serviceKey === "finance") {
-    try {
-      callCenter = await chooseCallCenterAssignment(sourceCode, requestedBranch || "online");
-    } catch (error: any) {
-      errors.push(`call_center:${error?.message || String(error)}`);
-    }
-  }
-  return { assignment, callCenter, distributionError: errors.join(" | ") };
-}
-
 export type ContactIdentityInput = {
   channelCode: string;
   externalId: string;
@@ -154,7 +121,11 @@ export async function ensureContactIdentity(input: ContactIdentityInput) {
       const duplicateIds = candidates.map((row: any) => String(row.id)).filter((id: string) => id !== String(contact.id));
       await mergeDuplicateContacts(tx, String(contact.id), duplicateIds);
       [contact] = await tx<any[]>`
-        update crm.contacts set display_name=coalesce(nullif(${clean(input.displayName)},''),display_name),
+        update crm.contacts set
+          display_name=case
+            when coalesce(metadata->>'automationCapturedName','false')='true' then display_name
+            else coalesce(nullif(${clean(input.displayName)},''),display_name)
+          end,
           primary_phone=coalesce(nullif(${clean(input.phone)},''),primary_phone),
           primary_phone_normalized=coalesce(nullif(${phoneNormalized},''),primary_phone_normalized),
           metadata=coalesce(metadata,'{}'::jsonb)||${tx.json((input.metadata || {}) as any)}::jsonb,updated_at=now()
@@ -242,12 +213,10 @@ export async function recordOwnershipEvent(input: {
 
 export async function classifyConversationService(input: {
   conversationId: string; serviceKey: string; sourceCode?: string; classificationMethod: string;
-  departmentCode?: string; branchCode?: string;
   actor?: SessionUser | null; eventKey?: string;
 }) {
   const sql = getSql();
   const serviceKey = departmentKey(input.serviceKey);
-  const automationClassification = input.classificationMethod === "customer_automation";
   const [conversation] = await sql<any[]>`
     select c.*,c.id::text,c.contact_id::text,c.lead_id::text,c.service_request_id::text,
       ct.display_name,ct.primary_phone,ct.primary_phone_normalized
@@ -263,21 +232,15 @@ export async function classifyConversationService(input: {
   // missing assignment, then keeps the current request, lead and conversation linked.
   if (existing && existingServiceKey === serviceKey) {
     let activeRequest = existing;
-    let reuseDistributionError = "";
     if (!existing.assigned_to) {
-      const resolvedAssignments = await resolveAssignments(existingServiceKey, existing.branch_code || branchForDepartment(existingServiceKey), existing.source_code || conversation.channel_code || "whatsapp", automationClassification);
-      const assignment = resolvedAssignments.assignment;
-      reuseDistributionError = resolvedAssignments.distributionError;
+      const assignment = await chooseAssignment(existingServiceKey, existing.branch_code || branchForDepartment(existingServiceKey), existing.source_code || conversation.channel_code || "whatsapp");
       const callCenter = existingServiceKey === "finance" && !existing.call_center_assigned_to
-        ? resolvedAssignments.callCenter
+        ? await chooseCallCenterAssignment(existing.source_code || conversation.channel_code || "whatsapp", existing.branch_code || "online")
         : { assignedTo: existing.call_center_assigned_to || null, assignedName: existing.call_center_name || "" };
       const branchCode = assignment.branchCode || existing.branch_code || branchForDepartment(existingServiceKey) || null;
       const [updatedRequest] = await sql<any[]>`
         update crm.service_requests set assigned_to=${assignment.assignedTo}::uuid,call_center_assigned_to=${callCenter.assignedTo}::uuid,
-          branch_code=${branchCode},metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
-            distributionStatus: assignment.assignedTo ? "assigned" : "pending",
-            distributionError: reuseDistributionError || null,
-          })}::jsonb,updated_at=now()
+          branch_code=${branchCode},updated_at=now()
         where id=${existing.id}::uuid and request_state='open'
         returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
       `;
@@ -295,15 +258,8 @@ export async function classifyConversationService(input: {
         newAssignedTo: assignment.assignedTo, newAssignedName: assignment.assignedName,
         previousDepartmentCode: existing.department_code, newDepartmentCode: existing.department_code,
         previousBranchCode: existing.branch_code, newBranchCode: branchCode,
-        actor: input.actor, actorType: input.actor ? "user" : "automation",
-        reason: assignment.assignedTo ? "استكمال توزيع طلب خدمة مفتوح غير موزع" : "تعذر توزيع طلب الخدمة وسيظل في انتظار التوزيع",
-        metadata: {
-          reusedRequest: true,
-          callCenterAssignedTo: callCenter.assignedTo,
-          callCenterName: callCenter.assignedName,
-          distributionStatus: assignment.assignedTo ? "assigned" : "pending",
-          distributionError: reuseDistributionError || null,
-        },
+        actor: input.actor, actorType: input.actor ? "user" : "automation", reason: "استكمال توزيع طلب خدمة مفتوح غير موزع",
+        metadata: { reusedRequest: true, callCenterAssignedTo: callCenter.assignedTo, callCenterName: callCenter.assignedName },
       });
     }
     await sql`
@@ -312,35 +268,15 @@ export async function classifyConversationService(input: {
         assigned_to=${activeRequest.assigned_to||null}::uuid,call_center_assigned_to=${activeRequest.call_center_assigned_to||null}::uuid,
         classification_state='classified',closed_at=null,updated_at=now() where id=${conversation.id}::uuid
     `;
-    const currentAssignment = {
-      assignedTo: activeRequest.assigned_to || null,
-      assignedName: activeRequest.assigned_name || "",
-      branchCode: activeRequest.branch_code || "",
-    };
-    const currentCallCenter = {
-      assignedTo: activeRequest.call_center_assigned_to || null,
-      assignedName: activeRequest.call_center_name || "",
-    };
-    return {
-      request: activeRequest,
-      leadId: activeRequest.lead_id,
-      reused: true,
-      reclassified: false,
-      assignment: currentAssignment,
-      callCenter: currentCallCenter,
-      distributionError: reuseDistributionError || null,
-    };
+    return { request: activeRequest, leadId: activeRequest.lead_id, reused: true, reclassified: false };
   }
 
   const sourceCode = clean(input.sourceCode || conversation.channel_code || "whatsapp");
   const sourceName = await resolveSourceName(sourceCode);
-  const requestedBranch = clean(input.branchCode) || branchForDepartment(serviceKey);
-  const resolvedAssignments = await resolveAssignments(serviceKey, requestedBranch, sourceCode, automationClassification);
-  const assignment = resolvedAssignments.assignment;
-  const callCenter = resolvedAssignments.callCenter;
-  const distributionError = resolvedAssignments.distributionError;
-  const departmentCode = clean(input.departmentCode) || departmentCodeFromKey(serviceKey);
-  const branchCode = assignment.branchCode || requestedBranch || null;
+  const assignment = await chooseAssignment(serviceKey, branchForDepartment(serviceKey), sourceCode);
+  const callCenter = serviceKey === "finance" ? await chooseCallCenterAssignment(sourceCode, "online") : { assignedTo: null, assignedName: "" };
+  const departmentCode = departmentCodeFromKey(serviceKey);
+  const branchCode = assignment.branchCode || branchForDepartment(serviceKey) || null;
   const lead = await ensureLeadForContact({
     contactId: conversation.contact_id, displayName: conversation.display_name || conversation.customer_name || "عميل",
     phone: conversation.primary_phone || "", phoneNormalized: conversation.primary_phone_normalized || "",
@@ -385,8 +321,6 @@ export async function classifyConversationService(input: {
         eventKey: input.eventKey || null,
         previousRequestId: existing?.id || null,
         reclassifiedFrom: existingServiceKey || null,
-        distributionStatus: assignment.assignedTo ? "assigned" : "pending",
-        distributionError: distributionError || null,
       })}
     ) returning *,id::text,contact_id::text,lead_id::text,conversation_id::text,assigned_to::text,call_center_assigned_to::text
   `;
@@ -428,21 +362,17 @@ export async function classifyConversationService(input: {
       previousServiceKey: existingServiceKey || null,
       callCenterAssignedTo: callCenter.assignedTo,
       callCenterName: callCenter.assignedName,
-      distributionStatus: assignment.assignedTo ? "assigned" : "pending",
-      distributionError: distributionError || null,
     },
   });
-  const automaticTemplate = automationClassification
-    ? { skipped: true, reason: "customer_automation_is_message_source_of_truth" }
-    : await dispatchAutomaticEntryTemplate({
-        contactId: conversation.contact_id,
-        conversationId: conversation.id,
-        serviceRequestId: request.id,
-        leadId: lead.id,
-        serviceKey,
-        callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
-      });
-  return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, distributionError: distributionError || null, automaticTemplate };
+  const automaticTemplate = await dispatchAutomaticEntryTemplate({
+    contactId: conversation.contact_id,
+    conversationId: conversation.id,
+    serviceRequestId: request.id,
+    leadId: lead.id,
+    serviceKey,
+    callCenterAssignedTo: request.call_center_assigned_to || callCenter.assignedTo || null,
+  });
+  return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, automaticTemplate };
 }
 
 export async function closeCurrentServiceRequest(input: { leadId: string; statusLabel: string; actor?: SessionUser | null; reason?: string }) {

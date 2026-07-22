@@ -1,47 +1,70 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowClockwise, Eye, FloppyDisk, Robot } from "@phosphor-icons/react";
+import { ArrowClockwise, FloppyDisk } from "@phosphor-icons/react";
 import { crmFetch } from "../api";
 
-function splitReplies(value: string) {
-  return value.split(/[،,\n]/).map((row) => row.trim()).filter(Boolean);
+type Binding = { platformCode: string; workerCode: string; enabled: boolean };
+type Choice = { key: "cash" | "finance" | "service"; label: string; emoji: string; aliases: string[]; enabled: boolean; sortOrder: number };
+type Settings = {
+  enabled: boolean;
+  name: string;
+  triggerPolicy: "every_message" | "every_24_hours" | "custom_interval";
+  intervalValue: number;
+  intervalUnit: "minute" | "hour" | "day";
+  bindings: Binding[];
+  messages: { greeting: string; servicePrompt: string; noMatch: string };
+  choices: Choice[];
+  flows: {
+    cash: { completionMessage: string };
+    finance: {
+      startMessage: string;
+      nameQuestion: string;
+      nameError: string;
+      carQuestion: string;
+      carError: string;
+      phoneQuestion: string;
+      phoneError: string;
+      completionMessage: string;
+    };
+    service: { completionMessage: string };
+  };
+  version: number;
+};
+type Platform = { code: string; name: string };
+type Worker = { code: string; name: string; platformCode: string; active: boolean; sendUrl: string; healthUrl: string };
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
 }
 
-function textEditor(title: string, value: string, onChange: (value: string) => void, rows = 3, hint = "") {
+function textArea(label: string, value: string, onChange: (value: string) => void, rows = 3) {
   return (
-    <label className="crm-field-wide crm-automation-fixed-field">
-      <span>{title}</span>
+    <label className="crm-form-label">
+      <span>{label}</span>
       <textarea rows={rows} value={value} onChange={(event) => onChange(event.target.value)} />
-      <small>{hint || `${value.length} حرف`}</small>
+      <small>{value.length} حرف</small>
     </label>
   );
 }
 
-function optionDisplay(option: any) {
-  return `${option.emoji ? `${option.emoji} ` : ""}${option.label}`;
-}
-
 export function CrmAutomationSettings() {
-  const [form, setForm] = useState<any>(null);
-  const [workers, setWorkers] = useState<any[]>([]);
-  const [savedSnapshot, setSavedSnapshot] = useState("");
+  const [form, setForm] = useState<Settings | null>(null);
+  const [saved, setSaved] = useState<Settings | null>(null);
+  const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [preview, setPreview] = useState(false);
   const [notice, setNotice] = useState("");
 
-  const dirty = Boolean(form && savedSnapshot && JSON.stringify(form) !== savedSnapshot);
-  const optionsByKey = useMemo(() => new Map<string, any>((form?.serviceOptions || []).map((row: any) => [String(row.key), row] as [string, any])), [form]);
-  const cash: any = optionsByKey.get("cash");
-  const finance: any = optionsByKey.get("finance");
-  const service: any = optionsByKey.get("service");
+  const dirty = useMemo(() => Boolean(form && saved && JSON.stringify(form) !== JSON.stringify(saved)), [form, saved]);
 
   async function load() {
     setLoading(true);
     try {
-      const result = await crmFetch<any>("/api/crm/automation-settings");
-      setForm(result.settings);
-      setWorkers(Array.isArray(result.workers) ? result.workers : []);
-      setSavedSnapshot(JSON.stringify(result.settings));
+      const result = await crmFetch<{ settings: Settings; platforms: Platform[]; workers: Worker[] }>("/api/crm/automation-settings");
+      setForm(clone(result.settings));
+      setSaved(clone(result.settings));
+      setPlatforms(result.platforms || []);
+      setWorkers(result.workers || []);
       setNotice("");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل إعدادات الأوتوميشن");
@@ -52,25 +75,50 @@ export function CrmAutomationSettings() {
 
   useEffect(() => { void load(); }, []);
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => {
+    const listener = (event: BeforeUnloadEvent) => {
       if (!dirty) return;
       event.preventDefault();
       event.returnValue = "";
     };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
+    window.addEventListener("beforeunload", listener);
+    return () => window.removeEventListener("beforeunload", listener);
   }, [dirty]);
 
+  function updateBinding(platformCode: string, patch: Partial<Binding>) {
+    setForm((current) => {
+      if (!current) return current;
+      const existing = current.bindings.find((binding) => binding.platformCode === platformCode);
+      const matchingWorkers = workers.filter((worker) => worker.platformCode === platformCode && worker.active);
+      const next: Binding = {
+        platformCode,
+        workerCode: existing?.workerCode || matchingWorkers[0]?.code || "",
+        enabled: existing?.enabled || false,
+        ...patch,
+      };
+      return {
+        ...current,
+        bindings: [...current.bindings.filter((binding) => binding.platformCode !== platformCode), next],
+      };
+    });
+  }
+
+  function updateChoice(key: Choice["key"], patch: Partial<Choice>) {
+    setForm((current) => current ? {
+      ...current,
+      choices: current.choices.map((choice) => choice.key === key ? { ...choice, ...patch } : choice),
+    } : current);
+  }
+
   async function save() {
+    if (!form || saving) return;
     setSaving(true);
-    setNotice("");
     try {
-      const result = await crmFetch<any>("/api/crm/automation-settings", {
+      const result = await crmFetch<{ settings: Settings; message: string }>("/api/crm/automation-settings", {
         method: "PUT",
         body: JSON.stringify(form),
       });
-      setForm(result.settings);
-      setSavedSnapshot(JSON.stringify(result.settings));
+      setForm(clone(result.settings));
+      setSaved(clone(result.settings));
       setNotice(result.message || "تم حفظ إعدادات الأوتوميشن");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر حفظ إعدادات الأوتوميشن");
@@ -79,195 +127,107 @@ export function CrmAutomationSettings() {
     }
   }
 
-  function patch(key: string, value: any) {
-    setForm((current: any) => ({ ...current, [key]: value }));
-  }
-
-  function patchWorkerBinding(platformCode: string, workerCode: string, enabled: boolean) {
-    setForm((current: any) => {
-      const existing = (current.platformWorkers || []).filter((row: any) => row.platformCode !== platformCode);
-      return {
-        ...current,
-        platformWorkers: [...existing, { platformCode, workerCode, enabled }],
-      };
-    });
-  }
-
-  function patchMessage(key: string, text: string) {
-    setForm((current: any) => ({
-      ...current,
-      messages: { ...current.messages, [key]: { ...current.messages[key], enabled: true, text } },
-    }));
-  }
-
-  function patchOption(optionKey: string, updater: (option: any) => any) {
-    setForm((current: any) => ({
-      ...current,
-      serviceOptions: current.serviceOptions.map((row: any) => row.key === optionKey ? updater(row) : row),
-    }));
-  }
-
-  function patchOptionMessage(optionKey: string, messageKey: "startMessage" | "endMessage", text: string) {
-    patchOption(optionKey, (row) => ({ ...row, [messageKey]: { ...row[messageKey], enabled: true, text } }));
-  }
-
-  function patchReplies(optionKey: string, value: string) {
-    patchOption(optionKey, (row) => ({ ...row, aliases: splitReplies(value) }));
-  }
-
-  function patchFinanceStep(stepKey: string, field: "prompt" | "errorMessage", value: string) {
-    patchOption("finance", (row) => ({
-      ...row,
-      steps: row.steps.map((step: any) => step.key === stepKey ? { ...step, [field]: value } : step),
-    }));
-  }
-
-  if (!form) {
-    return <div className="crm-loading-panel">{loading ? "جاري تحميل إعدادات الأوتوميشن..." : notice || "لا توجد إعدادات"}</div>;
-  }
-
-  const financeSteps = new Map((finance?.steps || []).map((row: any) => [row.key, row]));
-  const nameStep: any = financeSteps.get("name");
-  const carStep: any = financeSteps.get("car");
-  const phoneStep: any = financeSteps.get("phone");
-  const activeOptions = [cash, finance, service].filter(Boolean);
-  const startPreview = [
-    form.messages.welcome.text,
-    form.messages.servicePrompt.text,
-    activeOptions.map(optionDisplay).join("\n"),
-  ].filter(Boolean).join("\n\n");
+  if (!form) return <div className="crm-inline-notice">{loading ? "جاري تحميل إعدادات الأوتوميشن..." : notice || "تعذر تحميل الإعدادات"}</div>;
 
   return (
-    <div className="crm-automation-settings">
-      <section className="crm-automation-hero">
-        <div>
-          <Robot size={32} weight="duotone" />
-          <span>
-            <h2>إعدادات الأوتوميشن</h2>
-            <p>تحكم في تشغيل الأوتوميشن وربطه بالمنصات والـWorkers، مع بقاء الفلو الثلاثي ثابتًا حسب السيناريو المعتمد.</p>
-          </span>
-        </div>
-        <nav>
-          <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />إعادة تحميل</button>
-          <button className="crm-primary-button" onClick={() => void save()} disabled={saving || !dirty}><FloppyDisk size={17} />{saving ? "جاري الحفظ..." : "حفظ الإعدادات"}</button>
-        </nav>
+    <div className="crm-settings-grid crm-automation-settings-grid">
+      {notice ? <div className="crm-inline-notice full">{notice}</div> : null}
+
+      <section className="crm-panel settings-card full">
+        <header className="crm-settings-section-head">
+          <div><h2>الحالة العامة</h2><p>إيقاف الأوتوميشن لا يمنع حفظ رسائل العملاء داخل المحادثات.</p></div>
+          <button className="crm-secondary-button" type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />{loading ? "جاري التحميل" : "إعادة تحميل"}</button>
+        </header>
+        <label className="crm-switch-row"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} /><span>تشغيل الأوتوميشن</span></label>
+        <label className="crm-form-label"><span>اسم الأوتوميشن</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
       </section>
 
-      {notice ? <div className="crm-inline-notice">{notice}</div> : null}
-      {dirty ? <div className="crm-automation-unsaved">لديك تعديلات غير محفوظة.</div> : null}
-
-      <section className="crm-panel crm-automation-section">
-        <header><div><h2>الحالة العامة</h2><p>عند إيقاف الأوتوميشن تستمر رسائل العملاء في الوصول والحفظ، بدون إرسال أي رد آلي.</p></div></header>
-        <div className="crm-form-grid crm-form-grid-wide">
-          <label className="crm-switch-row"><input type="checkbox" checked={form.enabled === true} onChange={(event) => patch("enabled", event.target.checked)} /><span>الأوتوميشن نشط</span></label>
-          <label><span>اسم الأوتوميشن</span><input value={form.name || ""} onChange={(event) => patch("name", event.target.value)} /></label>
-        </div>
-      </section>
-
-      <section className="crm-panel crm-automation-section">
-        <header><div><h2>متى يتم تشغيل الأوتوميشن؟</h2><p>تحدد هذه السياسة متى يبدأ فلو جديد للعميل، ولا تؤثر على الفلو النشط أو على قواعد توزيع الموظفين.</p></div></header>
-        <div className="crm-form-grid crm-form-grid-wide">
-          <label><span>سياسة التشغيل</span><select value={form.triggerMode || "every_message"} onChange={(event) => patch("triggerMode", event.target.value)}>
-            <option value="every_message">مع كل رسالة واردة خارج فلو نشط</option>
-            <option value="once_24h">مرة كل 24 ساعة</option>
-            <option value="custom">مدة مخصصة</option>
-          </select></label>
-          {form.triggerMode === "custom" ? <>
-            <label><span>قيمة المدة</span><input type="number" min={1} value={form.customIntervalValue || 1} onChange={(event) => patch("customIntervalValue", Math.max(1, Number(event.target.value || 1)))} /></label>
-            <label><span>وحدة المدة</span><select value={form.customIntervalUnit || "hour"} onChange={(event) => patch("customIntervalUnit", event.target.value)}>
-              <option value="minute">دقيقة</option>
-              <option value="hour">ساعة</option>
-              <option value="day">يوم</option>
-            </select></label>
-          </> : null}
-          <div className="crm-field-wide crm-automation-policy-note">
-            {form.triggerMode === "every_message"
-              ? "يبدأ فلو جديد مع كل رسالة واردة إذا لم يكن للعميل فلو نشط أو طلب خدمة مفتوح."
-              : form.triggerMode === "once_24h"
-                ? "لا يبدأ الأوتوميشن لنفس العميل أكثر من مرة خلال 24 ساعة."
-                : `لا يبدأ الأوتوميشن لنفس العميل إلا بعد مرور ${form.customIntervalValue || 1} ${form.customIntervalUnit === "day" ? "يوم" : form.customIntervalUnit === "minute" ? "دقيقة" : "ساعة"}.`}
-          </div>
-        </div>
-      </section>
-
-      <section className="crm-panel crm-automation-section">
-        <header><div><h2>المنصات والـ Workers</h2><p>حدد المنصات والـWorkers التقنية التي يعمل عليها هذا الأوتوميشن. هذا الربط لا يغير قواعد توزيع الموظفين.</p></div></header>
-        <div className="crm-automation-worker-grid">
-          {[...new Set(workers.map((worker: any) => String(worker.platformCode)))].map((platformCode) => {
-            const choices = workers.filter((worker: any) => worker.platformCode === platformCode);
-            const current = (form.platformWorkers || []).find((row: any) => row.platformCode === platformCode);
-            const selectedCode = current?.workerCode || choices[0]?.workerCode || "";
-            const selected = choices.find((worker: any) => worker.workerCode === selectedCode) || choices[0];
-            const platformNames: Record<string, string> = { facebook: "Facebook", instagram: "Instagram", whatsapp: "WhatsApp", tiktok: "TikTok", snapchat: "Snapchat", installment_calculator: "حاسبة التقسيط" };
-            return <article key={platformCode} className={current?.enabled ? "active" : ""}>
-              <div><strong>{platformNames[platformCode] || platformCode}</strong><small>{selected?.displayName || selectedCode || "لا يوجد Worker"}</small></div>
-              <label><span>الـWorker المرتبط</span><select value={selectedCode} disabled={!choices.length} onChange={(event) => patchWorkerBinding(platformCode, event.target.value, current?.enabled === true)}>{choices.map((worker: any) => <option key={`${platformCode}:${worker.workerCode}`} value={worker.workerCode}>{worker.displayName}</option>)}</select></label>
-              <span>{selected?.inboundConnected ? "استقبال مربوط" : "مسار الاستقبال غير مسجل"} · {selected?.outboundConnected ? "إرسال مربوط" : "مسار الإرسال غير مسجل"}</span>
-              <label className="crm-switch-row"><input type="checkbox" disabled={!selected || selected.active === false} checked={current?.enabled === true} onChange={(event) => patchWorkerBinding(platformCode, selectedCode, event.target.checked)} /><span>تشغيل الأوتوميشن على المنصة</span></label>
-            </article>;
+      <section className="crm-panel settings-card full">
+        <h2>المنصات والـWorkers</h2>
+        <p className="crm-help-text">يعمل الأوتوميشن فقط على الربط المفعّل هنا، والـWorker يجب أن يكون تابعًا لنفس المنصة.</p>
+        <div className="crm-service-option-editor">
+          {platforms.map((platform) => {
+            const binding = form.bindings.find((item) => item.platformCode === platform.code);
+            const platformWorkers = workers.filter((worker) => worker.platformCode === platform.code);
+            return (
+              <article key={platform.code}>
+                <strong>{platform.name}</strong>
+                <label className="crm-switch-row"><input type="checkbox" checked={binding?.enabled === true} onChange={(event) => updateBinding(platform.code, { enabled: event.target.checked })} /><span>تشغيل الأوتوميشن على المنصة</span></label>
+                <label><span>الـWorker</span><select value={binding?.workerCode || ""} onChange={(event) => updateBinding(platform.code, { workerCode: event.target.value })}><option value="">اختر الـWorker</option>{platformWorkers.map((worker) => <option key={worker.code} value={worker.code}>{worker.name}{worker.active ? "" : " - غير نشط"}</option>)}</select></label>
+                <small>{binding?.workerCode && platformWorkers.find((worker) => worker.code === binding.workerCode)?.active ? "الربط متاح" : "اختر Worker نشطًا"}</small>
+              </article>
+            );
           })}
-          {!workers.length ? <div className="crm-empty-state">لا توجد Workers معرفة في ربط المنصات.</div> : null}
         </div>
       </section>
 
-      <section className="crm-panel crm-automation-section">
-        <header>
-          <div><h2>رسالة العميل الجديد</h2><p>أول رسالة واردة من عميل لا يوجد له طلب خدمة مفتوح تبدأ الأوتوميشن، مهما كان نص الرسالة.</p></div>
-        </header>
+      <section className="crm-panel settings-card full">
+        <h2>متى يتم تشغيل الأوتوميشن؟</h2>
         <div className="crm-form-grid crm-form-grid-wide">
-          {textEditor("رسالة الترحيب", form.messages.welcome.text, (value) => patchMessage("welcome", value), 3)}
-          {textEditor("رسالة طلب اختيار الخدمة", form.messages.servicePrompt.text, (value) => patchMessage("servicePrompt", value), 3, "قائمة الخدمات والأزرار تُضاف تلقائيًا بعد الرسالة.")}
-          {textEditor("الرد عند كتابة اختيار غير معروف", form.messages.noMatch.text, (value) => patchMessage("noMatch", value), 3)}
+          <label><span>سياسة التشغيل</span><select value={form.triggerPolicy} onChange={(event) => setForm({ ...form, triggerPolicy: event.target.value as Settings["triggerPolicy"] })}><option value="every_message">مع كل رسالة واردة خارج فلو نشط</option><option value="every_24_hours">مرة كل 24 ساعة</option><option value="custom_interval">مدة مخصصة</option></select></label>
+          {form.triggerPolicy === "custom_interval" ? <>
+            <label><span>قيمة المدة</span><input type="number" min={1} value={form.intervalValue} onChange={(event) => setForm({ ...form, intervalValue: Math.max(1, Number(event.target.value) || 1) })} /></label>
+            <label><span>وحدة المدة</span><select value={form.intervalUnit} onChange={(event) => setForm({ ...form, intervalUnit: event.target.value as Settings["intervalUnit"] })}><option value="minute">دقيقة</option><option value="hour">ساعة</option><option value="day">يوم</option></select></label>
+          </> : null}
         </div>
       </section>
 
-      <section className="crm-panel crm-automation-section crm-automation-fixed-option">
-        <header><div><h2>💰 مبيعات الكاش</h2><p>اختيار الخدمة يحدد قسم مبيعات الكاش ويطلب التوزيع مرة واحدة، ثم يرسل الرسالة التالية.</p></div></header>
+      <section className="crm-panel settings-card full">
+        <h2>رسالة بداية الأوتوميشن</h2>
+        <p className="crm-help-text">تُرسل في رسالة واحدة: الترحيب، ثم طلب اختيار الخدمة، ثم الاختيارات النشطة.</p>
         <div className="crm-form-grid crm-form-grid-wide">
-          <label className="crm-field-wide"><span>الردود المقبولة</span><input value={(cash?.aliases || []).join("، ")} onChange={(event) => patchReplies("cash", event.target.value)} /><small>الرقم 1 وزر «مبيعات الكاش» ثابتان ويعملان تلقائيًا.</small></label>
-          {textEditor("رسالة مبيعات الكاش", cash?.endMessage?.text || "", (value) => patchOptionMessage("cash", "endMessage", value), 4)}
+          {textArea("رسالة الترحيب", form.messages.greeting, (value) => setForm({ ...form, messages: { ...form.messages, greeting: value } }), 4)}
+          {textArea("رسالة طلب اختيار الخدمة", form.messages.servicePrompt, (value) => setForm({ ...form, messages: { ...form.messages, servicePrompt: value } }), 4)}
+          {textArea("الرد غير المطابق", form.messages.noMatch, (value) => setForm({ ...form, messages: { ...form.messages, noMatch: value } }), 4)}
         </div>
       </section>
 
-      <section className="crm-panel crm-automation-section crm-automation-fixed-option">
-        <header><div><h2>🏦 مبيعات التمويل</h2><p>بعد اختيار التمويل تُرسل رسالة البداية مع سؤال الاسم، ثم السيارة، ثم رقم الجوال، ثم رسالة النهاية.</p></div></header>
+      <section className="crm-panel settings-card full">
+        <h2>اختيارات الخدمة</h2>
+        <p className="crm-help-text">الخدمات الثلاث ومسار كل خدمة ثابتان حسب الفلو المعتمد. يمكن تعديل الاسم والرمز والردود المقبولة وحالة الظهور والترتيب فقط.</p>
+        <div className="crm-service-option-editor">
+          {[...form.choices].sort((a, b) => a.sortOrder - b.sortOrder).map((choice) => (
+            <article key={choice.key}>
+              <strong>{choice.emoji} {choice.label}</strong>
+              <label className="crm-switch-row"><input type="checkbox" checked={choice.enabled} onChange={(event) => updateChoice(choice.key, { enabled: event.target.checked })} /><span>الاختيار نشط</span></label>
+              <label><span>الاسم الظاهر</span><input value={choice.label} onChange={(event) => updateChoice(choice.key, { label: event.target.value })} /></label>
+              <label><span>Emoji</span><input value={choice.emoji} onChange={(event) => updateChoice(choice.key, { emoji: event.target.value })} /></label>
+              <label><span>الردود المقبولة</span><input value={choice.aliases.join("، ")} onChange={(event) => updateChoice(choice.key, { aliases: event.target.value.split(/[،,]/).map((item) => item.trim()).filter(Boolean) })} /></label>
+              <label><span>الترتيب</span><input type="number" min={1} value={choice.sortOrder} onChange={(event) => updateChoice(choice.key, { sortOrder: Math.max(1, Number(event.target.value) || 1) })} /></label>
+              <small>الكود الداخلي الثابت: {choice.key}</small>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="crm-panel settings-card full">
+        <h2>فلو مبيعات الكاش</h2>
+        {textArea("رسالة التحويل والنهاية", form.flows.cash.completionMessage, (value) => setForm({ ...form, flows: { ...form.flows, cash: { completionMessage: value } } }), 5)}
+      </section>
+
+      <section className="crm-panel settings-card full">
+        <h2>فلو مبيعات التمويل</h2>
+        <p className="crm-help-text">الترتيب ثابت: الاسم ← السيارة ← رقم الجوال ← رسالة النهاية. كل إجابة تُحفظ مباشرة في بيانات العميل.</p>
         <div className="crm-form-grid crm-form-grid-wide">
-          <label className="crm-field-wide"><span>الردود المقبولة</span><input value={(finance?.aliases || []).join("، ")} onChange={(event) => patchReplies("finance", event.target.value)} /><small>الرقم 2 وزر «مبيعات التمويل» ثابتان ويعملان تلقائيًا.</small></label>
-          {textEditor("رسالة بداية بيانات التمويل", finance?.startMessage?.text || "", (value) => patchOptionMessage("finance", "startMessage", value), 3, "تُرسل في نفس الرسالة مع سؤال الاسم.")}
-          {textEditor("سؤال الاسم", nameStep?.prompt || "", (value) => patchFinanceStep("name", "prompt", value), 2)}
-          {textEditor("رسالة خطأ الاسم", nameStep?.errorMessage || "", (value) => patchFinanceStep("name", "errorMessage", value), 2)}
-          {textEditor("سؤال السيارة", carStep?.prompt || "", (value) => patchFinanceStep("car", "prompt", value), 2)}
-          {textEditor("رسالة خطأ السيارة", carStep?.errorMessage || "", (value) => patchFinanceStep("car", "errorMessage", value), 2)}
-          {textEditor("سؤال رقم الجوال", phoneStep?.prompt || "", (value) => patchFinanceStep("phone", "prompt", value), 2)}
-          {textEditor("رسالة خطأ رقم الجوال", phoneStep?.errorMessage || "", (value) => patchFinanceStep("phone", "errorMessage", value), 2)}
-          {textEditor("رسالة نهاية التمويل", finance?.endMessage?.text || "", (value) => patchOptionMessage("finance", "endMessage", value), 4)}
+          {textArea("رسالة بداية بيانات التمويل", form.flows.finance.startMessage, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, startMessage: value } } }))}
+          {textArea("سؤال الاسم", form.flows.finance.nameQuestion, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, nameQuestion: value } } }))}
+          {textArea("رسالة خطأ الاسم", form.flows.finance.nameError, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, nameError: value } } }))}
+          {textArea("سؤال السيارة", form.flows.finance.carQuestion, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, carQuestion: value } } }))}
+          {textArea("رسالة خطأ السيارة", form.flows.finance.carError, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, carError: value } } }))}
+          {textArea("سؤال رقم الجوال", form.flows.finance.phoneQuestion, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, phoneQuestion: value } } }))}
+          {textArea("رسالة خطأ رقم الجوال", form.flows.finance.phoneError, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, phoneError: value } } }))}
+          {textArea("رسالة نهاية التمويل", form.flows.finance.completionMessage, (value) => setForm({ ...form, flows: { ...form.flows, finance: { ...form.flows.finance, completionMessage: value } } }), 5)}
         </div>
       </section>
 
-      <section className="crm-panel crm-automation-section crm-automation-fixed-option">
-        <header><div><h2>🛠 خدمة العملاء</h2><p>اختيار الخدمة يحدد قسم خدمة العملاء ويطلب التوزيع مرة واحدة، ثم يرسل الرسالة التالية.</p></div></header>
-        <div className="crm-form-grid crm-form-grid-wide">
-          <label className="crm-field-wide"><span>الردود المقبولة</span><input value={(service?.aliases || []).join("، ")} onChange={(event) => patchReplies("service", event.target.value)} /><small>الرقم 3 وزر «خدمة العملاء» ثابتان ويعملان تلقائيًا.</small></label>
-          {textEditor("رسالة خدمة العملاء", service?.endMessage?.text || "", (value) => patchOptionMessage("service", "endMessage", value), 4)}
-        </div>
+      <section className="crm-panel settings-card full">
+        <h2>فلو خدمة العملاء</h2>
+        {textArea("رسالة التحويل والنهاية", form.flows.service.completionMessage, (value) => setForm({ ...form, flows: { ...form.flows, service: { completionMessage: value } } }), 5)}
       </section>
 
-      <section className="crm-panel crm-automation-section crm-automation-boundary">
-        <header>
-          <div><h2>معاينة الفلو الثابت</h2><p>المعاينة لا ترسل أي رسالة حقيقية.</p></div>
-          <button className="crm-secondary-button" onClick={() => setPreview((value) => !value)}><Eye size={17} />{preview ? "إخفاء المعاينة" : "معاينة الفلو"}</button>
-        </header>
-        {preview ? <div className="crm-automation-preview">
-          <div className="crm-preview-bubble bot">{startPreview}</div>
-          <article><h4>💰 مبيعات الكاش</h4><div className="crm-preview-bubble bot">{cash?.endMessage?.text}</div></article>
-          <article><h4>🏦 مبيعات التمويل</h4><div className="crm-preview-bubble bot">{[finance?.startMessage?.text, nameStep?.prompt].filter(Boolean).join("\n")}</div><div className="crm-preview-bubble bot">{carStep?.prompt}</div><div className="crm-preview-bubble bot">{phoneStep?.prompt}</div><div className="crm-preview-bubble bot">{finance?.endMessage?.text}</div></article>
-          <article><h4>🛠 خدمة العملاء</h4><div className="crm-preview-bubble bot">{service?.endMessage?.text}</div></article>
-        </div> : null}
-      </section>
-
-      <div className="crm-settings-save">
-        <button className="crm-secondary-button" disabled={!dirty} onClick={() => setForm(JSON.parse(savedSnapshot))}>إلغاء التغييرات</button>
-        <button className="crm-primary-button" disabled={saving || !dirty} onClick={() => void save()}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ الإعدادات"}</button>
+      <div className="crm-settings-save full">
+        <button className="crm-secondary-button" type="button" disabled={!dirty || saving} onClick={() => saved && setForm(clone(saved))}>إلغاء التغييرات</button>
+        <button className="crm-primary-button" type="button" disabled={!dirty || saving} onClick={() => void save()}><FloppyDisk size={18} />{saving ? "جاري الحفظ..." : "حفظ إعدادات الأوتوميشن"}</button>
       </div>
     </div>
   );

@@ -365,7 +365,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
       {loading ? <div className="crm-loading-panel">جاري تحميل الإعدادات...</div> : null}
 
 
-      {tab === "entry_routing" ? <CrmEntryRoutingSettings onOpenAutomation={() => setTab("automation")} onOpenDistribution={() => setTab("distribution")} /> : null}
+      {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
       {tab === "automation" ? <CrmAutomationSettings /> : null}
 
       {tab === "statuses" ? (

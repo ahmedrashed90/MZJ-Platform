@@ -1,318 +1,214 @@
 import { clean } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 
-export type AutomationMessage = { enabled: boolean; text: string };
-export type AutomationStep = {
-  key: string;
-  name: string;
-  prompt: string;
-  sortOrder: number;
-  answerType: "text" | "phone" | "number" | "email" | "select" | "date" | "message";
-  fieldKey: string;
-  required: boolean;
-  errorMessage: string;
-  maxAttempts: number;
-  active: boolean;
-  options: Array<{ value: string; label: string }>;
-};
-export type AutomationServiceOption = {
-  key: string;
-  label: string;
-  emoji: string;
-  active: boolean;
-  sortOrder: number;
-  serviceKey: string;
-  departmentCode: string;
-  defaultBranch: string;
-  flowType: "questions" | "message";
-  aliases: string[];
-  startMessage: AutomationMessage;
-  endMessage: AutomationMessage;
-  steps: AutomationStep[];
-  system: boolean;
-};
-export type PlatformWorkerSetting = {
+export type TriggerPolicy = "every_message" | "every_24_hours" | "custom_interval";
+export type IntervalUnit = "minute" | "hour" | "day";
+
+export type AutomationBinding = {
   platformCode: string;
   workerCode: string;
   enabled: boolean;
 };
+
+export type AutomationChoice = {
+  key: "cash" | "finance" | "service";
+  label: string;
+  emoji: string;
+  aliases: string[];
+  enabled: boolean;
+  sortOrder: number;
+};
+
+export type AutomationMessages = {
+  greeting: string;
+  servicePrompt: string;
+  noMatch: string;
+};
+
+export type AutomationFlows = {
+  cash: { completionMessage: string };
+  finance: {
+    startMessage: string;
+    nameQuestion: string;
+    nameError: string;
+    carQuestion: string;
+    carError: string;
+    phoneQuestion: string;
+    phoneError: string;
+    completionMessage: string;
+  };
+  service: { completionMessage: string };
+};
+
 export type CustomerAutomationSettings = {
   enabled: boolean;
   name: string;
-  platformWorkers: PlatformWorkerSetting[];
-  triggerMode: "every_message" | "once_24h" | "custom";
-  customIntervalValue: number;
-  customIntervalUnit: "minute" | "hour" | "day";
-  scheduleEnabled: boolean;
-  scheduleStart: string;
-  scheduleEnd: string;
-  scheduleDays: number[];
-  messages: {
-    start: AutomationMessage;
-    welcome: AutomationMessage;
-    servicePrompt: AutomationMessage;
-    noMatch: AutomationMessage;
-    validationFallback: AutomationMessage;
-    cancelled: AutomationMessage;
-    restarted: AutomationMessage;
-  };
-  serviceOptions: AutomationServiceOption[];
-  flowTimeoutValue: number;
-  flowTimeoutUnit: "minute" | "hour";
-  restartKeywords: string[];
-  cancelKeywords: string[];
-  version?: number;
+  triggerPolicy: TriggerPolicy;
+  intervalValue: number;
+  intervalUnit: IntervalUnit;
+  bindings: AutomationBinding[];
+  messages: AutomationMessages;
+  choices: AutomationChoice[];
+  flows: AutomationFlows;
+  version: number;
   updatedAt?: string | null;
   updatedBy?: string | null;
 };
 
-const financeSteps: AutomationStep[] = [
-  { key: "name", name: "الاسم", prompt: "الاسم", sortOrder: 10, answerType: "text", fieldKey: "customer_name", required: true, errorMessage: "برجاء إدخال الاسم.", maxAttempts: 3, active: true, options: [] },
-  { key: "car", name: "السيارة", prompt: "السيارة", sortOrder: 20, answerType: "text", fieldKey: "car_name", required: true, errorMessage: "برجاء إدخال السيارة المطلوبة.", maxAttempts: 3, active: true, options: [] },
-  { key: "phone", name: "رقم الجوال", prompt: "رقم الجوال", sortOrder: 30, answerType: "phone", fieldKey: "phone", required: true, errorMessage: "برجاء إدخال رقم جوال صحيح.", maxAttempts: 3, active: true, options: [] },
-];
-
-export const DEFAULT_CUSTOMER_AUTOMATION_SETTINGS: CustomerAutomationSettings = {
-  version: 1,
+export const CUSTOMER_AUTOMATION_DEFAULTS: CustomerAutomationSettings = {
   enabled: true,
   name: "أوتوميشن استقبال عملاء CRM",
-  platformWorkers: [
-    { platformCode: "facebook", workerCode: "facebook", enabled: true },
-    { platformCode: "instagram", workerCode: "instagram", enabled: true },
-    { platformCode: "whatsapp", workerCode: "whatsapp", enabled: true },
-    { platformCode: "tiktok", workerCode: "tiktok-snapchat", enabled: true },
-    { platformCode: "snapchat", workerCode: "tiktok-snapchat", enabled: true },
-  ],
-  // The flow structure is fixed, while the administrator controls when a new run may start.
-  triggerMode: "every_message",
-  customIntervalValue: 24,
-  customIntervalUnit: "hour",
-  scheduleEnabled: false,
-  scheduleStart: "00:00",
-  scheduleEnd: "00:00",
-  scheduleDays: [0, 1, 2, 3, 4, 5, 6],
+  triggerPolicy: "every_message",
+  intervalValue: 24,
+  intervalUnit: "hour",
+  bindings: [],
   messages: {
-    start: { enabled: false, text: "" },
-    welcome: { enabled: true, text: "مرحباً بك في مجموعة محمد بن ذعار العجمي للسيارات 👋" },
-    servicePrompt: { enabled: true, text: "برجاء اختيار الخدمة:" },
-    noMatch: { enabled: true, text: "برجاء اختيار إحدى الخدمات الظاهرة في القائمة." },
-    validationFallback: { enabled: true, text: "برجاء إدخال البيانات بصورة صحيحة." },
-    cancelled: { enabled: true, text: "تم إلغاء الطلب الحالي. يمكنك إرسال رسالة جديدة للبدء مرة أخرى." },
-    restarted: { enabled: false, text: "" },
+    greeting: "مرحباً بك في مجموعة محمد بن ذعار العجمي للسيارات 👋",
+    servicePrompt: "برجاء اختيار الخدمة:",
+    noMatch: "برجاء اختيار إحدى الخدمات الظاهرة في القائمة.",
   },
-  serviceOptions: [
-    {
-      key: "cash", label: "مبيعات الكاش", emoji: "💰", active: true, sortOrder: 10,
-      serviceKey: "cash", departmentCode: "cash_sales", defaultBranch: "", flowType: "message",
-      aliases: ["كاش", "مبيعات كاش", "مبيعات الكاش", "شراء كاش"],
-      startMessage: { enabled: false, text: "" },
-      endMessage: { enabled: true, text: "تم تحويل طلبك إلى قسم مبيعات الكاش ✅\nسيتم التواصل معك قريباً" },
-      steps: [], system: true,
-    },
-    {
-      key: "finance", label: "مبيعات التمويل", emoji: "🏦", active: true, sortOrder: 20,
-      serviceKey: "finance", departmentCode: "finance_sales", defaultBranch: "online", flowType: "questions",
-      aliases: ["تمويل", "مبيعات تمويل", "مبيعات التمويل", "شراء تمويل"],
-      startMessage: { enabled: true, text: "برجاء إدخال بيانات التمويل 👇" },
-      endMessage: { enabled: true, text: "سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹" },
-      steps: financeSteps, system: true,
-    },
-    {
-      key: "service", label: "خدمة العملاء", emoji: "🛠", active: true, sortOrder: 30,
-      serviceKey: "service", departmentCode: "customer_service", defaultBranch: "customer_service", flowType: "message",
-      aliases: ["خدمة العملاء", "خدمه العملاء", "خدمة", "خدمة عملاء"],
-      startMessage: { enabled: false, text: "" },
-      endMessage: { enabled: true, text: "سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧" },
-      steps: [], system: true,
-    },
+  choices: [
+    { key: "cash", label: "مبيعات الكاش", emoji: "💰", aliases: ["1", "كاش", "مبيعات كاش", "مبيعات الكاش", "شراء كاش"], enabled: true, sortOrder: 10 },
+    { key: "finance", label: "مبيعات التمويل", emoji: "🏦", aliases: ["2", "تمويل", "مبيعات تمويل", "مبيعات التمويل", "شراء تمويل"], enabled: true, sortOrder: 20 },
+    { key: "service", label: "خدمة العملاء", emoji: "🛠", aliases: ["3", "خدمة العملاء", "خدمه العملاء", "خدمة", "خدمة عملاء"], enabled: true, sortOrder: 30 },
   ],
-  flowTimeoutValue: 24,
-  flowTimeoutUnit: "hour",
-  restartKeywords: ["البداية", "ابدأ من جديد", "القائمة"],
-  cancelKeywords: ["إلغاء", "الغاء", "خروج"],
+  flows: {
+    cash: { completionMessage: "تم تحويل طلبك إلى قسم مبيعات الكاش ✅\nسيتم التواصل معك قريباً" },
+    finance: {
+      startMessage: "برجاء إدخال بيانات التمويل 👇",
+      nameQuestion: "الاسم",
+      nameError: "برجاء إدخال الاسم.",
+      carQuestion: "السيارة",
+      carError: "برجاء إدخال السيارة المطلوبة.",
+      phoneQuestion: "رقم الجوال",
+      phoneError: "برجاء إدخال رقم جوال صحيح.",
+      completionMessage: "سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹",
+    },
+    service: { completionMessage: "سيتم التواصل معك قريباً من أحد ممثلي قسم خدمة العملاء 👨‍🔧" },
+  },
+  version: 1,
 };
 
-function number(value: unknown, fallback: number, min = 0, max = 100000) {
+function bool(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") return value;
+  const token = clean(value).toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(token)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(token)) return false;
+  return fallback;
+}
+
+function int(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
 }
 
-function boolean(value: unknown, fallback: boolean) {
-  if (typeof value === "boolean") return value;
-  const token = clean(value).toLowerCase();
-  if (["1", "true", "yes", "on", "active", "enabled"].includes(token)) return true;
-  if (["0", "false", "no", "off", "inactive", "disabled"].includes(token)) return false;
-  return fallback;
+function text(value: unknown, fallback: string, allowEmpty = false) {
+  const result = clean(value);
+  return result || (allowEmpty ? "" : fallback);
 }
 
-function triggerMode(value: unknown, fallback: CustomerAutomationSettings["triggerMode"]) {
-  const token = clean(value);
-  return (["every_message", "once_24h", "custom"] as const).includes(token as any)
-    ? token as CustomerAutomationSettings["triggerMode"]
-    : fallback;
-}
-
-function intervalUnit(value: unknown, fallback: CustomerAutomationSettings["customIntervalUnit"]) {
-  const token = clean(value);
-  return (["minute", "hour", "day"] as const).includes(token as any)
-    ? token as CustomerAutomationSettings["customIntervalUnit"]
-    : fallback;
-}
-
-function textList(value: unknown, fallback: string[] = []) {
+function textList(value: unknown, fallback: string[]) {
   const list = Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
   return list.length ? [...new Set(list)] : [...fallback];
 }
 
-function editableText(value: unknown, fallback: string) {
-  const result = clean(value);
-  return result || fallback;
+function normalizePolicy(value: unknown): TriggerPolicy {
+  const token = clean(value);
+  return token === "every_24_hours" || token === "custom_interval" ? token : "every_message";
 }
 
-function rawOptionByKey(raw: any, key: string) {
-  const rawOptions = Array.isArray(raw?.service_options) ? raw.service_options : raw?.serviceOptions;
-  return Array.isArray(rawOptions) ? rawOptions.find((row: any) => clean(row?.key) === key) || null : null;
+function normalizeUnit(value: unknown): IntervalUnit {
+  const token = clean(value);
+  return token === "minute" || token === "day" ? token : "hour";
 }
 
-function normalizeEditableStep(rawStep: any, fixed: AutomationStep): AutomationStep {
-  return {
-    ...fixed,
-    prompt: editableText(rawStep?.prompt, fixed.prompt),
-    errorMessage: editableText(rawStep?.errorMessage, fixed.errorMessage),
-    options: [],
-  };
-}
-
-function normalizeFixedOption(raw: any, fixed: AutomationServiceOption): AutomationServiceOption {
-  const rawOption = rawOptionByKey(raw, fixed.key);
-  const aliases = textList(rawOption?.aliases, fixed.aliases)
-    .filter((alias) => !/^\d+$/.test(clean(alias)));
-
-  if (fixed.key === "finance") {
-    const rawSteps = Array.isArray(rawOption?.steps) ? rawOption.steps : [];
-    return {
-      ...fixed,
-      aliases,
-      startMessage: {
-        enabled: true,
-        text: editableText(rawOption?.startMessage?.text, fixed.startMessage.text),
-      },
-      endMessage: {
-        enabled: true,
-        text: editableText(rawOption?.endMessage?.text, fixed.endMessage.text),
-      },
-      steps: fixed.steps.map((step) => normalizeEditableStep(rawSteps.find((row: any) => clean(row?.key) === step.key), step)),
-    };
-  }
-
-  let endText = editableText(rawOption?.endMessage?.text, fixed.endMessage.text);
-  // Upgrade the old generic no-step replies to the agreed service-specific messages.
-  if (fixed.key === "cash" && [
-    "سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹",
-    "سيتم التواصل معك في أقرب وقت\\nنسعد بخدمتكم دائمًا 🌹",
-  ].includes(endText)) endText = fixed.endMessage.text;
-  if (fixed.key === "service" && [
-    "تم استلام طلبك وسيتم التواصل معك في أقرب وقت.",
-    "سيتم التواصل معك في أقرب وقت\nنسعد بخدمتكم دائمًا 🌹",
-  ].includes(endText)) endText = fixed.endMessage.text;
-
-  return {
-    ...fixed,
-    aliases,
-    startMessage: { enabled: false, text: "" },
-    endMessage: { enabled: true, text: endText },
-    steps: [],
-  };
+function rawChoice(rawChoices: unknown, key: AutomationChoice["key"]) {
+  return Array.isArray(rawChoices) ? rawChoices.find((item: any) => clean(item?.key) === key) : null;
 }
 
 export function normalizeCustomerAutomationSettings(raw: any): CustomerAutomationSettings {
-  const defaults = DEFAULT_CUSTOMER_AUTOMATION_SETTINGS;
-  const rawMessages = raw?.automation_messages || raw?.messages || {};
-  const platformWorkersRaw = raw?.platform_workers || raw?.platformWorkers;
-  const platformWorkers = (Array.isArray(platformWorkersRaw) ? platformWorkersRaw : defaults.platformWorkers)
-    .map((item: any) => ({
-      platformCode: clean(item?.platformCode || item?.platform_code),
-      workerCode: clean(item?.workerCode || item?.worker_code),
-      enabled: item?.enabled !== false,
-    }))
-    .filter((item: PlatformWorkerSetting) => item.platformCode && item.workerCode);
+  const defaults = CUSTOMER_AUTOMATION_DEFAULTS;
+  const rawBindings = raw?.platform_bindings ?? raw?.bindings;
+  const rawMessages = raw?.entry_messages ?? raw?.messages;
+  const rawChoices = raw?.service_choices ?? raw?.choices;
+  const rawFlows = raw?.flow_messages ?? raw?.flows;
 
-  let welcomeText = editableText(rawMessages?.welcome?.text, defaults.messages.welcome.text);
-  if ([
-    "أهلًا وسهلًا بك في مجموعة محمد ذعار العجمي للسيارات 🌹",
-    "اهلًا وسهلًا بك في مجموعة محمد ذعار العجمي للسيارات 🌹",
-  ].includes(welcomeText)) welcomeText = defaults.messages.welcome.text;
+  const bindings = Array.isArray(rawBindings)
+    ? rawBindings.map((item: any) => ({
+        platformCode: clean(item?.platformCode || item?.platform_code).toLowerCase(),
+        workerCode: clean(item?.workerCode || item?.worker_code).toLowerCase(),
+        enabled: bool(item?.enabled, true),
+      })).filter((item: AutomationBinding) => item.platformCode && item.workerCode)
+    : [];
 
-  let servicePromptText = editableText(
-    rawMessages?.servicePrompt?.text || raw?.service_selection_message,
-    defaults.messages.servicePrompt.text,
-  );
-  if (servicePromptText === "برجاء اختيار الخدمة المطلوبة 👇") servicePromptText = defaults.messages.servicePrompt.text;
+  const choices = defaults.choices.map((fixed) => {
+    const item = rawChoice(rawChoices, fixed.key) || {};
+    return {
+      ...fixed,
+      label: text(item.label, fixed.label),
+      emoji: text(item.emoji, fixed.emoji, true),
+      aliases: textList(item.aliases, fixed.aliases),
+      enabled: bool(item.enabled, fixed.enabled),
+      sortOrder: int(item.sortOrder ?? item.sort_order, fixed.sortOrder, 1, 999),
+    };
+  }).sort((a, b) => a.sortOrder - b.sortOrder);
 
   return {
-    enabled: boolean(raw?.automation_enabled ?? raw?.enabled, defaults.enabled),
-    name: editableText(raw?.automation_name ?? raw?.name, defaults.name),
-    platformWorkers: platformWorkers.length ? platformWorkers : defaults.platformWorkers,
-    triggerMode: triggerMode(raw?.trigger_mode ?? raw?.triggerMode, defaults.triggerMode),
-    customIntervalValue: number(raw?.custom_interval_value ?? raw?.customIntervalValue, defaults.customIntervalValue, 1, 100000),
-    customIntervalUnit: intervalUnit(raw?.custom_interval_unit ?? raw?.customIntervalUnit, defaults.customIntervalUnit),
-    scheduleEnabled: false,
-    scheduleStart: defaults.scheduleStart,
-    scheduleEnd: defaults.scheduleEnd,
-    scheduleDays: [...defaults.scheduleDays],
+    enabled: bool(raw?.enabled, defaults.enabled),
+    name: text(raw?.automation_name ?? raw?.name, defaults.name),
+    triggerPolicy: normalizePolicy(raw?.trigger_policy ?? raw?.triggerPolicy),
+    intervalValue: int(raw?.interval_value ?? raw?.intervalValue, defaults.intervalValue, 1, 100000),
+    intervalUnit: normalizeUnit(raw?.interval_unit ?? raw?.intervalUnit),
+    bindings,
     messages: {
-      start: { enabled: false, text: "" },
-      welcome: { enabled: true, text: welcomeText },
-      servicePrompt: { enabled: true, text: servicePromptText },
-      noMatch: { enabled: true, text: editableText(rawMessages?.noMatch?.text, defaults.messages.noMatch.text) },
-      validationFallback: { enabled: true, text: editableText(rawMessages?.validationFallback?.text, defaults.messages.validationFallback.text) },
-      cancelled: { enabled: true, text: defaults.messages.cancelled.text },
-      restarted: { enabled: false, text: "" },
+      greeting: text(rawMessages?.greeting, defaults.messages.greeting),
+      servicePrompt: text(rawMessages?.servicePrompt ?? rawMessages?.service_prompt, defaults.messages.servicePrompt),
+      noMatch: text(rawMessages?.noMatch ?? rawMessages?.no_match, defaults.messages.noMatch),
     },
-    serviceOptions: defaults.serviceOptions.map((option) => normalizeFixedOption(raw, option)),
-    flowTimeoutValue: defaults.flowTimeoutValue,
-    flowTimeoutUnit: defaults.flowTimeoutUnit,
-    restartKeywords: [...defaults.restartKeywords],
-    cancelKeywords: [...defaults.cancelKeywords],
-    version: number(raw?.automation_version ?? raw?.version, defaults.version || 1, 1),
+    choices,
+    flows: {
+      cash: {
+        completionMessage: text(rawFlows?.cash?.completionMessage ?? rawFlows?.cash?.completion_message, defaults.flows.cash.completionMessage),
+      },
+      finance: {
+        startMessage: text(rawFlows?.finance?.startMessage ?? rawFlows?.finance?.start_message, defaults.flows.finance.startMessage),
+        nameQuestion: text(rawFlows?.finance?.nameQuestion ?? rawFlows?.finance?.name_question, defaults.flows.finance.nameQuestion),
+        nameError: text(rawFlows?.finance?.nameError ?? rawFlows?.finance?.name_error, defaults.flows.finance.nameError),
+        carQuestion: text(rawFlows?.finance?.carQuestion ?? rawFlows?.finance?.car_question, defaults.flows.finance.carQuestion),
+        carError: text(rawFlows?.finance?.carError ?? rawFlows?.finance?.car_error, defaults.flows.finance.carError),
+        phoneQuestion: text(rawFlows?.finance?.phoneQuestion ?? rawFlows?.finance?.phone_question, defaults.flows.finance.phoneQuestion),
+        phoneError: text(rawFlows?.finance?.phoneError ?? rawFlows?.finance?.phone_error, defaults.flows.finance.phoneError),
+        completionMessage: text(rawFlows?.finance?.completionMessage ?? rawFlows?.finance?.completion_message, defaults.flows.finance.completionMessage),
+      },
+      service: {
+        completionMessage: text(rawFlows?.service?.completionMessage ?? rawFlows?.service?.completion_message, defaults.flows.service.completionMessage),
+      },
+    },
+    version: int(raw?.version, defaults.version, 1, 1000000),
     updatedAt: raw?.updated_at || raw?.updatedAt || null,
     updatedBy: raw?.updated_by || raw?.updatedBy || null,
   };
 }
 
-export function canonicalAutomationPlatform(value: unknown) {
-  const source = clean(value).toLowerCase().replace(/-/g, "_");
-  if (source.includes("facebook")) return "facebook";
-  if (source.includes("instagram")) return "instagram";
-  if (source.includes("tiktok")) return "tiktok";
-  if (source.includes("snapchat") || source.includes("snap")) return "snapchat";
-  if (source.includes("whatsapp") || source.includes("mersal")) return "whatsapp";
-  if (source.includes("installment")) return "installment_calculator";
-  return source;
-}
-
-export function customerAutomationBindingEnabled(settings: CustomerAutomationSettings, platformCode: unknown, workerCode: unknown) {
-  const platform = canonicalAutomationPlatform(platformCode);
-  const worker = clean(workerCode);
-  return settings.enabled && settings.platformWorkers.some((row) =>
-    row.enabled && row.workerCode === worker && canonicalAutomationPlatform(row.platformCode) === platform
-  );
-}
-
-let cache: { value: CustomerAutomationSettings; expiresAt: number } | null = null;
-export function clearCustomerAutomationSettingsCache() { cache = null; }
-
-export async function getCustomerAutomationSettings(force = false) {
-  if (!force && cache && cache.expiresAt > Date.now()) return cache.value;
+export async function loadCustomerAutomationSettings() {
   const sql = getSql();
-  const [row] = await sql<any[]>`select * from crm.automation_settings where id='default'`;
-  const value = normalizeCustomerAutomationSettings(row || {});
-  cache = { value, expiresAt: Date.now() + 30_000 };
-  return value;
+  const [row] = await sql<any[]>`select *,updated_by::text from crm.customer_automation_settings where id='default' limit 1`;
+  return row ? normalizeCustomerAutomationSettings(row) : null;
 }
 
-export function intervalSeconds(value: number, unit: string) {
-  if (unit === "day") return Math.max(1, value) * 86400;
-  if (unit === "hour") return Math.max(1, value) * 3600;
-  return Math.max(1, value) * 60;
+export function intervalMilliseconds(settings: Pick<CustomerAutomationSettings, "triggerPolicy" | "intervalValue" | "intervalUnit">) {
+  if (settings.triggerPolicy === "every_message") return 0;
+  if (settings.triggerPolicy === "every_24_hours") return 24 * 60 * 60 * 1000;
+  const multiplier = settings.intervalUnit === "minute" ? 60 * 1000 : settings.intervalUnit === "day" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return Math.max(1, settings.intervalValue) * multiplier;
+}
+
+export function platformFromWorkerCode(value: unknown) {
+  const code = clean(value).toLowerCase();
+  if (code.includes("facebook")) return "facebook";
+  if (code.includes("instagram")) return "instagram";
+  if (code.includes("whatsapp") || code.includes("mersal")) return "whatsapp";
+  if (code.includes("tiktok")) return "tiktok";
+  if (code.includes("snapchat")) return "snapchat";
+  return code.replace(/[_-](chat|worker)$/g, "");
 }
