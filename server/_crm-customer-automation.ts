@@ -197,6 +197,7 @@ async function send(runId: string, conversationId: string, stage: string, text: 
     idempotencyKey: `customer-automation:${runId}:${stage}`,
     reason: "customer_automation",
     buttons,
+    waitForProvider: true,
   });
   const sql = getSql();
   await sql`update crm.customer_automation_runs set last_automation_message=${finalText},updated_at=now() where id=${runId}::uuid`;
@@ -369,7 +370,7 @@ async function planInbound(event: any, context: any, settings: CustomerAutomatio
     const nextStep = steps[nextStepIndex] || null;
     [run] = await tx<any[]>`
       update crm.customer_automation_runs set
-        status=${nextStep ? "awaiting_step" : "classifying"},
+        status='classifying',
         current_step_index=${nextStepIndex},
         current_step_key=${nextStep?.key || null},
         current_attempt=0,
@@ -396,14 +397,17 @@ async function continueFlow(run: any, option: AutomationServiceOption, startInde
   const sql = getSql();
   if (next) {
     const text = [introText, next.prompt].filter(Boolean).join("\n");
-    // Persist the exact expected step before queueing its outbound message. This prevents
-    // a completed answer from leaving the run in the transient "classifying" state if
-    // the process is interrupted between the database update and the Worker dispatch.
+    // Keep the run in a transition state until the Worker confirms delivery. The customer
+    // must never be moved to the next expected answer before its question is actually sent.
+    await sql`
+      update crm.customer_automation_runs set status='classifying',current_step_index=${index},current_step_key=${next.key},current_attempt=0,termination_reason=null,updated_at=now()
+      where id=${run.id}::uuid
+    `;
+    await send(run.id, run.conversation_id, introText ? `flow-start-question:${next.key}` : `question:${next.key}`, text);
     await sql`
       update crm.customer_automation_runs set status='awaiting_step',current_step_index=${index},current_step_key=${next.key},current_attempt=0,termination_reason=null,updated_at=now()
       where id=${run.id}::uuid
     `;
-    await send(run.id, run.conversation_id, introText ? `flow-start-question:${next.key}` : `question:${next.key}`, text);
     return { completed: false, nextStepKey: next.key };
   }
   if (introText) await send(run.id, run.conversation_id, "flow-start", introText);
@@ -427,21 +431,15 @@ export async function processCustomerAutomationInbound(event: any, context: any,
   const runtimeSettings = settingsForRun(settings, plan.run);
   if (plan.type === "start") {
     const sql = getSql();
-    try {
-      await sendStartSequence(plan.run, runtimeSettings);
-    } finally {
-      await sql`update crm.customer_automation_runs set status='awaiting_service',updated_at=now() where id=${plan.run.id}::uuid`;
-    }
+    await sendStartSequence(plan.run, runtimeSettings);
+    await sql`update crm.customer_automation_runs set status='awaiting_service',updated_at=now() where id=${plan.run.id}::uuid`;
     return { ok: true, action: "started", runId: plan.run.id };
   }
   if (plan.type === "restart") {
     const sql = getSql();
-    try {
-      if (runtimeSettings.messages.restarted.enabled) await send(plan.run.id, plan.run.conversation_id, "restarted", runtimeSettings.messages.restarted.text);
-      await sendStartSequence(plan.run, runtimeSettings);
-    } finally {
-      await sql`update crm.customer_automation_runs set status='awaiting_service',updated_at=now() where id=${plan.run.id}::uuid`;
-    }
+    if (runtimeSettings.messages.restarted.enabled) await send(plan.run.id, plan.run.conversation_id, "restarted", runtimeSettings.messages.restarted.text);
+    await sendStartSequence(plan.run, runtimeSettings);
+    await sql`update crm.customer_automation_runs set status='awaiting_service',updated_at=now() where id=${plan.run.id}::uuid`;
     return { ok: true, action: "restarted", runId: plan.run.id };
   }
   if (plan.type === "cancel") {
@@ -507,6 +505,11 @@ export async function processCustomerAutomationInbound(event: any, context: any,
 
   if (plan.nextStep) {
     await send(plan.run.id, plan.run.conversation_id, `question:${plan.nextStep.key}`, plan.nextStep.prompt);
+    const sql = getSql();
+    await sql`
+      update crm.customer_automation_runs set status='awaiting_step',current_step_index=${plan.nextStepIndex},current_step_key=${plan.nextStep.key},current_attempt=0,termination_reason=null,updated_at=now()
+      where id=${plan.run.id}::uuid
+    `;
     return { ok: true, action: "next_step", runId: plan.run.id, savedField: plan.step.fieldKey, nextStepKey: plan.nextStep.key };
   }
   const progress = await continueFlow(plan.run, plan.option, plan.nextStepIndex);

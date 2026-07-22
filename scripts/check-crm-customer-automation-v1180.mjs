@@ -8,6 +8,7 @@ const ui = read("src/crm/components/CrmAutomationSettings.tsx");
 const settings = read("server/_crm-customer-automation-settings.ts");
 const settingsApi = read("server/crm/automation-settings.ts");
 const engine = read("server/_crm-customer-automation.ts");
+const messaging = read("server/_crm-messaging.ts");
 const automation = read("server/_crm-automation.ts");
 const integration = read("server/_integration-processor.ts");
 const lifecycle = read("server/_crm-lifecycle.ts");
@@ -86,7 +87,8 @@ for (const token of [
   'settings_snapshot',
   'open_service_request_exists',
   'flow-start-question',
-  'status=${nextStep ? "awaiting_step" : "classifying"}',
+  "status='classifying'",
+  'waitForProvider: true',
   'nextStepKey: nextStep?.key || null',
   '`question:${plan.nextStep.key}`',
 ]) if (!engine.includes(token)) throw new Error(`Fixed state machine check failed: missing ${token}`);
@@ -98,6 +100,13 @@ if (firstInboundBlock.includes('detectAutomationServiceChoice')) throw new Error
 if (!firstInboundBlock.includes("request_state='open'")) throw new Error('Existing open service requests must not restart the automation');
 if (!engine.includes('options.map(optionDisplay).join("\\n")')) throw new Error('Service list must use the fixed labels without numeric prefixes');
 if (!engine.includes('settings.messages.welcome.enabled ? settings.messages.welcome.text')) throw new Error('Welcome and service list must be combined in the first response');
+
+
+for (const token of [
+  'waitForProvider?: boolean',
+  'await finishWorkerDelivery(deliveryInput)',
+  'providerStatus !== "sent"',
+]) if (!messaging.includes(token)) throw new Error(`Provider acknowledgement check failed: missing ${token}`);
 
 for (const token of [
   "status='processing'",
@@ -203,4 +212,4 @@ if (engineRuntime.nextAutomationStepIndex(fixedFinance, "name") !== 1) throw new
 if (engineRuntime.nextAutomationStepIndex(fixedFinance, "car") !== 2) throw new Error("Finance car must advance to phone");
 if (engineRuntime.nextAutomationStepIndex(fixedFinance, "phone") !== 3) throw new Error("Finance phone must advance to the end message");
 
-console.log('CRM customer automation v1.18.4 trigger policy and durable finance progression checks passed.');
+console.log('CRM customer automation v1.18.5 provider-confirmed finance progression checks passed.');
