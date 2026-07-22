@@ -25,6 +25,18 @@ type FlowContext = {
   input: AutomationInboundInput;
 };
 
+type FinalClassificationResult = {
+  skipped?: boolean;
+  reason?: string;
+  request?: any;
+  leadId?: string | null;
+  reused?: boolean;
+  reclassified?: boolean;
+  assignment?: any;
+  callCenter?: any;
+  automaticTemplate?: any;
+};
+
 const ACTIVE_SESSION_STATES = ["awaiting_choice", "sending", "awaiting_answer"];
 
 export function normalizeAutomationReply(value: unknown) {
@@ -326,7 +338,7 @@ async function completeFinalAction(context: FlowContext, choice: any) {
       : finalAction.assignSales !== false);
     const assignCallCenter = distributionEnabled && choice.service_key === "finance" && finalAction.assignCallCenter !== false;
     const shouldClassify = finalAction.createOrUpdateCustomer !== false && finalAction.classifyService !== false;
-    const classification = shouldClassify
+    const classification: FinalClassificationResult = shouldClassify
       ? await classifyConversationService({
           conversationId: session.conversation_id,
           serviceKey: choice.service_key,
