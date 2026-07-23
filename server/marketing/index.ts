@@ -27,22 +27,29 @@ function arrayValue<T = any>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
 
-type MarketingJsonValue = null | boolean | number | string | MarketingJsonValue[] | { [key: string]: MarketingJsonValue };
+type MarketingJsonObject = { [key: string]: MarketingJsonValue };
+type MarketingJsonValue = null | boolean | number | string | MarketingJsonValue[] | MarketingJsonObject;
+
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
 
 function normalizeJsonValue(value: unknown, depth = 0): MarketingJsonValue {
   if (depth > 24) throw new Error("INVALID_JSON_VALUE");
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean") return value;
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("INVALID_JSON_VALUE");
     return value;
   }
   if (value === undefined) return null;
   if (Array.isArray(value)) return value.map((item) => normalizeJsonValue(item, depth + 1));
-  if (typeof value === "object") {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) throw new Error("INVALID_JSON_VALUE");
-    const normalized: Record<string, MarketingJsonValue> = {};
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+  if (isPlainJsonObject(value)) {
+    const normalized: MarketingJsonObject = {};
+    for (const [key, item] of Object.entries(value)) {
       if (item !== undefined) normalized[key] = normalizeJsonValue(item, depth + 1);
     }
     return normalized;
