@@ -26,6 +26,29 @@ function booleanValue(value: unknown) {
 function arrayValue<T = any>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
 }
+
+type MarketingJsonValue = null | boolean | number | string | MarketingJsonValue[] | { [key: string]: MarketingJsonValue };
+
+function normalizeJsonValue(value: unknown, depth = 0): MarketingJsonValue {
+  if (depth > 24) throw new Error("INVALID_JSON_VALUE");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("INVALID_JSON_VALUE");
+    return value;
+  }
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map((item) => normalizeJsonValue(item, depth + 1));
+  if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new Error("INVALID_JSON_VALUE");
+    const normalized: Record<string, MarketingJsonValue> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item !== undefined) normalized[key] = normalizeJsonValue(item, depth + 1);
+    }
+    return normalized;
+  }
+  throw new Error("INVALID_JSON_VALUE");
+}
 function queryText(value: string | string[] | undefined) {
   return Array.isArray(value) ? String(value[0] || "") : String(value || "");
 }
@@ -70,6 +93,7 @@ function errorMessage(error: unknown) {
     TEMPLATE_FILE_REQUIRES_CONTENT_TASK: "Task Template يرفع على مهمة المحتوى فقط",
     TASK_FILE_NOT_FOUND: "ملف المهمة غير موجود",
     TEMPLATE_VERSION_NOT_FOUND: "نسخة Task Template غير موجودة",
+    INVALID_JSON_VALUE: "قيمة JSON المرسلة غير صالحة",
   };
   return known[code] || "تعذر تنفيذ العملية المطلوبة داخل نظام التسويق";
 }
@@ -744,13 +768,13 @@ async function attendance(sql:ReturnType<typeof getSql>,request:VercelRequest,us
   }
   const action=text(payload.action,40);
   if(action==="heartbeat"){
-    await sql`insert into marketing.presence(user_id,state,last_seen_at,last_activity_at,metadata) values (${user.id}::uuid,${text(payload.state||"online",20)},now(),now(),${sql.json(payload.metadata||{})}) on conflict (user_id) do update set state=excluded.state,last_seen_at=now(),last_activity_at=case when excluded.state='online' then now() else marketing.presence.last_activity_at end,metadata=excluded.metadata`;
+    await sql`insert into marketing.presence(user_id,state,last_seen_at,last_activity_at,metadata) values (${user.id}::uuid,${text(payload.state||"online",20)},now(),now(),${sql.json(normalizeJsonValue(payload.metadata || {}))}) on conflict (user_id) do update set state=excluded.state,last_seen_at=now(),last_activity_at=case when excluded.state='online' then now() else marketing.presence.last_activity_at end,metadata=excluded.metadata`;
     return {ok:true};
   }
   if(action==="checkin"){
     const [row]=await sql<any[]>`
       insert into marketing.attendance_records(user_id,work_date,checked_in_at,late_minutes,source,device_metadata)
-      select ${user.id}::uuid,(now() at time zone s.timezone)::date,now(),greatest(0,floor(extract(epoch from ((now() at time zone s.timezone)::time-(s.work_start + make_interval(mins => s.grace_minutes))))/60)::int),${nullable(payload.source,80)},${sql.json(payload.metadata||{})}
+      select ${user.id}::uuid,(now() at time zone s.timezone)::date,now(),greatest(0,floor(extract(epoch from ((now() at time zone s.timezone)::time-(s.work_start + make_interval(mins => s.grace_minutes))))/60)::int),${nullable(payload.source,80)},${sql.json(normalizeJsonValue(payload.metadata || {}))}
       from marketing.attendance_settings s where s.id=true
       on conflict (user_id,work_date) do update set checked_in_at=coalesce(marketing.attendance_records.checked_in_at,excluded.checked_in_at),updated_at=now()
       returning *,id::text
@@ -795,7 +819,7 @@ async function settings(sql:ReturnType<typeof getSql>,request:VercelRequest,user
   for(const [key,value] of Object.entries(payload.values||{})){
     const safeKey=text(key,120); const isSecret=booleanValue((payload.secrets||{})[key]);
     if(isSecret && (value===undefined || value===null || value===""))continue;
-    await sql`insert into marketing.settings(key,value,is_secret,updated_by,updated_at) values (${safeKey},${sql.json(value)},${isSecret},${user.id}::uuid,now()) on conflict (key) do update set value=excluded.value,is_secret=excluded.is_secret,updated_by=excluded.updated_by,updated_at=now()`;
+    await sql`insert into marketing.settings(key,value,is_secret,updated_by,updated_at) values (${safeKey},${sql.json(normalizeJsonValue(value))},${isSecret},${user.id}::uuid,now()) on conflict (key) do update set value=excluded.value,is_secret=excluded.is_secret,updated_by=excluded.updated_by,updated_at=now()`;
   }
   await writeMarketingAudit(sql,request,user,"settings.update","marketing_settings","global",null,{keys:Object.keys(payload.values||{})});
   return {ok:true};
@@ -821,8 +845,8 @@ async function catalogs(sql:ReturnType<typeof getSql>,request:VercelRequest,user
 async function checklist(sql:ReturnType<typeof getSql>,request:VercelRequest,user:any){
   if(request.method==="GET")return {ok:true,projects:await sql<any[]>`select *,id::text from marketing.checklist_projects where created_by=${user.id}::uuid or ${isMarketingAdmin(user)} order by updated_at desc limit 100`};
   const payload=await body(request); const id=nullable(payload.id,50);
-  if(id){const [row]=await sql<any[]>`update marketing.checklist_projects set name=${text(payload.name,200)},vehicle_name=${nullable(payload.vehicleName,200)},platform_code=${nullable(payload.platformCode,80)},post_type_code=${nullable(payload.postTypeCode,80)},dimensions=${nullable(payload.dimensions,80)},project_data=${sql.json(payload.projectData||{})},updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid and (created_by=${user.id}::uuid or ${isMarketingAdmin(user)}) returning *,id::text`;return {ok:true,project:row};}
-  const [row]=await sql<any[]>`insert into marketing.checklist_projects(name,vehicle_name,platform_code,post_type_code,dimensions,project_data,created_by,updated_by) values (${text(payload.name||"مشروع Checklist",200)},${nullable(payload.vehicleName,200)},${nullable(payload.platformCode,80)},${nullable(payload.postTypeCode,80)},${nullable(payload.dimensions,80)},${sql.json(payload.projectData||{})},${user.id}::uuid,${user.id}::uuid) returning *,id::text`;return {ok:true,project:row};
+  if(id){const [row]=await sql<any[]>`update marketing.checklist_projects set name=${text(payload.name,200)},vehicle_name=${nullable(payload.vehicleName,200)},platform_code=${nullable(payload.platformCode,80)},post_type_code=${nullable(payload.postTypeCode,80)},dimensions=${nullable(payload.dimensions,80)},project_data=${sql.json(normalizeJsonValue(payload.projectData || {}))},updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid and (created_by=${user.id}::uuid or ${isMarketingAdmin(user)}) returning *,id::text`;return {ok:true,project:row};}
+  const [row]=await sql<any[]>`insert into marketing.checklist_projects(name,vehicle_name,platform_code,post_type_code,dimensions,project_data,created_by,updated_by) values (${text(payload.name||"مشروع Checklist",200)},${nullable(payload.vehicleName,200)},${nullable(payload.platformCode,80)},${nullable(payload.postTypeCode,80)},${nullable(payload.dimensions,80)},${sql.json(normalizeJsonValue(payload.projectData || {}))},${user.id}::uuid,${user.id}::uuid) returning *,id::text`;return {ok:true,project:row};
 }
 
 async function reportData(sql:ReturnType<typeof getSql>,request:VercelRequest){
@@ -884,7 +908,7 @@ async function publisherRuntime(sql: ReturnType<typeof getSql>, request: VercelR
     const metadata = payload && typeof payload === "object" ? payload : {};
     await sql`
       update marketing.publisher_devices
-      set last_seen_at=now(), metadata=coalesce(metadata,'{}'::jsonb) || ${sql.json(metadata)}
+      set last_seen_at=now(), metadata=coalesce(metadata,'{}'::jsonb) || ${sql.json(normalizeJsonValue(metadata))}
       where id=${device.id}::uuid
     `;
     return response.status(200).json({ ok: true, deviceId: device.id, serverTime: new Date().toISOString() });
@@ -960,7 +984,7 @@ async function publisherRuntime(sql: ReturnType<typeof getSql>, request: VercelR
     const status = action === "result" ? "completed" : "failed";
     const [job] = await sql<any[]>`
       update marketing.publish_jobs
-      set status=${status},result=${action === "result" ? sql.json(payload.result || {}) : null},last_error=${action === "fail" ? text(payload.error, 4000) : null},completed_at=${action === "result" ? sql`now()` : null},lease_token_hash=null,lease_expires_at=null,updated_at=now()
+      set status=${status},result=${action === "result" ? sql.json(normalizeJsonValue(payload.result || {})) : null},last_error=${action === "fail" ? text(payload.error, 4000) : null},completed_at=${action === "result" ? sql`now()` : null},lease_token_hash=null,lease_expires_at=null,updated_at=now()
       where id=${jobId}::uuid and device_id=${device.id}::uuid and lease_token_hash=${leaseHash} and lease_expires_at>now()
       returning id::text,status
     `;
@@ -977,7 +1001,7 @@ async function agent(sql:ReturnType<typeof getSql>,request:VercelRequest,user:an
   const payload=await body(request); const action=text(payload.action,30);
   if(action==="register"){
     const token=randomBytes(32).toString("hex"); const hash=createHash("sha256").update(token).digest("hex");
-    const [device]=await sql<any[]>`insert into marketing.publisher_devices(name,token_hash,metadata,created_by) values (${text(payload.name,200)},${hash},${sql.json(payload.metadata||{})},${user.id}::uuid) returning id::text,name,created_at`;
+    const [device]=await sql<any[]>`insert into marketing.publisher_devices(name,token_hash,metadata,created_by) values (${text(payload.name,200)},${hash},${sql.json(normalizeJsonValue(payload.metadata || {}))},${user.id}::uuid) returning id::text,name,created_at`;
     await writeMarketingAudit(sql,request,user,"publisher_device.register","marketing_publisher_device",device.id,null,{name:device.name}); return {ok:true,device,deviceToken:token};
   }
   if(action==="revoke"){await sql`update marketing.publisher_devices set is_active=false where id=${text(payload.id,50)}::uuid`;return {ok:true};}

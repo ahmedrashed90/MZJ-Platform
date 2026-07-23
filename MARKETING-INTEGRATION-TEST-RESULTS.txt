@@ -9,6 +9,8 @@ PASS
 - All existing static Tracking checks in package.json
 - Existing Worker/API route checks
 - Marketing TypeScript/TSX syntax transpilation
+- Targeted TypeScript validation for server/marketing/index.ts against the Postgres.js 3.4.7 JSONValue contract
+- Central JSON normalization applied to every marketing sql.json boundary; no type assertion or per-line cast used
 - Marketing pair-key and progress unit assertions
 - Local publisher agent node --check
 - Secure task-file source checks: Presigned upload/download routes exist and placeholder pending-upload paths are absent
@@ -28,7 +30,7 @@ NOT EXECUTED IN THIS ENVIRONMENT
 - Local Agent large-media upload / FFmpeg render tests
 
 Reason:
-The execution environment could not reach registry.npmjs.org. Corepack failed with EAI_AGAIN while attempting to download pnpm 9.15.9, including offline mode. Therefore no claim is made that the full dependency-based build passed.
+The execution environment could not reach registry.npmjs.org. The exact failing marketing file was nevertheless type-checked with TypeScript 5.8.3 against a local declaration matching the Postgres.js 3.4.7 JSONValue signature, and the TS2345 failure no longer occurs. Corepack failed with EAI_AGAIN while attempting to download pnpm 9.15.9, including offline mode. Therefore no claim is made that the full dependency-based build passed.
 
 Evidence:
 - Full static check output: MARKETING-INTEGRATION-STATIC-CHECKS.log
