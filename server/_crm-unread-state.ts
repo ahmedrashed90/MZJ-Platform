@@ -26,10 +26,11 @@ export async function markCrmLeadUnread(sql: SqlClient, input: CrmUnreadInput) {
         last_message_direction='in',
         last_incoming_message_at=greatest(coalesce(last_incoming_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
         last_message_at=greatest(coalesce(last_message_at,'epoch'::timestamptz),${input.createdAt}::timestamptz),
-        extra_data=jsonb_set(
-          jsonb_set(coalesce(extra_data,'{}'::jsonb),'{lastFirestoreMessageId}',to_jsonb(${input.messageId || null}::text),true),
-          '{lastFirestoreMessagePath}',to_jsonb(${input.messagePath || null}::text),true
-        ) || jsonb_build_object('lastUnreadMessageKey',${input.messageKey}::text),
+        extra_data=coalesce(extra_data,'{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+          'lastUnreadMessageKey',${input.messageKey}::text,
+          'lastProviderMessageId',nullif(${input.messageId || null}::text,''),
+          'lastProviderMessagePath',nullif(${input.messagePath || null}::text,'')
+        )),
         updated_at=now()
       where id=${input.leadId}::uuid
       returning *,id::text,assigned_to::text,call_center_assigned_to::text

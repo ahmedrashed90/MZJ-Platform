@@ -5,6 +5,7 @@ import { ensureContactIdentity, findOpenServiceRequest, classifyConversationServ
 import { publishBackgroundEvent } from "./_crm-background-jobs.js";
 import { handleAutomationInbound } from "./_crm-flow-engine.js";
 import { markCrmLeadUnread } from "./_crm-unread-state.js";
+import { isLeadImportEvent, processLeadImportEvent } from "./_crm-lead-import.js";
 
 function first(...values: unknown[]) {
   for (const value of values) {
@@ -255,6 +256,10 @@ async function claimLatestServiceSelection(input: {
 }
 
 export async function processIntegrationEvent(routeSource: string, eventId: string, payload: any) {
+  if (isLeadImportEvent(routeSource, payload)) {
+    return processLeadImportEvent(routeSource, eventId, payload);
+  }
+
   const sql = getSql();
   const source = routeSourceCode(routeSource, payload);
   const identity = identityData(source, payload);

@@ -17,7 +17,7 @@ import { useAuth } from "../auth/AuthContext";
 const items = [
   { href: "/", label: "الداش بورد", icon: House },
   { href: "/crm", label: "CRM", icon: UsersThree },
-  { href: "/marketing", label: "التسويق", icon: Megaphone, marketingOnly: true },
+  { href: "/marketing", label: "التسويق", icon: Megaphone },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, operationsOnly: true },
   { href: "/tracking", label: "التراكينج", icon: MapPin, trackingOnly: true },
 ];
@@ -30,7 +30,7 @@ const supportItems = [
   { href: "/help", label: "المساعدة", icon: Question },
 ];
 
-type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean; marketingOnly?: boolean };
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean };
 
 function Item({ href, label, icon: Icon }: NavItem) {
   return (
@@ -53,9 +53,8 @@ export function Sidebar() {
   const { user, logout } = useAuth();
   const isAdmin = user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) ?? false;
   const canViewOperations = isAdmin || Boolean(user?.permissions.includes("operations.view")) || Boolean(user?.departmentCodes.includes("operations")) || Boolean(user?.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code)));
-  const canViewMarketing = isAdmin || Boolean(user?.permissions.some((code) => code.startsWith("marketing."))) || Boolean(user?.departmentCodes.includes("marketing")) || Boolean(user?.roleCodes.includes("marketing_user"));
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
-  const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations) && (!item.marketingOnly || canViewMarketing));
+  const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations));
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 

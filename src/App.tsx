@@ -24,15 +24,6 @@ const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((modu
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
-const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
-const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
-const MarketingCampaignsPage = lazy(() => import("./marketing/pages/MarketingCampaignsPage").then((module) => ({ default: module.MarketingCampaignsPage })));
-const MarketingCampaignBuilderPage = lazy(() => import("./marketing/pages/MarketingCampaignBuilderPage").then((module) => ({ default: module.MarketingCampaignBuilderPage })));
-const MarketingCampaignDetailPage = lazy(() => import("./marketing/pages/MarketingCampaignDetailPage").then((module) => ({ default: module.MarketingCampaignDetailPage })));
-const MarketingTasksPage = lazy(() => import("./marketing/pages/MarketingTasksPage").then((module) => ({ default: module.MarketingTasksPage })));
-const MarketingAgendaPage = lazy(() => import("./marketing/pages/MarketingAgendaPage").then((module) => ({ default: module.MarketingAgendaPage })));
-const MarketingPublishingPage = lazy(() => import("./marketing/pages/MarketingPublishingPage").then((module) => ({ default: module.MarketingPublishingPage })));
-const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
 const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
@@ -62,17 +53,7 @@ function PlatformRoutes() {
             <Route path="kpi" element={<CrmKpiPage />} />
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
-          <Route path="/marketing" element={<MarketingLayout />}>
-            <Route index element={<MarketingDashboardPage />} />
-            <Route path="campaigns" element={<MarketingCampaignsPage />} />
-            <Route path="campaigns/new" element={<MarketingCampaignBuilderPage />} />
-            <Route path="campaigns/:id/edit" element={<MarketingCampaignBuilderPage />} />
-            <Route path="campaigns/:id" element={<MarketingCampaignDetailPage />} />
-            <Route path="tasks" element={<MarketingTasksPage />} />
-            <Route path="agenda" element={<MarketingAgendaPage />} />
-            <Route path="publishing" element={<MarketingPublishingPage />} />
-            <Route path="calendar" element={<MarketingCalendarPage />} />
-          </Route>
+          <Route path="/marketing" element={<EmptyModulePage title="التسويق" description="الحملات والأجندة والكرييتيف وجدول النشر والتقويم." />} />
           <Route path="/operations" element={<OperationsLayout />}>
             <Route index element={<InventoryPage />} />
             <Route path="manage" element={<VehicleManagementPage />} />

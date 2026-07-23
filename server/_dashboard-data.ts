@@ -70,7 +70,7 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
   } catch (error) { data.sectionErrors!.crm = errorText(error); console.error("Dashboard CRM query failed", error); }
 
   try {
-    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status in ('مجدولة','تجهيز النشر'))::int as scheduled,count(*) filter(where due_at<now() and status not in ('مكتملة','تم الاستلام','مؤرشفة'))::int as delayed from marketing.campaigns where is_deleted=false and archived_at is null`;
+    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed from marketing.campaigns where is_deleted=false`;
     data.marketing = { campaigns: asNumber(row?.campaigns), scheduled: asNumber(row?.scheduled), delayed: asNumber(row?.delayed) };
   } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
 
