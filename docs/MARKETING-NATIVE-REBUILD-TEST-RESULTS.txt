@@ -1,0 +1,71 @@
+MZJ PLATFORM v1.19.0 — NATIVE MARKETING REBUILD
+Test execution date: 2026-07-23
+
+PASSED
+======
+1. Marketing native static architecture checks
+   Command: node scripts/check-marketing-native-rebuild.mjs
+   Result: PASS — 75 checks
+   Coverage: routes, schema, permissions, settings, task cardinality, idempotency,
+   receive gate, progress, publish gate, upload permission split, shared requests,
+   Firebase/iframe/local-publisher exclusions, package counters and primary department rules.
+
+2. Marketing domain scenario simulations
+   Command: node scripts/test-marketing-domain-scenarios.mjs
+   Result: PASS — 15 scenarios
+   Coverage: multiple writers, multiple execution users, exact template linkage,
+   unrelated task isolation, receive lock, immutable receive timestamp, weighted progress,
+   equal department weighting, 100% publish gate, idempotent submission and date limits.
+
+3. TypeScript syntax transpilation
+   Result: PASS — 20 changed/related TS and TSX files
+   Method: TypeScript transpileModule with diagnostics enabled.
+
+4. Frontend semantic TypeScript check
+   Result: PASS for the marketing frontend and the new operations photography page.
+   Method: strict no-emit TypeScript check with temporary declarations because project
+   dependencies were not installable in the execution environment.
+
+5. Existing platform static checks
+   Result: PASS — 23 check groups
+   Coverage includes API imports, CRM, Mersal/WhatsApp, tracking, operations,
+   ERPNext integration, dashboard calculations, workflow, deletion safety and approval cycles.
+
+6. Source exclusions audit
+   Result: PASS within the new marketing runtime.
+   - No Firebase imports.
+   - No iframe integration.
+   - No Electron or Local Publisher dependency.
+   - No explicit TypeScript any in src/marketing or server/marketing.
+   - No Checklist route/page in the new marketing module.
+
+BLOCKED / NOT EXECUTED
+======================
+1. Dependency installation
+   Command: corepack pnpm install --frozen-lockfile
+   Result: BLOCKED
+   Environment error: getaddrinfo EAI_AGAIN registry.npmjs.org while Corepack attempted
+   to download pnpm 9.15.9.
+
+2. Full project TypeScript build (tsc -b)
+   Result: NOT EXECUTED with real dependencies because installation was blocked.
+
+3. Vite production build
+   Result: NOT EXECUTED because dependencies could not be installed.
+
+4. PostgreSQL/API integration tests
+   Result: NOT EXECUTED because this execution environment did not provide a deployment
+   database/session/storage configuration.
+
+RELEASE DECISION
+================
+The source implementation and dependency-free checks are complete, but this package must
+NOT be described as production-build verified. Before deployment, run:
+
+  pnpm install --frozen-lockfile
+  pnpm run test:marketing
+  pnpm run typecheck
+  pnpm run build
+
+Then execute the staging smoke tests in:
+  docs/MARKETING-NATIVE-REBUILD-DEPLOYMENT-AR.md

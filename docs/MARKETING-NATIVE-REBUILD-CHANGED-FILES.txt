@@ -1,0 +1,106 @@
+MZJ PLATFORM v1.19.0 — CHANGED FILES
+
+ADDED (19)
+==========
+database/migrations/20260723_marketing_native_rebuild.sql
+  Final organized PostgreSQL migration for the marketing rebuild and shared photography audit.
+
+docs/MARKETING-NATIVE-REBUILD-CHANGED-FILES.txt
+  Exact added/modified/removed file inventory and the reason for each change.
+
+docs/MARKETING-NATIVE-REBUILD-DEPLOYMENT-AR.md
+  SQL, environment, deployment, permission and staging smoke-test instructions.
+
+docs/MARKETING-NATIVE-REBUILD-IMPLEMENTATION-AR.md
+  Arabic implementation report covering architecture, flows, permissions and exclusions.
+
+docs/MARKETING-NATIVE-REBUILD-TEST-RESULTS.txt
+  Commands, passed checks, blocked checks and the honest release decision.
+
+scripts/check-marketing-native-rebuild.mjs
+  Dependency-free architecture, relationship, permission and exclusion checks.
+
+scripts/test-marketing-domain-scenarios.mjs
+  Domain scenario simulations for task relationships, progress, gating and idempotency.
+
+server/_marketing-schema.ts
+  Native marketing schema, permissions, seed data and lazy initialization.
+
+server/marketing/index.ts
+  Marketing API for metadata, projects, tasks, reviews, files, packages, calendar, stock,
+  shared photography requests, reports, attendance, connections and settings.
+
+src/marketing/MarketingLayout.tsx
+  Marketing navigation, permission-aware pages and presence heartbeat.
+
+src/marketing/api.ts
+  Marketing API and signed-upload client helpers.
+
+src/marketing/types.ts
+  Shared frontend types for metadata, projects, tasks, wizard and detail screens.
+
+src/marketing/components/Common.tsx
+  Shared UI primitives for marketing pages.
+
+src/marketing/components/MarketingSettingsPanel.tsx
+  Marketing settings inside the unified platform settings page.
+
+src/marketing/components/ProjectWizard.tsx
+  Five-step campaign wizard and three-step agenda wizard with draft persistence,
+  stable idempotency, instance-level cars, budgets and publication schedule.
+
+src/marketing/components/TaskDetailsModal.tsx
+  Template/execution task details, receive flow, actions, review and scoped uploads.
+
+src/marketing/components/ProjectDetailsModal.tsx
+  Unified database/management detail window, edits, users, tasks, files, export and history.
+
+src/marketing/pages/MarketingPages.tsx
+  The 13 native marketing pages and their connected data views.
+
+src/operations/pages/PhotographyRequestsPage.tsx
+  Operations view for the same shared photography request and event records.
+
+MODIFIED (12)
+=============
+.env.example
+  Adds optional RAW folder service variables.
+
+README.md
+  Adds v1.19.0 marketing rebuild release notes and documentation references.
+
+api/index.ts
+  Routes /api/marketing to the native handler.
+
+package.json
+  Bumps version to 1.19.0 and adds marketing checks/tests to project scripts.
+
+server/_dashboard-data.ts
+  Reads native marketing campaign/task counts for the unified dashboard.
+
+server/_operations-schema.ts
+  Adds the shared photography request event audit table.
+
+server/operations/index.ts
+  Adds shared photography request listing/update, dynamic statuses and event history.
+
+server/setup/initialize.ts
+  Initializes the marketing schema with platform setup.
+
+src/App.tsx
+  Adds nested routes for all marketing pages and the operations photography page.
+
+src/operations/OperationsLayout.tsx
+  Adds permission-aware navigation to photography requests.
+
+src/pages/SettingsPage.tsx
+  Mounts MarketingSettingsPanel in the unified settings page.
+
+src/styles.css
+  Adds native marketing layouts, cards, tables, modals, wizard, settings and shared request styles.
+
+REMOVED (0)
+===========
+No existing platform file was removed. The base platform contained only a marketing placeholder;
+its route/rendering was replaced by the native module. No CRM, tracking or unrelated operations
+page was deleted.

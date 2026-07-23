@@ -1,0 +1,8 @@
+PASS: Full project typecheck command completed.
+PASS: All existing CRM, Tracking, Operations, Dashboard, ERPNext and deletion checks completed.
+PASS: New approval-cycle reconciliation check completed.
+PASS: Production Vite build completed.
+PASS: Vehicle Management status selector is editable for existing vehicles.
+PASS: Status changes from Vehicle Management use the movement history flow.
+PASS: NEXT ERP under-delivery status initializes the canonical approval cycle.
+PASS: Legacy full unique vehicle approval index is reconciled to active-cycle-only uniqueness.
