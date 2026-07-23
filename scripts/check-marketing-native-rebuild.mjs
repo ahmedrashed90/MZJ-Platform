@@ -33,6 +33,7 @@ for (const route of expectedRoutes) {
 check("operations photography route", app.includes('path="photos"') && operationsLayout.includes('/operations/photos'));
 check("marketing API gateway", gateway.includes('marketingHandler') && gateway.includes('["marketing", marketingHandler]'));
 check("schema initialization", setup.includes('ensureMarketingSchema'));
+check("attendance settings legacy type reconciliation", schema.includes("attendance_id_type") && schema.includes("alter column id type text using id::text") && schema.includes("where not exists(select 1 from marketing.attendance_settings where id='default')"));
 
 for (const table of [
   "marketing.departments", "marketing.department_users", "marketing.assignment_actions", "marketing.creative_types",

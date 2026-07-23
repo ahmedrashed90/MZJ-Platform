@@ -370,6 +370,29 @@ create table if not exists marketing.packages (
   unique(name,category_id)
 );
 
+do $marketing_attendance_settings_reconcile$
+declare
+  attendance_id_type text;
+begin
+  if to_regclass('marketing.attendance_settings') is not null then
+    select format_type(attribute.atttypid,attribute.atttypmod)
+      into attendance_id_type
+    from pg_attribute attribute
+    where attribute.attrelid='marketing.attendance_settings'::regclass
+      and attribute.attname='id'
+      and attribute.attnum>0
+      and not attribute.attisdropped;
+
+    if attendance_id_type is null then
+      alter table marketing.attendance_settings add column id text;
+    elsif attendance_id_type <> 'text' then
+      alter table marketing.attendance_settings alter column id drop default;
+      alter table marketing.attendance_settings alter column id type text using id::text;
+    end if;
+  end if;
+end
+$marketing_attendance_settings_reconcile$;
+
 create table if not exists marketing.attendance_settings (
   id text primary key default 'default',
   work_start_time time not null default '16:00',
@@ -380,7 +403,36 @@ create table if not exists marketing.attendance_settings (
   updated_by uuid references core.users(id),
   updated_at timestamptz not null default now()
 );
-insert into marketing.attendance_settings(id) values('default') on conflict(id) do nothing;
+alter table marketing.attendance_settings add column if not exists work_start_time time;
+alter table marketing.attendance_settings add column if not exists work_end_time time;
+alter table marketing.attendance_settings add column if not exists grace_minutes integer;
+alter table marketing.attendance_settings add column if not exists idle_after_minutes integer;
+alter table marketing.attendance_settings add column if not exists offline_after_minutes integer;
+alter table marketing.attendance_settings add column if not exists updated_by uuid references core.users(id);
+alter table marketing.attendance_settings add column if not exists updated_at timestamptz;
+alter table marketing.attendance_settings alter column id set default 'default';
+alter table marketing.attendance_settings alter column work_start_time set default '16:00';
+alter table marketing.attendance_settings alter column work_end_time set default '21:00';
+alter table marketing.attendance_settings alter column grace_minutes set default 0;
+alter table marketing.attendance_settings alter column idle_after_minutes set default 5;
+alter table marketing.attendance_settings alter column offline_after_minutes set default 10;
+alter table marketing.attendance_settings alter column updated_at set default now();
+update marketing.attendance_settings set
+  work_start_time=coalesce(work_start_time,'16:00'::time),
+  work_end_time=coalesce(work_end_time,'21:00'::time),
+  grace_minutes=coalesce(grace_minutes,0),
+  idle_after_minutes=coalesce(idle_after_minutes,5),
+  offline_after_minutes=coalesce(offline_after_minutes,10),
+  updated_at=coalesce(updated_at,now());
+alter table marketing.attendance_settings alter column work_start_time set not null;
+alter table marketing.attendance_settings alter column work_end_time set not null;
+alter table marketing.attendance_settings alter column grace_minutes set not null;
+alter table marketing.attendance_settings alter column idle_after_minutes set not null;
+alter table marketing.attendance_settings alter column offline_after_minutes set not null;
+alter table marketing.attendance_settings alter column updated_at set not null;
+insert into marketing.attendance_settings(id)
+select 'default'
+where not exists(select 1 from marketing.attendance_settings where id='default');
 
 create table if not exists marketing.attendance_records (
   id uuid primary key default gen_random_uuid(),
