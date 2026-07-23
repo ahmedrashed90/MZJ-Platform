@@ -1,0 +1,31 @@
+MZJ Platform v1.19.3 - Marketing Attendance Singleton Clean Fix
+
+PASS - Marketing native static checks: 76
+PASS - Marketing domain scenarios: 15
+PASS - API import extension check
+PASS - CRM service reclassification
+PASS - Facebook canonical identity and template
+PASS - CRM reports KPI
+PASS - CRM manual leads
+PASS - CRM module structure
+PASS - Customer completion
+PASS - CRM reference v27
+PASS - CRM settings v1.8
+PASS - CRM reference v39
+PASS - CRM automation v1.18.0
+PASS - CRM finance combined details
+PASS - Worker route discovery
+PASS - Tracking module
+PASS - Operations Native V2
+PASS - Dashboard operations
+PASS - Operations workflow
+PASS - Operations FK delete
+PASS - ERPNext unified sales link
+PASS - Tracking deleted release
+PASS - Operations auto archive
+PASS - Operations approval cycles
+PASS - TypeScript server check (tsconfig.node.json)
+PASS - No attendance_settings id text conversion
+PASS - No attendance_settings id runtime comparison
+
+Frontend dependency installation/build was not rerun in this isolated container because registry access is unavailable. No frontend source file was changed in v1.19.3.

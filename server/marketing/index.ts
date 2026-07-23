@@ -70,7 +70,7 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
     sql`select id::text,name,is_active,sort_order from marketing.package_categories order by sort_order,name`,
     sql`select id::text,code,name,is_terminal,is_active,sort_order from marketing.request_statuses order by sort_order,name`,
     sql`select u.id::text,u.full_name,u.email,u.employee_no,u.can_receive_tasks,coalesce(array_agg(distinct d.code) filter(where d.id is not null),'{}') as department_codes from core.users u left join core.user_departments ud on ud.user_id=u.id left join core.departments d on d.id=ud.department_id where u.is_active=true group by u.id order by u.full_name`,
-    sql`select work_start_time::text,work_end_time::text,grace_minutes,idle_after_minutes,offline_after_minutes,updated_at from marketing.attendance_settings where id='default'`,
+    sql`select work_start_time::text,work_end_time::text,grace_minutes,idle_after_minutes,offline_after_minutes,updated_at from marketing.attendance_settings order by updated_at desc nulls last limit 1`,
   ]);
   return { ok: true, departments, departmentUsers, actions, creativeTypes, campaignTypes, platforms, postTypes, categories, requestStatuses, users, attendanceSettings: attendanceSettings[0] || null, permissions: userPermissions(user), currentUser: { id: user.id, fullName: user.fullName, roleCodes: user.roleCodes, departmentCodes: user.departmentCodes } };
 }
@@ -603,7 +603,7 @@ async function attendance(sql: ReturnType<typeof getSql>, request: VercelRequest
   const date = clean(request.query.date) || new Date().toISOString().slice(0, 10);
   const from = clean(request.query.from) || date;
   const to = clean(request.query.to) || date;
-  const [settings] = await sql`select work_start_time::text,work_end_time::text,grace_minutes,idle_after_minutes,offline_after_minutes from marketing.attendance_settings where id='default'`;
+  const [settings] = await sql`select work_start_time::text,work_end_time::text,grace_minutes,idle_after_minutes,offline_after_minutes from marketing.attendance_settings order by updated_at desc nulls last limit 1`;
   const todayRows = await sql`select ar.id::text,ar.user_id::text,u.full_name,u.email,ar.attendance_date,ar.check_in_at,ar.check_out_at,ar.status,ar.late_minutes,ar.work_minutes,p.last_seen_at,p.last_activity_at,p.last_page from marketing.attendance_records ar join core.users u on u.id=ar.user_id left join marketing.presence_status p on p.user_id=ar.user_id where ar.attendance_date=${date}::date order by ar.check_in_at`;
   const reportRows = can(user, "marketing.attendance.manage") ? await sql`select ar.id::text,ar.user_id::text,u.full_name,u.email,ar.attendance_date,ar.check_in_at,ar.check_out_at,ar.status,ar.late_minutes,ar.work_minutes from marketing.attendance_records ar join core.users u on u.id=ar.user_id where ar.attendance_date between ${from}::date and ${to}::date order by ar.attendance_date desc,u.full_name` : await sql`select ar.id::text,ar.user_id::text,u.full_name,u.email,ar.attendance_date,ar.check_in_at,ar.check_out_at,ar.status,ar.late_minutes,ar.work_minutes from marketing.attendance_records ar join core.users u on u.id=ar.user_id where ar.user_id=${user.id}::uuid and ar.attendance_date between ${from}::date and ${to}::date order by ar.attendance_date desc`;
   const [myRecord] = await sql`select id::text,user_id::text,attendance_date,check_in_at,check_out_at,status,late_minutes,work_minutes from marketing.attendance_records where user_id=${user.id}::uuid and attendance_date=current_date`;
@@ -616,7 +616,7 @@ async function attendanceAction(sql: ReturnType<typeof getSql>, body: Record<str
     await sql`insert into marketing.presence_status(user_id,last_seen_at,last_activity_at,last_page,activity_type,device_info,updated_at) values(${user.id}::uuid,now(),now(),${textOrNull(body.lastPage)},${textOrNull(body.activityType)},${sql.json(toDatabaseJson(body.deviceInfo))},now()) on conflict(user_id) do update set last_seen_at=now(),last_activity_at=now(),last_page=excluded.last_page,activity_type=excluded.activity_type,device_info=excluded.device_info,updated_at=now()`;
     return { ok: true };
   }
-  const [settings] = await sql`select work_start_time::text,work_end_time::text,grace_minutes from marketing.attendance_settings where id='default'`;
+  const [settings] = await sql`select work_start_time::text,work_end_time::text,grace_minutes from marketing.attendance_settings order by updated_at desc nulls last limit 1`;
   if (attendanceAction === "check_in") {
     const [row] = await sql`
       insert into marketing.attendance_records(user_id,attendance_date,check_in_at,status,late_minutes,source,metadata)
@@ -711,7 +711,18 @@ async function settingsAction(sql: ReturnType<typeof getSql>, body: Record<strin
     return { ok: true, row, message: "تم حفظ حالة الطلب" };
   }
   if (entity === "attendance_settings") {
-    const [row] = await sql`update marketing.attendance_settings set work_start_time=${clean(body.workStartTime) || "16:00"}::time,work_end_time=${clean(body.workEndTime) || "21:00"}::time,grace_minutes=${Math.max(0,numberValue(body.graceMinutes))},idle_after_minutes=${Math.max(1,numberValue(body.idleAfterMinutes,5))},offline_after_minutes=${Math.max(2,numberValue(body.offlineAfterMinutes,10))},updated_by=${user.id}::uuid,updated_at=now() where id='default' returning work_start_time::text,work_end_time::text,grace_minutes,idle_after_minutes,offline_after_minutes`;
+    const [row] = await sql`
+      update marketing.attendance_settings
+      set work_start_time=${clean(body.workStartTime) || "16:00"}::time,
+          work_end_time=${clean(body.workEndTime) || "21:00"}::time,
+          grace_minutes=${Math.max(0,numberValue(body.graceMinutes))},
+          idle_after_minutes=${Math.max(1,numberValue(body.idleAfterMinutes,5))},
+          offline_after_minutes=${Math.max(2,numberValue(body.offlineAfterMinutes,10))},
+          updated_by=${user.id}::uuid,
+          updated_at=now()
+      where ctid=(select ctid from marketing.attendance_settings order by updated_at desc nulls last limit 1)
+      returning work_start_time::text,work_end_time::text,grace_minutes,idle_after_minutes,offline_after_minutes
+    `;
     return { ok: true, row, message: "تم حفظ مواعيد الدوام" };
   }
   throw new Error("نوع إعداد التسويق غير مدعوم");
