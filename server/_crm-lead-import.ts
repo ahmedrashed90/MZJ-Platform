@@ -128,8 +128,29 @@ function integerOrNull(value: unknown) {
   return number == null ? null : Math.trunc(number);
 }
 
-function objectValue(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+
+function toJsonValue(value: unknown): JsonValue {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(toJsonValue);
+  if (typeof value === "object") {
+    const result: JsonObject = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (item !== undefined) result[key] = toJsonValue(item);
+    }
+    return result;
+  }
+  return String(value);
+}
+
+function objectValue(value: unknown): JsonObject {
+  const normalized = toJsonValue(value);
+  return normalized && typeof normalized === "object" && !Array.isArray(normalized) ? normalized : {};
 }
 
 function sourceHistory(value: unknown, sourceCode: string, sourceName: string, occurredAt: string) {
@@ -286,7 +307,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   }
 
   const existingExtraData = objectValue(lead.extra_data);
-  const nextExtraData: Record<string, unknown> = {
+  const nextExtraData: JsonObject = {
     ...existingExtraData,
     importOnly: true,
     preferredContactChannel,
@@ -296,11 +317,11 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
     latestSourceAt: occurredAt,
     lastImportEventId: eventId,
     lastImportRouteSource: routeSource,
-    lastImportPayload: data.raw,
+    lastImportPayload: toJsonValue(data.raw),
   };
   if (sourceCode === "installment_calculator") {
-    nextExtraData.calculator = data.calculator;
-    nextExtraData.rawCalculatorRow = data.raw;
+    nextExtraData.calculator = toJsonValue(data.calculator);
+    nextExtraData.rawCalculatorRow = toJsonValue(data.raw);
     nextExtraData.calculatorLastEventAt = occurredAt;
   }
   const nextSourceHistory = sourceHistory(lead.source_history, sourceCode, sourceName, occurredAt);
