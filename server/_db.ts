@@ -70,10 +70,10 @@ export async function withDatabaseAdvisoryLock<T>(lockKey: string, work: () => P
   await ensureLockClientReady(locks);
   const reserved = await locks.reserve();
   try {
-    await reserved.unsafe("select pg_advisory_lock(hashtext($1))", [normalizedKey]);
+    await reserved`select pg_advisory_lock(hashtext(${normalizedKey}::text)::bigint)`;
     return await work();
   } finally {
-    await reserved.unsafe("select pg_advisory_unlock(hashtext($1))", [normalizedKey]).catch(() => undefined);
+    await reserved`select pg_advisory_unlock(hashtext(${normalizedKey}::text)::bigint)`.catch(() => undefined);
     await reserved.release();
   }
 }

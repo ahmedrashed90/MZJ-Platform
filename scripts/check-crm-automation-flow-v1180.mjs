@@ -130,14 +130,22 @@ requireTokens("database conversation serialization", db, [
   'lockClient',
   'getLockSql',
   'locks.reserve()',
-  'pg_advisory_lock(hashtext($1))',
-  'pg_advisory_unlock(hashtext($1))',
+  'reserved`select pg_advisory_lock(hashtext(${normalizedKey}::text)::bigint)`',
+  'reserved`select pg_advisory_unlock(hashtext(${normalizedKey}::text)::bigint)`',
   'return await work()',
 ]);
 forbidTokens("database conversation serialization", db, [
   'AsyncLocalStorage',
   'sqlContext',
   'reservedSqlFacade',
+  'pg_advisory_lock(hashtext($1',
+  'pg_advisory_unlock(hashtext($1',
+]);
+requireTokens("transaction conversation serialization", engine, [
+  'tx`select pg_advisory_xact_lock(hashtext(${input.conversationId}::text)::bigint)`',
+]);
+forbidTokens("transaction conversation serialization", engine, [
+  'pg_advisory_xact_lock(hashtext($1',
 ]);
 requireTokens("integration ingress ordering", integrationRoute, [
   'integrationConversationLockKey',

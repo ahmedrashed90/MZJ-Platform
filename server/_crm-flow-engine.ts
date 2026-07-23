@@ -663,7 +663,7 @@ export async function handleAutomationInbound(input: AutomationInboundInput) {
 
   try {
     const result = await sql.begin(async (tx) => {
-      await tx.unsafe("select pg_advisory_xact_lock(hashtext($1))", [input.conversationId]);
+      await tx`select pg_advisory_xact_lock(hashtext(${input.conversationId}::text)::bigint)`;
       const [lockedEvent] = await tx<any[]>`
         select *,id::text,conversation_id::text,contact_id::text,session_id::text
         from crm.automation_inbound_events where id=${event.id}::uuid for update
