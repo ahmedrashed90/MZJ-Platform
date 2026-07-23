@@ -1,70 +1,69 @@
+import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import {
-  CalendarDots,
-  ChartBar,
-  CheckSquareOffset,
-  ClockCounterClockwise,
-  Database,
-  Gear,
-  Gift,
-  House,
-  LinkSimple,
-  Megaphone,
-  Package,
-  PlusCircle,
-  RocketLaunch,
-  Stack,
-  UsersThree,
+  CalendarBlank, ChartBar, Clock, Database, Gift, Gauge, LinkSimple, Megaphone,
+  PaperPlaneTilt, PlusCircle, Stack, Truck, WarningCircle,
 } from "@phosphor-icons/react";
-import { MarketingProvider, useMarketing } from "./MarketingContext";
+import { marketingFetch } from "./api";
+import type { MarketingMeta } from "./types";
+import "./marketing.css";
 
-type MarketingNavPermission = "manageCampaigns" | "managePackages" | "viewReports" | "manageSettings";
+const items = [
+  { href: "/marketing", label: "لوحة التحكم", icon: Gauge, end: true, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/database", label: "قاعدة البيانات", icon: Database, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/create-campaign", label: "إنشاء حملة", icon: PlusCircle, visible: (meta: MarketingMeta) => meta.permissions.canManage },
+  { href: "/marketing/create-agenda", label: "إنشاء أجندة", icon: CalendarBlank, visible: (meta: MarketingMeta) => meta.permissions.canManage },
+  { href: "/marketing/campaigns", label: "إدارة الحملات", icon: Megaphone, visible: (meta: MarketingMeta) => meta.permissions.canManage },
+  { href: "/marketing/packages", label: "إدارة الباقات", icon: Gift, visible: (meta: MarketingMeta) => meta.permissions.canManagePackages },
+  { href: "/marketing/publish-prep", label: "تجهيز النشر", icon: PaperPlaneTilt, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/requests", label: "متابعة الطلبات", icon: Truck, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/calendar", label: "التقويم", icon: CalendarBlank, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/stock", label: "الاستوك", icon: Stack, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/reports", label: "التقارير", icon: ChartBar, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/attendance", label: "الحضور والانصراف", icon: Clock, visible: (meta: MarketingMeta) => meta.permissions.canView },
+  { href: "/marketing/connections", label: "ربط المنصات", icon: LinkSimple, visible: (meta: MarketingMeta) => meta.permissions.canManage },
+] as const;
 
-const navItems: Array<{ to: string; label: string; icon: typeof House; end?: boolean; permission?: MarketingNavPermission }> = [
-  { to: "/marketing", label: "لوحة التحكم", icon: House, end: true },
-  { to: "/marketing/database", label: "قاعدة البيانات", icon: Database, permission: "manageCampaigns" },
-  { to: "/marketing/create-campaign", label: "إنشاء حملة", icon: PlusCircle, permission: "manageCampaigns" },
-  { to: "/marketing/create-agenda", label: "إنشاء أجندة", icon: CalendarDots, permission: "manageCampaigns" },
-  { to: "/marketing/campaigns", label: "إدارة الحملات", icon: Megaphone, permission: "manageCampaigns" },
-  { to: "/marketing/packages", label: "إدارة الباقات", icon: Gift, permission: "managePackages" },
-  { to: "/marketing/publish-prep", label: "تجهيز النشر", icon: RocketLaunch },
-  { to: "/marketing/requests", label: "متابعة الطلبات", icon: CheckSquareOffset },
-  { to: "/marketing/calendar", label: "التقويم", icon: CalendarDots },
-  { to: "/marketing/stock", label: "الاستوك", icon: Stack },
-  { to: "/marketing/reports", label: "التقارير", icon: ChartBar, permission: "viewReports" },
-  { to: "/marketing/attendance", label: "الحضور والانصراف", icon: ClockCounterClockwise },
-  { to: "/marketing/connections", label: "ربط المنصات", icon: LinkSimple, permission: "manageSettings" },
-];
+export type MarketingOutletContext = { meta: MarketingMeta; reloadMeta: () => Promise<void> };
 
-function MarketingShell() {
-  const { meta, loading, error } = useMarketing();
-  const visibleItems = navItems.filter((item) => !item.permission || Boolean(meta?.permissions[item.permission]));
+export function MarketingLayout() {
+  const [meta, setMeta] = useState<MarketingMeta | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setMeta(await marketingFetch<MarketingMeta>("/api/marketing?resource=meta"));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل إعدادات التسويق");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (loading && !meta) return <div className="crm-loading-panel">جاري تجهيز نظام التسويق...</div>;
+  if (!meta) {
+    return <div className="module-page"><div className="connection-banner"><WarningCircle size={20} /><span>{error || "تعذر فتح نظام التسويق"}</span><button type="button" onClick={() => void load()}>إعادة المحاولة</button></div></div>;
+  }
+  if (!meta.permissions.canView) {
+    return <div className="module-page"><div className="connection-banner"><WarningCircle size={20} /><span>لا تملك صلاحية عرض نظام التسويق.</span></div></div>;
+  }
+
   return (
-    <div className="marketing-shell" dir="rtl">
-      <header className="marketing-module-head">
-        <div>
-          <span className="marketing-kicker">MZJ Marketing</span>
-          <h1>نظام التسويق</h1>
-          <p>الحملات والأجندات والكرييتيفات والتاسكات وجدول النشر من داخل المنصة الموحدة.</p>
-        </div>
-        {meta?.permissions.manageSettings ? <div className="marketing-head-actions">
-          <NavLink to="/settings?section=marketing"><Gear size={18} /> إعدادات التسويق</NavLink>
-        </div> : null}
-      </header>
-      <nav className="marketing-local-nav" aria-label="صفحات التسويق">
-        {visibleItems.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? "active" : ""}>
-            <Icon size={17} weight="duotone" /><span>{label}</span>
+    <section className="marketing-module">
+      <nav className="marketing-system-nav" aria-label="صفحات التسويق">
+        {items.filter((item) => item.visible(meta)).map(({ href, label, icon: Icon, ...item }) => (
+          <NavLink key={href} to={href} end={"end" in item ? item.end : false} className={({ isActive }) => `marketing-system-link ${isActive ? "active" : ""}`}>
+            <Icon size={18} weight="duotone" /><span>{label}</span>
           </NavLink>
         ))}
       </nav>
-      {loading ? <div className="marketing-loading"><Package size={24} /> جاري تحميل بيانات التسويق...</div> : null}
-      {error ? <div className="marketing-error"><UsersThree size={20} /> {error}</div> : null}
-      {!loading && !error ? <Outlet /> : null}
-    </div>
+      {error ? <div className="marketing-alert error"><WarningCircle size={18} />{error}</div> : null}
+      <Outlet context={{ meta, reloadMeta: load } satisfies MarketingOutletContext} />
+    </section>
   );
-}
-
-export function MarketingLayout() {
-  return <MarketingProvider><MarketingShell /></MarketingProvider>;
 }

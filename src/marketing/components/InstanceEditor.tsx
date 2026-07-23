@@ -1,50 +1,83 @@
 import { useMemo, useState } from "react";
-import { Car, CaretDown, CaretUp, Plus, Trash, UsersThree } from "@phosphor-icons/react";
-import type { CreativeInstanceDraft, InstanceSectionDraft, MarketingMeta, StockVehicle } from "../types";
+import { Car, Plus, Trash, UsersThree } from "@phosphor-icons/react";
+import { marketingFetch } from "../api";
+import type { DraftAssignment, DraftDepartment, DraftInstance, MarketingMeta, VehicleRow } from "../types";
+import { Empty } from "./Ui";
 
-function toggle(items: string[], value: string) { return items.includes(value) ? items.filter((item)=>item!==value) : [...items,value]; }
-function localId() { return crypto.randomUUID(); }
+type Props = { instance: DraftInstance; meta: MarketingMeta; onChange: (next: DraftInstance) => void; allowAgendaDate?: boolean; showPosts?: boolean; onRemove?: () => void };
 
-export function InstanceEditor({ instance, index, meta, vehicles, onChange, onRemove, showPlatforms = false }: {
-  instance: CreativeInstanceDraft;
-  index: number;
-  meta: MarketingMeta;
-  vehicles: StockVehicle[];
-  onChange: (value: CreativeInstanceDraft) => void;
-  onRemove: () => void;
-  showPlatforms?: boolean;
-}) {
-  const [open,setOpen]=useState(true);
-  const [carsOpen,setCarsOpen]=useState(false);
-  const [platformsOpen,setPlatformsOpen]=useState(false);
-  const creative=meta.creatives.find((item)=>item.id===instance.creativeId);
-  const contentDepartment=meta.departments.find((item)=>item.is_content);
-  const contentUserOptions=contentDepartment?.users || [];
-  const activeDepartments=meta.departments.filter((item)=>item.is_active&&!item.is_content);
-  const selectedContentIds=instance.contentUsers.map((item)=>item.userId);
+function toggleValue(values: string[], value: string) { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
 
-  const primaryDepartment = creative ? meta.departments.find((item)=>item.id===creative.primary_department_id) : undefined;
-  const sections = useMemo(() => {
-    if (!creative) return instance.sections;
-    if (instance.sections.some((section)=>section.kind==="primary")) return instance.sections;
-    return [{ localId:localId(),departmentId:creative.primary_department_id,kind:"primary" as const,receivedDate:instance.primaryReceivedDate,notes:instance.primaryNotes,users:[] },...instance.sections];
-  },[creative,instance.sections,instance.primaryReceivedDate,instance.primaryNotes]);
+export function InstanceEditor({ instance, meta, onChange, allowAgendaDate, showPosts, onRemove }: Props) {
+  const [optionalDepartmentId, setOptionalDepartmentId] = useState("");
+  const [vehicleSearch, setVehicleSearch] = useState("");
+  const [vehicleRows, setVehicleRows] = useState<VehicleRow[]>([]);
+  const [vehicleLoading, setVehicleLoading] = useState(false);
+  const creative = meta.creatives.find((item) => item.id === instance.creativeId);
+  const contentDepartment = meta.departments.find((item) => item.is_content);
+  const selectedWriterIds = instance.writers.map((item) => item.userId);
+  const usedDepartments = new Set(instance.departments.map((item) => item.departmentId));
+  const selectedVehicles = useMemo(() => {
+    const byId = new Map(vehicleRows.map((item) => [item.id, item]));
+    return instance.vehicleIds.map((id) => byId.get(id)).filter((item): item is VehicleRow => Boolean(item));
+  }, [instance.vehicleIds, vehicleRows]);
 
-  const updateSection=(sectionIndex:number,next:InstanceSectionDraft)=>onChange({...instance,sections:sections.map((section,i)=>i===sectionIndex?next:section)});
-  const addOptional=()=>{const used=new Set(sections.map((section)=>section.departmentId));const department=activeDepartments.find((item)=>!used.has(item.id));if(!department)return;onChange({...instance,sections:[...sections,{localId:localId(),departmentId:department.id,kind:"optional",receivedDate:"",notes:"",users:[]}]});};
+  function updateDepartment(index: number, next: DraftDepartment) { onChange({ ...instance, departments: instance.departments.map((item, itemIndex) => itemIndex === index ? next : item) }); }
+  function removeDepartment(index: number) { onChange({ ...instance, departments: instance.departments.filter((_, itemIndex) => itemIndex !== index) }); }
+  function toggleWriter(userId: string) {
+    const exists = instance.writers.some((item) => item.userId === userId);
+    const writers = exists ? instance.writers.filter((item) => item.userId !== userId) : [...instance.writers, { userId, dueDate: "", notes: "" }];
+    const departments = instance.departments.map((department) => ({ ...department, assignments: department.assignments.filter((assignment) => writers.some((writer) => writer.userId === assignment.contentWriterId)) }));
+    onChange({ ...instance, writers, departments });
+  }
+  function updateWriter(userId: string, patch: Partial<{ dueDate: string; notes: string }>) { onChange({ ...instance, writers: instance.writers.map((item) => item.userId === userId ? { ...item, ...patch } : item) }); }
+  function addOptionalDepartment() {
+    if (!optionalDepartmentId || usedDepartments.has(optionalDepartmentId)) return;
+    onChange({ ...instance, departments: [...instance.departments, { departmentId: optionalDepartmentId, isPrimary: false, dueDate: "", notes: "", assignments: [] }] });
+    setOptionalDepartmentId("");
+  }
+  function togglePair(department: DraftDepartment, executiveUserId: string, writerId: string) {
+    const exists = department.assignments.some((item) => item.executiveUserId === executiveUserId && item.contentWriterId === writerId);
+    const assignments = exists ? department.assignments.filter((item) => !(item.executiveUserId === executiveUserId && item.contentWriterId === writerId)) : [...department.assignments, { executiveUserId, contentWriterId: writerId, dueDate: department.dueDate }];
+    return { ...department, assignments };
+  }
+  function updateAssignment(department: DraftDepartment, executiveUserId: string, writerId: string, patch: Partial<DraftAssignment>) {
+    return { ...department, assignments: department.assignments.map((item) => item.executiveUserId === executiveUserId && item.contentWriterId === writerId ? { ...item, ...patch } : item) };
+  }
+  async function searchVehicles() {
+    setVehicleLoading(true);
+    try {
+      const payload = await marketingFetch<{ ok: true; rows: VehicleRow[] }>(`/api/marketing?resource=stock&search=${encodeURIComponent(vehicleSearch)}`);
+      setVehicleRows((current) => {
+        const map = new Map([...current, ...payload.rows].map((item) => [item.id, item]));
+        return [...map.values()];
+      });
+    } finally { setVehicleLoading(false); }
+  }
 
-  return <article className={`marketing-instance-editor ${open?"open":""}`}>
-    <header><button type="button" className="marketing-instance-toggle" onClick={()=>setOpen((value)=>!value)}><div><strong>N{String(index+1).padStart(2,"0")} - {creative?.name || "اختر الكرييتيف"}</strong><small>{creative?.short_code || "—"} · القسم الأساسي: {primaryDepartment?.name || "—"}</small></div>{open?<CaretUp size={19}/>:<CaretDown size={19}/>}</button><button type="button" className="danger-icon" onClick={onRemove} title="حذف الكرييتيف"><Trash size={18}/></button></header>
-    {open?<div className="marketing-instance-body">
-      <section className="marketing-instance-column content"><h4><UsersThree size={18}/>قسم المحتوى</h4><label><span>تاريخ استلام قسم المحتوى</span><input type="date" value={instance.contentReceivedDate} onChange={(event)=>onChange({...instance,contentReceivedDate:event.target.value})}/></label><label><span>ملاحظات قسم المحتوى</span><textarea value={instance.contentNotes} onChange={(event)=>onChange({...instance,contentNotes:event.target.value})}/></label><div className="marketing-choice-list">{contentUserOptions.map((user)=><label key={user.user_id} className={selectedContentIds.includes(user.user_id)?"selected":""}><input type="checkbox" checked={selectedContentIds.includes(user.user_id)} onChange={()=>{const selected=selectedContentIds.includes(user.user_id);const contentUsers=selected?instance.contentUsers.filter((item)=>item.userId!==user.user_id):[...instance.contentUsers,{userId:user.user_id,dueDate:instance.contentReceivedDate,notes:""}];const nextSections=sections.map((section)=>({...section,users:section.users.map((sectionUser)=>({...sectionUser,writers:sectionUser.writers.filter((writer)=>writer.userId!==user.user_id)}))}));onChange({...instance,contentUsers,sections:nextSections});}}/>{user.full_name}</label>)}</div>{!contentUserOptions.length?<p className="marketing-hint">اربط يوزرات قسم المحتوى من إعدادات التسويق أولًا.</p>:null}</section>
-
-      <section className="marketing-instance-column sections"><h4>الأقسام التنفيذية</h4>{sections.map((section,sectionIndex)=>{
-        const department=meta.departments.find((item)=>item.id===section.departmentId);const departmentUsers=department?.users||[];
-        return <article className="marketing-section-editor" key={section.localId}><header><strong>{section.kind==="primary"?"القسم الأساسي":"قسم اختياري"} — {department?.name||"—"}</strong>{section.kind==="optional"?<button type="button" onClick={()=>onChange({...instance,sections:sections.filter((_,i)=>i!==sectionIndex)})}><Trash size={16}/></button>:null}</header>{section.kind==="optional"?<label><span>القسم</span><select value={section.departmentId} onChange={(event)=>updateSection(sectionIndex,{...section,departmentId:event.target.value,users:[]})}>{activeDepartments.map((item)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>:null}<div className="marketing-form-row"><label><span>تاريخ استلام القسم</span><input type="date" value={section.receivedDate} onChange={(event)=>updateSection(sectionIndex,{...section,receivedDate:event.target.value})}/></label><label><span>ملاحظات القسم</span><textarea value={section.notes} onChange={(event)=>updateSection(sectionIndex,{...section,notes:event.target.value})}/></label></div><div className="marketing-choice-list">{departmentUsers.map((user)=>{const selected=section.users.some((item)=>item.userId===user.user_id);return <div className={`marketing-user-pair ${selected?"selected":""}`} key={user.user_id}><label><input type="checkbox" checked={selected} onChange={()=>{const users=selected?section.users.filter((item)=>item.userId!==user.user_id):[...section.users,{userId:user.user_id,dueDate:section.receivedDate,writers:[]}];updateSection(sectionIndex,{...section,users});}}/>{user.full_name}</label>{selected?<div className="marketing-writer-links"><span>ربط يوزرات المحتوى + تاريخ تسليم من كل يوزر</span>{contentUserOptions.filter((writer)=>selectedContentIds.includes(writer.user_id)).map((writer)=>{const sectionUser=section.users.find((item)=>item.userId===user.user_id);const link=sectionUser?.writers.find((item)=>item.userId===writer.user_id);return <div key={writer.user_id}><label><input type="checkbox" checked={Boolean(link)} onChange={()=>{const users=section.users.map((item)=>item.userId===user.user_id?{...item,writers:link?item.writers.filter((row)=>row.userId!==writer.user_id):[...item.writers,{userId:writer.user_id,dueDate:item.dueDate||section.receivedDate}]}:item);updateSection(sectionIndex,{...section,users});}}/>{writer.full_name}</label>{link?<input type="date" value={link.dueDate} onChange={(event)=>{const users=section.users.map((item)=>item.userId===user.user_id?{...item,writers:item.writers.map((row)=>row.userId===writer.user_id?{...row,dueDate:event.target.value}:row)}:item);updateSection(sectionIndex,{...section,users});}}/>:null}</div>})}</div>:null}</div>})}</div>{!departmentUsers.length?<p className="marketing-hint">لا يوجد يوزرات مرتبطون بهذا القسم في إعدادات التسويق.</p>:null}</article>})}<button type="button" className="marketing-add-inline" onClick={addOptional}><Plus size={16}/>إضافة قسم اختياري</button></section>
-
-      <section className="marketing-instance-wide"><button type="button" className="marketing-accordion-button" onClick={()=>setCarsOpen((value)=>!value)}><Car size={18}/><span>اختيار سيارة أو أكثر من الاستوك</span><b>{instance.vehicleIds.length}</b>{carsOpen?<CaretUp/>:<CaretDown/>}</button>{carsOpen?<div className="marketing-vehicle-picker">{vehicles.map((vehicle)=><label key={vehicle.id} className={instance.vehicleIds.includes(vehicle.id)?"selected":""}><input type="checkbox" checked={instance.vehicleIds.includes(vehicle.id)} onChange={()=>onChange({...instance,vehicleIds:toggle(instance.vehicleIds,vehicle.id)})}/><strong>{vehicle.vin}</strong><span>{vehicle.car_name} — {vehicle.statement}</span><small>{vehicle.exterior_color} / {vehicle.interior_color} — {vehicle.location_name}</small></label>)}</div>:null}</section>
-
-      {showPlatforms?<section className="marketing-instance-wide"><button type="button" className="marketing-accordion-button" onClick={()=>setPlatformsOpen((value)=>!value)}><span>المنصات وأنواع النشر</span><b>{instance.platformSelections.length}</b>{platformsOpen?<CaretUp/>:<CaretDown/>}</button>{platformsOpen?<div className="marketing-platform-picker">{meta.platforms.filter((platform)=>platform.is_active).map((platform)=>{const selection=instance.platformSelections.find((item)=>item.platformId===platform.id);return <article key={platform.id} className={selection?"selected":""}><label><input type="checkbox" checked={Boolean(selection)} onChange={()=>onChange({...instance,platformSelections:selection?instance.platformSelections.filter((item)=>item.platformId!==platform.id):[...instance.platformSelections,{platformId:platform.id,publishTypeIds:[]}]})}/>{platform.name}</label>{selection?<div>{platform.publishTypes.filter((type)=>type.is_active).map((type)=><label key={type.id}><input type="checkbox" checked={selection.publishTypeIds.includes(type.id)} onChange={()=>onChange({...instance,platformSelections:instance.platformSelections.map((item)=>item.platformId===platform.id?{...item,publishTypeIds:toggle(item.publishTypeIds,type.id)}:item)})}/>{type.name}<small>{type.dimensions}</small></label>)}</div>:null}</article>})}</div>:null}</section>:null}
-    </div>:null}
+  return <article className={`marketing-instance-editor ${instance.writers.length && instance.departments.every((dep) => dep.assignments.length) ? "complete" : "incomplete"}`}>
+    <header><div><b>{creative?.name || "اختر الكرييتيف"}</b><span>{creative?.short_code || "—"}</span></div>{onRemove ? <button type="button" onClick={onRemove}><Trash size={17} />حذف الكرييتيف</button> : null}</header>
+    {allowAgendaDate ? <label className="marketing-field"><span>تاريخ اليوم</span><input type="date" value={instance.agendaDate} onChange={(event) => onChange({ ...instance, agendaDate: event.target.value })} /></label> : null}
+    <div className="marketing-instance-columns">
+      <section className="marketing-instance-block"><h3>قسم المحتوى</h3><div className="marketing-inline-fields"><label><span>تاريخ استلام قسم المحتوى</span><input type="date" value={instance.contentReceivedDate} onChange={(event) => onChange({ ...instance, contentReceivedDate: event.target.value })} /></label><label><span>ملاحظات قسم المحتوى</span><textarea rows={2} value={instance.contentNotes} onChange={(event) => onChange({ ...instance, contentNotes: event.target.value })} /></label></div>
+        <div className="marketing-choice-list">{contentDepartment?.users.map((person) => { const selected = selectedWriterIds.includes(person.id); const writer = instance.writers.find((item) => item.userId === person.id); return <div key={person.id} className={selected ? "selected" : ""}><label><input type="checkbox" checked={selected} onChange={() => toggleWriter(person.id)} /><span>{person.full_name}</span></label>{selected ? <div className="marketing-writer-extra"><input type="date" value={writer?.dueDate || ""} onChange={(event) => updateWriter(person.id, { dueDate: event.target.value })} /><input placeholder="ملاحظات الكاتب" value={writer?.notes || ""} onChange={(event) => updateWriter(person.id, { notes: event.target.value })} /></div> : null}</div>; })}</div>
+        {!contentDepartment?.users.length ? <Empty text="لا يوجد يوزرات مرتبطة بقسم المحتوى من إعدادات التسويق." /> : null}
+      </section>
+      <section className="marketing-instance-block"><h3>القسم الأساسي — {creative?.primary_department_name || "—"}</h3>{instance.departments.filter((item) => item.isPrimary).map((department, index) => <DepartmentEditor key={department.departmentId} department={department} meta={meta} writerIds={selectedWriterIds} update={(next) => updateDepartment(instance.departments.indexOf(department), next)} togglePair={togglePair} updateAssignment={updateAssignment} />)}</section>
+    </div>
+    <section className="marketing-instance-block"><div className="marketing-block-title"><h3>الأقسام الاختيارية</h3><div><select value={optionalDepartmentId} onChange={(event) => setOptionalDepartmentId(event.target.value)}><option value="">اختر قسمًا</option>{meta.departments.filter((item) => !item.is_content && item.id !== creative?.primary_department_id && !usedDepartments.has(item.id) && item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="button" onClick={addOptionalDepartment}><Plus size={16} />إضافة قسم</button></div></div>
+      {instance.departments.filter((item) => !item.isPrimary).map((department) => <div className="marketing-optional-department" key={department.departmentId}><DepartmentEditor department={department} meta={meta} writerIds={selectedWriterIds} update={(next) => updateDepartment(instance.departments.indexOf(department), next)} togglePair={togglePair} updateAssignment={updateAssignment} /><button className="marketing-text-danger" type="button" onClick={() => removeDepartment(instance.departments.indexOf(department))}>حذف القسم</button></div>)}
+      {!instance.departments.some((item) => !item.isPrimary) ? <Empty text="لا توجد أقسام اختيارية." /> : null}
+    </section>
+    {showPosts ? <details className="marketing-accordion" open><summary>المنصات وأنواع النشر <span>{instance.posts.length} اختيار</span></summary><div className="marketing-platform-picker">{meta.platforms.filter((item) => item.is_active).map((platform) => <article key={platform.id}><strong>{platform.name}</strong>{platform.post_types.filter((item) => item.is_active).map((postType) => { const selected = instance.posts.some((post) => post.platformId === platform.id && post.postTypeId === postType.id); return <label key={postType.id}><input type="checkbox" checked={selected} onChange={() => onChange({ ...instance, posts: selected ? instance.posts.filter((post) => !(post.platformId === platform.id && post.postTypeId === postType.id)) : [...instance.posts, { platformId: platform.id, postTypeId: postType.id }] })} /><span>{postType.name}</span><small>{postType.width && postType.height ? `${postType.width}×${postType.height}` : ""}</small></label>; })}</article>)}</div></details> : null}
+    <details className="marketing-accordion"><summary><Car size={18} />اختيار سيارة أو أكثر من الاستوك <span>{instance.vehicleIds.length} سيارة</span></summary><div className="marketing-vehicle-picker"><div className="marketing-search-row"><input value={vehicleSearch} onChange={(event) => setVehicleSearch(event.target.value)} placeholder="ابحث برقم الهيكل أو السيارة" /><button type="button" onClick={() => void searchVehicles()} disabled={vehicleLoading}>{vehicleLoading ? "جاري البحث..." : "بحث"}</button></div><div className="marketing-chip-list">{selectedVehicles.map((vehicle) => <span key={vehicle.id}>{vehicle.vin} · {vehicle.car_name || vehicle.statement || "سيارة"}<button type="button" onClick={() => onChange({ ...instance, vehicleIds: instance.vehicleIds.filter((id) => id !== vehicle.id) })}>×</button></span>)}</div><div className="marketing-vehicle-results">{vehicleRows.map((vehicle) => <label key={vehicle.id} className={instance.vehicleIds.includes(vehicle.id) ? "selected" : ""}><input type="checkbox" checked={instance.vehicleIds.includes(vehicle.id)} onChange={() => onChange({ ...instance, vehicleIds: toggleValue(instance.vehicleIds, vehicle.id) })} /><div><b>{vehicle.vin}</b><span>{vehicle.car_name || "—"} · {vehicle.statement || "—"}</span><small>{vehicle.exterior_color || "—"} / {vehicle.interior_color || "—"} · {vehicle.model_year || "—"} · {vehicle.location_name || "—"}</small></div></label>)}</div></div></details>
   </article>;
+}
+
+function DepartmentEditor({ department, meta, writerIds, update, togglePair, updateAssignment }: { department: DraftDepartment; meta: MarketingMeta; writerIds: string[]; update: (next: DraftDepartment) => void; togglePair: (department: DraftDepartment, executiveUserId: string, writerId: string) => DraftDepartment; updateAssignment: (department: DraftDepartment, executiveUserId: string, writerId: string, patch: Partial<DraftAssignment>) => DraftDepartment }) {
+  const definition = meta.departments.find((item) => item.id === department.departmentId);
+  return <div className="marketing-department-editor"><div className="marketing-department-title"><UsersThree size={19} /><strong>{definition?.name || "قسم"}</strong></div><div className="marketing-inline-fields"><label><span>تاريخ استلام القسم</span><input type="date" value={department.dueDate} onChange={(event) => update({ ...department, dueDate: event.target.value, assignments: department.assignments.map((item) => ({ ...item, dueDate: item.dueDate || event.target.value })) })} /></label><label><span>ملاحظات القسم</span><textarea rows={2} value={department.notes} onChange={(event) => update({ ...department, notes: event.target.value })} /></label></div>
+    <div className="marketing-executive-list">{definition?.users.map((person) => { const pairs = department.assignments.filter((item) => item.executiveUserId === person.id); const selected = pairs.length > 0; return <article key={person.id} className={selected ? "selected" : ""}><div className="marketing-executive-name"><strong>{person.full_name}</strong><span>{selected ? `${pairs.length} علاقة` : "لم يتم الربط"}</span></div>{writerIds.length ? <div className="marketing-pair-grid">{writerIds.map((writerId) => { const writer = meta.users.find((item) => item.id === writerId); const pair = pairs.find((item) => item.contentWriterId === writerId); return <label key={writerId}><input type="checkbox" checked={Boolean(pair)} onChange={() => update(togglePair(department, person.id, writerId))} /><span>{writer?.full_name || "كاتب محتوى"}</span>{pair ? <input type="date" value={pair.dueDate} onChange={(event) => update(updateAssignment(department, person.id, writerId, { dueDate: event.target.value }))} /> : null}</label>; })}</div> : <small>اختر كاتب محتوى أولًا.</small>}</article>; })}</div>
+    {!definition?.users.length ? <Empty text="لا يوجد يوزرات مرتبطون بهذا القسم في إعدادات التسويق." /> : null}
+  </div>;
 }

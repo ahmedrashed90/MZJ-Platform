@@ -1,0 +1,102 @@
+MZJ Platform v1.18.0 - Native Marketing Rebuild
+Changed/new files and purpose
+
+ROOT / PLATFORM INTEGRATION
+- .env.example
+  Added the existing RAW/OUTPUT service variables used by the marketing workflow.
+- package.json
+  Added the marketing validation command to the platform typecheck chain.
+- api/index.ts
+  Registered the native marketing API handler.
+- src/App.tsx
+  Added the complete marketing route tree without a separate /marketing/settings route.
+- src/components/Sidebar.tsx
+  Added permission-aware marketing navigation through the unified sidebar.
+- src/pages/SettingsPage.tsx
+  Embedded Marketing Settings inside the unified platform settings page.
+- src/styles.css
+  Imported the native marketing stylesheet into the platform stylesheet.
+
+DATABASE / SERVER SCHEMA
+- database/marketing_native_rebuild.sql
+  Final organized rebuild migration for the marketing schema plus shared photography-request tables.
+- database/schema.sql
+  Integrated the final marketing tables and shared operations photography tables into the complete platform schema.
+- server/_schema.ts
+  Integrated non-destructive marketing and photography table creation into platform initialization.
+- server/_operations-schema.ts
+  Added shared photography-request tables to the operations schema lifecycle.
+- server/_media-storage.ts
+  Extended the existing platform media path validation for marketing files.
+
+MARKETING SERVER
+- server/marketing/index.ts
+  Native PostgreSQL/API implementation for settings, campaigns, agendas, task templates, execution tasks, progress, publishing, files, packages, stock, photography requests, attendance, reports, calendar, and platform connections.
+
+OPERATIONS SHARED PHOTOGRAPHY REQUESTS
+- server/operations/index.ts
+  Added reading and following the same photography-request records from Operations without changing transfer-request behavior.
+- src/operations/components/PhotographyRequestsList.tsx
+  Added the photography-request list and history using the shared operations records.
+- src/operations/pages/TransferRequestsPage.tsx
+  Added the request-type switch inside the existing Operations transfer requests / follow-up page.
+
+MARKETING CLIENT CORE
+- src/marketing/MarketingLayout.tsx
+  Native marketing layout, unified permission checks, and marketing navigation.
+- src/marketing/api.ts
+  Typed marketing API client and shared formatting helpers.
+- src/marketing/types.ts
+  Typed contracts for metadata, campaigns, instances, tasks, files, requests, attendance, packages, and drafts.
+- src/marketing/marketing.css
+  Marketing cards, tables, modals, accordions, wizards, dashboards, responsive layout, and reference-aligned styling.
+
+MARKETING SHARED COMPONENTS
+- src/marketing/components/Ui.tsx
+  Shared page heads, alerts, modals, badges, progress bars, empty states, and confirmation buttons.
+- src/marketing/components/files.ts
+  Upload/download helpers using the platform R2 media API.
+- src/marketing/components/exportFiles.ts
+  Dependency-free Excel XML export, Arabic CSV generation, and valid ZIP generation for agenda relationship sheets.
+- src/marketing/components/InstanceEditor.tsx
+  Per-instance content writers, primary/optional departments, executive-writer relationships, dates, notes, platforms, post types, and stock vehicles.
+- src/marketing/components/CampaignDetailView.tsx
+  Full campaign/agenda detail view, user/task summaries, budget, publishing schedule, final files, result files, links, RAW folders, PDF, and Excel exports.
+- src/marketing/components/MarketingSettingsPanel.tsx
+  Dynamic database-backed management of departments, users, actions, creatives, campaign types, funnels, platforms/post types/dimensions, request statuses, and package categories.
+
+MARKETING PAGES
+- src/marketing/pages/MarketingDashboardPage.tsx
+  TASK - المطلوب, جاهزية المطلوب, قسم النشر, Task Template review, execution workflow, actual receipt, actions, final files, and move-to-publish flow.
+- src/marketing/pages/DatabasePage.tsx
+  Campaign/agenda database, search, filters, ordering, archive, restore, delete, and full detail view.
+- src/marketing/pages/CampaignWizardPage.tsx
+  Five-step campaign creation: data, creative instances, budget, publishing schedule, review, RAW folders, and idempotent creation.
+- src/marketing/pages/AgendaWizardPage.tsx
+  Three-step agenda creation, inclusive date range, per-day instances, full relationships, review, RAW folders, and relationship-sheets ZIP.
+- src/marketing/pages/CampaignManagementPage.tsx
+  Campaign management using the same complete detail view as the database page.
+- src/marketing/pages/PackagesPage.tsx
+  Dynamic categories, search, category tabs/counters, package cards, create/edit/delete, fees, care lines, discount, and delivery.
+- src/marketing/pages/PublishPrepPage.tsx
+  Campaign/agenda publishing preparation with legacy-derived states, filters, platform data, final files, and bulk publish selection.
+- src/marketing/pages/RequestsPage.tsx
+  Marketing photography-request follow-up using the same shared operations records and history.
+- src/marketing/pages/CalendarPage.tsx
+  Task calendar based on the actual «تم الاستلام» timestamp.
+- src/marketing/pages/StockPage.tsx
+  Read-only Operations stock search and shared photography-request creation for one or more vehicles.
+- src/marketing/pages/ReportsPage.tsx
+  Campaign/task status, completion, department, user, delay, and date-range reporting.
+- src/marketing/pages/AttendancePage.tsx
+  Marketing attendance/check-in/check-out/activity and admin work-time settings.
+- src/marketing/pages/ConnectionsPage.tsx
+  Dynamic platform connection records using marketing platforms from settings.
+
+TEMPLATES / VALIDATION
+- public/templates/marketing-task-template.xlsx
+  Downloadable campaign Task Template workbook.
+- public/templates/marketing-agenda-task-template.xlsx
+  Downloadable agenda Task Template workbook.
+- scripts/check-marketing-native-v200.mjs
+  Static acceptance guard for routes, pages, schema, actions, templates, shared operations integration, forbidden runtime features, and unsafe TypeScript escapes.

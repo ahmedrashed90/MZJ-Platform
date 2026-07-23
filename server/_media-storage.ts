@@ -25,13 +25,18 @@ function safeSegment(value: unknown, fallback: string) {
   return clean(value).normalize("NFKD").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120) || fallback;
 }
 
-export function buildMediaStorageKey(input: { conversationId: string; fileName?: string; mediaType?: string }) {
+export function buildSystemMediaStorageKey(input: { systemCode: string; contextId: string; fileName?: string; mediaType?: string }) {
   const now = new Date();
   const yyyy = now.getUTCFullYear();
   const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const conversation = safeSegment(input.conversationId, "conversation");
+  const system = safeSegment(input.systemCode, "system");
+  const context = safeSegment(input.contextId, "context");
   const filename = safeSegment(input.fileName, `${safeSegment(input.mediaType, "file")}-${crypto.randomUUID()}`);
-  return `crm/${yyyy}/${mm}/${conversation}/${crypto.randomUUID()}-${filename}`;
+  return `${system}/${yyyy}/${mm}/${context}/${crypto.randomUUID()}-${filename}`;
+}
+
+export function buildMediaStorageKey(input: { conversationId: string; fileName?: string; mediaType?: string }) {
+  return buildSystemMediaStorageKey({ systemCode: "crm", contextId: input.conversationId, fileName: input.fileName, mediaType: input.mediaType });
 }
 
 export function buildInboundMediaStorageKey(input: { channelCode: string; conversationExternalId: string; providerMessageId: string; fileName?: string; mediaType?: string }) {

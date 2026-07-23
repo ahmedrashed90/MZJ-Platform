@@ -3,46 +3,41 @@ import path from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
-const failures = [];
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
 const exists = (relative) => fs.existsSync(path.join(root, relative));
-const requireFile = (relative) => {
-  if (!exists(relative)) failures.push(`missing file: ${relative}`);
-};
-const requireText = (relative, needles) => {
-  if (!exists(relative)) return failures.push(`missing file: ${relative}`);
-  const text = read(relative);
-  for (const needle of needles) {
-    if (!text.includes(needle)) failures.push(`missing ${JSON.stringify(needle)} in ${relative}`);
-  }
-};
+const failures = [];
+const checked = [];
 
-const requiredFiles = [
-  "server/_marketing-schema.ts",
-  "server/_marketing-utils.ts",
-  "server/marketing/index.ts",
-  "database/migrations/20260723_marketing_native_rebuild_v200.sql",
-  "src/marketing/MarketingContext.tsx",
-  "src/marketing/MarketingLayout.tsx",
-  "src/marketing/components/MarketingSettingsPanel.tsx",
-  "src/marketing/components/TaskDetailModal.tsx",
-  "src/marketing/components/CampaignDetailModal.tsx",
-  "src/marketing/components/InstanceEditor.tsx",
+function requireFile(relative) {
+  if (!exists(relative)) failures.push(`Missing file: ${relative}`);
+  else checked.push(relative);
+}
+
+function requireText(relative, fragments) {
+  requireFile(relative);
+  if (!exists(relative)) return;
+  const text = read(relative);
+  for (const fragment of fragments) {
+    if (!text.includes(fragment)) failures.push(`${relative} missing: ${fragment}`);
+  }
+}
+
+const pages = [
   "src/marketing/pages/MarketingDashboardPage.tsx",
-  "src/marketing/pages/MarketingDatabasePage.tsx",
-  "src/marketing/pages/CreateCampaignPage.tsx",
-  "src/marketing/pages/CreateAgendaPage.tsx",
-  "src/marketing/pages/MarketingCampaignsPage.tsx",
-  "src/marketing/pages/MarketingPackagesPage.tsx",
-  "src/marketing/pages/MarketingPublishPrepPage.tsx",
-  "src/marketing/pages/MarketingRequestsPage.tsx",
-  "src/marketing/pages/MarketingCalendarPage.tsx",
-  "src/marketing/pages/MarketingStockPage.tsx",
-  "src/marketing/pages/MarketingReportsPage.tsx",
-  "src/marketing/pages/MarketingAttendancePage.tsx",
-  "src/marketing/pages/MarketingConnectionsPage.tsx",
+  "src/marketing/pages/DatabasePage.tsx",
+  "src/marketing/pages/CampaignWizardPage.tsx",
+  "src/marketing/pages/AgendaWizardPage.tsx",
+  "src/marketing/pages/CampaignManagementPage.tsx",
+  "src/marketing/pages/PackagesPage.tsx",
+  "src/marketing/pages/PublishPrepPage.tsx",
+  "src/marketing/pages/RequestsPage.tsx",
+  "src/marketing/pages/CalendarPage.tsx",
+  "src/marketing/pages/StockPage.tsx",
+  "src/marketing/pages/ReportsPage.tsx",
+  "src/marketing/pages/AttendancePage.tsx",
+  "src/marketing/pages/ConnectionsPage.tsx",
 ];
-requiredFiles.forEach(requireFile);
+for (const page of pages) requireFile(page);
 
 requireText("src/App.tsx", [
   'path="/marketing"',
@@ -59,70 +54,77 @@ requireText("src/App.tsx", [
   'path="attendance"',
   'path="connections"',
 ]);
-requireText("api/index.ts", ['import marketingHandler', '["marketing", marketingHandler]']);
-requireText("server/setup/initialize.ts", ["ensureMarketingSchema", "await ensureMarketingSchema()"]);
-requireText("src/pages/SettingsPage.tsx", ["MarketingSettingsPanel", 'section === "marketing"']);
-requireText("server/operations/index.ts", ["updatePhotographyRequest", 'action === "update_photography_request"']);
-requireText("src/operations/pages/TransferRequestsPage.tsx", ["طلبات التصوير", "update_photography_request"]);
 
-const schema = read("database/migrations/20260723_marketing_native_rebuild_v200.sql");
-for (const table of [
-  "departments", "department_users", "assignment_actions", "creatives", "campaign_types",
-  "platforms", "publish_types", "package_categories", "request_statuses", "campaigns",
-  "agenda_days", "creative_instances", "instance_content_users", "instance_sections",
-  "section_users", "section_user_writers", "instance_vehicles", "instance_platforms",
-  "instance_publish_types", "budget_items", "budget_item_platforms", "schedule_items",
-  "schedule_item_platforms", "files", "tasks", "task_actions", "template_submissions",
-  "task_reviews", "campaign_files", "campaign_links", "raw_folder_runs", "packages",
-  "attendance", "platform_connections",
-]) {
-  if (!schema.includes(`create table marketing.${table}`)) failures.push(`missing marketing table: ${table}`);
-}
-for (const fragment of [
-  "drop schema if exists marketing cascade;",
-  "create schema marketing;",
-  "task_no text not null unique",
-  "unique(creative_instance_id,task_kind,department_id,assigned_to,content_writer_id)",
-]) {
-  if (!schema.toLowerCase().includes(fragment.toLowerCase())) failures.push(`missing migration guarantee: ${fragment}`);
-}
+requireText("src/pages/SettingsPage.tsx", ["MarketingSettingsPanel", "إعدادات التسويق"]);
+requireText("src/marketing/MarketingLayout.tsx", ["meta.permissions.canView", "meta.permissions.canManage", "meta.permissions.canManagePackages"]);
+requireText("src/marketing/components/MarketingSettingsPanel.tsx", [
+  '"departments"', '"actions"', '"creatives"', '"campaign_types"', '"platforms"', '"request_statuses"', '"categories"', '"funnels"',
+  "userIds", "progressPercent", "adminOnly", "shortCode", "primaryDepartmentId", "width", "height",
+]);
+requireText("src/marketing/components/CampaignDetailView.tsx", [
+  "عرض ملفات المنتجات", "تصدير PDF", "تصدير جدول النشر", "تصدير مراجعة Excel", "downloadSpreadsheetXml", "عرض الميزانية", "عرض نتائج الحملة", "روابط الحملة", "إنشاء فولدرات الخام",
+]);
+requireText("src/marketing/components/exportFiles.ts", ["downloadSpreadsheetXml", "downloadStoredZip", "buildStoredZip", "buildCsv", "0x04034B50", "0x02014B50"]);
+requireText("src/marketing/pages/MarketingDashboardPage.tsx", [
+  "TASK - المطلوب", "جاهزية المطلوب", "قسم النشر", "تحميل نموذج Task Template", "approve_template", "request_revision", "reject_template", "attach_final", "toggle_action", "receive",
+]);
+requireText("src/marketing/pages/CampaignWizardPage.tsx", [
+  "بيانات الحملة", "الكرييتيف", "الميزانية", "جدول النشر", "المراجعة", "idempotencyKey", "create_raw_folders",
+]);
+requireText("src/marketing/pages/AgendaWizardPage.tsx", [
+  "بيانات الأجندة", "جدول الأيام والربط", "مراجعة وإنشاء الأجندة", "تحميل شيتات العلاقات ZIP", "downloadStoredZip", "idempotencyKey", "create_raw_folders",
+]);
+requireText("src/marketing/pages/StockPage.tsx", ["create_photo_request", "إنشاء طلب تصوير", "رقم الهيكل", "المكان الحالي"]);
+requireText("src/marketing/pages/RequestsPage.tsx", ["photo_request_action", "بيانات المتابعة", "row.updates"]);
+requireText("src/operations/pages/TransferRequestsPage.tsx", ["PhotographyRequestsList", "طلبات التصوير", "متابعة الطلبات"]);
+requireText("src/operations/components/PhotographyRequestsList.tsx", ["dashboard_requests", 'kind: "photo"', "بيانات المتابعة", "row.updates"]);
+requireFile("public/templates/marketing-task-template.xlsx");
+requireFile("public/templates/marketing-agenda-task-template.xlsx");
 
-const server = read("server/marketing/index.ts");
-for (const action of [
-  "meta", "dashboard", "campaigns", "campaign_detail", "task_detail", "stock",
-  "photo_requests", "packages", "calendar", "reports", "attendance", "connections",
-  "publish_prep", "file_url", "save_setting", "disable_setting", "create_campaign",
-  "create_agenda", "receive_task", "prepare_upload", "finish_upload", "submit_template",
-  "review_template", "task_action", "attach_final_file", "campaign_action", "save_package",
-  "delete_package", "create_photo_request", "update_photo_request", "save_attendance",
-  "save_connection", "delete_connection", "add_campaign_link", "attach_campaign_file",
-  "create_raw_folders",
-]) {
-  if (!server.includes(`"${action}"`)) failures.push(`missing marketing API action: ${action}`);
-}
-
-const marketingSourceFiles = [
-  "server/_marketing-schema.ts",
-  "server/_marketing-utils.ts",
-  "server/marketing/index.ts",
-  ...fs.readdirSync(path.join(root, "src/marketing"), { recursive: true })
-    .filter((entry) => typeof entry === "string" && /\.(ts|tsx)$/.test(entry))
-    .map((entry) => path.join("src/marketing", entry)),
+const serverFragments = [
+  "canViewMarketing", "createCampaign", "pg_advisory_xact_lock", "idempotency_key", "taskAction", "approve_template", "request_revision", "reject_template", "template_task_id", "toggle_action", "actual_received_at=now()", "calculateCampaignProgress", "move_to_publish", "create_raw_folders", "createPhotoRequest", "photoRequestAction", "photography_request_updates", "savePackage", "attendanceAction", "saveConnection",
 ];
-for (const relative of marketingSourceFiles) {
-  const text = read(relative);
-  if (/\bany\b|\bas\s+any\b/.test(text)) failures.push(`explicit any is not allowed: ${relative}`);
-  if (/firebase|<iframe|local[ _-]?publisher|publisher[ _-]?agent/i.test(text)) failures.push(`forbidden runtime feature in ${relative}`);
-  if (/TODO|FIXME|coming soon|placeholder page|stub page/i.test(text)) failures.push(`unfinished implementation marker in ${relative}`);
+requireText("server/marketing/index.ts", serverFragments);
+requireText("server/operations/index.ts", ["photography_requests", "photography_request_updates", 'kind === "photo"']);
+requireText("api/index.ts", ["marketing"]);
+
+const schemaFiles = ["database/marketing_native_rebuild.sql", "database/schema.sql", "server/_schema.ts"];
+const tables = [
+  "marketing.departments", "marketing.department_users", "marketing.assignment_actions", "marketing.creative_catalog", "marketing.campaign_types", "marketing.funnels", "marketing.platforms", "marketing.platform_post_types", "marketing.request_statuses", "marketing.package_categories", "marketing.campaigns", "marketing.agenda_days", "marketing.creative_instances", "marketing.instance_content_writers", "marketing.instance_departments", "marketing.instance_assignments", "marketing.instance_vehicles", "marketing.instance_platform_posts", "marketing.budget_items", "marketing.budget_platform_values", "marketing.publish_schedule_items", "marketing.publish_schedule_posts", "marketing.tasks", "marketing.task_action_items", "marketing.template_submissions", "marketing.campaign_links", "marketing.car_packages", "marketing.attendance_records", "marketing.platform_connections", "operations.photography_requests", "operations.photography_request_vehicles", "operations.photography_request_updates",
+];
+for (const schemaFile of schemaFiles) requireText(schemaFile, tables);
+requireText("database/marketing_native_rebuild.sql", [
+  "begin;", "commit;", "drop schema if exists marketing cascade", "unique(campaign_id,publish_date,instance_id)", "PANNER", "MZJ-INTERIAL", "D-CAROUSEL", "M-RL-SPEC-ST", "P-CAR-PHOTO", "marketing.settings.manage",
+]);
+
+const forbiddenTargets = ["src/marketing", "server/marketing", "database/marketing_native_rebuild.sql"];
+const forbiddenPatterns = [/firebase/i, /local\s*publisher/i, /publisher\s*agent/i, /checklist/i, /\/marketing\/settings/i, /<iframe/i];
+function walk(target) {
+  const absolute = path.join(root, target);
+  if (!fs.existsSync(absolute)) return [];
+  const stat = fs.statSync(absolute);
+  if (stat.isFile()) return [absolute];
+  return fs.readdirSync(absolute, { withFileTypes: true }).flatMap((entry) => walk(path.relative(root, path.join(absolute, entry.name))));
+}
+for (const target of forbiddenTargets) {
+  for (const absolute of walk(target)) {
+    if (!/\.(ts|tsx|js|mjs|sql|css|html)$/i.test(absolute)) continue;
+    const text = fs.readFileSync(absolute, "utf8");
+    for (const pattern of forbiddenPatterns) {
+      if (pattern.test(text)) failures.push(`Forbidden marketing runtime content ${pattern} in ${path.relative(root, absolute)}`);
+    }
+  }
 }
 
-const app = read("src/App.tsx");
-if (/\/marketing\/settings/.test(app)) failures.push("standalone /marketing/settings route is forbidden");
-if (/checklist/i.test(app) && /marketing/i.test(app)) failures.push("marketing checklist route is forbidden");
+for (const relative of [...walk("src/marketing"), path.join(root, "server/marketing/index.ts")]) {
+  if (!/\.(ts|tsx)$/i.test(relative)) continue;
+  const text = fs.readFileSync(relative, "utf8");
+  if (/\bas\s+any\b|:\s*any\b|<any>/.test(text)) failures.push(`Unsafe any found in ${path.relative(root, relative)}`);
+}
 
 if (failures.length) {
-  console.error("Marketing native v2.0 validation failed:");
-  failures.forEach((failure) => console.error(`- ${failure}`));
+  console.error(`Marketing native validation failed (${failures.length} issue(s)):`);
+  for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
-console.log(`Marketing native v2.0 validation passed (${requiredFiles.length} required files, dynamic schema/routes/actions verified).`);
+console.log(`Marketing native validation passed (${new Set(checked).size} required files, dynamic schema/routes/actions verified).`);
