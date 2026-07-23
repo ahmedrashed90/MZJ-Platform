@@ -28,7 +28,9 @@ function parseBody(request: VercelRequest): UnknownRecord {
   return {};
 }
 function toJsonValue(value: unknown): JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (value === null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(toJsonValue);
