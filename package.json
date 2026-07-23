@@ -1,6 +1,6 @@
 {
   "name": "mzj-platform",
-  "version": "1.19.0",
+  "version": "1.19.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
     "@vercel/functions": "^3.7.5",
-    "postgres": "^3.4.7",
+    "postgres": "3.4.9",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.1",

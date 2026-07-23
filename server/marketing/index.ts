@@ -1,8 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "node:crypto";
-import { getSql } from "../_db.js";
+import { getSql, type SqlExecutor } from "../_db.js";
 import { requireUser, type SessionUser } from "../_auth.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
+import { toDatabaseJson } from "../_database-json.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 
@@ -169,7 +170,7 @@ async function projectDetail(sql: ReturnType<typeof getSql>, id: string, user: S
   return { project, creatives, assignments, vehicles, tasks, budget, schedule, links, files, activity };
 }
 
-async function nextProjectCode(tx: ReturnType<typeof getSql>, kind: string, campaignTypeId: string | null, startDate: string) {
+async function nextProjectCode(tx: SqlExecutor, kind: string, campaignTypeId: string | null, startDate: string) {
   if (kind === "agenda") {
     const [sequence] = await tx`select nextval('marketing.project_code_seq')::bigint as n`;
     const month = startDate ? startDate.slice(0, 7).replace("-", "") : new Date().toISOString().slice(0, 7).replace("-", "");
@@ -207,7 +208,7 @@ async function createProject(sql: ReturnType<typeof getSql>, body: Record<string
     const [campaignType] = campaignTypeId ? await tx`select name from marketing.campaign_types where id=${campaignTypeId}::uuid` : [null];
     const [project] = await tx`
       insert into marketing.campaigns(campaign_code,name,campaign_type,campaign_type_id,objective,content_brief,status,source_kind,stage,campaign_date,starts_on,ends_on,starts_at,ends_at,created_by,idempotency_key,metadata)
-      values(${code},${name},${campaignType?.name || (kind === "agenda" ? "أجندة" : null)},${campaignTypeId}::uuid,${textOrNull(payload.objective)},${textOrNull(payload.contentBrief)},'active',${kind},'required',${textOrNull(payload.campaignDate)}::date,${startsOn}::date,${endsOn}::date,${startsOn}::date,${endsOn}::date,${user.id}::uuid,${idempotencyKey},${tx.json(objectValue(payload.metadata))})
+      values(${code},${name},${campaignType?.name || (kind === "agenda" ? "أجندة" : null)},${campaignTypeId}::uuid,${textOrNull(payload.objective)},${textOrNull(payload.contentBrief)},'active',${kind},'required',${textOrNull(payload.campaignDate)}::date,${startsOn}::date,${endsOn}::date,${startsOn}::date,${endsOn}::date,${user.id}::uuid,${idempotencyKey},${tx.json(toDatabaseJson(payload.metadata))})
       returning id::text,campaign_code,name,source_kind,stage
     `;
 
@@ -221,7 +222,7 @@ async function createProject(sql: ReturnType<typeof getSql>, body: Record<string
       const instanceNo = clean(raw.instanceNo) || `N${String(instanceIndex).padStart(2, "0")}`;
       const [creative] = await tx`
         insert into marketing.creatives(campaign_id,creative_type,creative_type_id,quantity,status,instance_no,short_code,agenda_day,content_due_at,content_notes,admin_notes,sort_order,metadata)
-        values(${project.id}::uuid,${creativeType.name},${creativeType.id}::uuid,1,'pending',${instanceNo},${creativeType.short_code},${textOrNull(raw.agendaDay)}::date,${textOrNull(raw.contentDueAt)}::timestamptz,${textOrNull(raw.contentNotes)},${textOrNull(raw.adminNotes)},${instanceIndex},${tx.json(objectValue(raw.metadata))})
+        values(${project.id}::uuid,${creativeType.name},${creativeType.id}::uuid,1,'pending',${instanceNo},${creativeType.short_code},${textOrNull(raw.agendaDay)}::date,${textOrNull(raw.contentDueAt)}::timestamptz,${textOrNull(raw.contentNotes)},${textOrNull(raw.adminNotes)},${instanceIndex},${tx.json(toDatabaseJson(raw.metadata))})
         returning id::text
       `;
       creativeIdByClient.set(clean(raw.clientId) || instanceNo, creative.id);
@@ -246,7 +247,7 @@ async function createProject(sql: ReturnType<typeof getSql>, body: Record<string
         const taskNo = `${instanceNo}-${creativeType.short_code}-CONTENT-${String(seq?.n || 1).padStart(7, "0")}`;
         const [task] = await tx`
           insert into marketing.tasks(task_no,campaign_id,creative_id,task_kind,department_id,department_code,assigned_to,content_writer_id,paired_content_user_id,status,due_at,review_status,metadata)
-          values(${taskNo},${project.id}::uuid,${creative.id}::uuid,'template',${contentDepartment.id}::uuid,${contentDepartment.code},${writerId}::uuid,${writerId}::uuid,${writerId}::uuid,'required',${textOrNull(raw.contentDueAt)}::timestamptz,'not_submitted',${tx.json({ instanceNo, creativeType: creativeType.name })}) returning id::text
+          values(${taskNo},${project.id}::uuid,${creative.id}::uuid,'template',${contentDepartment.id}::uuid,${contentDepartment.code},${writerId}::uuid,${writerId}::uuid,${writerId}::uuid,'required',${textOrNull(raw.contentDueAt)}::timestamptz,'not_submitted',${tx.json(toDatabaseJson({ instanceNo, creativeType: creativeType.name }))}) returning id::text
         `;
         templateByWriter.set(writerId, task.id);
       }
@@ -273,7 +274,7 @@ async function createProject(sql: ReturnType<typeof getSql>, body: Record<string
           const taskNo = `${instanceNo}-${creativeType.short_code}-${department.code.toUpperCase()}-${String(seq?.n || 1).padStart(7, "0")}`;
           const [task] = await tx`
             insert into marketing.tasks(task_no,campaign_id,creative_id,task_kind,department_id,department_code,assigned_to,content_writer_id,paired_content_user_id,template_task_id,status,due_at,review_status,metadata)
-            values(${taskNo},${project.id}::uuid,${creative.id}::uuid,'execution',${department.id}::uuid,${department.code},${userId}::uuid,${writerId}::uuid,${writerId}::uuid,${templateTaskId}::uuid,'waiting_template',${textOrNull(assignment.dueAt)}::timestamptz,'waiting_template',${tx.json({ assignmentRole: role, instanceNo })}) returning id::text
+            values(${taskNo},${project.id}::uuid,${creative.id}::uuid,'execution',${department.id}::uuid,${department.code},${userId}::uuid,${writerId}::uuid,${writerId}::uuid,${templateTaskId}::uuid,'waiting_template',${textOrNull(assignment.dueAt)}::timestamptz,'waiting_template',${tx.json(toDatabaseJson({ assignmentRole: role, instanceNo }))}) returning id::text
           `;
           await tx`
             insert into marketing.task_action_progress(task_id,action_id)
@@ -302,7 +303,7 @@ async function createProject(sql: ReturnType<typeof getSql>, body: Record<string
       if (!postType) throw new Error("نوع النشر لا يتبع المنصة المختارة أو غير فعال");
       await tx`insert into marketing.publish_schedule(campaign_id,creative_id,publish_date,publish_time,platform_id,post_type_id,notes) values(${project.id}::uuid,${creativeId}::uuid,${publishDate}::date,${textOrNull(raw.publishTime)}::time,${platformId}::uuid,${postType.id}::uuid,${textOrNull(raw.notes)}) on conflict do nothing`;
     }
-    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'project_created','project',${project.id},${tx.json({ kind, code, name, instances: instances.length })})`;
+    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'project_created','project',${project.id},${tx.json(toDatabaseJson({ kind, code, name, instances: instances.length }))})`;
     return { ok: true, project, message: kind === "agenda" ? "تم إنشاء الأجندة والتاسكات بدون تكرار" : "تم إنشاء الحملة والتاسكات بدون تكرار" };
   });
 }
@@ -319,7 +320,7 @@ async function receiveTask(sql: ReturnType<typeof getSql>, body: Record<string, 
       if (!template || template.review_status !== "approved") throw new Error("لا يمكن استلام التاسك التنفيذي قبل اعتماد Task Template المرتبطة");
     }
     const [updated] = await tx`update marketing.tasks set received_at=now(),received_by=${user.id}::uuid,status='active',updated_at=now() where id=${id}::uuid returning *,id::text`;
-    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'task_received','task',${id},${tx.json({ receivedAt: updated.received_at })})`;
+    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'task_received','task',${id},${tx.json(toDatabaseJson({ receivedAt: updated.received_at }))})`;
     return { ok: true, task: updated, message: "تم استلام التاسك وتسجيل التاريخ الفعلي" };
   });
 }
@@ -332,9 +333,9 @@ async function submitTemplate(sql: ReturnType<typeof getSql>, body: Record<strin
     if (!task) throw new Error("Task Template غير موجودة");
     if (!isAdmin(user) && task.assigned_to !== user.id) throw new Error("هذه Task Template غير مسندة إليك");
     if (!task.received_at) throw new Error("اضغط تم الاستلام قبل رفع Task Template");
-    const [updated] = await tx`update marketing.tasks set template_data=${tx.json(templateData)},review_status='pending_review',status='review',review_note=null,progress=100,updated_at=now() where id=${id}::uuid returning *,id::text`;
-    await tx`insert into marketing.task_reviews(task_id,action,note,reviewer_id,reviewer_name,snapshot) values(${id}::uuid,'submitted',${textOrNull(body.note)},${user.id}::uuid,${user.fullName},${tx.json(templateData)})`;
-    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'template_submitted','task',${id},${tx.json({ fields: Object.keys(templateData) })})`;
+    const [updated] = await tx`update marketing.tasks set template_data=${tx.json(toDatabaseJson(templateData))},review_status='pending_review',status='review',review_note=null,progress=100,updated_at=now() where id=${id}::uuid returning *,id::text`;
+    await tx`insert into marketing.task_reviews(task_id,action,note,reviewer_id,reviewer_name,snapshot) values(${id}::uuid,'submitted',${textOrNull(body.note)},${user.id}::uuid,${user.fullName},${tx.json(toDatabaseJson(templateData))})`;
+    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'template_submitted','task',${id},${tx.json(toDatabaseJson({ fields: Object.keys(templateData) }))})`;
     return { ok: true, task: updated, message: "تم رفع Task Template وإرسالها للمراجعة" };
   });
 }
@@ -349,7 +350,7 @@ async function reviewTemplate(sql: ReturnType<typeof getSql>, body: Record<strin
     if (!task) throw new Error("Task Template غير موجودة");
     if (reviewAction === "approve") {
       await tx`update marketing.tasks set review_status='approved',review_note=${note || null},status='completed',completed_at=coalesce(completed_at,now()),progress=100,updated_at=now() where id=${id}::uuid`;
-      await tx`update marketing.tasks set template_data=${tx.json(task.template_data || {})},review_status='approved',status=case when received_at is null then 'required' else 'active' end,updated_at=now() where template_task_id=${id}::uuid`;
+      await tx`update marketing.tasks set template_data=${tx.json(toDatabaseJson(task.template_data || {}))},review_status='approved',status=case when received_at is null then 'required' else 'active' end,updated_at=now() where template_task_id=${id}::uuid`;
     } else if (reviewAction === "request_revision") {
       await tx`update marketing.tasks set review_status='revision_requested',review_note=${note || null},status='revision_requested',completed_at=null,updated_at=now() where id=${id}::uuid`;
       await tx`update marketing.tasks set review_status='waiting_template',status='waiting_template',template_data='{}'::jsonb,updated_at=now() where template_task_id=${id}::uuid`;
@@ -358,8 +359,8 @@ async function reviewTemplate(sql: ReturnType<typeof getSql>, body: Record<strin
       await tx`update marketing.tasks set review_status='rejected',status='waiting_template',template_data='{}'::jsonb,updated_at=now() where template_task_id=${id}::uuid`;
     }
     const dbAction = reviewAction === "approve" ? "approved" : reviewAction === "request_revision" ? "revision_requested" : "rejected";
-    await tx`insert into marketing.task_reviews(task_id,action,note,reviewer_id,reviewer_name,snapshot) values(${id}::uuid,${dbAction},${note || null},${user.id}::uuid,${user.fullName},${tx.json(task.template_data || {})})`;
-    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},${`template_${dbAction}`},'task',${id},${tx.json({ note })})`;
+    await tx`insert into marketing.task_reviews(task_id,action,note,reviewer_id,reviewer_name,snapshot) values(${id}::uuid,${dbAction},${note || null},${user.id}::uuid,${user.fullName},${tx.json(toDatabaseJson(task.template_data || {}))})`;
+    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},${`template_${dbAction}`},'task',${id},${tx.json(toDatabaseJson({ note }))})`;
     return { ok: true, message: reviewAction === "approve" ? "تم اعتماد Task Template وفتح التاسكات المرتبطة فقط" : reviewAction === "request_revision" ? "تم طلب تعديل نفس Task Template" : "تم رفض Task Template" };
   });
 }
@@ -439,7 +440,7 @@ async function updateProject(sql: ReturnType<typeof getSql>, body: Record<string
     where id=${id}::uuid and is_deleted=false
     returning id::text,name,campaign_code,source_kind,starts_on,ends_on,updated_at
   `;
-  await sql`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'project_updated','project',${id},${sql.json({ name, startsOn, endsOn, campaignTypeId })})`;
+  await sql`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'project_updated','project',${id},${sql.json(toDatabaseJson({ name, startsOn, endsOn, campaignTypeId }))})`;
   return { ok: true, project: row, message: "تم تحديث بيانات الحملة أو الأجندة" };
 }
 
@@ -474,7 +475,7 @@ async function savePackage(sql: ReturnType<typeof getSql>, body: Record<string, 
     insurance: Math.max(0, numberValue(body.insuranceFee)), issuance: Math.max(0, numberValue(body.issuanceFee)), careItems: stringList(body.careItems),
     deliveryHome: bool(body.deliveryHome), deliveryRegion: textOrNull(body.deliveryRegion), metadata: objectValue(body.metadata),
   };
-  const [row] = id ? await sql`update marketing.packages set name=${name},category_id=${categoryId}::uuid,price=${values.price},cash_discount_percent=${values.discount},registration_fee=${values.registration},insurance_fee=${values.insurance},issuance_fee=${values.issuance},care_items=${values.careItems},delivery_home=${values.deliveryHome},delivery_region=${values.deliveryRegion},metadata=${sql.json(values.metadata)},updated_at=now() where id=${id}::uuid returning id::text` : await sql`insert into marketing.packages(name,category_id,price,cash_discount_percent,registration_fee,insurance_fee,issuance_fee,care_items,delivery_home,delivery_region,metadata,created_by) values(${name},${categoryId}::uuid,${values.price},${values.discount},${values.registration},${values.insurance},${values.issuance},${values.careItems},${values.deliveryHome},${values.deliveryRegion},${sql.json(values.metadata)},${user.id}::uuid) returning id::text`;
+  const [row] = id ? await sql`update marketing.packages set name=${name},category_id=${categoryId}::uuid,price=${values.price},cash_discount_percent=${values.discount},registration_fee=${values.registration},insurance_fee=${values.insurance},issuance_fee=${values.issuance},care_items=${values.careItems},delivery_home=${values.deliveryHome},delivery_region=${values.deliveryRegion},metadata=${sql.json(toDatabaseJson(values.metadata))},updated_at=now() where id=${id}::uuid returning id::text` : await sql`insert into marketing.packages(name,category_id,price,cash_discount_percent,registration_fee,insurance_fee,issuance_fee,care_items,delivery_home,delivery_region,metadata,created_by) values(${name},${categoryId}::uuid,${values.price},${values.discount},${values.registration},${values.insurance},${values.issuance},${values.careItems},${values.deliveryHome},${values.deliveryRegion},${sql.json(toDatabaseJson(values.metadata))},${user.id}::uuid) returning id::text`;
   return { ok: true, row, message: id ? "تم تحديث الباقة" : "تم إنشاء الباقة" };
 }
 
@@ -526,8 +527,8 @@ async function createPhotoRequest(sql: ReturnType<typeof getSql>, body: Record<s
     const requestNo = `PH-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${String(seq?.n || 1).padStart(6,"0")}`;
     const [request] = await tx`insert into operations.photography_requests(request_no,status,requested_by,requested_by_name,requested_by_branch,photography_date,note) values(${requestNo},'request_received',${user.id}::uuid,${user.fullName},${user.branchCodes[0] || null},${photographyDate}::date,${textOrNull(body.note)}) returning id::text,request_no,status,photography_date,note,requested_at`;
     for (const vehicleId of vehicleIds) await tx`insert into operations.photography_request_vehicles(request_id,vehicle_id) values(${request.id}::uuid,${vehicleId}::uuid)`;
-    await tx`insert into operations.photography_request_events(request_id,status,actor_id,actor_name,note,details) values(${request.id}::uuid,'request_received',${user.id}::uuid,${user.fullName},${textOrNull(body.note)},${tx.json({ requestNo, vehicleIds })})`;
-    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'photo_request_created','photography_request',${request.id},${tx.json({ requestNo, vehicleIds })})`;
+    await tx`insert into operations.photography_request_events(request_id,status,actor_id,actor_name,note,details) values(${request.id}::uuid,'request_received',${user.id}::uuid,${user.fullName},${textOrNull(body.note)},${tx.json(toDatabaseJson({ requestNo, vehicleIds }))})`;
+    await tx`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'photo_request_created','photography_request',${request.id},${tx.json(toDatabaseJson({ requestNo, vehicleIds }))})`;
     return { ok: true, request, message: "تم إنشاء طلب التصوير في نفس سجل العمليات" };
   });
 }
@@ -539,8 +540,8 @@ async function updatePhotoRequest(sql: ReturnType<typeof getSql>, body: Record<s
   if (!validStatus) throw new Error("حالة الطلب غير صحيحة");
   const [row] = await sql`update operations.photography_requests set status=${status},photography_date=coalesce(${textOrNull(body.photographyDate)}::date,photography_date),note=coalesce(${textOrNull(body.note)},note),completed_at=case when ${bool(validStatus.is_terminal)} then coalesce(completed_at,now()) else null end where id=${id}::uuid and is_deleted=false returning id::text,request_no,status,photography_date,note,completed_at`;
   if (!row) throw new Error("طلب التصوير غير موجود");
-  await sql`insert into operations.photography_request_events(request_id,status,actor_id,actor_name,note,details) values(${id}::uuid,${status},${user.id}::uuid,${user.fullName},${textOrNull(body.note)},${sql.json({ requestNo: row.request_no, photographyDate: row.photography_date })})`;
-  await sql`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'photo_request_updated','photography_request',${id},${sql.json({ status, note: textOrNull(body.note) })})`;
+  await sql`insert into operations.photography_request_events(request_id,status,actor_id,actor_name,note,details) values(${id}::uuid,${status},${user.id}::uuid,${user.fullName},${textOrNull(body.note)},${sql.json(toDatabaseJson({ requestNo: row.request_no, photographyDate: row.photography_date }))})`;
+  await sql`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'photo_request_updated','photography_request',${id},${sql.json(toDatabaseJson({ status, note: textOrNull(body.note) }))})`;
   return { ok: true, request: row, message: "تم تحديث نفس طلب التصوير الظاهر في التسويق والعمليات" };
 }
 
@@ -612,14 +613,14 @@ async function attendance(sql: ReturnType<typeof getSql>, request: VercelRequest
 async function attendanceAction(sql: ReturnType<typeof getSql>, body: Record<string, unknown>, user: SessionUser) {
   const attendanceAction = clean(body.attendanceAction);
   if (attendanceAction === "presence") {
-    await sql`insert into marketing.presence_status(user_id,last_seen_at,last_activity_at,last_page,activity_type,device_info,updated_at) values(${user.id}::uuid,now(),now(),${textOrNull(body.lastPage)},${textOrNull(body.activityType)},${sql.json(objectValue(body.deviceInfo))},now()) on conflict(user_id) do update set last_seen_at=now(),last_activity_at=now(),last_page=excluded.last_page,activity_type=excluded.activity_type,device_info=excluded.device_info,updated_at=now()`;
+    await sql`insert into marketing.presence_status(user_id,last_seen_at,last_activity_at,last_page,activity_type,device_info,updated_at) values(${user.id}::uuid,now(),now(),${textOrNull(body.lastPage)},${textOrNull(body.activityType)},${sql.json(toDatabaseJson(body.deviceInfo))},now()) on conflict(user_id) do update set last_seen_at=now(),last_activity_at=now(),last_page=excluded.last_page,activity_type=excluded.activity_type,device_info=excluded.device_info,updated_at=now()`;
     return { ok: true };
   }
   const [settings] = await sql`select work_start_time::text,work_end_time::text,grace_minutes from marketing.attendance_settings where id='default'`;
   if (attendanceAction === "check_in") {
     const [row] = await sql`
       insert into marketing.attendance_records(user_id,attendance_date,check_in_at,status,late_minutes,source,metadata)
-      values(${user.id}::uuid,current_date,now(),case when localtime>(${settings.work_start_time}::time + (${settings.grace_minutes}::text || ' minutes')::interval) then 'late' else 'present' end,greatest(0,extract(epoch from(localtime-${settings.work_start_time}::time))/60::numeric-${settings.grace_minutes})::int,'marketing_system',${sql.json(objectValue(body.deviceInfo))})
+      values(${user.id}::uuid,current_date,now(),case when localtime>(${settings.work_start_time}::time + (${settings.grace_minutes}::text || ' minutes')::interval) then 'late' else 'present' end,greatest(0,extract(epoch from(localtime-${settings.work_start_time}::time))/60::numeric-${settings.grace_minutes})::int,'marketing_system',${sql.json(toDatabaseJson(body.deviceInfo))})
       on conflict(user_id,attendance_date) do update set check_in_at=coalesce(marketing.attendance_records.check_in_at,excluded.check_in_at),status=case when marketing.attendance_records.check_in_at is null then excluded.status else marketing.attendance_records.status end,late_minutes=case when marketing.attendance_records.check_in_at is null then excluded.late_minutes else marketing.attendance_records.late_minutes end,updated_at=now()
       returning id::text,attendance_date,check_in_at,check_out_at,status,late_minutes,work_minutes
     `;
@@ -640,7 +641,7 @@ async function connections(sql: ReturnType<typeof getSql>) {
 
 async function saveConnection(sql: ReturnType<typeof getSql>, body: Record<string, unknown>, user: SessionUser) {
   const platformId = clean(body.platformId);
-  const [row] = await sql`insert into marketing.platform_connections(platform_id,connection_status,account_name,account_external_id,token_status,settings,connected_by,connected_at,updated_at) values(${platformId}::uuid,${clean(body.connectionStatus) || "disconnected"},${textOrNull(body.accountName)},${textOrNull(body.accountExternalId)},${textOrNull(body.tokenStatus)},${sql.json(objectValue(body.settings))},${user.id}::uuid,case when ${clean(body.connectionStatus)}='connected' then now() else null end,now()) on conflict(platform_id) do update set connection_status=excluded.connection_status,account_name=excluded.account_name,account_external_id=excluded.account_external_id,token_status=excluded.token_status,settings=excluded.settings,connected_by=excluded.connected_by,connected_at=excluded.connected_at,updated_at=now() returning id::text,platform_id::text,connection_status,account_name,account_external_id,token_status,settings,connected_at,updated_at`;
+  const [row] = await sql`insert into marketing.platform_connections(platform_id,connection_status,account_name,account_external_id,token_status,settings,connected_by,connected_at,updated_at) values(${platformId}::uuid,${clean(body.connectionStatus) || "disconnected"},${textOrNull(body.accountName)},${textOrNull(body.accountExternalId)},${textOrNull(body.tokenStatus)},${sql.json(toDatabaseJson(body.settings))},${user.id}::uuid,case when ${clean(body.connectionStatus)}='connected' then now() else null end,now()) on conflict(platform_id) do update set connection_status=excluded.connection_status,account_name=excluded.account_name,account_external_id=excluded.account_external_id,token_status=excluded.token_status,settings=excluded.settings,connected_by=excluded.connected_by,connected_at=excluded.connected_at,updated_at=now() returning id::text,platform_id::text,connection_status,account_name,account_external_id,token_status,settings,connected_at,updated_at`;
   return { ok: true, row, message: "تم حفظ حالة ربط المنصة" };
 }
 
@@ -742,7 +743,7 @@ async function registerUpload(sql: ReturnType<typeof getSql>, body: Record<strin
     if (uploadKind === "final" && (task.task_kind !== "execution" || task.status === "waiting_template")) throw new Error("لا يمكن رفع الملف النهائي قبل اعتماد Task Template المرتبطة");
     if (uploadKind.startsWith("template") && task.task_kind !== "template") throw new Error("ملف Task Template يجب رفعه داخل تاسك المحتوى فقط");
     const [version] = await sql`select coalesce(max(version_no),0)::int+1 as next from marketing.task_uploads where task_id=${entityId}::uuid and upload_kind=${uploadKind}`;
-    const [row] = await sql`insert into marketing.task_uploads(task_id,upload_kind,file_name,storage_key,external_url,mime_type,file_size,version_no,status,uploaded_by,uploaded_by_name,metadata) values(${entityId}::uuid,${uploadKind},${fileName},${storageKey},${externalUrl},${textOrNull(body.mimeType)},${numberValue(body.fileSize) || null},${version?.next || 1},'ready',${user.id}::uuid,${user.fullName},${sql.json(objectValue(body.metadata))}) returning id::text,task_id::text,upload_kind,file_name,storage_key,external_url,version_no,created_at`;
+    const [row] = await sql`insert into marketing.task_uploads(task_id,upload_kind,file_name,storage_key,external_url,mime_type,file_size,version_no,status,uploaded_by,uploaded_by_name,metadata) values(${entityId}::uuid,${uploadKind},${fileName},${storageKey},${externalUrl},${textOrNull(body.mimeType)},${numberValue(body.fileSize) || null},${version?.next || 1},'ready',${user.id}::uuid,${user.fullName},${sql.json(toDatabaseJson(body.metadata))}) returning id::text,task_id::text,upload_kind,file_name,storage_key,external_url,version_no,created_at`;
     if (uploadKind === "final") await sql`update marketing.tasks set final_file_name=${fileName},final_file_url=${externalUrl},updated_at=now() where id=${entityId}::uuid`;
     return { ok: true, row, message: "تم تسجيل الملف داخل التاسك الصحيح" };
   }
@@ -777,7 +778,7 @@ async function createRawFolders(sql: ReturnType<typeof getSql>, body: Record<str
   try { result = text ? JSON.parse(text) : {}; } catch { result = { message: text }; }
   if (!response.ok) throw new Error(clean(objectValue(result).message) || "تعذر إنشاء فولدرات الخام");
   await sql`update marketing.campaigns set raw_folders_created_at=now(),updated_at=now() where id=${campaignId}::uuid`;
-  await sql`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'raw_folders_created','project',${campaignId},${sql.json(objectValue(result))})`;
+  await sql`insert into marketing.activity_log(actor_id,actor_name,action,entity_type,entity_id,details) values(${user.id}::uuid,${user.fullName},'raw_folders_created','project',${campaignId},${sql.json(toDatabaseJson(result))})`;
   return { ok: true, result, message: "تم إنشاء فولدرات الخام والتسليم" };
 }
 
