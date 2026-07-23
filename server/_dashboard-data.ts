@@ -70,7 +70,7 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
   } catch (error) { data.sectionErrors!.crm = errorText(error); console.error("Dashboard CRM query failed", error); }
 
   try {
-    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed from marketing.campaigns where is_deleted=false`;
+    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status in ('مجدولة','تجهيز النشر'))::int as scheduled,count(*) filter(where due_at<now() and status not in ('مكتملة','تم الاستلام','مؤرشفة'))::int as delayed from marketing.campaigns where is_deleted=false and archived_at is null`;
     data.marketing = { campaigns: asNumber(row?.campaigns), scheduled: asNumber(row?.scheduled), delayed: asNumber(row?.delayed) };
   } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
 
@@ -145,8 +145,8 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
       sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total,count(*) filter(where r.is_deleted=false and r.status='request_received')::int as request_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_received')::int as vehicle_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_sent')::int as vehicle_sent,count(*) filter(where r.is_deleted=false and r.status='completed')::int as completed
         from operations.transfer_requests r
         where (${globalOperationsAccess}=true or r.source_branch_code in ${sql(operationBranches)} or r.destination_branch_code in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
-      sql<any[]>`select count(*) filter(where r.is_deleted=false and r.request_kind='photography')::int as total from operations.transfer_requests r
-        where r.request_kind='photography' and (${globalOperationsAccess}=true or r.source_branch_code in ${sql(operationBranches)} or r.requested_by_branch in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
+      sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total from operations.photography_requests r
+        where (${globalOperationsAccess}=true or r.requested_by_branch in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
     ]);
     data.operations.inventory = { actualTotal: asNumber(inventory?.actual_total), agency: asNumber(inventory?.agency), availableForSale: asNumber(inventory?.available_for_sale), reserved: asNumber(inventory?.reserved), underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes) };
     data.operations.locations = locations.map((item) => ({ key: item.key, name: item.name, actualTotal: asNumber(item.actual_total), underDelivery: asNumber(item.under_delivery), availableForSale: asNumber(item.available_for_sale), reserved: asNumber(item.reserved), delivered: asNumber(item.delivered), hasNotes: asNumber(item.has_notes) }));

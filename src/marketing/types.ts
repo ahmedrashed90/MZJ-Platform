@@ -1,359 +1,177 @@
+export type MarketingAccess = {
+  isAdmin: boolean;
+  canManageCampaigns: boolean;
+  canApproveStructure: boolean;
+  canApproveTemplates: boolean;
+  canApproveTasks: boolean;
+  canManagePublishing: boolean;
+  canManageSettings: boolean;
+};
+
 export type MarketingUser = {
   id: string;
   full_name: string;
-  email?: string | null;
-  department_codes?: string[];
-  departments?: string[];
+  email: string | null;
+  can_receive_tasks: boolean;
+  role_codes: string[];
+  department_codes: string[];
+  departments: string[];
 };
 
-export type CampaignType = { id: string; name: string; prefix: string; sort_order: number };
-export type CreativeCatalogItem = {
-  id: string;
-  name: string;
-  short_code: string;
-  primary_department_code: string;
-  content_section_id?: string | null;
-  content_section_name?: string | null;
-  sort_order: number;
-};
-export type Funnel = { id: string; name: string; sort_order: number };
-export type Department = { department_code: string; display_name: string; short_code: string; sort_order: number };
-export type DepartmentMember = { department_code: string; user_id: string; full_name: string; email?: string | null };
-export type WorkflowAction = {
-  id: string;
-  department_code: string;
-  name: string;
-  sort_order: number;
-  weight: number;
-  is_admin_only: boolean;
-  is_required: boolean;
-};
-export type Platform = {
-  id: string;
+export type CreativeTypeSetting = {
   code: string;
   name: string;
-  icon?: string | null;
-  status: string;
-  capability_state?: string | null;
-  connection_status?: string | null;
-  mode?: string | null;
-  account_name?: string | null;
-  profile_id?: string | null;
-  scopes?: string[];
-  expires_at?: string | null;
-  last_error?: string | null;
+  department_codes: string[];
+  is_active: boolean;
+  sort_order: number;
 };
-export type PostType = { id: string; platform_id: string; platform_code: string; platform_name: string; code: string; name: string; dimensions?: string | null; sort_order: number };
-export type ContentSection = { id: string; code: string; name: string; sort_order: number };
-export type OrderStatus = { id: string; code: string; name: string; sort_order: number };
+
+export type PlatformSetting = {
+  code: string;
+  name: string;
+  post_types: string[];
+  is_active: boolean;
+  connection_status: string;
+  sort_order: number;
+  metadata?: Record<string, unknown>;
+};
 
 export type MarketingMeta = {
   ok: true;
+  creativeTypes: CreativeTypeSetting[];
+  platforms: PlatformSetting[];
   users: MarketingUser[];
-  campaignTypes: CampaignType[];
-  creativeCatalog: CreativeCatalogItem[];
-  funnels: Funnel[];
-  platforms: Platform[];
-  postTypes: PostType[];
-  departments: Department[];
-  departmentMembers: DepartmentMember[];
-  workflowActions: WorkflowAction[];
-  contentSections: ContentSection[];
-  orderStatuses: OrderStatus[];
-  ownerColors: Record<string, string>;
-  attendanceReminder: {
-    required: boolean;
-    checkedInAt?: string | null;
-    checkedOutAt?: string | null;
-    workStart: string;
-    workEnd: string;
-    timezone: string;
-  };
-  access: {
-    dashboard: boolean;
-    campaignsView: boolean;
-    campaignsManage: boolean;
-    tasksView: boolean;
-    publishPrepView: boolean;
-    publishPrepManage: boolean;
-    platformsManage: boolean;
-    packagesManage: boolean;
-    stockView: boolean;
-    reportsView: boolean;
-    attendanceSelf: boolean;
-    attendanceManage: boolean;
-    settingsManage: boolean;
-  };
+  campaignStatuses: string[];
+  departmentLabels: Record<string, string>;
+  access: MarketingAccess;
 };
 
-export type CampaignRow = {
+export type MarketingCampaignRow = {
   id: string;
   campaign_code: string;
   name: string;
-  campaign_type: string;
-  source_type: "campaign" | "agenda";
-  objective?: string | null;
-  content_brief?: string | null;
-  campaign_date?: string | null;
-  publish_start_date?: string | null;
-  publish_end_date?: string | null;
+  campaign_type: string | null;
+  objective: string | null;
   status: string;
-  progress_percent: number;
-  creatives_count?: number;
-  creative_count?: number;
-  tasks_count?: number;
-  task_count?: number;
-  total_budget?: number;
-  completed_tasks?: number;
-  departments?: Array<{ code: string; name: string; progress: number; total: number; started: number }>;
-  created_at?: string;
-  updated_at?: string;
-  released_at?: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  due_at: string | null;
+  budget_total: number;
+  raw_root_path: string | null;
+  structure_approved_at?: string | null;
+  publish_ready_at?: string | null;
+  created_by_name?: string | null;
+  creatives: number;
+  tasks: number;
+  done_tasks: number;
+  progress: number;
+  created_at: string;
+  updated_at: string;
 };
 
-export type TaskAction = {
+export type CampaignCreative = {
   id: string;
-  action_code: string;
-  action_name: string;
-  action_order: number;
-  weight: number;
-  is_admin_only: boolean;
-  is_required: boolean;
-  is_completed: boolean;
-  completed_by?: string | null;
-  completed_at?: string | null;
-  note?: string | null;
-};
-
-export type TaskFile = {
-  id: string;
-  file_kind: string;
-  file_name: string;
-  mime_type?: string | null;
-  file_size?: number | null;
-  uploaded_at: string;
-  uploaded_by_name?: string | null;
-};
-
-export type TaskTemplateVersion = {
-  id: string;
-  version_no: number;
+  campaign_id: string;
+  instance_key: string;
+  creative_type: string;
+  name: string;
+  description: string | null;
+  quantity: number;
   status: string;
-  parsed_data?: Record<string, unknown>;
-  submitted_at: string;
-  submitted_by_name?: string | null;
-  reviewed_at?: string | null;
-  reviewed_by_name?: string | null;
-  review_note?: string | null;
-  source_file_id?: string | null;
+  cars: Array<{ uniqueSpecKey: string; name: string; exteriorColor: string; interiorColor: string }>;
+  departments: Array<{ code: string; assignedUserId: string | null; pairedContentUserId?: string | null; dueAt: string | null; notes: string }>;
+  budget: number;
+  sort_order: number;
+  raw_path: string | null;
+  output_path: string | null;
+  metadata: Record<string, unknown>;
 };
 
-export type TaskRow = {
+export type MarketingTask = {
   id: string;
-  task_code: string;
-  task_type: "content_template" | "execution";
+  campaign_id: string;
+  creative_id: string | null;
+  task_key: string;
+  task_type: "task_template" | "execution";
   title: string;
-  status: string;
-  review_status?: string | null;
-  progress_percent: number;
   department_code: string;
-  assigned_to: string;
-  assigned_to_name: string;
-  paired_content_user_id?: string | null;
-  paired_content_user_name?: string | null;
-  content_user_name?: string | null;
-  department_name?: string | null;
-  due_at?: string | null;
-  received_at?: string | null;
-  completed_at?: string | null;
-  user_completed_at?: string | null;
-  requires_final_file: boolean;
-  campaign_id: string;
-  campaign_code: string;
-  campaign_name: string;
-  campaign_type?: string | null;
-  department_note?: string | null;
-  content_note?: string | null;
-  creative_id: string;
-  creative_name: string;
-  instance_code?: string | null;
-  source_type?: string;
-  actions?: TaskAction[];
-  files?: TaskFile[];
-  template_versions?: TaskTemplateVersion[];
-  latest_template?: TaskTemplateVersion | null;
-  can_work?: boolean;
-  can_review?: boolean;
-};
-
-export type VehicleRow = {
-  id: string;
-  vin: string;
-  car_name?: string | null;
-  statement?: string | null;
-  interior_color?: string | null;
-  exterior_color?: string | null;
-  model_year?: string | null;
-  location_code?: string | null;
-  location_name?: string | null;
-  status_code?: string | null;
-  status_name?: string | null;
-  active_photography_request_id?: string | null;
-  active_photography_request_no?: string | null;
-  active_photography_date?: string | null;
-  active_photography_status?: string | null;
-};
-
-export type PhotographyRequest = {
-  id: string;
-  request_no: string;
-  request_kind: "photography";
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  paired_content_user_id: string | null;
+  paired_content_user_name: string | null;
   status: string;
-  note?: string | null;
-  photography_date?: string | null;
-  photography_location?: string | null;
-  requested_by_name?: string | null;
-  requested_by_role?: string | null;
-  requested_at: string;
-  completed_at?: string | null;
-  cancelled_at?: string | null;
-  cancellation_reason?: string | null;
-  vehicles: VehicleRow[];
-  events: Array<{ id: string; stage: string; action: string; note?: string | null; actor_name?: string | null; created_at: string }>;
+  due_at: string | null;
+  completed_at: string | null;
+  notes: string | null;
+  template_data: {
+    proposedName?: string;
+    keyMessage?: string;
+    baseScript?: string;
+    hook?: string;
+    cta?: string;
+  };
+  action_data: Array<{ text: string; at: string; userId: string; userName: string }>;
+  final_file_path: string | null;
+  final_file_name: string | null;
+  submitted_at: string | null;
+  approved_at: string | null;
+  approved_by_name: string | null;
+  creative_name: string | null;
+  instance_key?: string;
+  campaign_name?: string;
+  campaign_code?: string;
+  campaign_status?: string;
+  raw_path?: string | null;
+  output_path?: string | null;
+  updated_at: string;
 };
 
-export type PublishTarget = {
+export type PublishingItem = {
   id: string;
-  platform_id: string;
-  platform_name: string;
+  campaign_id: string;
+  creative_id: string;
+  campaign_name?: string;
+  campaign_code?: string;
+  campaign_status?: string;
+  creative_name: string;
+  output_path?: string | null;
   platform_code: string;
-  post_type_id?: string | null;
-  post_type_code?: string | null;
-  post_type_name?: string | null;
-  dimensions?: string | null;
-  scheduled_at?: string | null;
+  platform_name: string | null;
+  post_type: string;
+  scheduled_at: string | null;
+  caption: string | null;
+  hashtags: string | null;
+  media_path: string | null;
   status: string;
-  published_url?: string | null;
-  external_id?: string | null;
-  error_message?: string | null;
+  published_at: string | null;
+  external_post_id: string | null;
+  connection_status?: string | null;
 };
 
-export type PublishPrepItem = {
+export type MarketingAgendaItem = {
   id: string;
-  campaign_id: string;
-  campaign_code: string;
-  campaign_name: string;
-  campaign_type?: string | null;
-  department_note?: string | null;
-  content_note?: string | null;
-  creative_id: string;
-  creative_name: string;
-  instance_code?: string | null;
-  source_task_id: string;
+  title: string;
+  item_type: string;
+  starts_at: string;
+  ends_at: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
   status: string;
-  caption?: string | null;
-  hashtags?: string | null;
-  recipients?: string[];
-  final_file_id?: string | null;
-  final_file_name?: string | null;
-  template_data?: Record<string, unknown>;
-  targets: PublishTarget[];
+  notes: string | null;
 };
 
-export const campaignStatusLabels: Record<string, string> = {
-  draft: "مسودة",
-  scheduled: "مجدولة",
-  in_progress: "جاري العمل",
-  ready_for_publish: "جاهزة للنشر",
-  completed: "مكتملة",
-  archived: "مؤرشفة",
-  cancelled: "ملغاة",
-};
-
-export const taskStatusLabels: Record<string, string> = {
-  pending_template: "في انتظار رفع Task Template",
-  template_submitted: "تحت مراجعة Task Template",
-  template_approved: "تم اعتماد Task Template",
-  blocked_by_template: "في انتظار اعتماد Task Template",
-  ready: "جاهز للاستلام",
-  received: "تم الاستلام",
-  in_progress: "جاري العمل",
-  changes_requested: "مطلوب تعديل",
-  under_review: "تحت المراجعة",
-  completed: "مكتمل",
-  content_done: "تم الانتهاء",
-  cancelled: "ملغي",
-};
-
-export const photographyStatusLabels: Record<string, string> = {
-  photography_requested: "تم استلام الطلب",
-  photography_scheduled: "تم جدولة التصوير",
-  photography_in_progress: "جاري التصوير",
-  completed: "تم التصوير",
-  cancelled: "ملغي",
-};
-
-export const departmentLabels: Record<string, string> = {
-  content: "قسم المحتوى",
-  montage: "قسم المونتاج",
-  photography: "قسم التصوير",
-  design: "قسم التصميم",
-  publishing: "قسم النشر",
-};
-
-export type CampaignAssignmentDetail = {
-  id: string;
-  department_code: string;
-  execution_user_id: string;
-  execution_user_name: string;
-  content_user_id: string;
-  content_user_name: string;
-  due_date?: string | null;
-  writer_due_date?: string | null;
-  department_note?: string | null;
-  content_note?: string | null;
-};
-
-export type CampaignCreativeDetail = {
-  id: string;
-  instance_no: number;
-  instance_code: string;
-  creative_name: string;
-  primary_department_code: string;
-  notes?: string | null;
-  vehicles: Array<{ vehicle_id: string; vin: string; car_name?: string; statement?: string; exterior_color?: string; interior_color?: string; model_year?: string; location?: string }>;
-  assignments: CampaignAssignmentDetail[];
-};
-
-export type CampaignBudgetDetail = {
-  id: string;
-  creative_id: string;
-  funnel_id?: string | null;
-  funnel_name?: string;
-  creative_name: string;
-  instance_code: string;
-  ads_count: number;
-  content_goal?: string | null;
-  expected_target?: string | null;
-  platforms: Array<{ platform_id: string; platform_name: string; amount: number }>;
-};
-
-export type CampaignScheduleDetail = {
-  id: string;
-  creative_id: string;
-  publish_date: string;
-  creative_name: string;
-  instance_code: string;
-  caption?: string | null;
-  hashtags?: string | null;
-  targets: Array<{ id: string; platform_id: string; platform_name: string; post_type_id: string; post_type_name: string; publish_time?: string | null; dimensions?: string | null; status: string }>;
-};
-
-export type CampaignDetailPayload = {
+export type CampaignDetailResponse = {
   ok: true;
-  campaign: CampaignRow & { version: number; structure_deadline?: string | null; content_brief?: string | null; created_at?: string; released_at?: string | null };
-  creatives: CampaignCreativeDetail[];
-  tasks: TaskRow[];
-  budgets: CampaignBudgetDetail[];
-  schedule: CampaignScheduleDetail[];
+  campaign: MarketingCampaignRow & {
+    brief: string | null;
+    folder_created_at: string | null;
+    structure_approved_by_name: string | null;
+    metadata: Record<string, unknown>;
+  };
+  creatives: CampaignCreative[];
+  tasks: MarketingTask[];
+  publishing: PublishingItem[];
+  activity: Array<{ id: number; action: string; user_name: string | null; created_at: string; after_data?: Record<string, unknown> }>;
 };

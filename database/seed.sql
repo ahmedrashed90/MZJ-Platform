@@ -27,18 +27,3 @@ insert into core.roles(code, name, is_system) values
 ('operations_user', 'مستخدم العمليات', true),
 ('tracking_user', 'مستخدم التتبع', true)
 on conflict (code) do update set name = excluded.name;
-
--- MZJ_MARKETING_ROLE_PERMISSION_SEED_20260723
-insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r cross join core.permissions p
-where r.code in ('admin','system_admin') and p.system_code='marketing'
-on conflict do nothing;
-
-insert into core.role_permissions(role_id,permission_id)
-select r.id,p.id from core.roles r join core.permissions p on p.code in (
-  'marketing.view','marketing.dashboard.view','marketing.campaigns.view','marketing.tasks.view',
-  'marketing.tasks.work','marketing.publish_prep.view','marketing.attendance.self','marketing.stock.view',
-  'marketing.photography_requests.create','marketing.reports.view'
-)
-where r.code='marketing_user'
-on conflict do nothing;

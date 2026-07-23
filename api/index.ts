@@ -30,7 +30,6 @@ import crmInboxHandler from "../server/crm/inbox.js";
 import crmMediaHandler from "../server/crm/media.js";
 import crmContactsHandler from "../server/crm/contacts.js";
 import internalAutomationJobHandler from "../server/internal/automation-job.js";
-import internalMarketingPublishHandler from "../server/internal/marketing-publish.js";
 import trackingOrdersHandler from "../server/tracking/orders.js";
 import trackingPublicHandler from "../server/tracking/public.js";
 import trackingSmsHandler from "../server/tracking/sms.js";
@@ -73,7 +72,6 @@ const routes = new Map<string, ApiHandler>([
   ["crm/contacts", crmContactsHandler],
   ["integrations/media", integrationMediaHandler],
   ["internal/automation-job", internalAutomationJobHandler],
-  ["internal/marketing-publish", internalMarketingPublishHandler],
   ["tracking/orders", trackingOrdersHandler],
   ["tracking/public", trackingPublicHandler],
   ["tracking/sms", trackingSmsHandler],
@@ -102,7 +100,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.16.8" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.19.0" });
   }
 
   if (route === "integrations/media") {

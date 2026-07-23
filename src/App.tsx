@@ -24,6 +24,15 @@ const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((modu
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
+const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
+const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
+const MarketingCampaignsPage = lazy(() => import("./marketing/pages/MarketingCampaignsPage").then((module) => ({ default: module.MarketingCampaignsPage })));
+const MarketingCampaignBuilderPage = lazy(() => import("./marketing/pages/MarketingCampaignBuilderPage").then((module) => ({ default: module.MarketingCampaignBuilderPage })));
+const MarketingCampaignDetailPage = lazy(() => import("./marketing/pages/MarketingCampaignDetailPage").then((module) => ({ default: module.MarketingCampaignDetailPage })));
+const MarketingTasksPage = lazy(() => import("./marketing/pages/MarketingTasksPage").then((module) => ({ default: module.MarketingTasksPage })));
+const MarketingAgendaPage = lazy(() => import("./marketing/pages/MarketingAgendaPage").then((module) => ({ default: module.MarketingAgendaPage })));
+const MarketingPublishingPage = lazy(() => import("./marketing/pages/MarketingPublishingPage").then((module) => ({ default: module.MarketingPublishingPage })));
+const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
 const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
@@ -31,20 +40,6 @@ const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((
 const TransferRequestsPage = lazy(() => import("./operations/pages/TransferRequestsPage").then((module) => ({ default: module.TransferRequestsPage })));
 const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
 const MovementHistoryPage = lazy(() => import("./operations/pages/MovementHistoryPage").then((module) => ({ default: module.MovementHistoryPage })));
-const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
-const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
-const CampaignsPage = lazy(() => import("./marketing/pages/CampaignsPage").then((module) => ({ default: module.CampaignsPage })));
-const CreateCampaignPage = lazy(() => import("./marketing/pages/CreateCampaignPage").then((module) => ({ default: module.CreateCampaignPage })));
-const CreateAgendaPage = lazy(() => import("./marketing/pages/CreateAgendaPage").then((module) => ({ default: module.CreateAgendaPage })));
-const TasksPage = lazy(() => import("./marketing/pages/TasksPage").then((module) => ({ default: module.TasksPage })));
-const PublishPrepPage = lazy(() => import("./marketing/pages/PublishPrepPage").then((module) => ({ default: module.PublishPrepPage })));
-const CalendarPage = lazy(() => import("./marketing/pages/CalendarPage").then((module) => ({ default: module.CalendarPage })));
-const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
-const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
-const PackagesPage = lazy(() => import("./marketing/pages/PackagesPage").then((module) => ({ default: module.PackagesPage })));
-const PlatformsPage = lazy(() => import("./marketing/pages/PlatformsPage").then((module) => ({ default: module.PlatformsPage })));
-const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
-const MarketingReportsPage = lazy(() => import("./marketing/pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
 
 
 function PlatformRoutes() {
@@ -69,18 +64,14 @@ function PlatformRoutes() {
           </Route>
           <Route path="/marketing" element={<MarketingLayout />}>
             <Route index element={<MarketingDashboardPage />} />
-            <Route path="database" element={<MarketingReportsPage />} />
-            <Route path="campaigns" element={<CampaignsPage />} />
-            <Route path="campaigns/new" element={<CreateCampaignPage />} />
-            <Route path="agendas/new" element={<CreateAgendaPage />} />
-            <Route path="packages" element={<PackagesPage />} />
-            <Route path="platforms" element={<PlatformsPage />} />
-            <Route path="publish-prep" element={<PublishPrepPage />} />
-            <Route path="tasks" element={<TasksPage />} />
-            <Route path="calendar" element={<CalendarPage />} />
-            <Route path="receipt-calendar" element={<ReceiptCalendarPage />} />
-            <Route path="stock" element={<StockPage />} />
-            <Route path="attendance" element={<AttendancePage />} />
+            <Route path="campaigns" element={<MarketingCampaignsPage />} />
+            <Route path="campaigns/new" element={<MarketingCampaignBuilderPage />} />
+            <Route path="campaigns/:id/edit" element={<MarketingCampaignBuilderPage />} />
+            <Route path="campaigns/:id" element={<MarketingCampaignDetailPage />} />
+            <Route path="tasks" element={<MarketingTasksPage />} />
+            <Route path="agenda" element={<MarketingAgendaPage />} />
+            <Route path="publishing" element={<MarketingPublishingPage />} />
+            <Route path="calendar" element={<MarketingCalendarPage />} />
           </Route>
           <Route path="/operations" element={<OperationsLayout />}>
             <Route index element={<InventoryPage />} />

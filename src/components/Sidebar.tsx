@@ -53,7 +53,7 @@ export function Sidebar() {
   const { user, logout } = useAuth();
   const isAdmin = user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) ?? false;
   const canViewOperations = isAdmin || Boolean(user?.permissions.includes("operations.view")) || Boolean(user?.departmentCodes.includes("operations")) || Boolean(user?.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code)));
-  const canViewMarketing = isAdmin || Boolean(user?.permissions.includes("marketing.view")) || Boolean(user?.departmentCodes.includes("marketing")) || Boolean(user?.roleCodes.some((code) => ["marketing_user", "marketing_manager"].includes(code)));
+  const canViewMarketing = isAdmin || Boolean(user?.permissions.some((code) => code.startsWith("marketing."))) || Boolean(user?.departmentCodes.includes("marketing")) || Boolean(user?.roleCodes.includes("marketing_user"));
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
   const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations) && (!item.marketingOnly || canViewMarketing));
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);

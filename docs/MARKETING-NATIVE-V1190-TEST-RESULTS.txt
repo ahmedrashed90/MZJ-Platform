@@ -1,0 +1,38 @@
+MZJ Platform v1.19.0 — Marketing Native Rebuild Test Results
+Date: 2026-07-23
+
+PASS — Marketing architecture checker
+- scripts/check-marketing-native-v1190.mjs
+- 57 assertions passed.
+- Verified routes, API dispatcher, five-stage builder, workflow actions and guards, database objects, creative mappings, platform statuses, settings integration, and removal of the marketing placeholder.
+
+PASS — Targeted TypeScript typecheck
+- All new marketing frontend files, marketing API, auth helper, and schema bootstrap passed strict targeted TypeScript checking using the globally available TypeScript compiler and local declaration stubs.
+
+PASS — TypeScript syntax transpilation
+- All new and modified marketing TypeScript/TSX files transpiled without syntax diagnostics.
+
+PASS — Import resolution
+- All relative imports inside src/marketing and server/marketing resolve to real source files.
+
+PASS — Existing project static acceptance suite before tsc
+- API import extension checks passed.
+- CRM checks passed.
+- Tracking checks passed.
+- Operations checks passed.
+- ERPNext integration checks passed.
+- Marketing v1.19.0 checker passed.
+
+PASS — Source isolation review
+- Diff against the uploaded source confirmed changes are limited to marketing integration points, shared schema/dashboard wiring, package scripts/version, and documentation.
+- No CRM, operations, or tracking business logic files were changed.
+
+ENVIRONMENT LIMITATION — Full pnpm build
+- pnpm was not installed in the execution session.
+- Corepack could not download pnpm or project dependencies because the session had no registry/network access.
+- Therefore `pnpm run build` could not be executed in this environment.
+- This is an execution-environment limitation, not a source error. The dependency-independent project checks and targeted TypeScript checks listed above passed.
+
+NOT EXECUTED — Live PostgreSQL integration test
+- No DATABASE_URL/test database was provided in the session.
+- Schema SQL was reviewed for idempotency and included in both automatic bootstrap and the explicit migration.
