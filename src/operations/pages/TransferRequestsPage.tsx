@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, CheckCircle, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, Camera, CheckCircle, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { OperationsVehiclePicker } from "../components/OperationsVehiclePicker";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "../components/ResizableOperationsTable";
@@ -7,9 +7,28 @@ import { formatOperationsDate, operationsFetch, queryString } from "../api";
 import type { TransferRow, VehicleRow } from "../types";
 import { useOperations } from "../useOperations";
 
-const stageOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
-const stageLabels: Record<string, string> = { request_received: "تم استلام الطلب", vehicle_sent: "تم إرسال السيارة", vehicle_received: "تم استلام السيارة", completed: "تم الانتهاء" };
-const nextStage: Record<string, string> = { request_received: "vehicle_sent", vehicle_sent: "vehicle_received", vehicle_received: "completed" };
+const transferStageOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
+const photographyStageOrder = ["photography_requested", "photography_scheduled", "photography_in_progress", "completed"] as const;
+const stageLabels: Record<string, string> = {
+  request_received: "تم استلام الطلب",
+  vehicle_sent: "تم إرسال السيارة",
+  vehicle_received: "تم استلام السيارة",
+  photography_requested: "تم استلام طلب التصوير",
+  photography_scheduled: "تم جدولة التصوير",
+  photography_in_progress: "جاري التصوير",
+  completed: "تم الانتهاء",
+};
+const nextStage: Record<string, string> = {
+  request_received: "vehicle_sent",
+  vehicle_sent: "vehicle_received",
+  vehicle_received: "completed",
+  photography_requested: "photography_scheduled",
+  photography_scheduled: "photography_in_progress",
+  photography_in_progress: "completed",
+};
+function requestStages(row: TransferRow): readonly string[] { return row.request_kind === "photography" ? photographyStageOrder : transferStageOrder; }
+function requestTypeLabel(row: TransferRow) { return row.request_kind === "photography" ? "تصوير" : "نقل"; }
+function requestStatusLabel(row: TransferRow) { return row.status === "completed" && row.request_kind === "photography" ? "تم التصوير" : stageLabels[row.status] || row.status; }
 
 type TransferVehicle = TransferRow["vehicles"][number];
 
@@ -48,7 +67,7 @@ export function TransferRequestsPage() {
     setLoading(true);
     setError("");
     try {
-      const payload = await operationsFetch<{ rows: TransferRow[] }>(`/api/operations${queryString({ resource: "transfers", kind: "transfer", completed: tab === "completed", pageSize: 200 })}`);
+      const payload = await operationsFetch<{ rows: TransferRow[] }>(`/api/operations${queryString({ resource: "transfers", kind: "all", completed: tab === "completed", pageSize: 200 })}`);
       setRows(payload.rows);
       if (selected) setSelected(payload.rows.find((row) => row.id === selected.id) || null);
     } catch (failure) {
@@ -148,7 +167,7 @@ export function TransferRequestsPage() {
 
   return (
     <div className="module-page operations-page operations-transfer-page">
-      <header className="module-page-head"><div><h1>طلبات النقل</h1><p>إنشاء طلب نقل لسيارة أو عدة سيارات ومتابعة المراحل الأربع بين الفرع المصدر والمكان المستهدف.</p></div></header>
+      <header className="module-page-head"><div><h1>طلبات النقل والتصوير</h1><p>إنشاء طلبات النقل ومتابعة طلبات النقل وطلبات التصوير المشتركة القادمة من نظام التسويق.</p></div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 
@@ -183,29 +202,30 @@ export function TransferRequestsPage() {
         </section>
       ) : (
         <section className="panel operations-requests-panel">
-          <div className="operations-requests-list">{!loading && !rows.length ? <div className="operations-empty-state"><Truck size={42} /><strong>لا توجد طلبات</strong></div> : rows.map((row) => <article key={row.id} onClick={() => setSelected(row)}><div className="operations-request-icon"><Truck size={23} /></div><div className="operations-request-copy"><b>{row.request_no}</b><span>{row.source_location_name || "—"} <ArrowRight size={14} /> {row.destination_location_name || "—"}</span><small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small></div><span className={`operations-status status-${row.status}`}>{row.cancelled_at ? "ملغي" : stageLabels[row.status] || row.status}</span><strong>{row.vehicles_count}</strong></article>)}</div>
+          <div className="operations-requests-list">{!loading && !rows.length ? <div className="operations-empty-state"><Truck size={42} /><strong>لا توجد طلبات</strong></div> : rows.map((row) => <article key={row.id} onClick={() => setSelected(row)}><div className="operations-request-icon">{row.request_kind === "photography" ? <Camera size={23} /> : <Truck size={23} />}</div><div className="operations-request-copy"><b>{row.request_no} <small>· {requestTypeLabel(row)}</small></b>{row.request_kind === "photography" ? <span>{row.photography_location || row.source_location_name || "مكان السيارة"} · تاريخ التصوير: {row.photography_date ? String(row.photography_date).slice(0, 10) : "غير محدد"}</span> : <span>{row.source_location_name || "—"} <ArrowRight size={14} /> {row.destination_location_name || "—"}</span>}<small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small></div><span className={`operations-status status-${row.status}`}>{row.cancelled_at ? "ملغي" : requestStatusLabel(row)}</span><strong>{row.vehicles_count}</strong></article>)}</div>
         </section>
       )}
 
-      <Modal open={Boolean(selected)} title={selected ? `تفاصيل الطلب — ${selected.request_no}` : "تفاصيل طلب النقل"} subtitle={selected ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : undefined} onClose={() => setSelected(null)} className="operations-request-detail-modal">
+      <Modal open={Boolean(selected)} title={selected ? `تفاصيل طلب ${requestTypeLabel(selected)} — ${selected.request_no}` : "تفاصيل الطلب"} subtitle={selected ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : undefined} onClose={() => setSelected(null)} className="operations-request-detail-modal">
         {selected ? (
           <div className="operations-transfer-detail">
             <div className="operations-request-summary-grid">
-              <div><small>نوع الطلب</small><strong>نقل</strong></div>
+              <div><small>نوع الطلب</small><strong>{requestTypeLabel(selected)}</strong></div>
               <div><small>المكان المصدر</small><strong>{selected.source_location_name || "—"}</strong></div>
-              <div><small>المكان المستهدف</small><strong>{selected.destination_location_name || "—"}</strong></div>
-              <div><small>الحالة الحالية</small><strong>{selected.cancelled_at ? "ملغي" : stageLabels[selected.status] || selected.status}</strong></div>
+              <div><small>{selected.request_kind === "photography" ? "مكان التصوير" : "المكان المستهدف"}</small><strong>{selected.request_kind === "photography" ? selected.photography_location || selected.source_location_name || "—" : selected.destination_location_name || "—"}</strong></div>
+              <div><small>الحالة الحالية</small><strong>{selected.cancelled_at ? "ملغي" : requestStatusLabel(selected)}</strong></div>
               <div><small>المنشئ</small><strong>{selected.requested_by_name || "—"}</strong></div>
-              <div><small>تاريخ الإنشاء</small><strong>{formatOperationsDate(selected.requested_at)}</strong></div>
+              <div><small>تاريخ الإنشاء</small><strong>{formatOperationsDate(selected.requested_at)}</strong></div>{selected.request_kind === "photography" ? <div><small>تاريخ التصوير</small><strong>{selected.photography_date ? String(selected.photography_date).slice(0, 10) : "غير محدد"}</strong></div> : null}
             </div>
 
-            <div className="operations-request-route"><span>{selected.source_location_name || "—"}</span><ArrowRight size={24} /><span>{selected.destination_location_name || "—"}</span></div>
+            {selected.request_kind === "transfer" ? <div className="operations-request-route"><span>{selected.source_location_name || "—"}</span><ArrowRight size={24} /><span>{selected.destination_location_name || "—"}</span></div> : <div className="operations-request-route"><Camera size={24} /><span>{selected.photography_location || selected.source_location_name || "مكان السيارة"}</span><span>{selected.photography_date ? String(selected.photography_date).slice(0, 10) : "غير محدد"}</span></div>}
 
-            <div className="operations-transfer-stage-timeline">{stageOrder.map((stage, index) => {
-              const currentIndex = stageOrder.indexOf(selected.status as typeof stageOrder[number]);
+            <div className="operations-transfer-stage-timeline">{requestStages(selected).map((stage, index, stages) => {
+              const currentIndex = stages.indexOf(selected.status);
               const done = selected.status === "completed" || index <= currentIndex;
               const event = selected.events?.find((item) => item.stage === stage && ["created", "advanced", "stage_completed"].includes(item.action));
-              return <article key={stage} className={done ? "done" : ""}><span>{done ? <CheckCircle size={21} weight="fill" /> : index + 1}</span><div><strong>{stageLabels[stage]}</strong><small>{event ? `${event.actor_name || "مستخدم المنصة"} · ${formatOperationsDate(event.created_at)}` : done && stage === "request_received" ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : done ? "تم التنفيذ — تفاصيل التنفيذ غير مسجلة" : "لم تنفذ بعد"}</small></div></article>;
+              const firstStage = selected.request_kind === "photography" ? "photography_requested" : "request_received";
+              return <article key={stage} className={done ? "done" : ""}><span>{done ? <CheckCircle size={21} weight="fill" /> : index + 1}</span><div><strong>{stage === "completed" && selected.request_kind === "photography" ? "تم التصوير" : stageLabels[stage]}</strong><small>{event ? `${event.actor_name || "مستخدم المنصة"} · ${formatOperationsDate(event.created_at)}` : done && stage === firstStage ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : done ? "تم التنفيذ — تفاصيل التنفيذ غير مسجلة" : "لم تنفذ بعد"}</small></div></article>;
             })}</div>
 
             <div className="operations-request-vehicles-table-wrap">
@@ -222,12 +242,12 @@ export function TransferRequestsPage() {
             </div>
 
             {selected.note ? <div className="operations-request-note"><small>ملاحظات الطلب</small><p>{selected.note}</p></div> : null}
-            <div className="operations-detail-actions">{!selected.cancelled_at && nextStage[selected.status] ? <button type="button" className="primary" onClick={() => void stageAction(selected)} disabled={loading}><CheckCircle size={17} />{stageLabels[nextStage[selected.status]]}</button> : null}{!selected.cancelled_at && selected.status === "request_received" ? <button type="button" className="danger" onClick={() => setConfirmAction("delete")}><Trash size={17} />حذف قبل التنفيذ</button> : null}{!selected.cancelled_at && selected.status !== "completed" ? <button type="button" onClick={() => setConfirmAction("cancel")}>إلغاء الطلب</button> : null}</div>
+            <div className="operations-detail-actions">{!selected.cancelled_at && nextStage[selected.status] ? <button type="button" className="primary" onClick={() => void stageAction(selected)} disabled={loading}><CheckCircle size={17} />{nextStage[selected.status] === "completed" && selected.request_kind === "photography" ? "تم التصوير" : stageLabels[nextStage[selected.status]]}</button> : null}{!selected.cancelled_at && (selected.status === "request_received" || selected.status === "photography_requested") ? <button type="button" className="danger" onClick={() => setConfirmAction("delete")}><Trash size={17} />حذف قبل التنفيذ</button> : null}{!selected.cancelled_at && selected.status !== "completed" ? <button type="button" onClick={() => setConfirmAction("cancel")}>إلغاء الطلب</button> : null}</div>
           </div>
         ) : null}
       </Modal>
 
-      <Modal open={Boolean(confirmAction)} title={confirmAction === "delete" ? "حذف طلب النقل" : "إلغاء طلب النقل"} onClose={() => setConfirmAction(null)} level={1} className="operations-confirm-modal" footer={<><button type="button" className="secondary" onClick={() => setConfirmAction(null)}>رجوع</button><button type="button" className="danger" disabled={loading || (confirmAction === "cancel" && !reason.trim())} onClick={() => void destructiveAction()}>{loading ? "جاري التنفيذ..." : "تأكيد"}</button></>}><div className="operations-confirm-warning danger"><WarningCircle size={24} /><p>{confirmAction === "delete" ? "يتم الحذف فقط قبل تنفيذ أي مرحلة، مع بقاء الحدث في سجل التدقيق." : "سيتم إيقاف المراحل الجديدة مع الحفاظ على كل الإجراءات السابقة."}</p></div><label className="operations-field"><span>السبب {confirmAction === "cancel" ? "— مطلوب" : ""}</span><textarea rows={4} value={reason} onChange={(event) => setReason(event.target.value)} /></label></Modal>
+      <Modal open={Boolean(confirmAction)} title={confirmAction === "delete" ? `حذف طلب ${selected ? requestTypeLabel(selected) : ""}` : `إلغاء طلب ${selected ? requestTypeLabel(selected) : ""}` } onClose={() => setConfirmAction(null)} level={1} className="operations-confirm-modal" footer={<><button type="button" className="secondary" onClick={() => setConfirmAction(null)}>رجوع</button><button type="button" className="danger" disabled={loading || (confirmAction === "cancel" && !reason.trim())} onClick={() => void destructiveAction()}>{loading ? "جاري التنفيذ..." : "تأكيد"}</button></>}><div className="operations-confirm-warning danger"><WarningCircle size={24} /><p>{confirmAction === "delete" ? "يتم الحذف فقط قبل تنفيذ أي مرحلة، مع بقاء الحدث في سجل التدقيق." : "سيتم إيقاف المراحل الجديدة مع الحفاظ على كل الإجراءات السابقة."}</p></div><label className="operations-field"><span>السبب {confirmAction === "cancel" ? "— مطلوب" : ""}</span><textarea rows={4} value={reason} onChange={(event) => setReason(event.target.value)} /></label></Modal>
     </div>
   );
 }

@@ -1,84 +1,53 @@
 import { useEffect, useState } from "react";
-import { Archive, ArrowClockwise, Eye, MagnifyingGlass, RocketLaunch } from "@phosphor-icons/react";
+import { Archive, Eye, MagnifyingGlass, Plus, RocketLaunch } from "@phosphor-icons/react";
 import { Link, useSearchParams } from "react-router-dom";
-import { formatMarketingDate, marketingFetch, marketingQuery } from "../api";
-import type { CampaignSummary } from "../types";
-import { MarketingPageHeader } from "../components/MarketingPageHeader";
-import { MarketingLoading, MarketingError } from "../components/MarketingLoading";
-import { MarketingStatusBadge } from "../components/MarketingStatusBadge";
-import { MarketingEmpty } from "../components/MarketingEmpty";
+import { marketingFetch, queryString } from "../api";
+import type { CampaignRow } from "../types";
+import { CampaignDetailView } from "../components/CampaignDetailView";
+import { TaskDetailView } from "../components/TaskDetailView";
+import { MarketingAlert, MarketingEmpty, MarketingLoading, MarketingModal, MarketingPageHeader, Pagination, ProgressBar, StatusBadge, formatDate, formatMoney } from "../components/Ui";
+import { useMarketingMeta } from "../MarketingLayout";
+
+type Payload = { ok: true; rows: CampaignRow[]; total: number; page: number; pageSize: number };
 
 export function CampaignsPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [campaigns, setCampaigns] = useState<CampaignSummary[]>([]);
-  const [selected, setSelected] = useState<any | null>(null);
+  const { meta } = useMarketingMeta();
+  const [params] = useSearchParams();
+  const [rows, setRows] = useState<CampaignRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [type, setType] = useState("");
+  const [status, setStatus] = useState("");
+  const [sourceType, setSourceType] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [selectedId, setSelectedId] = useState(params.get("created") || "");
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const [view, setView] = useState<"cards" | "table">("cards");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState(searchParams.get("search") || "");
-  const [status, setStatus] = useState(searchParams.get("status") || "");
-  const [sourceType, setSourceType] = useState(searchParams.get("sourceType") || "");
+  const pageSize = 18;
 
   async function load() {
     setLoading(true); setError("");
     try {
-      const query = marketingQuery({ resource: "campaigns", search, status, sourceType });
-      const result = await marketingFetch<{ ok: boolean; campaigns: CampaignSummary[] }>(query);
-      setCampaigns(result.campaigns);
-      const selectedId = searchParams.get("id");
-      if (selectedId) {
-        const detail = await marketingFetch<{ ok: boolean; campaign: any }>(`resource=campaign&id=${selectedId}`);
-        setSelected(detail.campaign);
-      }
+      const payload = await marketingFetch<Payload>(`/api/marketing?${queryString({ resource: "campaigns", page, pageSize, search, type, status, sourceType, from, to })}`);
+      setRows(payload.rows); setTotal(payload.total);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل الحملات"); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, [searchParams]);
+  useEffect(() => { const timer = window.setTimeout(() => void load(), 240); return () => window.clearTimeout(timer); }, [page, search, type, status, sourceType, from, to]);
+  function reset() { setSearch(""); setType(""); setStatus(""); setSourceType(""); setFrom(""); setTo(""); setPage(1); }
 
-  function applyFilters(event: React.FormEvent) {
-    event.preventDefault();
-    const next = new URLSearchParams();
-    if (search) next.set("search", search);
-    if (status) next.set("status", status);
-    if (sourceType) next.set("sourceType", sourceType);
-    setSearchParams(next);
-  }
-
-  async function action(id: string, actionName: "archive" | "release") {
-    if (!window.confirm(actionName === "archive" ? "هل تريد أرشفة الحملة؟" : "هل تريد تحرير الحملة للنشر؟")) return;
-    try {
-      await marketingFetch("resource=campaign-action", { method: "PATCH", body: JSON.stringify({ id, action: actionName }) });
-      setSelected(null); setSearchParams((current) => { current.delete("id"); return current; });
-      await load();
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تنفيذ الإجراء"); }
-  }
-
-  if (loading && campaigns.length === 0 && !selected) return <MarketingLoading label="جاري تحميل الحملات..." />;
-
-  return (
-    <div className="marketing-page">
-      <MarketingPageHeader title="إدارة الحملات" description="الحملات والأجندة والتقدم والمهام المرتبطة بها." actions={<Link className="marketing-button" to="/marketing/campaigns/new">إنشاء حملة</Link>} />
-      {error ? <MarketingError message={error} onRetry={() => void load()} /> : null}
-      <form className="marketing-filter-bar" onSubmit={applyFilters}>
-        <label className="marketing-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالاسم أو الكود" /></label>
-        <select value={sourceType} onChange={(event) => setSourceType(event.target.value)}><option value="">كل الأنواع</option><option value="campaign">حملات</option><option value="agenda">أجندة</option></select>
-        <select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">كل الحالات</option><option value="in_progress">جاري العمل</option><option value="ready_for_publish">جاهزة للنشر</option><option value="completed">مكتملة</option><option value="archived">مؤرشفة</option></select>
-        <button className="marketing-button compact" type="submit">تطبيق</button>
-        <button className="marketing-icon-button" type="button" onClick={() => void load()} title="تحديث"><ArrowClockwise size={18} /></button>
-      </form>
-      <section className="marketing-panel">
-        {campaigns.length ? <div className="marketing-table-wrap"><table className="marketing-table"><thead><tr><th>الحملة</th><th>النوع</th><th>الفترة</th><th>الكرييتيف</th><th>المهام</th><th>التقدم</th><th>الحالة</th><th></th></tr></thead><tbody>{campaigns.map((campaign) => <tr key={campaign.id}><td><strong>{campaign.name}</strong><small>{campaign.campaign_code}</small></td><td>{campaign.source_type === "agenda" ? "أجندة" : "حملة"}</td><td>{formatMarketingDate(campaign.starts_at, false)} — {formatMarketingDate(campaign.ends_at, false)}</td><td>{campaign.creative_count}</td><td>{campaign.completed_task_count}/{campaign.task_count}</td><td><div className="marketing-progress inline"><span><i style={{ width: `${campaign.progress_percent}%` }} /></span><b>{campaign.progress_percent}%</b></div></td><td><MarketingStatusBadge status={campaign.status} /></td><td><button className="marketing-icon-button" type="button" onClick={() => setSearchParams((current) => { current.set("id", campaign.id); return current; })}><Eye size={18} /></button></td></tr>)}</tbody></table></div> : <MarketingEmpty title="لا توجد نتائج" description="غيّر الفلاتر أو أنشئ حملة جديدة." />}
-      </section>
-      {selected ? <div className="marketing-drawer-backdrop" onMouseDown={() => { setSelected(null); setSearchParams((current) => { current.delete("id"); return current; }); }}><aside className="marketing-drawer" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><small>{selected.campaign_code}</small><h2>{selected.name}</h2></div><button type="button" onClick={() => { setSelected(null); setSearchParams((current) => { current.delete("id"); return current; }); }}>×</button></header>
-        <div className="marketing-drawer-body">
-          <div className="marketing-detail-grid"><article><span>النوع</span><strong>{selected.source_type === "agenda" ? "أجندة" : "حملة"}</strong></article><article><span>الحالة</span><MarketingStatusBadge status={selected.status} /></article><article><span>البداية</span><strong>{formatMarketingDate(selected.starts_at, false)}</strong></article><article><span>النهاية</span><strong>{formatMarketingDate(selected.ends_at, false)}</strong></article></div>
-          <section><h3>الهدف</h3><p>{selected.objective || "—"}</p></section>
-          <section><h3>المطلوب / Content Brief</h3><p>{selected.content_brief || "—"}</p></section>
-          <section><h3>الكرييتيفات</h3><div className="marketing-mini-list">{selected.creatives?.map((item: any) => <article key={item.id}><div><strong>{item.catalog_name || item.creative_type}</strong><span>{item.instance_code}</span></div><MarketingStatusBadge status={item.status} /></article>)}</div></section>
-          <section><h3>المهام</h3><div className="marketing-mini-list">{selected.tasks?.map((task: any) => <Link to={`/marketing/tasks?id=${task.id}`} key={task.id}><div><strong>{task.task_type === "content_template" ? "Task Template" : task.department_code}</strong><span>{task.assigned_to_name || "غير مسندة"}</span></div><MarketingStatusBadge status={task.status} /></Link>)}</div></section>
-        </div>
-        <footer><button className="marketing-button secondary" type="button" onClick={() => void action(selected.id, "archive")}><Archive size={18} />أرشفة</button><button className="marketing-button" type="button" onClick={() => void action(selected.id, "release")}><RocketLaunch size={18} />تحرير للنشر</button></footer>
-      </aside></div> : null}
-    </div>
-  );
+  return <div className="marketing-page">
+    <MarketingPageHeader title="إدارة الحملات" description="إدارة ومتابعة الحملات والأجندات، تفاصيل الكرييتيف والتوزيع والميزانية والجدول والتقدم." actions={<><button className="marketing-button" onClick={() => setView(view === "cards" ? "table" : "cards")}>{view === "cards" ? "عرض الجدول" : "عرض البطاقات"}</button>{meta.access.campaignsManage ? <Link className="marketing-button primary" to="/marketing/campaigns/new"><Plus />إنشاء حملة</Link> : null}</>} />
+    {error ? <MarketingAlert>{error}</MarketingAlert> : null}
+    <section className="marketing-panel"><div className="marketing-toolbar"><label className="marketing-field"><span>بحث</span><div style={{ position: "relative" }}><MagnifyingGlass style={{ position: "absolute", right: 10, top: 12 }} /><input style={{ paddingRight: 36 }} value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="اسم الحملة أو الكود أو الهدف" /></div></label><label className="marketing-field"><span>نوع الحملة</span><select value={type} onChange={(event) => { setType(event.target.value); setPage(1); }}><option value="">كل الأنواع</option>{meta.campaignTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="marketing-field"><span>المصدر</span><select value={sourceType} onChange={(event) => { setSourceType(event.target.value); setPage(1); }}><option value="">الحملات والأجندات</option><option value="campaign">حملة</option><option value="agenda">أجندة</option></select></label><label className="marketing-field"><span>الحالة</span><select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">كل الحالات</option><option value="draft">مسودة</option><option value="in_progress">جاري العمل</option><option value="ready_for_publish">جاهزة للنشر</option><option value="completed">مكتملة</option><option value="archived">مؤرشفة</option></select></label><label className="marketing-field"><span>من</span><input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label className="marketing-field"><span>إلى</span><input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label><button className="marketing-button secondary" type="button" onClick={reset}>تصفير الفلاتر</button></div></section>
+    {loading ? <MarketingLoading label="جاري تحميل الحملات..." /> : !rows.length ? <section className="marketing-panel"><MarketingEmpty title="لا توجد حملات مطابقة" description="غيّر الفلاتر أو أنشئ حملة جديدة." /></section> : view === "cards" ? <div className="marketing-grid-3">{rows.map((row) => <article className="marketing-campaign-card" key={row.id} onClick={() => setSelectedId(row.id)}><div className="top"><div><span className="code">{row.campaign_code}</span><h3>{row.name}</h3><small>{row.source_type === "agenda" ? "أجندة" : row.campaign_type}</small></div><StatusBadge status={row.status} type="campaign" /></div><p>{row.objective || "بدون هدف مسجل"}</p><div className="meta"><span>{formatDate(row.campaign_date)}</span><span>{row.creative_count ?? row.creatives_count ?? 0} كرييتيف</span><span>{row.task_count ?? row.tasks_count ?? 0} تاسك</span><span>{formatMoney((row as CampaignRow & { total_budget?: number }).total_budget || 0)}</span></div><ProgressBar value={row.progress_percent} /><div className="departments">{(row.departments || []).map((department) => <span className="marketing-department" key={department.code}>{department.name}</span>)}</div><div className="footer"><span>{formatDate(row.publish_start_date)} — {formatDate(row.publish_end_date)}</span><Eye size={18} /></div></article>)}</div> : <section className="marketing-panel"><div className="marketing-table-wrap"><table className="marketing-table"><thead><tr><th>الكود</th><th>الحملة</th><th>النوع</th><th>الفترة</th><th>الكرييتيف</th><th>التاسكات</th><th>الميزانية</th><th>التقدم</th><th>الحالة</th><th>عرض</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><b>{row.campaign_code}</b></td><td>{row.name}<small style={{ display: "block" }}>{row.objective || "—"}</small></td><td>{row.source_type === "agenda" ? "أجندة" : row.campaign_type}</td><td>{inputRange(row.publish_start_date, row.publish_end_date)}</td><td>{row.creative_count ?? row.creatives_count ?? 0}</td><td>{row.completed_tasks || 0}/{row.task_count ?? row.tasks_count ?? 0}</td><td>{formatMoney((row as CampaignRow & { total_budget?: number }).total_budget || 0)}</td><td style={{ minWidth: 160 }}><ProgressBar compact value={row.progress_percent} /></td><td><StatusBadge status={row.status} type="campaign" /></td><td><button className="marketing-button small" onClick={() => setSelectedId(row.id)}><Eye />تفاصيل</button></td></tr>)}</tbody></table></div></section>}
+    <Pagination page={page} pageSize={pageSize} total={total} onChange={setPage} />
+    <MarketingModal open={Boolean(selectedId)} title="تفاصيل الحملة" onClose={() => setSelectedId("")} wide>{selectedId ? <CampaignDetailView campaignId={selectedId} onTaskOpen={setSelectedTaskId} onChanged={() => void load()} /> : null}</MarketingModal>
+    <MarketingModal open={Boolean(selectedTaskId)} title="تفاصيل التاسك" onClose={() => setSelectedTaskId("")} wide>{selectedTaskId ? <TaskDetailView taskId={selectedTaskId} onChanged={() => void load()} /> : null}</MarketingModal>
+  </div>;
 }
+function inputRange(start?: string | null, end?: string | null) { return `${start ? String(start).slice(0, 10) : "—"} ← ${end ? String(end).slice(0, 10) : "—"}`; }

@@ -1,0 +1,63 @@
+MZJ Marketing Native Rebuild - Test Results
+Date: 2026-07-23
+
+PASSED STATIC / STRUCTURAL CHECKS
+- API and server import extension check.
+- CRM service reclassification.
+- Facebook canonical identity and automatic template.
+- CRM reports/KPI checks.
+- CRM manual leads checks.
+- CRM module structure and no-sample-data check.
+- Dynamic customer completion calculation.
+- CRM reference v27, CRM settings, CRM reference v39.
+- CRM automation architecture simulations.
+- CRM finance combined details parser.
+- Worker route discovery and delivery checks.
+- Tracking native module checks.
+- Operations Native V2 checks.
+- Operations dashboard checks.
+- Operations workflow checks.
+- Operations FK/delete checks.
+- ERPNext unified Sales Order integration checks.
+- Tracking deleted-order release checks.
+- Operations automatic archive checks.
+- Operations approval-cycle checks.
+- Marketing full native rebuild checker.
+
+PASSED MARKETING-SPECIFIC ASSERTIONS
+- No Firebase, merged-patches, Monkey Patch, MutationObserver, Local Publisher, or Checklist runtime inside the new Marketing module.
+- No /marketing/settings route; Marketing settings are mounted in the unified Settings page.
+- Campaign and Publish Prep read scopes do not expose all records to ordinary users.
+- Paired content user is not used as a cross-user data-access bypass.
+- Exact Pair task uniqueness exists.
+- Campaign updates use row lock and version increment.
+- Finalized task file storage keys are bound to the exact task path.
+- TikTok and Snapchat return honest external-approval states.
+- No fake publish-success action exists.
+- Stock reads Operations inventory and shared photography requests use operations.transfer_requests.
+- Photography requests appear in Operations transfer follow-up and Operations dashboard request drilldown.
+- Attendance reminder and XLSX export are present.
+
+TYPESCRIPT SOURCE CHECK
+- TypeScript syntax/transpile check passed for 52 selected TS/TSX files covering Marketing and its approved integration points.
+
+NOT EXECUTED IN THIS ENVIRONMENT
+- pnpm install --frozen-lockfile
+- pnpm run typecheck (full tsc -b)
+- pnpm run build
+Reason: the execution environment could not resolve the npm registry (EAI_AGAIN), so project dependencies were unavailable. No successful full build is claimed.
+
+REQUIRED DEPLOYMENT VALIDATION
+1. Run pnpm install --frozen-lockfile in CI/Vercel.
+2. Run pnpm run typecheck.
+3. Run pnpm run build.
+4. Deploy to Preview/Staging after the SQL migration.
+5. Smoke-test campaign creation, exact Pair tasks, Task Template review, R2 upload, Publish Prep, attendance, stock, and shared photography follow-up.
+
+MIGRATION FIX VALIDATION - v1.18.1
+- Canonical migration now rebuilds the isolated Marketing schema after a business-data safety guard.
+- Obsolete Local Publisher publish_jobs shape is removed before the canonical publishing tables are created.
+- publish_jobs.target_id exists before marketing_publish_jobs_target_idx is created.
+- All Marketing index columns resolve against their canonical tables.
+- All Marketing foreign-key target tables are created by the migration.
+- Named Operations photography-request foreign key recreation is present.

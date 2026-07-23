@@ -30,6 +30,7 @@ import crmInboxHandler from "../server/crm/inbox.js";
 import crmMediaHandler from "../server/crm/media.js";
 import crmContactsHandler from "../server/crm/contacts.js";
 import internalAutomationJobHandler from "../server/internal/automation-job.js";
+import internalMarketingPublishHandler from "../server/internal/marketing-publish.js";
 import trackingOrdersHandler from "../server/tracking/orders.js";
 import trackingPublicHandler from "../server/tracking/public.js";
 import trackingSmsHandler from "../server/tracking/sms.js";
@@ -72,6 +73,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/contacts", crmContactsHandler],
   ["integrations/media", integrationMediaHandler],
   ["internal/automation-job", internalAutomationJobHandler],
+  ["internal/marketing-publish", internalMarketingPublishHandler],
   ["tracking/orders", trackingOrdersHandler],
   ["tracking/public", trackingPublicHandler],
   ["tracking/sms", trackingSmsHandler],

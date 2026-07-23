@@ -1,8 +1,253 @@
-import { useEffect, useState } from "react";
-import { Clock, SignIn, SignOut, UsersThree } from "@phosphor-icons/react";
-import { formatMarketingDate, marketingFetch } from "../api";
-import { MarketingPageHeader } from "../components/MarketingPageHeader";
-import { MarketingLoading, MarketingError } from "../components/MarketingLoading";
-import { MarketingStatusBadge } from "../components/MarketingStatusBadge";
+import { useEffect, useMemo, useState } from "react";
+import { Clock, DownloadSimple, SignIn, SignOut, UserCheck, WarningCircle } from "@phosphor-icons/react";
+import { marketingFetch, marketingPost, queryString } from "../api";
+import {
+  MarketingAlert,
+  MarketingEmpty,
+  MarketingLoading,
+  MarketingPageHeader,
+  Pagination,
+  formatDate,
+} from "../components/Ui";
+import { exportRowsToExcel } from "../excel";
 
-export function AttendancePage(){const[data,setData]=useState<any|null>(null);const[loading,setLoading]=useState(true);const[error,setError]=useState("");const[settings,setSettings]=useState<any>({});async function load(){setLoading(true);setError("");try{const r=await marketingFetch<any>("resource=attendance");setData(r);setSettings({workStart:String(r.settings?.work_start||"16:00").slice(0,5),workEnd:String(r.settings?.work_end||"21:00").slice(0,5),graceMinutes:r.settings?.grace_minutes||15,heartbeatSeconds:r.settings?.heartbeat_seconds||60,offlineAfterMinutes:r.settings?.offline_after_minutes||10,idleAfterMinutes:r.settings?.idle_after_minutes||5})}catch(f){setError(f instanceof Error?f.message:"تعذر تحميل الحضور")}finally{setLoading(false)}}useEffect(()=>{void load();const timer=setInterval(()=>{void marketingFetch("resource=attendance",{method:"POST",body:JSON.stringify({action:"heartbeat",state:document.hidden?"idle":"online"})}).catch(()=>undefined)},60000);return()=>clearInterval(timer)},[]);async function action(name:string){try{await marketingFetch("resource=attendance",{method:"POST",body:JSON.stringify({action:name,source:"web"})});await load()}catch(f){setError(f instanceof Error?f.message:"تعذر تسجيل الحضور")}}async function saveSettings(e:React.FormEvent){e.preventDefault();try{await marketingFetch("resource=attendance",{method:"POST",body:JSON.stringify({action:"settings",...settings})});await load()}catch(f){setError(f instanceof Error?f.message:"تعذر حفظ الإعدادات")}}if(loading&&!data)return <MarketingLoading/>;return <div className="marketing-page"><MarketingPageHeader title="الحضور والانصراف" description="حضور فريق التسويق وتتبّع Online / Idle / Offline حسب توقيت الرياض."/>{error?<MarketingError message={error}/>:null}<section className="marketing-attendance-hero"><article><Clock size={30}/><div><small>حضور اليوم</small><strong>{data?.today?.checked_in_at?formatMarketingDate(data.today.checked_in_at):"لم تسجل بعد"}</strong></div></article><article><UsersThree size={30}/><div><small>التأخير</small><strong>{data?.today?.late_minutes||0} دقيقة</strong></div></article><div>{!data?.today?.checked_in_at?<button className="marketing-button" onClick={()=>void action("checkin")}><SignIn size={18}/>تسجيل حضور</button>:!data?.today?.checked_out_at?<button className="marketing-button secondary" onClick={()=>void action("checkout")}><SignOut size={18}/>تسجيل انصراف</button>:<MarketingStatusBadge status="completed"/>}</div></section><div className={data?.admin?"marketing-two-columns":""}><section className="marketing-panel"><div className="marketing-panel-title"><div><h2>سجل الحضور</h2></div></div><div className="marketing-table-wrap"><table className="marketing-table"><thead><tr><th>الموظف</th><th>التاريخ</th><th>الحضور</th><th>الانصراف</th><th>التأخير</th><th>ساعات العمل</th><th>الحالة اللحظية</th></tr></thead><tbody>{data?.records?.map((r:any)=><tr key={r.id}><td>{r.full_name}</td><td>{r.work_date}</td><td>{formatMarketingDate(r.checked_in_at)}</td><td>{formatMarketingDate(r.checked_out_at)}</td><td>{r.late_minutes} دقيقة</td><td>{Math.round((r.work_minutes||0)/60*10)/10}</td><td><MarketingStatusBadge status={r.presence_state||"offline"}/></td></tr>)}</tbody></table></div></section>{data?.admin?<section className="marketing-panel marketing-form-panel"><h2>إعدادات الدوام</h2><form className="marketing-form-grid compact" onSubmit={saveSettings}><label><span>بداية الدوام</span><input type="time" value={settings.workStart} onChange={e=>setSettings({...settings,workStart:e.target.value})}/></label><label><span>نهاية الدوام</span><input type="time" value={settings.workEnd} onChange={e=>setSettings({...settings,workEnd:e.target.value})}/></label><label><span>فترة السماح</span><input type="number" value={settings.graceMinutes} onChange={e=>setSettings({...settings,graceMinutes:Number(e.target.value)})}/></label><label><span>Heartbeat بالثواني</span><input type="number" min={30} value={settings.heartbeatSeconds} onChange={e=>setSettings({...settings,heartbeatSeconds:Number(e.target.value)})}/></label><label><span>Offline بعد</span><input type="number" value={settings.offlineAfterMinutes} onChange={e=>setSettings({...settings,offlineAfterMinutes:Number(e.target.value)})}/></label><label><span>Idle بعد</span><input type="number" value={settings.idleAfterMinutes} onChange={e=>setSettings({...settings,idleAfterMinutes:Number(e.target.value)})}/></label><button className="marketing-button wide">حفظ الإعدادات</button></form></section>:null}</div></div>}
+type AttendanceSession = {
+  id: string;
+  full_name: string;
+  email?: string;
+  work_date: string;
+  checked_in_at?: string;
+  checked_out_at?: string;
+  late_minutes: number;
+  work_minutes: number;
+  presence_status?: string;
+  last_seen_at?: string;
+};
+
+type AttendancePayload = {
+  ok: true;
+  settings: {
+    work_start: string;
+    work_end: string;
+    grace_minutes: number;
+    timezone: string;
+  };
+  today: AttendanceSession | null;
+  rows: AttendanceSession[];
+  users: Array<{ id: string; full_name: string }>;
+  summary: {
+    sessions?: number;
+    late_count?: number;
+    no_checkout?: number;
+    total_work_minutes?: number;
+    present_users?: number;
+  };
+  total: number;
+  canManage: boolean;
+};
+
+export function AttendancePage() {
+  const initialDate = new Date();
+  const [clock, setClock] = useState(initialDate);
+  const [data, setData] = useState<AttendancePayload | null>(null);
+  const [from, setFrom] = useState(initialDate.toISOString().slice(0, 10));
+  const [to, setTo] = useState(initialDate.toISOString().slice(0, 10));
+  const [userId, setUserId] = useState("");
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const pageSize = 40;
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const payload = await marketingFetch<AttendancePayload>(
+        `/api/marketing?${queryString({ resource: "attendance", from, to, userId, status, page, pageSize })}`,
+      );
+      setData(payload);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل الحضور والانصراف");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [from, to, userId, status, page]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 1000);
+    const heartbeat = window.setInterval(() => {
+      void marketingPost({ action: "attendance_heartbeat", idle: document.hidden });
+    }, 60000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(heartbeat);
+    };
+  }, []);
+
+  async function runAction(actionName: "attendance_check_in" | "attendance_check_out") {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await marketingPost<{ message: string }>({ action: actionName });
+      setMessage(result.message);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تسجيل الحضور");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const workHours = useMemo(
+    () => Math.round((Number(data?.summary.total_work_minutes || 0) / 60) * 10) / 10,
+    [data],
+  );
+
+  async function exportAttendance() {
+    if (!data?.canManage) return;
+    setBusy(true);
+    setError("");
+    try {
+      const exported: AttendanceSession[] = [];
+      let exportPage = 1;
+      let exportTotal = 0;
+      do {
+        const payload = await marketingFetch<AttendancePayload>(
+          `/api/marketing?${queryString({ resource: "attendance", from, to, userId, status, page: exportPage, pageSize: 500 })}`,
+        );
+        exported.push(...payload.rows);
+        exportTotal = Number(payload.total || 0);
+        exportPage += 1;
+      } while (exported.length < exportTotal);
+      exportRowsToExcel(exported.map((row, index) => ({
+        "م": index + 1,
+        "الموظف": row.full_name,
+        "التاريخ": String(row.work_date || "").slice(0, 10),
+        "وقت الحضور": row.checked_in_at ? new Date(row.checked_in_at).toLocaleString("ar-SA") : "",
+        "وقت الانصراف": row.checked_out_at ? new Date(row.checked_out_at).toLocaleString("ar-SA") : "",
+        "التأخير بالدقائق": Number(row.late_minutes || 0),
+        "ساعات العمل": Math.round((Number(row.work_minutes || 0) / 60) * 100) / 100,
+        "الحالة اللحظية": row.presence_status || "offline",
+        "آخر ظهور": row.last_seen_at ? new Date(row.last_seen_at).toLocaleString("ar-SA") : "",
+      })), `marketing-attendance-${from}-${to}.xlsx`, "الحضور والانصراف");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تصدير الحضور");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="marketing-page">
+      <MarketingPageHeader
+        title="الحضور والانصراف"
+        description="تسجيل حضور فريق التسويق ومتابعة Online / Idle / Offline والتأخير وساعات العمل."
+        actions={data?.canManage ? <button type="button" className="marketing-button" disabled={busy} onClick={() => void exportAttendance()}><DownloadSimple />تصدير XLSX</button> : undefined}
+      />
+      {error ? <MarketingAlert>{error}</MarketingAlert> : null}
+      {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
+      {loading && !data ? <MarketingLoading /> : null}
+
+      {data ? (
+        <>
+          <section className="marketing-attendance-hero">
+            <div>
+              <small>الوقت الحالي — {data.settings.timezone || "Asia/Riyadh"}</small>
+              <div className="marketing-attendance-clock">
+                {new Intl.DateTimeFormat("ar-SA", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                }).format(clock)}
+              </div>
+              <p>
+                الدوام: {String(data.settings.work_start).slice(0, 5)} — {String(data.settings.work_end).slice(0, 5)} · السماح {data.settings.grace_minutes} دقيقة
+              </p>
+            </div>
+            <div className="marketing-table-actions">
+              {!data.today?.checked_in_at ? (
+                <button className="marketing-button success" disabled={busy} onClick={() => void runAction("attendance_check_in")}>
+                  <SignIn /> تسجيل حضور
+                </button>
+              ) : !data.today.checked_out_at ? (
+                <button className="marketing-button danger" disabled={busy} onClick={() => void runAction("attendance_check_out")}>
+                  <SignOut /> تسجيل انصراف
+                </button>
+              ) : (
+                <span className="marketing-status status-completed">تم تسجيل اليوم</span>
+              )}
+            </div>
+          </section>
+
+          <section className="marketing-stats-grid">
+            <article className="marketing-stat"><div><small>الحاضرون</small><strong>{data.summary.present_users || 0}</strong></div><UserCheck size={30} /></article>
+            <article className="marketing-stat"><div><small>المتأخرون</small><strong>{data.summary.late_count || 0}</strong></div><WarningCircle size={30} /></article>
+            <article className="marketing-stat"><div><small>بدون انصراف</small><strong>{data.summary.no_checkout || 0}</strong></div><Clock size={30} /></article>
+            <article className="marketing-stat"><div><small>إجمالي ساعات العمل</small><strong>{workHours}</strong></div></article>
+          </section>
+
+          {data.canManage ? (
+            <section className="marketing-panel">
+              <div className="marketing-toolbar">
+                <label className="marketing-field"><span>من</span><input type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPage(1); }} /></label>
+                <label className="marketing-field"><span>إلى</span><input type="date" value={to} onChange={(event) => { setTo(event.target.value); setPage(1); }} /></label>
+                <label className="marketing-field">
+                  <span>الموظف</span>
+                  <select value={userId} onChange={(event) => { setUserId(event.target.value); setPage(1); }}>
+                    <option value="">كل الموظفين</option>
+                    {data.users.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}
+                  </select>
+                </label>
+                <label className="marketing-field">
+                  <span>الحالة</span>
+                  <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}>
+                    <option value="">الكل</option>
+                    <option value="present">حاضر</option>
+                    <option value="late">متأخر</option>
+                    <option value="no_checkout">بدون انصراف</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+          ) : null}
+
+          <section className="marketing-panel">
+            <div className="marketing-panel-head"><div><h2>{data.canManage ? "سجل الحضور" : "سجل اليوم"}</h2><p>{data.total} سجل</p></div></div>
+            {!data.rows.length ? (
+              <MarketingEmpty title="لا توجد سجلات" />
+            ) : (
+              <div className="marketing-table-wrap">
+                <table className="marketing-table">
+                  <thead><tr><th>الموظف</th><th>التاريخ</th><th>الحضور</th><th>الانصراف</th><th>التأخير</th><th>ساعات العمل</th><th>الحالة اللحظية</th><th>آخر ظهور</th></tr></thead>
+                  <tbody>
+                    {data.rows.map((row) => (
+                      <tr key={row.id}>
+                        <td><b>{row.full_name}</b><small style={{ display: "block" }}>{row.email || ""}</small></td>
+                        <td>{String(row.work_date).slice(0, 10)}</td>
+                        <td>{formatDate(row.checked_in_at, true)}</td>
+                        <td>{formatDate(row.checked_out_at, true)}</td>
+                        <td>{row.late_minutes || 0} دقيقة</td>
+                        <td>{Math.round((Number(row.work_minutes || 0) / 60) * 10) / 10}</td>
+                        <td><span className="marketing-chip"><i className={`marketing-presence-dot ${row.presence_status || "offline"}`} />{row.presence_status || "offline"}</span></td>
+                        <td>{formatDate(row.last_seen_at, true)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          {data.canManage ? <Pagination page={page} pageSize={pageSize} total={data.total} onChange={setPage} /> : null}
+        </>
+      ) : null}
+    </div>
+  );
+}

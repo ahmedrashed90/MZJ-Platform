@@ -4,6 +4,7 @@ import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
+import { cancelPhotographyRequest, nextPhotographyStage, transitionPhotographyRequest } from "./photography-requests.js";
 import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
 import {
   hasPermission,
@@ -329,7 +330,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
   const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
   const where = sql`
-    r.is_deleted=false and r.request_kind=${kind}
+    r.is_deleted=false and (${kind}='all' or r.request_kind=${kind})
     and (${status}='' or r.status=${status})
     and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
     and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
@@ -342,6 +343,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const rows = await sql<any[]>`
     select r.id::text,r.request_no,r.request_kind,r.status,r.note,r.requested_by::text,r.requested_by_name,r.requested_by_role,r.requested_by_branch,
       r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.cancelled_at,r.cancellation_reason,r.version,
+      r.photography_date,r.photography_location,r.marketing_campaign_id::text,
       sl.code as source_location_code,sl.name as source_location_name,dl.code as destination_location_code,dl.name as destination_location_name,
       coalesce(cars.vehicles_count,0)::int as vehicles_count,coalesce(cars.vehicles,'[]'::json) as vehicles,
       coalesce(events.events,'[]'::json) as events
@@ -496,18 +498,26 @@ async function dashboardRequests(sql: ReturnType<typeof getSql>, request: Vercel
     const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
     const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
     const where = sql`
-      r.is_deleted=false
+      r.request_kind='photography' and r.is_deleted=false
       and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
-        select 1 from operations.photography_request_vehicles px join operations.vehicles pv on pv.id=px.vehicle_id
-        where px.request_id=r.id and pv.vin ilike ${pattern}
+        select 1 from operations.transfer_request_vehicles px join operations.vehicles pv on pv.id=px.vehicle_id
+        where px.transfer_request_id=r.id and (pv.vin ilike ${pattern} or coalesce(pv.car_name,'') ilike ${pattern} or coalesce(pv.statement,'') ilike ${pattern})
       ))
-      and (${isAdmin}=true or r.requested_by_branch in ${sql(branches)} or r.requested_by=${user.id}::uuid)
+      and (${isAdmin}=true or r.source_branch_code in ${sql(branches)} or r.requested_by_branch in ${sql(branches)} or r.requested_by=${user.id}::uuid)
     `;
-    const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.photography_requests r where ${where}`;
+    const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.transfer_requests r where ${where}`;
     const rows = await sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by_name as creator_name,r.requested_at,r.photography_date,r.note,
-        coalesce(json_agg(json_build_object('vin',v.vin,'car_name',v.car_name,'statement',v.statement) order by v.vin) filter(where v.id is not null),'[]') as vehicles
-      from operations.photography_requests r left join operations.photography_request_vehicles rv on rv.request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id
+      select r.id::text,r.request_no,r.status,r.requested_by_name,r.requested_by_name as creator_name,r.requested_at,r.photography_date,r.photography_location,r.note,
+        coalesce(json_agg(json_build_object(
+          'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'model_year',v.model_year,
+          'interior_color',v.interior_color,'exterior_color',v.exterior_color,
+          'current_location_name',l.name,'current_status_name',coalesce(vs.name,v.status_code)
+        ) order by v.vin) filter(where v.id is not null),'[]') as vehicles
+      from operations.transfer_requests r
+      left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
+      left join operations.vehicles v on v.id=rv.vehicle_id
+      left join operations.locations l on l.id=v.location_id
+      left join operations.vehicle_statuses vs on vs.code=v.status_code
       where ${where}
       group by r.id order by r.requested_at desc limit 500
     `;
@@ -870,7 +880,7 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
       const [v] = await tx<any[]>`select v.*,v.id::text,l.branch_code,l.code as location_code from operations.vehicles v left join operations.locations l on l.id=v.location_id where v.id=${vehicleId}::uuid and v.is_deleted=false and v.archived_at is null for update of v`;
       if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", "إحدى السيارات غير موجودة");
       if (String(v.location_id) === destinationLocationId) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", `السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
-      const [active] = await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
+      const [active] = await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${vehicleId}::uuid and r.request_kind='transfer' and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
       if (active) throw new OperationError(409, "DUPLICATE_ACTIVE_REQUEST", `السيارة ${v.vin} مرتبطة بطلب نقل نشط ${active.request_no}`);
       if (!isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(v.branch_code || v.location_code)) throw new OperationError(403, "FORBIDDEN", `لا تملك صلاحية إنشاء طلب للسيارة ${v.vin}`);
       cars.push(v);
@@ -914,8 +924,8 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
   if (!id || !action) throw new OperationError(400, "VALIDATION_ERROR", "الطلب والإجراء مطلوبان");
   return sql.begin(async (tx) => {
     const [r] = await tx<any[]>`select *,id::text from operations.transfer_requests where id=${id}::uuid and is_deleted=false for update`;
-    if (!r) throw new OperationError(404, "CONFLICT", "طلب النقل غير موجود");
-    if (r.cancelled_at) throw new OperationError(409, "CONFLICT", "طلب النقل ملغي");
+    if (!r) throw new OperationError(404, "CONFLICT", "الطلب غير موجود");
+    if (r.cancelled_at) throw new OperationError(409, "CONFLICT", "الطلب ملغي");
     const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
     async function archiveEligibleItems() {
       const archivedVehicleIds: string[] = [];
@@ -924,6 +934,31 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
         if (archive.archived) archivedVehicleIds.push(item.id);
       }
       return archivedVehicleIds;
+    }
+    if (r.request_kind === "photography") {
+      const canManagePhotography = isSystemAdmin(user) || hasPermission(user, "operations.transfer.create") || hasPermission(user, "operations.transfer.complete");
+      if (!canManagePhotography) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية متابعة طلبات التصوير");
+      if (action === "delete") {
+        const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
+        if (r.status !== "photography_requested" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف طلب التصوير بعد بدء المتابعة. استخدم الإلغاء.");
+        await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${who.id}::uuid,updated_at=now() where id=${id}::uuid`;
+        await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'deleted',${reason || null},${who.id}::uuid,${who.name},${who.role},${who.branch},${tx.json({ request:r,items })})`;
+        return { ok: true, message: "تم حذف طلب التصوير قبل بدء التنفيذ" };
+      }
+      if (action === "cancel") {
+        if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
+        await cancelPhotographyRequest(tx, r, who, reason);
+        return { ok: true, message: "تم إلغاء طلب التصوير مع الحفاظ على السجل" };
+      }
+      const next = clean(body.nextStatus) || nextPhotographyStage(r.status);
+      if (!next) throw new OperationError(409, "CONFLICT", "طلب التصوير مكتمل بالفعل");
+      try {
+        await transitionPhotographyRequest(tx, r, next, who, clean(body.note) || null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "تعذر تحديث طلب التصوير";
+        throw new OperationError(409, "CONFLICT", message);
+      }
+      return { ok: true, message: next === "completed" ? "تم إنهاء طلب التصوير" : "تم تحديث مرحلة طلب التصوير" };
     }
     if (action === "delete") {
       if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "الحذف متاح لمنشئ الطلب أو صاحب الصلاحية فقط");

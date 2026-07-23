@@ -112,6 +112,9 @@ export type TransferRow = {
   completed_at?: string | null;
   cancelled_at?: string | null;
   cancellation_reason?: string | null;
+  photography_date?: string | null;
+  photography_location?: string | null;
+  marketing_campaign_id?: string | null;
   source_location_name?: string | null;
   destination_location_name?: string | null;
   vehicles_count: number;
