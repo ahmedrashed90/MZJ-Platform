@@ -38,6 +38,7 @@ import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
 import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-sales-order.js";
 import operationsHandler from "../server/operations/index.js";
+import marketingHandler from "../server/marketing/index.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
 
@@ -79,6 +80,7 @@ const routes = new Map<string, ApiHandler>([
   ["integrations/tracking/orders", trackingIntegrationHandler],
   ["integrations/erpnext/sales-order", erpNextSalesOrderIntegrationHandler],
   ["operations", operationsHandler],
+  ["marketing", marketingHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {

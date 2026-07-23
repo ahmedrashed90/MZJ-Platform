@@ -24,6 +24,25 @@ const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((modu
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
+const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
+const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
+const CampaignsPage = lazy(() => import("./marketing/pages/CampaignsPage").then((module) => ({ default: module.CampaignsPage })));
+const CreateCampaignPage = lazy(() => import("./marketing/pages/CreateCampaignPage").then((module) => ({ default: module.CreateCampaignPage })));
+const CreateAgendaPage = lazy(() => import("./marketing/pages/CreateAgendaPage").then((module) => ({ default: module.CreateAgendaPage })));
+const TasksPage = lazy(() => import("./marketing/pages/TasksPage").then((module) => ({ default: module.TasksPage })));
+const PublishPrepPage = lazy(() => import("./marketing/pages/PublishPrepPage").then((module) => ({ default: module.PublishPrepPage })));
+const PublishCalendarPage = lazy(() => import("./marketing/pages/PublishCalendarPage").then((module) => ({ default: module.PublishCalendarPage })));
+const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
+const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
+const PackagesPage = lazy(() => import("./marketing/pages/PackagesPage").then((module) => ({ default: module.PackagesPage })));
+const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
+const ReportsPage = lazy(() => import("./marketing/pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
+const ChecklistReelPage = lazy(() => import("./marketing/pages/ChecklistReelPage").then((module) => ({ default: module.ChecklistReelPage })));
+const LocalPublisherPage = lazy(() => import("./marketing/pages/LocalPublisherPage").then((module) => ({ default: module.LocalPublisherPage })));
+const PlatformConnectionsPage = lazy(() => import("./marketing/pages/PlatformConnectionsPage").then((module) => ({ default: module.PlatformConnectionsPage })));
+const PlatformSettingsPage = lazy(() => import("./marketing/pages/PlatformSettingsPage").then((module) => ({ default: module.PlatformSettingsPage })));
+const DepartmentsPage = lazy(() => import("./marketing/pages/DepartmentsPage").then((module) => ({ default: module.DepartmentsPage })));
+const PublicMzjPublishPage = lazy(() => import("./marketing/pages/PublicMzjPublishPage").then((module) => ({ default: module.PublicMzjPublishPage })));
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
 const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
@@ -53,7 +72,25 @@ function PlatformRoutes() {
             <Route path="kpi" element={<CrmKpiPage />} />
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
-          <Route path="/marketing" element={<EmptyModulePage title="التسويق" description="الحملات والأجندة والكرييتيف وجدول النشر والتقويم." />} />
+          <Route path="/marketing" element={<MarketingLayout />}>
+            <Route index element={<MarketingDashboardPage />} />
+            <Route path="campaigns" element={<CampaignsPage />} />
+            <Route path="campaigns/new" element={<CreateCampaignPage />} />
+            <Route path="agendas/new" element={<CreateAgendaPage />} />
+            <Route path="tasks" element={<TasksPage />} />
+            <Route path="publish-prep" element={<PublishPrepPage />} />
+            <Route path="calendar" element={<PublishCalendarPage />} />
+            <Route path="receipt-calendar" element={<ReceiptCalendarPage />} />
+            <Route path="stock" element={<StockPage />} />
+            <Route path="packages" element={<PackagesPage />} />
+            <Route path="attendance" element={<AttendancePage />} />
+            <Route path="reports" element={<ReportsPage />} />
+            <Route path="checklist-reel" element={<ChecklistReelPage />} />
+            <Route path="local-publisher" element={<LocalPublisherPage />} />
+            <Route path="platforms" element={<PlatformConnectionsPage />} />
+            <Route path="platform-settings" element={<PlatformSettingsPage />} />
+            <Route path="departments" element={<DepartmentsPage />} />
+          </Route>
           <Route path="/operations" element={<OperationsLayout />}>
             <Route index element={<InventoryPage />} />
             <Route path="manage" element={<VehicleManagementPage />} />
@@ -85,8 +122,18 @@ export default function App() {
   const { loading, status, user } = useAuth();
   const location = useLocation();
   const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
+  const publicPublishPaths = ["/mzj-publish", "/mzj-publish/privacy-policy", "/mzj-publish/terms-of-service", "/mzj-publish/data-deletion"];
+  const isPublicPublish = publicPublishPaths.includes(location.pathname);
 
   if (loading) return <PlatformLoadingPage />;
+  if (isPublicPublish) {
+    const page = location.pathname.endsWith("privacy-policy") ? "privacy" : location.pathname.endsWith("terms-of-service") ? "terms" : location.pathname.endsWith("data-deletion") ? "deletion" : "home";
+    return (
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل MZJ Publish...</div>}>
+        <PublicMzjPublishPage page={page} />
+      </Suspense>
+    );
+  }
   if (isPublicTracking) {
     return (
       <Suspense fallback={<div className="crm-loading-panel">جاري تحميل صفحة التتبع...</div>}>

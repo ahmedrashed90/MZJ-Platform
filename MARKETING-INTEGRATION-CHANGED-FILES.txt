@@ -1,0 +1,50 @@
+MZJ MARKETING NATIVE INTEGRATION - CHANGED FILES
+
+MODIFIED INTEGRATION POINTS
+.env.example
+  Added server-side marketing/OAuth/agent environment placeholders only.
+api/index.ts
+  Registered the isolated marketing API handler.
+database/schema.sql
+  Appended additive marketing schema, publisher runtime, and publish reconciliation SQL.
+package.json
+  Added check:marketing and included it in typecheck.
+server/_schema.ts
+  Added marketing DDL and seeds for fresh platform initialization.
+src/App.tsx
+  Replaced the marketing placeholder with lazy routes and added public MZJ Publish routes.
+src/components/Sidebar.tsx
+  Added marketing visibility condition without changing other system conditions.
+src/pages/SettingsPage.tsx
+  Replaced the marketing settings placeholder with MarketingSettingsPanel.
+
+NEW DATABASE FILES
+database/migrations/20260723_marketing_native_phase1.sql
+database/migrations/20260723_marketing_publisher_runtime.sql
+database/migrations/20260723_marketing_publish_reconciliation.sql
+
+NEW BACKEND TREE
+server/marketing/**
+  Isolated auth, campaign/agenda transaction flow, exact task pairs, task workflow, secure R2 task files, publishing preparation, calendars, attendance, packages, stock read-only adapter, reports, settings, and publisher device runtime.
+
+NEW FRONTEND TREE
+src/marketing/**
+  Native marketing layout, pages, components, API client, secure file upload/download flow, domain labels, settings panel, and isolated CSS.
+
+NEW PUBLIC ASSETS
+public/mzj-publish/mzj-publish-icon.png
+
+NEW LOCAL AGENT
+marketing-publisher-agent/**
+
+NEW CHECK
+scripts/check-marketing-native.mjs
+
+NEW DELIVERY DOCUMENTS
+MARKETING-INTEGRATION-ARCHITECTURE.md
+MARKETING-INTEGRATION-CHANGED-FILES.txt
+MARKETING-INTEGRATION-DEPLOYMENT.md
+MARKETING-INTEGRATION-REGRESSION-REPORT.md
+MARKETING-INTEGRATION-TEST-RESULTS.txt
+MARKETING-INTEGRATION-STATIC-CHECKS.log
+MARKETING-INTEGRATION-FINAL-DIFF.txt

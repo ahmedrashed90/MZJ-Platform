@@ -1,0 +1,36 @@
+MZJ MARKETING NATIVE INTEGRATION - TEST RESULTS
+Date: 2026-07-23
+
+PASS
+- scripts/check-marketing-native.mjs
+- scripts/check-api-imports.mjs
+- All existing static CRM checks in package.json
+- All existing static Operations checks in package.json
+- All existing static Tracking checks in package.json
+- Existing Worker/API route checks
+- Marketing TypeScript/TSX syntax transpilation
+- Marketing pair-key and progress unit assertions
+- Local publisher agent node --check
+- Secure task-file source checks: Presigned upload/download routes exist and placeholder pending-upload paths are absent
+- Forbidden runtime scan: no Firebase, Firestore, merged-patches.js, iframe, localStorage token storage, or MutationObserver inside marketing module
+- Read-only scan: no UPDATE/INSERT/DELETE against operations tables from marketing server code
+- Protected diff scan: no CRM/Operations/Tracking implementation file changed
+
+NOT EXECUTED IN THIS ENVIRONMENT
+- pnpm install --frozen-lockfile
+- pnpm run typecheck (full tsc -b)
+- pnpm run build
+- PostgreSQL migration execution against a real database
+- Browser E2E tests
+- Real R2 upload through deployed CORS
+- OAuth and real publishing tests
+- XLSX content parsing tests
+- Local Agent large-media upload / FFmpeg render tests
+
+Reason:
+The execution environment could not reach registry.npmjs.org. Corepack failed with EAI_AGAIN while attempting to download pnpm 9.15.9, including offline mode. Therefore no claim is made that the full dependency-based build passed.
+
+Evidence:
+- Full static check output: MARKETING-INTEGRATION-STATIC-CHECKS.log
+- Marketing check: node scripts/check-marketing-native.mjs
+- Agent check: npm --prefix marketing-publisher-agent run check
