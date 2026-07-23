@@ -74,7 +74,7 @@ const requiredText = [
   ["src/marketing/pages/PublishPrepPage.tsx", "كل التاسكات"],
   ["src/marketing/pages/PublishPrepPage.tsx", "بانتظار التاريخ"],
   ["src/marketing/pages/PublishPrepPage.tsx", "نشر المحدد الآن"],
-  ["src/marketing/MarketingLayout.tsx", "meta.access[item.access]"],
+  ["src/marketing/MarketingLayout.tsx", "currentMeta.access[item.access]"],
   ["src/marketing/settings/MarketingSettingsPanel.tsx", "أرقام عملاء واتساب"],
   ["database/migrations/20260723_marketing_full_native_rebuild.sql", "use_saved_contacts boolean"],
   ["database/migrations/20260723_marketing_full_native_rebuild.sql", "alter table operations.transfer_requests add column if not exists request_kind"],

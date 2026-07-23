@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import {
   CalendarBlank,
@@ -60,7 +60,6 @@ export function MarketingLayout() {
   }
 
   useEffect(() => { void loadMeta(); }, []);
-  const value = useMemo(() => meta ? { meta, reloadMeta: loadMeta } : null, [meta]);
 
   async function checkInFromReminder() {
     setAttendanceBusy(true);
@@ -77,13 +76,16 @@ export function MarketingLayout() {
   }
 
   if (loading && !meta) return <MarketingLoading label="جاري تجهيز نظام التسويق..." />;
-  if (!value) return <MarketingAlert>{error || "تعذر فتح نظام التسويق"}</MarketingAlert>;
+  if (!meta) return <MarketingAlert>{error || "تعذر فتح نظام التسويق"}</MarketingAlert>;
+
+  const currentMeta = meta;
+  const contextValue = { meta: currentMeta, reloadMeta: loadMeta };
 
   return (
-    <MarketingContext.Provider value={value}>
+    <MarketingContext.Provider value={contextValue}>
       <div className="marketing-module" dir="rtl">
         <nav className="marketing-tabs" aria-label="صفحات نظام التسويق">
-          {navigation.filter((item) => meta.access[item.access]).map(({ to, label, icon: Icon, end }) => (
+          {navigation.filter((item) => currentMeta.access[item.access]).map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? "active" : ""}>
               <Icon size={18} weight="duotone" /><span>{label}</span>
             </NavLink>
@@ -92,9 +94,9 @@ export function MarketingLayout() {
         {error ? <MarketingAlert>{error}</MarketingAlert> : null}
         <Outlet />
         <MarketingModal
-          open={Boolean(meta.attendanceReminder?.required && !attendanceDismissed)}
+          open={Boolean(currentMeta.attendanceReminder.required && !attendanceDismissed)}
           title="تسجيل الحضور"
-          subtitle={`الدوام ${String(meta.attendanceReminder?.workStart || "16:00").slice(0, 5)} — ${String(meta.attendanceReminder?.workEnd || "21:00").slice(0, 5)}`}
+          subtitle={`الدوام ${String(currentMeta.attendanceReminder.workStart || "16:00").slice(0, 5)} — ${String(currentMeta.attendanceReminder.workEnd || "21:00").slice(0, 5)}`}
           onClose={() => setAttendanceDismissed(true)}
           footer={<><button type="button" className="marketing-button" onClick={() => setAttendanceDismissed(true)}>لاحقًا</button><button type="button" className="marketing-button primary" disabled={attendanceBusy} onClick={() => void checkInFromReminder()}>{attendanceBusy ? "جاري التسجيل..." : "تسجيل الحضور الآن"}</button></>}
         >

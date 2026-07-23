@@ -1,6 +1,6 @@
 MZJ Marketing Migration Fix Report
 Date: 2026-07-23
-Source version: 1.18.1
+Source version: 1.18.2
 
 ROOT CAUSE
 - An older, now-excluded Local Publisher migration had already created marketing.publish_jobs with a different schema.
@@ -28,4 +28,4 @@ USER ACTION
 2. Do not rerun the old SQL file.
 3. Use database/migrations/20260723_marketing_full_native_rebuild.sql from source v1.18.1.
 4. Confirm the final result is COMMIT.
-5. Deploy source v1.18.1 only after the SQL succeeds.
+5. Deploy source v1.18.2 only after the SQL succeeds.

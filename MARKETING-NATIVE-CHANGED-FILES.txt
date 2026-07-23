@@ -158,3 +158,14 @@ v1.18.1 migration correction
 - package.json: version 1.18.1 and migration checker in typecheck chain.
 - MARKETING-NATIVE-DEPLOYMENT.md: documented ROLLBACK and canonical migration execution order.
 - MARKETING-MIGRATION-FIX-REPORT.txt: documented root cause and verified correction.
+
+
+v1.18.2 canonical TypeScript model correction
+---------------------------------------------
+- src/marketing/MarketingLayout.tsx: use a stable non-null meta value after the loading guard, so route visibility and attendance reminder share one proven MarketingMeta instance.
+- src/marketing/pages/MarketingDashboardPage.tsx: replace the invalid ArchiveBox icon with the package-supported Archive icon and define DashboardCampaign by omitting/replacing the departments projection instead of intersecting incompatible API shapes.
+- src/marketing/settings/MarketingSettingsPanel.tsx: normalize all catalog API records into one explicit CatalogItemRow view model and validate owner-color settings before using them.
+- scripts/check-marketing-full-native-rebuild.mjs: align the structural assertion with the stable currentMeta access expression without weakening the permission check.
+- package.json: version 1.18.2.
+
+No CRM, Tracking, Operations business logic, database migration, or publishing workflow file was changed in this correction.

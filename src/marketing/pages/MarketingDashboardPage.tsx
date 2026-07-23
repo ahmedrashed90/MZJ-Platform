@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  ArchiveBox,
+  Archive,
   Bell,
   CalendarBlank,
   Car,
@@ -31,7 +31,7 @@ import {
 import { CampaignDetailView } from "../components/CampaignDetailView";
 import { TaskDetailView } from "../components/TaskDetailView";
 
-type DashboardCampaign = CampaignRow & {
+type DashboardCampaign = Omit<CampaignRow, "departments"> & {
   task_count: number;
   started_count: number;
   completed_count: number;
@@ -178,7 +178,7 @@ export function MarketingDashboardPage() {
         <section className="marketing-flow-column required"><header><div><CheckCircle size={21} /><h2>TASK - المطلوب</h2></div><span>{data.adminTasks.length}</span><p>كل تاسكات الحملات، القسم، المسؤول، الاستلام والتقدم.</p></header><div className="marketing-flow-column-body">{groupTasksByDepartment(data.adminTasks).map(([department, tasks]) => <details key={department} open className="marketing-dashboard-department-group"><summary><DepartmentBadge code={department} /><span>{tasks.length} تاسك</span></summary><div>{tasks.map((task) => <TaskCard compact key={task.id} task={task} ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} />)}</div></details>)}{!data.adminTasks.length ? <MarketingEmpty title="لا توجد تاسكات" /> : null}</div></section>
         <section className="marketing-flow-column readiness"><header><div><Megaphone size={21} /><h2>جاهزية المطلوب</h2></div><span>{readinessCampaigns.length}</span><p>تقدم الحملة محسوب من متوسط الأقسام المتساوي.</p></header><div className="marketing-flow-column-body">{readinessCampaigns.map((campaign) => <CampaignReadinessCard key={campaign.id} campaign={campaign} onOpen={setSelectedCampaignId} />)}{!readinessCampaigns.length ? <MarketingEmpty title="لا توجد حملات في جاهزية المطلوب" /> : null}</div></section>
         <section className="marketing-flow-column publishing"><header><div><RocketLaunch size={21} /><h2>قسم النشر</h2></div><span>{publishingCampaigns.length}</span><p>الحملات التي تم نقلها يدويًا بعد اكتمال الجاهزية.</p></header><div className="marketing-flow-column-body">{publishingCampaigns.map((campaign) => <CampaignReadinessCard key={campaign.id} campaign={campaign} onOpen={setSelectedCampaignId} />)}{!publishingCampaigns.length ? <MarketingEmpty title="قسم النشر ينتظر نقل الحملات الجاهزة" /> : null}</div></section>
-        <section className="marketing-flow-column archive"><header><div><ArchiveBox size={21} /><h2>قسم الأرشيف</h2></div><span>{data.archiveTasks.length}</span><p>التاسكات المنتهية مع بقاء تفاصيلها وملفاتها.</p></header><div className="marketing-flow-column-body">{data.archiveTasks.map((task) => <TaskCard compact key={task.id} task={task} ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} />)}{!data.archiveTasks.length ? <MarketingEmpty title="لا يوجد أرشيف" /> : null}</div></section>
+        <section className="marketing-flow-column archive"><header><div><Archive size={21} /><h2>قسم الأرشيف</h2></div><span>{data.archiveTasks.length}</span><p>التاسكات المنتهية مع بقاء تفاصيلها وملفاتها.</p></header><div className="marketing-flow-column-body">{data.archiveTasks.map((task) => <TaskCard compact key={task.id} task={task} ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} />)}{!data.archiveTasks.length ? <MarketingEmpty title="لا يوجد أرشيف" /> : null}</div></section>
       </section> : <section className="marketing-user-flow-section">
         <div className="marketing-user-flow-toolbar"><div><h2>لوحة التاسكات</h2><p>التاسكات المسندة لك فقط، مجمعة حسب الحملة في الجديد وجاري العمل.</p></div><button type="button" className={`marketing-button${showCompleted ? " primary" : ""}`} onClick={() => setShowCompleted((value) => !value)}>{showCompleted ? "إخفاء التاسكات المنتهية" : "التاسكات المنتهية"}</button></div>
         {showCompleted ? <section className="marketing-user-kanban single"><UserColumn title="التاسكات المنتهية" tasks={userBuckets.done} groupByCampaign={false} ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} /></section> : <section className="marketing-user-kanban"><UserColumn title="جديد / لم يتم الاستلام" tasks={userBuckets.new} groupByCampaign ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} /><UserColumn title="تم الاستلام / جاري العمل" tasks={userBuckets.work} groupByCampaign ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} /><UserColumn title="في المراجعة" tasks={userBuckets.review} groupByCampaign={false} ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} /><UserColumn title="محتاج تعديل" tasks={userBuckets.changes} groupByCampaign={false} ownerColors={meta.ownerColors} onOpen={setSelectedTaskId} /></section>}
