@@ -108,8 +108,11 @@ requireTokens("settings API", settingsApi, [
   "once_24_hours",
   "custom_duration",
   "platformCompatible",
-  "is_archived=false",
+  "to_jsonb(c)->>'is_archived'",
   "is_archived=true",
+  "join crm.automation_choices c on c.id=r.choice_id",
+  "join crm.automation_steps s on s.id=o.step_id",
+  "databaseReadError",
   "normalizeAutomationSettings",
   "normalizeAutomationEndpoints",
   "AutomationSettingsResponse",
@@ -121,6 +124,13 @@ forbidTokens("settings API request contract", settingsApi, [
   "body.settings",
   "automation.start_messages",
   "automation.trigger_policy",
+]);
+forbidTokens("settings API database coupling", settingsApi, [
+  "select *",
+  "=any(",
+  "e.text_send_url",
+  "created_by::text",
+  "updated_by::text",
 ]);
 requireTokens("shared automation contract", contract, [
   "export type AutomationSettings",

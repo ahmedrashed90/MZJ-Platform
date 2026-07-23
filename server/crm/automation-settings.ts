@@ -7,9 +7,27 @@ import {
   type AutomationSettingsResponse,
 } from "../../shared/crmAutomationContract.js";
 
-function list(value: unknown): any[] { return Array.isArray(value) ? value : []; }
-function record(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
-function bool(value: unknown, fallback = false) { return value == null ? fallback : value === true || ["1", "true", "yes", "on"].includes(clean(value).toLowerCase()); }
+type DbRow = Record<string, unknown>;
+type AutomationSettingsRows = {
+  definition: DbRow;
+  platforms: DbRow[];
+  startMessages: DbRow[];
+  choices: Array<DbRow & { replies: DbRow[]; steps: Array<DbRow & { options: DbRow[] }> }>;
+  endpoints: DbRow[];
+};
+
+function list(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+function rows(value: unknown): DbRow[] {
+  return list(value).filter((item): item is DbRow => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+}
+function record(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+function bool(value: unknown, fallback = false) {
+  return value == null ? fallback : value === true || ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+}
 function integer(value: unknown, fallback: number, min = 0, max = 1000000) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.round(parsed))) : fallback;
@@ -25,55 +43,184 @@ function platformCompatible(sourceCode: string, workerCode: string) {
   if (source === "whatsapp") return ["whatsapp", "mersal"].includes(worker);
   return source === worker;
 }
+function databaseReadError(error: unknown) {
+  const input = record(error);
+  const errorCode = clean(input.code);
+  console.error("CRM automation settings read failed", {
+    code: errorCode || undefined,
+    message: clean(input.message) || undefined,
+  });
+  if (["42P01", "42703"].includes(errorCode)) {
+    return `هيكل جداول إعدادات الأوتوميشن غير مطابق للسورس الحالي${errorCode ? ` (${errorCode})` : ""}`;
+  }
+  return `تعذر قراءة إعدادات الأوتوميشن من قاعدة البيانات${errorCode ? ` (${errorCode})` : ""}`;
+}
 
-async function readSettingsRows(sql: any) {
-  const [definition] = await sql<any[]>`select *,id::text,created_by::text,updated_by::text from crm.automation_definitions where code='default_customer_entry' limit 1`;
+/**
+ * Reads one canonical automation contract from PostgreSQL.
+ *
+ * Deliberately avoids SELECT *, optional-column references, and JavaScript UUID
+ * arrays. Optional operational fields are read through to_jsonb so the settings
+ * page stays compatible with the authoritative v1.18.0 tables without another
+ * migration or a database-side patch.
+ */
+export async function readSettingsRows(sql: ReturnType<typeof getSql>): Promise<AutomationSettingsRows | null> {
+  const [definition] = await sql<DbRow[]>`
+    select
+      d.id::text as id,
+      d.code,
+      d.name,
+      d.is_active,
+      d.trigger_policy,
+      d.trigger_interval_seconds,
+      coalesce(nullif(to_jsonb(d)->>'version','')::integer,1) as version
+    from crm.automation_definitions d
+    where d.code='default_customer_entry'
+    limit 1
+  `;
   if (!definition) return null;
 
-  const [platforms, startMessages, choices, endpoints] = await Promise.all([
-    sql<any[]>`
-      select p.*,p.id::text,p.automation_id::text,e.display_name as worker_name,e.is_active as worker_is_active,
-        coalesce(e.text_send_url,e.send_url) as worker_send_url,e.health_url,e.updated_at as worker_updated_at
+  const automationId = clean(definition.id);
+  const [platforms, startMessages, choices, replies, steps, options, endpoints] = await Promise.all([
+    sql<DbRow[]>`
+      select
+        p.id::text as id,
+        p.automation_id::text as automation_id,
+        p.source_code,
+        p.worker_code,
+        p.is_enabled,
+        coalesce(to_jsonb(p)->>'last_health_status','') as last_health_status,
+        coalesce(to_jsonb(p)->>'last_health_at','') as last_health_at,
+        coalesce(to_jsonb(p)->>'last_success_at','') as last_success_at,
+        coalesce(to_jsonb(p)->>'last_error','') as last_error,
+        coalesce(e.display_name,'') as worker_name,
+        coalesce(e.is_active,false) as worker_is_active,
+        coalesce(nullif(to_jsonb(e)->>'text_send_url',''),nullif(to_jsonb(e)->>'send_url',''),'') as worker_send_url,
+        coalesce(e.health_url,'') as health_url
       from crm.automation_platforms p
       left join crm.integration_endpoints e on e.source_code=p.worker_code
-      where p.automation_id=${definition.id}::uuid order by p.source_code
+      where p.automation_id=${automationId}::uuid
+      order by p.source_code
     `,
-    sql<any[]>`select *,id::text,automation_id::text from crm.automation_start_messages where automation_id=${definition.id}::uuid and is_archived=false order by sort_order,id`,
-    sql<any[]>`select *,id::text,automation_id::text from crm.automation_choices where automation_id=${definition.id}::uuid and is_archived=false order by sort_order,id`,
-    sql<any[]>`select source_code,display_name,is_active,coalesce(text_send_url,send_url) as send_url,health_url,updated_at from crm.integration_endpoints order by display_name`,
+    sql<DbRow[]>`
+      select
+        m.id::text as id,
+        m.automation_id::text as automation_id,
+        m.message_code,
+        m.body,
+        m.sort_order,
+        m.is_active
+      from crm.automation_start_messages m
+      where m.automation_id=${automationId}::uuid
+        and coalesce(nullif(to_jsonb(m)->>'is_archived','')::boolean,false)=false
+      order by m.sort_order,m.id
+    `,
+    sql<DbRow[]>`
+      select
+        c.id::text as id,
+        c.automation_id::text as automation_id,
+        c.choice_code,
+        c.display_name,
+        c.emoji,
+        c.department_code,
+        c.service_key,
+        c.branch_policy,
+        c.branch_code,
+        c.final_action,
+        c.final_message,
+        c.sort_order,
+        c.is_active
+      from crm.automation_choices c
+      where c.automation_id=${automationId}::uuid
+        and coalesce(nullif(to_jsonb(c)->>'is_archived','')::boolean,false)=false
+      order by c.sort_order,c.id
+    `,
+    sql<DbRow[]>`
+      select
+        r.id::text as id,
+        r.choice_id::text as choice_id,
+        r.reply_type,
+        r.reply_value
+      from crm.automation_choice_replies r
+      join crm.automation_choices c on c.id=r.choice_id
+      where c.automation_id=${automationId}::uuid
+        and coalesce(nullif(to_jsonb(c)->>'is_archived','')::boolean,false)=false
+      order by c.sort_order,r.id
+    `,
+    sql<DbRow[]>`
+      select
+        s.id::text as id,
+        s.choice_id::text as choice_id,
+        s.step_code,
+        s.name,
+        s.prompt,
+        s.step_type,
+        s.customer_field_key,
+        s.is_required,
+        s.validation_rules,
+        s.validation_error_message,
+        s.max_attempts,
+        s.sort_order,
+        s.is_active
+      from crm.automation_steps s
+      join crm.automation_choices c on c.id=s.choice_id
+      where c.automation_id=${automationId}::uuid
+        and coalesce(nullif(to_jsonb(c)->>'is_archived','')::boolean,false)=false
+        and coalesce(nullif(to_jsonb(s)->>'is_archived','')::boolean,false)=false
+      order by c.sort_order,s.sort_order,s.id
+    `,
+    sql<DbRow[]>`
+      select
+        o.id::text as id,
+        o.step_id::text as step_id,
+        o.option_code,
+        o.label,
+        o.accepted_replies,
+        o.sort_order,
+        o.is_active
+      from crm.automation_step_options o
+      join crm.automation_steps s on s.id=o.step_id
+      join crm.automation_choices c on c.id=s.choice_id
+      where c.automation_id=${automationId}::uuid
+        and coalesce(nullif(to_jsonb(c)->>'is_archived','')::boolean,false)=false
+        and coalesce(nullif(to_jsonb(s)->>'is_archived','')::boolean,false)=false
+      order by c.sort_order,s.sort_order,o.sort_order,o.id
+    `,
+    sql<DbRow[]>`
+      select
+        e.source_code,
+        e.display_name,
+        e.is_active,
+        coalesce(nullif(to_jsonb(e)->>'text_send_url',''),nullif(to_jsonb(e)->>'send_url',''),'') as send_url,
+        coalesce(e.health_url,'') as health_url,
+        coalesce(to_jsonb(e)->>'updated_at','') as updated_at
+      from crm.integration_endpoints e
+      order by e.display_name
+    `,
   ]);
 
-  const safeChoices = list(choices);
-  const choiceIds = safeChoices.map((item: any) => item.id).filter(Boolean);
-  const replies = choiceIds.length
-    ? await sql<any[]>`select *,id::text,choice_id::text from crm.automation_choice_replies where choice_id=any(${choiceIds}::uuid[]) order by created_at,id`
-    : [];
-  const steps = choiceIds.length
-    ? await sql<any[]>`select *,id::text,choice_id::text from crm.automation_steps where choice_id=any(${choiceIds}::uuid[]) and is_archived=false order by sort_order,id`
-    : [];
-  const safeSteps = list(steps);
-  const stepIds = safeSteps.map((item: any) => item.id).filter(Boolean);
-  const options = stepIds.length
-    ? await sql<any[]>`select *,id::text,step_id::text from crm.automation_step_options where step_id=any(${stepIds}::uuid[]) order by sort_order,id`
-    : [];
-
+  const safeReplies = rows(replies);
+  const safeSteps = rows(steps);
+  const safeOptions = rows(options);
   return {
     definition,
-    platforms: list(platforms),
-    startMessages: list(startMessages),
-    choices: safeChoices.map((choice: any) => ({
+    platforms: rows(platforms),
+    startMessages: rows(startMessages),
+    choices: rows(choices).map((choice) => ({
       ...choice,
-      replies: list(replies).filter((item: any) => item.choice_id === choice.id),
-      steps: safeSteps.filter((step: any) => step.choice_id === choice.id).map((step: any) => ({
-        ...step,
-        options: list(options).filter((item: any) => item.step_id === step.id),
-      })),
+      replies: safeReplies.filter((reply) => clean(reply.choice_id) === clean(choice.id)),
+      steps: safeSteps
+        .filter((step) => clean(step.choice_id) === clean(choice.id))
+        .map((step) => ({
+          ...step,
+          options: safeOptions.filter((option) => clean(option.step_id) === clean(step.id)),
+        })),
     })),
-    endpoints: list(endpoints),
+    endpoints: rows(endpoints),
   };
 }
 
-function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows>>>, message?: string): AutomationSettingsResponse {
+export function toResponse(rows: AutomationSettingsRows, message?: string): AutomationSettingsResponse {
   const definition = rows.definition;
   const automation = normalizeAutomationSettings({
     id: definition.id,
@@ -83,7 +230,7 @@ function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows
     triggerPolicy: definition.trigger_policy,
     triggerIntervalSeconds: definition.trigger_interval_seconds,
     version: definition.version,
-    platforms: rows.platforms.map((item: any) => ({
+    platforms: rows.platforms.map((item) => ({
       id: item.id,
       sourceCode: item.source_code,
       workerCode: item.worker_code,
@@ -97,13 +244,13 @@ function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows
       lastSuccessAt: item.last_success_at,
       lastError: item.last_error,
     })),
-    startMessages: rows.startMessages.map((item: any) => ({
+    startMessages: rows.startMessages.map((item) => ({
       id: item.id,
       messageCode: item.message_code,
       body: item.body,
       isActive: item.is_active,
     })),
-    choices: rows.choices.map((choice: any) => ({
+    choices: rows.choices.map((choice) => ({
       id: choice.id,
       choiceCode: choice.choice_code,
       displayName: choice.display_name,
@@ -115,12 +262,12 @@ function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows
       finalAction: choice.final_action,
       finalMessage: choice.final_message,
       isActive: choice.is_active,
-      replies: list(choice.replies).map((reply: any) => ({
+      replies: choice.replies.map((reply) => ({
         id: reply.id,
         replyType: reply.reply_type,
         replyValue: reply.reply_value,
       })),
-      steps: list(choice.steps).map((step: any) => ({
+      steps: choice.steps.map((step) => ({
         id: step.id,
         stepCode: step.step_code,
         name: step.name,
@@ -132,7 +279,7 @@ function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows
         validationErrorMessage: step.validation_error_message,
         maxAttempts: step.max_attempts,
         isActive: step.is_active,
-        options: list(step.options).map((option: any) => ({
+        options: step.options.map((option) => ({
           id: option.id,
           optionCode: option.option_code,
           label: option.label,
@@ -146,7 +293,7 @@ function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows
   return {
     ok: true,
     automation,
-    endpoints: normalizeAutomationEndpoints(rows.endpoints.map((item: any) => ({
+    endpoints: normalizeAutomationEndpoints(rows.endpoints.map((item) => ({
       sourceCode: item.source_code,
       displayName: item.display_name,
       isActive: item.is_active,
@@ -158,16 +305,20 @@ function toResponse(rows: NonNullable<Awaited<ReturnType<typeof readSettingsRows
   };
 }
 
-export default async function handler(request: VercelRequest, response: VercelResponse) {
+async function handleRequest(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
   if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إعدادات الأوتوميشن متاحة لإدارة CRM فقط" });
   const sql = getSql();
 
   if (request.method === "GET") {
-    const rows = await readSettingsRows(sql);
-    if (!rows) return response.status(409).json({ ok: false, error: "تعريف الأوتوميشن غير موجود في قاعدة البيانات الحالية" });
-    return response.status(200).json(toResponse(rows));
+    try {
+      const rows = await readSettingsRows(sql);
+      if (!rows) return response.status(409).json({ ok: false, error: "تعريف الأوتوميشن غير موجود في قاعدة البيانات الحالية" });
+      return response.status(200).json(toResponse(rows));
+    } catch (error) {
+      return response.status(500).json({ ok: false, error: databaseReadError(error) });
+    }
   }
   if (!["POST", "PUT", "PATCH"].includes(request.method || "")) return response.status(405).json({ ok: false, error: "Method not allowed" });
 
@@ -265,12 +416,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       await sql.begin(async (tx: any) => {
         const [definition] = await tx<any[]>`
           update crm.automation_definitions set name=${name},is_active=${bool(automation.isActive, true)},
-            trigger_policy=${triggerPolicy},trigger_interval_seconds=${triggerIntervalSeconds},version=version+1,updated_by=${user.id}::uuid,updated_at=now()
-          where code='default_customer_entry' returning *,id::text
+            trigger_policy=${triggerPolicy},trigger_interval_seconds=${triggerIntervalSeconds},version=version+1,updated_at=now()
+          where code='default_customer_entry' returning id::text as id
         `;
         if (!definition) throw new Error("تعريف الأوتوميشن الافتراضي غير موجود");
 
-        const endpointRows = list(await tx<any[]>`select source_code,is_active,coalesce(text_send_url,send_url) as send_url from crm.integration_endpoints`);
+        const endpointRows = rows(await tx`
+          select source_code,is_active,
+            coalesce(nullif(to_jsonb(e)->>'text_send_url',''),nullif(to_jsonb(e)->>'send_url',''),'') as send_url
+          from crm.integration_endpoints e
+        `);
         const endpointMap = new Map(endpointRows.map((row: any) => [clean(row.source_code).toLowerCase(), row]));
         for (const platform of platforms) {
           if (!platformCompatible(platform.sourceCode, platform.workerCode)) throw new Error(`لا يمكن ربط Worker ${platform.workerCode || "غير محدد"} بمنصة ${platform.sourceCode}`);
@@ -336,5 +491,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json(result);
   } catch (error: any) {
     return response.status(400).json({ ok: false, error: error?.message || "تعذر التحقق من إعدادات الأوتوميشن" });
+  }
+}
+
+
+export default async function handler(request: VercelRequest, response: VercelResponse) {
+  try {
+    return await handleRequest(request, response);
+  } catch (error) {
+    if (response.headersSent) return;
+    return response.status(500).json({ ok: false, error: databaseReadError(error) });
   }
 }
