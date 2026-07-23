@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, CheckCircle, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, Camera, CheckCircle, PencilSimple, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { OperationsVehiclePicker } from "../components/OperationsVehiclePicker";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "../components/ResizableOperationsTable";
@@ -12,16 +12,29 @@ const stageLabels: Record<string, string> = { request_received: "تم استلا
 const nextStage: Record<string, string> = { request_received: "vehicle_sent", vehicle_sent: "vehicle_received", vehicle_received: "completed" };
 
 type TransferVehicle = TransferRow["vehicles"][number];
+type PhotographyRequestRow = {
+  id: string;
+  request_no: string | null;
+  status: string;
+  creator_name: string | null;
+  requested_at: string;
+  photography_date: string | null;
+  note: string | null;
+  vehicles: Array<{ vin: string; car_name: string | null; statement: string | null }>;
+};
 
 export function TransferRequestsPage() {
   const { meta } = useOperations();
-  const [tab, setTab] = useState<"create" | "active" | "completed">("create");
+  const [tab, setTab] = useState<"create" | "active" | "completed" | "photo">("create");
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<VehicleRow[]>([]);
   const [selectedCars, setSelectedCars] = useState<VehicleRow[]>([]);
   const [destinationLocationId, setDestinationLocationId] = useState("");
   const [note, setNote] = useState("");
   const [rows, setRows] = useState<TransferRow[]>([]);
+  const [photoRows, setPhotoRows] = useState<PhotographyRequestRow[]>([]);
+  const [editingPhoto, setEditingPhoto] = useState<PhotographyRequestRow | null>(null);
+  const [photoForm, setPhotoForm] = useState({ status: "request_received", photographyDate: "", note: "" });
   const [selected, setSelected] = useState<TransferRow | null>(null);
   const [confirmAction, setConfirmAction] = useState<"cancel" | "delete" | null>(null);
   const [reason, setReason] = useState("");
@@ -48,11 +61,18 @@ export function TransferRequestsPage() {
     setLoading(true);
     setError("");
     try {
-      const payload = await operationsFetch<{ rows: TransferRow[] }>(`/api/operations${queryString({ resource: "transfers", kind: "transfer", completed: tab === "completed", pageSize: 200 })}`);
-      setRows(payload.rows);
-      if (selected) setSelected(payload.rows.find((row) => row.id === selected.id) || null);
+      if (tab === "photo") {
+        const payload = await operationsFetch<{ rows: PhotographyRequestRow[] }>(`/api/operations${queryString({ resource: "dashboard_requests", kind: "photo", search })}`);
+        setPhotoRows(payload.rows);
+        setRows([]);
+      } else {
+        const payload = await operationsFetch<{ rows: TransferRow[] }>(`/api/operations${queryString({ resource: "transfers", kind: "transfer", completed: tab === "completed", pageSize: 200 })}`);
+        setRows(payload.rows);
+        setPhotoRows([]);
+        if (selected) setSelected(payload.rows.find((row) => row.id === selected.id) || null);
+      }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل طلبات النقل");
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل الطلبات");
     } finally {
       setLoading(false);
     }
@@ -128,6 +148,27 @@ export function TransferRequestsPage() {
     }
   }
 
+  function beginPhotoEdit(row: PhotographyRequestRow) {
+    setEditingPhoto(row);
+    setPhotoForm({ status: row.status, photographyDate: row.photography_date?.slice(0, 10) || "", note: row.note || "" });
+  }
+
+  async function savePhotoRequest() {
+    if (!editingPhoto) return;
+    setLoading(true);
+    setError("");
+    try {
+      const payload = await operationsFetch<{ message: string }>("/api/operations", { method: "POST", body: JSON.stringify({ action: "update_photography_request", id: editingPhoto.id, ...photoForm }) });
+      setMessage(payload.message);
+      setEditingPhoto(null);
+      await loadRows();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحديث طلب التصوير");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function destructiveAction() {
     if (!selected || !confirmAction) return;
     setLoading(true);
@@ -152,7 +193,7 @@ export function TransferRequestsPage() {
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 
-      <div className="operations-subtabs"><button className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>إنشاء طلب</button><button className={tab === "active" ? "active" : ""} onClick={() => setTab("active")}>متابعة الطلبات</button><button className={tab === "completed" ? "active" : ""} onClick={() => setTab("completed")}>الطلبات المكتملة</button></div>
+      <div className="operations-subtabs"><button className={tab === "create" ? "active" : ""} onClick={() => setTab("create")}>إنشاء طلب</button><button className={tab === "active" ? "active" : ""} onClick={() => setTab("active")}>متابعة الطلبات</button><button className={tab === "completed" ? "active" : ""} onClick={() => setTab("completed")}>الطلبات المكتملة</button><button className={tab === "photo" ? "active" : ""} onClick={() => setTab("photo")}>طلبات التصوير</button></div>
 
       {tab === "create" ? (
         <section className="panel operations-transfer-create">
@@ -181,11 +222,20 @@ export function TransferRequestsPage() {
           <label className="operations-field operations-transfer-note"><span>ملاحظات الطلب</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="ملاحظة اختيارية على طلب النقل" /></label>
           <button className="operations-primary-button" type="button" disabled={loading || !selectedCars.length || !destinationLocationId || !meta.permissions.canCreateTransfer} onClick={() => void create()}>{loading ? "جاري الإنشاء..." : "إنشاء طلب النقل"}</button>
         </section>
+      ) : tab === "photo" ? (
+        <section className="panel operations-requests-panel operations-photo-requests-panel">
+          <div className="operations-photo-toolbar"><label><span>بحث في طلبات التصوير</span><input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadRows(); }} placeholder="رقم الطلب أو رقم الهيكل" /></label><button type="button" onClick={() => void loadRows()}>بحث</button></div>
+          <div className="operations-requests-list">{!loading && !photoRows.length ? <div className="operations-empty-state"><Camera size={42} /><strong>لا توجد طلبات تصوير</strong></div> : photoRows.map((row) => <article key={row.id}><div className="operations-request-icon"><Camera size={23} /></div><div className="operations-request-copy"><b>{row.request_no || row.id.slice(0, 8)}</b><span>{row.vehicles.map((vehicle) => `${vehicle.vin} - ${vehicle.car_name || vehicle.statement || "سيارة"}`).join("، ")}</span><small>{row.creator_name || "—"} · {formatOperationsDate(row.requested_at)} · موعد التصوير: {row.photography_date ? formatOperationsDate(row.photography_date) : "—"}</small>{row.note ? <small>{row.note}</small> : null}</div><span className={`operations-status status-${row.status}`}>{stageLabels[row.status] || row.status}</span>{meta.permissions.canCreateTransfer ? <button type="button" className="operations-row-edit" onClick={() => beginPhotoEdit(row)}><PencilSimple size={17} />تحديث</button> : null}</article>)}</div>
+        </section>
       ) : (
         <section className="panel operations-requests-panel">
           <div className="operations-requests-list">{!loading && !rows.length ? <div className="operations-empty-state"><Truck size={42} /><strong>لا توجد طلبات</strong></div> : rows.map((row) => <article key={row.id} onClick={() => setSelected(row)}><div className="operations-request-icon"><Truck size={23} /></div><div className="operations-request-copy"><b>{row.request_no}</b><span>{row.source_location_name || "—"} <ArrowRight size={14} /> {row.destination_location_name || "—"}</span><small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small></div><span className={`operations-status status-${row.status}`}>{row.cancelled_at ? "ملغي" : stageLabels[row.status] || row.status}</span><strong>{row.vehicles_count}</strong></article>)}</div>
         </section>
       )}
+
+      <Modal open={Boolean(editingPhoto)} title={editingPhoto ? `متابعة طلب التصوير — ${editingPhoto.request_no || editingPhoto.id.slice(0, 8)}` : "متابعة طلب التصوير"} onClose={() => setEditingPhoto(null)} className="operations-request-detail-modal">
+        {editingPhoto ? <div className="operations-transfer-detail"><div className="operations-request-summary-grid"><div><small>نوع الطلب</small><strong>تصوير</strong></div><div><small>المنشئ</small><strong>{editingPhoto.creator_name || "—"}</strong></div><div><small>تاريخ الطلب</small><strong>{formatOperationsDate(editingPhoto.requested_at)}</strong></div><div><small>السيارات</small><strong>{editingPhoto.vehicles.length}</strong></div></div><div className="operations-photo-vehicle-list">{editingPhoto.vehicles.map((vehicle) => <div key={vehicle.vin}><strong>{vehicle.vin}</strong><span>{vehicle.car_name || "—"} — {vehicle.statement || "—"}</span></div>)}</div><div className="operations-transfer-controls"><label className="operations-control-field"><span>الحالة</span><select value={photoForm.status} onChange={(event) => setPhotoForm({ ...photoForm, status: event.target.value })}><option value="request_received">تم استلام الطلب</option><option value="scheduled">تم تحديد الموعد</option><option value="in_progress">جاري التصوير</option><option value="completed">تم الانتهاء</option><option value="cancelled">ملغي</option></select></label><label className="operations-control-field"><span>تاريخ التصوير</span><input type="date" value={photoForm.photographyDate} onChange={(event) => setPhotoForm({ ...photoForm, photographyDate: event.target.value })} /></label></div><label className="operations-field"><span>الملاحظات</span><textarea rows={4} value={photoForm.note} onChange={(event) => setPhotoForm({ ...photoForm, note: event.target.value })} /></label><div className="operations-detail-actions"><button className="primary" disabled={loading} onClick={() => void savePhotoRequest()}><CheckCircle size={17} />حفظ المتابعة</button></div></div> : null}
+      </Modal>
 
       <Modal open={Boolean(selected)} title={selected ? `تفاصيل الطلب — ${selected.request_no}` : "تفاصيل طلب النقل"} subtitle={selected ? `${selected.requested_by_name || "—"} · ${formatOperationsDate(selected.requested_at)}` : undefined} onClose={() => setSelected(null)} className="operations-request-detail-modal">
         {selected ? (

@@ -511,17 +511,6 @@ create table if not exists operations.photography_request_vehicles (
   vehicle_id uuid not null references operations.vehicles(id),
   primary key(request_id,vehicle_id)
 );
-create table if not exists operations.photography_request_events (
-  id bigserial primary key,
-  request_id uuid not null references operations.photography_requests(id) on delete cascade,
-  status text not null,
-  actor_id uuid references core.users(id),
-  actor_name text,
-  note text,
-  details jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
-create index if not exists operations_photography_events_idx on operations.photography_request_events(request_id,created_at desc);
 
 create table if not exists operations.vehicle_archive_events (
   id bigserial primary key,

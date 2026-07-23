@@ -10,6 +10,22 @@ import { LoginPage } from "./pages/LoginPage";
 import { PlatformLoadingPage } from "./pages/PlatformLoadingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
+
+const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
+const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingDashboardPage").then((module) => ({ default: module.MarketingDashboardPage })));
+const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingDatabasePage").then((module) => ({ default: module.MarketingDatabasePage })));
+const CreateCampaignPage = lazy(() => import("./marketing/pages/CreateCampaignPage").then((module) => ({ default: module.CreateCampaignPage })));
+const CreateAgendaPage = lazy(() => import("./marketing/pages/CreateAgendaPage").then((module) => ({ default: module.CreateAgendaPage })));
+const MarketingCampaignsPage = lazy(() => import("./marketing/pages/MarketingCampaignsPage").then((module) => ({ default: module.MarketingCampaignsPage })));
+const MarketingPackagesPage = lazy(() => import("./marketing/pages/MarketingPackagesPage").then((module) => ({ default: module.MarketingPackagesPage })));
+const MarketingPublishPrepPage = lazy(() => import("./marketing/pages/MarketingPublishPrepPage").then((module) => ({ default: module.MarketingPublishPrepPage })));
+const MarketingRequestsPage = lazy(() => import("./marketing/pages/MarketingRequestsPage").then((module) => ({ default: module.MarketingRequestsPage })));
+const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
+const MarketingStockPage = lazy(() => import("./marketing/pages/MarketingStockPage").then((module) => ({ default: module.MarketingStockPage })));
+const MarketingReportsPage = lazy(() => import("./marketing/pages/MarketingReportsPage").then((module) => ({ default: module.MarketingReportsPage })));
+const MarketingAttendancePage = lazy(() => import("./marketing/pages/MarketingAttendancePage").then((module) => ({ default: module.MarketingAttendancePage })));
+const MarketingConnectionsPage = lazy(() => import("./marketing/pages/MarketingConnectionsPage").then((module) => ({ default: module.MarketingConnectionsPage })));
+
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
 const CrmDashboardPage = lazy(() => import("./crm/pages/CrmDashboardPage").then((module) => ({ default: module.CrmDashboardPage })));
 const CrmDatabasePage = lazy(() => import("./crm/pages/CrmDatabasePage").then((module) => ({ default: module.CrmDatabasePage })));
@@ -24,27 +40,12 @@ const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((modu
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
 const PublicTrackingPage = lazy(() => import("./tracking/pages/PublicTrackingPage").then((module) => ({ default: module.PublicTrackingPage })));
-const MarketingLayout = lazy(() => import("./marketing/MarketingLayout").then((module) => ({ default: module.MarketingLayout })));
-const MarketingDashboardPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingDashboardPage })));
-const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingDatabasePage })));
-const MarketingCreateCampaignPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingCreateCampaignPage })));
-const MarketingCreateAgendaPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingCreateAgendaPage })));
-const MarketingCampaignsPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingCampaignsPage })));
-const MarketingPackagesPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingPackagesPage })));
-const MarketingPublishPrepPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingPublishPrepPage })));
-const MarketingRequestsPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingRequestsPage })));
-const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingCalendarPage })));
-const MarketingStockPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingStockPage })));
-const MarketingReportsPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingReportsPage })));
-const MarketingAttendancePage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingAttendancePage })));
-const MarketingConnectionsPage = lazy(() => import("./marketing/pages/MarketingPages").then((module) => ({ default: module.MarketingConnectionsPage })));
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
 const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
 const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((module) => ({ default: module.MovementPage })));
 const TransferRequestsPage = lazy(() => import("./operations/pages/TransferRequestsPage").then((module) => ({ default: module.TransferRequestsPage })));
 const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
-const PhotographyRequestsPage = lazy(() => import("./operations/pages/PhotographyRequestsPage").then((module) => ({ default: module.PhotographyRequestsPage })));
 const MovementHistoryPage = lazy(() => import("./operations/pages/MovementHistoryPage").then((module) => ({ default: module.MovementHistoryPage })));
 
 
@@ -71,8 +72,8 @@ function PlatformRoutes() {
           <Route path="/marketing" element={<MarketingLayout />}>
             <Route index element={<MarketingDashboardPage />} />
             <Route path="database" element={<MarketingDatabasePage />} />
-            <Route path="create-campaign" element={<MarketingCreateCampaignPage />} />
-            <Route path="create-agenda" element={<MarketingCreateAgendaPage />} />
+            <Route path="create-campaign" element={<CreateCampaignPage />} />
+            <Route path="create-agenda" element={<CreateAgendaPage />} />
             <Route path="campaigns" element={<MarketingCampaignsPage />} />
             <Route path="packages" element={<MarketingPackagesPage />} />
             <Route path="publish-prep" element={<MarketingPublishPrepPage />} />
@@ -88,7 +89,6 @@ function PlatformRoutes() {
             <Route path="manage" element={<VehicleManagementPage />} />
             <Route path="movement" element={<MovementPage />} />
             <Route path="transfers" element={<TransferRequestsPage />} />
-            <Route path="photos" element={<PhotographyRequestsPage />} />
             <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="all" element={<InventoryPage all />} />
             <Route path="movements" element={<MovementHistoryPage />} />

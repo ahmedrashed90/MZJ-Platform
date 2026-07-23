@@ -1,15 +1,4 @@
-# MZJ Platform
-
-## v1.20.0 — Marketing Native Clean Rebuild
-
-تمت إعادة بناء نظام التسويق من سورس المنصة v1.18.0 داخل PostgreSQL Schema معزولة باسم `marketing_native`. لا يستخدم النظام الجديد جداول التسويق القديمة داخل `marketing`، وتُنشأ الجداول والعلاقات والـSeeds داخل Transaction واحدة مع Advisory Lock وفحص قبل Commit.
-
-تعليمات التنفيذ والاختبارات:
-
-- `docs/MARKETING-NATIVE-CLEAN-REBUILD-V1200-AR.md`
-- `docs/MARKETING-NATIVE-CLEAN-REBUILD-V1200-TEST-RESULTS.txt`
-- `docs/MARKETING-NATIVE-CLEAN-REBUILD-V1200-CHANGED-FILES.txt`
-
+# MZJ Platform v1.7.0
 
 منصة React/Vite موحدة لمجموعة محمد بن ذعار العجمي، تعمل على Vercel مع PostgreSQL وتسجيل دخول حقيقي.
 

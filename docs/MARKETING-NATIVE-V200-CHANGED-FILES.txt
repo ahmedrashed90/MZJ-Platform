@@ -1,0 +1,73 @@
+MZJ Marketing Native Rebuild v2.0 - Changed Files
+
+Platform/API integration
+- api/index.ts
+  Registered the unified /api/marketing handler.
+- server/setup/initialize.ts
+  Added initialization of the final marketing schema.
+- package.json
+  Added the native marketing architecture check to typecheck.
+- .env.example
+  Added optional RAW folder server variables.
+
+Database
+- database/migrations/20260723_marketing_native_rebuild_v200.sql
+  Final clean marketing schema, seeds, constraints, indexes and permissions.
+- database/schema.sql
+  Added the same final marketing schema to the platform bootstrap schema.
+- server/_marketing-schema.ts
+  Versioned clean schema initialization and dynamic settings seed data.
+
+Marketing server
+- server/_marketing-utils.ts
+  Typed request parsing, permission and validation helpers.
+- server/marketing/index.ts
+  Unified marketing API for settings, campaigns, agendas, tasks, templates, files, dashboard, database, packages, calendar, stock, photography requests, reports, attendance, platform connections and publishing preparation.
+
+Shared operations photography requests
+- server/operations/index.ts
+  Added controlled updates for the shared photography request record.
+- src/operations/pages/TransferRequestsPage.tsx
+  Added the photography requests tab reading and updating the same operations records.
+
+Marketing client core
+- src/marketing/types.ts
+- src/marketing/api.ts
+- src/marketing/MarketingContext.tsx
+- src/marketing/MarketingLayout.tsx
+
+Marketing shared components
+- src/marketing/components/MarketingSettingsPanel.tsx
+- src/marketing/components/InstanceEditor.tsx
+- src/marketing/components/TaskDetailModal.tsx
+- src/marketing/components/CampaignDetailModal.tsx
+- src/marketing/components/CampaignListView.tsx
+
+Marketing pages
+- src/marketing/pages/MarketingDashboardPage.tsx
+- src/marketing/pages/MarketingDatabasePage.tsx
+- src/marketing/pages/CreateCampaignPage.tsx
+- src/marketing/pages/CreateAgendaPage.tsx
+- src/marketing/pages/MarketingCampaignsPage.tsx
+- src/marketing/pages/MarketingPackagesPage.tsx
+- src/marketing/pages/MarketingPublishPrepPage.tsx
+- src/marketing/pages/MarketingRequestsPage.tsx
+- src/marketing/pages/MarketingCalendarPage.tsx
+- src/marketing/pages/MarketingStockPage.tsx
+- src/marketing/pages/MarketingReportsPage.tsx
+- src/marketing/pages/MarketingAttendancePage.tsx
+- src/marketing/pages/MarketingConnectionsPage.tsx
+
+Unified platform UI
+- src/App.tsx
+  Added all required marketing routes and removed use of the old marketing placeholder.
+- src/pages/SettingsPage.tsx
+  Added Marketing Settings inside the unified Settings page; no /marketing/settings route was created.
+- src/styles.css
+  Added the native RTL marketing design, cards, tables, modals, accordions, wizards, calendar, packages, publishing and responsive states.
+
+Validation and documentation
+- scripts/check-marketing-native-v200.mjs
+- docs/MARKETING-NATIVE-V200-DEPLOYMENT-AR.md
+- docs/MARKETING-NATIVE-V200-TEST-RESULTS.txt
+- docs/MARKETING-NATIVE-V200-CHANGED-FILES.txt

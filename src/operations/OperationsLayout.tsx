@@ -9,7 +9,6 @@ const tabs = [
   ["/operations/manage", "إدارة السيارات"],
   ["/operations/movement", "الحركة"],
   ["/operations/transfers", "طلبات النقل"],
-  ["/operations/photos", "طلبات التصوير"],
   ["/operations/approvals", "الموافقات"],
   ["/operations/all", "جميع السيارات"],
   ["/operations/movements", "سجل الحركات"],

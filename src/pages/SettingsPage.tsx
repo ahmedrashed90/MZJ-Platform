@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Buildings,
   FloppyDisk,
   GearSix,
   Megaphone,
@@ -58,6 +59,19 @@ const initialForm = {
   canReceiveLeads: false,
   canReceiveTasks: false,
 };
+
+function PendingSystemSettings({ title, description }: { title: string; description: string }) {
+  return (
+    <section className="panel unified-settings-placeholder">
+      <Buildings size={46} weight="duotone" />
+      <div>
+        <h2>{title}</h2>
+        <p>{description}</p>
+        <span>مكان الإعدادات محجوز داخل صفحة الإعدادات الموحدة، ويتم ربطه عند نقل موديول النظام إلى المنصة.</span>
+      </div>
+    </section>
+  );
+}
 
 export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();

@@ -1,220 +1,85 @@
-import { useEffect, useMemo, useState } from "react";
-import { FloppyDisk, PencilSimple, Trash } from "@phosphor-icons/react";
-import { marketingFetch } from "../api";
-import type { MarketingMeta } from "../types";
-import { Field, MarketingError, MarketingLoading } from "./Common";
+import { useMemo, useState } from "react";
+import { Buildings, CheckCircle, Gear, Gift, Megaphone, PencilSimple, Plus, Stack, Trash, UsersThree } from "@phosphor-icons/react";
+import { marketingPost } from "../api";
+import { MarketingProvider, useMarketing } from "../MarketingContext";
+import type { MarketingAction, MarketingDepartment, MarketingPlatform, MarketingPublishType } from "../types";
 
-type Tab = "departments" | "actions" | "creatives" | "campaigns" | "platforms" | "categories" | "requests" | "attendance";
-
-type SettingsForm = {
-  id: string;
-  name: string;
-  code: string;
-  shortCode: string;
-  codePrefix: string;
-  departmentId: string;
-  primaryDepartmentId: string;
-  platformId: string;
-  dimensions: string;
-  percentage: number;
-  audience: string;
-  isContentDepartment: boolean;
-  isTerminal: boolean;
-  isActive: boolean;
-  sortOrder: number;
-};
-
-const tabs: Array<[Tab, string]> = [
-  ["departments", "الأقسام واليوزرات"],
-  ["actions", "إجراءات التكليف"],
-  ["creatives", "أنواع الكرييتيف"],
-  ["campaigns", "أنواع الحملات"],
-  ["platforms", "المنصات والنشر"],
-  ["categories", "تصنيفات الباقات"],
-  ["requests", "حالات الطلبات"],
-  ["attendance", "الحضور"],
+type Tab = "departments" | "actions" | "creatives" | "campaignTypes" | "platforms" | "categories" | "statuses";
+const tabs: Array<{ key: Tab; label: string }> = [
+  { key: "departments", label: "الأقسام" },
+  { key: "actions", label: "إجراءات التكليف" },
+  { key: "creatives", label: "الكرييتيفات" },
+  { key: "campaignTypes", label: "أنواع الحملات" },
+  { key: "platforms", label: "المنصات وأنواع النشر" },
+  { key: "categories", label: "تصنيفات الباقات" },
+  { key: "statuses", label: "حالات الطلب" },
 ];
 
-const empty: SettingsForm = {
-  id: "",
-  name: "",
-  code: "",
-  shortCode: "",
-  codePrefix: "MZJ",
-  departmentId: "",
-  primaryDepartmentId: "",
-  platformId: "",
-  dimensions: "",
-  percentage: 0,
-  audience: "user",
-  isContentDepartment: false,
-  isTerminal: false,
-  isActive: true,
-  sortOrder: 0,
-};
+type BasicForm = { id: string; name: string; code: string; sortOrder: number; isActive: boolean };
+const basic = (): BasicForm => ({ id: "", name: "", code: "", sortOrder: 10, isActive: true });
 
-export function MarketingSettingsPanel() {
-  const [meta, setMeta] = useState<MarketingMeta | null>(null);
+function MarketingSettingsPanelContent() {
+  const { meta, refreshMeta } = useMarketing();
   const [tab, setTab] = useState<Tab>("departments");
-  const [form, setForm] = useState<SettingsForm>(empty);
-  const [selectedDepartment, setSelectedDepartment] = useState("");
-  const [departmentUserIds, setDepartmentUserIds] = useState<string[]>([]);
-  const [attendance, setAttendance] = useState({ workStartTime: "16:00", workEndTime: "21:00", graceMinutes: 0, idleAfterMinutes: 5, offlineAfterMinutes: 10 });
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [working, setWorking] = useState(false);
+  const [department, setDepartment] = useState({ ...basic(), isContent: false, userIds: [] as string[] });
+  const [action, setAction] = useState({ ...basic(), departmentId: "", progressWeight: 0, adminOnly: false });
+  const [creative, setCreative] = useState({ ...basic(), shortCode: "", primaryDepartmentId: "" });
+  const [campaignType, setCampaignType] = useState({ ...basic(), prefix: "MZJ" });
+  const [platform, setPlatform] = useState({ ...basic(), publishTypes: [] as Array<{ id?: string; name: string; dimensions: string; isActive: boolean; sortOrder: number }> });
+  const [category, setCategory] = useState(basic);
+  const [requestStatus, setRequestStatus] = useState(basic);
 
-  async function load() {
-    setError("");
-    try {
-      const result = await marketingFetch<MarketingMeta>("/api/marketing?resource=meta");
-      setMeta(result);
-      if (!selectedDepartment && result.departments[0]) setSelectedDepartment(result.departments[0].id);
-      if (result.attendanceSettings) {
-        setAttendance({
-          workStartTime: result.attendanceSettings.work_start_time.slice(0, 5),
-          workEndTime: result.attendanceSettings.work_end_time.slice(0, 5),
-          graceMinutes: result.attendanceSettings.grace_minutes,
-          idleAfterMinutes: result.attendanceSettings.idle_after_minutes,
-          offlineAfterMinutes: result.attendanceSettings.offline_after_minutes,
-        });
-      }
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل إعدادات التسويق");
-    }
-  }
+  const allActions = useMemo(() => (meta?.departments || []).flatMap((row) => row.actions), [meta]);
+  if (!meta) return <div className="marketing-loading">جاري تحميل إعدادات التسويق...</div>;
+  if (!meta.permissions.manageSettings) return <div className="marketing-error">لا تملك صلاحية إدارة إعدادات التسويق.</div>;
 
-  useEffect(() => { void load(); }, []);
-  useEffect(() => {
-    if (!meta || !selectedDepartment) return;
-    setDepartmentUserIds(meta.departmentUsers.filter((row) => row.department_id === selectedDepartment && row.is_active).map((row) => row.user_id));
-  }, [meta, selectedDepartment]);
+  const run = async (body: Record<string, unknown>, reset: () => void) => {
+    setWorking(true); setError(""); setMessage("");
+    try { const result = await marketingPost<{ ok: true; message: string }>(body); setMessage(result.message); reset(); await refreshMeta(); }
+    catch (actionError) { setError(actionError instanceof Error ? actionError.message : "تعذر حفظ الإعداد"); }
+    finally { setWorking(false); }
+  };
+  const disable = async (entity: string, id: string) => {
+    if (!window.confirm("سيتم تعطيل السجل من القوائم المستخدمة داخل التسويق. هل أنت متأكد؟")) return;
+    await run({ action: "disable_setting", entity, id }, () => undefined);
+  };
 
-  const rows = useMemo(() => {
-    if (!meta) return [];
-    if (tab === "departments") return meta.departments;
-    if (tab === "actions") return meta.actions;
-    if (tab === "creatives") return meta.creativeTypes;
-    if (tab === "campaigns") return meta.campaignTypes;
-    if (tab === "platforms") return [...meta.platforms, ...meta.postTypes];
-    if (tab === "categories") return meta.categories;
-    if (tab === "requests") return meta.requestStatuses;
-    return [];
-  }, [meta, tab]);
+  const resetDepartment = () => setDepartment({ ...basic(), isContent: false, userIds: [] });
+  const resetAction = () => setAction({ ...basic(), departmentId: "", progressWeight: 0, adminOnly: false });
+  const resetCreative = () => setCreative({ ...basic(), shortCode: "", primaryDepartmentId: "" });
+  const resetCampaignType = () => setCampaignType({ ...basic(), prefix: "MZJ" });
+  const resetPlatform = () => setPlatform({ ...basic(), publishTypes: [] });
 
-  async function send(payload: Record<string, unknown>) {
-    setBusy(true); setMessage(""); setError("");
-    try {
-      const result = await marketingFetch<{ ok: true; message: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "settings_action", ...payload }) });
-      setMessage(result.message);
-      setForm(empty);
-      await load();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر حفظ الإعداد");
-    } finally { setBusy(false); }
-  }
+  const editDepartment = (row: MarketingDepartment) => setDepartment({ id: row.id, name: row.name, code: row.code, sortOrder: row.sort_order, isActive: row.is_active, isContent: row.is_content, userIds: row.users.map((item) => item.user_id) });
+  const editAction = (row: MarketingAction) => setAction({ id: row.id, name: row.name, code: row.code, sortOrder: row.sort_order, isActive: row.is_active, departmentId: row.department_id, progressWeight: row.progress_weight, adminOnly: row.admin_only });
+  const editPlatform = (row: MarketingPlatform) => setPlatform({ id: row.id, name: row.name, code: row.code, sortOrder: row.sort_order, isActive: row.is_active, publishTypes: row.publishTypes.map((type: MarketingPublishType) => ({ id: type.id, name: type.name, dimensions: type.dimensions || "", isActive: type.is_active, sortOrder: type.sort_order })) });
 
-  function edit(row: Record<string, unknown>) {
-    setForm({
-      ...empty,
-      id: String(row.id || ""),
-      name: String(row.name || ""),
-      code: String(row.code || ""),
-      shortCode: String(row.short_code || ""),
-      codePrefix: String(row.code_prefix || "MZJ"),
-      departmentId: String(row.department_id || ""),
-      primaryDepartmentId: String(row.primary_department_id || ""),
-      platformId: String(row.platform_id || ""),
-      dimensions: String(row.dimensions || ""),
-      percentage: Number(row.percentage || 0),
-      audience: String(row.audience || "user"),
-      isContentDepartment: Boolean(row.is_content_department),
-      isTerminal: Boolean(row.is_terminal),
-      isActive: row.is_active !== false,
-      sortOrder: Number(row.sort_order || 0),
-    });
-  }
+  return <section className="marketing-settings-panel" dir="rtl">
+    <header className="marketing-settings-head"><div><span><Gear /></span><div><h2>إعدادات التسويق</h2><p>المصدر المركزي للأقسام والكرييتيفات والإجراءات والمنصات والقوائم المنسدلة.</p></div></div></header>
+    {error ? <div className="marketing-error">{error}</div> : null}{message ? <div className="marketing-success">{message}</div> : null}
+    <nav className="marketing-settings-tabs">{tabs.map((item) => <button type="button" key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}>{item.label}</button>)}</nav>
 
-  async function saveCurrent() {
-    const base = { operation: "save", id: form.id, name: form.name, isActive: form.isActive, sortOrder: form.sortOrder };
-    if (tab === "departments") return send({ ...base, entity: "department", code: form.code, isContentDepartment: form.isContentDepartment });
-    if (tab === "actions") return send({ ...base, entity: "action", departmentId: form.departmentId, percentage: form.percentage, audience: form.audience, isRequired: true });
-    if (tab === "creatives") return send({ ...base, entity: "creative_type", shortCode: form.shortCode, primaryDepartmentId: form.primaryDepartmentId });
-    if (tab === "campaigns") return send({ ...base, entity: "campaign_type", shortCode: form.shortCode, codePrefix: form.codePrefix });
-    if (tab === "categories") return send({ ...base, entity: "category" });
-    if (tab === "requests") return send({ ...base, entity: "request_status", code: form.code, isTerminal: form.isTerminal });
-    if (tab === "platforms") {
-      return form.platformId
-        ? send({ ...base, entity: "post_type", platformId: form.platformId, code: form.code, dimensions: form.dimensions })
-        : send({ ...base, entity: "platform", code: form.code });
-    }
-  }
+    {tab === "departments" ? <div className="marketing-settings-grid"><section className="marketing-settings-form panel"><h3><Buildings />{department.id ? "تعديل القسم" : "إضافة قسم جديد"}</h3><div className="marketing-form-grid two"><label><span>اسم القسم</span><input value={department.name} onChange={(event) => setDepartment({ ...department, name: event.target.value })} /></label><label><span>كود القسم</span><input value={department.code} onChange={(event) => setDepartment({ ...department, code: event.target.value })} /></label><label><span>الترتيب</span><input type="number" value={department.sortOrder} onChange={(event) => setDepartment({ ...department, sortOrder: Number(event.target.value) || 0 })} /></label><label className="marketing-check"><input type="checkbox" checked={department.isContent} onChange={(event) => setDepartment({ ...department, isContent: event.target.checked })} /><span>تحديد هذا القسم باعتباره قسم المحتوى</span></label></div><fieldset><legend>ربط مستخدم واحد أو أكثر بالقسم</legend><div className="settings-user-picker">{meta.users.map((user) => <label key={user.id} className={department.userIds.includes(user.id) ? "selected" : ""}><input type="checkbox" checked={department.userIds.includes(user.id)} onChange={() => setDepartment({ ...department, userIds: department.userIds.includes(user.id) ? department.userIds.filter((id) => id !== user.id) : [...department.userIds, user.id] })} /><span>{user.full_name}</span><small>{user.role_names || user.department_names}</small></label>)}</div></fieldset><div className="marketing-modal-actions"><button className="primary" disabled={working || !department.name || !department.code} onClick={() => void run({ action: "save_setting", entity: "department", ...department }, resetDepartment)}>{department.id ? <PencilSimple /> : <Plus />}{department.id ? "حفظ التعديل" : "إضافة القسم"}</button>{department.id ? <button onClick={resetDepartment}>إلغاء</button> : null}</div></section><section className="marketing-settings-list panel"><h3>قائمة الأقسام</h3>{meta.departments.map((row) => <article key={row.id}><div><h4>{row.name}{row.is_content ? <span>قسم المحتوى</span> : null}</h4><p>{row.code}</p><div>{row.users.map((user) => <span key={user.user_id}>{user.full_name}</span>)}</div></div><footer><button onClick={() => editDepartment(row)}><PencilSimple />تعديل</button><button className="danger" onClick={() => void disable("department", row.id)}><Trash />تعطيل</button></footer></article>)}</section></div> : null}
 
-  async function remove(row: Record<string, unknown>) {
-    if (!window.confirm("تأكيد تعطيل العنصر؟")) return;
-    const entity = tab === "departments" ? "department"
-      : tab === "actions" ? "action"
-      : tab === "creatives" ? "creative_type"
-      : tab === "campaigns" ? "campaign_type"
-      : tab === "categories" ? "category"
-      : tab === "requests" ? "request_status"
-      : "platform_id" in row ? "post_type" : "platform";
-    await send({ entity, operation: "delete", id: row.id });
-  }
+    {tab === "actions" ? <div className="marketing-settings-grid"><section className="marketing-settings-form panel"><h3><CheckCircle />{action.id ? "تعديل إجراء التكليف" : "إضافة إجراء تكليف"}</h3><div className="marketing-form-grid two"><label><span>القسم</span><select value={action.departmentId} onChange={(event) => setAction({ ...action, departmentId: event.target.value })}><option value="">اختر القسم</option>{meta.departments.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label><label><span>اسم الإجراء</span><input value={action.name} onChange={(event) => setAction({ ...action, name: event.target.value })} /></label><label><span>كود الإجراء</span><input value={action.code} onChange={(event) => setAction({ ...action, code: event.target.value })} /></label><label><span>نسبة الإجراء</span><input type="number" min={0} max={100} value={action.progressWeight} onChange={(event) => setAction({ ...action, progressWeight: Number(event.target.value) || 0 })} /></label><label><span>الترتيب</span><input type="number" value={action.sortOrder} onChange={(event) => setAction({ ...action, sortOrder: Number(event.target.value) || 0 })} /></label><label className="marketing-check"><input type="checkbox" checked={action.adminOnly} onChange={(event) => setAction({ ...action, adminOnly: event.target.checked })} /><span>أدمن فقط</span></label></div><div className="marketing-modal-actions"><button className="primary" disabled={working || !action.departmentId || !action.name || !action.code} onClick={() => void run({ action: "save_setting", entity: "action", ...action }, resetAction)}>{action.id ? <PencilSimple /> : <Plus />}{action.id ? "حفظ التعديل" : "إضافة الإجراء"}</button>{action.id ? <button onClick={resetAction}>إلغاء</button> : null}</div></section><section className="marketing-settings-list panel"><h3>إجراءات التكليف الحالية</h3>{meta.departments.map((departmentRow) => <div key={departmentRow.id} className="settings-list-group"><h4>{departmentRow.name}</h4>{departmentRow.actions.map((row) => <article key={row.id}><div><h4>{row.name}</h4><p>{row.progress_weight}% — {row.admin_only ? "أدمن فقط" : "متاح للمستخدم"}</p></div><footer><button onClick={() => editAction(row)}><PencilSimple />تعديل</button><button className="danger" onClick={() => void disable("action", row.id)}><Trash />تعطيل</button></footer></article>)}</div>)}</section></div> : null}
 
-  if (!meta && !error) return <MarketingLoading text="جاري تحميل إعدادات التسويق..." />;
-  if (!meta) return <MarketingError message={error} onRetry={() => void load()} />;
-  if (!meta.permissions["marketing.settings.manage"]) return <MarketingError message="لا توجد لديك صلاحية إدارة إعدادات التسويق." />;
+    {tab === "creatives" ? <div className="marketing-settings-grid"><section className="marketing-settings-form panel"><h3><Stack />{creative.id ? "تعديل الكرييتيف" : "إضافة كرييتيف"}</h3><div className="marketing-form-grid two"><label><span>اسم الكرييتيف</span><input value={creative.name} onChange={(event) => setCreative({ ...creative, name: event.target.value })} /></label><label><span>الكود المختصر</span><input value={creative.shortCode} onChange={(event) => setCreative({ ...creative, shortCode: event.target.value })} /></label><label><span>القسم الأساسي</span><select value={creative.primaryDepartmentId} onChange={(event) => setCreative({ ...creative, primaryDepartmentId: event.target.value })}><option value="">اختر القسم</option>{meta.departments.filter((row) => !row.is_content).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label><label><span>الترتيب</span><input type="number" value={creative.sortOrder} onChange={(event) => setCreative({ ...creative, sortOrder: Number(event.target.value) || 0 })} /></label></div><div className="marketing-modal-actions"><button className="primary" disabled={working || !creative.name || !creative.shortCode || !creative.primaryDepartmentId} onClick={() => void run({ action: "save_setting", entity: "creative", id: creative.id, name: creative.name, shortCode: creative.shortCode, primaryDepartmentId: creative.primaryDepartmentId, sortOrder: creative.sortOrder, isActive: creative.isActive }, resetCreative)}>{creative.id ? <PencilSimple /> : <Plus />}{creative.id ? "حفظ التعديل" : "إضافة الكرييتيف"}</button>{creative.id ? <button onClick={resetCreative}>إلغاء</button> : null}</div></section><section className="marketing-settings-list creatives panel"><h3>قائمة الكرييتيفات <span>{meta.creatives.length} كرييتيف</span></h3>{meta.departments.filter((departmentRow) => !departmentRow.is_content).map((departmentRow) => <div key={departmentRow.id} className="settings-list-group"><h4>{departmentRow.name}</h4><div className="creative-settings-grid">{meta.creatives.filter((row) => row.primary_department_id === departmentRow.id).map((row) => <article key={row.id}><div><h4>{row.name}</h4><p>{row.short_code}</p></div><footer><button onClick={() => setCreative({ id: row.id, name: row.name, code: "", shortCode: row.short_code, primaryDepartmentId: row.primary_department_id, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple />تعديل</button><button className="danger" onClick={() => void disable("creative", row.id)}><Trash />تعطيل</button></footer></article>)}</div></div>)}</section></div> : null}
 
-  return <div className="marketing-settings-panel">
-    <nav className="marketing-settings-tabs">{tabs.map(([key, label]) => <button type="button" key={key} className={tab === key ? "active" : ""} onClick={() => { setTab(key); setForm(empty); }}>{label}</button>)}</nav>
-    {error ? <MarketingError message={error} /> : null}
-    {message ? <div className="success-banner"><span>{message}</span></div> : null}
+    {tab === "campaignTypes" ? <div className="marketing-settings-grid"><section className="marketing-settings-form panel"><h3><Megaphone />{campaignType.id ? "تعديل نوع الحملة" : "إضافة نوع حملة وكود"}</h3><div className="marketing-form-grid two"><label><span>اسم نوع الحملة</span><input value={campaignType.name} onChange={(event) => setCampaignType({ ...campaignType, name: event.target.value })} /></label><label><span>الكود</span><input value={campaignType.code} onChange={(event) => setCampaignType({ ...campaignType, code: event.target.value })} /></label><label><span>Prefix</span><input value={campaignType.prefix} onChange={(event) => setCampaignType({ ...campaignType, prefix: event.target.value })} /></label><label><span>الترتيب</span><input type="number" value={campaignType.sortOrder} onChange={(event) => setCampaignType({ ...campaignType, sortOrder: Number(event.target.value) || 0 })} /></label></div><div className="marketing-modal-actions"><button className="primary" disabled={working || !campaignType.name || !campaignType.code} onClick={() => void run({ action: "save_setting", entity: "campaignType", ...campaignType }, resetCampaignType)}>{campaignType.id ? <PencilSimple /> : <Plus />}{campaignType.id ? "حفظ التعديل" : "إضافة نوع الحملة"}</button>{campaignType.id ? <button onClick={resetCampaignType}>إلغاء</button> : null}</div></section><section className="marketing-settings-list panel"><h3>أنواع الحملات</h3>{meta.campaignTypes.map((row) => <article key={row.id}><div><h4>{row.name}</h4><p>{row.prefix}-{row.code}</p></div><footer><button onClick={() => setCampaignType({ id: row.id, name: row.name, code: row.code, prefix: row.prefix, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple />تعديل</button><button className="danger" onClick={() => void disable("campaignType", row.id)}><Trash />تعطيل</button></footer></article>)}</section></div> : null}
 
-    {tab === "departments" ? <div className="marketing-settings-users panel">
-      <h2>ربط اليوزرات بالأقسام</h2>
-      <Field label="القسم"><select value={selectedDepartment} onChange={(event) => setSelectedDepartment(event.target.value)}>{meta.departments.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field>
-      <div className="marketing-check-grid">{meta.users.map((row) => <label key={row.id}><input type="checkbox" checked={departmentUserIds.includes(row.id)} onChange={(event) => setDepartmentUserIds((values) => event.target.checked ? [...new Set([...values, row.id])] : values.filter((id) => id !== row.id))} /><span>{row.full_name}</span></label>)}</div>
-      <button className="marketing-primary-button" type="button" disabled={busy} onClick={() => void send({ entity: "department_users", departmentId: selectedDepartment, userIds: departmentUserIds })}><FloppyDisk size={18} />حفظ يوزرات القسم</button>
-    </div> : null}
+    {tab === "platforms" ? <div className="marketing-settings-grid"><section className="marketing-settings-form panel"><h3><Megaphone />{platform.id ? "تعديل منصة" : "إضافة منصة"}</h3><div className="marketing-form-grid two"><label><span>اسم المنصة</span><input value={platform.name} onChange={(event) => setPlatform({ ...platform, name: event.target.value })} /></label><label><span>كود المنصة</span><input value={platform.code} onChange={(event) => setPlatform({ ...platform, code: event.target.value })} /></label><label><span>الترتيب</span><input type="number" value={platform.sortOrder} onChange={(event) => setPlatform({ ...platform, sortOrder: Number(event.target.value) || 0 })} /></label></div><fieldset><legend>أنواع النشر والأبعاد</legend>{platform.publishTypes.map((type, index) => <div key={`${type.id || "new"}-${index}`} className="publish-type-form"><input value={type.name} onChange={(event) => setPlatform({ ...platform, publishTypes: platform.publishTypes.map((row, i) => i === index ? { ...row, name: event.target.value } : row) })} placeholder="نوع النشر" /><input value={type.dimensions} onChange={(event) => setPlatform({ ...platform, publishTypes: platform.publishTypes.map((row, i) => i === index ? { ...row, dimensions: event.target.value } : row) })} placeholder="الأبعاد" /><button onClick={() => setPlatform({ ...platform, publishTypes: platform.publishTypes.filter((_, i) => i !== index) })}><Trash /></button></div>)}<button className="marketing-add-inline" onClick={() => setPlatform({ ...platform, publishTypes: [...platform.publishTypes, { name: "", dimensions: "", isActive: true, sortOrder: (platform.publishTypes.length + 1) * 10 }] })}><Plus />إضافة نوع نشر</button></fieldset><div className="marketing-modal-actions"><button className="primary" disabled={working || !platform.name || !platform.code} onClick={() => void run({ action: "save_setting", entity: "platform", ...platform }, resetPlatform)}>{platform.id ? <PencilSimple /> : <Plus />}{platform.id ? "حفظ التعديل" : "إضافة المنصة"}</button>{platform.id ? <button onClick={resetPlatform}>إلغاء</button> : null}</div></section><section className="marketing-settings-list panel"><h3>المنصات</h3>{meta.platforms.map((row) => <article key={row.id}><div><h4>{row.name}</h4><p>{row.code}</p><div>{row.publishTypes.map((type) => <span key={type.id}>{type.name} {type.dimensions}</span>)}</div></div><footer><button onClick={() => editPlatform(row)}><PencilSimple />تعديل</button><button className="danger" onClick={() => void disable("platform", row.id)}><Trash />تعطيل</button></footer></article>)}</section></div> : null}
 
-    {tab === "attendance" ? <section className="panel marketing-settings-form">
-      <h2>مواعيد الدوام والحضور</h2>
-      <div className="marketing-form-grid">
-        <Field label="بداية الدوام"><input type="time" value={attendance.workStartTime} onChange={(event) => setAttendance({ ...attendance, workStartTime: event.target.value })} /></Field>
-        <Field label="نهاية الدوام"><input type="time" value={attendance.workEndTime} onChange={(event) => setAttendance({ ...attendance, workEndTime: event.target.value })} /></Field>
-        <Field label="دقائق السماح"><input type="number" min="0" value={attendance.graceMinutes} onChange={(event) => setAttendance({ ...attendance, graceMinutes: Number(event.target.value) })} /></Field>
-        <Field label="اعتبار خامل بعد"><input type="number" min="1" value={attendance.idleAfterMinutes} onChange={(event) => setAttendance({ ...attendance, idleAfterMinutes: Number(event.target.value) })} /></Field>
-        <Field label="اعتبار أوفلاين بعد"><input type="number" min="2" value={attendance.offlineAfterMinutes} onChange={(event) => setAttendance({ ...attendance, offlineAfterMinutes: Number(event.target.value) })} /></Field>
-      </div>
-      <button className="marketing-primary-button" type="button" disabled={busy} onClick={() => void send({ entity: "attendance_settings", ...attendance })}><FloppyDisk size={18} />حفظ مواعيد الدوام</button>
-    </section> : null}
-
-    {tab !== "attendance" ? <div className="marketing-settings-grid">
-      <section className="panel marketing-table-wrap">
-        <div className="marketing-section-title"><h2>العناصر المحفوظة</h2><span>{rows.length}</span></div>
-        <table><thead><tr><th>الاسم</th><th>الكود / القسم</th><th>النسبة / الحالة</th><th /></tr></thead><tbody>{rows.map((row) => {
-          const item = row as unknown as Record<string, unknown>;
-          const state = item.percentage !== undefined ? `${item.percentage}%` : item.is_terminal ? "حالة نهائية" : item.is_active === false ? "موقوف" : "فعال";
-          return <tr key={`${item.id}-${item.name}`}><td><strong>{String(item.name || "—")}</strong></td><td>{String(item.short_code || item.code || item.department_name || item.platform_name || "—")}</td><td>{state}</td><td><div className="marketing-table-actions"><button type="button" onClick={() => edit(item)} aria-label="تعديل"><PencilSimple size={16} /></button><button type="button" onClick={() => void remove(item)} aria-label="تعطيل"><Trash size={16} /></button></div></td></tr>;
-        })}</tbody></table>
-      </section>
-
-      <section className="panel marketing-settings-form">
-        <h2>{form.id ? "تعديل العنصر" : "إضافة عنصر"}</h2>
-        <Field label="الاسم"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></Field>
-        {tab === "departments" || tab === "platforms" || tab === "requests" ? <Field label="الكود"><input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} /></Field> : null}
-        {tab === "creatives" || tab === "campaigns" ? <Field label="الكود المختصر"><input value={form.shortCode} onChange={(event) => setForm({ ...form, shortCode: event.target.value })} /></Field> : null}
-        {tab === "campaigns" ? <Field label="بادئة كود الحملة"><input value={form.codePrefix} onChange={(event) => setForm({ ...form, codePrefix: event.target.value })} /></Field> : null}
-        {tab === "actions" ? <><Field label="القسم"><select value={form.departmentId} onChange={(event) => setForm({ ...form, departmentId: event.target.value })}><option value="">اختر القسم</option>{meta.departments.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field><Field label="النسبة"><input type="number" min="0" max="100" value={form.percentage} onChange={(event) => setForm({ ...form, percentage: Number(event.target.value) })} /></Field><Field label="الظهور"><select value={form.audience} onChange={(event) => setForm({ ...form, audience: event.target.value })}><option value="user">يوزر</option><option value="admin">أدمن</option><option value="both">الكل</option></select></Field></> : null}
-        {tab === "creatives" ? <Field label="القسم الأساسي"><select value={form.primaryDepartmentId} onChange={(event) => setForm({ ...form, primaryDepartmentId: event.target.value })}><option value="">بدون</option>{meta.departments.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></Field> : null}
-        {tab === "platforms" ? <><Field label="نوع العنصر"><select value={form.platformId} onChange={(event) => setForm({ ...form, platformId: event.target.value })}><option value="">منصة رئيسية</option>{meta.platforms.map((row) => <option key={row.id} value={row.id}>نوع نشر تابع لـ {row.name}</option>)}</select></Field>{form.platformId ? <Field label="المقاس"><input value={form.dimensions} onChange={(event) => setForm({ ...form, dimensions: event.target.value })} placeholder="1080x1920" /></Field> : null}</> : null}
-        {tab === "departments" ? <label className="marketing-toggle"><input type="checkbox" checked={form.isContentDepartment} onChange={(event) => setForm({ ...form, isContentDepartment: event.target.checked })} /><span>قسم المحتوى</span></label> : null}
-        {tab === "requests" ? <label className="marketing-toggle"><input type="checkbox" checked={form.isTerminal} onChange={(event) => setForm({ ...form, isTerminal: event.target.checked })} /><span>حالة نهائية تغلق الطلب</span></label> : null}
-        <Field label="الترتيب"><input type="number" min="0" value={form.sortOrder} onChange={(event) => setForm({ ...form, sortOrder: Number(event.target.value) })} /></Field>
-        <label className="marketing-toggle"><input type="checkbox" checked={form.isActive} onChange={(event) => setForm({ ...form, isActive: event.target.checked })} /><span>فعال</span></label>
-        <div className="marketing-form-actions"><button className="marketing-primary-button" type="button" disabled={busy || !form.name.trim()} onClick={() => void saveCurrent()}><FloppyDisk size={18} />حفظ</button>{form.id ? <button type="button" onClick={() => setForm(empty)}>إلغاء التعديل</button> : null}</div>
-      </section>
-    </div> : null}
-  </div>;
+    {tab === "categories" ? <BasicSettingSection title="تصنيفات الباقات" icon={<Gift />} entity="packageCategory" form={category} setForm={setCategory} rows={meta.packageCategories} working={working} onSave={() => void run({ action: "save_setting", entity: "packageCategory", ...category }, () => setCategory(basic()))} onDisable={(id) => void disable("packageCategory", id)} /> : null}
+    {tab === "statuses" ? <BasicSettingSection title="حالات الطلب" icon={<CheckCircle />} entity="requestStatus" form={requestStatus} setForm={setRequestStatus} rows={meta.requestStatuses} working={working} onSave={() => void run({ action: "save_setting", entity: "requestStatus", ...requestStatus }, () => setRequestStatus(basic()))} onDisable={(id) => void disable("requestStatus", id)} /> : null}
+  </section>;
 }
+
+type BasicRow = { id: string; name: string; code: string; is_active: boolean; sort_order: number };
+function BasicSettingSection({ title, icon, form, setForm, rows, working, onSave, onDisable }: { title: string; icon: React.ReactNode; entity: string; form: BasicForm; setForm: (value: BasicForm) => void; rows: BasicRow[]; working: boolean; onSave: () => void; onDisable: (id: string) => void }) {
+  return <div className="marketing-settings-grid"><section className="marketing-settings-form panel"><h3>{icon}{form.id ? `تعديل ${title}` : `إضافة ${title}`}</h3><div className="marketing-form-grid two"><label><span>الاسم</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label><span>الكود</span><input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} /></label><label><span>الترتيب</span><input type="number" value={form.sortOrder} onChange={(event) => setForm({ ...form, sortOrder: Number(event.target.value) || 0 })} /></label></div><div className="marketing-modal-actions"><button className="primary" disabled={working || !form.name || !form.code} onClick={onSave}>{form.id ? <PencilSimple /> : <Plus />}{form.id ? "حفظ التعديل" : "إضافة"}</button>{form.id ? <button onClick={() => setForm(basic())}>إلغاء</button> : null}</div></section><section className="marketing-settings-list panel"><h3>{title}</h3>{rows.map((row) => <article key={row.id}><div><h4>{row.name}</h4><p>{row.code}</p></div><footer><button onClick={() => setForm({ id: row.id, name: row.name, code: row.code, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple />تعديل</button><button className="danger" onClick={() => onDisable(row.id)}><Trash />تعطيل</button></footer></article>)}</section></div>;
+}
+
+export function MarketingSettingsPanel() { return <MarketingProvider><MarketingSettingsPanelContent /></MarketingProvider>; }

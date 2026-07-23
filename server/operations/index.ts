@@ -2,7 +2,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
-import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
 import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
@@ -99,7 +98,6 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaite
       canExport: hasPermission(user, "operations.vehicle.export"),
       canMove: hasPermission(user, "operations.movement.create"),
       canCreateTransfer: hasPermission(user, "operations.transfer.create"),
-      canManagePhotoRequests: hasPermission(user, "operations.transfer.create"),
       canApproveFinancial: hasPermission(user, "operations.approval.financial"),
       canApproveAdministrative: hasPermission(user, "operations.approval.administrative"),
       canManageSettings: hasPermission(user, "operations.settings.manage"),
@@ -516,6 +514,23 @@ async function dashboardRequests(sql: ReturnType<typeof getSql>, request: Vercel
     return { ok: true, rows, total: Number(count?.total || 0) };
   }
   return listTransfers(sql, { query: { ...request.query, kind: "transfer", pageSize: "200" } }, user);
+}
+
+async function updatePhotographyRequest(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+  const id = clean(body.id);
+  const status = clean(body.status);
+  const photographyDate = clean(body.photographyDate);
+  const note = clean(body.note);
+  if (!id || !status) throw new OperationError(400, "VALIDATION_ERROR", "بيانات طلب التصوير غير مكتملة");
+  const allowed = ["request_received", "scheduled", "in_progress", "completed", "cancelled"];
+  if (!allowed.includes(status)) throw new OperationError(400, "VALIDATION_ERROR", "حالة طلب التصوير غير صحيحة");
+  const [requestRow] = await sql<any[]>`select id::text,requested_by::text,requested_by_branch from operations.photography_requests where id=${id}::uuid and is_deleted=false`;
+  if (!requestRow) throw new OperationError(404, "TRACKING_REQUEST_NOT_FOUND", "طلب التصوير غير موجود");
+  if (!isSystemAdmin(user) && requestRow.requested_by !== user.id && requestRow.requested_by_branch && !user.branchCodes.includes(requestRow.requested_by_branch)) {
+    throw new OperationError(403, "FORBIDDEN", "لا تملك صلاحية تحديث طلب التصوير");
+  }
+  await sql`update operations.photography_requests set status=${status},photography_date=${photographyDate || null},note=${note || null},completed_at=case when ${status}='completed' then coalesce(completed_at,now()) else null end where id=${id}::uuid and is_deleted=false`;
+  return { ok: true, message: "تم تحديث نفس سجل طلب التصوير المشترك بين العمليات والتسويق" };
 }
 
 async function createVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -1198,54 +1213,12 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
   });
 }
 
-
-async function listPhotographyRequests(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
-  const search = clean(request.query.search);
-  const status = clean(request.query.status);
-  const pattern = `%${search}%`;
-  const unrestricted = isSystemAdmin(user) || user.branchCodes.length === 0;
-  const rows = await sql<any[]>`
-    select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_by_branch,r.requested_at,r.photography_date,r.note,r.completed_at,
-      coalesce(json_agg(json_build_object('vehicle_id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'location_name',l.name,'branch_code',coalesce(l.branch_code,l.code)) order by v.vin) filter(where v.id is not null),'[]') as vehicles,
-      coalesce((select json_agg(json_build_object('id',e.id::text,'status',e.status,'actor_name',e.actor_name,'note',e.note,'created_at',e.created_at) order by e.created_at desc) from operations.photography_request_events e where e.request_id=r.id),'[]') as events
-    from operations.photography_requests r
-    left join operations.photography_request_vehicles rv on rv.request_id=r.id
-    left join operations.vehicles v on v.id=rv.vehicle_id
-    left join operations.locations l on l.id=v.location_id
-    where r.is_deleted=false
-      and (${unrestricted}=true or r.requested_by_branch in ${sql(user.branchCodes.length ? user.branchCodes : ['__none__'])} or coalesce(l.branch_code,l.code) in ${sql(user.branchCodes.length ? user.branchCodes : ['__none__'])})
-      and (${status}='' or r.status=${status})
-      and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or coalesce(v.vin,'') ilike ${pattern})
-    group by r.id order by r.requested_at desc
-  `;
-  const requestStatuses = await sql<any[]>`select code,name,is_terminal,is_active,sort_order from marketing_native.request_statuses where is_active=true order by sort_order,name`;
-  return { ok: true, rows, requestStatuses };
-}
-
-async function photographyRequestAction(sql: ReturnType<typeof getSql>, body: Record<string, unknown>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
-  const id = clean(body.id);
-  const status = clean(body.status);
-  const [statusDefinition] = await sql<any[]>`select code,is_terminal from marketing_native.request_statuses where code=${status} and is_active=true`;
-  if (!statusDefinition) throw new OperationError(400, 'VALIDATION_ERROR', 'حالة طلب التصوير غير صحيحة');
-  const [request] = await sql<any[]>`select r.id::text,r.request_no,r.requested_by_branch from operations.photography_requests r where r.id=${id}::uuid and r.is_deleted=false`;
-  if (!request) throw new OperationError(404, 'NOT_FOUND', 'طلب التصوير غير موجود');
-  if (!isSystemAdmin(user) && user.branchCodes.length && request.requested_by_branch && !user.branchCodes.includes(request.requested_by_branch)) {
-    const [accessible] = await sql<any[]>`select 1 from operations.photography_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id join operations.locations l on l.id=v.location_id where rv.request_id=${id}::uuid and coalesce(l.branch_code,l.code) in ${sql(user.branchCodes)} limit 1`;
-    if (!accessible) throw new OperationError(403, 'FORBIDDEN', 'لا تملك صلاحية تحديث هذا الطلب');
-  }
-  const who = actor(user);
-  const [row] = await sql<any[]>`update operations.photography_requests set status=${status},photography_date=coalesce(${clean(body.photographyDate)||null}::date,photography_date),note=coalesce(${clean(body.note)||null},note),completed_at=case when ${Boolean(statusDefinition.is_terminal)} then coalesce(completed_at,now()) else null end where id=${id}::uuid returning id::text,request_no,status,photography_date,note,completed_at`;
-  await sql`insert into operations.photography_request_events(request_id,status,actor_id,actor_name,note,details) values(${id}::uuid,${status},${who.id}::uuid,${who.name},${clean(body.note)||null},${sql.json({ requestNo: request.request_no })})`;
-  return { ok: true, row, message: 'تم تحديث طلب التصوير المشترك مع التسويق' };
-}
-
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const traceId = requestId("ops");
   response.setHeader("Cache-Control", "no-store");
   try {
     await ensureTrackingSchema();
     await ensureOperationsSchema();
-    await ensureMarketingSchema();
     await ensureErpNextSalesOrderSchema();
     const user = await requireOperationsUser(request, response);
     if (!user) return;
@@ -1262,7 +1235,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (resource === "dashboard_vehicles") return response.status(200).json(await dashboardVehicles(sql, request, user));
       if (resource === "dashboard_shortages") return response.status(200).json(await dashboardShortages(sql, request, user));
       if (resource === "dashboard_requests") return response.status(200).json(await dashboardRequests(sql, request, user));
-      if (resource === "photography_requests") return response.status(200).json(await listPhotographyRequests(sql, request, user));
       return response.status(404).json({ ok: false, code: "VALIDATION_ERROR", error: "المورد المطلوب غير موجود", requestId: traceId });
     }
 
@@ -1290,11 +1262,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       result = await createTransfer(sql, body, user);
     } else if (action === "transfer_action") {
       result = await transferAction(sql, body, user);
+    } else if (action === "update_photography_request") {
+      if (!requireOperationsPermission(user, "operations.transfer.create", response) && !isSystemAdmin(user)) return;
+      result = await updatePhotographyRequest(sql, body, user);
     } else if (action === "approval_action") {
       result = await approvalAction(sql, body, user);
-    } else if (action === "photography_request_action") {
-      if (!requireOperationsPermission(user, "operations.transfer.create", response)) return;
-      result = await photographyRequestAction(sql, body, user);
     } else if (action === "save_setting") {
       if (!requireOperationsPermission(user, "operations.settings.manage", response)) return;
       result = await saveOperationSetting(sql, body, user);

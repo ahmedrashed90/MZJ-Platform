@@ -1,3 +1,5 @@
+import { parseExcelFile } from "../operations/excel";
+
 export async function marketingFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -5,75 +7,87 @@ export async function marketingFetch<T>(url: string, init?: RequestInit): Promis
     cache: "no-store",
     headers: { "content-type": "application/json", ...(init?.headers || {}) },
   });
-  const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; message?: string };
-  if (!response.ok || payload.ok === false) throw new Error(payload.error || payload.message || "تعذر تنفيذ العملية داخل نظام التسويق");
+  const payload: unknown = await response.json().catch(() => ({}));
+  if (!response.ok || (typeof payload === "object" && payload !== null && "ok" in payload && payload.ok === false)) {
+    const message = typeof payload === "object" && payload !== null && "error" in payload ? String(payload.error) : "تعذر تنفيذ العملية";
+    throw new Error(message);
+  }
   return payload as T;
 }
 
-export function marketingQuery(values: Record<string, string | number | boolean | null | undefined>) {
+export function marketingQuery(values: Record<string, unknown>) {
   const params = new URLSearchParams();
   Object.entries(values).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   });
-  const text = params.toString();
-  return text ? `?${text}` : "";
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function marketingPost<T>(body: Record<string, unknown>) {
+  return marketingFetch<T>("/api/marketing", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function uploadMarketingFile(ownerType: "task" | "campaign", ownerId: string, file: File, metadata: Record<string, unknown> = {}) {
+  const prepared = await marketingPost<{ ok: true; fileId: string; uploadUrl: string }>({
+    action: "prepare_upload",
+    ownerType,
+    ownerId,
+    fileName: file.name,
+    mimeType: file.type || "application/octet-stream",
+    fileSize: file.size,
+    metadata,
+  });
+  const upload = await fetch(prepared.uploadUrl, { method: "PUT", body: file, headers: { "content-type": file.type || "application/octet-stream" } });
+  if (!upload.ok) throw new Error("تعذر رفع الملف إلى التخزين");
+  await marketingPost({ action: "finish_upload", fileId: prepared.fileId });
+  return prepared.fileId;
+}
+
+export async function openMarketingFile(fileId: string) {
+  const payload = await marketingFetch<{ ok: true; url: string; fileName: string }>(`/api/marketing${marketingQuery({ action: "file_url", fileId })}`);
+  window.open(payload.url, "_blank", "noopener,noreferrer");
+}
+
+export async function parseTaskTemplateFile(file: File) {
+  const rows = await parseExcelFile(file);
+  const normalized = rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key.trim(), String(value ?? "").trim()])));
+  const first = normalized[0] || {};
+  const field = (...keys: string[]) => {
+    for (const key of keys) {
+      const direct = first[key];
+      if (direct) return direct;
+      const found = Object.entries(first).find(([name]) => keys.some((candidate) => name.includes(candidate)));
+      if (found?.[1]) return found[1];
+    }
+    return "";
+  };
+  const scenes = normalized
+    .filter((row) => Object.values(row).some(Boolean))
+    .map((row, index) => ({
+      number: row["رقم المشهد"] || row["المشهد"] || String(index + 1),
+      title: row["عنوان المشهد"] || row["العنوان"] || row["Hook"] || "",
+      description: row["شرح المشهد"] || row["التفاصيل"] || row["السكريبت"] || "",
+      voiceOver: row["الفويس أوفر"] || row["الصوت"] || "",
+      text: row["التكست"] || row["النص"] || "",
+    }));
+  return {
+    proposedName: field("الاسم المقترح للكرييتيف", "الاسم المقترح"),
+    objective: field("الهدف"),
+    mainMessage: field("الرسالة الأساسية", "الرسالة"),
+    sound: field("الصوت"),
+    cta: field("CTA"),
+    script: field("السكريبت", "السكريبت الأساسي"),
+    hook: field("Hook", "الهوك"),
+    caption: field("الكابشن"),
+    hashtags: field("الهاشتاج"),
+    scenes,
+    rawRows: normalized,
+  };
 }
 
 export function formatMarketingDate(value: unknown, withTime = false) {
   const date = new Date(String(value || ""));
   if (!Number.isFinite(date.getTime())) return "—";
-  return withTime ? date.toLocaleString("ar-SA") : date.toLocaleDateString("ar-SA");
-}
-
-export function statusLabel(status: string | null | undefined) {
-  const labels: Record<string, string> = {
-    required: "مطلوب",
-    waiting_template: "في انتظار اعتماد Task Template",
-    active: "قيد التنفيذ",
-    review: "في انتظار المراجعة",
-    revision_requested: "مطلوب تعديل",
-    approved: "معتمد",
-    rejected: "مرفوض",
-    completed: "مكتمل",
-    publishing: "قسم النشر",
-    request_received: "تم استلام الطلب",
-    scheduled: "تمت الجدولة",
-    in_progress: "قيد التنفيذ",
-    cancelled: "ملغي",
-    present: "حاضر",
-    late: "متأخر",
-    checked_out: "منصرف",
-  };
-  return labels[String(status || "")] || String(status || "—");
-}
-
-export async function uploadMarketingFile(input: {
-  scope: "task" | "project";
-  entityId: string;
-  file: File;
-  uploadKind?: string;
-  fileKind?: string;
-  metadata?: Record<string, unknown>;
-}) {
-  const prepared = await marketingFetch<{ ok: true; storageKey: string; uploadUrl: string }>("/api/marketing", {
-    method: "POST",
-    body: JSON.stringify({ action: "prepare_upload", scope: input.scope, entityId: input.entityId, fileName: input.file.name }),
-  });
-  const upload = await fetch(prepared.uploadUrl, { method: "PUT", headers: { "content-type": input.file.type || "application/octet-stream" }, body: input.file });
-  if (!upload.ok) throw new Error("تعذر رفع الملف إلى التخزين");
-  return marketingFetch<{ ok: true; row: { id: string } }>("/api/marketing", {
-    method: "POST",
-    body: JSON.stringify({
-      action: "register_upload",
-      scope: input.scope,
-      entityId: input.entityId,
-      fileName: input.file.name,
-      storageKey: prepared.storageKey,
-      mimeType: input.file.type,
-      fileSize: input.file.size,
-      uploadKind: input.uploadKind,
-      fileKind: input.fileKind,
-      metadata: input.metadata || {},
-    }),
-  });
+  return date.toLocaleString("ar-SA", withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
 }

@@ -20,7 +20,6 @@ export function requestId(prefix = "ops") {
 
 export type OperationErrorCode =
   | "VALIDATION_ERROR"
-  | "NOT_FOUND"
   | "VEHICLE_NOT_FOUND"
   | "VEHICLE_NOT_ELIGIBLE"
   | "INVALID_STATUS_TRANSITION"

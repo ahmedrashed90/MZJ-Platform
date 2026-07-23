@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 import postgres from "postgres";
 
-export type SqlClient = postgres.Sql;
-export type SqlExecutor = postgres.ISql;
-export type SqlTransaction = postgres.TransactionSql;
-
 let client: ReturnType<typeof postgres> | null = null;
 let lockClient: ReturnType<typeof postgres> | null = null;
 let lockClientReady: Promise<void> | null = null;

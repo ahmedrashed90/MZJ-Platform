@@ -1,42 +1,54 @@
-export type MarketingPermissionMap = Record<string, boolean>;
-
-export type MarketingDepartment = {
-  id: string;
-  code: string;
-  name: string;
-  is_content_department: boolean;
-  is_active: boolean;
-  sort_order: number;
+export type MarketingPermissionFlags = {
+  admin: boolean;
+  manageCampaigns: boolean;
+  executeTasks: boolean;
+  reviewTemplates: boolean;
+  manageSettings: boolean;
+  managePackages: boolean;
+  manageRequests: boolean;
+  viewReports: boolean;
 };
 
-export type MarketingDepartmentUser = {
-  department_id: string;
-  user_id: string;
+export type MarketingUserOption = {
+  id: string;
   full_name: string;
-  email?: string | null;
-  is_active: boolean;
+  email: string | null;
+  role_names: string;
+  department_names: string;
+  can_receive_tasks: boolean;
 };
 
 export type MarketingAction = {
   id: string;
   department_id: string;
-  department_code: string;
-  department_name: string;
   name: string;
-  percentage: number;
-  audience: "user" | "admin" | "both";
-  is_required: boolean;
+  code: string;
+  progress_weight: number;
+  admin_only: boolean;
   is_active: boolean;
   sort_order: number;
+  completed?: boolean;
+  completed_at?: string | null;
+  notes?: string | null;
 };
 
-export type MarketingCreativeType = {
+export type MarketingDepartment = {
+  id: string;
+  code: string;
+  name: string;
+  is_content: boolean;
+  is_active: boolean;
+  sort_order: number;
+  users: Array<{ department_id: string; user_id: string; full_name: string }>;
+  actions: MarketingAction[];
+};
+
+export type MarketingCreative = {
   id: string;
   name: string;
   short_code: string;
-  primary_department_id?: string | null;
-  primary_department_code?: string | null;
-  primary_department_name?: string | null;
+  primary_department_id: string;
+  department_name: string;
   is_active: boolean;
   sort_order: number;
 };
@@ -44,36 +56,34 @@ export type MarketingCreativeType = {
 export type MarketingCampaignType = {
   id: string;
   name: string;
-  short_code: string;
-  code_prefix: string;
+  code: string;
+  prefix: string;
   is_active: boolean;
   sort_order: number;
-  next_number: string;
+};
+
+export type MarketingPublishType = {
+  id: string;
+  platform_id: string;
+  name: string;
+  dimensions: string | null;
+  is_active: boolean;
+  sort_order: number;
 };
 
 export type MarketingPlatform = {
   id: string;
-  code: string;
-  name: string;
-  is_active: boolean;
-  sort_order: number;
-};
-
-export type MarketingPostType = {
-  id: string;
-  platform_id: string;
-  platform_code: string;
-  platform_name: string;
   name: string;
   code: string;
-  dimensions?: string | null;
   is_active: boolean;
   sort_order: number;
+  publishTypes: MarketingPublishType[];
 };
 
-export type MarketingCategory = {
+export type MarketingPackageCategory = {
   id: string;
   name: string;
+  code: string;
   is_active: boolean;
   sort_order: number;
 };
@@ -82,280 +92,247 @@ export type MarketingRequestStatus = {
   id: string;
   code: string;
   name: string;
-  is_terminal: boolean;
   is_active: boolean;
   sort_order: number;
 };
 
-export type MarketingUser = {
-  id: string;
-  full_name: string;
-  email?: string | null;
-  employee_no?: string | null;
-  can_receive_tasks: boolean;
-  department_codes: string[];
-};
-
-export type MarketingAttendanceSettings = {
-  work_start_time: string;
-  work_end_time: string;
-  grace_minutes: number;
-  idle_after_minutes: number;
-  offline_after_minutes: number;
-  updated_at?: string;
-};
-
 export type MarketingMeta = {
-  ok: boolean;
+  ok: true;
   departments: MarketingDepartment[];
-  departmentUsers: MarketingDepartmentUser[];
-  actions: MarketingAction[];
-  creativeTypes: MarketingCreativeType[];
+  creatives: MarketingCreative[];
   campaignTypes: MarketingCampaignType[];
   platforms: MarketingPlatform[];
-  postTypes: MarketingPostType[];
-  categories: MarketingCategory[];
+  packageCategories: MarketingPackageCategory[];
   requestStatuses: MarketingRequestStatus[];
-  users: MarketingUser[];
-  attendanceSettings: MarketingAttendanceSettings | null;
-  permissions: MarketingPermissionMap;
-  currentUser: { id: string; fullName: string; roleCodes: string[]; departmentCodes: string[] };
-};
-
-export type TaskActionState = {
-  id: string;
-  name: string;
-  percentage: number;
-  completed: boolean;
-  completed_at?: string | null;
-  note?: string | null;
-};
-
-export type MarketingUpload = {
-  id: string;
-  upload_kind: string;
-  file_name: string;
-  external_url?: string | null;
-  storage_key?: string | null;
-  version_no?: number;
-  uploaded_by_name?: string | null;
-  created_at: string;
+  users: MarketingUserOption[];
+  permissions: MarketingPermissionFlags;
+  currentUserId: string;
 };
 
 export type MarketingTask = {
   id: string;
+  campaign_id: string;
+  creative_instance_id: string;
+  template_task_id: string | null;
   task_no: string;
   task_kind: "template" | "execution";
   status: string;
-  review_status?: string | null;
-  review_note?: string | null;
+  status_label: string;
   progress: number;
-  due_at?: string | null;
-  received_at?: string | null;
-  completed_at?: string | null;
-  assigned_to?: string | null;
-  assigned_name?: string | null;
-  content_writer_id?: string | null;
-  content_writer_name?: string | null;
-  template_task_id?: string | null;
-  department_id?: string | null;
-  department_code?: string | null;
-  department_name?: string | null;
-  campaign_id: string;
-  project_name: string;
+  due_date: string | null;
+  received_at: string | null;
+  completed_at: string | null;
+  final_file_id: string | null;
+  admin_notes: string | null;
+  campaign_name: string;
   campaign_code: string;
   source_kind: "campaign" | "agenda";
-  campaign_type?: string | null;
-  project_starts_on?: string | null;
-  project_ends_on?: string | null;
-  project_objective?: string | null;
-  project_content_brief?: string | null;
-  project_stage?: string;
-  creative_id?: string | null;
-  instance_no?: string | null;
-  creative_type?: string | null;
-  short_code?: string | null;
-  agenda_day?: string | null;
-  content_due_at?: string | null;
-  content_notes?: string | null;
-  admin_notes?: string | null;
-  assignment_notes?: string | null;
-  vehicles?: Array<{ id: string; vin: string; car_name?: string | null; statement?: string | null; exterior_color?: string | null; interior_color?: string | null; model_year?: string | null; location_name?: string | null }>;
-  template_data?: Record<string, unknown>;
-  final_file_name?: string | null;
-  final_file_url?: string | null;
-  actions: TaskActionState[];
-  uploads: MarketingUpload[];
+  creative_name: string;
+  creative_short_code: string;
+  instance_code: string;
+  department_id: string;
+  department_name: string;
+  assigned_to: string;
+  assigned_name: string;
+  content_writer_id: string;
+  content_writer_name: string;
+  template_status: string | null;
 };
 
-export type MarketingProjectSummary = {
+export type CampaignSummary = {
+  id: string;
+  source_kind: "campaign" | "agenda";
+  campaign_code: string;
+  name: string;
+  campaign_type: string | null;
+  objective: string | null;
+  content_request: string | null;
+  campaign_date: string | null;
+  publish_start: string;
+  publish_end: string;
+  agenda_month: string | null;
+  status: string;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+  progress: number;
+  departments_count: number;
+  tasks_count: number;
+  received_count: number;
+  completed_count: number;
+};
+
+export type MarketingDashboard = {
+  ok: true;
+  pendingGroups: Array<{ departmentName: string; tasks: MarketingTask[] }>;
+  reviewTasks: MarketingTask[];
+  activeTasks: MarketingTask[];
+  readiness: CampaignSummary[];
+  publishing: CampaignSummary[];
+};
+
+export type MarketingCampaignList = { ok: true; rows: CampaignSummary[] };
+
+export type CampaignDetailResponse = {
+  ok: true;
+  campaign: CampaignSummary;
+  instances: Array<Record<string, unknown>>;
+  contentUsers: Array<Record<string, unknown>>;
+  sections: Array<Record<string, unknown>>;
+  sectionUsers: Array<Record<string, unknown>>;
+  writerLinks: Array<Record<string, unknown>>;
+  vehicles: Array<Record<string, unknown>>;
+  instancePlatforms: Array<Record<string, unknown>>;
+  instancePublishTypes: Array<Record<string, unknown>>;
+  budgets: Array<Record<string, unknown>>;
+  budgetPlatforms: Array<Record<string, unknown>>;
+  schedule: Array<Record<string, unknown>>;
+  schedulePlatforms: Array<Record<string, unknown>>;
+  tasks: MarketingTask[];
+  actions: Array<Record<string, unknown>>;
+  submissions: Array<Record<string, unknown>>;
+  files: Array<Record<string, unknown>>;
+  links: Array<Record<string, unknown>>;
+  days: Array<Record<string, unknown>>;
+};
+
+export type TaskDetailResponse = {
+  ok: true;
+  task: MarketingTask;
+  campaign: Record<string, unknown>;
+  instance: Record<string, unknown>;
+  vehicles: Array<Record<string, unknown>>;
+  actions: MarketingAction[];
+  submissions: Array<Record<string, unknown>>;
+  approvedTemplate: Record<string, unknown> | null;
+  files: Array<Record<string, unknown>>;
+};
+
+export type StockVehicle = {
+  id: string;
+  vin: string;
+  car_name: string | null;
+  statement: string | null;
+  exterior_color: string | null;
+  interior_color: string | null;
+  model_year: string | null;
+  location_name: string | null;
+  status_code: string;
+  active_photo_requests: number;
+  content_uses: number;
+};
+
+export type StockResponse = { ok: true; rows: StockVehicle[] };
+
+export type PhotoRequest = {
+  id: string;
+  request_no: string | null;
+  status: string;
+  requested_by_name: string | null;
+  requested_at: string;
+  photography_date: string | null;
+  note: string | null;
+  completed_at: string | null;
+  vehicles: Array<{ id: string; vin: string; car_name: string | null; statement: string | null; location_name: string | null }>;
+};
+
+export type PhotoRequestsResponse = { ok: true; rows: PhotoRequest[] };
+
+export type MarketingPackage = {
   id: string;
   name: string;
-  campaign_code: string;
-  source_kind: "campaign" | "agenda";
-  status: string;
-  stage: string;
-  starts_on?: string | null;
-  ends_on?: string | null;
-  moved_to_publish_at?: string | null;
+  category_id: string;
+  category_name: string;
+  category_code: string;
+  price: number;
+  cash_discount: number;
+  registration_fee: boolean;
+  insurance: boolean;
+  issuance_fee: boolean;
+  car_care_lines: string[];
+  delivery_mode: "home" | "region";
+  is_active: boolean;
   created_at: string;
-  task_count: number;
-  department_count: number;
-  progress: number;
-};
-
-export type MarketingDashboardData = {
-  ok: boolean;
-  counts: { projects: number; campaigns: number; agendas: number; publishing: number };
-  tasks: MarketingTask[];
-  projects: MarketingProjectSummary[];
-  pendingReviews: number;
-};
-
-export type ProjectListRow = MarketingProjectSummary & {
-  campaign_type?: string | null;
-  objective?: string | null;
-  content_brief?: string | null;
-  campaign_date?: string | null;
   updated_at: string;
-  archived_at?: string | null;
-  raw_folders_created_at?: string | null;
-  creative_count: number;
-  created_by_name?: string | null;
 };
 
-export type ProjectCreative = {
-  id: string;
-  campaign_id: string;
-  creative_type_id?: string | null;
-  creative_type: string;
-  creative_type_name?: string | null;
-  instance_no: string;
-  short_code?: string | null;
-  agenda_day?: string | null;
-  content_due_at?: string | null;
-  content_notes?: string | null;
-  admin_notes?: string | null;
-  primary_department_name?: string | null;
-  status: string;
-  metadata?: Record<string, unknown>;
-};
+export type PackagesResponse = { ok: true; rows: MarketingPackage[] };
 
-export type ProjectAssignment = {
-  id: string;
-  creative_id: string;
-  department_id: string;
-  assigned_user_id: string;
-  content_writer_id?: string | null;
-  assignment_role: "content" | "primary" | "optional";
-  due_at?: string | null;
-  notes?: string | null;
-  is_optional: boolean;
-  department_name: string;
-  department_code: string;
-  assigned_name: string;
-  content_writer_name?: string | null;
-};
+export type GenericRowsResponse = { ok: true; rows: Array<Record<string, unknown>>; month?: string };
 
-export type ProjectVehicle = {
-  creative_id: string;
-  vehicle_id: string;
-  vin: string;
-  car_name?: string | null;
-  statement?: string | null;
-  exterior_color?: string | null;
-  interior_color?: string | null;
-  model_year?: string | null;
-  location_name?: string | null;
-};
-
-export type BudgetItemRow = {
-  id: string;
-  creative_id?: string | null;
-  platform_id?: string | null;
-  funnel: string;
-  ad_count: number;
-  content_goal?: string | null;
-  expected_goal?: string | null;
-  amount: number;
-  notes?: string | null;
-  instance_no?: string | null;
-  creative_type?: string | null;
-  platform_name?: string | null;
-};
-
-export type PublishScheduleRow = {
-  id: string;
-  creative_id: string;
-  platform_id: string;
-  post_type_id: string;
-  publish_date: string;
-  publish_time?: string | null;
-  notes?: string | null;
-  status: string;
-  instance_no: string;
-  creative_type: string;
-  platform_name: string;
-  post_type_name: string;
-  dimensions?: string | null;
-};
-
-export type ProjectDetail = {
-  ok: boolean;
-  project: ProjectListRow & Record<string, unknown>;
-  creatives: ProjectCreative[];
-  assignments: ProjectAssignment[];
-  vehicles: ProjectVehicle[];
-  tasks: MarketingTask[];
-  budget: BudgetItemRow[];
-  schedule: PublishScheduleRow[];
-  links: Array<{ id: string; platform_id?: string | null; platform_name?: string | null; url: string; created_at: string }>;
-  files: Array<{ id: string; file_kind: string; file_name: string; external_url?: string | null; storage_key?: string | null; created_at: string }>;
-  activity: Array<{ id: string; actor_name?: string | null; action: string; details: Record<string, unknown>; created_at: string }>;
-};
-
-export type WizardAssignment = {
-  id: string;
-  departmentId: string;
+export type ContentUserDraft = {
   userId: string;
-  contentWriterIds: string[];
-  role: "primary" | "optional";
-  dueAt: string;
+  dueDate: string;
   notes: string;
 };
 
-export type WizardInstance = {
-  clientId: string;
-  instanceNo: string;
-  agendaDay: string;
-  creativeTypeId: string;
-  contentWriterIds: string[];
-  contentDueAt: string;
-  contentNotes: string;
-  adminNotes: string;
-  assignments: WizardAssignment[];
-  vehicleIds: string[];
-  metadata: Record<string, unknown>;
+export type WriterLinkDraft = {
+  userId: string;
+  dueDate: string;
 };
 
-export type WizardBudgetItem = {
-  id: string;
-  instanceClientId: string;
-  funnel: string;
+export type SectionUserDraft = {
+  userId: string;
+  dueDate: string;
+  writers: WriterLinkDraft[];
+};
+
+export type InstanceSectionDraft = {
+  localId: string;
+  departmentId: string;
+  kind: "primary" | "optional";
+  receivedDate: string;
+  notes: string;
+  users: SectionUserDraft[];
+};
+
+export type InstancePlatformDraft = {
   platformId: string;
-  adCount: number;
+  publishTypeIds: string[];
+};
+
+export type CreativeInstanceDraft = {
+  clientKey: string;
+  creativeId: string;
+  agendaDate?: string;
+  contentReceivedDate: string;
+  contentNotes: string;
+  primaryReceivedDate: string;
+  primaryNotes: string;
+  contentUsers: ContentUserDraft[];
+  sections: InstanceSectionDraft[];
+  vehicleIds: string[];
+  platformSelections: InstancePlatformDraft[];
+};
+
+export type BudgetDraft = {
+  localId: string;
+  clientInstanceKey: string;
+  funnel: string;
+  adsCount: number;
   contentGoal: string;
   expectedGoal: string;
-  amount: number;
-  notes: string;
+  platformAmounts: Array<{ platformId: string; amount: number }>;
 };
 
-export type WizardScheduleItem = {
-  id: string;
-  instanceClientId: string;
+export type ScheduleDraft = {
+  localId: string;
+  clientInstanceKey: string;
   publishDate: string;
-  publishTime: string;
-  platformId: string;
-  postTypeId: string;
-  notes: string;
+  selections: InstancePlatformDraft[];
+};
+
+export type CampaignWizardDraft = {
+  idempotencyKey: string;
+  name: string;
+  campaignTypeId: string;
+  objective: string;
+  contentRequest: string;
+  campaignDate: string;
+  publishStart: string;
+  publishEnd: string;
+  agendaMonth: string;
+  instances: CreativeInstanceDraft[];
+  budgets: BudgetDraft[];
+  schedule: ScheduleDraft[];
 };
