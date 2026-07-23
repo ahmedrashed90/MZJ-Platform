@@ -69,6 +69,31 @@ requireTokens("migration", migration, [
 ]);
 if (!schema.includes(migration.trim())) throw new Error("embedded CRM schema migration is not synchronized with the standalone SQL file");
 
+const runtimeSqlBlocks = [...engine.matchAll(/`([\s\S]*?)`/g)].map((match) => match[1]);
+for (const block of runtimeSqlBlocks) {
+  const projectsDuplicateId = /select\s+\*,\s*id::text/i.test(block);
+  const orderByClause = block.match(/order\s+by\s+([\s\S]*?)(?:\blimit\b|\bfor\s+update\b|$)/i)?.[1] || "";
+  const ordersByBareId = /(^|,)\s*id(?:\s+(?:asc|desc))?(?:\s*,|\s*$)/i.test(orderByClause.trim());
+  if (projectsDuplicateId && ordersByBareId) {
+    throw new Error(`engine: ambiguous runtime SQL projects id twice and orders by bare id: ${block.trim()}`);
+  }
+}
+
+requireTokens("engine ordered collection readers", engine, [
+  "c.id::text as id",
+  "order by c.sort_order,c.id",
+  "o.id::text as id",
+  "order by o.sort_order,o.id",
+  "m.id::text as id",
+  "order by m.sort_order,m.id",
+  "s.id::text as id",
+  "order by s.sort_order,s.id",
+]);
+forbidTokens("engine ambiguous ordered readers", engine, [
+  "order by sort_order,id",
+  "order by sort_order desc,id desc",
+]);
+
 requireTokens("engine", engine, [
   "pg_advisory_xact_lock",
   "on conflict(event_key)",

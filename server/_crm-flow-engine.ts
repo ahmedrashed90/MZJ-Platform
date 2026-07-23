@@ -130,19 +130,42 @@ async function sendFlowMessage(context: FlowContext, input: {
 
 async function loadChoices(tx: any, automationId: string) {
   return tx<any[]>`
-    select *,id::text,automation_id::text
-    from crm.automation_choices
-    where automation_id=${automationId}::uuid and is_active=true and is_archived=false
-    order by sort_order,id
+    select
+      c.id::text as id,
+      c.automation_id::text as automation_id,
+      c.choice_code,
+      c.display_name,
+      c.emoji,
+      c.department_code,
+      c.service_key,
+      c.branch_policy,
+      c.branch_code,
+      c.final_action,
+      c.final_message,
+      c.sort_order,
+      c.is_active,
+      c.is_archived,
+      c.created_at,
+      c.updated_at
+    from crm.automation_choices c
+    where c.automation_id=${automationId}::uuid and c.is_active=true and c.is_archived=false
+    order by c.sort_order,c.id
   `;
 }
 
 async function loadStepOptions(tx: any, stepId: string) {
   return tx<any[]>`
-    select *,id::text,step_id::text
-    from crm.automation_step_options
-    where step_id=${stepId}::uuid and is_active=true
-    order by sort_order,id
+    select
+      o.id::text as id,
+      o.step_id::text as step_id,
+      o.option_code,
+      o.label,
+      o.accepted_replies,
+      o.sort_order,
+      o.is_active
+    from crm.automation_step_options o
+    where o.step_id=${stepId}::uuid and o.is_active=true
+    order by o.sort_order,o.id
   `;
 }
 
@@ -161,9 +184,19 @@ async function startSession(context: FlowContext) {
   session.status = "sending";
 
   const messages = await tx<any[]>`
-    select *,id::text from crm.automation_start_messages
-    where automation_id=${definition.id}::uuid and is_active=true and is_archived=false
-    order by sort_order,id
+    select
+      m.id::text as id,
+      m.automation_id::text as automation_id,
+      m.message_code,
+      m.body,
+      m.sort_order,
+      m.is_active,
+      m.is_archived,
+      m.created_at,
+      m.updated_at
+    from crm.automation_start_messages m
+    where m.automation_id=${definition.id}::uuid and m.is_active=true and m.is_archived=false
+    order by m.sort_order,m.id
   `;
   const choices = await loadChoices(tx, definition.id);
   try {
@@ -193,9 +226,9 @@ async function startSession(context: FlowContext) {
 async function resendChoicePrompt(context: FlowContext) {
   const choices = await loadChoices(context.tx, context.definition.id);
   const [last] = await context.tx<any[]>`
-    select body,message_code from crm.automation_start_messages
-    where automation_id=${context.definition.id}::uuid and is_active=true and is_archived=false
-    order by sort_order desc,id desc limit 1
+    select m.body,m.message_code from crm.automation_start_messages m
+    where m.automation_id=${context.definition.id}::uuid and m.is_active=true and m.is_archived=false
+    order by m.sort_order desc,m.id desc limit 1
   `;
   const body = clean(last?.body) || "برجاء اختيار الخدمة المطلوبة.";
   await sendFlowMessage(context, {
@@ -433,9 +466,26 @@ async function completeFinalAction(context: FlowContext, choice: any) {
 
 async function advanceChoiceFlow(context: FlowContext, choice: any, afterSortOrder = -1) {
   const steps = await context.tx<any[]>`
-    select *,id::text,choice_id::text from crm.automation_steps
-    where choice_id=${choice.id}::uuid and is_active=true and is_archived=false and sort_order>${afterSortOrder}
-    order by sort_order,id
+    select
+      s.id::text as id,
+      s.choice_id::text as choice_id,
+      s.step_code,
+      s.name,
+      s.prompt,
+      s.step_type,
+      s.customer_field_key,
+      s.is_required,
+      s.validation_rules,
+      s.validation_error_message,
+      s.max_attempts,
+      s.sort_order,
+      s.is_active,
+      s.is_archived,
+      s.created_at,
+      s.updated_at
+    from crm.automation_steps s
+    where s.choice_id=${choice.id}::uuid and s.is_active=true and s.is_archived=false and s.sort_order>${afterSortOrder}
+    order by s.sort_order,s.id
   `;
   for (const step of steps) {
     await context.tx`
