@@ -4,6 +4,7 @@ const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "
 const migration = read("database/migrations/20260723_crm_automation_flow_rebuild_v1180.sql");
 const schema = read("server/_crm-schema.ts");
 const engine = read("server/_crm-flow-engine.ts");
+const financeDetails = read("server/_crm-finance-details.ts");
 const settingsApi = read("server/crm/automation-settings.ts");
 const entryApi = read("server/crm/entry-routing.ts");
 const integration = read("server/_integration-processor.ts");
@@ -94,6 +95,25 @@ requireTokens("engine ordered collection readers", engine, [
 forbidTokens("engine ambiguous ordered readers", engine, [
   "order by sort_order,id",
   "order by sort_order desc,id desc",
+]);
+
+requireTokens("finance combined details parser", financeDetails, [
+  "FINANCE_COMBINED_PROMPT",
+  "parseFinanceCombinedDetails",
+  "financeMissingPrompt",
+  "normalizeFinancePhone",
+  "customerName",
+  "carName",
+  "phone",
+]);
+requireTokens("finance combined runtime", engine, [
+  "sendFinanceCombinedQuestion",
+  "handleFinanceCombinedAnswer",
+  "awaiting_finance_details",
+  "finance_details_incomplete",
+  "finance-details:missing",
+  "financeBatchSteps",
+  "financeCombinedPrompt",
 ]);
 
 requireTokens("engine", engine, [
@@ -291,9 +311,30 @@ function phone(value) {
 
 const choices = {
   cash: { replies: ["مبيعات الكاش", "كاش", "1", "cash"], steps: [], final: "cash_done" },
-  finance: { replies: ["مبيعات التمويل", "تمويل", "2", "finance"], steps: ["name", "car", "phone"], final: "finance_done" },
+  finance: { replies: ["مبيعات التمويل", "تمويل", "2", "finance"], steps: ["finance_details"], final: "finance_done" },
   service: { replies: ["خدمة العملاء", "3", "service"], steps: [], final: "service_done" },
 };
+function parseFinanceDetails(value, previous = {}) {
+  const raw = String(value || "").trim();
+  const phoneValue = phone(raw);
+  let withoutPhone = raw.replace(/(?:00966|\+?966|0)?[\s().-]*5(?:[\s().-]*\d){8}/, "\n");
+  withoutPhone = withoutPhone
+    .replace(/(?:اسم\s*العميل|الاسم|name)\s*[:=\-]*/gi, "\n")
+    .replace(/(?:اسم\s*السيار(?:ة|ه)|نوع\s*السيار(?:ة|ه)|السيار(?:ة|ه)|car)\s*[:=\-]*/gi, "\n")
+    .replace(/(?:رقم\s*(?:الجوال|الهاتف)|الجوال|الهاتف|phone|mobile)\s*[:=\-]*/gi, "\n");
+  const parts = withoutPhone.split(/[\r\n,،;؛|/\\]+/).map((item) => item.trim()).filter(Boolean);
+  const values = { name: previous.name || "", car: previous.car || "", phone: previous.phone || "" };
+  if (phoneValue) values.phone = phoneValue;
+  const missingText = ["name", "car"].filter((field) => !values[field]);
+  if (missingText.length === 1 && parts.length) values[missingText[0]] = parts.join(" ");
+  else if (missingText.length === 2 && parts.length >= 2) { values.name = parts[0]; values.car = parts.slice(1).join(" "); }
+  else if (missingText.length === 2 && parts.length === 1 && phoneValue) {
+    const words = parts[0].split(/\s+/).filter(Boolean);
+    if (words.length >= 2) { values.name = words.slice(0, -1).join(" "); values.car = words.at(-1); }
+    else values.name = parts[0];
+  } else if (missingText.length === 2 && parts.length === 1) values.name = parts[0];
+  return values;
+}
 function simulate(events) {
   const seen = new Set();
   const output = [];
@@ -305,7 +346,7 @@ function simulate(events) {
     if (seen.has(event.id)) continue;
     seen.add(event.id);
     if (!session) {
-      session = { status: "awaiting_choice", choice: null, step: 0, answers: {} };
+      session = { status: "awaiting_choice", choice: null, answers: {} };
       output.push("welcome");
       continue;
     }
@@ -318,19 +359,14 @@ function simulate(events) {
         created += 1; distributed += 1; finalMessages += 1;
         session.status = "completed"; output.push(choices[choiceKey].final); continue;
       }
-      session.status = "awaiting_answer"; output.push("name_question"); continue;
+      session.status = "awaiting_answer"; output.push("finance_details_question"); continue;
     }
     if (session.status === "awaiting_answer") {
-      const step = choices[session.choice].steps[session.step];
-      const value = step === "phone" ? phone(event.text) : String(event.text || "").trim();
-      if (!value) { output.push(step === "phone" ? "phone_invalid" : "invalid"); continue; }
-      session.answers[step] = value;
-      session.step += 1;
-      if (session.step < choices[session.choice].steps.length) output.push(`${choices[session.choice].steps[session.step]}_question`);
-      else {
-        created += 1; distributed += 2; finalMessages += 1;
-        session.status = "completed"; output.push("finance_done");
-      }
+      session.answers = parseFinanceDetails(event.text, session.answers);
+      const missing = ["name", "car", "phone"].filter((field) => !session.answers[field]);
+      if (missing.length) { output.push(`finance_missing_${missing.join("_")}`); continue; }
+      created += 1; distributed += 2; finalMessages += 1;
+      session.status = "completed"; output.push("finance_done");
     }
   }
   return { output, session, created, distributed, finalMessages, seen: seen.size };
@@ -346,15 +382,28 @@ if (cash.output.join(",") !== "welcome,cash_done" || cash.created !== 1 || cash.
 const finance = simulate([
   { id: "f1", text: "مرحبا" },
   { id: "f2", text: "مبيعات التمويل" },
-  { id: "f3", text: "أحمد محمد" },
-  { id: "f4", text: "سوناتا" },
-  { id: "f5", text: "123" },
-  { id: "f6", text: "0541421013" },
-  { id: "f6", text: "0541421013" },
+  { id: "f3", text: "أحمد محمد، سوناتا، 0541421013" },
+  { id: "f3", text: "أحمد محمد، سوناتا، 0541421013" },
 ]);
-if (finance.output.join(",") !== "welcome,name_question,car_question,phone_question,phone_invalid,finance_done") throw new Error(`finance acceptance simulation failed: ${finance.output.join(",")}`);
-if (finance.session.answers.name !== "أحمد محمد" || finance.session.answers.car !== "سوناتا" || finance.session.answers.phone !== "966541421013") throw new Error("finance answers were not retained in order");
-if (finance.created !== 1 || finance.distributed !== 2 || finance.finalMessages !== 1) throw new Error("finance idempotency simulation failed");
+if (finance.output.join(",") !== "welcome,finance_details_question,finance_done") throw new Error(`finance combined acceptance simulation failed: ${finance.output.join(",")}`);
+if (finance.session.answers.name !== "أحمد محمد" || finance.session.answers.car !== "سوناتا" || finance.session.answers.phone !== "966541421013") throw new Error("finance combined answers were not retained");
+if (finance.created !== 1 || finance.distributed !== 2 || finance.finalMessages !== 1) throw new Error("finance combined idempotency simulation failed");
+
+const financeLines = simulate([
+  { id: "fl1", text: "مرحبا" },
+  { id: "fl2", text: "2" },
+  { id: "fl3", text: "أحمد محمد\nتويوتا كامري\n0541421013" },
+]);
+if (financeLines.output.join(",") !== "welcome,finance_details_question,finance_done") throw new Error("finance multiline acceptance simulation failed");
+
+const financePartial = simulate([
+  { id: "fp1", text: "مرحبا" },
+  { id: "fp2", text: "تمويل" },
+  { id: "fp3", text: "أحمد" },
+  { id: "fp4", text: "سوناتا" },
+  { id: "fp5", text: "0541421013" },
+]);
+if (financePartial.output.join(",") !== "welcome,finance_details_question,finance_missing_car_phone,finance_missing_phone,finance_done") throw new Error(`finance partial accumulation simulation failed: ${financePartial.output.join(",")}`);
 
 const service = simulate([
   { id: "s1", text: "مرحبا" },

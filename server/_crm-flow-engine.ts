@@ -2,6 +2,7 @@ import { clean, normalizePhone } from "./_crm-utils.js";
 import { databaseAdvisoryLockPair, getSql } from "./_db.js";
 import { classifyConversationService, mergeDuplicateContacts } from "./_crm-lifecycle.js";
 import { deliverConversationMessage } from "./_crm-messaging.js";
+import { FINANCE_COMBINED_PROMPT, financeMissingPrompt, parseFinanceCombinedDetails } from "./_crm-finance-details.js";
 
 export type AutomationInboundInput = {
   eventKey: string;
@@ -464,6 +465,163 @@ async function completeFinalAction(context: FlowContext, choice: any) {
   }
 }
 
+
+const FINANCE_REQUIRED_FIELDS = ["customer_name", "car_name", "phone"] as const;
+
+function financeBatchSteps(steps: any[]) {
+  const byField = new Map(steps.map((step) => [clean(step.customer_field_key), step]));
+  if (!FINANCE_REQUIRED_FIELDS.every((field) => byField.has(field))) return null;
+  return {
+    customerName: byField.get("customer_name"),
+    carName: byField.get("car_name"),
+    phone: byField.get("phone"),
+  };
+}
+
+function financeCombinedPrompt(steps: NonNullable<ReturnType<typeof financeBatchSteps>>) {
+  const seen = new Set<string>();
+  const lines = [steps.customerName.prompt, steps.carName.prompt, steps.phone.prompt]
+    .flatMap((prompt) => clean(prompt).split(/\r?\n/u))
+    .map(clean)
+    .filter((line) => {
+      if (!line) return false;
+      const key = normalizeAutomationReply(line);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return lines.join("\n") || FINANCE_COMBINED_PROMPT;
+}
+
+async function sendFinanceCombinedQuestion(context: FlowContext, choice: any, steps: ReturnType<typeof financeBatchSteps>) {
+  if (!steps) throw new Error("خطوات بيانات التمويل غير مكتملة");
+  const anchor = steps.customerName;
+  await context.tx`
+    update crm.automation_sessions set status='sending',current_step_id=${anchor.id}::uuid,last_activity_at=now(),error_message=null
+    where id=${context.session.id}::uuid
+  `;
+  context.session.current_step_id = anchor.id;
+  context.session.status = "sending";
+  try {
+    await sendFlowMessage(context, {
+      kind: "question",
+      body: financeCombinedPrompt(steps),
+      idempotencyKey: `automation:${context.session.id}:finance-details`,
+      stepId: anchor.id,
+    });
+  } catch (error: any) {
+    const message = clean(error?.message || error) || "فشل إرسال طلب بيانات التمويل";
+    await context.tx`
+      update crm.automation_sessions set status='sending',current_step_id=${anchor.id}::uuid,error_message=${message},last_activity_at=now()
+      where id=${context.session.id}::uuid
+    `;
+    return { action: "finance_details_question_failed", retryable: true, error: message, sessionId: context.session.id };
+  }
+  await context.tx`
+    update crm.automation_sessions set status='awaiting_answer',current_step_id=${anchor.id}::uuid,last_activity_at=now(),error_message=null
+    where id=${context.session.id}::uuid
+  `;
+  context.session.status = "awaiting_answer";
+  return { action: "awaiting_finance_details", choice: choice.choice_code, currentStep: anchor.step_code, sessionId: context.session.id };
+}
+
+async function stageFinanceAnswer(context: FlowContext, step: any, rawValue: string, normalizedValue: string) {
+  const [attemptRow] = await context.tx<any[]>`
+    select count(*)::integer as count from crm.automation_answers
+    where session_id=${context.session.id}::uuid and step_id=${step.id}::uuid
+  `;
+  const attempt = Number(attemptRow?.count || 0) + 1;
+  await context.tx`
+    insert into crm.automation_answers(session_id,step_id,inbound_event_id,raw_value,normalized_value,validation_status,validation_error,attempt_number)
+    values(${context.session.id}::uuid,${step.id}::uuid,${context.event.id}::uuid,${rawValue || null},${normalizedValue || null},'valid',null,${attempt})
+    on conflict(session_id,step_id,inbound_event_id) do update set raw_value=excluded.raw_value,normalized_value=excluded.normalized_value,
+      validation_status='valid',validation_error=null,attempt_number=excluded.attempt_number
+  `;
+}
+
+async function handleFinanceCombinedAnswer(context: FlowContext, choice: any, steps: NonNullable<ReturnType<typeof financeBatchSteps>>) {
+  const rawValue = clean(context.input.messageText || context.input.payloadValue);
+  const existingAnswers = await sessionAnswerMap(context.tx, context.session.id);
+  const parsed = parseFinanceCombinedDetails(rawValue, {
+    customerName: existingAnswers.customer_name,
+    carName: existingAnswers.car_name,
+    phone: existingAnswers.phone,
+  });
+  const fieldEntries = [
+    { key: "customerName" as const, step: steps.customerName },
+    { key: "carName" as const, step: steps.carName },
+    { key: "phone" as const, step: steps.phone },
+  ];
+  const accepted: Record<string, string> = {};
+  const invalidFields = new Set<string>();
+
+  for (const entry of fieldEntries) {
+    const capturedValue = clean(parsed.captured[entry.key]);
+    if (!capturedValue) continue;
+    const validation = validateStep(entry.step, capturedValue);
+    if (!validation.valid) {
+      invalidFields.add(entry.key);
+      continue;
+    }
+    accepted[entry.key] = validation.normalized;
+    await stageFinanceAnswer(context, entry.step, capturedValue, validation.normalized);
+  }
+
+  const values = {
+    customerName: accepted.customerName || existingAnswers.customer_name || "",
+    carName: accepted.carName || existingAnswers.car_name || "",
+    phone: accepted.phone || existingAnswers.phone || "",
+  };
+  const missing = (["customerName", "carName", "phone"] as const).filter((field) => !clean(values[field]) || invalidFields.has(field));
+  const pendingTargetContactId = values.phone
+    ? clean((await context.tx<any[]>`select id::text from crm.contacts where primary_phone_normalized=${values.phone} limit 1`)[0]?.id)
+    : "";
+  const metadata = {
+    ...(context.session.metadata || {}),
+    capturedCustomerName: values.customerName || null,
+    capturedCarName: values.carName || null,
+    capturedPhone: values.phone || null,
+    financeDetailsDraft: values,
+    pendingTargetContactId: pendingTargetContactId && pendingTargetContactId !== context.session.contact_id ? pendingTargetContactId : null,
+  };
+  await context.tx`
+    update crm.automation_sessions set metadata=${context.tx.json(metadata)},last_activity_at=now(),error_message=null
+    where id=${context.session.id}::uuid
+  `;
+  context.session.metadata = metadata;
+
+  if (missing.length) {
+    const body = financeMissingPrompt(missing);
+    try {
+      await sendFlowMessage(context, {
+        kind: "validation_error",
+        body,
+        idempotencyKey: `automation:${context.session.id}:finance-details:missing:${context.event.id}`,
+        stepId: steps.customerName.id,
+      });
+    } catch (error: any) {
+      const message = clean(error?.message || error) || "فشل إرسال طلب استكمال بيانات التمويل";
+      await context.tx`update crm.automation_sessions set status='awaiting_answer',error_message=${message},last_activity_at=now() where id=${context.session.id}::uuid`;
+      return { action: "finance_details_validation_message_failed", retryable: true, missing, error: message, sessionId: context.session.id };
+    }
+    await context.tx`
+      update crm.automation_sessions set status='awaiting_answer',current_step_id=${steps.customerName.id}::uuid,last_activity_at=now(),error_message=null
+      where id=${context.session.id}::uuid
+    `;
+    context.session.current_step_id = steps.customerName.id;
+    context.session.status = "awaiting_answer";
+    return { action: "finance_details_incomplete", missing, sessionId: context.session.id };
+  }
+
+  await context.tx`
+    update crm.automation_sessions set status='sending',current_step_id=null,last_activity_at=now(),error_message=null
+    where id=${context.session.id}::uuid
+  `;
+  context.session.current_step_id = null;
+  context.session.status = "sending";
+  return completeFinalAction(context, choice);
+}
+
 async function advanceChoiceFlow(context: FlowContext, choice: any, afterSortOrder = -1) {
   const steps = await context.tx<any[]>`
     select
@@ -487,6 +645,8 @@ async function advanceChoiceFlow(context: FlowContext, choice: any, afterSortOrd
     where s.choice_id=${choice.id}::uuid and s.is_active=true and s.is_archived=false and s.sort_order>${afterSortOrder}
     order by s.sort_order,s.id
   `;
+  const financeSteps = clean(choice.service_key) === "finance" ? financeBatchSteps(steps) : null;
+  if (financeSteps && afterSortOrder < 0) return sendFinanceCombinedQuestion(context, choice, financeSteps);
   for (const step of steps) {
     await context.tx`
       update crm.automation_sessions set status='sending',current_step_id=${step.id}::uuid,last_activity_at=now(),error_message=null
@@ -551,6 +711,16 @@ async function handleAnswer(context: FlowContext) {
     where id=${context.session.current_step_id}::uuid and is_active=true and is_archived=false limit 1
   `;
   if (!step) throw new Error("خطوة الأوتوميشن الحالية غير موجودة أو غير نشطة");
+  const [choice] = await context.tx<any[]>`select *,id::text from crm.automation_choices where id=${step.choice_id}::uuid and is_active=true and is_archived=false limit 1`;
+  if (!choice) throw new Error("اختيار الأوتوميشن المرتبط بالخطوة غير موجود");
+  if (clean(choice.service_key) === "finance") {
+    const choiceSteps = await context.tx<any[]>`
+      select s.*,s.id::text,s.choice_id::text from crm.automation_steps s
+      where s.choice_id=${choice.id}::uuid and s.is_active=true and s.is_archived=false order by s.sort_order,s.id
+    `;
+    const financeSteps = financeBatchSteps(choiceSteps);
+    if (financeSteps) return handleFinanceCombinedAnswer(context, choice, financeSteps);
+  }
   const rawValue = clean(context.input.messageText || context.input.payloadValue);
   const options = step.step_type === "choice" ? await loadStepOptions(context.tx, step.id) : [];
   const validation = validateStep(step, rawValue, options);
@@ -584,8 +754,6 @@ async function handleAnswer(context: FlowContext) {
   }
 
   await applyCustomerField(context, step, validation.normalized);
-  const [choice] = await context.tx<any[]>`select *,id::text from crm.automation_choices where id=${step.choice_id}::uuid and is_active=true and is_archived=false limit 1`;
-  if (!choice) throw new Error("اختيار الأوتوميشن المرتبط بالخطوة غير موجود");
   const flowResult = await advanceChoiceFlow(context, choice, Number(step.sort_order));
   await projectCapturedFieldAfterDelivery(context, step, validation.normalized);
   return flowResult;
@@ -600,6 +768,16 @@ async function retrySendingSession(context: FlowContext) {
       where id=${session.current_step_id}::uuid and is_active=true and is_archived=false limit 1
     `;
     if (!step) throw new Error("تعذر العثور على خطوة الأوتوميشن المطلوب إعادة إرسالها");
+    const [choice] = await tx<any[]>`select *,id::text from crm.automation_choices where id=${step.choice_id}::uuid and is_active=true and is_archived=false limit 1`;
+    if (!choice) throw new Error("تعذر العثور على اختيار خطوة الأوتوميشن");
+    if (clean(choice.service_key) === "finance") {
+      const choiceSteps = await tx<any[]>`
+        select s.*,s.id::text,s.choice_id::text from crm.automation_steps s
+        where s.choice_id=${choice.id}::uuid and s.is_active=true and s.is_archived=false order by s.sort_order,s.id
+      `;
+      const financeSteps = financeBatchSteps(choiceSteps);
+      if (financeSteps) return sendFinanceCombinedQuestion(context, choice, financeSteps);
+    }
     const options = step.step_type === "choice" ? await loadStepOptions(tx, step.id) : [];
     try {
       await sendFlowMessage(context, {
@@ -615,11 +793,6 @@ async function retrySendingSession(context: FlowContext) {
       return { action: "question_retry_failed", retryable: true, step: step.step_code, error: message, sessionId: session.id };
     }
     if (step.step_type === "message") {
-      const [choice] = await tx<any[]>`
-        select *,id::text from crm.automation_choices
-        where id=${step.choice_id}::uuid and is_active=true and is_archived=false limit 1
-      `;
-      if (!choice) throw new Error("تعذر العثور على اختيار خطوة الأوتوميشن");
       return advanceChoiceFlow(context, choice, Number(step.sort_order));
     }
     await tx`update crm.automation_sessions set status='awaiting_answer',error_message=null,last_activity_at=now() where id=${session.id}::uuid`;
