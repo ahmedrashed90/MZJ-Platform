@@ -17,6 +17,8 @@ const admin = read("src/crm/pages/CrmAdminPage.tsx");
 const api = read("api/index.ts");
 const worker = read("facebook-worker/src/index.js");
 const workerCopy = read("workers/MZJ-Facebook-Worker-v2.0.0-FULL.js");
+const db = read("server/_db.ts");
+const integrationRoute = read("server/integrations/[source].ts");
 
 function requireTokens(label, source, tokens) {
   for (const token of tokens) {
@@ -124,6 +126,33 @@ forbidTokens("engine", engine, [
 ]);
 requireTokens("central distribution", lifecycle, ["export async function classifyConversationService", "export async function mergeDuplicateContacts"]);
 requireTokens("integration", integration, ["handleAutomationInbound", "publishBackgroundEvent"]);
+requireTokens("database conversation serialization", db, [
+  'lockClient',
+  'getLockSql',
+  'locks.reserve()',
+  'pg_advisory_lock(hashtext($1))',
+  'pg_advisory_unlock(hashtext($1))',
+  'return await work()',
+]);
+forbidTokens("database conversation serialization", db, [
+  'AsyncLocalStorage',
+  'sqlContext',
+  'reservedSqlFacade',
+]);
+requireTokens("integration ingress ordering", integrationRoute, [
+  'integrationConversationLockKey',
+  'withDatabaseAdvisoryLock(lockKey',
+  'integration:${source}:conversation:',
+  'await ensureCrmSchema()',
+  'processIntegrationEvent(source,eventKey,payload)',
+  'direction === "out" ? "" : integrationConversationLockKey',
+]);
+if (integrationRoute.indexOf('withDatabaseAdvisoryLock(lockKey') > integrationRoute.indexOf('processIntegrationEvent(source,eventKey,payload)')) {
+  throw new Error("integration ingress ordering: processIntegrationEvent must run inside the conversation lock");
+}
+if (integrationRoute.indexOf('await ensureCrmSchema()') < integrationRoute.indexOf('withDatabaseAdvisoryLock(lockKey')) {
+  throw new Error("integration ingress ordering: schema and processing must start after the conversation lock is acquired");
+}
 requireTokens("messaging", messaging, ["awaitProviderResult", "finishWorkerDelivery"]);
 requireTokens("background jobs", background, ["crm.background_events", "crm.background_jobs"]);
 

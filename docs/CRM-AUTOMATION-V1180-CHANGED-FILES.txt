@@ -15,6 +15,7 @@ workers/MZJ-Facebook-Worker-v2.0.0-FULL.js
 docs/CRM-AUTOMATION-V1180-IMPLEMENTATION-REPORT-AR.md
 docs/CRM-AUTOMATION-V1180-IMPLEMENTATION-PROMPT-AR.md
 docs/CRM-AUTOMATION-V1180-TEST-RESULTS.txt
+docs/CRM-AUTOMATION-V1180-INBOUND-ORDERING-FIX-AR.md
 
 UPDATED
 api/index.ts
@@ -25,6 +26,7 @@ server/_crm-auto-template.ts
 server/_crm-lifecycle.ts
 server/_crm-messaging.ts
 server/_integration-processor.ts
+server/integrations/[source].ts
 server/crm/contacts.ts
 server/crm/conversations.ts
 server/crm/entry-routing.ts

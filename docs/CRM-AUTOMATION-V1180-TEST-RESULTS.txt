@@ -24,3 +24,8 @@ PASS - ERPNext unified Sales Order link checks
 NOT RUN - Live PostgreSQL migration/integration test: DATABASE_URL is not configured.
 NOT RUN - Full Vite production build: project dependencies are not installed and network package installation was unavailable.
 The direct tsc command stopped on missing React/Node/module declarations, while syntax transpile of all source files passed.
+PASS - Same-conversation rapid inbound events are serialized at integration ingress
+PASS - Different conversations remain concurrent
+PASS - Advisory locks use an isolated PostgreSQL pool and do not replace CRM transaction clients
+PASS - TypeScript/TSX syntax transpile after inbound-ordering fix (128 files)
+NOT RUN - Live Facebook rapid-message sequence: requires deployment and a real Messenger conversation.

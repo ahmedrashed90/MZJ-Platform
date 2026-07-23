@@ -1,6 +1,8 @@
 import postgres from "postgres";
 
 let client: ReturnType<typeof postgres> | null = null;
+let lockClient: ReturnType<typeof postgres> | null = null;
+let lockClientReady: Promise<void> | null = null;
 
 export function databaseConfigured() {
   return Boolean(String(process.env.DATABASE_URL || "").trim());
@@ -26,6 +28,54 @@ export function getSql() {
   }
 
   return client;
+}
+
+function getLockSql() {
+  const connectionString = String(process.env.DATABASE_URL || "").trim();
+  if (!connectionString) {
+    const error = new Error("DATABASE_URL is not configured");
+    (error as Error & { code?: string }).code = "DATABASE_NOT_CONFIGURED";
+    throw error;
+  }
+
+  if (!lockClient) {
+    lockClient = postgres(connectionString, {
+      max: 4,
+      prepare: false,
+      connect_timeout: 12,
+      idle_timeout: 20,
+      max_lifetime: 60 * 30,
+      onnotice: () => undefined,
+    });
+  }
+
+  return lockClient;
+}
+
+async function ensureLockClientReady(sql: ReturnType<typeof postgres>) {
+  if (!lockClientReady) {
+    lockClientReady = sql.unsafe("select 1").then(() => undefined).catch((error) => {
+      lockClientReady = null;
+      throw error;
+    });
+  }
+  await lockClientReady;
+}
+
+export async function withDatabaseAdvisoryLock<T>(lockKey: string, work: () => Promise<T>): Promise<T> {
+  const normalizedKey = String(lockKey || "").trim();
+  if (!normalizedKey) return work();
+
+  const locks = getLockSql();
+  await ensureLockClientReady(locks);
+  const reserved = await locks.reserve();
+  try {
+    await reserved.unsafe("select pg_advisory_lock(hashtext($1))", [normalizedKey]);
+    return await work();
+  } finally {
+    await reserved.unsafe("select pg_advisory_unlock(hashtext($1))", [normalizedKey]).catch(() => undefined);
+    await reserved.release();
+  }
 }
 
 function splitSqlStatements(sqlText: string) {
