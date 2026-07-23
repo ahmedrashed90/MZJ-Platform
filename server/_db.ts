@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import postgres from "postgres";
 
 let client: ReturnType<typeof postgres> | null = null;
@@ -62,18 +63,25 @@ async function ensureLockClientReady(sql: ReturnType<typeof postgres>) {
   await lockClientReady;
 }
 
+export function databaseAdvisoryLockPair(lockKey: string): readonly [number, number] {
+  const normalizedKey = String(lockKey || "").trim();
+  const digest = createHash("sha256").update(normalizedKey, "utf8").digest();
+  return [digest.readInt32BE(0), digest.readInt32BE(4)] as const;
+}
+
 export async function withDatabaseAdvisoryLock<T>(lockKey: string, work: () => Promise<T>): Promise<T> {
   const normalizedKey = String(lockKey || "").trim();
   if (!normalizedKey) return work();
 
+  const [lockNamespace, lockValue] = databaseAdvisoryLockPair(`session:${normalizedKey}`);
   const locks = getLockSql();
   await ensureLockClientReady(locks);
   const reserved = await locks.reserve();
   try {
-    await reserved`select pg_advisory_lock(hashtext(${normalizedKey}::text)::bigint)`;
+    await reserved`select pg_advisory_lock(${lockNamespace}::integer,${lockValue}::integer)`;
     return await work();
   } finally {
-    await reserved`select pg_advisory_unlock(hashtext(${normalizedKey}::text)::bigint)`.catch(() => undefined);
+    await reserved`select pg_advisory_unlock(${lockNamespace}::integer,${lockValue}::integer)`.catch(() => undefined);
     await reserved.release();
   }
 }

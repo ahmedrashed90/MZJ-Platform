@@ -127,25 +127,32 @@ forbidTokens("engine", engine, [
 requireTokens("central distribution", lifecycle, ["export async function classifyConversationService", "export async function mergeDuplicateContacts"]);
 requireTokens("integration", integration, ["handleAutomationInbound", "publishBackgroundEvent"]);
 requireTokens("database conversation serialization", db, [
+  'createHash("sha256")',
+  'databaseAdvisoryLockPair',
+  'digest.readInt32BE(0)',
+  'digest.readInt32BE(4)',
   'lockClient',
   'getLockSql',
   'locks.reserve()',
-  'reserved`select pg_advisory_lock(hashtext(${normalizedKey}::text)::bigint)`',
-  'reserved`select pg_advisory_unlock(hashtext(${normalizedKey}::text)::bigint)`',
+  'reserved`select pg_advisory_lock(${lockNamespace}::integer,${lockValue}::integer)`',
+  'reserved`select pg_advisory_unlock(${lockNamespace}::integer,${lockValue}::integer)`',
   'return await work()',
 ]);
 forbidTokens("database conversation serialization", db, [
   'AsyncLocalStorage',
   'sqlContext',
   'reservedSqlFacade',
-  'pg_advisory_lock(hashtext($1',
-  'pg_advisory_unlock(hashtext($1',
+  'hashtext(',
+  'pg_advisory_lock($1',
+  'pg_advisory_unlock($1',
 ]);
 requireTokens("transaction conversation serialization", engine, [
-  'tx`select pg_advisory_xact_lock(hashtext(${input.conversationId}::text)::bigint)`',
+  'databaseAdvisoryLockPair(`transaction:${input.conversationId}`)',
+  'tx`select pg_advisory_xact_lock(${lockNamespace}::integer,${lockValue}::integer)`',
 ]);
 forbidTokens("transaction conversation serialization", engine, [
-  'pg_advisory_xact_lock(hashtext($1',
+  'hashtext(',
+  'pg_advisory_xact_lock($1',
 ]);
 requireTokens("integration ingress ordering", integrationRoute, [
   'integrationConversationLockKey',
