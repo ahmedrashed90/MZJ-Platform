@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Buildings,
   FloppyDisk,
   GearSix,
   Megaphone,
@@ -14,6 +13,7 @@ import { useSearchParams } from "react-router-dom";
 import { CrmAdminPage } from "../crm/pages/CrmAdminPage";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
 import { OperationsSettingsPanel } from "../operations/components/OperationsSettingsPanel";
+import { MarketingSettingsPanel } from "../marketing/components/MarketingSettingsPanel";
 
 type MetaItem = { id: string; code: string; name: string; system_code?: string };
 type MetaResponse = { ok: boolean; departments: MetaItem[]; branches: MetaItem[]; roles: MetaItem[]; error?: string };
@@ -58,19 +58,6 @@ const initialForm = {
   canReceiveLeads: false,
   canReceiveTasks: false,
 };
-
-function PendingSystemSettings({ title, description }: { title: string; description: string }) {
-  return (
-    <section className="panel unified-settings-placeholder">
-      <Buildings size={46} weight="duotone" />
-      <div>
-        <h2>{title}</h2>
-        <p>{description}</p>
-        <span>مكان الإعدادات محجوز داخل صفحة الإعدادات الموحدة، ويتم ربطه عند نقل موديول النظام إلى المنصة.</span>
-      </div>
-    </section>
-  );
-}
 
 export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -223,7 +210,7 @@ export function SettingsPage() {
       ) : null}
 
       {section === "crm" ? <CrmAdminPage embedded /> : null}
-      {section === "marketing" ? <PendingSystemSettings title="إعدادات التسويق" description="مصادر العملاء أصبحت مشتركة بالفعل مع CRM. بقية إعدادات الحملات والأجندة تنتقل هنا عند دمج موديول التسويق." /> : null}
+      {section === "marketing" ? <MarketingSettingsPanel /> : null}
       {section === "operations" ? <OperationsSettingsPanel /> : null}
       {section === "tracking" ? <TrackingSettingsPanel /> : null}
     </div>

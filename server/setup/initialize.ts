@@ -4,6 +4,7 @@ import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
 import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
+import { ensureMarketingSchema } from "../_marketing-schema.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -36,6 +37,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     await runSqlScript(SEED_SQL);
     await ensureTrackingSchema();
     await ensureOperationsSchema();
+    await ensureMarketingSchema();
 
     const sql = getSql();
     const [admin] = await sql<{ exists: boolean }[]>`
