@@ -21,6 +21,22 @@ import { createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 type Sql = ReturnType<typeof getSql>;
 type JsonRecord = Record<string, unknown>;
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function toJsonValue(value: unknown): JsonValue {
+  if (value === null) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(toJsonValue);
+  if (isRecord(value)) {
+    const result: { [key: string]: JsonValue } = {};
+    for (const [key, entry] of Object.entries(value)) result[key] = toJsonValue(entry);
+    return result;
+  }
+  return null;
+}
 
 type CampaignProgressRow = {
   campaign_id: string;
@@ -557,13 +573,6 @@ async function disableSetting(sql: Sql, body: JsonRecord) {
   return { ok: true, message: "تم تعطيل السجل" };
 }
 
-async function nextTaskNo(tx: Sql, instanceCode: string, shortCode: string, kind: "template" | "execution") {
-  const [sequence] = await tx<{ value: number }[]>`select nextval('marketing.task_no_seq')::bigint as value`;
-  const marker = kind === "template" ? "CONTENT" : "EXEC";
-  const suffix = crypto.randomBytes(5).toString("hex").toUpperCase();
-  return `${instanceCode}-${shortCode}-${marker}-${String(sequence?.value || 0).padStart(6, "0")}-${suffix}`;
-}
-
 async function createCampaign(sql: Sql, body: JsonRecord, user: MarketingUser) {
   const idempotencyKey = clean(body.idempotencyKey) || crypto.randomUUID();
   const sourceKind = clean(body.sourceKind) === "agenda" ? "agenda" : "campaign";
@@ -583,6 +592,13 @@ async function createCampaign(sql: Sql, body: JsonRecord, user: MarketingUser) {
   if (!instancesInput.length) throw new Error("أضف كرييتيفًا واحدًا على الأقل");
 
   return sql.begin(async (tx) => {
+    const nextTaskNo = async (instanceCode: string, shortCode: string, kind: "template" | "execution") => {
+      const [sequence] = await tx<{ value: number }[]>`select nextval('marketing.task_no_seq')::bigint as value`;
+      const marker = kind === "template" ? "CONTENT" : "EXEC";
+      const suffix = crypto.randomBytes(5).toString("hex").toUpperCase();
+      return `${instanceCode}-${shortCode}-${marker}-${String(sequence?.value || 0).padStart(6, "0")}-${suffix}`;
+    };
+
     const [existing] = await tx<{ id: string; campaign_code: string }[]>`select id::text,campaign_code from marketing.campaigns where idempotency_key=${idempotencyKey}`;
     if (existing) return { ok: true, id: existing.id, campaignCode: existing.campaign_code, duplicate: true, message: "تم إنشاء السجل من قبل" };
 
@@ -681,7 +697,7 @@ async function createCampaign(sql: Sql, body: JsonRecord, user: MarketingUser) {
       const templateTaskIds = new Map<string, string>();
       for (const writerId of contentUserIds) {
         const content = contentUsers.find((item) => asId(item.userId) === writerId);
-        const taskNo = await nextTaskNo(tx, instanceCode, creative.short_code, "template");
+        const taskNo = await nextTaskNo(instanceCode, creative.short_code, "template");
         const [task] = await tx<{ id: string }[]>`
           insert into marketing.tasks(campaign_id,creative_instance_id,task_no,task_kind,department_id,assigned_to,content_writer_id,status,due_date)
           values(${campaign.id}::uuid,${instance.id}::uuid,${taskNo},'template',${contentDepartment[0].id}::uuid,${writerId}::uuid,${writerId}::uuid,'waiting_receipt',${dateValue(content?.dueDate)||dateValue(instanceInput.contentReceivedDate)||null}) returning id::text
@@ -693,7 +709,7 @@ async function createCampaign(sql: Sql, body: JsonRecord, user: MarketingUser) {
       for (const link of sectionTaskLinks) {
         const templateTaskId = templateTaskIds.get(link.writerId);
         if (!templateTaskId) throw new Error("تعذر ربط التاسك التنفيذية بالـTask Template الصحيحة");
-        const taskNo = await nextTaskNo(tx, instanceCode, creative.short_code, "execution");
+        const taskNo = await nextTaskNo(instanceCode, creative.short_code, "execution");
         const [task] = await tx<{ id: string }[]>`
           insert into marketing.tasks(campaign_id,creative_instance_id,template_task_id,task_no,task_kind,department_id,assigned_to,content_writer_id,status,due_date)
           values(${campaign.id}::uuid,${instance.id}::uuid,${templateTaskId}::uuid,${taskNo},'execution',${link.departmentId}::uuid,${link.userId}::uuid,${link.writerId}::uuid,'waiting_template',${link.dueDate||null}) returning id::text
@@ -727,7 +743,7 @@ async function createCampaign(sql: Sql, body: JsonRecord, user: MarketingUser) {
       }
     }
 
-    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values(${user.id}::uuid,'marketing',${sourceKind==='agenda'?'agenda_created':'campaign_created'},${sourceKind},${campaign.id},${tx.json({campaignCode,name,instances:instancesInput.length})})`;
+    await tx`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values(${user.id}::uuid,'marketing',${sourceKind==='agenda'?'agenda_created':'campaign_created'},${sourceKind},${campaign.id},${tx.json(toJsonValue({ campaignCode, name, instances: instancesInput.length }))})`;
     return { ok: true, id: campaign.id, campaignCode, message: sourceKind === "agenda" ? "تم إنشاء الأجندة والتاسكات بنجاح" : "تم إنشاء الحملة والتاسكات بنجاح" };
   });
 }
@@ -767,7 +783,7 @@ async function prepareUpload(sql: Sql, body: JsonRecord, user: MarketingUser) {
     throw new Error("نوع مالك الملف غير مدعوم");
   }
   const key = storageKey(ownerType, ownerId, fileName);
-  const [file] = await sql<{ id: string }[]>`insert into marketing.files(owner_type,owner_id,storage_key,original_name,mime_type,file_size,status,uploaded_by,metadata) values(${ownerType},${ownerId}::uuid,${key},${fileName},${mimeType},${fileSize||null},'uploading',${user.id}::uuid,${sql.json(isRecord(body.metadata)?body.metadata:{})}) returning id::text`;
+  const [file] = await sql<{ id: string }[]>`insert into marketing.files(owner_type,owner_id,storage_key,original_name,mime_type,file_size,status,uploaded_by,metadata) values(${ownerType},${ownerId}::uuid,${key},${fileName},${mimeType},${fileSize||null},'uploading',${user.id}::uuid,${sql.json(toJsonValue(isRecord(body.metadata) ? body.metadata : {}))}) returning id::text`;
   if (!file) throw new Error("تعذر تجهيز رفع الملف");
   return { ok: true, fileId: file.id, uploadUrl: createUploadUrl(key, 900), expiresIn: 900 };
 }
@@ -803,7 +819,7 @@ async function submitTemplate(sql: Sql, body: JsonRecord, user: MarketingUser) {
     if (!file || file.status !== "ready") throw new Error("أكمل رفع الملف أولًا");
     const [revision] = await tx<{ revision: number }[]>`select coalesce(max(revision_no),0)::int+1 as revision from marketing.template_submissions where task_id=${taskId}::uuid`;
     const parsedData = isRecord(body.parsedData) ? body.parsedData : {};
-    const [submission] = await tx<{ id: string }[]>`insert into marketing.template_submissions(task_id,revision_no,file_id,parsed_data,status,submitted_by) values(${taskId}::uuid,${revision?.revision||1},${fileId}::uuid,${tx.json(parsedData)},'submitted',${user.id}::uuid) returning id::text`;
+    const [submission] = await tx<{ id: string }[]>`insert into marketing.template_submissions(task_id,revision_no,file_id,parsed_data,status,submitted_by) values(${taskId}::uuid,${revision?.revision||1},${fileId}::uuid,${tx.json(toJsonValue(parsedData))},'submitted',${user.id}::uuid) returning id::text`;
     await tx`update marketing.tasks set status='template_review',progress=50,received_at=coalesce(received_at,now()),updated_at=now() where id=${taskId}::uuid`;
     await tx`update marketing.task_actions ta set completed=true,completed_at=now(),completed_by=${user.id}::uuid,updated_at=now() from marketing.assignment_actions a where ta.assignment_action_id=a.id and ta.task_id=${taskId}::uuid and a.code='template_upload'`;
     return { ok: true, submissionId: submission?.id, message: "تم رفع Task Template وإرسالها للمراجعة" };
@@ -932,8 +948,8 @@ async function saveConnection(sql: Sql, body: JsonRecord, user: MarketingUser) {
   if (!platformId || !connectionName) throw new Error("بيانات ربط المنصة غير مكتملة");
   const credentials = isRecord(body.credentials) ? body.credentials : {};
   const [row] = id
-    ? await sql<{ id: string }[]>`update marketing.platform_connections set platform_id=${platformId}::uuid,connection_name=${connectionName},account_label=${clean(body.accountLabel)||null},status=${clean(body.status)||'disconnected'},credentials=${sql.json(credentials)},updated_at=now() where id=${id}::uuid returning id::text`
-    : await sql<{ id: string }[]>`insert into marketing.platform_connections(platform_id,connection_name,account_label,status,credentials,created_by) values(${platformId}::uuid,${connectionName},${clean(body.accountLabel)||null},${clean(body.status)||'disconnected'},${sql.json(credentials)},${user.id}::uuid) returning id::text`;
+    ? await sql<{ id: string }[]>`update marketing.platform_connections set platform_id=${platformId}::uuid,connection_name=${connectionName},account_label=${clean(body.accountLabel)||null},status=${clean(body.status)||'disconnected'},credentials=${sql.json(toJsonValue(credentials))},updated_at=now() where id=${id}::uuid returning id::text`
+    : await sql<{ id: string }[]>`insert into marketing.platform_connections(platform_id,connection_name,account_label,status,credentials,created_by) values(${platformId}::uuid,${connectionName},${clean(body.accountLabel)||null},${clean(body.status)||'disconnected'},${sql.json(toJsonValue(credentials))},${user.id}::uuid) returning id::text`;
   return { ok: true, id: row?.id, message: "تم حفظ ربط المنصة" };
 }
 
@@ -967,7 +983,7 @@ async function createRawFolders(sql: Sql, body: JsonRecord, user: MarketingUser)
   const rawText = await response.text();
   let responseData: unknown = rawText;
   try { responseData = JSON.parse(rawText); } catch { /* keep text */ }
-  await sql`insert into marketing.raw_folder_runs(campaign_id,status,response_data,created_by) values(${campaignId}::uuid,${response.ok?'success':'failed'},${sql.json(isRecord(responseData)?responseData:{raw:rawText})},${user.id}::uuid)`;
+  await sql`insert into marketing.raw_folder_runs(campaign_id,status,response_data,created_by) values(${campaignId}::uuid,${response.ok?'success':'failed'},${sql.json(toJsonValue(isRecord(responseData) ? responseData : { raw: rawText }))},${user.id}::uuid)`;
   if (!response.ok) throw new Error("تعذر إنشاء فولدرات الخام على السيرفر");
   return { ok: true, message: "تم إنشاء فولدرات الخام والتسليم على السيرفر", result: responseData };
 }
