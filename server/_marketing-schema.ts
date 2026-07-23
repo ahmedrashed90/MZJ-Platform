@@ -1,13 +1,23 @@
-import { runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
+import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 
 let marketingSchemaPromise: Promise<void> | null = null;
 
 export const MARKETING_SCHEMA_SQL = String.raw`begin;
 
-create schema if not exists marketing;
-create sequence if not exists marketing.project_code_seq;
-create sequence if not exists marketing.task_no_seq;
-create sequence if not exists marketing.photo_request_no_seq;
+create schema if not exists marketing_native;
+create sequence if not exists marketing_native.project_code_seq;
+create sequence if not exists marketing_native.task_no_seq;
+create sequence if not exists marketing_native.photo_request_no_seq;
+
+create table if not exists marketing_native.schema_meta (
+  singleton boolean primary key default true check (singleton = true),
+  schema_version integer not null,
+  installed_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+insert into marketing_native.schema_meta(singleton,schema_version)
+values(true,1200)
+on conflict(singleton) do update set schema_version=excluded.schema_version,updated_at=now();
 
 insert into core.permissions(code,name,system_code) values
 ('marketing.view','عرض نظام التسويق','marketing'),
@@ -44,311 +54,7 @@ select r.id,p.id from core.roles r join core.permissions p on p.code in (
 where r.code='marketing_user'
 on conflict do nothing;
 
--- One in-transaction source of truth for the canonical marketing table columns.
--- It is reused by compatibility normalization and the final schema verification.
-create temporary table _mzj_marketing_contract_columns (
-  table_name text not null,
-  column_name text not null,
-  primary key(table_name,column_name)
-) on commit drop;
-insert into _mzj_marketing_contract_columns(table_name,column_name) values
-      ('departments','id'),
-      ('departments','code'),
-      ('departments','name'),
-      ('departments','is_content_department'),
-      ('departments','is_active'),
-      ('departments','sort_order'),
-      ('departments','created_at'),
-      ('departments','updated_at'),
-      ('department_users','department_id'),
-      ('department_users','user_id'),
-      ('department_users','is_active'),
-      ('department_users','created_at'),
-      ('assignment_actions','id'),
-      ('assignment_actions','department_id'),
-      ('assignment_actions','name'),
-      ('assignment_actions','percentage'),
-      ('assignment_actions','audience'),
-      ('assignment_actions','is_required'),
-      ('assignment_actions','is_active'),
-      ('assignment_actions','sort_order'),
-      ('assignment_actions','created_at'),
-      ('assignment_actions','updated_at'),
-      ('creative_types','id'),
-      ('creative_types','name'),
-      ('creative_types','short_code'),
-      ('creative_types','primary_department_id'),
-      ('creative_types','is_active'),
-      ('creative_types','sort_order'),
-      ('creative_types','created_at'),
-      ('creative_types','updated_at'),
-      ('campaign_types','id'),
-      ('campaign_types','name'),
-      ('campaign_types','short_code'),
-      ('campaign_types','code_prefix'),
-      ('campaign_types','is_active'),
-      ('campaign_types','sort_order'),
-      ('campaign_types','next_number'),
-      ('campaign_types','created_at'),
-      ('campaign_types','updated_at'),
-      ('platforms','id'),
-      ('platforms','code'),
-      ('platforms','name'),
-      ('platforms','is_active'),
-      ('platforms','sort_order'),
-      ('platforms','created_at'),
-      ('platforms','updated_at'),
-      ('platform_post_types','id'),
-      ('platform_post_types','platform_id'),
-      ('platform_post_types','name'),
-      ('platform_post_types','code'),
-      ('platform_post_types','dimensions'),
-      ('platform_post_types','is_active'),
-      ('platform_post_types','sort_order'),
-      ('platform_post_types','created_at'),
-      ('platform_post_types','updated_at'),
-      ('package_categories','id'),
-      ('package_categories','name'),
-      ('package_categories','is_active'),
-      ('package_categories','sort_order'),
-      ('package_categories','created_at'),
-      ('package_categories','updated_at'),
-      ('request_statuses','id'),
-      ('request_statuses','code'),
-      ('request_statuses','name'),
-      ('request_statuses','is_terminal'),
-      ('request_statuses','is_active'),
-      ('request_statuses','sort_order'),
-      ('request_statuses','created_at'),
-      ('request_statuses','updated_at'),
-      ('campaigns','id'),
-      ('campaigns','legacy_id'),
-      ('campaigns','campaign_code'),
-      ('campaigns','name'),
-      ('campaigns','campaign_type'),
-      ('campaigns','objective'),
-      ('campaigns','status'),
-      ('campaigns','starts_at'),
-      ('campaigns','ends_at'),
-      ('campaigns','due_at'),
-      ('campaigns','created_by'),
-      ('campaigns','is_deleted'),
-      ('campaigns','created_at'),
-      ('campaigns','updated_at'),
-      ('campaigns','source_kind'),
-      ('campaigns','campaign_type_id'),
-      ('campaigns','campaign_date'),
-      ('campaigns','starts_on'),
-      ('campaigns','ends_on'),
-      ('campaigns','content_brief'),
-      ('campaigns','stage'),
-      ('campaigns','archived_at'),
-      ('campaigns','archived_by'),
-      ('campaigns','deleted_at'),
-      ('campaigns','deleted_by'),
-      ('campaigns','moved_to_publish_at'),
-      ('campaigns','raw_folders_created_at'),
-      ('campaigns','idempotency_key'),
-      ('campaigns','metadata'),
-      ('creatives','id'),
-      ('creatives','campaign_id'),
-      ('creatives','creative_type'),
-      ('creatives','quantity'),
-      ('creatives','status'),
-      ('creatives','created_at'),
-      ('creatives','creative_type_id'),
-      ('creatives','instance_no'),
-      ('creatives','short_code'),
-      ('creatives','agenda_day'),
-      ('creatives','content_due_at'),
-      ('creatives','content_notes'),
-      ('creatives','admin_notes'),
-      ('creatives','sort_order'),
-      ('creatives','metadata'),
-      ('creatives','updated_at'),
-      ('instance_assignments','id'),
-      ('instance_assignments','creative_id'),
-      ('instance_assignments','department_id'),
-      ('instance_assignments','assigned_user_id'),
-      ('instance_assignments','content_writer_id'),
-      ('instance_assignments','assignment_role'),
-      ('instance_assignments','due_at'),
-      ('instance_assignments','notes'),
-      ('instance_assignments','is_optional'),
-      ('instance_assignments','created_at'),
-      ('instance_assignments','updated_at'),
-      ('instance_vehicles','creative_id'),
-      ('instance_vehicles','vehicle_id'),
-      ('instance_vehicles','created_at'),
-      ('budget_items','id'),
-      ('budget_items','campaign_id'),
-      ('budget_items','creative_id'),
-      ('budget_items','funnel'),
-      ('budget_items','platform_id'),
-      ('budget_items','amount'),
-      ('budget_items','notes'),
-      ('budget_items','sort_order'),
-      ('budget_items','created_at'),
-      ('budget_items','updated_at'),
-      ('budget_items','ad_count'),
-      ('budget_items','content_goal'),
-      ('budget_items','expected_goal'),
-      ('publish_schedule','id'),
-      ('publish_schedule','campaign_id'),
-      ('publish_schedule','creative_id'),
-      ('publish_schedule','publish_date'),
-      ('publish_schedule','publish_time'),
-      ('publish_schedule','platform_id'),
-      ('publish_schedule','post_type_id'),
-      ('publish_schedule','notes'),
-      ('publish_schedule','status'),
-      ('publish_schedule','created_at'),
-      ('publish_schedule','updated_at'),
-      ('tasks','id'),
-      ('tasks','campaign_id'),
-      ('tasks','creative_id'),
-      ('tasks','department_code'),
-      ('tasks','assigned_to'),
-      ('tasks','paired_content_user_id'),
-      ('tasks','status'),
-      ('tasks','due_at'),
-      ('tasks','completed_at'),
-      ('tasks','created_at'),
-      ('tasks','updated_at'),
-      ('tasks','task_no'),
-      ('tasks','task_kind'),
-      ('tasks','department_id'),
-      ('tasks','content_writer_id'),
-      ('tasks','template_task_id'),
-      ('tasks','received_at'),
-      ('tasks','received_by'),
-      ('tasks','progress'),
-      ('tasks','review_status'),
-      ('tasks','review_note'),
-      ('tasks','template_data'),
-      ('tasks','final_asset_id'),
-      ('tasks','final_file_name'),
-      ('tasks','final_file_url'),
-      ('tasks','metadata'),
-      ('task_action_progress','task_id'),
-      ('task_action_progress','action_id'),
-      ('task_action_progress','completed'),
-      ('task_action_progress','completed_by'),
-      ('task_action_progress','completed_at'),
-      ('task_action_progress','note'),
-      ('task_action_progress','updated_at'),
-      ('task_uploads','id'),
-      ('task_uploads','task_id'),
-      ('task_uploads','upload_kind'),
-      ('task_uploads','file_name'),
-      ('task_uploads','storage_key'),
-      ('task_uploads','external_url'),
-      ('task_uploads','mime_type'),
-      ('task_uploads','file_size'),
-      ('task_uploads','version_no'),
-      ('task_uploads','status'),
-      ('task_uploads','uploaded_by'),
-      ('task_uploads','uploaded_by_name'),
-      ('task_uploads','metadata'),
-      ('task_uploads','created_at'),
-      ('task_reviews','id'),
-      ('task_reviews','task_id'),
-      ('task_reviews','action'),
-      ('task_reviews','note'),
-      ('task_reviews','reviewer_id'),
-      ('task_reviews','reviewer_name'),
-      ('task_reviews','snapshot'),
-      ('task_reviews','created_at'),
-      ('project_links','id'),
-      ('project_links','campaign_id'),
-      ('project_links','platform_id'),
-      ('project_links','url'),
-      ('project_links','created_by'),
-      ('project_links','created_at'),
-      ('project_files','id'),
-      ('project_files','campaign_id'),
-      ('project_files','file_kind'),
-      ('project_files','file_name'),
-      ('project_files','storage_key'),
-      ('project_files','external_url'),
-      ('project_files','mime_type'),
-      ('project_files','file_size'),
-      ('project_files','uploaded_by'),
-      ('project_files','uploaded_by_name'),
-      ('project_files','created_at'),
-      ('packages','id'),
-      ('packages','name'),
-      ('packages','category_id'),
-      ('packages','price'),
-      ('packages','cash_discount_percent'),
-      ('packages','registration_fee'),
-      ('packages','insurance_fee'),
-      ('packages','issuance_fee'),
-      ('packages','care_items'),
-      ('packages','delivery_home'),
-      ('packages','delivery_region'),
-      ('packages','metadata'),
-      ('packages','is_active'),
-      ('packages','created_by'),
-      ('packages','created_at'),
-      ('packages','updated_at'),
-      ('attendance_settings','id'),
-      ('attendance_settings','work_start_time'),
-      ('attendance_settings','work_end_time'),
-      ('attendance_settings','grace_minutes'),
-      ('attendance_settings','idle_after_minutes'),
-      ('attendance_settings','offline_after_minutes'),
-      ('attendance_settings','updated_by'),
-      ('attendance_settings','updated_at'),
-      ('attendance_records','id'),
-      ('attendance_records','user_id'),
-      ('attendance_records','attendance_date'),
-      ('attendance_records','check_in_at'),
-      ('attendance_records','check_out_at'),
-      ('attendance_records','status'),
-      ('attendance_records','late_minutes'),
-      ('attendance_records','work_minutes'),
-      ('attendance_records','source'),
-      ('attendance_records','metadata'),
-      ('attendance_records','created_at'),
-      ('attendance_records','updated_at'),
-      ('presence_status','user_id'),
-      ('presence_status','last_seen_at'),
-      ('presence_status','last_activity_at'),
-      ('presence_status','last_page'),
-      ('presence_status','activity_type'),
-      ('presence_status','device_info'),
-      ('presence_status','updated_at'),
-      ('attendance_requests','id'),
-      ('attendance_requests','user_id'),
-      ('attendance_requests','request_type'),
-      ('attendance_requests','request_date'),
-      ('attendance_requests','note'),
-      ('attendance_requests','status'),
-      ('attendance_requests','reviewed_by'),
-      ('attendance_requests','review_note'),
-      ('attendance_requests','created_at'),
-      ('attendance_requests','updated_at'),
-      ('platform_connections','id'),
-      ('platform_connections','platform_id'),
-      ('platform_connections','connection_status'),
-      ('platform_connections','account_name'),
-      ('platform_connections','account_external_id'),
-      ('platform_connections','token_status'),
-      ('platform_connections','settings'),
-      ('platform_connections','connected_by'),
-      ('platform_connections','connected_at'),
-      ('platform_connections','updated_at'),
-      ('activity_log','id'),
-      ('activity_log','actor_id'),
-      ('activity_log','actor_name'),
-      ('activity_log','action'),
-      ('activity_log','entity_type'),
-      ('activity_log','entity_id'),
-      ('activity_log','details'),
-      ('activity_log','created_at');
-
-create table if not exists marketing.departments (
+create table if not exists marketing_native.departments (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
   name text not null,
@@ -358,34 +64,21 @@ create table if not exists marketing.departments (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.departments.
-alter table marketing.departments add column if not exists code text;
-alter table marketing.departments add column if not exists name text;
-alter table marketing.departments add column if not exists is_content_department boolean not null default false;
-alter table marketing.departments add column if not exists is_active boolean not null default true;
-alter table marketing.departments add column if not exists sort_order integer not null default 0;
-alter table marketing.departments add column if not exists created_at timestamptz not null default now();
-alter table marketing.departments add column if not exists updated_at timestamptz not null default now();
 
 create unique index if not exists marketing_single_content_department
-on marketing.departments((is_content_department)) where is_content_department=true and is_active=true;
+on marketing_native.departments((is_content_department)) where is_content_department=true and is_active=true;
 
-create table if not exists marketing.department_users (
-  department_id uuid not null references marketing.departments(id) on delete cascade,
+create table if not exists marketing_native.department_users (
+  department_id uuid not null references marketing_native.departments(id) on delete cascade,
   user_id uuid not null references core.users(id) on delete cascade,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   primary key(department_id,user_id)
 );
--- Existing-table compatibility contract for marketing.department_users.
-alter table marketing.department_users add column if not exists department_id uuid references marketing.departments(id) on delete cascade;
-alter table marketing.department_users add column if not exists user_id uuid references core.users(id) on delete cascade;
-alter table marketing.department_users add column if not exists is_active boolean not null default true;
-alter table marketing.department_users add column if not exists created_at timestamptz not null default now();
 
-create table if not exists marketing.assignment_actions (
+create table if not exists marketing_native.assignment_actions (
   id uuid primary key default gen_random_uuid(),
-  department_id uuid not null references marketing.departments(id) on delete cascade,
+  department_id uuid not null references marketing_native.departments(id) on delete cascade,
   name text not null,
   percentage numeric(5,2) not null check(percentage>=0 and percentage<=100),
   audience text not null default 'user' check(audience in ('user','admin','both')),
@@ -396,37 +89,19 @@ create table if not exists marketing.assignment_actions (
   updated_at timestamptz not null default now(),
   unique(department_id,name)
 );
--- Existing-table compatibility contract for marketing.assignment_actions.
-alter table marketing.assignment_actions add column if not exists department_id uuid references marketing.departments(id) on delete cascade;
-alter table marketing.assignment_actions add column if not exists name text;
-alter table marketing.assignment_actions add column if not exists percentage numeric(5,2);
-alter table marketing.assignment_actions add column if not exists audience text not null default 'user';
-alter table marketing.assignment_actions add column if not exists is_required boolean not null default true;
-alter table marketing.assignment_actions add column if not exists is_active boolean not null default true;
-alter table marketing.assignment_actions add column if not exists sort_order integer not null default 0;
-alter table marketing.assignment_actions add column if not exists created_at timestamptz not null default now();
-alter table marketing.assignment_actions add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.creative_types (
+create table if not exists marketing_native.creative_types (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   short_code text not null unique,
-  primary_department_id uuid references marketing.departments(id),
+  primary_department_id uuid references marketing_native.departments(id),
   is_active boolean not null default true,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.creative_types.
-alter table marketing.creative_types add column if not exists name text;
-alter table marketing.creative_types add column if not exists short_code text;
-alter table marketing.creative_types add column if not exists primary_department_id uuid references marketing.departments(id);
-alter table marketing.creative_types add column if not exists is_active boolean not null default true;
-alter table marketing.creative_types add column if not exists sort_order integer not null default 0;
-alter table marketing.creative_types add column if not exists created_at timestamptz not null default now();
-alter table marketing.creative_types add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.campaign_types (
+create table if not exists marketing_native.campaign_types (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   short_code text not null unique,
@@ -437,86 +112,8 @@ create table if not exists marketing.campaign_types (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.campaign_types.
-alter table marketing.campaign_types add column if not exists name text;
-alter table marketing.campaign_types add column if not exists short_code text;
-alter table marketing.campaign_types add column if not exists code_prefix text not null default 'MZJ';
-alter table marketing.campaign_types add column if not exists is_active boolean not null default true;
-alter table marketing.campaign_types add column if not exists sort_order integer not null default 0;
-alter table marketing.campaign_types add column if not exists next_number bigint not null default 1;
-alter table marketing.campaign_types add column if not exists created_at timestamptz not null default now();
-alter table marketing.campaign_types add column if not exists updated_at timestamptz not null default now();
 
-
--- One-time, data-preserving normalization of the legacy campaign type aliases.
--- Older marketing builds used code / prefix; the native contract uses
--- short_code / code_prefix. The old columns are retained as nullable
--- compatibility data, but they can no longer block native inserts.
-do $$
-declare
-  has_legacy_code boolean;
-  has_legacy_prefix boolean;
-begin
-  select exists(
-    select 1 from information_schema.columns
-    where table_schema='marketing' and table_name='campaign_types' and column_name='code'
-  ) into has_legacy_code;
-  select exists(
-    select 1 from information_schema.columns
-    where table_schema='marketing' and table_name='campaign_types' and column_name='prefix'
-  ) into has_legacy_prefix;
-
-  if has_legacy_code and has_legacy_prefix then
-    execute $sql$
-      update marketing.campaign_types
-      set code_prefix = case
-            when nullif(short_code,'') is null then coalesce(nullif(prefix::text,''),nullif(code_prefix,''),'MZJ')
-            else coalesce(nullif(code_prefix,''),'MZJ')
-          end,
-          short_code = coalesce(nullif(short_code,''),nullif(code::text,''))
-    $sql$;
-  elsif has_legacy_code then
-    execute $sql$
-      update marketing.campaign_types
-      set short_code=coalesce(nullif(short_code,''),nullif(code::text,'')),
-          code_prefix=coalesce(nullif(code_prefix,''),'MZJ')
-    $sql$;
-  elsif has_legacy_prefix then
-    execute $sql$
-      update marketing.campaign_types
-      set code_prefix=case
-            when nullif(short_code,'') is null then coalesce(nullif(prefix::text,''),nullif(code_prefix,''),'MZJ')
-            else coalesce(nullif(code_prefix,''),'MZJ')
-          end
-    $sql$;
-  end if;
-end $$;
-
-update marketing.campaign_types
-set name=coalesce(nullif(name,''),'نوع حملة ' || substr(id::text,1,8)),
-    short_code=coalesce(nullif(short_code,''),'LEG-' || upper(substr(md5(id::text),1,8))),
-    code_prefix=coalesce(nullif(code_prefix,''),'MZJ'),
-    is_active=coalesce(is_active,true),
-    sort_order=coalesce(sort_order,0),
-    next_number=coalesce(next_number,1),
-    created_at=coalesce(created_at,now()),
-    updated_at=coalesce(updated_at,now());
-alter table marketing.campaign_types alter column code_prefix set default 'MZJ';
-alter table marketing.campaign_types alter column is_active set default true;
-alter table marketing.campaign_types alter column sort_order set default 0;
-alter table marketing.campaign_types alter column next_number set default 1;
-alter table marketing.campaign_types alter column created_at set default now();
-alter table marketing.campaign_types alter column updated_at set default now();
-alter table marketing.campaign_types alter column name set not null;
-alter table marketing.campaign_types alter column short_code set not null;
-alter table marketing.campaign_types alter column code_prefix set not null;
-alter table marketing.campaign_types alter column is_active set not null;
-alter table marketing.campaign_types alter column sort_order set not null;
-alter table marketing.campaign_types alter column next_number set not null;
-alter table marketing.campaign_types alter column created_at set not null;
-alter table marketing.campaign_types alter column updated_at set not null;
-
-create table if not exists marketing.platforms (
+create table if not exists marketing_native.platforms (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
   name text not null unique,
@@ -525,17 +122,10 @@ create table if not exists marketing.platforms (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.platforms.
-alter table marketing.platforms add column if not exists code text;
-alter table marketing.platforms add column if not exists name text;
-alter table marketing.platforms add column if not exists is_active boolean not null default true;
-alter table marketing.platforms add column if not exists sort_order integer not null default 0;
-alter table marketing.platforms add column if not exists created_at timestamptz not null default now();
-alter table marketing.platforms add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.platform_post_types (
+create table if not exists marketing_native.platform_post_types (
   id uuid primary key default gen_random_uuid(),
-  platform_id uuid not null references marketing.platforms(id) on delete cascade,
+  platform_id uuid not null references marketing_native.platforms(id) on delete cascade,
   name text not null,
   code text not null,
   dimensions text,
@@ -545,17 +135,8 @@ create table if not exists marketing.platform_post_types (
   updated_at timestamptz not null default now(),
   unique(platform_id,code)
 );
--- Existing-table compatibility contract for marketing.platform_post_types.
-alter table marketing.platform_post_types add column if not exists platform_id uuid references marketing.platforms(id) on delete cascade;
-alter table marketing.platform_post_types add column if not exists name text;
-alter table marketing.platform_post_types add column if not exists code text;
-alter table marketing.platform_post_types add column if not exists dimensions text;
-alter table marketing.platform_post_types add column if not exists is_active boolean not null default true;
-alter table marketing.platform_post_types add column if not exists sort_order integer not null default 0;
-alter table marketing.platform_post_types add column if not exists created_at timestamptz not null default now();
-alter table marketing.platform_post_types add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.package_categories (
+create table if not exists marketing_native.package_categories (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   is_active boolean not null default true,
@@ -563,14 +144,8 @@ create table if not exists marketing.package_categories (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.package_categories.
-alter table marketing.package_categories add column if not exists name text;
-alter table marketing.package_categories add column if not exists is_active boolean not null default true;
-alter table marketing.package_categories add column if not exists sort_order integer not null default 0;
-alter table marketing.package_categories add column if not exists created_at timestamptz not null default now();
-alter table marketing.package_categories add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.request_statuses (
+create table if not exists marketing_native.request_statuses (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
   name text not null,
@@ -580,16 +155,8 @@ create table if not exists marketing.request_statuses (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.request_statuses.
-alter table marketing.request_statuses add column if not exists code text;
-alter table marketing.request_statuses add column if not exists name text;
-alter table marketing.request_statuses add column if not exists is_terminal boolean not null default false;
-alter table marketing.request_statuses add column if not exists is_active boolean not null default true;
-alter table marketing.request_statuses add column if not exists sort_order integer not null default 0;
-alter table marketing.request_statuses add column if not exists created_at timestamptz not null default now();
-alter table marketing.request_statuses add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.campaigns (
+create table if not exists marketing_native.campaigns (
   id uuid primary key default gen_random_uuid(),
   legacy_id text unique,
   campaign_code text unique,
@@ -605,7 +172,7 @@ create table if not exists marketing.campaigns (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   source_kind text not null default 'campaign',
-  campaign_type_id uuid references marketing.campaign_types(id),
+  campaign_type_id uuid references marketing_native.campaign_types(id),
   campaign_date date,
   starts_on date,
   ends_on date,
@@ -620,47 +187,18 @@ create table if not exists marketing.campaigns (
   idempotency_key text,
   metadata jsonb not null default '{}'::jsonb
 );
--- Existing-table compatibility contract for marketing.campaigns.
-alter table marketing.campaigns add column if not exists legacy_id text;
-alter table marketing.campaigns add column if not exists campaign_code text;
-alter table marketing.campaigns add column if not exists name text;
-alter table marketing.campaigns add column if not exists campaign_type text;
-alter table marketing.campaigns add column if not exists objective text;
-alter table marketing.campaigns add column if not exists status text not null default 'active';
-alter table marketing.campaigns add column if not exists starts_at timestamptz;
-alter table marketing.campaigns add column if not exists ends_at timestamptz;
-alter table marketing.campaigns add column if not exists due_at timestamptz;
-alter table marketing.campaigns add column if not exists created_by uuid references core.users(id);
-alter table marketing.campaigns add column if not exists is_deleted boolean not null default false;
-alter table marketing.campaigns add column if not exists created_at timestamptz not null default now();
-alter table marketing.campaigns add column if not exists updated_at timestamptz not null default now();
-alter table marketing.campaigns add column if not exists source_kind text not null default 'campaign';
-alter table marketing.campaigns add column if not exists campaign_type_id uuid references marketing.campaign_types(id);
-alter table marketing.campaigns add column if not exists campaign_date date;
-alter table marketing.campaigns add column if not exists starts_on date;
-alter table marketing.campaigns add column if not exists ends_on date;
-alter table marketing.campaigns add column if not exists content_brief text;
-alter table marketing.campaigns add column if not exists stage text not null default 'required';
-alter table marketing.campaigns add column if not exists archived_at timestamptz;
-alter table marketing.campaigns add column if not exists archived_by uuid references core.users(id);
-alter table marketing.campaigns add column if not exists deleted_at timestamptz;
-alter table marketing.campaigns add column if not exists deleted_by uuid references core.users(id);
-alter table marketing.campaigns add column if not exists moved_to_publish_at timestamptz;
-alter table marketing.campaigns add column if not exists raw_folders_created_at timestamptz;
-alter table marketing.campaigns add column if not exists idempotency_key text;
-alter table marketing.campaigns add column if not exists metadata jsonb not null default '{}'::jsonb;
 
-create unique index if not exists marketing_campaigns_idempotency_key on marketing.campaigns(idempotency_key) where idempotency_key is not null;
-create index if not exists marketing_campaigns_kind_stage_idx on marketing.campaigns(source_kind,stage,created_at desc) where is_deleted=false;
+create unique index if not exists marketing_campaigns_idempotency_key on marketing_native.campaigns(idempotency_key) where idempotency_key is not null;
+create index if not exists marketing_campaigns_kind_stage_idx on marketing_native.campaigns(source_kind,stage,created_at desc) where is_deleted=false;
 
-create table if not exists marketing.creatives (
+create table if not exists marketing_native.creatives (
   id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
+  campaign_id uuid not null references marketing_native.campaigns(id) on delete cascade,
   creative_type text not null,
   quantity integer not null default 1,
   status text not null default 'pending',
   created_at timestamptz not null default now(),
-  creative_type_id uuid references marketing.creative_types(id),
+  creative_type_id uuid references marketing_native.creative_types(id),
   instance_no text,
   short_code text,
   agenda_day date,
@@ -671,28 +209,12 @@ create table if not exists marketing.creatives (
   metadata jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.creatives.
-alter table marketing.creatives add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
-alter table marketing.creatives add column if not exists creative_type text;
-alter table marketing.creatives add column if not exists quantity integer not null default 1;
-alter table marketing.creatives add column if not exists status text not null default 'pending';
-alter table marketing.creatives add column if not exists created_at timestamptz not null default now();
-alter table marketing.creatives add column if not exists creative_type_id uuid references marketing.creative_types(id);
-alter table marketing.creatives add column if not exists instance_no text;
-alter table marketing.creatives add column if not exists short_code text;
-alter table marketing.creatives add column if not exists agenda_day date;
-alter table marketing.creatives add column if not exists content_due_at timestamptz;
-alter table marketing.creatives add column if not exists content_notes text;
-alter table marketing.creatives add column if not exists admin_notes text;
-alter table marketing.creatives add column if not exists sort_order integer not null default 0;
-alter table marketing.creatives add column if not exists metadata jsonb not null default '{}'::jsonb;
-alter table marketing.creatives add column if not exists updated_at timestamptz not null default now();
-create unique index if not exists marketing_creatives_project_instance on marketing.creatives(campaign_id,instance_no);
+create unique index if not exists marketing_creatives_project_instance on marketing_native.creatives(campaign_id,instance_no);
 
-create table if not exists marketing.instance_assignments (
+create table if not exists marketing_native.instance_assignments (
   id uuid primary key default gen_random_uuid(),
-  creative_id uuid not null references marketing.creatives(id) on delete cascade,
-  department_id uuid not null references marketing.departments(id),
+  creative_id uuid not null references marketing_native.creatives(id) on delete cascade,
+  department_id uuid not null references marketing_native.departments(id),
   assigned_user_id uuid not null references core.users(id),
   content_writer_id uuid references core.users(id),
   assignment_role text not null check(assignment_role in ('content','primary','optional')),
@@ -702,37 +224,22 @@ create table if not exists marketing.instance_assignments (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.instance_assignments.
-alter table marketing.instance_assignments add column if not exists creative_id uuid references marketing.creatives(id) on delete cascade;
-alter table marketing.instance_assignments add column if not exists department_id uuid references marketing.departments(id);
-alter table marketing.instance_assignments add column if not exists assigned_user_id uuid references core.users(id);
-alter table marketing.instance_assignments add column if not exists content_writer_id uuid references core.users(id);
-alter table marketing.instance_assignments add column if not exists assignment_role text;
-alter table marketing.instance_assignments add column if not exists due_at timestamptz;
-alter table marketing.instance_assignments add column if not exists notes text;
-alter table marketing.instance_assignments add column if not exists is_optional boolean not null default false;
-alter table marketing.instance_assignments add column if not exists created_at timestamptz not null default now();
-alter table marketing.instance_assignments add column if not exists updated_at timestamptz not null default now();
 create unique index if not exists marketing_instance_assignment_unique
-on marketing.instance_assignments(creative_id,department_id,assigned_user_id,coalesce(content_writer_id,'00000000-0000-0000-0000-000000000000'::uuid),assignment_role);
+on marketing_native.instance_assignments(creative_id,department_id,assigned_user_id,coalesce(content_writer_id,'00000000-0000-0000-0000-000000000000'::uuid),assignment_role);
 
-create table if not exists marketing.instance_vehicles (
-  creative_id uuid not null references marketing.creatives(id) on delete cascade,
+create table if not exists marketing_native.instance_vehicles (
+  creative_id uuid not null references marketing_native.creatives(id) on delete cascade,
   vehicle_id uuid not null references operations.vehicles(id),
   created_at timestamptz not null default now(),
   primary key(creative_id,vehicle_id)
 );
--- Existing-table compatibility contract for marketing.instance_vehicles.
-alter table marketing.instance_vehicles add column if not exists creative_id uuid references marketing.creatives(id) on delete cascade;
-alter table marketing.instance_vehicles add column if not exists vehicle_id uuid references operations.vehicles(id);
-alter table marketing.instance_vehicles add column if not exists created_at timestamptz not null default now();
 
-create table if not exists marketing.budget_items (
+create table if not exists marketing_native.budget_items (
   id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
-  creative_id uuid references marketing.creatives(id) on delete cascade,
+  campaign_id uuid not null references marketing_native.campaigns(id) on delete cascade,
+  creative_id uuid references marketing_native.creatives(id) on delete cascade,
   funnel text not null,
-  platform_id uuid references marketing.platforms(id),
+  platform_id uuid references marketing_native.platforms(id),
   amount numeric(14,2) not null default 0 check(amount>=0),
   notes text,
   sort_order integer not null default 0,
@@ -742,50 +249,26 @@ create table if not exists marketing.budget_items (
   content_goal text,
   expected_goal text
 );
--- Existing-table compatibility contract for marketing.budget_items.
-alter table marketing.budget_items add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
-alter table marketing.budget_items add column if not exists creative_id uuid references marketing.creatives(id) on delete cascade;
-alter table marketing.budget_items add column if not exists funnel text;
-alter table marketing.budget_items add column if not exists platform_id uuid references marketing.platforms(id);
-alter table marketing.budget_items add column if not exists amount numeric(14,2) not null default 0;
-alter table marketing.budget_items add column if not exists notes text;
-alter table marketing.budget_items add column if not exists sort_order integer not null default 0;
-alter table marketing.budget_items add column if not exists created_at timestamptz not null default now();
-alter table marketing.budget_items add column if not exists updated_at timestamptz not null default now();
-alter table marketing.budget_items add column if not exists ad_count integer not null default 1;
-alter table marketing.budget_items add column if not exists content_goal text;
-alter table marketing.budget_items add column if not exists expected_goal text;
 
-create table if not exists marketing.publish_schedule (
+create table if not exists marketing_native.publish_schedule (
   id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
-  creative_id uuid not null references marketing.creatives(id) on delete cascade,
+  campaign_id uuid not null references marketing_native.campaigns(id) on delete cascade,
+  creative_id uuid not null references marketing_native.creatives(id) on delete cascade,
   publish_date date not null,
   publish_time time,
-  platform_id uuid not null references marketing.platforms(id),
-  post_type_id uuid not null references marketing.platform_post_types(id),
+  platform_id uuid not null references marketing_native.platforms(id),
+  post_type_id uuid not null references marketing_native.platform_post_types(id),
   notes text,
   status text not null default 'scheduled',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(campaign_id,creative_id,publish_date,platform_id,post_type_id)
 );
--- Existing-table compatibility contract for marketing.publish_schedule.
-alter table marketing.publish_schedule add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
-alter table marketing.publish_schedule add column if not exists creative_id uuid references marketing.creatives(id) on delete cascade;
-alter table marketing.publish_schedule add column if not exists publish_date date;
-alter table marketing.publish_schedule add column if not exists publish_time time;
-alter table marketing.publish_schedule add column if not exists platform_id uuid references marketing.platforms(id);
-alter table marketing.publish_schedule add column if not exists post_type_id uuid references marketing.platform_post_types(id);
-alter table marketing.publish_schedule add column if not exists notes text;
-alter table marketing.publish_schedule add column if not exists status text not null default 'scheduled';
-alter table marketing.publish_schedule add column if not exists created_at timestamptz not null default now();
-alter table marketing.publish_schedule add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.tasks (
+create table if not exists marketing_native.tasks (
   id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
-  creative_id uuid references marketing.creatives(id) on delete cascade,
+  campaign_id uuid not null references marketing_native.campaigns(id) on delete cascade,
+  creative_id uuid references marketing_native.creatives(id) on delete cascade,
   department_code text not null,
   assigned_to uuid references core.users(id),
   paired_content_user_id uuid references core.users(id),
@@ -796,9 +279,9 @@ create table if not exists marketing.tasks (
   updated_at timestamptz not null default now(),
   task_no text,
   task_kind text not null default 'execution',
-  department_id uuid references marketing.departments(id),
+  department_id uuid references marketing_native.departments(id),
   content_writer_id uuid references core.users(id),
-  template_task_id uuid references marketing.tasks(id) on delete set null,
+  template_task_id uuid references marketing_native.tasks(id) on delete set null,
   received_at timestamptz,
   received_by uuid references core.users(id),
   progress numeric(5,2) not null default 0,
@@ -810,42 +293,16 @@ create table if not exists marketing.tasks (
   final_file_url text,
   metadata jsonb not null default '{}'::jsonb
 );
--- Existing-table compatibility contract for marketing.tasks.
-alter table marketing.tasks add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
-alter table marketing.tasks add column if not exists creative_id uuid references marketing.creatives(id) on delete cascade;
-alter table marketing.tasks add column if not exists department_code text;
-alter table marketing.tasks add column if not exists assigned_to uuid references core.users(id);
-alter table marketing.tasks add column if not exists paired_content_user_id uuid references core.users(id);
-alter table marketing.tasks add column if not exists status text not null default 'required';
-alter table marketing.tasks add column if not exists due_at timestamptz;
-alter table marketing.tasks add column if not exists completed_at timestamptz;
-alter table marketing.tasks add column if not exists created_at timestamptz not null default now();
-alter table marketing.tasks add column if not exists updated_at timestamptz not null default now();
-alter table marketing.tasks add column if not exists task_no text;
-alter table marketing.tasks add column if not exists task_kind text not null default 'execution';
-alter table marketing.tasks add column if not exists department_id uuid references marketing.departments(id);
-alter table marketing.tasks add column if not exists content_writer_id uuid references core.users(id);
-alter table marketing.tasks add column if not exists template_task_id uuid references marketing.tasks(id) on delete set null;
-alter table marketing.tasks add column if not exists received_at timestamptz;
-alter table marketing.tasks add column if not exists received_by uuid references core.users(id);
-alter table marketing.tasks add column if not exists progress numeric(5,2) not null default 0;
-alter table marketing.tasks add column if not exists review_status text;
-alter table marketing.tasks add column if not exists review_note text;
-alter table marketing.tasks add column if not exists template_data jsonb not null default '{}'::jsonb;
-alter table marketing.tasks add column if not exists final_asset_id uuid;
-alter table marketing.tasks add column if not exists final_file_name text;
-alter table marketing.tasks add column if not exists final_file_url text;
-alter table marketing.tasks add column if not exists metadata jsonb not null default '{}'::jsonb;
-create unique index if not exists marketing_tasks_task_no_unique on marketing.tasks(task_no) where task_no is not null;
+create unique index if not exists marketing_tasks_task_no_unique on marketing_native.tasks(task_no) where task_no is not null;
 create unique index if not exists marketing_template_task_unique
-on marketing.tasks(creative_id,content_writer_id) where task_kind='template';
+on marketing_native.tasks(creative_id,content_writer_id) where task_kind='template';
 create unique index if not exists marketing_execution_task_unique
-on marketing.tasks(creative_id,assigned_to,content_writer_id,department_id) where task_kind='execution';
-create index if not exists marketing_tasks_assignee_status_idx on marketing.tasks(assigned_to,status,created_at desc);
+on marketing_native.tasks(creative_id,assigned_to,content_writer_id,department_id) where task_kind='execution';
+create index if not exists marketing_tasks_assignee_status_idx on marketing_native.tasks(assigned_to,status,created_at desc);
 
-create table if not exists marketing.task_action_progress (
-  task_id uuid not null references marketing.tasks(id) on delete cascade,
-  action_id uuid not null references marketing.assignment_actions(id),
+create table if not exists marketing_native.task_action_progress (
+  task_id uuid not null references marketing_native.tasks(id) on delete cascade,
+  action_id uuid not null references marketing_native.assignment_actions(id),
   completed boolean not null default false,
   completed_by uuid references core.users(id),
   completed_at timestamptz,
@@ -853,18 +310,10 @@ create table if not exists marketing.task_action_progress (
   updated_at timestamptz not null default now(),
   primary key(task_id,action_id)
 );
--- Existing-table compatibility contract for marketing.task_action_progress.
-alter table marketing.task_action_progress add column if not exists task_id uuid references marketing.tasks(id) on delete cascade;
-alter table marketing.task_action_progress add column if not exists action_id uuid references marketing.assignment_actions(id);
-alter table marketing.task_action_progress add column if not exists completed boolean not null default false;
-alter table marketing.task_action_progress add column if not exists completed_by uuid references core.users(id);
-alter table marketing.task_action_progress add column if not exists completed_at timestamptz;
-alter table marketing.task_action_progress add column if not exists note text;
-alter table marketing.task_action_progress add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.task_uploads (
+create table if not exists marketing_native.task_uploads (
   id uuid primary key default gen_random_uuid(),
-  task_id uuid not null references marketing.tasks(id) on delete cascade,
+  task_id uuid not null references marketing_native.tasks(id) on delete cascade,
   upload_kind text not null check(upload_kind in ('template','template_revision','final','result','product')),
   file_name text not null,
   storage_key text,
@@ -878,25 +327,11 @@ create table if not exists marketing.task_uploads (
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.task_uploads.
-alter table marketing.task_uploads add column if not exists task_id uuid references marketing.tasks(id) on delete cascade;
-alter table marketing.task_uploads add column if not exists upload_kind text;
-alter table marketing.task_uploads add column if not exists file_name text;
-alter table marketing.task_uploads add column if not exists storage_key text;
-alter table marketing.task_uploads add column if not exists external_url text;
-alter table marketing.task_uploads add column if not exists mime_type text;
-alter table marketing.task_uploads add column if not exists file_size bigint;
-alter table marketing.task_uploads add column if not exists version_no integer not null default 1;
-alter table marketing.task_uploads add column if not exists status text not null default 'ready';
-alter table marketing.task_uploads add column if not exists uploaded_by uuid references core.users(id);
-alter table marketing.task_uploads add column if not exists uploaded_by_name text;
-alter table marketing.task_uploads add column if not exists metadata jsonb not null default '{}'::jsonb;
-alter table marketing.task_uploads add column if not exists created_at timestamptz not null default now();
-create index if not exists marketing_task_uploads_task_idx on marketing.task_uploads(task_id,created_at desc);
+create index if not exists marketing_task_uploads_task_idx on marketing_native.task_uploads(task_id,created_at desc);
 
-create table if not exists marketing.task_reviews (
+create table if not exists marketing_native.task_reviews (
   id uuid primary key default gen_random_uuid(),
-  task_id uuid not null references marketing.tasks(id) on delete cascade,
+  task_id uuid not null references marketing_native.tasks(id) on delete cascade,
   action text not null check(action in ('submitted','approved','revision_requested','rejected')),
   note text,
   reviewer_id uuid references core.users(id),
@@ -904,33 +339,19 @@ create table if not exists marketing.task_reviews (
   snapshot jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.task_reviews.
-alter table marketing.task_reviews add column if not exists task_id uuid references marketing.tasks(id) on delete cascade;
-alter table marketing.task_reviews add column if not exists action text;
-alter table marketing.task_reviews add column if not exists note text;
-alter table marketing.task_reviews add column if not exists reviewer_id uuid references core.users(id);
-alter table marketing.task_reviews add column if not exists reviewer_name text;
-alter table marketing.task_reviews add column if not exists snapshot jsonb not null default '{}'::jsonb;
-alter table marketing.task_reviews add column if not exists created_at timestamptz not null default now();
 
-create table if not exists marketing.project_links (
+create table if not exists marketing_native.project_links (
   id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
-  platform_id uuid references marketing.platforms(id),
+  campaign_id uuid not null references marketing_native.campaigns(id) on delete cascade,
+  platform_id uuid references marketing_native.platforms(id),
   url text not null,
   created_by uuid references core.users(id),
   created_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.project_links.
-alter table marketing.project_links add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
-alter table marketing.project_links add column if not exists platform_id uuid references marketing.platforms(id);
-alter table marketing.project_links add column if not exists url text;
-alter table marketing.project_links add column if not exists created_by uuid references core.users(id);
-alter table marketing.project_links add column if not exists created_at timestamptz not null default now();
 
-create table if not exists marketing.project_files (
+create table if not exists marketing_native.project_files (
   id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
+  campaign_id uuid not null references marketing_native.campaigns(id) on delete cascade,
   file_kind text not null check(file_kind in ('result','product','audit','schedule','other')),
   file_name text not null,
   storage_key text,
@@ -941,22 +362,11 @@ create table if not exists marketing.project_files (
   uploaded_by_name text,
   created_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.project_files.
-alter table marketing.project_files add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
-alter table marketing.project_files add column if not exists file_kind text;
-alter table marketing.project_files add column if not exists file_name text;
-alter table marketing.project_files add column if not exists storage_key text;
-alter table marketing.project_files add column if not exists external_url text;
-alter table marketing.project_files add column if not exists mime_type text;
-alter table marketing.project_files add column if not exists file_size bigint;
-alter table marketing.project_files add column if not exists uploaded_by uuid references core.users(id);
-alter table marketing.project_files add column if not exists uploaded_by_name text;
-alter table marketing.project_files add column if not exists created_at timestamptz not null default now();
 
-create table if not exists marketing.packages (
+create table if not exists marketing_native.packages (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  category_id uuid references marketing.package_categories(id),
+  category_id uuid references marketing_native.package_categories(id),
   price numeric(14,2) not null default 0,
   cash_discount_percent numeric(5,2) not null default 0,
   registration_fee numeric(14,2) not null default 0,
@@ -972,25 +382,9 @@ create table if not exists marketing.packages (
   updated_at timestamptz not null default now(),
   unique(name,category_id)
 );
--- Existing-table compatibility contract for marketing.packages.
-alter table marketing.packages add column if not exists name text;
-alter table marketing.packages add column if not exists category_id uuid references marketing.package_categories(id);
-alter table marketing.packages add column if not exists price numeric(14,2) not null default 0;
-alter table marketing.packages add column if not exists cash_discount_percent numeric(5,2) not null default 0;
-alter table marketing.packages add column if not exists registration_fee numeric(14,2) not null default 0;
-alter table marketing.packages add column if not exists insurance_fee numeric(14,2) not null default 0;
-alter table marketing.packages add column if not exists issuance_fee numeric(14,2) not null default 0;
-alter table marketing.packages add column if not exists care_items text[] not null default '{}';
-alter table marketing.packages add column if not exists delivery_home boolean not null default false;
-alter table marketing.packages add column if not exists delivery_region text;
-alter table marketing.packages add column if not exists metadata jsonb not null default '{}'::jsonb;
-alter table marketing.packages add column if not exists is_active boolean not null default true;
-alter table marketing.packages add column if not exists created_by uuid references core.users(id);
-alter table marketing.packages add column if not exists created_at timestamptz not null default now();
-alter table marketing.packages add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.attendance_settings (
-  id boolean primary key default true check (id = true),
+create table if not exists marketing_native.attendance_settings (
+  id text primary key default 'default' check (id = 'default'),
   work_start_time time not null default '16:00',
   work_end_time time not null default '21:00',
   grace_minutes integer not null default 0,
@@ -999,51 +393,9 @@ create table if not exists marketing.attendance_settings (
   updated_by uuid references core.users(id),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.attendance_settings.
-alter table marketing.attendance_settings add column if not exists work_start_time time not null default '16:00';
-alter table marketing.attendance_settings add column if not exists work_end_time time not null default '21:00';
-alter table marketing.attendance_settings add column if not exists grace_minutes integer not null default 0;
-alter table marketing.attendance_settings add column if not exists idle_after_minutes integer not null default 5;
-alter table marketing.attendance_settings add column if not exists offline_after_minutes integer not null default 10;
-alter table marketing.attendance_settings add column if not exists updated_by uuid references core.users(id);
-alter table marketing.attendance_settings add column if not exists updated_at timestamptz not null default now();
-alter table marketing.attendance_settings alter column work_start_time set default '16:00';
-alter table marketing.attendance_settings alter column work_end_time set default '21:00';
-alter table marketing.attendance_settings alter column grace_minutes set default 0;
-alter table marketing.attendance_settings alter column idle_after_minutes set default 5;
-alter table marketing.attendance_settings alter column offline_after_minutes set default 10;
-alter table marketing.attendance_settings alter column updated_at set default now();
-update marketing.attendance_settings set work_start_time=coalesce(work_start_time,'16:00'::time), work_end_time=coalesce(work_end_time,'21:00'::time), grace_minutes=coalesce(grace_minutes,0), idle_after_minutes=coalesce(idle_after_minutes,5), offline_after_minutes=coalesce(offline_after_minutes,10), updated_at=coalesce(updated_at,now()) where work_start_time is null or work_end_time is null or grace_minutes is null or idle_after_minutes is null or offline_after_minutes is null or updated_at is null;
-alter table marketing.attendance_settings alter column work_start_time set not null;
-alter table marketing.attendance_settings alter column work_end_time set not null;
-alter table marketing.attendance_settings alter column grace_minutes set not null;
-alter table marketing.attendance_settings alter column idle_after_minutes set not null;
-alter table marketing.attendance_settings alter column offline_after_minutes set not null;
-alter table marketing.attendance_settings alter column updated_at set not null;
-do $$
-declare
-  attendance_id_type text;
-begin
-  if not exists(select 1 from marketing.attendance_settings) then
-    select udt_name into attendance_id_type
-    from information_schema.columns
-    where table_schema='marketing' and table_name='attendance_settings' and column_name='id';
+insert into marketing_native.attendance_settings(id) values('default') on conflict(id) do nothing;
 
-    if attendance_id_type='bool' then
-      insert into marketing.attendance_settings(id,work_start_time,work_end_time,grace_minutes,idle_after_minutes,offline_after_minutes,updated_at)
-      values(true,'16:00'::time,'21:00'::time,0,5,10,now());
-    elsif attendance_id_type in ('text','varchar','bpchar') then
-      insert into marketing.attendance_settings(id,work_start_time,work_end_time,grace_minutes,idle_after_minutes,offline_after_minutes,updated_at)
-      values('default','16:00'::time,'21:00'::time,0,5,10,now());
-    else
-      insert into marketing.attendance_settings(work_start_time,work_end_time,grace_minutes,idle_after_minutes,offline_after_minutes,updated_at)
-      values('16:00'::time,'21:00'::time,0,5,10,now());
-    end if;
-  end if;
-end $$;
-
-
-create table if not exists marketing.attendance_records (
+create table if not exists marketing_native.attendance_records (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references core.users(id) on delete cascade,
   attendance_date date not null default current_date,
@@ -1058,20 +410,8 @@ create table if not exists marketing.attendance_records (
   updated_at timestamptz not null default now(),
   unique(user_id,attendance_date)
 );
--- Existing-table compatibility contract for marketing.attendance_records.
-alter table marketing.attendance_records add column if not exists user_id uuid references core.users(id) on delete cascade;
-alter table marketing.attendance_records add column if not exists attendance_date date not null default current_date;
-alter table marketing.attendance_records add column if not exists check_in_at timestamptz;
-alter table marketing.attendance_records add column if not exists check_out_at timestamptz;
-alter table marketing.attendance_records add column if not exists status text not null default 'present';
-alter table marketing.attendance_records add column if not exists late_minutes integer not null default 0;
-alter table marketing.attendance_records add column if not exists work_minutes integer not null default 0;
-alter table marketing.attendance_records add column if not exists source text not null default 'marketing_system';
-alter table marketing.attendance_records add column if not exists metadata jsonb not null default '{}'::jsonb;
-alter table marketing.attendance_records add column if not exists created_at timestamptz not null default now();
-alter table marketing.attendance_records add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.presence_status (
+create table if not exists marketing_native.presence_status (
   user_id uuid primary key references core.users(id) on delete cascade,
   last_seen_at timestamptz not null default now(),
   last_activity_at timestamptz not null default now(),
@@ -1080,15 +420,8 @@ create table if not exists marketing.presence_status (
   device_info jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.presence_status.
-alter table marketing.presence_status add column if not exists last_seen_at timestamptz not null default now();
-alter table marketing.presence_status add column if not exists last_activity_at timestamptz not null default now();
-alter table marketing.presence_status add column if not exists last_page text;
-alter table marketing.presence_status add column if not exists activity_type text;
-alter table marketing.presence_status add column if not exists device_info jsonb not null default '{}'::jsonb;
-alter table marketing.presence_status add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.attendance_requests (
+create table if not exists marketing_native.attendance_requests (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references core.users(id) on delete cascade,
   request_type text not null,
@@ -1100,20 +433,10 @@ create table if not exists marketing.attendance_requests (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.attendance_requests.
-alter table marketing.attendance_requests add column if not exists user_id uuid references core.users(id) on delete cascade;
-alter table marketing.attendance_requests add column if not exists request_type text;
-alter table marketing.attendance_requests add column if not exists request_date date;
-alter table marketing.attendance_requests add column if not exists note text;
-alter table marketing.attendance_requests add column if not exists status text not null default 'pending';
-alter table marketing.attendance_requests add column if not exists reviewed_by uuid references core.users(id);
-alter table marketing.attendance_requests add column if not exists review_note text;
-alter table marketing.attendance_requests add column if not exists created_at timestamptz not null default now();
-alter table marketing.attendance_requests add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.platform_connections (
+create table if not exists marketing_native.platform_connections (
   id uuid primary key default gen_random_uuid(),
-  platform_id uuid not null references marketing.platforms(id) on delete cascade,
+  platform_id uuid not null references marketing_native.platforms(id) on delete cascade,
   connection_status text not null default 'disconnected',
   account_name text,
   account_external_id text,
@@ -1124,18 +447,8 @@ create table if not exists marketing.platform_connections (
   updated_at timestamptz not null default now(),
   unique(platform_id)
 );
--- Existing-table compatibility contract for marketing.platform_connections.
-alter table marketing.platform_connections add column if not exists platform_id uuid references marketing.platforms(id) on delete cascade;
-alter table marketing.platform_connections add column if not exists connection_status text not null default 'disconnected';
-alter table marketing.platform_connections add column if not exists account_name text;
-alter table marketing.platform_connections add column if not exists account_external_id text;
-alter table marketing.platform_connections add column if not exists token_status text;
-alter table marketing.platform_connections add column if not exists settings jsonb not null default '{}'::jsonb;
-alter table marketing.platform_connections add column if not exists connected_by uuid references core.users(id);
-alter table marketing.platform_connections add column if not exists connected_at timestamptz;
-alter table marketing.platform_connections add column if not exists updated_at timestamptz not null default now();
 
-create table if not exists marketing.activity_log (
+create table if not exists marketing_native.activity_log (
   id bigserial primary key,
   actor_id uuid references core.users(id),
   actor_name text,
@@ -1145,472 +458,19 @@ create table if not exists marketing.activity_log (
   details jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
--- Existing-table compatibility contract for marketing.activity_log.
-alter table marketing.activity_log add column if not exists actor_id uuid references core.users(id);
-alter table marketing.activity_log add column if not exists actor_name text;
-alter table marketing.activity_log add column if not exists action text;
-alter table marketing.activity_log add column if not exists entity_type text;
-alter table marketing.activity_log add column if not exists entity_id text;
-alter table marketing.activity_log add column if not exists details jsonb not null default '{}'::jsonb;
-alter table marketing.activity_log add column if not exists created_at timestamptz not null default now();
-alter table marketing.activity_log alter column action drop default;
-alter table marketing.activity_log alter column entity_type drop default;
-alter table marketing.activity_log alter column entity_id drop default;
-alter table marketing.activity_log alter column actor_name drop default;
-alter table marketing.activity_log alter column details drop default;
-do $$
-declare
-  column_type text;
-begin
-  select udt_name into column_type from information_schema.columns where table_schema='marketing' and table_name='activity_log' and column_name='action';
-  if column_type is distinct from 'text' then execute 'alter table marketing.activity_log alter column action type text using action::text'; end if;
-  select udt_name into column_type from information_schema.columns where table_schema='marketing' and table_name='activity_log' and column_name='entity_type';
-  if column_type is distinct from 'text' then execute 'alter table marketing.activity_log alter column entity_type type text using entity_type::text'; end if;
-  select udt_name into column_type from information_schema.columns where table_schema='marketing' and table_name='activity_log' and column_name='entity_id';
-  if column_type is distinct from 'text' then execute 'alter table marketing.activity_log alter column entity_id type text using entity_id::text'; end if;
-  select udt_name into column_type from information_schema.columns where table_schema='marketing' and table_name='activity_log' and column_name='actor_name';
-  if column_type is distinct from 'text' then execute 'alter table marketing.activity_log alter column actor_name type text using actor_name::text'; end if;
-  select udt_name into column_type from information_schema.columns where table_schema='marketing' and table_name='activity_log' and column_name='details';
-  if column_type is distinct from 'jsonb' then execute 'alter table marketing.activity_log alter column details type jsonb using to_jsonb(details)'; end if;
-end $$;
-alter table marketing.activity_log alter column action set default 'legacy';
-alter table marketing.activity_log alter column entity_type set default 'legacy';
-alter table marketing.activity_log alter column details set default '{}'::jsonb;
-alter table marketing.activity_log alter column created_at set default now();
-update marketing.activity_log set action=coalesce(nullif(action,''),'legacy'), entity_type=coalesce(nullif(entity_type,''),'legacy'), details=coalesce(details,'{}'::jsonb), created_at=coalesce(created_at,now()) where action is null or action='' or entity_type is null or entity_type='' or details is null or created_at is null;
-alter table marketing.activity_log alter column action set not null;
-alter table marketing.activity_log alter column entity_type set not null;
-alter table marketing.activity_log alter column details set not null;
-alter table marketing.activity_log alter column created_at set not null;
-create index if not exists marketing_activity_log_entity_idx on marketing.activity_log(entity_type,entity_id,created_at desc);
+create index if not exists marketing_activity_log_entity_idx on marketing_native.activity_log(entity_type,entity_id,created_at desc);
 
--- Canonical defaults are enforced for columns that may already exist from an older schema.
-alter table marketing.departments alter column is_content_department set default false;
-update marketing.departments set is_content_department=false where is_content_department is null;
-alter table marketing.departments alter column is_content_department set not null;
-alter table marketing.departments alter column is_active set default true;
-update marketing.departments set is_active=true where is_active is null;
-alter table marketing.departments alter column is_active set not null;
-alter table marketing.departments alter column sort_order set default 0;
-update marketing.departments set sort_order=0 where sort_order is null;
-alter table marketing.departments alter column sort_order set not null;
-alter table marketing.departments alter column created_at set default now();
-update marketing.departments set created_at=now() where created_at is null;
-alter table marketing.departments alter column created_at set not null;
-alter table marketing.departments alter column updated_at set default now();
-update marketing.departments set updated_at=now() where updated_at is null;
-alter table marketing.departments alter column updated_at set not null;
-alter table marketing.department_users alter column is_active set default true;
-update marketing.department_users set is_active=true where is_active is null;
-alter table marketing.department_users alter column is_active set not null;
-alter table marketing.department_users alter column created_at set default now();
-update marketing.department_users set created_at=now() where created_at is null;
-alter table marketing.department_users alter column created_at set not null;
-alter table marketing.assignment_actions alter column audience set default 'user';
-update marketing.assignment_actions set audience='user' where audience is null;
-alter table marketing.assignment_actions alter column audience set not null;
-alter table marketing.assignment_actions alter column is_required set default true;
-update marketing.assignment_actions set is_required=true where is_required is null;
-alter table marketing.assignment_actions alter column is_required set not null;
-alter table marketing.assignment_actions alter column is_active set default true;
-update marketing.assignment_actions set is_active=true where is_active is null;
-alter table marketing.assignment_actions alter column is_active set not null;
-alter table marketing.assignment_actions alter column sort_order set default 0;
-update marketing.assignment_actions set sort_order=0 where sort_order is null;
-alter table marketing.assignment_actions alter column sort_order set not null;
-alter table marketing.assignment_actions alter column created_at set default now();
-update marketing.assignment_actions set created_at=now() where created_at is null;
-alter table marketing.assignment_actions alter column created_at set not null;
-alter table marketing.assignment_actions alter column updated_at set default now();
-update marketing.assignment_actions set updated_at=now() where updated_at is null;
-alter table marketing.assignment_actions alter column updated_at set not null;
-alter table marketing.creative_types alter column is_active set default true;
-update marketing.creative_types set is_active=true where is_active is null;
-alter table marketing.creative_types alter column is_active set not null;
-alter table marketing.creative_types alter column sort_order set default 0;
-update marketing.creative_types set sort_order=0 where sort_order is null;
-alter table marketing.creative_types alter column sort_order set not null;
-alter table marketing.creative_types alter column created_at set default now();
-update marketing.creative_types set created_at=now() where created_at is null;
-alter table marketing.creative_types alter column created_at set not null;
-alter table marketing.creative_types alter column updated_at set default now();
-update marketing.creative_types set updated_at=now() where updated_at is null;
-alter table marketing.creative_types alter column updated_at set not null;
-alter table marketing.campaign_types alter column code_prefix set default 'MZJ';
-update marketing.campaign_types set code_prefix='MZJ' where code_prefix is null;
-alter table marketing.campaign_types alter column code_prefix set not null;
-alter table marketing.campaign_types alter column is_active set default true;
-update marketing.campaign_types set is_active=true where is_active is null;
-alter table marketing.campaign_types alter column is_active set not null;
-alter table marketing.campaign_types alter column sort_order set default 0;
-update marketing.campaign_types set sort_order=0 where sort_order is null;
-alter table marketing.campaign_types alter column sort_order set not null;
-alter table marketing.campaign_types alter column next_number set default 1;
-update marketing.campaign_types set next_number=1 where next_number is null;
-alter table marketing.campaign_types alter column next_number set not null;
-alter table marketing.campaign_types alter column created_at set default now();
-update marketing.campaign_types set created_at=now() where created_at is null;
-alter table marketing.campaign_types alter column created_at set not null;
-alter table marketing.campaign_types alter column updated_at set default now();
-update marketing.campaign_types set updated_at=now() where updated_at is null;
-alter table marketing.campaign_types alter column updated_at set not null;
-alter table marketing.platforms alter column is_active set default true;
-update marketing.platforms set is_active=true where is_active is null;
-alter table marketing.platforms alter column is_active set not null;
-alter table marketing.platforms alter column sort_order set default 0;
-update marketing.platforms set sort_order=0 where sort_order is null;
-alter table marketing.platforms alter column sort_order set not null;
-alter table marketing.platforms alter column created_at set default now();
-update marketing.platforms set created_at=now() where created_at is null;
-alter table marketing.platforms alter column created_at set not null;
-alter table marketing.platforms alter column updated_at set default now();
-update marketing.platforms set updated_at=now() where updated_at is null;
-alter table marketing.platforms alter column updated_at set not null;
-alter table marketing.platform_post_types alter column is_active set default true;
-update marketing.platform_post_types set is_active=true where is_active is null;
-alter table marketing.platform_post_types alter column is_active set not null;
-alter table marketing.platform_post_types alter column sort_order set default 0;
-update marketing.platform_post_types set sort_order=0 where sort_order is null;
-alter table marketing.platform_post_types alter column sort_order set not null;
-alter table marketing.platform_post_types alter column created_at set default now();
-update marketing.platform_post_types set created_at=now() where created_at is null;
-alter table marketing.platform_post_types alter column created_at set not null;
-alter table marketing.platform_post_types alter column updated_at set default now();
-update marketing.platform_post_types set updated_at=now() where updated_at is null;
-alter table marketing.platform_post_types alter column updated_at set not null;
-alter table marketing.package_categories alter column is_active set default true;
-update marketing.package_categories set is_active=true where is_active is null;
-alter table marketing.package_categories alter column is_active set not null;
-alter table marketing.package_categories alter column sort_order set default 0;
-update marketing.package_categories set sort_order=0 where sort_order is null;
-alter table marketing.package_categories alter column sort_order set not null;
-alter table marketing.package_categories alter column created_at set default now();
-update marketing.package_categories set created_at=now() where created_at is null;
-alter table marketing.package_categories alter column created_at set not null;
-alter table marketing.package_categories alter column updated_at set default now();
-update marketing.package_categories set updated_at=now() where updated_at is null;
-alter table marketing.package_categories alter column updated_at set not null;
-alter table marketing.request_statuses alter column is_terminal set default false;
-update marketing.request_statuses set is_terminal=false where is_terminal is null;
-alter table marketing.request_statuses alter column is_terminal set not null;
-alter table marketing.request_statuses alter column is_active set default true;
-update marketing.request_statuses set is_active=true where is_active is null;
-alter table marketing.request_statuses alter column is_active set not null;
-alter table marketing.request_statuses alter column sort_order set default 0;
-update marketing.request_statuses set sort_order=0 where sort_order is null;
-alter table marketing.request_statuses alter column sort_order set not null;
-alter table marketing.request_statuses alter column created_at set default now();
-update marketing.request_statuses set created_at=now() where created_at is null;
-alter table marketing.request_statuses alter column created_at set not null;
-alter table marketing.request_statuses alter column updated_at set default now();
-update marketing.request_statuses set updated_at=now() where updated_at is null;
-alter table marketing.request_statuses alter column updated_at set not null;
-alter table marketing.campaigns alter column status set default 'active';
-update marketing.campaigns set status='active' where status is null;
-alter table marketing.campaigns alter column status set not null;
-alter table marketing.campaigns alter column is_deleted set default false;
-update marketing.campaigns set is_deleted=false where is_deleted is null;
-alter table marketing.campaigns alter column is_deleted set not null;
-alter table marketing.campaigns alter column created_at set default now();
-update marketing.campaigns set created_at=now() where created_at is null;
-alter table marketing.campaigns alter column created_at set not null;
-alter table marketing.campaigns alter column updated_at set default now();
-update marketing.campaigns set updated_at=now() where updated_at is null;
-alter table marketing.campaigns alter column updated_at set not null;
-alter table marketing.campaigns alter column source_kind set default 'campaign';
-update marketing.campaigns set source_kind='campaign' where source_kind is null;
-alter table marketing.campaigns alter column source_kind set not null;
-alter table marketing.campaigns alter column stage set default 'required';
-update marketing.campaigns set stage='required' where stage is null;
-alter table marketing.campaigns alter column stage set not null;
-alter table marketing.campaigns alter column metadata set default '{}'::jsonb;
-update marketing.campaigns set metadata='{}'::jsonb where metadata is null;
-alter table marketing.campaigns alter column metadata set not null;
-alter table marketing.creatives alter column quantity set default 1;
-update marketing.creatives set quantity=1 where quantity is null;
-alter table marketing.creatives alter column quantity set not null;
-alter table marketing.creatives alter column status set default 'pending';
-update marketing.creatives set status='pending' where status is null;
-alter table marketing.creatives alter column status set not null;
-alter table marketing.creatives alter column created_at set default now();
-update marketing.creatives set created_at=now() where created_at is null;
-alter table marketing.creatives alter column created_at set not null;
-alter table marketing.creatives alter column sort_order set default 0;
-update marketing.creatives set sort_order=0 where sort_order is null;
-alter table marketing.creatives alter column sort_order set not null;
-alter table marketing.creatives alter column metadata set default '{}'::jsonb;
-update marketing.creatives set metadata='{}'::jsonb where metadata is null;
-alter table marketing.creatives alter column metadata set not null;
-alter table marketing.creatives alter column updated_at set default now();
-update marketing.creatives set updated_at=now() where updated_at is null;
-alter table marketing.creatives alter column updated_at set not null;
-alter table marketing.instance_assignments alter column is_optional set default false;
-update marketing.instance_assignments set is_optional=false where is_optional is null;
-alter table marketing.instance_assignments alter column is_optional set not null;
-alter table marketing.instance_assignments alter column created_at set default now();
-update marketing.instance_assignments set created_at=now() where created_at is null;
-alter table marketing.instance_assignments alter column created_at set not null;
-alter table marketing.instance_assignments alter column updated_at set default now();
-update marketing.instance_assignments set updated_at=now() where updated_at is null;
-alter table marketing.instance_assignments alter column updated_at set not null;
-alter table marketing.instance_vehicles alter column created_at set default now();
-update marketing.instance_vehicles set created_at=now() where created_at is null;
-alter table marketing.instance_vehicles alter column created_at set not null;
-alter table marketing.budget_items alter column amount set default 0;
-update marketing.budget_items set amount=0 where amount is null;
-alter table marketing.budget_items alter column amount set not null;
-alter table marketing.budget_items alter column sort_order set default 0;
-update marketing.budget_items set sort_order=0 where sort_order is null;
-alter table marketing.budget_items alter column sort_order set not null;
-alter table marketing.budget_items alter column created_at set default now();
-update marketing.budget_items set created_at=now() where created_at is null;
-alter table marketing.budget_items alter column created_at set not null;
-alter table marketing.budget_items alter column updated_at set default now();
-update marketing.budget_items set updated_at=now() where updated_at is null;
-alter table marketing.budget_items alter column updated_at set not null;
-alter table marketing.budget_items alter column ad_count set default 1;
-update marketing.budget_items set ad_count=1 where ad_count is null;
-alter table marketing.budget_items alter column ad_count set not null;
-alter table marketing.publish_schedule alter column status set default 'scheduled';
-update marketing.publish_schedule set status='scheduled' where status is null;
-alter table marketing.publish_schedule alter column status set not null;
-alter table marketing.publish_schedule alter column created_at set default now();
-update marketing.publish_schedule set created_at=now() where created_at is null;
-alter table marketing.publish_schedule alter column created_at set not null;
-alter table marketing.publish_schedule alter column updated_at set default now();
-update marketing.publish_schedule set updated_at=now() where updated_at is null;
-alter table marketing.publish_schedule alter column updated_at set not null;
-alter table marketing.tasks alter column status set default 'required';
-update marketing.tasks set status='required' where status is null;
-alter table marketing.tasks alter column status set not null;
-alter table marketing.tasks alter column created_at set default now();
-update marketing.tasks set created_at=now() where created_at is null;
-alter table marketing.tasks alter column created_at set not null;
-alter table marketing.tasks alter column updated_at set default now();
-update marketing.tasks set updated_at=now() where updated_at is null;
-alter table marketing.tasks alter column updated_at set not null;
-alter table marketing.tasks alter column task_kind set default 'execution';
-update marketing.tasks set task_kind='execution' where task_kind is null;
-alter table marketing.tasks alter column task_kind set not null;
-alter table marketing.tasks alter column progress set default 0;
-update marketing.tasks set progress=0 where progress is null;
-alter table marketing.tasks alter column progress set not null;
-alter table marketing.tasks alter column template_data set default '{}'::jsonb;
-update marketing.tasks set template_data='{}'::jsonb where template_data is null;
-alter table marketing.tasks alter column template_data set not null;
-alter table marketing.tasks alter column metadata set default '{}'::jsonb;
-update marketing.tasks set metadata='{}'::jsonb where metadata is null;
-alter table marketing.tasks alter column metadata set not null;
-alter table marketing.task_action_progress alter column completed set default false;
-update marketing.task_action_progress set completed=false where completed is null;
-alter table marketing.task_action_progress alter column completed set not null;
-alter table marketing.task_action_progress alter column updated_at set default now();
-update marketing.task_action_progress set updated_at=now() where updated_at is null;
-alter table marketing.task_action_progress alter column updated_at set not null;
-alter table marketing.task_uploads alter column version_no set default 1;
-update marketing.task_uploads set version_no=1 where version_no is null;
-alter table marketing.task_uploads alter column version_no set not null;
-alter table marketing.task_uploads alter column status set default 'ready';
-update marketing.task_uploads set status='ready' where status is null;
-alter table marketing.task_uploads alter column status set not null;
-alter table marketing.task_uploads alter column metadata set default '{}'::jsonb;
-update marketing.task_uploads set metadata='{}'::jsonb where metadata is null;
-alter table marketing.task_uploads alter column metadata set not null;
-alter table marketing.task_uploads alter column created_at set default now();
-update marketing.task_uploads set created_at=now() where created_at is null;
-alter table marketing.task_uploads alter column created_at set not null;
-alter table marketing.task_reviews alter column snapshot set default '{}'::jsonb;
-update marketing.task_reviews set snapshot='{}'::jsonb where snapshot is null;
-alter table marketing.task_reviews alter column snapshot set not null;
-alter table marketing.task_reviews alter column created_at set default now();
-update marketing.task_reviews set created_at=now() where created_at is null;
-alter table marketing.task_reviews alter column created_at set not null;
-alter table marketing.project_links alter column created_at set default now();
-update marketing.project_links set created_at=now() where created_at is null;
-alter table marketing.project_links alter column created_at set not null;
-alter table marketing.project_files alter column created_at set default now();
-update marketing.project_files set created_at=now() where created_at is null;
-alter table marketing.project_files alter column created_at set not null;
-alter table marketing.packages alter column price set default 0;
-update marketing.packages set price=0 where price is null;
-alter table marketing.packages alter column price set not null;
-alter table marketing.packages alter column cash_discount_percent set default 0;
-update marketing.packages set cash_discount_percent=0 where cash_discount_percent is null;
-alter table marketing.packages alter column cash_discount_percent set not null;
-alter table marketing.packages alter column registration_fee set default 0;
-update marketing.packages set registration_fee=0 where registration_fee is null;
-alter table marketing.packages alter column registration_fee set not null;
-alter table marketing.packages alter column insurance_fee set default 0;
-update marketing.packages set insurance_fee=0 where insurance_fee is null;
-alter table marketing.packages alter column insurance_fee set not null;
-alter table marketing.packages alter column issuance_fee set default 0;
-update marketing.packages set issuance_fee=0 where issuance_fee is null;
-alter table marketing.packages alter column issuance_fee set not null;
-alter table marketing.packages alter column care_items set default '{}';
-update marketing.packages set care_items='{}' where care_items is null;
-alter table marketing.packages alter column care_items set not null;
-alter table marketing.packages alter column delivery_home set default false;
-update marketing.packages set delivery_home=false where delivery_home is null;
-alter table marketing.packages alter column delivery_home set not null;
-alter table marketing.packages alter column metadata set default '{}'::jsonb;
-update marketing.packages set metadata='{}'::jsonb where metadata is null;
-alter table marketing.packages alter column metadata set not null;
-alter table marketing.packages alter column is_active set default true;
-update marketing.packages set is_active=true where is_active is null;
-alter table marketing.packages alter column is_active set not null;
-alter table marketing.packages alter column created_at set default now();
-update marketing.packages set created_at=now() where created_at is null;
-alter table marketing.packages alter column created_at set not null;
-alter table marketing.packages alter column updated_at set default now();
-update marketing.packages set updated_at=now() where updated_at is null;
-alter table marketing.packages alter column updated_at set not null;
-alter table marketing.attendance_settings alter column work_start_time set default '16:00';
-update marketing.attendance_settings set work_start_time='16:00' where work_start_time is null;
-alter table marketing.attendance_settings alter column work_start_time set not null;
-alter table marketing.attendance_settings alter column work_end_time set default '21:00';
-update marketing.attendance_settings set work_end_time='21:00' where work_end_time is null;
-alter table marketing.attendance_settings alter column work_end_time set not null;
-alter table marketing.attendance_settings alter column grace_minutes set default 0;
-update marketing.attendance_settings set grace_minutes=0 where grace_minutes is null;
-alter table marketing.attendance_settings alter column grace_minutes set not null;
-alter table marketing.attendance_settings alter column idle_after_minutes set default 5;
-update marketing.attendance_settings set idle_after_minutes=5 where idle_after_minutes is null;
-alter table marketing.attendance_settings alter column idle_after_minutes set not null;
-alter table marketing.attendance_settings alter column offline_after_minutes set default 10;
-update marketing.attendance_settings set offline_after_minutes=10 where offline_after_minutes is null;
-alter table marketing.attendance_settings alter column offline_after_minutes set not null;
-alter table marketing.attendance_settings alter column updated_at set default now();
-update marketing.attendance_settings set updated_at=now() where updated_at is null;
-alter table marketing.attendance_settings alter column updated_at set not null;
-alter table marketing.attendance_records alter column attendance_date set default current_date;
-update marketing.attendance_records set attendance_date=current_date where attendance_date is null;
-alter table marketing.attendance_records alter column attendance_date set not null;
-alter table marketing.attendance_records alter column status set default 'present';
-update marketing.attendance_records set status='present' where status is null;
-alter table marketing.attendance_records alter column status set not null;
-alter table marketing.attendance_records alter column late_minutes set default 0;
-update marketing.attendance_records set late_minutes=0 where late_minutes is null;
-alter table marketing.attendance_records alter column late_minutes set not null;
-alter table marketing.attendance_records alter column work_minutes set default 0;
-update marketing.attendance_records set work_minutes=0 where work_minutes is null;
-alter table marketing.attendance_records alter column work_minutes set not null;
-alter table marketing.attendance_records alter column source set default 'marketing_system';
-update marketing.attendance_records set source='marketing_system' where source is null;
-alter table marketing.attendance_records alter column source set not null;
-alter table marketing.attendance_records alter column metadata set default '{}'::jsonb;
-update marketing.attendance_records set metadata='{}'::jsonb where metadata is null;
-alter table marketing.attendance_records alter column metadata set not null;
-alter table marketing.attendance_records alter column created_at set default now();
-update marketing.attendance_records set created_at=now() where created_at is null;
-alter table marketing.attendance_records alter column created_at set not null;
-alter table marketing.attendance_records alter column updated_at set default now();
-update marketing.attendance_records set updated_at=now() where updated_at is null;
-alter table marketing.attendance_records alter column updated_at set not null;
-alter table marketing.presence_status alter column last_seen_at set default now();
-update marketing.presence_status set last_seen_at=now() where last_seen_at is null;
-alter table marketing.presence_status alter column last_seen_at set not null;
-alter table marketing.presence_status alter column last_activity_at set default now();
-update marketing.presence_status set last_activity_at=now() where last_activity_at is null;
-alter table marketing.presence_status alter column last_activity_at set not null;
-alter table marketing.presence_status alter column device_info set default '{}'::jsonb;
-update marketing.presence_status set device_info='{}'::jsonb where device_info is null;
-alter table marketing.presence_status alter column device_info set not null;
-alter table marketing.presence_status alter column updated_at set default now();
-update marketing.presence_status set updated_at=now() where updated_at is null;
-alter table marketing.presence_status alter column updated_at set not null;
-alter table marketing.attendance_requests alter column status set default 'pending';
-update marketing.attendance_requests set status='pending' where status is null;
-alter table marketing.attendance_requests alter column status set not null;
-alter table marketing.attendance_requests alter column created_at set default now();
-update marketing.attendance_requests set created_at=now() where created_at is null;
-alter table marketing.attendance_requests alter column created_at set not null;
-alter table marketing.attendance_requests alter column updated_at set default now();
-update marketing.attendance_requests set updated_at=now() where updated_at is null;
-alter table marketing.attendance_requests alter column updated_at set not null;
-alter table marketing.platform_connections alter column connection_status set default 'disconnected';
-update marketing.platform_connections set connection_status='disconnected' where connection_status is null;
-alter table marketing.platform_connections alter column connection_status set not null;
-alter table marketing.platform_connections alter column settings set default '{}'::jsonb;
-update marketing.platform_connections set settings='{}'::jsonb where settings is null;
-alter table marketing.platform_connections alter column settings set not null;
-alter table marketing.platform_connections alter column updated_at set default now();
-update marketing.platform_connections set updated_at=now() where updated_at is null;
-alter table marketing.platform_connections alter column updated_at set not null;
-alter table marketing.activity_log alter column details set default '{}'::jsonb;
-update marketing.activity_log set details='{}'::jsonb where details is null;
-alter table marketing.activity_log alter column details set not null;
-alter table marketing.activity_log alter column created_at set default now();
-update marketing.activity_log set created_at=now() where created_at is null;
-alter table marketing.activity_log alter column created_at set not null;
-
--- Normalize write blockers left by pre-native marketing tables.
--- Only extra (non-contract) columns are relaxed; canonical columns and primary keys are untouched.
-do $$
-declare
-  legacy_column record;
-begin
-  for legacy_column in
-    select c.table_name,c.column_name
-    from information_schema.columns c
-    where c.table_schema='marketing'
-      and c.is_nullable='NO'
-      and c.column_default is null
-      and coalesce(c.is_identity,'NO')='NO'
-      and coalesce(c.is_generated,'NEVER')='NEVER'
-      and not exists (
-        select 1 from _mzj_marketing_contract_columns k
-        where k.table_name=c.table_name and k.column_name=c.column_name
-      )
-      and not exists (
-        select 1
-        from pg_constraint con
-        join pg_class rel on rel.oid=con.conrelid
-        join pg_namespace ns on ns.oid=rel.relnamespace
-        join unnest(con.conkey) as key(attnum) on true
-        join pg_attribute attr on attr.attrelid=rel.oid and attr.attnum=key.attnum
-        where con.contype='p' and ns.nspname='marketing'
-          and rel.relname=c.table_name and attr.attname=c.column_name
-      )
-  loop
-    execute format('alter table marketing.%I alter column %I drop not null',legacy_column.table_name,legacy_column.column_name);
-  end loop;
-end $$;
-
--- Unique indexes are created explicitly because CREATE TABLE IF NOT EXISTS
--- does not add table constraints to tables that already existed.
-create unique index if not exists marketing_departments_code_unique on marketing.departments(code);
-create unique index if not exists marketing_department_users_unique on marketing.department_users(department_id,user_id);
-create unique index if not exists marketing_assignment_actions_unique on marketing.assignment_actions(department_id,name);
-create unique index if not exists marketing_creative_types_name_unique on marketing.creative_types(name);
-create unique index if not exists marketing_creative_types_short_code_unique on marketing.creative_types(short_code);
-create unique index if not exists marketing_campaign_types_name_unique on marketing.campaign_types(name);
-create unique index if not exists marketing_campaign_types_short_code_unique on marketing.campaign_types(short_code);
-create unique index if not exists marketing_platforms_code_unique on marketing.platforms(code);
-create unique index if not exists marketing_platforms_name_unique on marketing.platforms(name);
-create unique index if not exists marketing_platform_post_types_unique on marketing.platform_post_types(platform_id,code);
-create unique index if not exists marketing_package_categories_name_unique on marketing.package_categories(name);
-create unique index if not exists marketing_request_statuses_code_unique on marketing.request_statuses(code);
-create unique index if not exists marketing_campaigns_legacy_id_unique on marketing.campaigns(legacy_id);
-create unique index if not exists marketing_campaigns_campaign_code_unique on marketing.campaigns(campaign_code);
-create unique index if not exists marketing_instance_vehicles_unique on marketing.instance_vehicles(creative_id,vehicle_id);
-create unique index if not exists marketing_publish_schedule_unique on marketing.publish_schedule(campaign_id,creative_id,publish_date,platform_id,post_type_id);
-create unique index if not exists marketing_task_action_progress_unique on marketing.task_action_progress(task_id,action_id);
-create unique index if not exists marketing_packages_name_category_unique on marketing.packages(name,category_id);
-create unique index if not exists marketing_attendance_records_user_date_unique on marketing.attendance_records(user_id,attendance_date);
-create unique index if not exists marketing_presence_status_user_unique on marketing.presence_status(user_id);
-create unique index if not exists marketing_platform_connections_platform_unique on marketing.platform_connections(platform_id);
-
-insert into marketing.departments(code,name,is_content_department,sort_order) values
+insert into marketing_native.departments(code,name,is_content_department,sort_order) values
 ('content','قسم المحتوى',true,10),
 ('design','قسم التصميم',false,20),
 ('photography','قسم التصوير',false,30),
 ('montage','قسم المونتاج',false,40),
 ('publishing','قسم النشر',false,50)
-on conflict(code) do update set name=excluded.name,sort_order=excluded.sort_order;
+on conflict do nothing;
 
-insert into marketing.assignment_actions(department_id,name,percentage,audience,sort_order)
+insert into marketing_native.assignment_actions(department_id,name,percentage,audience,sort_order)
 select d.id,v.name,v.percentage,v.audience,v.sort_order
-from marketing.departments d
+from marketing_native.departments d
 join (values
 ('content','رفع Task Template',100::numeric,'user',10),
 ('design','النسخة الأولى',50::numeric,'user',10),
@@ -1624,9 +484,9 @@ join (values
 ('publishing','التجهيز للنشر',50::numeric,'user',10),
 ('publishing','النشر والتوثيق',50::numeric,'user',20)
 ) as v(code,name,percentage,audience,sort_order) on v.code=d.code
-on conflict(department_id,name) do nothing;
+on conflict do nothing;
 
-insert into marketing.creative_types(name,short_code,primary_department_id,sort_order)
+insert into marketing_native.creative_types(name,short_code,primary_department_id,sort_order)
 select v.name,v.short_code,d.id,v.sort_order
 from (values
 ('REEL - مواصفات كامله - STUDIO','M-RL-SPEC-ST','montage',10),
@@ -1668,26 +528,26 @@ from (values
 ('تصوير ستوري - سياره - STUDIO','P-ST-CAR-ST','photography',500),
 ('تصوير ستوري - معرضنا - SHOWROOM','P-ST-SHOW-SR','photography',510)
 ) as v(name,short_code,department_code,sort_order)
-join marketing.departments d on d.code=v.department_code
-on conflict(name) do update set short_code=excluded.short_code,primary_department_id=excluded.primary_department_id,sort_order=excluded.sort_order;
+join marketing_native.departments d on d.code=v.department_code
+on conflict do nothing;
 
-insert into marketing.campaign_types(name,short_code,code_prefix,sort_order) values
+insert into marketing_native.campaign_types(name,short_code,code_prefix,sort_order) values
 ('حملة تسويقية','CMP','MZJ',10),
 ('حملة عروض','OFR','MZJ',20),
 ('حملة إطلاق','LCH','MZJ',30),
 ('حملة توعوية','AWR','MZJ',40)
-on conflict(name) do nothing;
+on conflict do nothing;
 
-insert into marketing.platforms(code,name,sort_order) values
+insert into marketing_native.platforms(code,name,sort_order) values
 ('instagram','Instagram',10),
 ('snapchat','Snapchat',20),
 ('tiktok','TikTok',30),
 ('youtube','YouTube',40),
 ('whatsapp','حملات واتساب',50)
-on conflict(code) do update set name=excluded.name,sort_order=excluded.sort_order;
+on conflict do nothing;
 
-insert into marketing.platform_post_types(platform_id,name,code,dimensions,sort_order)
-select p.id,v.name,v.code,v.dimensions,v.sort_order from marketing.platforms p
+insert into marketing_native.platform_post_types(platform_id,name,code,dimensions,sort_order)
+select p.id,v.name,v.code,v.dimensions,v.sort_order from marketing_native.platforms p
 join (values
 ('instagram','Reel / Video','reel','1080×1920',10),
 ('instagram','Story','story','1080×1920',20),
@@ -1702,71 +562,160 @@ join (values
 ('whatsapp','فيديو','video','1080×1920',20),
 ('whatsapp','رسالة','message',null,30)
 ) as v(platform_code,name,code,dimensions,sort_order) on v.platform_code=p.code
-on conflict(platform_id,code) do update set name=excluded.name,dimensions=excluded.dimensions,sort_order=excluded.sort_order;
+on conflict do nothing;
 
-insert into marketing.package_categories(name,sort_order) values
+insert into marketing_native.package_categories(name,sort_order) values
 ('العائلية',10),('الفضية',20),('الذهبية',30),('VIP',40)
-on conflict(name) do update set sort_order=excluded.sort_order;
+on conflict do nothing;
 
-insert into marketing.request_statuses(code,name,is_terminal,sort_order) values
+insert into marketing_native.request_statuses(code,name,is_terminal,sort_order) values
 ('request_received','تم استلام الطلب',false,10),
 ('scheduled','تمت الجدولة',false,20),
 ('in_progress','قيد التنفيذ',false,30),
 ('completed','مكتمل',true,40),
 ('cancelled','ملغي',true,50)
-on conflict(code) do update set name=excluded.name,is_terminal=excluded.is_terminal,sort_order=excluded.sort_order;
+on conflict do nothing;
 
--- Runtime schema contract verification. Any missing column rolls back the whole migration.
 do $$
 declare
-  missing_columns text;
+  expected_table_count integer;
+  schema_version_value integer;
 begin
-  select string_agg(format('marketing.%I.%I', expected.table_name, expected.column_name), ', ' order by expected.table_name, expected.column_name)
-    into missing_columns
-  from _mzj_marketing_contract_columns expected
-  left join information_schema.columns actual
-    on actual.table_schema='marketing'
-   and actual.table_name=expected.table_name
-   and actual.column_name=expected.column_name
-  where actual.column_name is null;
+  select count(*) into expected_table_count
+  from unnest(array[
+    'schema_meta','departments','department_users','assignment_actions','creative_types','campaign_types',
+    'platforms','platform_post_types','package_categories','request_statuses','campaigns','creatives',
+    'instance_assignments','instance_vehicles','budget_items','publish_schedule','tasks','task_action_progress',
+    'task_uploads','task_reviews','project_links','project_files','packages','attendance_settings',
+    'attendance_records','presence_status','attendance_requests','platform_connections','activity_log'
+  ]::text[]) as expected_table_name
+  where to_regclass(format('marketing_native.%I', expected_table_name)) is not null;
 
-  if missing_columns is not null then
-    raise exception 'Marketing schema contract is incomplete. Missing columns: %', missing_columns;
+  if expected_table_count <> 29 then
+    raise exception 'marketing_native schema validation failed: expected 29 canonical tables, found %', expected_table_count;
   end if;
 
-  select string_agg(format('marketing.%I.%I',c.table_name,c.column_name), ', ' order by c.table_name,c.column_name)
-    into missing_columns
-  from information_schema.columns c
-  where c.table_schema='marketing'
-    and c.is_nullable='NO'
-    and c.column_default is null
-    and coalesce(c.is_identity,'NO')='NO'
-    and coalesce(c.is_generated,'NEVER')='NEVER'
-    and not exists (
-      select 1 from _mzj_marketing_contract_columns expected
-      where expected.table_name=c.table_name and expected.column_name=c.column_name
-    )
-    and not exists (
-      select 1
-      from pg_constraint con
-      join pg_class rel on rel.oid=con.conrelid
-      join pg_namespace ns on ns.oid=rel.relnamespace
-      join unnest(con.conkey) as key(attnum) on true
-      join pg_attribute attr on attr.attrelid=rel.oid and attr.attnum=key.attnum
-      where con.contype='p' and ns.nspname='marketing'
-        and rel.relname=c.table_name and attr.attname=c.column_name
-    );
 
-  if missing_columns is not null then
-    raise exception 'Legacy marketing columns still block native writes: %',missing_columns;
+  select schema_version into schema_version_value
+  from marketing_native.schema_meta
+  where singleton=true;
+
+  if schema_version_value is distinct from 1200 then
+    raise exception 'marketing_native schema validation failed: schema version is %', schema_version_value;
+  end if;
+
+  if exists (
+    select 1
+    from marketing_native.platform_post_types pt
+    left join marketing_native.platforms p on p.id=pt.platform_id
+    where p.id is null
+  ) then
+    raise exception 'marketing_native schema validation failed: orphan platform_post_types rows';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint c
+    join pg_class child on child.oid=c.conrelid
+    join pg_namespace child_ns on child_ns.oid=child.relnamespace
+    join pg_class parent on parent.oid=c.confrelid
+    join pg_namespace parent_ns on parent_ns.oid=parent.relnamespace
+    where c.contype='f'
+      and child_ns.nspname='marketing_native'
+      and child.relname='platform_post_types'
+      and parent_ns.nspname='marketing_native'
+      and parent.relname='platforms'
+  ) then
+    raise exception 'marketing_native schema validation failed: platform_post_types FK does not target marketing_native.platforms';
+  end if;
+
+  if exists (
+    select 1
+    from pg_constraint c
+    join pg_class child on child.oid=c.conrelid
+    join pg_namespace child_ns on child_ns.oid=child.relnamespace
+    join pg_class parent on parent.oid=c.confrelid
+    join pg_namespace parent_ns on parent_ns.oid=parent.relnamespace
+    where c.contype='f'
+      and child_ns.nspname='marketing_native'
+      and parent_ns.nspname='marketing'
+  ) then
+    raise exception 'marketing_native schema validation failed: a foreign key still targets legacy marketing schema';
+  end if;
+
+  if (select count(*) from marketing_native.attendance_settings) <> 1
+     or not exists (select 1 from marketing_native.attendance_settings where id='default') then
+    raise exception 'marketing_native seed validation failed: attendance singleton is invalid';
   end if;
 end $$;
 
 commit;`;
 
+async function marketingSchemaIsCurrent() {
+  const sql = getSql();
+  const [relation] = await sql<{ exists: boolean }[]>`select to_regclass('marketing_native.schema_meta') is not null as exists`;
+  if (!relation?.exists) return false;
+  try {
+    const [state] = await sql<{ schema_version: number; table_count: number; platform_fk_ok: boolean; no_legacy_fk: boolean }[]>`
+      select
+        m.schema_version,
+        (
+          select count(*)::int
+          from unnest(array[
+            'schema_meta','departments','department_users','assignment_actions','creative_types','campaign_types',
+            'platforms','platform_post_types','package_categories','request_statuses','campaigns','creatives',
+            'instance_assignments','instance_vehicles','budget_items','publish_schedule','tasks','task_action_progress',
+            'task_uploads','task_reviews','project_links','project_files','packages','attendance_settings',
+            'attendance_records','presence_status','attendance_requests','platform_connections','activity_log'
+          ]::text[]) as expected_table_name
+          where to_regclass(format('marketing_native.%I', expected_table_name)) is not null
+        ) as table_count,
+        exists (
+          select 1
+          from pg_constraint c
+          join pg_class child on child.oid=c.conrelid
+          join pg_namespace child_ns on child_ns.oid=child.relnamespace
+          join pg_class parent on parent.oid=c.confrelid
+          join pg_namespace parent_ns on parent_ns.oid=parent.relnamespace
+          where c.contype='f'
+            and child_ns.nspname='marketing_native'
+            and child.relname='platform_post_types'
+            and parent_ns.nspname='marketing_native'
+            and parent.relname='platforms'
+        ) as platform_fk_ok,
+        not exists (
+          select 1
+          from pg_constraint c
+          join pg_class child on child.oid=c.conrelid
+          join pg_namespace child_ns on child_ns.oid=child.relnamespace
+          join pg_class parent on parent.oid=c.confrelid
+          join pg_namespace parent_ns on parent_ns.oid=parent.relnamespace
+          where c.contype='f'
+            and child_ns.nspname='marketing_native'
+            and parent_ns.nspname='marketing'
+        ) as no_legacy_fk
+      from marketing_native.schema_meta m
+      where m.singleton=true
+      limit 1
+    `;
+    return Number(state?.schema_version || 0) === 1200
+      && Number(state?.table_count || 0) === 29
+      && Boolean(state?.platform_fk_ok)
+      && Boolean(state?.no_legacy_fk);
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureMarketingSchema() {
   if (!marketingSchemaPromise) {
-    marketingSchemaPromise = withDatabaseAdvisoryLock("mzj:marketing-schema:v5", () => runSqlScript(MARKETING_SCHEMA_SQL)).catch((error) => {
+    marketingSchemaPromise = (async () => {
+      if (await marketingSchemaIsCurrent()) return;
+      await withDatabaseAdvisoryLock("mzj:marketing-native-schema:v1200", async () => {
+        if (await marketingSchemaIsCurrent()) return;
+        await runSqlScript(MARKETING_SCHEMA_SQL);
+      });
+    })().catch((error) => {
       marketingSchemaPromise = null;
       throw error;
     });

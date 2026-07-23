@@ -1,0 +1,65 @@
+MZJ Platform v1.20.0 — Marketing Native Clean Rebuild
+Final verification date: 2026-07-23
+
+SOURCE BASE
+- Rebuilt from original platform v1.18.0 source.
+- Not based on v1.19.0-v1.19.5 delivery chain.
+
+FULL TYPECHECK COMMAND
+npm run typecheck
+RESULT: PASS (exit code 0)
+
+TYPECHECK / STATIC SUITE HIGHLIGHTS
+- TypeScript source syntax: PASS — 145 files
+- Marketing canonical schema contract: PASS — 29 tables, 299 columns, 10 seeds
+- Runtime SQL/schema usage: PASS — 4 runtime files, 224 SQL templates, 258 table-column references
+- Marketing native architecture checks: PASS — 85 checks
+- Marketing domain scenarios: PASS — 15 scenarios
+- Clean bootstrap simulation: PASS
+  - isolated legacy marketing fixture
+  - 5 native platforms
+  - 12 native post types with valid parent IDs
+  - singleton attendance settings
+- Local module graph: PASS — 144 source files
+- API/server import extensions: PASS
+- TypeScript project build (`tsc -b`): PASS
+
+REGRESSION SUITES
+- CRM service reclassification: PASS
+- Facebook canonical identity/template flow: PASS
+- CRM reports/KPI: PASS
+- CRM manual leads: PASS
+- CRM module/no sample data: PASS
+- Customer completion: PASS
+- CRM reference v27/v39: PASS
+- CRM settings and automation v1.18.0: PASS
+- WhatsApp worker routing: PASS
+- Tracking native module: PASS
+- Operations Native V2: PASS
+- Dashboard operations: PASS
+- Operations workflow/FK/delete/approval-cycle suites: PASS
+- ERPNext unified Sales Order flow: PASS
+- Tracking deleted-order release: PASS
+- Operations auto archive: PASS
+
+DATABASE CONTRACT CHECKS
+- New domain schema is `marketing_native`: PASS
+- No runtime domain access to legacy `marketing.*`: PASS
+- No FK from `marketing_native` to legacy `marketing`: PASS
+- Parent table creation precedes every native child FK: PASS
+- Platform seed precedes post-type seed: PASS
+- Post-type parent IDs selected from `marketing_native.platforms`: PASS
+- Transactional validation block syntax and statement splitting: PASS
+- Runtime, canonical SQL, and deployment migration are byte-equivalent after trimming: PASS
+- Non-invasive setting seeds: PASS
+- No DROP statements: PASS
+- No legacy ALTER compatibility chain in native schema: PASS
+
+ARCHIVE VERIFICATION
+- Run after packaging: unzip integrity test required and recorded beside final artifact.
+
+ENVIRONMENT LIMITATIONS
+- No credentials/access to the production PostgreSQL database.
+- No local PostgreSQL server or PGlite runtime available.
+- npm registry DNS failed (`EAI_AGAIN registry.npmjs.org`), so a real dependency install and Vite production bundle could not be executed in this environment.
+- `tsc -b` was executed with temporary local declaration stubs for unavailable packages; those stubs are removed before delivery and are not included in the ZIP.

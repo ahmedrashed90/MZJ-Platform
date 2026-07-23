@@ -1,0 +1,102 @@
+
+> mzj-platform@1.20.0 typecheck
+> node scripts/check-source-syntax.mjs && node scripts/check-marketing-clean-schema.mjs && node scripts/check-marketing-api-schema-usage.mjs && node scripts/check-marketing-native-rebuild.mjs && node scripts/test-marketing-domain-scenarios.mjs && node scripts/test-marketing-schema-bootstrap-scenarios.mjs && node scripts/check-local-module-graph.mjs && node scripts/check-api-imports.mjs && node scripts/check-crm-service-reclassification-v1156.mjs && node scripts/check-facebook-identity-auto-template-v1173.mjs && node scripts/check-crm-reports-kpi-v1159.mjs && node scripts/check-crm-manual-leads-v1160.mjs && node scripts/check-crm-module.mjs && node scripts/check-customer-completion.mjs && node scripts/check-crm-reference-v27.mjs && node scripts/check-crm-settings-v180.mjs && node scripts/check-crm-reference-v39.mjs && node scripts/check-crm-automation-flow-v1180.mjs && node scripts/check-crm-finance-combined-details-v1180.mjs && node scripts/check-worker-route-discovery-v194.mjs && node scripts/check-tracking-module-v112.mjs && node scripts/check-operations-native-v2.mjs && node scripts/check-dashboard-operations-v1161.mjs && node scripts/check-operations-workflow-v1162.mjs && node scripts/check-operations-fk-delete-v1163.mjs && node scripts/check-erpnext-unified-sales-link-v1166.mjs && node scripts/check-tracking-deleted-release-v1168.mjs && node scripts/check-operations-auto-archive-v1169.mjs && node scripts/check-operations-approval-cycles-v1170.mjs && tsc -b
+
+TypeScript syntax check passed: 145 files
+Marketing clean schema checks passed: 29 tables, 299 columns, 10 seeds
+Marketing native runtime/schema usage checks passed: 4 files, 224 SQL templates, 258 table-column references
+Marketing native rebuild checks passed: 85
+Marketing domain scenario tests passed: 15
+Marketing bootstrap simulations passed: isolated legacy schema, 5 native platforms, 12 FK-valid post types, singleton settings
+Local module graph check passed: 144 source files
+API and server import extension check passed.
+CRM service reclassification v1.15.6 check passed
+Facebook canonical identity and automatic entry template v1.17.3 check passed
+PASS: Package version includes the CRM reports release
+PASS: Ownership page route remains removed
+PASS: Ownership navigation remains removed
+PASS: Ownership dedicated API remains removed
+PASS: Browser voice recording is fully removed
+PASS: Existing attachment upload remains available
+PASS: Reports show requested count labels
+PASS: Report sales totals are calculated from sold
+PASS: Customer report popup exports all filtered rows to PDF
+PASS: KPI PDF actions are centered
+PASS: Each KPI PDF target has dedicated content
+PASS: KPI print layout starts content on the first page
+PASS: Attachment action is compact and writing area is larger
+PASS: Readable bold typography is integrated in canonical styles
+PASS: Finance history layout remains unchanged
+PASS: Ownership page and dedicated handler files remain deleted
+PASS: Manual lead form hides payment selector
+PASS: Manual lead form hides branch selector
+PASS: Manual lead form hides registration date input
+PASS: Manual lead form hides automatic assignment controls
+PASS: Manual lead WhatsApp-only note is removed
+PASS: New manual leads belong to the logged-in salesperson
+PASS: New manual leads do not call automatic distribution
+PASS: Registration date is generated automatically
+PASS: Tracking navigation no longer duplicates settings
+PASS: Tracking settings remain in unified settings
+PASS: Role choices are deduplicated
+CRM module structure and no-sample-data check passed.
+Dynamic customer completion calculation check passed.
+CRM reference v27 structure, unread flow, finance differences, and category checks passed.
+CRM settings v1.8 full-width layout, Worker-based Mersal sync, and distribution checks passed.
+CRM reference v39 migration, reports, pagination, manual edit, XLSX export, and data-review checks passed.
+CRM automation v1.18.0 static architecture and acceptance simulations: PASS
+CRM finance combined details parser v1.18.0: PASS
+PASS: WhatsApp text uses the configured canonical worker route
+PASS: WhatsApp media may use its dedicated configured worker route
+PASS: Worker delivery has no route fallback loop
+PASS: Template payload sends both params and components
+PASS: Mersal template name is preferred over provider numeric id
+PASS: UI request returns queued while Vercel finishes the provider call in the background
+PASS: Worker result is stored directly by the background platform task
+PASS: Admin exposes separate text/template and attachment worker route fields
+Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, direct ERPNext webhook, and SMS+ checks passed.
+Operations Native V2 structure, branch scope, tracking delete, modal stack, dashboard drill-down, and source-identity checks passed.
+PASS: Package version includes dashboard operations v1.16.1
+PASS: Department cards use department-specific open conversation totals
+PASS: Open conversations exclude closed rows
+PASS: Transferred conversations follow the current lead department
+PASS: Shortages use the five-field vehicle combination
+PASS: Shortages use only active available, reserved, and note statuses
+PASS: Shortages exclude agency and use the four requested stock locations
+PASS: Accessory statements are excluded from shortages
+PASS: Shortage total counts missing combinations by branch
+PASS: Dashboard shortage card opens complete shortage details
+PASS: Dashboard popups use wrapping wide layouts
+PASS: Inventory search applies while typing without Enter
+PASS: Tracking is restored as a progress button
+PASS: Vehicle detail tabs remain centered and tracking opens as a button
+PASS: Movement filters use the upgraded apply action
+PASS: Movement history provides A3 landscape PDF export
+PASS: A3 PDF contains every requested column
+PASS: A3 PDF renders present as correct and absent as wrong
+PASS: Movement API returns the requested vehicle, check, approval, actor, and request data
+PASS: Version is 1.16.2 or newer
+PASS: Existing check history tables gain the missing note column
+PASS: Approval rows persist pending final delivery requests
+PASS: Final delivery no longer forces the legacy under-delivery transition
+PASS: Missing approvals queue the requested final delivery
+PASS: Completed approvals execute the queued delivery
+PASS: Check history writes the note after schema compatibility runs
+PASS: Vehicle deletion requires exact VIN confirmation
+PASS: Vehicle deletion removes related operational and tracking data
+PASS: Operations dashboard inventory and shortage drilldowns use fullscreen modal
+PASS: Vehicle checks are rendered as separated professional cards
+PASS: Agency movement checks are rendered as separated editor cards
+PASS: Tracking request is a compact progress control with percentage tones
+PASS: Approval screen closes a vehicle after automatic final delivery
+PASS: Canonical safety bag definition exists
+PASS: Legacy history codes are preserved before FK replacement
+PASS: History FK is repointed to canonical definitions
+PASS: Deployment migration contains the same FK repair
+PASS: Vehicle delete removes related tracking SMS
+PASS: Vehicle delete remains transactional
+PASS: Inventory detail exposes complete vehicle delete action
+ERPNext unified Sales Order -> Tracking + CRM + Operations v1.16.9 check passed.
+Tracking deleted-order release v1.16.9 check passed.
+Operations automatic vehicle archive v1.16.9 check passed.
+Operations approval-cycle and vehicle-management status v1.17.0 check passed.

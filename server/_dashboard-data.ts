@@ -70,7 +70,7 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
   } catch (error) { data.sectionErrors!.crm = errorText(error); console.error("Dashboard CRM query failed", error); }
 
   try {
-    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where stage='publishing')::int as scheduled,(select count(*)::int from marketing.tasks t join marketing.campaigns c2 on c2.id=t.campaign_id where c2.is_deleted=false and c2.archived_at is null and t.due_at<now() and t.status not in ('completed','rejected')) as delayed from marketing.campaigns where is_deleted=false and archived_at is null`;
+    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where stage='publishing')::int as scheduled,(select count(*)::int from marketing_native.tasks t join marketing_native.campaigns c2 on c2.id=t.campaign_id where c2.is_deleted=false and c2.archived_at is null and t.due_at<now() and t.status not in ('completed','rejected')) as delayed from marketing_native.campaigns where is_deleted=false and archived_at is null`;
     data.marketing = { campaigns: asNumber(row?.campaigns), scheduled: asNumber(row?.scheduled), delayed: asNumber(row?.delayed) };
   } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
 

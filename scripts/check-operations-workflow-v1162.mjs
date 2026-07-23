@@ -2,6 +2,8 @@ import fs from "node:fs";
 
 const read = (path) => fs.readFileSync(path, "utf8");
 const pkg = read("package.json");
+const packageVersion = JSON.parse(pkg).version.split(".").map(Number);
+const versionAtLeast1162 = packageVersion[0] > 1 || (packageVersion[0] === 1 && (packageVersion[1] > 16 || (packageVersion[1] === 16 && packageVersion[2] >= 2)));
 const schema = read("server/_operations-schema.ts");
 const databaseSchema = read("database/schema.sql");
 const migration = read("database/migrations/20260721_operations_delivery_approval_and_check_history_v1162.sql");
@@ -14,7 +16,7 @@ const approvalsPage = read("src/operations/pages/ApprovalsPage.tsx");
 const styles = read("src/styles.css");
 
 const checks = [
-  ["Version is 1.16.2 or newer", /"version": "(?:1\.16\.[2-9][0-9]*|1\.1[7-9]\.[0-9]+|[2-9]\.[0-9]+\.[0-9]+)"/.test(pkg)],
+  ["Version is 1.16.2 or newer", versionAtLeast1162],
   ["Existing check history tables gain the missing note column", schema.includes("alter table operations.vehicle_check_history add column if not exists note text") && migration.includes("vehicle_check_history add column if not exists note text")],
   ["Approval rows persist pending final delivery requests", schema.includes("pending_delivery jsonb") && databaseSchema.includes("pending_delivery jsonb") && migration.includes("vehicle_approvals add column if not exists pending_delivery jsonb")],
   ["Final delivery no longer forces the legacy under-delivery transition", !api.includes("يجب أن تكون السيارة") || !api.includes("في حالة مباع تحت التسليم قبل التسليم النهائي")],

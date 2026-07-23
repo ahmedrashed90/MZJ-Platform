@@ -1218,14 +1218,14 @@ async function listPhotographyRequests(sql: ReturnType<typeof getSql>, request: 
       and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or coalesce(v.vin,'') ilike ${pattern})
     group by r.id order by r.requested_at desc
   `;
-  const requestStatuses = await sql<any[]>`select code,name,is_terminal,is_active,sort_order from marketing.request_statuses where is_active=true order by sort_order,name`;
+  const requestStatuses = await sql<any[]>`select code,name,is_terminal,is_active,sort_order from marketing_native.request_statuses where is_active=true order by sort_order,name`;
   return { ok: true, rows, requestStatuses };
 }
 
 async function photographyRequestAction(sql: ReturnType<typeof getSql>, body: Record<string, unknown>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const id = clean(body.id);
   const status = clean(body.status);
-  const [statusDefinition] = await sql<any[]>`select code,is_terminal from marketing.request_statuses where code=${status} and is_active=true`;
+  const [statusDefinition] = await sql<any[]>`select code,is_terminal from marketing_native.request_statuses where code=${status} and is_active=true`;
   if (!statusDefinition) throw new OperationError(400, 'VALIDATION_ERROR', 'حالة طلب التصوير غير صحيحة');
   const [request] = await sql<any[]>`select r.id::text,r.request_no,r.requested_by_branch from operations.photography_requests r where r.id=${id}::uuid and r.is_deleted=false`;
   if (!request) throw new OperationError(404, 'NOT_FOUND', 'طلب التصوير غير موجود');
