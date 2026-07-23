@@ -1,0 +1,33 @@
+MZJ Platform v1.19.4 - Marketing Schema Contract Final Validation
+==================================================================
+
+ROOT CAUSE COVERAGE
+-------------------
+PASS - Existing marketing.activity_log without entity_type is upgraded before index creation.
+PASS - Existing table compatibility covers all non-primary columns in the canonical marketing schema.
+PASS - Runtime schema, canonical SQL, and deployment migration are byte-equivalent after normalization.
+PASS - Runtime schema executes as one transaction.
+PASS - Runtime schema uses a PostgreSQL advisory lock.
+PASS - Runtime PostgreSQL postcheck covers 28 tables and 295 columns.
+PASS - Attendance singleton supports legacy boolean or text id without runtime id comparisons.
+PASS - Dashboard initializes marketing schema before reading marketing metrics.
+
+MARKETING VALIDATION
+--------------------
+PASS - Marketing schema contract checks: 28 tables, 295 columns.
+PASS - Marketing API/schema usage checks: 163 SQL templates, 258 table-column references.
+PASS - Marketing native rebuild static checks: 76.
+PASS - Marketing domain scenarios: 15.
+PASS - Marketing schema upgrade simulations: 4 legacy database states.
+
+FULL SOURCE VALIDATION
+----------------------
+PASS - All 28 repository check/test scripts completed successfully.
+PASS - Server TypeScript semantic compile completed successfully with tsconfig.node.json.
+PASS - TypeScript syntax transpilation completed successfully for 143 TS/TSX source files.
+PASS - JavaScript syntax checks completed successfully for 36 JS/MJS files.
+PASS - No TODO/FIXME/temporary patch/hack markers found in executable source.
+
+ENVIRONMENT NOTE
+----------------
+A fresh dependency installation and Vite production bundle were not rerun in the isolated execution environment because DNS access to registry.npmjs.org returned EAI_AGAIN. No frontend source file was changed in v1.19.4. The server TypeScript project and every repository-specific acceptance check passed.

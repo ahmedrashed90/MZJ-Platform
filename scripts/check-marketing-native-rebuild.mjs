@@ -33,7 +33,7 @@ for (const route of expectedRoutes) {
 check("operations photography route", app.includes('path="photos"') && operationsLayout.includes('/operations/photos'));
 check("marketing API gateway", gateway.includes('marketingHandler') && gateway.includes('["marketing", marketingHandler]'));
 check("schema initialization", setup.includes('ensureMarketingSchema'));
-check("attendance settings type-agnostic singleton", schema.includes("id boolean primary key default true check (id = true)") && schema.includes("where not exists(select 1 from marketing.attendance_settings)") && !schema.includes("alter column id type text") && api.includes("order by updated_at desc nulls last limit 1") && api.includes("where ctid=(select ctid from marketing.attendance_settings"));
+check("attendance settings type-agnostic singleton", schema.includes("id boolean primary key default true check (id = true)") && schema.includes("if not exists(select 1 from marketing.attendance_settings)") && schema.includes("attendance_id_type in ('text','varchar','bpchar')") && !schema.includes("alter column id type text") && api.includes("order by updated_at desc nulls last limit 1") && api.includes("where ctid=(select ctid from marketing.attendance_settings"));
 
 for (const table of [
   "marketing.departments", "marketing.department_users", "marketing.assignment_actions", "marketing.creative_types",
