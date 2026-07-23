@@ -40,6 +40,310 @@ select r.id,p.id from core.roles r join core.permissions p on p.code in (
 where r.code='marketing_user'
 on conflict do nothing;
 
+-- One in-transaction source of truth for the canonical marketing table columns.
+-- It is reused by compatibility normalization and the final schema verification.
+create temporary table _mzj_marketing_contract_columns (
+  table_name text not null,
+  column_name text not null,
+  primary key(table_name,column_name)
+) on commit drop;
+insert into _mzj_marketing_contract_columns(table_name,column_name) values
+      ('departments','id'),
+      ('departments','code'),
+      ('departments','name'),
+      ('departments','is_content_department'),
+      ('departments','is_active'),
+      ('departments','sort_order'),
+      ('departments','created_at'),
+      ('departments','updated_at'),
+      ('department_users','department_id'),
+      ('department_users','user_id'),
+      ('department_users','is_active'),
+      ('department_users','created_at'),
+      ('assignment_actions','id'),
+      ('assignment_actions','department_id'),
+      ('assignment_actions','name'),
+      ('assignment_actions','percentage'),
+      ('assignment_actions','audience'),
+      ('assignment_actions','is_required'),
+      ('assignment_actions','is_active'),
+      ('assignment_actions','sort_order'),
+      ('assignment_actions','created_at'),
+      ('assignment_actions','updated_at'),
+      ('creative_types','id'),
+      ('creative_types','name'),
+      ('creative_types','short_code'),
+      ('creative_types','primary_department_id'),
+      ('creative_types','is_active'),
+      ('creative_types','sort_order'),
+      ('creative_types','created_at'),
+      ('creative_types','updated_at'),
+      ('campaign_types','id'),
+      ('campaign_types','name'),
+      ('campaign_types','short_code'),
+      ('campaign_types','code_prefix'),
+      ('campaign_types','is_active'),
+      ('campaign_types','sort_order'),
+      ('campaign_types','next_number'),
+      ('campaign_types','created_at'),
+      ('campaign_types','updated_at'),
+      ('platforms','id'),
+      ('platforms','code'),
+      ('platforms','name'),
+      ('platforms','is_active'),
+      ('platforms','sort_order'),
+      ('platforms','created_at'),
+      ('platforms','updated_at'),
+      ('platform_post_types','id'),
+      ('platform_post_types','platform_id'),
+      ('platform_post_types','name'),
+      ('platform_post_types','code'),
+      ('platform_post_types','dimensions'),
+      ('platform_post_types','is_active'),
+      ('platform_post_types','sort_order'),
+      ('platform_post_types','created_at'),
+      ('platform_post_types','updated_at'),
+      ('package_categories','id'),
+      ('package_categories','name'),
+      ('package_categories','is_active'),
+      ('package_categories','sort_order'),
+      ('package_categories','created_at'),
+      ('package_categories','updated_at'),
+      ('request_statuses','id'),
+      ('request_statuses','code'),
+      ('request_statuses','name'),
+      ('request_statuses','is_terminal'),
+      ('request_statuses','is_active'),
+      ('request_statuses','sort_order'),
+      ('request_statuses','created_at'),
+      ('request_statuses','updated_at'),
+      ('campaigns','id'),
+      ('campaigns','legacy_id'),
+      ('campaigns','campaign_code'),
+      ('campaigns','name'),
+      ('campaigns','campaign_type'),
+      ('campaigns','objective'),
+      ('campaigns','status'),
+      ('campaigns','starts_at'),
+      ('campaigns','ends_at'),
+      ('campaigns','due_at'),
+      ('campaigns','created_by'),
+      ('campaigns','is_deleted'),
+      ('campaigns','created_at'),
+      ('campaigns','updated_at'),
+      ('campaigns','source_kind'),
+      ('campaigns','campaign_type_id'),
+      ('campaigns','campaign_date'),
+      ('campaigns','starts_on'),
+      ('campaigns','ends_on'),
+      ('campaigns','content_brief'),
+      ('campaigns','stage'),
+      ('campaigns','archived_at'),
+      ('campaigns','archived_by'),
+      ('campaigns','deleted_at'),
+      ('campaigns','deleted_by'),
+      ('campaigns','moved_to_publish_at'),
+      ('campaigns','raw_folders_created_at'),
+      ('campaigns','idempotency_key'),
+      ('campaigns','metadata'),
+      ('creatives','id'),
+      ('creatives','campaign_id'),
+      ('creatives','creative_type'),
+      ('creatives','quantity'),
+      ('creatives','status'),
+      ('creatives','created_at'),
+      ('creatives','creative_type_id'),
+      ('creatives','instance_no'),
+      ('creatives','short_code'),
+      ('creatives','agenda_day'),
+      ('creatives','content_due_at'),
+      ('creatives','content_notes'),
+      ('creatives','admin_notes'),
+      ('creatives','sort_order'),
+      ('creatives','metadata'),
+      ('creatives','updated_at'),
+      ('instance_assignments','id'),
+      ('instance_assignments','creative_id'),
+      ('instance_assignments','department_id'),
+      ('instance_assignments','assigned_user_id'),
+      ('instance_assignments','content_writer_id'),
+      ('instance_assignments','assignment_role'),
+      ('instance_assignments','due_at'),
+      ('instance_assignments','notes'),
+      ('instance_assignments','is_optional'),
+      ('instance_assignments','created_at'),
+      ('instance_assignments','updated_at'),
+      ('instance_vehicles','creative_id'),
+      ('instance_vehicles','vehicle_id'),
+      ('instance_vehicles','created_at'),
+      ('budget_items','id'),
+      ('budget_items','campaign_id'),
+      ('budget_items','creative_id'),
+      ('budget_items','funnel'),
+      ('budget_items','platform_id'),
+      ('budget_items','amount'),
+      ('budget_items','notes'),
+      ('budget_items','sort_order'),
+      ('budget_items','created_at'),
+      ('budget_items','updated_at'),
+      ('budget_items','ad_count'),
+      ('budget_items','content_goal'),
+      ('budget_items','expected_goal'),
+      ('publish_schedule','id'),
+      ('publish_schedule','campaign_id'),
+      ('publish_schedule','creative_id'),
+      ('publish_schedule','publish_date'),
+      ('publish_schedule','publish_time'),
+      ('publish_schedule','platform_id'),
+      ('publish_schedule','post_type_id'),
+      ('publish_schedule','notes'),
+      ('publish_schedule','status'),
+      ('publish_schedule','created_at'),
+      ('publish_schedule','updated_at'),
+      ('tasks','id'),
+      ('tasks','campaign_id'),
+      ('tasks','creative_id'),
+      ('tasks','department_code'),
+      ('tasks','assigned_to'),
+      ('tasks','paired_content_user_id'),
+      ('tasks','status'),
+      ('tasks','due_at'),
+      ('tasks','completed_at'),
+      ('tasks','created_at'),
+      ('tasks','updated_at'),
+      ('tasks','task_no'),
+      ('tasks','task_kind'),
+      ('tasks','department_id'),
+      ('tasks','content_writer_id'),
+      ('tasks','template_task_id'),
+      ('tasks','received_at'),
+      ('tasks','received_by'),
+      ('tasks','progress'),
+      ('tasks','review_status'),
+      ('tasks','review_note'),
+      ('tasks','template_data'),
+      ('tasks','final_asset_id'),
+      ('tasks','final_file_name'),
+      ('tasks','final_file_url'),
+      ('tasks','metadata'),
+      ('task_action_progress','task_id'),
+      ('task_action_progress','action_id'),
+      ('task_action_progress','completed'),
+      ('task_action_progress','completed_by'),
+      ('task_action_progress','completed_at'),
+      ('task_action_progress','note'),
+      ('task_action_progress','updated_at'),
+      ('task_uploads','id'),
+      ('task_uploads','task_id'),
+      ('task_uploads','upload_kind'),
+      ('task_uploads','file_name'),
+      ('task_uploads','storage_key'),
+      ('task_uploads','external_url'),
+      ('task_uploads','mime_type'),
+      ('task_uploads','file_size'),
+      ('task_uploads','version_no'),
+      ('task_uploads','status'),
+      ('task_uploads','uploaded_by'),
+      ('task_uploads','uploaded_by_name'),
+      ('task_uploads','metadata'),
+      ('task_uploads','created_at'),
+      ('task_reviews','id'),
+      ('task_reviews','task_id'),
+      ('task_reviews','action'),
+      ('task_reviews','note'),
+      ('task_reviews','reviewer_id'),
+      ('task_reviews','reviewer_name'),
+      ('task_reviews','snapshot'),
+      ('task_reviews','created_at'),
+      ('project_links','id'),
+      ('project_links','campaign_id'),
+      ('project_links','platform_id'),
+      ('project_links','url'),
+      ('project_links','created_by'),
+      ('project_links','created_at'),
+      ('project_files','id'),
+      ('project_files','campaign_id'),
+      ('project_files','file_kind'),
+      ('project_files','file_name'),
+      ('project_files','storage_key'),
+      ('project_files','external_url'),
+      ('project_files','mime_type'),
+      ('project_files','file_size'),
+      ('project_files','uploaded_by'),
+      ('project_files','uploaded_by_name'),
+      ('project_files','created_at'),
+      ('packages','id'),
+      ('packages','name'),
+      ('packages','category_id'),
+      ('packages','price'),
+      ('packages','cash_discount_percent'),
+      ('packages','registration_fee'),
+      ('packages','insurance_fee'),
+      ('packages','issuance_fee'),
+      ('packages','care_items'),
+      ('packages','delivery_home'),
+      ('packages','delivery_region'),
+      ('packages','metadata'),
+      ('packages','is_active'),
+      ('packages','created_by'),
+      ('packages','created_at'),
+      ('packages','updated_at'),
+      ('attendance_settings','id'),
+      ('attendance_settings','work_start_time'),
+      ('attendance_settings','work_end_time'),
+      ('attendance_settings','grace_minutes'),
+      ('attendance_settings','idle_after_minutes'),
+      ('attendance_settings','offline_after_minutes'),
+      ('attendance_settings','updated_by'),
+      ('attendance_settings','updated_at'),
+      ('attendance_records','id'),
+      ('attendance_records','user_id'),
+      ('attendance_records','attendance_date'),
+      ('attendance_records','check_in_at'),
+      ('attendance_records','check_out_at'),
+      ('attendance_records','status'),
+      ('attendance_records','late_minutes'),
+      ('attendance_records','work_minutes'),
+      ('attendance_records','source'),
+      ('attendance_records','metadata'),
+      ('attendance_records','created_at'),
+      ('attendance_records','updated_at'),
+      ('presence_status','user_id'),
+      ('presence_status','last_seen_at'),
+      ('presence_status','last_activity_at'),
+      ('presence_status','last_page'),
+      ('presence_status','activity_type'),
+      ('presence_status','device_info'),
+      ('presence_status','updated_at'),
+      ('attendance_requests','id'),
+      ('attendance_requests','user_id'),
+      ('attendance_requests','request_type'),
+      ('attendance_requests','request_date'),
+      ('attendance_requests','note'),
+      ('attendance_requests','status'),
+      ('attendance_requests','reviewed_by'),
+      ('attendance_requests','review_note'),
+      ('attendance_requests','created_at'),
+      ('attendance_requests','updated_at'),
+      ('platform_connections','id'),
+      ('platform_connections','platform_id'),
+      ('platform_connections','connection_status'),
+      ('platform_connections','account_name'),
+      ('platform_connections','account_external_id'),
+      ('platform_connections','token_status'),
+      ('platform_connections','settings'),
+      ('platform_connections','connected_by'),
+      ('platform_connections','connected_at'),
+      ('platform_connections','updated_at'),
+      ('activity_log','id'),
+      ('activity_log','actor_id'),
+      ('activity_log','actor_name'),
+      ('activity_log','action'),
+      ('activity_log','entity_type'),
+      ('activity_log','entity_id'),
+      ('activity_log','details'),
+      ('activity_log','created_at');
+
 create table if not exists marketing.departments (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,
@@ -138,6 +442,75 @@ alter table marketing.campaign_types add column if not exists sort_order integer
 alter table marketing.campaign_types add column if not exists next_number bigint not null default 1;
 alter table marketing.campaign_types add column if not exists created_at timestamptz not null default now();
 alter table marketing.campaign_types add column if not exists updated_at timestamptz not null default now();
+
+
+-- One-time, data-preserving normalization of the legacy campaign type aliases.
+-- Older marketing builds used code / prefix; the native contract uses
+-- short_code / code_prefix. The old columns are retained as nullable
+-- compatibility data, but they can no longer block native inserts.
+do $$
+declare
+  has_legacy_code boolean;
+  has_legacy_prefix boolean;
+begin
+  select exists(
+    select 1 from information_schema.columns
+    where table_schema='marketing' and table_name='campaign_types' and column_name='code'
+  ) into has_legacy_code;
+  select exists(
+    select 1 from information_schema.columns
+    where table_schema='marketing' and table_name='campaign_types' and column_name='prefix'
+  ) into has_legacy_prefix;
+
+  if has_legacy_code and has_legacy_prefix then
+    execute $sql$
+      update marketing.campaign_types
+      set code_prefix = case
+            when nullif(short_code,'') is null then coalesce(nullif(prefix::text,''),nullif(code_prefix,''),'MZJ')
+            else coalesce(nullif(code_prefix,''),'MZJ')
+          end,
+          short_code = coalesce(nullif(short_code,''),nullif(code::text,''))
+    $sql$;
+  elsif has_legacy_code then
+    execute $sql$
+      update marketing.campaign_types
+      set short_code=coalesce(nullif(short_code,''),nullif(code::text,'')),
+          code_prefix=coalesce(nullif(code_prefix,''),'MZJ')
+    $sql$;
+  elsif has_legacy_prefix then
+    execute $sql$
+      update marketing.campaign_types
+      set code_prefix=case
+            when nullif(short_code,'') is null then coalesce(nullif(prefix::text,''),nullif(code_prefix,''),'MZJ')
+            else coalesce(nullif(code_prefix,''),'MZJ')
+          end
+    $sql$;
+  end if;
+end $$;
+
+update marketing.campaign_types
+set name=coalesce(nullif(name,''),'نوع حملة ' || substr(id::text,1,8)),
+    short_code=coalesce(nullif(short_code,''),'LEG-' || upper(substr(md5(id::text),1,8))),
+    code_prefix=coalesce(nullif(code_prefix,''),'MZJ'),
+    is_active=coalesce(is_active,true),
+    sort_order=coalesce(sort_order,0),
+    next_number=coalesce(next_number,1),
+    created_at=coalesce(created_at,now()),
+    updated_at=coalesce(updated_at,now());
+alter table marketing.campaign_types alter column code_prefix set default 'MZJ';
+alter table marketing.campaign_types alter column is_active set default true;
+alter table marketing.campaign_types alter column sort_order set default 0;
+alter table marketing.campaign_types alter column next_number set default 1;
+alter table marketing.campaign_types alter column created_at set default now();
+alter table marketing.campaign_types alter column updated_at set default now();
+alter table marketing.campaign_types alter column name set not null;
+alter table marketing.campaign_types alter column short_code set not null;
+alter table marketing.campaign_types alter column code_prefix set not null;
+alter table marketing.campaign_types alter column is_active set not null;
+alter table marketing.campaign_types alter column sort_order set not null;
+alter table marketing.campaign_types alter column next_number set not null;
+alter table marketing.campaign_types alter column created_at set not null;
+alter table marketing.campaign_types alter column updated_at set not null;
 
 create table if not exists marketing.platforms (
   id uuid primary key default gen_random_uuid(),
@@ -807,6 +1180,422 @@ alter table marketing.activity_log alter column details set not null;
 alter table marketing.activity_log alter column created_at set not null;
 create index if not exists marketing_activity_log_entity_idx on marketing.activity_log(entity_type,entity_id,created_at desc);
 
+-- Canonical defaults are enforced for columns that may already exist from an older schema.
+alter table marketing.departments alter column is_content_department set default false;
+update marketing.departments set is_content_department=false where is_content_department is null;
+alter table marketing.departments alter column is_content_department set not null;
+alter table marketing.departments alter column is_active set default true;
+update marketing.departments set is_active=true where is_active is null;
+alter table marketing.departments alter column is_active set not null;
+alter table marketing.departments alter column sort_order set default 0;
+update marketing.departments set sort_order=0 where sort_order is null;
+alter table marketing.departments alter column sort_order set not null;
+alter table marketing.departments alter column created_at set default now();
+update marketing.departments set created_at=now() where created_at is null;
+alter table marketing.departments alter column created_at set not null;
+alter table marketing.departments alter column updated_at set default now();
+update marketing.departments set updated_at=now() where updated_at is null;
+alter table marketing.departments alter column updated_at set not null;
+alter table marketing.department_users alter column is_active set default true;
+update marketing.department_users set is_active=true where is_active is null;
+alter table marketing.department_users alter column is_active set not null;
+alter table marketing.department_users alter column created_at set default now();
+update marketing.department_users set created_at=now() where created_at is null;
+alter table marketing.department_users alter column created_at set not null;
+alter table marketing.assignment_actions alter column audience set default 'user';
+update marketing.assignment_actions set audience='user' where audience is null;
+alter table marketing.assignment_actions alter column audience set not null;
+alter table marketing.assignment_actions alter column is_required set default true;
+update marketing.assignment_actions set is_required=true where is_required is null;
+alter table marketing.assignment_actions alter column is_required set not null;
+alter table marketing.assignment_actions alter column is_active set default true;
+update marketing.assignment_actions set is_active=true where is_active is null;
+alter table marketing.assignment_actions alter column is_active set not null;
+alter table marketing.assignment_actions alter column sort_order set default 0;
+update marketing.assignment_actions set sort_order=0 where sort_order is null;
+alter table marketing.assignment_actions alter column sort_order set not null;
+alter table marketing.assignment_actions alter column created_at set default now();
+update marketing.assignment_actions set created_at=now() where created_at is null;
+alter table marketing.assignment_actions alter column created_at set not null;
+alter table marketing.assignment_actions alter column updated_at set default now();
+update marketing.assignment_actions set updated_at=now() where updated_at is null;
+alter table marketing.assignment_actions alter column updated_at set not null;
+alter table marketing.creative_types alter column is_active set default true;
+update marketing.creative_types set is_active=true where is_active is null;
+alter table marketing.creative_types alter column is_active set not null;
+alter table marketing.creative_types alter column sort_order set default 0;
+update marketing.creative_types set sort_order=0 where sort_order is null;
+alter table marketing.creative_types alter column sort_order set not null;
+alter table marketing.creative_types alter column created_at set default now();
+update marketing.creative_types set created_at=now() where created_at is null;
+alter table marketing.creative_types alter column created_at set not null;
+alter table marketing.creative_types alter column updated_at set default now();
+update marketing.creative_types set updated_at=now() where updated_at is null;
+alter table marketing.creative_types alter column updated_at set not null;
+alter table marketing.campaign_types alter column code_prefix set default 'MZJ';
+update marketing.campaign_types set code_prefix='MZJ' where code_prefix is null;
+alter table marketing.campaign_types alter column code_prefix set not null;
+alter table marketing.campaign_types alter column is_active set default true;
+update marketing.campaign_types set is_active=true where is_active is null;
+alter table marketing.campaign_types alter column is_active set not null;
+alter table marketing.campaign_types alter column sort_order set default 0;
+update marketing.campaign_types set sort_order=0 where sort_order is null;
+alter table marketing.campaign_types alter column sort_order set not null;
+alter table marketing.campaign_types alter column next_number set default 1;
+update marketing.campaign_types set next_number=1 where next_number is null;
+alter table marketing.campaign_types alter column next_number set not null;
+alter table marketing.campaign_types alter column created_at set default now();
+update marketing.campaign_types set created_at=now() where created_at is null;
+alter table marketing.campaign_types alter column created_at set not null;
+alter table marketing.campaign_types alter column updated_at set default now();
+update marketing.campaign_types set updated_at=now() where updated_at is null;
+alter table marketing.campaign_types alter column updated_at set not null;
+alter table marketing.platforms alter column is_active set default true;
+update marketing.platforms set is_active=true where is_active is null;
+alter table marketing.platforms alter column is_active set not null;
+alter table marketing.platforms alter column sort_order set default 0;
+update marketing.platforms set sort_order=0 where sort_order is null;
+alter table marketing.platforms alter column sort_order set not null;
+alter table marketing.platforms alter column created_at set default now();
+update marketing.platforms set created_at=now() where created_at is null;
+alter table marketing.platforms alter column created_at set not null;
+alter table marketing.platforms alter column updated_at set default now();
+update marketing.platforms set updated_at=now() where updated_at is null;
+alter table marketing.platforms alter column updated_at set not null;
+alter table marketing.platform_post_types alter column is_active set default true;
+update marketing.platform_post_types set is_active=true where is_active is null;
+alter table marketing.platform_post_types alter column is_active set not null;
+alter table marketing.platform_post_types alter column sort_order set default 0;
+update marketing.platform_post_types set sort_order=0 where sort_order is null;
+alter table marketing.platform_post_types alter column sort_order set not null;
+alter table marketing.platform_post_types alter column created_at set default now();
+update marketing.platform_post_types set created_at=now() where created_at is null;
+alter table marketing.platform_post_types alter column created_at set not null;
+alter table marketing.platform_post_types alter column updated_at set default now();
+update marketing.platform_post_types set updated_at=now() where updated_at is null;
+alter table marketing.platform_post_types alter column updated_at set not null;
+alter table marketing.package_categories alter column is_active set default true;
+update marketing.package_categories set is_active=true where is_active is null;
+alter table marketing.package_categories alter column is_active set not null;
+alter table marketing.package_categories alter column sort_order set default 0;
+update marketing.package_categories set sort_order=0 where sort_order is null;
+alter table marketing.package_categories alter column sort_order set not null;
+alter table marketing.package_categories alter column created_at set default now();
+update marketing.package_categories set created_at=now() where created_at is null;
+alter table marketing.package_categories alter column created_at set not null;
+alter table marketing.package_categories alter column updated_at set default now();
+update marketing.package_categories set updated_at=now() where updated_at is null;
+alter table marketing.package_categories alter column updated_at set not null;
+alter table marketing.request_statuses alter column is_terminal set default false;
+update marketing.request_statuses set is_terminal=false where is_terminal is null;
+alter table marketing.request_statuses alter column is_terminal set not null;
+alter table marketing.request_statuses alter column is_active set default true;
+update marketing.request_statuses set is_active=true where is_active is null;
+alter table marketing.request_statuses alter column is_active set not null;
+alter table marketing.request_statuses alter column sort_order set default 0;
+update marketing.request_statuses set sort_order=0 where sort_order is null;
+alter table marketing.request_statuses alter column sort_order set not null;
+alter table marketing.request_statuses alter column created_at set default now();
+update marketing.request_statuses set created_at=now() where created_at is null;
+alter table marketing.request_statuses alter column created_at set not null;
+alter table marketing.request_statuses alter column updated_at set default now();
+update marketing.request_statuses set updated_at=now() where updated_at is null;
+alter table marketing.request_statuses alter column updated_at set not null;
+alter table marketing.campaigns alter column status set default 'active';
+update marketing.campaigns set status='active' where status is null;
+alter table marketing.campaigns alter column status set not null;
+alter table marketing.campaigns alter column is_deleted set default false;
+update marketing.campaigns set is_deleted=false where is_deleted is null;
+alter table marketing.campaigns alter column is_deleted set not null;
+alter table marketing.campaigns alter column created_at set default now();
+update marketing.campaigns set created_at=now() where created_at is null;
+alter table marketing.campaigns alter column created_at set not null;
+alter table marketing.campaigns alter column updated_at set default now();
+update marketing.campaigns set updated_at=now() where updated_at is null;
+alter table marketing.campaigns alter column updated_at set not null;
+alter table marketing.campaigns alter column source_kind set default 'campaign';
+update marketing.campaigns set source_kind='campaign' where source_kind is null;
+alter table marketing.campaigns alter column source_kind set not null;
+alter table marketing.campaigns alter column stage set default 'required';
+update marketing.campaigns set stage='required' where stage is null;
+alter table marketing.campaigns alter column stage set not null;
+alter table marketing.campaigns alter column metadata set default '{}'::jsonb;
+update marketing.campaigns set metadata='{}'::jsonb where metadata is null;
+alter table marketing.campaigns alter column metadata set not null;
+alter table marketing.creatives alter column quantity set default 1;
+update marketing.creatives set quantity=1 where quantity is null;
+alter table marketing.creatives alter column quantity set not null;
+alter table marketing.creatives alter column status set default 'pending';
+update marketing.creatives set status='pending' where status is null;
+alter table marketing.creatives alter column status set not null;
+alter table marketing.creatives alter column created_at set default now();
+update marketing.creatives set created_at=now() where created_at is null;
+alter table marketing.creatives alter column created_at set not null;
+alter table marketing.creatives alter column sort_order set default 0;
+update marketing.creatives set sort_order=0 where sort_order is null;
+alter table marketing.creatives alter column sort_order set not null;
+alter table marketing.creatives alter column metadata set default '{}'::jsonb;
+update marketing.creatives set metadata='{}'::jsonb where metadata is null;
+alter table marketing.creatives alter column metadata set not null;
+alter table marketing.creatives alter column updated_at set default now();
+update marketing.creatives set updated_at=now() where updated_at is null;
+alter table marketing.creatives alter column updated_at set not null;
+alter table marketing.instance_assignments alter column is_optional set default false;
+update marketing.instance_assignments set is_optional=false where is_optional is null;
+alter table marketing.instance_assignments alter column is_optional set not null;
+alter table marketing.instance_assignments alter column created_at set default now();
+update marketing.instance_assignments set created_at=now() where created_at is null;
+alter table marketing.instance_assignments alter column created_at set not null;
+alter table marketing.instance_assignments alter column updated_at set default now();
+update marketing.instance_assignments set updated_at=now() where updated_at is null;
+alter table marketing.instance_assignments alter column updated_at set not null;
+alter table marketing.instance_vehicles alter column created_at set default now();
+update marketing.instance_vehicles set created_at=now() where created_at is null;
+alter table marketing.instance_vehicles alter column created_at set not null;
+alter table marketing.budget_items alter column amount set default 0;
+update marketing.budget_items set amount=0 where amount is null;
+alter table marketing.budget_items alter column amount set not null;
+alter table marketing.budget_items alter column sort_order set default 0;
+update marketing.budget_items set sort_order=0 where sort_order is null;
+alter table marketing.budget_items alter column sort_order set not null;
+alter table marketing.budget_items alter column created_at set default now();
+update marketing.budget_items set created_at=now() where created_at is null;
+alter table marketing.budget_items alter column created_at set not null;
+alter table marketing.budget_items alter column updated_at set default now();
+update marketing.budget_items set updated_at=now() where updated_at is null;
+alter table marketing.budget_items alter column updated_at set not null;
+alter table marketing.budget_items alter column ad_count set default 1;
+update marketing.budget_items set ad_count=1 where ad_count is null;
+alter table marketing.budget_items alter column ad_count set not null;
+alter table marketing.publish_schedule alter column status set default 'scheduled';
+update marketing.publish_schedule set status='scheduled' where status is null;
+alter table marketing.publish_schedule alter column status set not null;
+alter table marketing.publish_schedule alter column created_at set default now();
+update marketing.publish_schedule set created_at=now() where created_at is null;
+alter table marketing.publish_schedule alter column created_at set not null;
+alter table marketing.publish_schedule alter column updated_at set default now();
+update marketing.publish_schedule set updated_at=now() where updated_at is null;
+alter table marketing.publish_schedule alter column updated_at set not null;
+alter table marketing.tasks alter column status set default 'required';
+update marketing.tasks set status='required' where status is null;
+alter table marketing.tasks alter column status set not null;
+alter table marketing.tasks alter column created_at set default now();
+update marketing.tasks set created_at=now() where created_at is null;
+alter table marketing.tasks alter column created_at set not null;
+alter table marketing.tasks alter column updated_at set default now();
+update marketing.tasks set updated_at=now() where updated_at is null;
+alter table marketing.tasks alter column updated_at set not null;
+alter table marketing.tasks alter column task_kind set default 'execution';
+update marketing.tasks set task_kind='execution' where task_kind is null;
+alter table marketing.tasks alter column task_kind set not null;
+alter table marketing.tasks alter column progress set default 0;
+update marketing.tasks set progress=0 where progress is null;
+alter table marketing.tasks alter column progress set not null;
+alter table marketing.tasks alter column template_data set default '{}'::jsonb;
+update marketing.tasks set template_data='{}'::jsonb where template_data is null;
+alter table marketing.tasks alter column template_data set not null;
+alter table marketing.tasks alter column metadata set default '{}'::jsonb;
+update marketing.tasks set metadata='{}'::jsonb where metadata is null;
+alter table marketing.tasks alter column metadata set not null;
+alter table marketing.task_action_progress alter column completed set default false;
+update marketing.task_action_progress set completed=false where completed is null;
+alter table marketing.task_action_progress alter column completed set not null;
+alter table marketing.task_action_progress alter column updated_at set default now();
+update marketing.task_action_progress set updated_at=now() where updated_at is null;
+alter table marketing.task_action_progress alter column updated_at set not null;
+alter table marketing.task_uploads alter column version_no set default 1;
+update marketing.task_uploads set version_no=1 where version_no is null;
+alter table marketing.task_uploads alter column version_no set not null;
+alter table marketing.task_uploads alter column status set default 'ready';
+update marketing.task_uploads set status='ready' where status is null;
+alter table marketing.task_uploads alter column status set not null;
+alter table marketing.task_uploads alter column metadata set default '{}'::jsonb;
+update marketing.task_uploads set metadata='{}'::jsonb where metadata is null;
+alter table marketing.task_uploads alter column metadata set not null;
+alter table marketing.task_uploads alter column created_at set default now();
+update marketing.task_uploads set created_at=now() where created_at is null;
+alter table marketing.task_uploads alter column created_at set not null;
+alter table marketing.task_reviews alter column snapshot set default '{}'::jsonb;
+update marketing.task_reviews set snapshot='{}'::jsonb where snapshot is null;
+alter table marketing.task_reviews alter column snapshot set not null;
+alter table marketing.task_reviews alter column created_at set default now();
+update marketing.task_reviews set created_at=now() where created_at is null;
+alter table marketing.task_reviews alter column created_at set not null;
+alter table marketing.project_links alter column created_at set default now();
+update marketing.project_links set created_at=now() where created_at is null;
+alter table marketing.project_links alter column created_at set not null;
+alter table marketing.project_files alter column created_at set default now();
+update marketing.project_files set created_at=now() where created_at is null;
+alter table marketing.project_files alter column created_at set not null;
+alter table marketing.packages alter column price set default 0;
+update marketing.packages set price=0 where price is null;
+alter table marketing.packages alter column price set not null;
+alter table marketing.packages alter column cash_discount_percent set default 0;
+update marketing.packages set cash_discount_percent=0 where cash_discount_percent is null;
+alter table marketing.packages alter column cash_discount_percent set not null;
+alter table marketing.packages alter column registration_fee set default 0;
+update marketing.packages set registration_fee=0 where registration_fee is null;
+alter table marketing.packages alter column registration_fee set not null;
+alter table marketing.packages alter column insurance_fee set default 0;
+update marketing.packages set insurance_fee=0 where insurance_fee is null;
+alter table marketing.packages alter column insurance_fee set not null;
+alter table marketing.packages alter column issuance_fee set default 0;
+update marketing.packages set issuance_fee=0 where issuance_fee is null;
+alter table marketing.packages alter column issuance_fee set not null;
+alter table marketing.packages alter column care_items set default '{}';
+update marketing.packages set care_items='{}' where care_items is null;
+alter table marketing.packages alter column care_items set not null;
+alter table marketing.packages alter column delivery_home set default false;
+update marketing.packages set delivery_home=false where delivery_home is null;
+alter table marketing.packages alter column delivery_home set not null;
+alter table marketing.packages alter column metadata set default '{}'::jsonb;
+update marketing.packages set metadata='{}'::jsonb where metadata is null;
+alter table marketing.packages alter column metadata set not null;
+alter table marketing.packages alter column is_active set default true;
+update marketing.packages set is_active=true where is_active is null;
+alter table marketing.packages alter column is_active set not null;
+alter table marketing.packages alter column created_at set default now();
+update marketing.packages set created_at=now() where created_at is null;
+alter table marketing.packages alter column created_at set not null;
+alter table marketing.packages alter column updated_at set default now();
+update marketing.packages set updated_at=now() where updated_at is null;
+alter table marketing.packages alter column updated_at set not null;
+alter table marketing.attendance_settings alter column work_start_time set default '16:00';
+update marketing.attendance_settings set work_start_time='16:00' where work_start_time is null;
+alter table marketing.attendance_settings alter column work_start_time set not null;
+alter table marketing.attendance_settings alter column work_end_time set default '21:00';
+update marketing.attendance_settings set work_end_time='21:00' where work_end_time is null;
+alter table marketing.attendance_settings alter column work_end_time set not null;
+alter table marketing.attendance_settings alter column grace_minutes set default 0;
+update marketing.attendance_settings set grace_minutes=0 where grace_minutes is null;
+alter table marketing.attendance_settings alter column grace_minutes set not null;
+alter table marketing.attendance_settings alter column idle_after_minutes set default 5;
+update marketing.attendance_settings set idle_after_minutes=5 where idle_after_minutes is null;
+alter table marketing.attendance_settings alter column idle_after_minutes set not null;
+alter table marketing.attendance_settings alter column offline_after_minutes set default 10;
+update marketing.attendance_settings set offline_after_minutes=10 where offline_after_minutes is null;
+alter table marketing.attendance_settings alter column offline_after_minutes set not null;
+alter table marketing.attendance_settings alter column updated_at set default now();
+update marketing.attendance_settings set updated_at=now() where updated_at is null;
+alter table marketing.attendance_settings alter column updated_at set not null;
+alter table marketing.attendance_records alter column attendance_date set default current_date;
+update marketing.attendance_records set attendance_date=current_date where attendance_date is null;
+alter table marketing.attendance_records alter column attendance_date set not null;
+alter table marketing.attendance_records alter column status set default 'present';
+update marketing.attendance_records set status='present' where status is null;
+alter table marketing.attendance_records alter column status set not null;
+alter table marketing.attendance_records alter column late_minutes set default 0;
+update marketing.attendance_records set late_minutes=0 where late_minutes is null;
+alter table marketing.attendance_records alter column late_minutes set not null;
+alter table marketing.attendance_records alter column work_minutes set default 0;
+update marketing.attendance_records set work_minutes=0 where work_minutes is null;
+alter table marketing.attendance_records alter column work_minutes set not null;
+alter table marketing.attendance_records alter column source set default 'marketing_system';
+update marketing.attendance_records set source='marketing_system' where source is null;
+alter table marketing.attendance_records alter column source set not null;
+alter table marketing.attendance_records alter column metadata set default '{}'::jsonb;
+update marketing.attendance_records set metadata='{}'::jsonb where metadata is null;
+alter table marketing.attendance_records alter column metadata set not null;
+alter table marketing.attendance_records alter column created_at set default now();
+update marketing.attendance_records set created_at=now() where created_at is null;
+alter table marketing.attendance_records alter column created_at set not null;
+alter table marketing.attendance_records alter column updated_at set default now();
+update marketing.attendance_records set updated_at=now() where updated_at is null;
+alter table marketing.attendance_records alter column updated_at set not null;
+alter table marketing.presence_status alter column last_seen_at set default now();
+update marketing.presence_status set last_seen_at=now() where last_seen_at is null;
+alter table marketing.presence_status alter column last_seen_at set not null;
+alter table marketing.presence_status alter column last_activity_at set default now();
+update marketing.presence_status set last_activity_at=now() where last_activity_at is null;
+alter table marketing.presence_status alter column last_activity_at set not null;
+alter table marketing.presence_status alter column device_info set default '{}'::jsonb;
+update marketing.presence_status set device_info='{}'::jsonb where device_info is null;
+alter table marketing.presence_status alter column device_info set not null;
+alter table marketing.presence_status alter column updated_at set default now();
+update marketing.presence_status set updated_at=now() where updated_at is null;
+alter table marketing.presence_status alter column updated_at set not null;
+alter table marketing.attendance_requests alter column status set default 'pending';
+update marketing.attendance_requests set status='pending' where status is null;
+alter table marketing.attendance_requests alter column status set not null;
+alter table marketing.attendance_requests alter column created_at set default now();
+update marketing.attendance_requests set created_at=now() where created_at is null;
+alter table marketing.attendance_requests alter column created_at set not null;
+alter table marketing.attendance_requests alter column updated_at set default now();
+update marketing.attendance_requests set updated_at=now() where updated_at is null;
+alter table marketing.attendance_requests alter column updated_at set not null;
+alter table marketing.platform_connections alter column connection_status set default 'disconnected';
+update marketing.platform_connections set connection_status='disconnected' where connection_status is null;
+alter table marketing.platform_connections alter column connection_status set not null;
+alter table marketing.platform_connections alter column settings set default '{}'::jsonb;
+update marketing.platform_connections set settings='{}'::jsonb where settings is null;
+alter table marketing.platform_connections alter column settings set not null;
+alter table marketing.platform_connections alter column updated_at set default now();
+update marketing.platform_connections set updated_at=now() where updated_at is null;
+alter table marketing.platform_connections alter column updated_at set not null;
+alter table marketing.activity_log alter column details set default '{}'::jsonb;
+update marketing.activity_log set details='{}'::jsonb where details is null;
+alter table marketing.activity_log alter column details set not null;
+alter table marketing.activity_log alter column created_at set default now();
+update marketing.activity_log set created_at=now() where created_at is null;
+alter table marketing.activity_log alter column created_at set not null;
+
+-- Normalize write blockers left by pre-native marketing tables.
+-- Only extra (non-contract) columns are relaxed; canonical columns and primary keys are untouched.
+do $$
+declare
+  legacy_column record;
+begin
+  for legacy_column in
+    select c.table_name,c.column_name
+    from information_schema.columns c
+    where c.table_schema='marketing'
+      and c.is_nullable='NO'
+      and c.column_default is null
+      and coalesce(c.is_identity,'NO')='NO'
+      and coalesce(c.is_generated,'NEVER')='NEVER'
+      and not exists (
+        select 1 from _mzj_marketing_contract_columns k
+        where k.table_name=c.table_name and k.column_name=c.column_name
+      )
+      and not exists (
+        select 1
+        from pg_constraint con
+        join pg_class rel on rel.oid=con.conrelid
+        join pg_namespace ns on ns.oid=rel.relnamespace
+        join unnest(con.conkey) as key(attnum) on true
+        join pg_attribute attr on attr.attrelid=rel.oid and attr.attnum=key.attnum
+        where con.contype='p' and ns.nspname='marketing'
+          and rel.relname=c.table_name and attr.attname=c.column_name
+      )
+  loop
+    execute format('alter table marketing.%I alter column %I drop not null',legacy_column.table_name,legacy_column.column_name);
+  end loop;
+end $$;
+
+-- Unique indexes are created explicitly because CREATE TABLE IF NOT EXISTS
+-- does not add table constraints to tables that already existed.
+create unique index if not exists marketing_departments_code_unique on marketing.departments(code);
+create unique index if not exists marketing_department_users_unique on marketing.department_users(department_id,user_id);
+create unique index if not exists marketing_assignment_actions_unique on marketing.assignment_actions(department_id,name);
+create unique index if not exists marketing_creative_types_name_unique on marketing.creative_types(name);
+create unique index if not exists marketing_creative_types_short_code_unique on marketing.creative_types(short_code);
+create unique index if not exists marketing_campaign_types_name_unique on marketing.campaign_types(name);
+create unique index if not exists marketing_campaign_types_short_code_unique on marketing.campaign_types(short_code);
+create unique index if not exists marketing_platforms_code_unique on marketing.platforms(code);
+create unique index if not exists marketing_platforms_name_unique on marketing.platforms(name);
+create unique index if not exists marketing_platform_post_types_unique on marketing.platform_post_types(platform_id,code);
+create unique index if not exists marketing_package_categories_name_unique on marketing.package_categories(name);
+create unique index if not exists marketing_request_statuses_code_unique on marketing.request_statuses(code);
+create unique index if not exists marketing_campaigns_legacy_id_unique on marketing.campaigns(legacy_id);
+create unique index if not exists marketing_campaigns_campaign_code_unique on marketing.campaigns(campaign_code);
+create unique index if not exists marketing_instance_vehicles_unique on marketing.instance_vehicles(creative_id,vehicle_id);
+create unique index if not exists marketing_publish_schedule_unique on marketing.publish_schedule(campaign_id,creative_id,publish_date,platform_id,post_type_id);
+create unique index if not exists marketing_task_action_progress_unique on marketing.task_action_progress(task_id,action_id);
+create unique index if not exists marketing_packages_name_category_unique on marketing.packages(name,category_id);
+create unique index if not exists marketing_attendance_records_user_date_unique on marketing.attendance_records(user_id,attendance_date);
+create unique index if not exists marketing_presence_status_user_unique on marketing.presence_status(user_id);
+create unique index if not exists marketing_platform_connections_platform_unique on marketing.platform_connections(platform_id);
+
 insert into marketing.departments(code,name,is_content_department,sort_order) values
 ('content','قسم المحتوى',true,10),
 ('design','قسم التصميم',false,20),
@@ -930,303 +1719,7 @@ declare
 begin
   select string_agg(format('marketing.%I.%I', expected.table_name, expected.column_name), ', ' order by expected.table_name, expected.column_name)
     into missing_columns
-  from (values
-      ('departments','id'),
-      ('departments','code'),
-      ('departments','name'),
-      ('departments','is_content_department'),
-      ('departments','is_active'),
-      ('departments','sort_order'),
-      ('departments','created_at'),
-      ('departments','updated_at'),
-      ('department_users','department_id'),
-      ('department_users','user_id'),
-      ('department_users','is_active'),
-      ('department_users','created_at'),
-      ('assignment_actions','id'),
-      ('assignment_actions','department_id'),
-      ('assignment_actions','name'),
-      ('assignment_actions','percentage'),
-      ('assignment_actions','audience'),
-      ('assignment_actions','is_required'),
-      ('assignment_actions','is_active'),
-      ('assignment_actions','sort_order'),
-      ('assignment_actions','created_at'),
-      ('assignment_actions','updated_at'),
-      ('creative_types','id'),
-      ('creative_types','name'),
-      ('creative_types','short_code'),
-      ('creative_types','primary_department_id'),
-      ('creative_types','is_active'),
-      ('creative_types','sort_order'),
-      ('creative_types','created_at'),
-      ('creative_types','updated_at'),
-      ('campaign_types','id'),
-      ('campaign_types','name'),
-      ('campaign_types','short_code'),
-      ('campaign_types','code_prefix'),
-      ('campaign_types','is_active'),
-      ('campaign_types','sort_order'),
-      ('campaign_types','next_number'),
-      ('campaign_types','created_at'),
-      ('campaign_types','updated_at'),
-      ('platforms','id'),
-      ('platforms','code'),
-      ('platforms','name'),
-      ('platforms','is_active'),
-      ('platforms','sort_order'),
-      ('platforms','created_at'),
-      ('platforms','updated_at'),
-      ('platform_post_types','id'),
-      ('platform_post_types','platform_id'),
-      ('platform_post_types','name'),
-      ('platform_post_types','code'),
-      ('platform_post_types','dimensions'),
-      ('platform_post_types','is_active'),
-      ('platform_post_types','sort_order'),
-      ('platform_post_types','created_at'),
-      ('platform_post_types','updated_at'),
-      ('package_categories','id'),
-      ('package_categories','name'),
-      ('package_categories','is_active'),
-      ('package_categories','sort_order'),
-      ('package_categories','created_at'),
-      ('package_categories','updated_at'),
-      ('request_statuses','id'),
-      ('request_statuses','code'),
-      ('request_statuses','name'),
-      ('request_statuses','is_terminal'),
-      ('request_statuses','is_active'),
-      ('request_statuses','sort_order'),
-      ('request_statuses','created_at'),
-      ('request_statuses','updated_at'),
-      ('campaigns','id'),
-      ('campaigns','legacy_id'),
-      ('campaigns','campaign_code'),
-      ('campaigns','name'),
-      ('campaigns','campaign_type'),
-      ('campaigns','objective'),
-      ('campaigns','status'),
-      ('campaigns','starts_at'),
-      ('campaigns','ends_at'),
-      ('campaigns','due_at'),
-      ('campaigns','created_by'),
-      ('campaigns','is_deleted'),
-      ('campaigns','created_at'),
-      ('campaigns','updated_at'),
-      ('campaigns','source_kind'),
-      ('campaigns','campaign_type_id'),
-      ('campaigns','campaign_date'),
-      ('campaigns','starts_on'),
-      ('campaigns','ends_on'),
-      ('campaigns','content_brief'),
-      ('campaigns','stage'),
-      ('campaigns','archived_at'),
-      ('campaigns','archived_by'),
-      ('campaigns','deleted_at'),
-      ('campaigns','deleted_by'),
-      ('campaigns','moved_to_publish_at'),
-      ('campaigns','raw_folders_created_at'),
-      ('campaigns','idempotency_key'),
-      ('campaigns','metadata'),
-      ('creatives','id'),
-      ('creatives','campaign_id'),
-      ('creatives','creative_type'),
-      ('creatives','quantity'),
-      ('creatives','status'),
-      ('creatives','created_at'),
-      ('creatives','creative_type_id'),
-      ('creatives','instance_no'),
-      ('creatives','short_code'),
-      ('creatives','agenda_day'),
-      ('creatives','content_due_at'),
-      ('creatives','content_notes'),
-      ('creatives','admin_notes'),
-      ('creatives','sort_order'),
-      ('creatives','metadata'),
-      ('creatives','updated_at'),
-      ('instance_assignments','id'),
-      ('instance_assignments','creative_id'),
-      ('instance_assignments','department_id'),
-      ('instance_assignments','assigned_user_id'),
-      ('instance_assignments','content_writer_id'),
-      ('instance_assignments','assignment_role'),
-      ('instance_assignments','due_at'),
-      ('instance_assignments','notes'),
-      ('instance_assignments','is_optional'),
-      ('instance_assignments','created_at'),
-      ('instance_assignments','updated_at'),
-      ('instance_vehicles','creative_id'),
-      ('instance_vehicles','vehicle_id'),
-      ('instance_vehicles','created_at'),
-      ('budget_items','id'),
-      ('budget_items','campaign_id'),
-      ('budget_items','creative_id'),
-      ('budget_items','funnel'),
-      ('budget_items','platform_id'),
-      ('budget_items','amount'),
-      ('budget_items','notes'),
-      ('budget_items','sort_order'),
-      ('budget_items','created_at'),
-      ('budget_items','updated_at'),
-      ('budget_items','ad_count'),
-      ('budget_items','content_goal'),
-      ('budget_items','expected_goal'),
-      ('publish_schedule','id'),
-      ('publish_schedule','campaign_id'),
-      ('publish_schedule','creative_id'),
-      ('publish_schedule','publish_date'),
-      ('publish_schedule','publish_time'),
-      ('publish_schedule','platform_id'),
-      ('publish_schedule','post_type_id'),
-      ('publish_schedule','notes'),
-      ('publish_schedule','status'),
-      ('publish_schedule','created_at'),
-      ('publish_schedule','updated_at'),
-      ('tasks','id'),
-      ('tasks','campaign_id'),
-      ('tasks','creative_id'),
-      ('tasks','department_code'),
-      ('tasks','assigned_to'),
-      ('tasks','paired_content_user_id'),
-      ('tasks','status'),
-      ('tasks','due_at'),
-      ('tasks','completed_at'),
-      ('tasks','created_at'),
-      ('tasks','updated_at'),
-      ('tasks','task_no'),
-      ('tasks','task_kind'),
-      ('tasks','department_id'),
-      ('tasks','content_writer_id'),
-      ('tasks','template_task_id'),
-      ('tasks','received_at'),
-      ('tasks','received_by'),
-      ('tasks','progress'),
-      ('tasks','review_status'),
-      ('tasks','review_note'),
-      ('tasks','template_data'),
-      ('tasks','final_asset_id'),
-      ('tasks','final_file_name'),
-      ('tasks','final_file_url'),
-      ('tasks','metadata'),
-      ('task_action_progress','task_id'),
-      ('task_action_progress','action_id'),
-      ('task_action_progress','completed'),
-      ('task_action_progress','completed_by'),
-      ('task_action_progress','completed_at'),
-      ('task_action_progress','note'),
-      ('task_action_progress','updated_at'),
-      ('task_uploads','id'),
-      ('task_uploads','task_id'),
-      ('task_uploads','upload_kind'),
-      ('task_uploads','file_name'),
-      ('task_uploads','storage_key'),
-      ('task_uploads','external_url'),
-      ('task_uploads','mime_type'),
-      ('task_uploads','file_size'),
-      ('task_uploads','version_no'),
-      ('task_uploads','status'),
-      ('task_uploads','uploaded_by'),
-      ('task_uploads','uploaded_by_name'),
-      ('task_uploads','metadata'),
-      ('task_uploads','created_at'),
-      ('task_reviews','id'),
-      ('task_reviews','task_id'),
-      ('task_reviews','action'),
-      ('task_reviews','note'),
-      ('task_reviews','reviewer_id'),
-      ('task_reviews','reviewer_name'),
-      ('task_reviews','snapshot'),
-      ('task_reviews','created_at'),
-      ('project_links','id'),
-      ('project_links','campaign_id'),
-      ('project_links','platform_id'),
-      ('project_links','url'),
-      ('project_links','created_by'),
-      ('project_links','created_at'),
-      ('project_files','id'),
-      ('project_files','campaign_id'),
-      ('project_files','file_kind'),
-      ('project_files','file_name'),
-      ('project_files','storage_key'),
-      ('project_files','external_url'),
-      ('project_files','mime_type'),
-      ('project_files','file_size'),
-      ('project_files','uploaded_by'),
-      ('project_files','uploaded_by_name'),
-      ('project_files','created_at'),
-      ('packages','id'),
-      ('packages','name'),
-      ('packages','category_id'),
-      ('packages','price'),
-      ('packages','cash_discount_percent'),
-      ('packages','registration_fee'),
-      ('packages','insurance_fee'),
-      ('packages','issuance_fee'),
-      ('packages','care_items'),
-      ('packages','delivery_home'),
-      ('packages','delivery_region'),
-      ('packages','metadata'),
-      ('packages','is_active'),
-      ('packages','created_by'),
-      ('packages','created_at'),
-      ('packages','updated_at'),
-      ('attendance_settings','id'),
-      ('attendance_settings','work_start_time'),
-      ('attendance_settings','work_end_time'),
-      ('attendance_settings','grace_minutes'),
-      ('attendance_settings','idle_after_minutes'),
-      ('attendance_settings','offline_after_minutes'),
-      ('attendance_settings','updated_by'),
-      ('attendance_settings','updated_at'),
-      ('attendance_records','id'),
-      ('attendance_records','user_id'),
-      ('attendance_records','attendance_date'),
-      ('attendance_records','check_in_at'),
-      ('attendance_records','check_out_at'),
-      ('attendance_records','status'),
-      ('attendance_records','late_minutes'),
-      ('attendance_records','work_minutes'),
-      ('attendance_records','source'),
-      ('attendance_records','metadata'),
-      ('attendance_records','created_at'),
-      ('attendance_records','updated_at'),
-      ('presence_status','user_id'),
-      ('presence_status','last_seen_at'),
-      ('presence_status','last_activity_at'),
-      ('presence_status','last_page'),
-      ('presence_status','activity_type'),
-      ('presence_status','device_info'),
-      ('presence_status','updated_at'),
-      ('attendance_requests','id'),
-      ('attendance_requests','user_id'),
-      ('attendance_requests','request_type'),
-      ('attendance_requests','request_date'),
-      ('attendance_requests','note'),
-      ('attendance_requests','status'),
-      ('attendance_requests','reviewed_by'),
-      ('attendance_requests','review_note'),
-      ('attendance_requests','created_at'),
-      ('attendance_requests','updated_at'),
-      ('platform_connections','id'),
-      ('platform_connections','platform_id'),
-      ('platform_connections','connection_status'),
-      ('platform_connections','account_name'),
-      ('platform_connections','account_external_id'),
-      ('platform_connections','token_status'),
-      ('platform_connections','settings'),
-      ('platform_connections','connected_by'),
-      ('platform_connections','connected_at'),
-      ('platform_connections','updated_at'),
-      ('activity_log','id'),
-      ('activity_log','actor_id'),
-      ('activity_log','actor_name'),
-      ('activity_log','action'),
-      ('activity_log','entity_type'),
-      ('activity_log','entity_id'),
-      ('activity_log','details'),
-      ('activity_log','created_at')
-  ) as expected(table_name,column_name)
+  from _mzj_marketing_contract_columns expected
   left join information_schema.columns actual
     on actual.table_schema='marketing'
    and actual.table_name=expected.table_name
@@ -1235,6 +1728,33 @@ begin
 
   if missing_columns is not null then
     raise exception 'Marketing schema contract is incomplete. Missing columns: %', missing_columns;
+  end if;
+
+  select string_agg(format('marketing.%I.%I',c.table_name,c.column_name), ', ' order by c.table_name,c.column_name)
+    into missing_columns
+  from information_schema.columns c
+  where c.table_schema='marketing'
+    and c.is_nullable='NO'
+    and c.column_default is null
+    and coalesce(c.is_identity,'NO')='NO'
+    and coalesce(c.is_generated,'NEVER')='NEVER'
+    and not exists (
+      select 1 from _mzj_marketing_contract_columns expected
+      where expected.table_name=c.table_name and expected.column_name=c.column_name
+    )
+    and not exists (
+      select 1
+      from pg_constraint con
+      join pg_class rel on rel.oid=con.conrelid
+      join pg_namespace ns on ns.oid=rel.relnamespace
+      join unnest(con.conkey) as key(attnum) on true
+      join pg_attribute attr on attr.attrelid=rel.oid and attr.attnum=key.attnum
+      where con.contype='p' and ns.nspname='marketing'
+        and rel.relname=c.table_name and attr.attname=c.column_name
+    );
+
+  if missing_columns is not null then
+    raise exception 'Legacy marketing columns still block native writes: %',missing_columns;
   end if;
 end $$;
 

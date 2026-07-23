@@ -19,9 +19,21 @@ const migrationBody = migrationSource.trim();
 if (migrationBody !== canonical) fail("deployment migration and canonical SQL are different");
 
 if (!/^begin;/i.test(canonical) || !/commit;$/i.test(canonical)) fail("schema must be one transaction");
-if (!runtimeSource.includes('withDatabaseAdvisoryLock("mzj:marketing-schema:v4"')) fail("runtime migration must use the advisory lock");
+if (!runtimeSource.includes('withDatabaseAdvisoryLock("mzj:marketing-schema:v5"')) fail("runtime migration must use the advisory lock");
 if (!dbSource.includes("transactionWrapped") || !dbSource.includes("sql.begin")) fail("SQL runner transaction support is missing");
 if (!canonical.includes("Runtime schema contract verification")) fail("runtime information_schema postcheck is missing");
+if (!canonical.includes("One-time, data-preserving normalization of the legacy campaign type aliases")) fail("legacy campaign type alias migration is missing");
+if (!canonical.includes("Normalize write blockers left by pre-native marketing tables")) fail("generic legacy write-blocker normalization is missing");
+if (!canonical.includes("Legacy marketing columns still block native writes")) fail("legacy write-blocker postcheck is missing");
+for (const indexName of [
+  "marketing_campaign_types_name_unique",
+  "marketing_campaign_types_short_code_unique",
+  "marketing_departments_code_unique",
+  "marketing_platforms_code_unique",
+  "marketing_platform_connections_platform_unique",
+]) {
+  if (!canonical.includes(`create unique index if not exists ${indexName}`)) fail(`existing-table unique index is missing: ${indexName}`);
+}
 
 function splitItems(body) {
   const parts = [];

@@ -1,6 +1,15 @@
-# MZJ Platform v1.19.4
+# MZJ Platform v1.19.5
 
 منصة React/Vite موحدة لمجموعة محمد بن ذعار العجمي، تعمل على Vercel مع PostgreSQL وتسجيل دخول حقيقي.
+
+## v1.19.5 - Marketing legacy schema compatibility
+
+- معالجة جذرية لتعارض جداول إعدادات التسويق القديمة مع العقد الـNative الجديد.
+- ترحيل بيانات `marketing.campaign_types.code` و`prefix` إلى `short_code` و`code_prefix` بدون حذف بيانات قديمة.
+- منع الأعمدة القديمة الإضافية ذات `NOT NULL` وبدون قيمة افتراضية من تعطيل Seed أو عمليات API الجديدة، مع عدم تغيير المفاتيح الأساسية أو أعمدة العقد النهائي.
+- إضافة فحص نهائي داخل نفس Transaction يرفض اعتماد الترقية إذا ظل أي عمود قديم يمنع الكتابة.
+- إضافة محاكاة صريحة لحالة قاعدة الإنتاج التي تحتوي على `code` و`prefix` كأعمدة إجبارية، وفحص كل عمليات Seed ضد الأعمدة الإلزامية.
+- الإبقاء على Schema التسويق موحدًا ومتطابقًا بين الملف الأساسي وRuntime Schema وMigration النشر.
 
 ## v1.19.4 - Marketing canonical schema contract
 

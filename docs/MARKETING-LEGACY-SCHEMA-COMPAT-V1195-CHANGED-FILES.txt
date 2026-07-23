@@ -1,0 +1,42 @@
+MZJ Platform v1.19.5 — Changed Files
+=====================================
+
+README.md
+- Updated release version and documented the legacy schema compatibility behavior.
+
+package.json
+- Bumped version to 1.19.5.
+- Added full TS/TSX syntax validation to the typecheck chain.
+
+database/marketing_native_schema.sql
+- Canonical source of the complete marketing schema contract.
+- Migrates legacy campaign_types code/prefix data.
+- Relaxes only obsolete non-contract write blockers.
+- Verifies that no legacy required column can block native writes before COMMIT.
+
+database/migrations/20260723_marketing_native_rebuild.sql
+- Exact synchronized deployment copy of the canonical marketing schema.
+
+server/_marketing-schema.ts
+- Exact synchronized runtime schema used by the server before marketing queries.
+- Advisory lock version advanced to v5.
+
+scripts/check-marketing-schema-contract.mjs
+- Verifies legacy alias migration, blocker normalization, post-checks, and required indexes.
+
+scripts/test-marketing-schema-upgrade-scenarios.mjs
+- Simulates six database states.
+- Includes the exact legacy campaign_types prefix/code NOT NULL scenario.
+- Validates seed inserts against all required columns without defaults.
+
+scripts/check-source-syntax.mjs
+- Parses all TypeScript and TSX source files using the TypeScript compiler parser.
+
+docs/MARKETING-LEGACY-SCHEMA-COMPAT-V1195-AR.md
+- Root cause, architecture, deployment, and verification report.
+
+docs/MARKETING-LEGACY-SCHEMA-COMPAT-V1195-TEST-RESULTS.txt
+- Actual test results and explicitly stated environment limitations.
+
+docs/MARKETING-LEGACY-SCHEMA-COMPAT-V1195-CHANGED-FILES.txt
+- This file.
