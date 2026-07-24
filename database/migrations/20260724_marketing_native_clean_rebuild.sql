@@ -1,3 +1,5 @@
+create extension if not exists pgcrypto;
+
 create schema if not exists marketing;
 
 create table if not exists marketing.departments (
@@ -107,6 +109,47 @@ create table if not exists marketing.packages (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists marketing.campaigns (
+  id uuid primary key default gen_random_uuid(),
+  legacy_id text unique,
+  campaign_code text unique,
+  name text not null,
+  campaign_type text,
+  campaign_type_id uuid references marketing.campaign_types(id) on delete set null,
+  objective text,
+  status text not null default 'required',
+  campaign_date date not null default current_date,
+  publish_start date,
+  publish_end date,
+  starts_at timestamptz,
+  ends_at timestamptz,
+  due_at timestamptz,
+  required_from_content text,
+  payload jsonb not null default '{}'::jsonb,
+  progress numeric(6,2) not null default 0,
+  result_file_id uuid,
+  links jsonb not null default '[]'::jsonb,
+  archived_at timestamptz,
+  archived_by uuid references core.users(id),
+  created_by uuid references core.users(id),
+  is_deleted boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table marketing.campaigns add column if not exists legacy_id text;
+alter table marketing.campaigns add column if not exists campaign_code text;
+alter table marketing.campaigns add column if not exists name text;
+alter table marketing.campaigns add column if not exists campaign_type text;
+alter table marketing.campaigns add column if not exists objective text;
+alter table marketing.campaigns add column if not exists status text not null default 'required';
+alter table marketing.campaigns add column if not exists starts_at timestamptz;
+alter table marketing.campaigns add column if not exists ends_at timestamptz;
+alter table marketing.campaigns add column if not exists due_at timestamptz;
+alter table marketing.campaigns add column if not exists created_by uuid references core.users(id);
+alter table marketing.campaigns add column if not exists is_deleted boolean not null default false;
+alter table marketing.campaigns add column if not exists created_at timestamptz not null default now();
+alter table marketing.campaigns add column if not exists updated_at timestamptz not null default now();
 alter table marketing.campaigns add column if not exists campaign_date date not null default current_date;
 alter table marketing.campaigns add column if not exists campaign_type_id uuid references marketing.campaign_types(id) on delete set null;
 alter table marketing.campaigns add column if not exists required_from_content text;
@@ -137,6 +180,34 @@ create table if not exists marketing.agendas (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists marketing.creatives (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid references marketing.campaigns(id) on delete cascade,
+  agenda_id uuid references marketing.agendas(id) on delete cascade,
+  creative_type text not null,
+  creative_type_id uuid references marketing.creative_types(id) on delete set null,
+  quantity integer not null default 1,
+  status text not null default 'required',
+  instance_code text,
+  name text,
+  primary_department_id uuid references marketing.departments(id) on delete set null,
+  cars jsonb not null default '[]'::jsonb,
+  content_assignments jsonb not null default '[]'::jsonb,
+  primary_assignments jsonb not null default '[]'::jsonb,
+  optional_assignments jsonb not null default '[]'::jsonb,
+  platform_assignments jsonb not null default '[]'::jsonb,
+  schedule_day date,
+  notes jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table marketing.creatives add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
+alter table marketing.creatives add column if not exists creative_type text;
+alter table marketing.creatives add column if not exists quantity integer not null default 1;
+alter table marketing.creatives add column if not exists status text not null default 'required';
+alter table marketing.creatives add column if not exists created_at timestamptz not null default now();
+alter table marketing.creatives add column if not exists updated_at timestamptz not null default now();
 alter table marketing.creatives alter column campaign_id drop not null;
 alter table marketing.creatives add column if not exists agenda_id uuid references marketing.agendas(id) on delete cascade;
 alter table marketing.creatives add column if not exists creative_type_id uuid references marketing.creative_types(id) on delete set null;
@@ -189,6 +260,43 @@ create table if not exists marketing.task_templates (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists marketing.tasks (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid references marketing.campaigns(id) on delete cascade,
+  agenda_id uuid references marketing.agendas(id) on delete cascade,
+  source_type text not null default 'campaign',
+  source_id uuid,
+  creative_id uuid references marketing.creatives(id) on delete cascade,
+  department_code text not null,
+  department_id uuid references marketing.departments(id) on delete set null,
+  assigned_to uuid references core.users(id),
+  paired_content_user_id uuid references core.users(id),
+  task_template_id uuid references marketing.task_templates(id) on delete set null,
+  task_kind text not null default 'execution',
+  title text,
+  status text not null default 'required',
+  due_at timestamptz,
+  progress numeric(6,2) not null default 0,
+  received_at timestamptz,
+  completed_at timestamptz,
+  note text,
+  final_file_id uuid references marketing.files(id) on delete set null,
+  approved_template_data jsonb not null default '{}'::jsonb,
+  is_deleted boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table marketing.tasks add column if not exists campaign_id uuid references marketing.campaigns(id) on delete cascade;
+alter table marketing.tasks add column if not exists creative_id uuid references marketing.creatives(id) on delete cascade;
+alter table marketing.tasks add column if not exists department_code text;
+alter table marketing.tasks add column if not exists assigned_to uuid references core.users(id);
+alter table marketing.tasks add column if not exists paired_content_user_id uuid references core.users(id);
+alter table marketing.tasks add column if not exists status text not null default 'required';
+alter table marketing.tasks add column if not exists due_at timestamptz;
+alter table marketing.tasks add column if not exists completed_at timestamptz;
+alter table marketing.tasks add column if not exists created_at timestamptz not null default now();
+alter table marketing.tasks add column if not exists updated_at timestamptz not null default now();
 alter table marketing.tasks alter column campaign_id drop not null;
 alter table marketing.tasks add column if not exists agenda_id uuid references marketing.agendas(id) on delete cascade;
 alter table marketing.tasks add column if not exists source_type text not null default 'campaign';
@@ -203,6 +311,13 @@ alter table marketing.tasks add column if not exists note text;
 alter table marketing.tasks add column if not exists final_file_id uuid references marketing.files(id) on delete set null;
 alter table marketing.tasks add column if not exists approved_template_data jsonb not null default '{}'::jsonb;
 alter table marketing.tasks add column if not exists is_deleted boolean not null default false;
+
+update marketing.campaigns set name=coalesce(nullif(name,''),'حملة') where name is null or name='';
+update marketing.campaigns set status=coalesce(nullif(status,''),'required') where status is null or status='';
+update marketing.creatives set creative_type=coalesce(nullif(creative_type,''),'creative') where creative_type is null or creative_type='';
+update marketing.creatives set status=coalesce(nullif(status,''),'required') where status is null or status='';
+update marketing.tasks set department_code=coalesce(nullif(department_code,''),'marketing') where department_code is null or department_code='';
+update marketing.tasks set status=coalesce(nullif(status,''),'required') where status is null or status='';
 
 create table if not exists marketing.task_action_progress (
   task_id uuid not null references marketing.tasks(id) on delete cascade,
