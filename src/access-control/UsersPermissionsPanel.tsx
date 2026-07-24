@@ -92,7 +92,7 @@ export function UsersPermissionsPanel() {
   const canCreateUsers = hasPermission(user, "settings.users.create");
   const canUpdateUsers = hasPermission(user, "settings.users.update");
   const canDisableUsers = hasPermission(user, "settings.users.disable");
-  const canDeleteUsers = hasPermission(user, "settings.users.delete");
+  const canDeleteUsers = hasPermission(user, "platform.superadmin");
   const isEditingCurrentUser = Boolean(form.id && user?.id === form.id);
   const canEditProfile = !isEditingCurrentUser && (form.id ? canUpdateUsers : canCreateUsers);
   const canManageRoles = hasPermission(user, "settings.roles.manage");

@@ -141,7 +141,6 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("settings.users.create", "إنشاء مستخدم", "core", "settings", "users_create", "settings", "إنشاء حساب مستخدم جديد", true),
   p("settings.users.update", "تعديل مستخدم", "core", "settings", "users_update", "settings", "تعديل بيانات المستخدم وربطه", true),
   p("settings.users.disable", "تعطيل وتفعيل مستخدم", "core", "settings", "users_disable", "settings", "تعطيل الحساب وإبطال جلساته", true),
-  p("settings.users.delete", "حذف مستخدم", "core", "settings", "users_delete", "settings", "حذف الحساب وإزالة بيانات دخوله مع الاحتفاظ بالسجلات السابقة", true),
   p("settings.roles.manage", "إدارة الأدوار وقوالب الصلاحيات", "core", "settings", "roles_manage", "settings", "إنشاء وتعديل الأدوار وقوالبها", true),
   p("settings.permissions.manage", "إدارة الصلاحيات الفردية", "core", "settings", "permissions_manage", "settings", "منح ومنع الصلاحيات الفردية", true),
   p("settings.branches.manage", "إدارة الفروع", "core", "settings", "branches_manage", "settings", "إضافة وتعديل الفروع", true),

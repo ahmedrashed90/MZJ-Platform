@@ -8,7 +8,7 @@ const contains = (file, ...tokens) => {
   return tokens.every((token) => text.includes(token));
 };
 
-expect("Package version is 1.19.5", JSON.parse(read("package.json")).version === "1.19.5");
+expect("Package version is 1.19.4", JSON.parse(read("package.json")).version === "1.19.4");
 expect("ERPNext instance identity includes creation", contains("server/_erpnext-sales-order-normalizer.ts", "sourceInstanceKey", "created:${erpCreatedAt}", "isCancellation"));
 expect("ERPNext cancel route uses the unified endpoint", contains("server/integrations/erpnext-sales-order.ts", "normalized.isCancellation", "cancelErpNextSalesOrder"));
 expect("Cancellation is idempotent", contains("server/_erpnext-sales-order-sync.ts", "alreadyCancelled", "ERP_CANCEL_ORDER_NOT_FOUND"));

@@ -9,7 +9,7 @@ create sequence if not exists operations.transfer_request_no_seq;
 insert into core.roles(code,name,is_system) values
 ('system_admin','مدير النظام',true),
 ('operations_manager','مدير العمليات',true),
-('finance_manager','مدير المالية',true)
+('finance_manager','مدير الحسابات',true)
 on conflict (code) do update set name=excluded.name,is_system=true;
 
 insert into core.permissions(code,name,system_code) values
