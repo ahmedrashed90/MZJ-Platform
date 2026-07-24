@@ -226,45 +226,8 @@ create table if not exists crm.status_history (
   created_at timestamptz not null default now()
 );
 
-create table if not exists marketing.campaigns (
-  id uuid primary key default gen_random_uuid(),
-  legacy_id text unique,
-  campaign_code text unique,
-  name text not null,
-  campaign_type text,
-  objective text,
-  status text not null,
-  starts_at timestamptz,
-  ends_at timestamptz,
-  due_at timestamptz,
-  created_by uuid references core.users(id),
-  is_deleted boolean not null default false,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create table if not exists marketing.creatives (
-  id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
-  creative_type text not null,
-  quantity integer not null default 1,
-  status text not null,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists marketing.tasks (
-  id uuid primary key default gen_random_uuid(),
-  campaign_id uuid not null references marketing.campaigns(id) on delete cascade,
-  creative_id uuid references marketing.creatives(id) on delete cascade,
-  department_code text not null,
-  assigned_to uuid references core.users(id),
-  paired_content_user_id uuid references core.users(id),
-  status text not null,
-  due_at timestamptz,
-  completed_at timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+-- Marketing tables are initialized only by server/_marketing-schema.ts.
+-- Keeping a single schema owner prevents partial or conflicting table definitions.
 
 create table if not exists operations.locations (
   id uuid primary key default gen_random_uuid(),

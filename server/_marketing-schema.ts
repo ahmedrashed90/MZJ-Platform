@@ -2,9 +2,30 @@ import { runSqlScript } from "./_db.js";
 
 let ready: Promise<void> | null = null;
 
-const MARKETING_SCHEMA_SQL = String.raw`create extension if not exists pgcrypto;
+const MARKETING_SCHEMA_SQL = String.raw`begin;
+
+create extension if not exists pgcrypto;
 
 create schema if not exists marketing;
+
+do $marketing_schema_reset$
+declare
+  current_version integer;
+begin
+  if to_regclass('marketing.schema_state') is not null then
+    begin
+      execute 'select version from marketing.schema_state where id = 1' into current_version;
+    exception when others then
+      current_version := null;
+    end;
+  end if;
+
+  if current_version is distinct from 1 then
+    execute 'drop schema marketing cascade';
+    execute 'create schema marketing';
+  end if;
+end
+$marketing_schema_reset$;
 
 create table if not exists marketing.departments (
   id uuid primary key default gen_random_uuid(),
@@ -486,6 +507,16 @@ insert into core.role_permissions(role_id,permission_id)
 select r.id,p.id from core.roles r cross join core.permissions p
 where r.code='marketing_user' and p.code in ('marketing.view','marketing.task.receive','marketing.task.execute','marketing.file.upload')
 on conflict do nothing;
+
+create table if not exists marketing.schema_state (
+  id smallint primary key default 1 check(id = 1),
+  version integer not null,
+  updated_at timestamptz not null default now()
+);
+insert into marketing.schema_state(id,version,updated_at) values(1,1,now())
+on conflict(id) do update set version=excluded.version,updated_at=excluded.updated_at;
+
+commit;
 `;
 
 export async function ensureMarketingSchema() {
