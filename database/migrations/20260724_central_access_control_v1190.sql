@@ -174,7 +174,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('operations','archive','الأرشيف','/operations/archive',80,true),
 ('tracking','orders','طلبات التراكينج','/tracking',10,true),
 ('tracking','archive','أرشيف الطلبات','/tracking/archive',20,true),
-('tracking','delete','حذف طلبات التراكينج','/tracking/delete',30,true),
+('tracking','delete','حذف طلبات التراكينج','/tracking/delete',30,true)
 on conflict(system_code,code) do update set name_ar=excluded.name_ar,route=excluded.route,sort_order=excluded.sort_order,is_active=true,updated_at=now();
 
 insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values

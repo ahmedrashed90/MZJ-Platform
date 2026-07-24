@@ -139,3 +139,20 @@
 - `server/setup/initialize.ts`: استخدام نفس خدمة Bootstrap بدل مسار تهيئة مكرر.
 - `database/migrations/20260724_central_access_control_v1192_login_bootstrap.sql`: حالة إصدار المخطط.
 - `scripts/check-login-schema-bootstrap-v1192.mjs`: اختبار رجوع جديد.
+
+## v1.19.3 — إصلاح صياغة SQL المركزي
+
+- `database/migrations/20260724_central_access_control_v1190.sql`
+- `database/seeds/20260724_central_access_catalog.sql`
+- `server/_access-control-schema.ts`
+- `scripts/check-central-access-sql-v1193.mjs`
+- `scripts/check-central-access-control-v1190.mjs`
+- `package.json`
+- `README.md`
+- `DELIVERY_MANIFEST_AR.md`
+- `docs/V1193-CENTRAL-SQL-SYNTAX-FIX-AR.md`
+- `docs/TEST_RESULTS_AR.md`
+- `docs/MODIFIED_FILES_AR.md`
+
+لم يتم تعديل أي فلو أو صلاحية أو API وظيفية.
+

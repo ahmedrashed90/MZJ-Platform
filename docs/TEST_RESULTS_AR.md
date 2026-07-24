@@ -71,3 +71,13 @@ pnpm run build
 - جميع ملفات `scripts/check-*.mjs` نجحت بعد إتاحة TypeScript المحلي للاختبارات التي تحتاجه.
 - Transpile Syntax لجميع ملفات TypeScript/TSX: 166 ملفًا، صفر أخطاء.
 - لم يتم تشغيل `pnpm run build` الكامل لأن تنزيل pnpm والحزم من npm غير متاح في بيئة التنفيذ الحالية.
+
+## نتائج v1.19.3
+
+- `scripts/check-central-access-sql-v1193.mjs`: **3/3 مصادر ناجحة**.
+- لا توجد فاصلة زائدة قبل `ON CONFLICT` في Migration أو Seed أو Bootstrap السيرفر.
+- فحص Bootstrap تسجيل الدخول: **8/8 ناجح**.
+- فحص أنواع PostgreSQL وNodeNext: **6/6 ناجح**.
+- فحص الصلاحيات المركزي: **88/88 ناجح**.
+- فحص Imports الخاص بـVercel: **ناجح**.
+- جميع ملفات `scripts/check-*.mjs` وعددها **27 Script**: ناجحة.
