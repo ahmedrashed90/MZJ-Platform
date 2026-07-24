@@ -777,20 +777,41 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
 }
 
 async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
+  const requestAccessFilter=isAdmin(user)?sql`true`:sql`r.requested_by=${user.id}::uuid`;
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.note,r.cancelled_at,
+      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.note,r.cancelled_at,
         sl.name as source_location_name,dl.name as destination_location_name,
         (r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
-        coalesce(json_agg(json_build_object('vehicleId',v.id::text,'vin',v.vin,'carName',v.car_name,'statement',v.statement,'note',rv.item_note) order by v.vin) filter(where v.id is not null),'[]'::json) as vehicles
+        coalesce((
+          select json_agg(json_build_object(
+            'vehicleId',v.id::text,
+            'vin',v.vin,
+            'carName',v.car_name,
+            'statement',v.statement,
+            'note',rv.item_note
+          ) order by v.vin)
+          from operations.transfer_request_vehicles rv
+          join operations.vehicles v on v.id=rv.vehicle_id
+          where rv.transfer_request_id=r.id
+        ),'[]'::json) as vehicles,
+        coalesce((
+          select json_agg(json_build_object(
+            'id',e.id::text,
+            'stage',e.stage,
+            'action',e.action,
+            'note',e.note,
+            'actorName',e.actor_name,
+            'createdAt',e.created_at
+          ) order by e.created_at)
+          from operations.transfer_request_events e
+          where e.transfer_request_id=r.id
+        ),'[]'::json) as events
       from operations.transfer_requests r
       left join operations.locations sl on sl.id=r.source_location_id
       left join operations.locations dl on dl.id=r.destination_location_id
-      left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
-      left join operations.vehicles v on v.id=rv.vehicle_id
-      where r.request_kind='photography' and r.is_deleted=false
-      group by r.id,sl.name,dl.name
+      where r.request_kind='photography' and r.is_deleted=false and ${requestAccessFilter}
       order by r.requested_at desc
     `,
     sql<any[]>`select id::text,code,name,branch_code from operations.locations where is_active=true order by sort_order,name`,
