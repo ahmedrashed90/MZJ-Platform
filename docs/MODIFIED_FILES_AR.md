@@ -1,4 +1,4 @@
-# قائمة الملفات المعدلة — MZJ Platform v1.19.0
+# قائمة الملفات المعدلة — MZJ Platform v1.19.1
 
 - ملفات جديدة: **29**.
 - ملفات موجودة تم تعديلها: **66**.
@@ -120,3 +120,12 @@
 
 - `test-results/check-central-access-control-v1190.log`
 - `test-results/all-static-checks-final.log`
+
+## إصلاح Build في v1.19.1
+
+- `server/_access-control.ts`: فصل RowList عن الصف الأول عند حساب الصلاحيات الفعلية.
+- `server/_auth.ts`: فصل RowList عن صف المستخدم عند تحميل الجلسة.
+- `shared/system-access.ts`: إضافة امتداد `.js` المتوافق مع NodeNext.
+- `scripts/check-build-types-v1191.mjs`: اختبار رجوع للمشكلة.
+- `docs/V1191-BUILD-TYPE-FIX-AR.md`: شرح سبب المشكلة والإصلاح.
+- لا توجد Migration جديدة ولا تغيير في أي فلو تشغيلي.

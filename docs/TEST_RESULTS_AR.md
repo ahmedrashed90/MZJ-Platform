@@ -1,4 +1,4 @@
-# نتائج اختبارات نظام الصلاحيات المركزي — v1.19.0
+# نتائج اختبارات نظام الصلاحيات المركزي — v1.19.1
 
 ## النتيجة النهائية
 
@@ -53,3 +53,11 @@ pnpm run build
 
 - `test-results/check-central-access-control-v1190.log`
 - `test-results/all-static-checks-final.log`
+
+## فحوص v1.19.1 الخاصة بمشكلة Build
+
+- `scripts/check-build-types-v1191.mjs`: **6/6 ناجح**.
+- فحص `tsconfig.node.json`: **صفر أخطاء TypeScript** بعد تصحيح قراءة RowList ومسار NodeNext.
+- الفحوص المركزية: **88/88 ناجحة**.
+- جميع فحوص الأنظمة الموجودة في أمر `typecheck` قبل مرحلة `tsc -b`: ناجحة.
+- لم تتوفر حزم المشروع الفعلية داخل بيئة التنفيذ لإعادة تشغيل `vite build` كاملًا؛ لذلك لم يُسجل ادعاء غير موثق بنجاح Build إنتاجي هنا.

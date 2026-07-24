@@ -40,7 +40,7 @@ export function requestUserAgent(request: VercelRequest) {
 
 export async function getEffectiveAccess(userId: string): Promise<EffectiveAccessSnapshot> {
   const sql = getSql();
-  const [versionRow, permissionRow, systemRows] = await Promise.all([
+  const [versionRows, permissionRows, systemRows] = await Promise.all([
     sql<{ permission_version: number }[]>`
       select permission_version::int from core.users where id=${userId}::uuid
     `,
@@ -112,6 +112,9 @@ export async function getEffectiveAccess(userId: string): Promise<EffectiveAcces
       where us.user_id=${userId}::uuid
     `,
   ]);
+
+  const versionRow = versionRows[0];
+  const permissionRow = permissionRows[0];
 
   const systemAccess: EffectiveAccessSnapshot["systemAccess"] = {};
   for (const row of systemRows) {

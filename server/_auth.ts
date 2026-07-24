@@ -48,7 +48,7 @@ export function requestIp(request: VercelRequest) {
 
 export async function loadUserProfile(userId: string): Promise<SessionUser | null> {
   const sql = getSql();
-  const [row, access] = await Promise.all([
+  const [rows, access] = await Promise.all([
     sql<{
       id: string;
       employee_no: string | null;
@@ -75,6 +75,7 @@ export async function loadUserProfile(userId: string): Promise<SessionUser | nul
     `,
     getEffectiveAccess(userId),
   ]);
+  const row = rows[0];
   if (!row) return null;
   return {
     id: row.id,

@@ -6,4 +6,4 @@ export {
   type PlatformSystem,
   type SystemAccessConfig,
   type DataScope,
-} from "./access-control";
+} from "./access-control.js";
