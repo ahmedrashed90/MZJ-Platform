@@ -52,6 +52,7 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
   useEffect(() => { setVehicle(null); setTab("details"); if (id) void load(); }, [id]);
 
   const currentApproval = useMemo(() => vehicle?.approvals.find((item) => item.is_active) || vehicle?.approvals[0], [vehicle]);
+  const hasActiveSalesOrder = useMemo(() => Boolean(vehicle?.salesOrders?.some((item) => !item.is_cancelled)), [vehicle]);
 
   async function runAction() {
     if (!vehicle || !confirmAction || !reason.trim() || (confirmAction === "delete" && confirmVin.trim() !== vehicle.vin)) return;
@@ -82,9 +83,10 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
             ) : null}
             {tab === "sales" ? (
               <div className="operations-sales-order-list">
+                {vehicle.salesOrders?.length && !hasActiveSalesOrder ? <p>لا يوجد طلب بيع نشط مرتبط بهذه السيارة. تظهر الطلبات الملغية السابقة أدناه.</p> : null}
                 {vehicle.salesOrders?.length ? vehicle.salesOrders.map((order) => (
                   <article key={`${order.id}-${order.item_no || order.sales_order_no}`} className="operations-sales-order-card">
-                    <header><Receipt size={22} /><div><strong>{order.sales_order_no}</strong><span>{order.erp_status || "To Deliver and Bill"}</span></div></header>
+                    <header><Receipt size={22} /><div><strong>{order.sales_order_no}</strong><span>{order.is_cancelled ? "ملغي من NEXT ERP" : (order.erp_status || "To Deliver and Bill")}</span></div></header>
                     <div className="operations-detail-grid">
                       {[
                         ["العميل الحقيقي", order.actual_customer_name], ["رقم الجوال", order.actual_customer_phone],
@@ -96,6 +98,8 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
                         ["ربط CRM", linkStatusLabel(order.crm_link_status)], ["ربط العمليات", linkStatusLabel(order.operations_link_status)],
                         ["ربط المستخدم", linkStatusLabel(order.user_link_status)],
                       ].map(([label, value]) => <div key={label}><small>{label}</small><strong>{value || "—"}</strong></div>)}
+                      {order.is_cancelled ? <div><small>تاريخ الإلغاء</small><strong>{order.cancelled_at ? formatOperationsDate(order.cancelled_at) : "—"}</strong></div> : null}
+                      {order.is_cancelled ? <div><small>سبب الإلغاء</small><strong>{order.cancellation_reason || "تم الإلغاء من NEXT ERP"}</strong></div> : null}
                     </div>
                     <div className="operations-sales-order-actions">
                       {order.crm_lead_id ? <button type="button" onClick={() => window.location.assign(`/crm?lead=${encodeURIComponent(order.crm_lead_id || "")}`)}>فتح العميل في CRM</button> : null}
@@ -121,7 +125,7 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
             {tab === "approvals" ? <div className="operations-approval-summary"><div><ShieldCheck size={28} /><span>الموافقة المالية</span><b className={currentApproval?.financial_approved ? "ok" : "pending"}>{currentApproval?.financial_approved ? "تمت" : "لم تتم"}</b><small>{currentApproval?.financial_note || "بدون ملاحظة"}</small></div><div><CheckCircle size={28} /><span>الموافقة الإدارية</span><b className={currentApproval?.administrative_approved ? "ok" : "pending"}>{currentApproval?.administrative_approved ? "تمت" : "لم تتم"}</b><small>{currentApproval?.administrative_note || "بدون ملاحظة"}</small></div></div> : null}
             {tab === "movements" ? <div className="operations-timeline">{vehicle.movements.length ? vehicle.movements.map((row) => <article key={row.id}><ClockCounterClockwise size={18} /><div><strong>{row.from_location_name || "—"} ← {row.to_location_name || "—"}</strong><span>{row.old_status || "—"} ← {row.new_status || "—"}</span><small>{row.performed_by_name || "—"} · {formatOperationsDate(row.created_at)}</small></div></article>) : <p>لا توجد حركات مسجلة.</p>}</div> : null}
             {tab === "transfers" ? <div className="operations-timeline">{vehicle.transfers.length ? vehicle.transfers.map((row) => <article key={row.id}><Truck size={18} /><div><strong>{row.request_no}</strong><span>{row.source_location_name || "—"} ← {row.destination_location_name || "—"}</span><small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small></div></article>) : <p>لا توجد طلبات نقل.</p>}</div> : null}
-            {tab === "tracking" ? <div className="operations-timeline operations-detail-tracking-list">{vehicle.tracking.length ? vehicle.tracking.map((row) => { const progress = Math.max(0, Math.min(100, Number(row.progress || 0))); return <button type="button" key={row.id} className={`operations-tracking-detail-button ${trackingProgressTone(progress)}`} onClick={() => window.location.assign(`/tracking?order=${encodeURIComponent(row.id || "")}`)}><LinkSimple size={20} /><div><strong>{row.sales_order_no}</strong><span>{row.status} — {progress}%</span><i><span style={{ width: `${progress}%` }} /></i><small>{formatOperationsDate(row.updated_at)}</small></div></button>; }) : <p>لا يوجد طلب تراكينج مرتبط.</p>}</div> : null}
+            {tab === "tracking" ? <div className="operations-timeline operations-detail-tracking-list">{vehicle.tracking.length ? vehicle.tracking.map((row) => { const progress = Math.max(0, Math.min(100, Number(row.progress || 0))); return <button type="button" key={row.id} className={`operations-tracking-detail-button ${trackingProgressTone(progress)}`} onClick={() => window.location.assign(`/tracking?order=${encodeURIComponent(row.id || "")}`)}><LinkSimple size={20} /><div><strong>{row.sales_order_no}</strong><span>{row.is_cancelled ? "ملغي من NEXT ERP" : row.status} — {progress}%</span><i><span style={{ width: `${progress}%` }} /></i><small>{formatOperationsDate(row.updated_at)}</small></div></button>; }) : <p>لا يوجد طلب تراكينج مرتبط.</p>}</div> : null}
             {tab === "audit" ? <div className="operations-timeline">{[...vehicle.approvalEvents, ...vehicle.statusNotes, ...vehicle.archiveEvents].sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at)).map((row, index) => <article key={`${row.id || index}`}><Car size={18} /><div><strong>{row.action || row.status_code || "تحديث"}</strong><span>{row.note || row.reason || ""}</span><small>{row.actor_name || row.created_by_name || "—"} · {formatOperationsDate(row.created_at)}</small></div></article>)}</div> : null}
             <div className="operations-detail-actions">
               {meta.permissions.canArchiveVehicle && !vehicle.archived_at ? <button type="button" onClick={() => setConfirmAction("archive")}><Archive size={17} />أرشفة السيارة</button> : null}

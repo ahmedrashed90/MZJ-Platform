@@ -15,6 +15,7 @@ export type TrackingStage = {
   reverted_at?: string | null;
   completed_by_name?: string | null;
   reverted_by_name?: string | null;
+  sms_sent?: boolean;
 };
 
 export type TrackingVehicle = {
@@ -53,6 +54,10 @@ export type TrackingOrderRow = {
   archived_at?: string | null;
   archived_by_name?: string | null;
   archive_reason?: string | null;
+  is_cancelled?: boolean;
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
+  cancellation_source?: string | null;
   subtotal_before_tax?: number | string | null;
   tax_value?: number | string | null;
   total_incl_vat?: number | string | null;
@@ -115,6 +120,9 @@ export type PublicTrackingOrder = {
   registration_fee?: number | string | null;
   status: TrackingStatus;
   is_archived?: boolean;
+  is_cancelled?: boolean;
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
   updated_at?: string | null;
   vehicles: TrackingVehicle[];
 };

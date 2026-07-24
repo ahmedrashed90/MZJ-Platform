@@ -1924,6 +1924,8 @@ button.small-metric { cursor: pointer; }
 .tracking-stage-actions button { min-height: 34px; border-radius: 9px; padding: 0 10px; font-size: 11px; }
 .tracking-stage-actions button.secondary { color: #6e5e59; background: #f3efed; }
 .tracking-stage-actions button.sms { background: #3777c8; }
+.tracking-stage-actions button.sms.sent { background: #218c5a; }
+.tracking-status.cancelled { background: #fce8e6; color: #9f2f27; }
 .tracking-history-list { display: grid; gap: 9px; }
 .tracking-history-list > div { border: 1px solid #f0e9e6; border-radius: 12px; padding: 11px 13px; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
 .tracking-history-list > div > span { grid-row: 1 / span 2; border-radius: 999px; padding: 5px 9px; font-size: 10px; font-weight: 800; }
@@ -4322,4 +4324,97 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .access-permission-pages section > label { grid-template-columns: 1fr; }
   .access-save-bar { position: static; }
   .access-reason-field > span { align-items: flex-start; flex-direction: column; }
+}
+
+/* Central access: duplicate-free roles and safe account deletion */
+.access-editor-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.access-delete-user {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #ecc7c7;
+  border-radius: 9px;
+  background: #fff5f5;
+  padding: 0 11px;
+  color: #a12d35;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: .18s ease;
+}
+.access-delete-user:hover {
+  border-color: #d89b9f;
+  background: #ffecec;
+  transform: translateY(-1px);
+}
+.access-delete-modal { width: min(610px,100%); }
+.access-delete-dialog {
+  display: grid;
+  gap: 14px;
+}
+.access-delete-warning {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 14px;
+  border: 1px solid #efc8ca;
+  border-radius: 12px;
+  background: #fff5f5;
+  color: #9f3038;
+}
+.access-delete-warning > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.access-delete-warning strong { font-size: 13px; }
+.access-delete-warning span {
+  overflow: hidden;
+  color: #87625f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.access-delete-dialog label {
+  display: grid;
+  gap: 7px;
+}
+.access-delete-dialog label > span {
+  color: #65463d;
+  font-size: 11px;
+  font-weight: 900;
+}
+.access-delete-dialog input,
+.access-delete-dialog textarea {
+  width: 100%;
+  min-height: 43px;
+  border: 1px solid #dfd3cd;
+  border-radius: 10px;
+  outline: 0;
+  background: #fff;
+  padding: 9px 11px;
+  color: #4e332c;
+  font: inherit;
+  font-size: 11px;
+}
+.access-delete-dialog textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+.access-delete-dialog input:focus,
+.access-delete-dialog textarea:focus {
+  border-color: #bb8875;
+  box-shadow: 0 0 0 3px rgba(108,51,41,.07);
+}
+@media (max-width: 700px) {
+  .access-editor-head-actions { justify-content: flex-start; }
 }

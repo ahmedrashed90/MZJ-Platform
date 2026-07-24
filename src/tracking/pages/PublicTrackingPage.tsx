@@ -94,7 +94,12 @@ export function PublicTrackingPage() {
                     <div><small>إجمالي السيارة</small><strong>{formatTrackingMoney(Number(activeVehicle.total_incl_vat || 0) + Number(activeVehicle.registration_fee || 0))}</strong></div>
                   </div>
 
-                  {order.is_archived ? (
+                  {order.is_cancelled ? (
+                    <div className="public-archived-notice">
+                      <WarningCircle size={34} weight="duotone" />
+                      <div><strong>تم إلغاء طلب البيع</strong><span>{order.cancellation_reason || "تم إلغاء الطلب من NEXT ERP مع الاحتفاظ بسجل المراحل السابقة."}</span></div>
+                    </div>
+                  ) : order.is_archived ? (
                     <div className="public-archived-notice">
                       <Archive size={34} weight="duotone" />
                       <div><strong>الطلب منتهي</strong><span>تم الانتهاء من هذا الطلب وأرشفته بنجاح.</span></div>

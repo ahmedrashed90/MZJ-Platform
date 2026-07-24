@@ -160,6 +160,8 @@ async function linkCrmCustomer(input: {
   const sourceMetadata = {
     origin: "erpnext-sales-order",
     salesOrderNo: normalized.orderNo,
+    sourceInstanceKey: normalized.sourceInstanceKey,
+    erpCreatedAt: normalized.erpCreatedAt,
     erpUserId: normalized.erpUserId,
     erpSalesPerson: normalized.erpSalesPerson,
     erpBranch: normalized.erpBranch,
@@ -168,6 +170,10 @@ async function linkCrmCustomer(input: {
   };
 
   return sql.begin(async (tx: any) => {
+    const [integrationState] = await tx`
+      select crm_lead_id::text,crm_created_by_integration,crm_previous_state
+      from integrations.erpnext_sales_orders where id=${input.orderId}::uuid for update
+    `;
     const matches = await tx`
       select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
         assigned.full_name as assigned_name
@@ -199,6 +205,11 @@ async function linkCrmCustomer(input: {
     let created = false;
     if (!existing) {
       created = true;
+      await tx`
+        update integrations.erpnext_sales_orders
+        set crm_created_by_integration=true,crm_previous_state=null,updated_at=now()
+        where id=${input.orderId}::uuid
+      `;
       [lead] = await tx`
         insert into crm.leads(
           contact_id,customer_name,phone,phone_normalized,source_code,source_name,platform_code,
@@ -237,6 +248,53 @@ async function linkCrmCustomer(input: {
         )
       `;
     } else {
+      const [originIntegrationState] = await tx`
+        select crm_previous_state,crm_created_by_integration
+        from integrations.erpnext_sales_orders
+        where crm_lead_id=${existing.id}::uuid and id<>${input.orderId}::uuid
+          and coalesce(is_cancelled,false)=false
+        order by received_at asc,id asc
+        limit 1
+      `;
+      const sameIntegrationCreatedLead = Boolean(
+        integrationState?.crm_created_by_integration
+        && clean(integrationState?.crm_lead_id) === clean(existing.id),
+      ) || Boolean(originIntegrationState?.crm_created_by_integration);
+      const inheritedPreviousState = integrationState?.crm_previous_state || originIntegrationState?.crm_previous_state || null;
+      if (sameIntegrationCreatedLead) {
+        await tx`
+          update integrations.erpnext_sales_orders set
+            crm_created_by_integration=true,crm_previous_state=null,updated_at=now()
+          where id=${input.orderId}::uuid
+        `;
+      } else if (inheritedPreviousState && !integrationState?.crm_previous_state) {
+        await tx`
+          update integrations.erpnext_sales_orders set
+            crm_previous_state=${tx.json(inheritedPreviousState)},crm_created_by_integration=false,updated_at=now()
+          where id=${input.orderId}::uuid
+        `;
+      } else if (!integrationState?.crm_previous_state) {
+        const [previousRequest] = existing.current_request_id ? await tx`
+          select *,id::text from crm.service_requests where id=${existing.current_request_id}::uuid
+        ` : [null];
+        await tx`
+          update integrations.erpnext_sales_orders set
+            crm_previous_state=${tx.json({
+              statusCode: existing.status_code || null,
+              statusLabel: existing.status_label || null,
+              departmentCode: existing.department_code || null,
+              branchCode: existing.branch_code || null,
+              serviceKey: existing.service_key || null,
+              paymentType: existing.payment_type || null,
+              assignedTo: existing.assigned_to || null,
+              responsibleName: existing.responsible_name_snapshot || null,
+              currentRequestId: existing.current_request_id || null,
+              request: previousRequest || null,
+            })},
+            crm_created_by_integration=false,updated_at=now()
+          where id=${input.orderId}::uuid
+        `;
+      }
       const oldStatus = clean(existing.status_label);
       const oldDepartment = clean(existing.department_code);
       const oldBranch = clean(existing.branch_code);
@@ -340,36 +398,64 @@ async function upsertSalesOrderRecord(input: {
   const totalInclVat = numberValue(firstTotals.grandTotal || firstTotals.carTotalInclVAT);
   const registrationFee = normalized.payloads.reduce((sum, payload) => sum + numberValue(payload.totals?.registrationFee), 0);
   const sql = getSql();
-  const [row] = await sql<any[]>`
-    insert into integrations.erpnext_sales_orders(
-      sales_order_no,erp_status,erp_event,erp_sales_person,accounting_customer_name,actual_customer_name,actual_customer_phone,
-      actual_customer_phone_normalized,customer_vat,order_date,delivery_date,erp_user_id,erp_branch,
-      platform_user_id,platform_user_name,platform_department_code,platform_department_name,platform_branch_code,platform_branch_name,
-      tracking_order_id,subtotal_before_tax,tax_value,total_incl_vat,registration_fee,user_link_status,warnings,source_payload,received_at,updated_at
-    ) values(
-      ${normalized.orderNo},${normalized.erpStatus||null},${normalized.erpEvent||null},${normalized.erpSalesPerson||null},${normalized.accountingCustomerName||null},
-      ${normalized.actualCustomerName||null},${normalized.actualCustomerPhone||null},${normalized.actualCustomerPhoneNormalized||null},
-      ${normalized.customerVat||null},${dateValue(normalized.orderDate)},${dateValue(normalized.deliveryDate)},${normalized.erpUserId||null},${normalized.erpBranch||null},
-      ${mapping?.id||null}::uuid,${mapping?.full_name||null},${mapping?.department_code||null},${mapping?.department_name||null},
-      ${mapping?.branch_code||null},${mapping?.branch_name||null},${trackingOrderId||null}::uuid,
-      ${subtotalBeforeTax},${taxValue},${totalInclVat},${registrationFee},${userStatus},${sql.json(warnings)},${sql.json(normalized.rawBody)},now(),now()
-    )
-    on conflict(sales_order_no) do update set
-      erp_status=excluded.erp_status,erp_event=excluded.erp_event,erp_sales_person=excluded.erp_sales_person,
-      accounting_customer_name=excluded.accounting_customer_name,actual_customer_name=excluded.actual_customer_name,
-      actual_customer_phone=excluded.actual_customer_phone,actual_customer_phone_normalized=excluded.actual_customer_phone_normalized,
-      customer_vat=excluded.customer_vat,order_date=excluded.order_date,delivery_date=excluded.delivery_date,
-      erp_user_id=excluded.erp_user_id,erp_branch=excluded.erp_branch,platform_user_id=excluded.platform_user_id,
-      platform_user_name=excluded.platform_user_name,platform_department_code=excluded.platform_department_code,
-      platform_department_name=excluded.platform_department_name,platform_branch_code=excluded.platform_branch_code,
-      platform_branch_name=excluded.platform_branch_name,
-      tracking_order_id=coalesce(excluded.tracking_order_id,integrations.erpnext_sales_orders.tracking_order_id),
-      subtotal_before_tax=excluded.subtotal_before_tax,tax_value=excluded.tax_value,total_incl_vat=excluded.total_incl_vat,
-      registration_fee=excluded.registration_fee,user_link_status=excluded.user_link_status,warnings=excluded.warnings,
-      source_payload=excluded.source_payload,received_at=now(),updated_at=now()
-    returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
-  `;
-  return row;
+
+  return sql.begin(async (tx: any) => {
+    let [row] = await tx<any[]>`
+      select *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+      from integrations.erpnext_sales_orders
+      where source_instance_key=${normalized.sourceInstanceKey}
+      limit 1 for update
+    `;
+
+    if (!row) {
+      [row] = await tx<any[]>`
+        select *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+        from integrations.erpnext_sales_orders
+        where sales_order_no=${normalized.orderNo} and coalesce(is_cancelled,false)=false
+          and (erp_created_at is null or source_instance_key like ${`next-erp:sales-order:${normalized.orderNo}:legacy:%`})
+        order by received_at desc,updated_at desc
+        limit 1 for update
+      `;
+    }
+
+    if (row) {
+      [row] = await tx<any[]>`
+        update integrations.erpnext_sales_orders set
+          source_instance_key=${normalized.sourceInstanceKey},erp_created_at=${normalized.erpCreatedAt === "legacy" ? null : normalized.erpCreatedAt}::timestamptz,
+          erp_status=${normalized.erpStatus||null},erp_event=${normalized.erpEvent||null},erp_sales_person=${normalized.erpSalesPerson||null},
+          accounting_customer_name=${normalized.accountingCustomerName||null},actual_customer_name=${normalized.actualCustomerName||null},
+          actual_customer_phone=${normalized.actualCustomerPhone||null},actual_customer_phone_normalized=${normalized.actualCustomerPhoneNormalized||null},
+          customer_vat=${normalized.customerVat||null},order_date=${dateValue(normalized.orderDate)},delivery_date=${dateValue(normalized.deliveryDate)},
+          erp_user_id=${normalized.erpUserId||null},erp_branch=${normalized.erpBranch||null},platform_user_id=${mapping?.id||null}::uuid,
+          platform_user_name=${mapping?.full_name||null},platform_department_code=${mapping?.department_code||null},
+          platform_department_name=${mapping?.department_name||null},platform_branch_code=${mapping?.branch_code||null},
+          platform_branch_name=${mapping?.branch_name||null},tracking_order_id=coalesce(${trackingOrderId||null}::uuid,tracking_order_id),
+          subtotal_before_tax=${subtotalBeforeTax},tax_value=${taxValue},total_incl_vat=${totalInclVat},registration_fee=${registrationFee},
+          user_link_status=${userStatus},warnings=${tx.json(warnings)},source_payload=${tx.json(normalized.rawBody)},received_at=now(),updated_at=now()
+        where id=${row.id}::uuid
+        returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+      `;
+      return row;
+    }
+
+    [row] = await tx<any[]>`
+      insert into integrations.erpnext_sales_orders(
+        sales_order_no,source_instance_key,erp_created_at,erp_status,erp_event,erp_sales_person,accounting_customer_name,actual_customer_name,actual_customer_phone,
+        actual_customer_phone_normalized,customer_vat,order_date,delivery_date,erp_user_id,erp_branch,
+        platform_user_id,platform_user_name,platform_department_code,platform_department_name,platform_branch_code,platform_branch_name,
+        tracking_order_id,subtotal_before_tax,tax_value,total_incl_vat,registration_fee,user_link_status,warnings,source_payload,received_at,updated_at
+      ) values(
+        ${normalized.orderNo},${normalized.sourceInstanceKey},${normalized.erpCreatedAt === "legacy" ? null : normalized.erpCreatedAt}::timestamptz,
+        ${normalized.erpStatus||null},${normalized.erpEvent||null},${normalized.erpSalesPerson||null},${normalized.accountingCustomerName||null},
+        ${normalized.actualCustomerName||null},${normalized.actualCustomerPhone||null},${normalized.actualCustomerPhoneNormalized||null},
+        ${normalized.customerVat||null},${dateValue(normalized.orderDate)},${dateValue(normalized.deliveryDate)},${normalized.erpUserId||null},${normalized.erpBranch||null},
+        ${mapping?.id||null}::uuid,${mapping?.full_name||null},${mapping?.department_code||null},${mapping?.department_name||null},
+        ${mapping?.branch_code||null},${mapping?.branch_name||null},${trackingOrderId||null}::uuid,
+        ${subtotalBeforeTax},${taxValue},${totalInclVat},${registrationFee},${userStatus},${tx.json(warnings)},${tx.json(normalized.rawBody)},now(),now()
+      ) returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+    `;
+    return row;
+  });
 }
 
 async function linkOperationsVehicles(input: {
@@ -521,6 +607,322 @@ async function linkOperationsVehicles(input: {
   };
 }
 
+export async function cancelErpNextSalesOrder(input: {
+  normalized: NormalizedErpNextSalesOrder;
+}) {
+  await ensureCrmSchema();
+  await ensureOperationsSchema();
+  await ensureTrackingSchema();
+  await ensureErpNextUserMappingSchema();
+  await ensureErpNextSalesOrderSchema();
+
+  const { normalized } = input;
+  const sql = getSql();
+  const warnings: LinkWarning[] = [];
+  const cancellationReason = `تم إلغاء طلب البيع ${normalized.orderNo} من NEXT ERP`;
+  const actorName = "NEXT ERP Integration";
+
+  const result = await sql.begin(async (tx: any) => {
+    let [order] = await tx<any[]>`
+      select *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+      from integrations.erpnext_sales_orders
+      where source_instance_key=${normalized.sourceInstanceKey}
+      limit 1 for update
+    `;
+
+    if (!order) {
+      [order] = await tx<any[]>`
+        select *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+        from integrations.erpnext_sales_orders
+        where sales_order_no=${normalized.orderNo} and coalesce(is_cancelled,false)=false
+          and (
+            ${normalized.erpCreatedAt === "legacy"}=true
+            or erp_created_at=${normalized.erpCreatedAt === "legacy" ? null : normalized.erpCreatedAt}::timestamptz
+            or erp_created_at is null
+          )
+        order by received_at desc,updated_at desc
+        limit 1 for update
+      `;
+    }
+
+    if (!order) {
+      warnings.push({
+        code: "ERP_CANCEL_ORDER_NOT_FOUND",
+        message: `لم يتم العثور على نسخة طلب ${normalized.orderNo} داخل المنصة لإلغائها`,
+      });
+      return {
+        found: false,
+        alreadyCancelled: false,
+        integrationOrderId: null,
+        trackingCancelled: 0,
+        operations: { linked: 0, returnedToAvailable: 0, preserved: 0 },
+        crm: { status: "not_found", leadId: null, restored: false },
+      };
+    }
+
+    if (order.is_cancelled) {
+      return {
+        found: true,
+        alreadyCancelled: true,
+        integrationOrderId: order.id,
+        trackingCancelled: order.tracking_order_id ? 1 : 0,
+        operations: { linked: 0, returnedToAvailable: 0, preserved: 0 },
+        crm: { status: "already_cancelled", leadId: order.crm_lead_id || null, restored: false },
+      };
+    }
+
+    [order] = await tx<any[]>`
+      update integrations.erpnext_sales_orders set
+        erp_status=coalesce(nullif(${normalized.erpStatus},''),'Cancelled'),erp_event=${normalized.erpEvent||"sales_order.cancelled"},
+        is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},source_payload=${tx.json(normalized.rawBody)},updated_at=now()
+      where id=${order.id}::uuid
+      returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
+    `;
+
+    const trackingRows = await tx<any[]>`
+      update tracking.orders set
+        is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},cancellation_source='next_erp',updated_at=now()
+      where coalesce(is_deleted,false)=false and (
+        id=${order.tracking_order_id||null}::uuid
+        or source_instance_key=${order.source_instance_key}
+        or source_identity=${order.source_instance_key}
+      )
+      returning id::text
+    `;
+
+    const salesVehicles = await tx<any[]>`
+      select sov.*,sov.id::text,sov.operations_vehicle_id::text,sov.tracking_vehicle_id::text
+      from integrations.erpnext_sales_order_vehicles sov
+      where sov.sales_order_id=${order.id}::uuid
+      order by sov.created_at,sov.id
+      for update
+    `;
+
+    let returnedToAvailable = 0;
+    let preserved = 0;
+    let linked = 0;
+
+    for (const salesVehicle of salesVehicles) {
+      await tx`
+        update integrations.erpnext_sales_order_vehicles
+        set is_cancelled=true,cancelled_at=now(),updated_at=now()
+        where id=${salesVehicle.id}::uuid
+      `;
+      if (!salesVehicle.operations_vehicle_id) continue;
+      linked += 1;
+
+      const [newerActiveOrder] = await tx<any[]>`
+        select so.id::text,so.sales_order_no,so.source_instance_key
+        from integrations.erpnext_sales_order_vehicles other_vehicle
+        join integrations.erpnext_sales_orders so on so.id=other_vehicle.sales_order_id
+        where other_vehicle.operations_vehicle_id=${salesVehicle.operations_vehicle_id}::uuid
+          and so.id<>${order.id}::uuid
+          and coalesce(so.is_cancelled,false)=false
+          and coalesce(other_vehicle.is_cancelled,false)=false
+          and coalesce(so.erp_created_at,so.received_at)>coalesce(${order.erp_created_at}::timestamptz,${order.received_at}::timestamptz)
+        order by coalesce(so.erp_created_at,so.received_at) desc
+        limit 1
+      `;
+      if (newerActiveOrder) {
+        preserved += 1;
+        warnings.push({
+          code: "OPERATIONS_NEWER_SALES_ORDER_PRESERVED",
+          message: `لم تتغير السيارة لأن عليها طلب بيع أحدث: ${newerActiveOrder.sales_order_no}`,
+          vin: clean(salesVehicle.vin),
+          itemNo: clean(salesVehicle.item_no),
+        });
+        continue;
+      }
+
+      const [vehicle] = await tx<any[]>`
+        select *,id::text,location_id::text
+        from operations.vehicles
+        where id=${salesVehicle.operations_vehicle_id}::uuid and is_deleted=false
+        for update
+      `;
+      if (!vehicle) continue;
+
+      const [activeApproval] = await tx<any[]>`
+        select *,id::text from operations.vehicle_approvals
+        where vehicle_id=${vehicle.id}::uuid and is_active=true
+        order by cycle_no desc limit 1 for update
+      `;
+
+      if (vehicle.archived_at || clean(vehicle.status_code) === "delivered") {
+        preserved += 1;
+        warnings.push({
+          code: "OPERATIONS_CANCEL_REVIEW_REQUIRED",
+          message: vehicle.archived_at
+            ? "السيارة مؤرشفة؛ تم تسجيل إلغاء طلب البيع دون إرجاع حالتها تلقائيًا"
+            : "السيارة مباع تم التسليم؛ تم تسجيل إلغاء طلب البيع وتحتاج مراجعة إدارية",
+          vin: clean(salesVehicle.vin),
+          itemNo: clean(salesVehicle.item_no),
+        });
+        continue;
+      }
+
+      if (activeApproval) {
+        const beforeApproval = { ...activeApproval };
+        const [closedApproval] = await tx<any[]>`
+          update operations.vehicle_approvals
+          set is_active=false,pending_delivery=null,updated_at=now()
+          where id=${activeApproval.id}::uuid
+          returning *,id::text
+        `;
+        await tx`
+          insert into operations.approval_events(
+            approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data
+          ) values(
+            ${closedApproval.id}::uuid,${vehicle.id}::uuid,${closedApproval.cycle_no},'all','cancelled',${cancellationReason},
+            ${order.platform_user_id||null}::uuid,${actorName},'NEXT ERP',${tx.json(beforeApproval)},${tx.json(closedApproval)}
+          )
+        `;
+      }
+
+      if (clean(vehicle.status_code) === "under_delivery") {
+        const oldStatus = clean(vehicle.status_code);
+        const locationId = vehicle.location_id || null;
+        await tx`
+          update operations.vehicles set
+            status_code='available_for_sale',state_note=${cancellationReason},updated_by=${order.platform_user_id||null}::uuid,
+            updated_by_name=${actorName},updated_at=now(),version=version+1
+          where id=${vehicle.id}::uuid
+        `;
+        await tx`
+          insert into operations.movements(
+            vehicle_id,from_location_id,to_location_id,old_status,new_status,note,performed_by,movement_type,
+            state_note,performed_by_name,performed_by_role,performed_by_branch,before_data,after_data
+          ) values(
+            ${vehicle.id}::uuid,${locationId}::uuid,${locationId}::uuid,${oldStatus},'available_for_sale',${cancellationReason},
+            ${order.platform_user_id||null}::uuid,'erpnext_sale_cancelled',${cancellationReason},${actorName},'NEXT ERP',${order.platform_branch_name||order.platform_branch_code||null},
+            ${tx.json({ statusCode: oldStatus, locationId, salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key })},
+            ${tx.json({ statusCode: "available_for_sale", locationId, salesOrderNo: null, cancelledSalesOrderNo: order.sales_order_no })}
+          )
+        `;
+        await tx`
+          insert into operations.vehicle_status_notes(vehicle_id,status_code,note,created_by,created_by_name)
+          values(${vehicle.id}::uuid,'available_for_sale',${cancellationReason},${order.platform_user_id||null}::uuid,${actorName})
+        `;
+        returnedToAvailable += 1;
+      } else {
+        preserved += 1;
+      }
+    }
+
+    let crm = { status: "not_linked", leadId: order.crm_lead_id || null, restored: false };
+    if (order.crm_lead_id) {
+      const [lead] = await tx<any[]>`
+        select *,id::text,current_request_id::text,assigned_to::text
+        from crm.leads where id=${order.crm_lead_id}::uuid and is_deleted=false for update
+      `;
+      if (lead) {
+        let effectivePreviousState = order.crm_previous_state;
+        let effectiveCreatedByIntegration = Boolean(order.crm_created_by_integration);
+        if (!effectivePreviousState && !effectiveCreatedByIntegration) {
+          const [historicalOrigin] = await tx<any[]>`
+            select crm_previous_state,crm_created_by_integration
+            from integrations.erpnext_sales_orders
+            where crm_lead_id=${lead.id}::uuid and id<>${order.id}::uuid
+              and (crm_previous_state is not null or crm_created_by_integration=true)
+            order by received_at asc
+            limit 1
+          `;
+          effectivePreviousState = historicalOrigin?.crm_previous_state || null;
+          effectiveCreatedByIntegration = Boolean(historicalOrigin?.crm_created_by_integration);
+        }
+        const activeOrders = await tx<any[]>`
+          select sales_order_no,source_instance_key
+          from integrations.erpnext_sales_orders
+          where crm_lead_id=${lead.id}::uuid and coalesce(is_cancelled,false)=false and id<>${order.id}::uuid
+          order by received_at desc
+        `;
+        const extraData = lead.extra_data && typeof lead.extra_data === "object" ? { ...lead.extra_data } : {};
+        extraData.salesOrderInstances = activeOrders.map((activeOrder: any) => activeOrder.source_instance_key).filter(Boolean);
+        extraData.salesOrders = [...new Set(activeOrders.map((activeOrder: any) => clean(activeOrder.sales_order_no)).filter(Boolean))];
+        extraData.lastCancelledSalesOrder = {
+          orderNo: order.sales_order_no,
+          sourceInstanceKey: order.source_instance_key,
+          cancelledAt: new Date().toISOString(),
+        };
+
+        let nextStatus = clean(lead.status_label);
+        if (activeOrders.length > 0) {
+          await tx`update crm.leads set extra_data=${tx.json(extraData)},updated_at=now() where id=${lead.id}::uuid`;
+          crm = { status: "active_order_preserved", leadId: lead.id, restored: false };
+        } else if (effectivePreviousState && typeof effectivePreviousState === "object") {
+          const previous = effectivePreviousState as Record<string, any>;
+          nextStatus = clean(previous.statusLabel) || "عميل جديد";
+          const previousRequestId = clean(previous.currentRequestId);
+          await tx`
+            update crm.leads set
+              status_code=${clean(previous.statusCode)||null},status_label=${nextStatus},department_code=${clean(previous.departmentCode)||lead.department_code||null},
+              branch_code=${clean(previous.branchCode)||lead.branch_code||null},service_key=${clean(previous.serviceKey)||lead.service_key||null},
+              payment_type=${clean(previous.paymentType)||lead.payment_type||null},assigned_to=${clean(previous.assignedTo)||null}::uuid,
+              responsible_name_snapshot=${clean(previous.responsibleName)||null},current_request_id=${previousRequestId||null}::uuid,
+              extra_data=${tx.json(extraData)},updated_by=${order.platform_user_id||null}::uuid,updated_at=now()
+            where id=${lead.id}::uuid
+          `;
+          if (previousRequestId && previous.request && typeof previous.request === "object") {
+            const requestState = previous.request as Record<string, any>;
+            await tx`
+              update crm.service_requests set
+                service_key=${clean(requestState.service_key)||clean(previous.serviceKey)||lead.service_key||null},
+                department_code=${clean(requestState.department_code)||clean(previous.departmentCode)||lead.department_code||null},
+                branch_code=${clean(requestState.branch_code)||clean(previous.branchCode)||lead.branch_code||null},
+                status_label=${clean(requestState.status_label)||nextStatus},request_state=${clean(requestState.request_state)||'open'},
+                assigned_to=${clean(requestState.assigned_to)||clean(previous.assignedTo)||null}::uuid,
+                closed_at=${requestState.closed_at||null}::timestamptz,closed_by=${clean(requestState.closed_by)||null}::uuid,
+                closure_reason=${clean(requestState.closure_reason)||null},updated_at=now()
+              where id=${previousRequestId}::uuid
+            `;
+          }
+          crm = { status: "restored_previous_state", leadId: lead.id, restored: true };
+        } else if (effectiveCreatedByIntegration) {
+          nextStatus = "عميل جديد";
+          await tx`
+            update crm.leads set status_code=null,status_label='عميل جديد',current_request_id=null,extra_data=${tx.json(extraData)},
+              updated_by=${order.platform_user_id||null}::uuid,updated_at=now()
+            where id=${lead.id}::uuid
+          `;
+          crm = { status: "created_lead_reopened", leadId: lead.id, restored: true };
+        } else {
+          await tx`update crm.leads set extra_data=${tx.json(extraData)},updated_at=now() where id=${lead.id}::uuid`;
+          crm = { status: "cancel_recorded", leadId: lead.id, restored: false };
+        }
+
+        await tx`
+          insert into crm.lead_events(
+            lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
+            actor_id,actor_name,actor_role,note,details,created_at
+          ) values(
+            ${lead.id}::uuid,'erpnext_sales_order_cancelled',${clean(lead.status_label)||null},${nextStatus||clean(lead.status_label)||null},
+            ${clean(lead.department_code)||null},${clean(lead.department_code)||null},${clean(lead.branch_code)||null},${clean(lead.branch_code)||null},
+            ${order.platform_user_id||null}::uuid,${actorName},'NEXT ERP',${cancellationReason},
+            ${tx.json({ salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key, crmStatus: crm.status })},now()
+          )
+        `;
+      }
+    }
+
+    await tx`
+      update integrations.erpnext_sales_orders set
+        crm_link_status=${crm.status},operations_link_status='cancelled',warnings=${tx.json(uniqueWarnings(warnings))},updated_at=now()
+      where id=${order.id}::uuid
+    `;
+
+    return {
+      found: true,
+      alreadyCancelled: false,
+      integrationOrderId: order.id,
+      trackingCancelled: trackingRows.length,
+      operations: { linked, returnedToAvailable, preserved },
+      crm,
+    };
+  });
+
+  return { ...result, warnings: uniqueWarnings(warnings) };
+}
+
 export async function syncErpNextSalesOrder(input: {
   normalized: NormalizedErpNextSalesOrder;
   trackingResults: TrackingIngestResult[];
@@ -562,7 +964,6 @@ export async function syncErpNextSalesOrder(input: {
     });
   }
 
-  const canApplyBusinessLink = eligibleStatus && userResolution.status === "linked" && Boolean(mapping);
   const trackingOrderId = trackingResults.find((result) => result.orderId)?.orderId || null;
   const order = await upsertSalesOrderRecord({
     normalized,
@@ -571,6 +972,10 @@ export async function syncErpNextSalesOrder(input: {
     trackingOrderId,
     warnings,
   });
+  const canApplyBusinessLink = eligibleStatus && userResolution.status === "linked" && Boolean(mapping) && !order.is_cancelled;
+  if (order.is_cancelled) {
+    warnings.push({ code: "ERP_INSTANCE_ALREADY_CANCELLED", message: "نسخة طلب البيع ملغاة بالفعل؛ لم يتم إعادة ربط CRM أو العمليات" });
+  }
 
   let crm = {
     status: eligibleStatus ? userResolution.status : "skipped_status",

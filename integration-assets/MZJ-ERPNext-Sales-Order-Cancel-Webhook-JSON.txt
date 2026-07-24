@@ -1,0 +1,29 @@
+{
+  "event": "sales_order.cancelled",
+  "doc": {
+    "name": "{{ doc.name }}",
+    "creation": "{{ doc.creation }}",
+    "modified": "{{ doc.modified }}",
+    "owner": "{{ doc.owner }}",
+    "modified_by": "{{ doc.modified_by }}",
+    "erp_user_id": "{{ doc.get('custom_sales_person_email') or doc.get('sales_person_email') or doc.owner or doc.modified_by or '' }}",
+    "sales_person": "{{ doc.get('sales_person') or doc.get('custom_sales_person') or '' }}",
+    "status": "{{ doc.status }}",
+    "docstatus": "{{ doc.docstatus }}",
+    "customer": "{{ doc.customer }}",
+    "customer_name": "{{ doc.customer_name }}",
+    "tax_id": "{{ doc.tax_id }}",
+    "contact_mobile": "{{ doc.get('contact_mobile') or doc.get('customer_mobile') or doc.get('mobile_no') or '' }}",
+    "user_name": "{{ doc.get('custom_user_name') or doc.get('user_name') or doc.get('custom_username') or doc.get('actual_customer_name') or '' }}",
+    "user_phone": "{{ doc.get('custom_user_mobile') or doc.get('custom_user_phone') or doc.get('custom_mobile_number') or doc.get('user_mobile') or doc.get('user_phone') or doc.get('actual_customer_phone') or '' }}",
+    "branch": "{{ doc.branch }}",
+    "transaction_date": "{{ doc.transaction_date }}",
+    "delivery_date": "{{ doc.delivery_date }}",
+    "net_total": "{{ doc.net_total }}",
+    "total_taxes_and_charges": "{{ doc.total_taxes_and_charges }}",
+    "grand_total": "{{ doc.grand_total }}",
+    "sales_team": {{ doc["sales_team"] | tojson }},
+    "items": {{ doc["items"] | tojson }},
+    "taxes": {{ doc["taxes"] | tojson }}
+  }
+}

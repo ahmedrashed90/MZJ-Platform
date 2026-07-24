@@ -53,6 +53,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.user_branches ub on ub.user_id = u.id
       left join core.branches b on b.id = ub.branch_id
       where u.is_active = true
+        and u.deleted_at is null
         and (
           lower(coalesce(u.email, '')) = lower(${identifier})
           or coalesce(u.mobile, '') = ${identifier}

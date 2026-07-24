@@ -73,7 +73,7 @@ export async function loadUserProfile(userId: string): Promise<SessionUser | nul
         coalesce((select array_agg(b.name order by ub.is_primary desc,b.sort_order,b.name) from core.user_branches ub join core.branches b on b.id=ub.branch_id and b.is_active=true where ub.user_id=u.id),'{}') as branches,
         coalesce((select array_agg(b.code order by ub.is_primary desc,b.sort_order,b.name) from core.user_branches ub join core.branches b on b.id=ub.branch_id and b.is_active=true where ub.user_id=u.id),'{}') as branch_codes
       from core.users u
-      where u.id=${userId}::uuid and u.is_active=true
+      where u.id=${userId}::uuid and u.is_active=true and u.deleted_at is null
     `,
     getEffectiveAccess(userId),
   ]);
@@ -106,7 +106,7 @@ export async function createSession(request: VercelRequest, response: VercelResp
   await sql`
     insert into core.sessions(token_hash,user_id,expires_at,user_agent,ip_address,permission_version)
     select ${hash},u.id,now()+${SESSION_HOURS}*interval '1 hour',${userAgent},${ipAddress},u.permission_version
-    from core.users u where u.id=${userId}::uuid and u.is_active=true
+    from core.users u where u.id=${userId}::uuid and u.is_active=true and u.deleted_at is null
   `;
 
   const secure = process.env.VERCEL ? "; Secure" : "";
@@ -138,7 +138,7 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
   const [session] = await sql<{ user_id: string }[]>`
     select s.user_id::text
     from core.sessions s
-    join core.users u on u.id=s.user_id and u.is_active=true
+    join core.users u on u.id=s.user_id and u.is_active=true and u.deleted_at is null
     where s.token_hash=${tokenHash(token)}
       and s.expires_at>now()
       and s.permission_version=u.permission_version

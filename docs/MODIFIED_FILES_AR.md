@@ -1,3 +1,26 @@
+
+## v1.19.4 — NEXT ERP Cancel + Tracking Sync
+
+- `server/_erpnext-sales-order-normalizer.ts`
+- `server/_erpnext-sales-order-sync.ts`
+- `server/_erpnext-integration-schema.ts`
+- `server/_tracking-schema.ts`
+- `server/_operations-schema.ts`
+- `server/integrations/erpnext-sales-order.ts`
+- `server/integrations/tracking-orders.ts`
+- `server/tracking/orders.ts`
+- `server/tracking/sms.ts`
+- `server/operations/index.ts`
+- `src/tracking/pages/TrackingOrdersPage.tsx`
+- `src/tracking/types.ts`
+- `src/tracking/api.ts`
+- `src/operations/components/VehicleDetailModal.tsx`
+- `src/operations/types.ts`
+- `src/styles.css`
+- `database/migrations/20260724_erpnext_cancel_tracking_sync_v1194.sql`
+- `integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt`
+- `scripts/check-erpnext-cancel-tracking-sync-v1194.mjs`
+
 # قائمة الملفات المعدلة — MZJ Platform v1.19.1
 
 - ملفات جديدة: **29**.

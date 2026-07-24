@@ -58,6 +58,8 @@ export type VehicleDetail = VehicleRow & {
   salesOrders: Array<{
     id: string;
     sales_order_no: string;
+    source_instance_key?: string | null;
+    erp_created_at?: string | null;
     erp_status?: string | null;
     erp_event?: string | null;
     erp_sales_person?: string | null;
@@ -84,6 +86,11 @@ export type VehicleDetail = VehicleRow & {
     user_link_status?: string | null;
     crm_link_status?: string | null;
     operations_link_status?: string | null;
+    is_cancelled?: boolean;
+    cancelled_at?: string | null;
+    cancellation_reason?: string | null;
+    vehicle_order_cancelled?: boolean;
+    vehicle_order_cancelled_at?: string | null;
     warnings?: Array<{ code?: string; message?: string }> | null;
     item_no?: string | null;
     item_type?: string | null;

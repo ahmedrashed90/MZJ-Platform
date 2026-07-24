@@ -21,6 +21,9 @@ export type ErpNextVehiclePayload = JsonRecord & {
   erpUserId?: string;
   erpStatus?: string;
   erpEvent?: string;
+  erpCreatedAt?: string;
+  sourceInstanceKey?: string;
+  isCancellation?: boolean;
   accountingCustomerName?: string;
   actualCustomerName?: string;
   actualCustomerPhone?: string;
@@ -33,6 +36,9 @@ export type NormalizedErpNextSalesOrder = {
   orderNo: string;
   erpStatus: string;
   erpEvent: string;
+  erpCreatedAt: string;
+  sourceInstanceKey: string;
+  isCancellation: boolean;
   erpSalesPerson: string;
   erpUserId: string;
   erpBranch: string;
@@ -249,6 +255,19 @@ function resolveItems(doc: JsonRecord, body: JsonRecord) {
   return hasFlatItem ? [doc] : [];
 }
 
+function normalizedInstanceTimestamp(value: unknown) {
+  const text = clean(value);
+  if (!text) return "legacy";
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? text.replace(/\s+/g, "_") : parsed.toISOString();
+}
+
+function cancellationEvent(event: unknown, status: unknown, docstatus: unknown) {
+  const eventText = clean(event).toLowerCase().replace(/[\s._-]+/g, "");
+  const statusText = clean(status).toLowerCase().replace(/[\s._-]+/g, "");
+  return eventText.includes("cancel") || statusText === "cancelled" || statusText === "canceled" || Number(docstatus) === 2;
+}
+
 export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSalesOrder {
   if (!isRecord(input)) throw new ErpNextSalesOrderError(400, "بيانات ERPNext يجب أن تكون JSON Object");
   const body = input;
@@ -297,6 +316,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const erpEvent = pickText(body, ["event", "eventType"]) || "sales_order.submitted";
   const createdAt = pickText(doc, ["creation", "created_at", "createdAt", "Timestamp"])
     || pickText(body, ["Timestamp", "createdAt"]);
+  const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
+  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
+  const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
   const explicitGrandTotal = numberValue(pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal"]));
@@ -357,6 +379,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
       erpUserId,
       erpStatus,
       erpEvent,
+      erpCreatedAt,
+      sourceInstanceKey,
+      isCancellation,
       orderDate,
       deliveryDate,
       salesPerson,
@@ -391,9 +416,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
       createdAt,
       originalCreatedAt: createdAt,
       integrationSource: "erpnext-webhook",
-      sourceOriginalId: orderNo,
-      sourceIdentity: `next-erp:sales-order:${orderNo}`,
-      sourceItemIdentity: `next-erp:sales-order:${orderNo}:item:${identityPart}`,
+      sourceOriginalId: sourceInstanceKey,
+      sourceIdentity: sourceInstanceKey,
+      sourceItemIdentity: `${sourceInstanceKey}:item:${identityPart}`,
       sourceDocument: {
         event: erpEvent,
         name: orderNo,
@@ -413,6 +438,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     orderNo,
     erpStatus,
     erpEvent,
+    erpCreatedAt,
+    sourceInstanceKey,
+    isCancellation,
     erpSalesPerson: salesPerson,
     erpUserId,
     erpBranch: branch,

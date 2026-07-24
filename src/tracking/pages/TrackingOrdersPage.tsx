@@ -270,7 +270,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                     <td>{order.branch || "—"}</td>
                     <td>{order.vehicles_count}</td>
                     <td><div className="tracking-mini-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
-                    <td><span className={`tracking-status ${order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived)}</span></td>
+                    <td><span className={`tracking-status ${order.is_cancelled ? "cancelled" : order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived, order.is_cancelled)}</span></td>
                     <td>{formatTrackingDate(order.updated_at)}</td>
                   </tr>
                 );
@@ -298,7 +298,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
             <div className="tracking-detail-actions">
               {canCopyTrackingLink && selected.tracking_token ? <button type="button" onClick={() => void copyLink()}><Copy size={17} />نسخ رابط العميل</button> : null}
               {canCreateTrackingLink && selected.tracking_token ? <button type="button" onClick={() => window.open(trackingUrl(), "_blank")}><LinkSimple size={17} />فتح صفحة العميل</button> : null}
-              {canArchiveTracking && !selected.is_archived && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
+              {canArchiveTracking && !selected.is_archived && !selected.is_cancelled && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
                 <button type="button" className="tracking-archive-button" onClick={() => void archiveOrder()} disabled={Boolean(actionKey)}>
                   <Archive size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
                 </button>
@@ -311,6 +311,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
             </div>
 
             <div className="tracking-detail-body">
+              {selected.is_cancelled ? <div className="connection-banner warning"><WarningCircle size={20} weight="fill" /><span>هذا الطلب ملغي من NEXT ERP. تم إيقاف المراحل ورسائل SMS+ مع الاحتفاظ بالسجل السابق.</span></div> : null}
               <section className="tracking-order-info-grid">
                 <div><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
                 <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
@@ -364,9 +365,9 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                               <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
                             </div>
                             <div className="tracking-stage-actions">
-                              {!selected.is_archived && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
-                              {!selected.is_archived && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
-                              {!selected.is_archived && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className="sms" onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
+                              {!selected.is_archived && !selected.is_cancelled && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
+                              {!selected.is_archived && !selected.is_cancelled && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
+                              {!selected.is_archived && !selected.is_cancelled && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className={`sms ${stage.sms_sent ? "sent" : ""}`} onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)} title={stage.sms_sent ? "تم إرسال SMS+ لهذه المرحلة" : "إرسال SMS+"}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
                             </div>
                           </article>
                         );

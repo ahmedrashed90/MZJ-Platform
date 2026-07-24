@@ -36,7 +36,11 @@ async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<t
       select
         s.id::text as stage_id,s.code,s.name,s.description,s.owner_type,s.sort_order,s.sms_enabled,s.is_active,
         vs.id::text as vehicle_stage_id,vs.status,vs.completed_at,vs.reverted_at,
-        cu.full_name as completed_by_name,ru.full_name as reverted_by_name
+        cu.full_name as completed_by_name,ru.full_name as reverted_by_name,
+        exists(
+          select 1 from tracking.sms_messages sm
+          where sm.order_id=${id}::uuid and sm.stage_id=s.id and sm.status not in ('failed','cancelled')
+        ) as sms_sent
       from tracking.stages s
       left join tracking.vehicle_stages vs on vs.stage_id=s.id and vs.vehicle_id=${vehicle.id}::uuid
       left join core.users cu on cu.id=vs.completed_by
@@ -96,7 +100,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const orders = await sql<any[]>`
       select
         o.id::text,o.sales_order_no,o.customer_name,o.customer_mobile,o.branch,o.order_date,o.delivery_date,o.sales_person,
-        o.status,o.tracking_token,o.is_archived,o.subtotal_before_tax,o.tax_value,o.total_incl_vat,o.registration_fee,o.created_at,o.updated_at,
+        o.status,o.tracking_token,o.is_archived,o.is_cancelled,o.cancelled_at,o.cancellation_reason,o.subtotal_before_tax,o.tax_value,o.total_incl_vat,o.registration_fee,o.created_at,o.updated_at,
         count(distinct v.id)::int as vehicles_count,
         count(vs.id)::int as total_stages,
         count(vs.id) filter (where vs.status='completed')::int as completed_stages,
@@ -142,7 +146,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (!orderId) return response.status(400).json({ ok: false, error: "رقم الطلب الداخلي مطلوب" });
 
       const [archiveState] = await sql<any[]>`
-        select o.id::text,o.is_archived,
+        select o.id::text,o.is_archived,o.is_cancelled,
           count(vs.id) filter (where s.is_active=true)::int as total_stages,
           count(vs.id) filter (where s.is_active=true and vs.status='completed')::int as completed_stages
         from tracking.orders o
@@ -153,6 +157,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         group by o.id
       `;
       if (!archiveState) return response.status(404).json({ ok: false, error: "طلب التتبع غير موجود" });
+      if (archiveState.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن أرشفته" });
       if (archiveState.is_archived) {
         const detail = await getOrderDetail(orderId, user);
         return response.status(200).json({ ok: true, order: detail, message: "الطلب موجود في الأرشيف بالفعل" });
@@ -180,7 +185,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!vehicleId || !stageId) return response.status(400).json({ ok: false, error: "السيارة والمرحلة مطلوبتان" });
 
     const [row] = await sql<any[]>`
-      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived,o.branch
+      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived,o.is_cancelled,o.branch
       from tracking.vehicle_stages vs
       join tracking.order_vehicles v on v.id=vs.vehicle_id
       join tracking.orders o on o.id=v.order_id
@@ -195,45 +200,71 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const permissionCode = action === "complete_stage" ? `tracking.stage.${stageNo}.complete` : `tracking.stage.${stageNo}.rollback`;
     if (!hasPermission(user, permissionCode)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه المرحلة", permission: permissionCode });
     if (action === "revert_stage" && !clean(body.note)) return response.status(400).json({ ok: false, error: "سبب التراجع مطلوب" });
-    if (action === "complete_stage") {
-      const [previousPending] = await sql<any[]>`
-        select 1 from tracking.vehicle_stages pvs join tracking.stages ps on ps.id=pvs.stage_id and ps.is_active=true
-        where pvs.vehicle_id=${vehicleId}::uuid and ps.sort_order<${Number(row.sort_order)} and pvs.status<>'completed' limit 1
-      `;
-      if (previousPending) return response.status(400).json({ ok: false, error: "لا يمكن تنفيذ المرحلة قبل استكمال المراحل السابقة" });
-    }
+    if (row.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن تعديل مراحله" });
     if (row.is_archived) return response.status(400).json({ ok: false, error: "الطلب مؤرشف ولا يمكن تعديل مراحله" });
 
+    const siblingVehicles = await sql<any[]>`
+      select id::text from tracking.order_vehicles where order_id=${row.order_id}::uuid order by created_at,id
+    `;
+    for (const sibling of siblingVehicles) await ensureVehicleStageRows(sibling.id);
+
     if (action === "complete_stage") {
-      if (row.status !== "completed") {
-        await sql.begin(async (tx) => {
-          await tx`
-            update tracking.vehicle_stages set status='completed',completed_by=${user.id}::uuid,completed_at=now(),reverted_by=null,reverted_at=null,updated_at=now()
-            where vehicle_id=${vehicleId}::uuid and stage_id=${stageId}::uuid
-          `;
+      const [previousPending] = await sql<any[]>`
+        select 1
+        from tracking.order_vehicles ov
+        join tracking.vehicle_stages pvs on pvs.vehicle_id=ov.id
+        join tracking.stages ps on ps.id=pvs.stage_id and ps.is_active=true
+        where ov.order_id=${row.order_id}::uuid and ps.sort_order<${Number(row.sort_order)} and pvs.status<>'completed'
+        limit 1
+      `;
+      if (previousPending) return response.status(400).json({ ok: false, error: "لا يمكن تنفيذ المرحلة قبل استكمال المراحل السابقة لجميع سيارات الطلب" });
+    }
+
+    let affectedCount = 0;
+    await sql.begin(async (tx) => {
+      if (action === "complete_stage") {
+        const updated = await tx<any[]>`
+          update tracking.vehicle_stages vs set
+            status='completed',completed_by=${user.id}::uuid,completed_at=now(),reverted_by=null,reverted_at=null,updated_at=now()
+          from tracking.order_vehicles ov
+          where vs.vehicle_id=ov.id and ov.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid and vs.status<>'completed'
+          returning vs.vehicle_id::text
+        `;
+        affectedCount = updated.length;
+        for (const target of updated) {
           await tx`
             insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
-            values (${row.order_id}::uuid,${vehicleId}::uuid,${stageId}::uuid,'completed',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
+            values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,'completed',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
           `;
-          await tryArchiveVehicleForTrackingRecord(tx, vehicleId, { id: user.id, name: user.fullName });
-        });
+          await tryArchiveVehicleForTrackingRecord(tx, target.vehicle_id, { id: user.id, name: user.fullName });
+        }
+      } else {
+        const updated = await tx<any[]>`
+          update tracking.vehicle_stages vs set
+            status='pending',reverted_by=${user.id}::uuid,reverted_at=now(),completed_by=null,completed_at=null,updated_at=now()
+          from tracking.order_vehicles ov
+          where vs.vehicle_id=ov.id and ov.order_id=${row.order_id}::uuid and vs.stage_id=${stageId}::uuid and vs.status='completed'
+          returning vs.vehicle_id::text
+        `;
+        affectedCount = updated.length;
+        for (const target of updated) {
+          await tx`
+            insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
+            values (${row.order_id}::uuid,${target.vehicle_id}::uuid,${stageId}::uuid,'reverted',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
+          `;
+        }
       }
-    } else if (row.status === "completed") {
-      await sql.begin(async (tx) => {
-        await tx`
-          update tracking.vehicle_stages set status='pending',reverted_by=${user.id}::uuid,reverted_at=now(),completed_by=null,completed_at=null,updated_at=now()
-          where vehicle_id=${vehicleId}::uuid and stage_id=${stageId}::uuid
-        `;
-        await tx`
-          insert into tracking.stage_events(order_id,vehicle_id,stage_id,action,actor_id,actor_name,note)
-          values (${row.order_id}::uuid,${vehicleId}::uuid,${stageId}::uuid,'reverted',${user.id}::uuid,${user.fullName},${clean(body.note)||null})
-        `;
-      });
-    }
+    });
 
     await recalculateTrackingOrder(row.order_id);
     const detail = await getOrderDetail(row.order_id, user);
-    return response.status(200).json({ ok: true, order: detail, message: action === "complete_stage" ? "تم إنهاء المرحلة" : "تم التراجع عن المرحلة" });
+    const vehicleWord = siblingVehicles.length > 1 ? " لجميع سيارات الطلب" : "";
+    return response.status(200).json({
+      ok: true,
+      order: detail,
+      affectedVehicles: affectedCount,
+      message: action === "complete_stage" ? `تم إنهاء المرحلة${vehicleWord}` : `تم التراجع عن المرحلة${vehicleWord}`,
+    });
   }
 
   return response.status(405).json({ ok: false, error: "Method not allowed" });

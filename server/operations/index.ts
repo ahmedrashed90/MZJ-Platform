@@ -159,7 +159,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       select count(*) over() as active_orders,o.id as order_id,o.sales_order_no,o.status,
         case when count(vs.id)=0 then 0 else round(100.0*count(vs.id) filter(where vs.status='completed')/count(vs.id)) end as progress
       from tracking.order_vehicles ov
-      join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false and coalesce(o.is_archived,false)=false
+      join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false and coalesce(o.is_archived,false)=false and coalesce(o.is_cancelled,false)=false
       left join tracking.vehicle_stages vs on vs.vehicle_id=ov.id
       where (ov.vehicle_id=v.id or (ov.vehicle_id is null and ov.vin=v.vin))
       group by o.id,o.sales_order_no,o.status,o.updated_at
@@ -220,7 +220,7 @@ async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: N
       where rv.vehicle_id=${id}::uuid order by r.requested_at desc
     `,
     sql<any[]>`
-      select o.id::text,o.sales_order_no,o.status,o.is_archived,o.created_at,o.updated_at,
+      select o.id::text,o.sales_order_no,o.status,o.is_archived,o.is_cancelled,o.cancelled_at,o.cancellation_reason,o.created_at,o.updated_at,
         case when count(vs.id)=0 then 0 else round(100.0*count(vs.id) filter(where vs.status='completed')/count(vs.id)) end::int as progress
       from tracking.order_vehicles ov join tracking.orders o on o.id=ov.order_id and coalesce(o.is_deleted,false)=false
       left join tracking.vehicle_stages vs on vs.vehicle_id=ov.id
@@ -228,14 +228,14 @@ async function vehicleDetail(sql: ReturnType<typeof getSql>, id: string, user: N
       group by o.id order by o.updated_at desc
     `,
     sql<any[]>`
-      select so.id::text,so.sales_order_no,so.erp_status,so.erp_event,so.erp_sales_person,so.accounting_customer_name,so.actual_customer_name,
+      select so.id::text,so.sales_order_no,so.source_instance_key,so.erp_created_at,so.erp_status,so.erp_event,so.erp_sales_person,so.accounting_customer_name,so.actual_customer_name,
         so.actual_customer_phone,so.customer_vat,so.order_date,so.delivery_date,so.erp_user_id,so.erp_branch,
         so.platform_user_id::text,so.platform_user_name,so.platform_department_code,so.platform_department_name,so.platform_branch_code,so.platform_branch_name,
         so.crm_lead_id::text,so.tracking_order_id::text,so.subtotal_before_tax,so.tax_value,so.total_incl_vat,so.registration_fee,
-        so.user_link_status,so.crm_link_status,so.operations_link_status,so.warnings,so.received_at,so.updated_at,
+        so.user_link_status,so.crm_link_status,so.operations_link_status,so.warnings,so.is_cancelled,so.cancelled_at,so.cancellation_reason,so.received_at,so.updated_at,
         sov.id::text as sales_order_vehicle_id,sov.item_no,sov.vin,sov.item_type,sov.item_category,sov.item_model,
         sov.interior_color,sov.exterior_color,sov.dealer,sov.qty,sov.unit_price,sov.item_value,sov.total_incl_vat as vehicle_total_incl_vat,
-        sov.tracking_vehicle_id::text,sov.operations_status_code,sov.operations_status_applied_at
+        sov.tracking_vehicle_id::text,sov.operations_status_code,sov.operations_status_applied_at,sov.is_cancelled as vehicle_order_cancelled,sov.cancelled_at as vehicle_order_cancelled_at
       from integrations.erpnext_sales_order_vehicles sov
       join integrations.erpnext_sales_orders so on so.id=sov.sales_order_id
       where sov.operations_vehicle_id=${id}::uuid

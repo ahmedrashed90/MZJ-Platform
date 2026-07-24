@@ -35,6 +35,14 @@ alter table tracking.orders add column if not exists archived_at timestamptz;
 alter table tracking.orders add column if not exists archived_by uuid references core.users(id);
 alter table tracking.orders add column if not exists archived_by_name text;
 alter table tracking.orders add column if not exists archive_reason text;
+alter table tracking.orders add column if not exists is_cancelled boolean not null default false;
+alter table tracking.orders add column if not exists cancelled_at timestamptz;
+alter table tracking.orders add column if not exists cancellation_reason text;
+alter table tracking.orders add column if not exists cancellation_source text;
+alter table tracking.orders add column if not exists source_instance_key text;
+alter table tracking.orders add column if not exists erp_created_at timestamptz;
+create index if not exists tracking_orders_cancelled_idx on tracking.orders(is_cancelled,cancelled_at desc);
+create index if not exists tracking_orders_source_instance_idx on tracking.orders(source_instance_key);
 
 alter table tracking.order_vehicles add column if not exists item_no text;
 alter table tracking.order_vehicles add column if not exists item_type text;

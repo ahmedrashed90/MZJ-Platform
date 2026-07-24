@@ -93,7 +93,7 @@ async function actorCanGrant(actor: PermissionUser, permissionCodes: string[], r
 
 
 const ACCESS_CONTROL_VIEW_PERMISSIONS = [
-  "settings.users.view", "settings.users.create", "settings.users.update", "settings.users.disable",
+  "settings.users.view", "settings.users.create", "settings.users.update", "settings.users.disable", "settings.users.delete",
   "settings.roles.manage", "settings.permissions.manage", "settings.branches.manage", "settings.departments.manage",
   "settings.audit.view", "settings.security.view",
 ];
@@ -101,7 +101,7 @@ function canOpenAccessControl(user: PermissionUser) {
   return ACCESS_CONTROL_VIEW_PERMISSIONS.some((code) => hasPermission(user, code));
 }
 function canReadUsers(user: PermissionUser) {
-  return ["settings.users.view","settings.users.update","settings.users.disable","settings.permissions.manage"].some((code) => hasPermission(user, code));
+  return ["settings.users.view","settings.users.update","settings.users.disable","settings.users.delete","settings.permissions.manage"].some((code) => hasPermission(user, code));
 }
 function accessPayloadSignature(roleIds: string[], systems: any[], overrides: any[]) {
   return JSON.stringify({
@@ -142,7 +142,7 @@ async function listUsers() {
   return sql<any[]>`
     select u.id::text,u.employee_no,u.full_name,u.email,u.mobile,u.next_erp_user_id,u.is_active,u.can_receive_leads,u.can_receive_tasks,
       u.last_login_at,u.created_at,u.updated_at,u.permission_version,
-      coalesce((select string_agg(r.name,'، ' order by r.name) from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=u.id),'') as roles,
+      coalesce((select string_agg(distinct r.name,'، ' order by r.name) from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=u.id),'') as roles,
       coalesce((select string_agg(b.name,'، ' order by b.sort_order,b.name) from core.user_branches ub join core.branches b on b.id=ub.branch_id where ub.user_id=u.id),'') as branches,
       coalesce((select string_agg(d.name,'، ' order by d.name) from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id),'') as departments,
       coalesce((select array_agg(ur.role_id::text order by ur.role_id::text) from core.user_roles ur where ur.user_id=u.id),'{}') as role_ids,
@@ -151,14 +151,14 @@ async function listUsers() {
       coalesce((select jsonb_object_agg(us.system_code,jsonb_build_object('enabled',us.is_enabled,'dataScope',us.data_scope,'roleId',us.role_id::text)) from core.user_systems us where us.user_id=u.id),'{}'::jsonb) as systems,
       (select l.created_at from core.permission_change_log l where l.target_user_id=u.id order by l.created_at desc limit 1) as last_access_change_at,
       (select cu.full_name from core.permission_change_log l left join core.users cu on cu.id=l.changed_by where l.target_user_id=u.id order by l.created_at desc limit 1) as last_access_changed_by
-    from core.users u order by u.is_active desc,u.full_name,u.created_at
+    from core.users u where u.deleted_at is null order by u.is_active desc,u.full_name,u.created_at
   `;
 }
 
 async function userDetail(userId: string) {
   const sql = getSql();
   const [userRows, roles, systems, overrides, access] = await Promise.all([
-    sql<any[]>`select id::text,employee_no,full_name,email,mobile,next_erp_user_id,is_active,can_receive_leads,can_receive_tasks,last_login_at,created_at,updated_at,permission_version from core.users where id=${userId}::uuid`,
+    sql<any[]>`select id::text,employee_no,full_name,email,mobile,next_erp_user_id,is_active,can_receive_leads,can_receive_tasks,last_login_at,created_at,updated_at,permission_version from core.users where id=${userId}::uuid and deleted_at is null`,
     sql<any[]>`select r.id::text,r.code,r.name from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=${userId}::uuid order by r.name`,
     sql<any[]>`
       select us.system_code,us.is_enabled,us.role_id::text,us.data_scope,
@@ -221,7 +221,7 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   if (password && password.length < 10) throw Object.assign(new Error("كلمة المرور الجديدة يجب ألا تقل عن 10 أحرف"), { status: 400 });
 
   const before = creating ? null : await userSnapshot(userId);
-  if (!creating && !before) throw Object.assign(new Error("المستخدم غير موجود"), { status: 404 });
+  if (!creating && (!before || before?.user?.deleted_at)) throw Object.assign(new Error("المستخدم غير موجود"), { status: 404 });
   const beforeUser = before?.user || {};
   const profileChanged = creating
     || clean(beforeUser.full_name) !== fullName
@@ -379,6 +379,67 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   return { ok: true, userId: targetId, message: creating ? "تم إنشاء المستخدم وصلاحياته" : "تم تحديث المستخدم وصلاحياته" };
 }
 
+
+async function deleteUser(request: VercelRequest, actor: PermissionUser, body: Record<string, any>) {
+  if (!hasPermission(actor, "settings.users.delete")) throw Object.assign(new Error("لا توجد صلاحية لحذف المستخدمين"), { status: 403 });
+  const sql = getSql();
+  const userId = clean(body.userId || body.id);
+  const reason = clean(body.reason);
+  if (!userId) throw Object.assign(new Error("المستخدم المطلوب حذفه غير محدد"), { status: 400 });
+  if (!reason) throw Object.assign(new Error("سبب حذف الحساب مطلوب"), { status: 400 });
+  if (userId === actor.id) throw Object.assign(new Error("لا يمكن حذف الحساب الحالي من نفس الجلسة"), { status: 403 });
+
+  const before = await userSnapshot(userId);
+  if (!before || before?.user?.deleted_at) throw Object.assign(new Error("المستخدم غير موجود"), { status: 404 });
+
+  const targetAccess = await getEffectiveAccess(userId);
+  if (targetAccess.permissions.includes("platform.superadmin")) {
+    const candidates = await sql<{ id: string }[]>`
+      select id::text from core.users
+      where id<>${userId}::uuid and is_active=true and deleted_at is null
+    `;
+    let anotherSuperadminExists = false;
+    for (const candidate of candidates) {
+      const access = await getEffectiveAccess(candidate.id);
+      if (access.permissions.includes("platform.superadmin")) {
+        anotherSuperadminExists = true;
+        break;
+      }
+    }
+    if (!anotherSuperadminExists) {
+      throw Object.assign(new Error("لا يمكن حذف آخر حساب مدير نظام فعال"), { status: 409 });
+    }
+  }
+
+  await sql.begin(async (tx) => {
+    await tx`delete from core.sessions where user_id=${userId}::uuid`;
+    await tx`delete from core.user_permission_overrides where user_id=${userId}::uuid`;
+    await tx`delete from core.user_system_branches where user_id=${userId}::uuid`;
+    await tx`delete from core.user_system_departments where user_id=${userId}::uuid`;
+    await tx`delete from core.user_systems where user_id=${userId}::uuid`;
+    await tx`delete from core.user_roles where user_id=${userId}::uuid`;
+    await tx`delete from core.user_branches where user_id=${userId}::uuid`;
+    await tx`delete from core.user_departments where user_id=${userId}::uuid`;
+    await tx`
+      update core.users set
+        employee_no=null,email=null,mobile=null,next_erp_user_id=null,password_hash=null,must_change_password=true,
+        is_active=false,can_receive_leads=false,can_receive_tasks=false,
+        disabled_at=coalesce(disabled_at,now()),disabled_by=${actor.id}::uuid,disabled_reason=${reason},
+        deleted_at=now(),deleted_by=${actor.id}::uuid,deleted_reason=${reason},
+        permission_version=permission_version+1,updated_at=now()
+      where id=${userId}::uuid and deleted_at is null
+    `;
+  });
+
+  const after = await userSnapshot(userId);
+  await sql`
+    insert into core.permission_change_log(target_user_id,changed_by,change_type,before_data,after_data,reason,request_id,ip_address,user_agent)
+    values(${userId}::uuid,${actor.id}::uuid,'user_deleted',${sql.json(before)},${after ? sql.json(after) : null},${reason},${requestId(request)},${requestIp(request)},${requestUserAgent(request)})
+  `;
+  await logSecurityEvent({ request,user:actor,systemCode:"core",pageCode:"settings",permissionCode:"settings.users.delete",action:"user_deleted",entityType:"user",entityId:userId,result:"success",beforeData:before,afterData:after,reason,ipAddress:requestIp(request) });
+  return { ok: true, message: "تم حذف الحساب وإزالة بيانات دخوله مع الاحتفاظ بالسجلات السابقة" };
+}
+
 async function saveRole(request: VercelRequest, actor: PermissionUser, body: Record<string, any>) {
   if (!hasPermission(actor, "settings.roles.manage")) throw Object.assign(new Error("لا توجد صلاحية لإدارة الأدوار"), { status: 403 });
   const sql = getSql();
@@ -497,7 +558,7 @@ export default async function handler(request: VercelRequest,response: VercelRes
       }
       if(resource==='security_log'){
         if(!await requirePermissionForUser(request,response,actor,'settings.security.view',{systemCode:'core',pageCode:'settings'}))return;
-        const sql=getSql(); const rows=await sql<any[]>`select id,user_id::text,user_email,user_role,system_code,page_code,permission_code,action,entity_type,entity_id,ip_address,user_agent,result,rejection_reason,request_id,created_at from audit.activity_log where result is not null or action in ('login','login_failed','user_created','user_updated') order by created_at desc limit 500`;
+        const sql=getSql(); const rows=await sql<any[]>`select id,user_id::text,user_email,user_role,system_code,page_code,permission_code,action,entity_type,entity_id,ip_address,user_agent,result,rejection_reason,request_id,created_at from audit.activity_log where result is not null or action in ('login','login_failed','user_created','user_updated','user_deleted') order by created_at desc limit 500`;
         return response.status(200).json({ok:true,rows});
       }
       return response.status(404).json({ok:false,error:'المورد غير موجود'});
@@ -505,6 +566,7 @@ export default async function handler(request: VercelRequest,response: VercelRes
     if(request.method!=='POST')return response.status(405).json({ok:false,error:'Method not allowed'});
     const body=bodyObject(request),action=clean(body.action); let result;
     if(action==='save_user')result=await saveUser(request,actor,body);
+    else if(action==='delete_user')result=await deleteUser(request,actor,body);
     else if(action==='save_role')result=await saveRole(request,actor,body);
     else if(action==='save_org_item')result=await saveOrgItem(request,actor,body);
     else throw Object.assign(new Error('الإجراء غير مدعوم'),{status:400});

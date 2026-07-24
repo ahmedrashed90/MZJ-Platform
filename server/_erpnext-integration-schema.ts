@@ -28,7 +28,9 @@ on conflict(code) do update set name=excluded.name,sort_order=excluded.sort_orde
 
 create table if not exists integrations.erpnext_sales_orders (
   id uuid primary key default gen_random_uuid(),
-  sales_order_no text not null unique,
+  sales_order_no text not null,
+  source_instance_key text,
+  erp_created_at timestamptz,
   erp_status text,
   erp_event text,
   erp_sales_person text,
@@ -58,10 +60,18 @@ create table if not exists integrations.erpnext_sales_orders (
   operations_link_status text not null default 'pending',
   warnings jsonb not null default '[]'::jsonb,
   source_payload jsonb not null default '{}'::jsonb,
+  crm_previous_state jsonb,
+  crm_created_by_integration boolean not null default false,
+  is_cancelled boolean not null default false,
+  cancelled_at timestamptz,
+  cancellation_reason text,
   received_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
+alter table integrations.erpnext_sales_orders drop constraint if exists erpnext_sales_orders_sales_order_no_key;
+alter table integrations.erpnext_sales_orders add column if not exists source_instance_key text;
+alter table integrations.erpnext_sales_orders add column if not exists erp_created_at timestamptz;
 alter table integrations.erpnext_sales_orders add column if not exists erp_status text;
 alter table integrations.erpnext_sales_orders add column if not exists erp_event text;
 alter table integrations.erpnext_sales_orders add column if not exists erp_sales_person text;
@@ -91,9 +101,24 @@ alter table integrations.erpnext_sales_orders add column if not exists crm_link_
 alter table integrations.erpnext_sales_orders add column if not exists operations_link_status text not null default 'pending';
 alter table integrations.erpnext_sales_orders add column if not exists warnings jsonb not null default '[]'::jsonb;
 alter table integrations.erpnext_sales_orders add column if not exists source_payload jsonb not null default '{}'::jsonb;
+alter table integrations.erpnext_sales_orders add column if not exists crm_previous_state jsonb;
+alter table integrations.erpnext_sales_orders add column if not exists crm_created_by_integration boolean not null default false;
+alter table integrations.erpnext_sales_orders add column if not exists is_cancelled boolean not null default false;
+alter table integrations.erpnext_sales_orders add column if not exists cancelled_at timestamptz;
+alter table integrations.erpnext_sales_orders add column if not exists cancellation_reason text;
 alter table integrations.erpnext_sales_orders add column if not exists received_at timestamptz not null default now();
 alter table integrations.erpnext_sales_orders add column if not exists updated_at timestamptz not null default now();
 
+update integrations.erpnext_sales_orders
+set source_instance_key=coalesce(nullif(source_instance_key,''),'next-erp:sales-order:'||sales_order_no||':legacy:'||id::text)
+where source_instance_key is null or source_instance_key='';
+create unique index if not exists erpnext_sales_orders_source_instance_unique
+on integrations.erpnext_sales_orders(source_instance_key)
+where nullif(source_instance_key,'') is not null;
+create index if not exists erpnext_sales_orders_no_idx
+on integrations.erpnext_sales_orders(sales_order_no,received_at desc);
+create index if not exists erpnext_sales_orders_active_idx
+on integrations.erpnext_sales_orders(sales_order_no,is_cancelled,received_at desc);
 create index if not exists erpnext_sales_orders_phone_idx
 on integrations.erpnext_sales_orders(actual_customer_phone_normalized);
 create index if not exists erpnext_sales_orders_user_idx
@@ -121,6 +146,8 @@ create table if not exists integrations.erpnext_sales_order_vehicles (
   operations_vehicle_id uuid references operations.vehicles(id) on delete set null,
   operations_status_code text,
   operations_status_applied_at timestamptz,
+  is_cancelled boolean not null default false,
+  cancelled_at timestamptz,
   raw_payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -143,6 +170,8 @@ alter table integrations.erpnext_sales_order_vehicles add column if not exists t
 alter table integrations.erpnext_sales_order_vehicles add column if not exists operations_vehicle_id uuid references operations.vehicles(id) on delete set null;
 alter table integrations.erpnext_sales_order_vehicles add column if not exists operations_status_code text;
 alter table integrations.erpnext_sales_order_vehicles add column if not exists operations_status_applied_at timestamptz;
+alter table integrations.erpnext_sales_order_vehicles add column if not exists is_cancelled boolean not null default false;
+alter table integrations.erpnext_sales_order_vehicles add column if not exists cancelled_at timestamptz;
 alter table integrations.erpnext_sales_order_vehicles add column if not exists raw_payload jsonb not null default '{}'::jsonb;
 alter table integrations.erpnext_sales_order_vehicles add column if not exists created_at timestamptz not null default now();
 alter table integrations.erpnext_sales_order_vehicles add column if not exists updated_at timestamptz not null default now();

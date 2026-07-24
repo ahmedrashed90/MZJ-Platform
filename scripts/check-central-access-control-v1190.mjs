@@ -11,13 +11,13 @@ const permissionCodes = [...catalog.matchAll(/\bp\("([^"]+)"/g)].map((match) => 
 const pageKeys = [...read("shared/access-control.ts").matchAll(/\{ system: "([^"]+)", code: "([^"]+)"/g)].map((match) => `${match[1]}.${match[2]}`);
 const unique = (items) => new Set(items).size === items.length;
 
-expect("Package version is 1.19.3", JSON.parse(read("package.json")).version === "1.19.3");
+expect("Package version is 1.19.5", JSON.parse(read("package.json")).version === "1.19.5");
 expect("Four systems exist in central catalog", ["crm", "marketing", "operations", "tracking"].every((code) => catalog.includes(`code: "${code}"`)));
 expect("Permission catalog is large enough for all systems", permissionCodes.length >= 180);
 expect("Permission codes are unique", unique(permissionCodes));
 expect("Page catalog entries are unique", unique(pageKeys));
 expect("System access permissions exist", ["system.crm.access", "system.marketing.access", "system.operations.access", "system.tracking.access"].every((code) => permissionCodes.includes(code)));
-expect("Central settings permissions exist", ["settings.users.view", "settings.roles.manage", "settings.permissions.manage", "settings.branches.manage", "settings.departments.manage", "settings.audit.view", "settings.security.view"].every((code) => permissionCodes.includes(code)));
+expect("Central settings permissions exist", ["settings.users.view", "settings.users.delete", "settings.roles.manage", "settings.permissions.manage", "settings.branches.manage", "settings.departments.manage", "settings.audit.view", "settings.security.view"].every((code) => permissionCodes.includes(code)));
 expect("Legacy per-system settings permissions are absent", !["crm.settings.view", "crm.settings.manage", "marketing.settings.view", "marketing.settings.manage", "operations.settings.view", "operations.settings.manage", "tracking.settings.view", "tracking.settings.manage"].some((code) => permissionCodes.includes(code)));
 expect("CRM data review has separate view and execute permissions", ["crm.data_review.view", "crm.data_review.execute"].every((code) => permissionCodes.includes(code)));
 expect("CRM routing and automation are separate permissions", ["crm.routing.manage", "crm.automation.manage"].every((code) => permissionCodes.includes(code)));

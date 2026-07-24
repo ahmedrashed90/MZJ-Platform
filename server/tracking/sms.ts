@@ -55,6 +55,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     where o.id=${orderId}::uuid and coalesce(o.is_deleted,false)=false
   `;
   if (!row) return response.status(404).json({ ok: false, error: "لم يتم العثور على بيانات الرسالة" });
+  if (row.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن إرسال SMS+ له" });
   const access = getSystemAccess(user, "tracking");
   const inScope = access.dataScope === "all" || access.branchCodes.includes(clean(row.branch)) || Boolean((await sql<any[]>`select 1 from tracking.stage_events where order_id=${row.id}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
   if (!inScope) return response.status(403).json({ ok: false, error: "الطلب خارج نطاق بياناتك" });

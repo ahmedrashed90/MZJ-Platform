@@ -4,7 +4,7 @@ import {
   ErpNextSalesOrderError,
   normalizeErpNextSalesOrder,
 } from "../_erpnext-sales-order-normalizer.js";
-import { syncErpNextSalesOrder } from "../_erpnext-sales-order-sync.js";
+import { cancelErpNextSalesOrder, syncErpNextSalesOrder } from "../_erpnext-sales-order-sync.js";
 import { clean } from "../_tracking-utils.js";
 import { ingestTrackingOrder, TrackingIngestError } from "./tracking-orders.js";
 
@@ -42,6 +42,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   try {
     const normalized = normalizeErpNextSalesOrder(body);
+    if (normalized.isCancellation) {
+      const cancellation = await cancelErpNextSalesOrder({ normalized });
+      return response.status(200).json({
+        ok: true,
+        message: cancellation.alreadyCancelled
+          ? `طلب ${normalized.orderNo} ملغي بالفعل داخل المنصة`
+          : cancellation.found
+            ? `تم إلغاء طلب ${normalized.orderNo} من NEXT ERP وتحديث التراكينج وCRM والعمليات`
+            : `تم استلام إلغاء طلب ${normalized.orderNo} ولم يتم العثور على نسخة مرتبطة داخل المنصة`,
+        orderNo: normalized.orderNo,
+        sourceInstanceKey: normalized.sourceInstanceKey,
+        erpStatus: normalized.erpStatus,
+        cancellation,
+        warnings: cancellation.warnings,
+      });
+    }
+
     const results = [];
     for (const payload of normalized.payloads) {
       results.push(await ingestTrackingOrder(payload));

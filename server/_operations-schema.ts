@@ -9,7 +9,7 @@ create sequence if not exists operations.transfer_request_no_seq;
 insert into core.roles(code,name,is_system) values
 ('system_admin','مدير النظام',true),
 ('operations_manager','مدير العمليات',true),
-('finance_manager','مدير الحسابات',true)
+('finance_manager','مدير المالية',true)
 on conflict (code) do update set name=excluded.name,is_system=true;
 
 insert into core.permissions(code,name,system_code) values
@@ -343,16 +343,20 @@ update operations.approval_events set created_at=now() where created_at is null;
 alter table operations.approval_events alter column created_at set default now();
 alter table operations.approval_events drop constraint if exists approval_events_action_check;
 do $approval_events_native_action$
+declare
+  current_definition text;
 begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conrelid='operations.approval_events'::regclass
-      and conname='approval_events_action_native_check'
-  ) then
+  select pg_get_constraintdef(oid)
+  into current_definition
+  from pg_constraint
+  where conrelid='operations.approval_events'::regclass
+    and conname='approval_events_action_native_check';
+
+  if current_definition is null or position('cancelled' in lower(current_definition))=0 then
+    alter table operations.approval_events drop constraint if exists approval_events_action_native_check;
     alter table operations.approval_events
       add constraint approval_events_action_native_check
-      check (action in ('approve','revert','note','reset')) not valid;
+      check (action in ('approve','revert','note','reset','cancelled')) not valid;
   end if;
 end
 $approval_events_native_action$;
