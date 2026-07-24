@@ -108,6 +108,8 @@ export type TransferRow = {
   requested_by_branch?: string | null;
   source_branch_code?: string | null;
   destination_branch_code?: string | null;
+  source_location_code?: string | null;
+  destination_location_code?: string | null;
   requested_at: string;
   completed_at?: string | null;
   cancelled_at?: string | null;
@@ -115,6 +117,10 @@ export type TransferRow = {
   source_location_name?: string | null;
   destination_location_name?: string | null;
   vehicles_count: number;
+  next_status?: string | null;
+  can_advance?: boolean;
+  can_delete?: boolean;
+  can_cancel?: boolean;
   vehicles: Array<{
     vehicle_id: string;
     vin: string;
@@ -127,6 +133,7 @@ export type TransferRow = {
     source_status?: string | null;
     current_location_name?: string | null;
     current_status_name?: string | null;
+    item_note?: string | null;
   }>;
   events?: Array<{
     id: string;

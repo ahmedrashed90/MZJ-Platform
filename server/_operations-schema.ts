@@ -23,13 +23,13 @@ insert into core.permissions(code,name,system_code) values
 ('operations.movement.create','تنفيذ حركة السيارات','operations'),
 ('operations.movement.view','عرض سجل الحركات','operations'),
 ('operations.transfer.create','إنشاء طلب نقل','operations'),
-('operations.transfer.view','عرض طلبات النقل','operations'),
-('operations.transfer.receive_order','استلام طلب النقل','operations'),
+('operations.transfer.view','عرض الطلبات','operations'),
+('operations.transfer.receive_order','استلام الطلب','operations'),
 ('operations.transfer.send_vehicle','إرسال السيارة','operations'),
 ('operations.transfer.receive_vehicle','استلام السيارة','operations'),
-('operations.transfer.complete','إنهاء طلب النقل','operations'),
-('operations.transfer.cancel','إلغاء طلب النقل','operations'),
-('operations.transfer.delete','حذف طلب النقل قبل التنفيذ','operations'),
+('operations.transfer.complete','إنهاء الطلب','operations'),
+('operations.transfer.cancel','إلغاء الطلب','operations'),
+('operations.transfer.delete','حذف الطلب قبل التنفيذ','operations'),
 ('operations.approval.view','عرض الموافقات','operations'),
 ('operations.approval.financial','تنفيذ الموافقة المالية','operations'),
 ('operations.approval.administrative','تنفيذ الموافقة الإدارية','operations'),
@@ -126,6 +126,9 @@ alter table operations.vehicles add column if not exists updated_by uuid referen
 alter table operations.vehicles add column if not exists updated_by_name text;
 alter table operations.vehicles add column if not exists legacy_id text;
 alter table operations.vehicles add column if not exists version integer not null default 1;
+alter table operations.vehicles add column if not exists photographed boolean not null default false;
+alter table operations.vehicles add column if not exists photographed_at timestamptz;
+alter table operations.vehicles add column if not exists photographed_by uuid references core.users(id);
 create index if not exists operations_vehicles_vin_text_idx on operations.vehicles(vin);
 create index if not exists operations_vehicles_search_idx on operations.vehicles(lower(coalesce(car_name,'')),lower(coalesce(statement,'')));
 create index if not exists operations_vehicles_active_idx on operations.vehicles(is_deleted,is_inventory_active,archived_at,location_id,status_code);
@@ -412,6 +415,7 @@ alter table operations.transfer_requests add column if not exists transfer_type 
 alter table operations.transfer_requests add column if not exists source_location_id uuid references operations.locations(id);
 alter table operations.transfer_requests add column if not exists destination_location_id uuid references operations.locations(id);
 alter table operations.transfer_requests add column if not exists status text not null default 'request_received';
+alter table operations.transfer_requests alter column status set default 'created';
 alter table operations.transfer_requests add column if not exists requested_by uuid references core.users(id);
 alter table operations.transfer_requests add column if not exists requested_at timestamptz not null default now();
 alter table operations.transfer_requests add column if not exists completed_at timestamptz;

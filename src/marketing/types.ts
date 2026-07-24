@@ -6,7 +6,28 @@ export type CampaignType = { id: string; name: string; short_code: string; code_
 export type MarketingPlatform = { id: string; code: string; name: string };
 export type PlatformPostType = { id: string; platform_id: string; name: string; width?: number | null; height?: number | null };
 export type Funnel = { id: string; name: string };
-export type StockCar = { id: string; vin: string; car_name: string | null; statement: string | null; model_year: string | null; exterior_color: string | null; interior_color: string | null; location_name: string | null; photographed?: boolean; content_usage?: any[] };
+export type MarketingLocation = { id: string; code: string; name: string; branch_code?: string | null };
+export type StockCar = {
+  id: string;
+  vin: string;
+  car_name: string | null;
+  statement: string | null;
+  model_year: string | null;
+  exterior_color: string | null;
+  interior_color: string | null;
+  location_id?: string | null;
+  location_code?: string | null;
+  location_name: string | null;
+  branch_code?: string | null;
+  status_code?: string | null;
+  status_name?: string | null;
+  photographed?: boolean;
+  photographed_at?: string | null;
+  financial_approved?: boolean;
+  administrative_approved?: boolean;
+  active_transfer_requests?: number;
+  content_usage?: any[];
+};
 export type MarketingMeta = {
   ok: boolean;
   users: MarketingUser[];

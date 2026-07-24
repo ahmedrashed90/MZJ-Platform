@@ -76,10 +76,29 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
 
 async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
   return sql<any[]>`
-    select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.exterior_color,v.interior_color,l.name as location_name,v.status_code,
-      coalesce(ms.photographed,false) as photographed,coalesce(ms.content_usage,'[]'::jsonb) as content_usage
+    select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.exterior_color,v.interior_color,
+      v.location_id::text,l.code as location_code,l.name as location_name,l.branch_code,
+      v.status_code,coalesce(vs.name,v.status_code) as status_name,
+      coalesce(v.photographed,false) as photographed,v.photographed_at,
+      coalesce(a.financial_approved,false) as financial_approved,
+      coalesce(a.administrative_approved,false) as administrative_approved,
+      coalesce(req.active_requests,0)::int as active_transfer_requests,
+      coalesce(ms.content_usage,'[]'::jsonb) as content_usage
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
+    left join operations.vehicle_statuses vs on vs.code=v.status_code
+    left join lateral (
+      select va.financial_approved,va.administrative_approved
+      from operations.vehicle_approvals va
+      where va.vehicle_id=v.id and va.is_active=true
+      order by va.cycle_no desc limit 1
+    ) a on true
+    left join lateral (
+      select count(*)::int as active_requests
+      from operations.transfer_request_vehicles rv
+      join operations.transfer_requests r on r.id=rv.transfer_request_id
+      where rv.vehicle_id=v.id and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed'
+    ) req on true
     left join marketing.stock_vehicle_state ms on ms.vehicle_id=v.id
     where v.is_deleted=false and v.archived_at is null and coalesce(v.is_inventory_active,true)=true
     order by v.car_name,v.statement,v.exterior_color,v.interior_color,v.vin
@@ -573,8 +592,8 @@ async function archiveEntity(sql:ReturnType<typeof getSql>,body:any,user:Session
 async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("المسح متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id);if(sourceType==='agenda')await sql`delete from marketing.agendas where id=${id}::uuid`;else await sql`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم المسح"};}
 
 async function monitoring(sql:ReturnType<typeof getSql>){const[totals,statuses,delayed,employees,departments,entities]=await Promise.all([sql<any[]>`select (select count(*) from marketing.campaigns where is_deleted=false and archived_at is null)::int as campaigns,(select count(*) from marketing.campaigns where is_deleted=false and archived_at is null and status<>'archived')::int as active_campaigns,(select count(*) from marketing.agendas where archived_at is null)::int as agendas,(select count(*) from marketing.tasks where is_deleted=false)::int as tasks,(select count(*) from marketing.tasks where is_deleted=false and due_at<now() and progress<100)::int as delayed,(select count(*) from marketing.tasks where is_deleted=false and progress=0)::int as waiting,(select count(*) from marketing.tasks where is_deleted=false and progress>0 and progress<100)::int as active,(select coalesce(avg(progress),0)::float from marketing.tasks where is_deleted=false) as progress`,sql<any[]>`select status,count(*)::int as count from marketing.tasks where is_deleted=false group by status order by count(*) desc`,sql<any[]>`select t.id::text,t.title,t.due_at,t.progress::float,u.full_name,d.name as department_name,coalesce(cam.name,ag.name) as source_name,greatest(0,current_date-t.due_at::date)::int as delay_days from marketing.tasks t left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id where t.is_deleted=false and t.due_at<now() and t.progress<100 order by t.due_at`,sql<any[]>`select u.id::text,u.full_name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress,count(*) filter(where t.due_at<now() and t.progress<100)::int as delayed,coalesce(sum(greatest(0,current_date-t.due_at::date)) filter(where t.due_at<now() and t.progress<100),0)::int as delay_days from core.users u join marketing.tasks t on t.assigned_to=u.id and t.is_deleted=false group by u.id order by progress desc`,sql<any[]>`select d.id::text,d.name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress from marketing.departments d left join marketing.tasks t on t.department_id=d.id and t.is_deleted=false where d.is_active=true group by d.id order by d.name`,sql<any[]>`select 'campaign' as source_type,id::text,name,progress::float,status from marketing.campaigns where is_deleted=false and archived_at is null union all select 'agenda',id::text,name,progress::float,status from marketing.agendas where archived_at is null order by progress desc`]);return{ok:true,totals:totals[0]||{},statuses,delayed,employees,departments,entities};}
-async function calendarData(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select s.id::text,s.publish_date,s.status,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code,coalesce(cam.name,ag.name) as source_name,u.full_name as assigned_name,coalesce(uc.color,'#c65f3c') as user_color from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id left join lateral(select assigned_to from marketing.tasks t where t.creative_id=s.creative_id and t.task_kind='execution' order by t.created_at limit 1)t on true left join core.users u on u.id=t.assigned_to left join marketing.user_colors uc on uc.user_id=u.id order by s.publish_date`;return{ok:true,rows};}
-async function receiptCalendar(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select t.id::text,t.received_at,t.source_type,coalesce(cam.name,ag.name) as source_name,c.name as creative_name,u.full_name,d.name as department_name,coalesce(uc.color,'#c65f3c') as user_color from marketing.tasks t left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id left join marketing.creatives c on c.id=t.creative_id left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.user_colors uc on uc.user_id=u.id where t.received_at is not null and t.is_deleted=false order by t.received_at`;return{ok:true,rows};}
+async function calendarData(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select s.id::text,s.publish_date,s.status,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code,coalesce(cam.name,ag.name) as source_name,u.full_name as assigned_name,coalesce(uc.color,'#6c3329') as user_color from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id left join lateral(select assigned_to from marketing.tasks t where t.creative_id=s.creative_id and t.task_kind='execution' order by t.created_at limit 1)t on true left join core.users u on u.id=t.assigned_to left join marketing.user_colors uc on uc.user_id=u.id order by s.publish_date`;return{ok:true,rows};}
+async function receiptCalendar(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select t.id::text,t.received_at,t.source_type,coalesce(cam.name,ag.name) as source_name,c.name as creative_name,u.full_name,d.name as department_name,coalesce(uc.color,'#6c3329') as user_color from marketing.tasks t left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id left join marketing.creatives c on c.id=t.creative_id left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.user_colors uc on uc.user_id=u.id where t.received_at is not null and t.is_deleted=false order by t.received_at`;return{ok:true,rows};}
 
 async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,request:VercelRequest){
   const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
@@ -703,11 +722,67 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   throw new Error("إجراء الحضور غير صحيح");
 }
 
-async function stockData(sql:ReturnType<typeof getSql>){const cars=await loadOperationsCars(sql);const requests=await sql<any[]>`select r.id::text,r.request_no,r.status,r.requested_by_name,r.requested_at,r.note,coalesce(json_agg(json_build_object('vehicleId',v.id::text,'vin',v.vin,'carName',v.car_name,'statement',v.statement,'note',rv.item_note) order by v.vin) filter(where v.id is not null),'[]'::json) as vehicles from operations.transfer_requests r left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id where r.request_kind='photography' and r.is_deleted=false group by r.id order by r.requested_at desc`;return{ok:true,cars,requests};}
-async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const vehicles=arrayValue(body.vehicles).filter((item:any)=>clean(item.vehicleId));if(!vehicles.length)throw new Error("اختر سيارة واحدة على الأقل");return sql.begin(async tx=>{const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;const[first]=await tx<any[]>`select v.location_id::text,l.branch_code,l.code from operations.vehicles v left join operations.locations l on l.id=v.location_id where v.id=${clean(vehicles[0].vehicleId)}::uuid`;const[request]=await tx<any[]>`insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,note) values(${requestNo},'marketing','photography','photography',${first?.location_id?tx`${first.location_id}::uuid`:null},'request_received',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${first?.branch_code||first?.code||null},${clean(body.note)||null}) returning *,id::text`;for(const item of vehicles){const vehicleId=clean(item.vehicleId);const[v]=await tx<any[]>`select location_id,status_code from operations.vehicles where id=${vehicleId}::uuid`;await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${vehicleId}::uuid,${v?.location_id||null},${v?.status_code||null},${clean(item.note)||null})`;}await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'request_received','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',vehicles}))})`;return{ok:true,request,message:"تم إنشاء طلب التصوير"};});}
-async function markPhotographed(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const vehicleId=clean(body.vehicleId),photographed=bool(body.photographed);await sql`insert into marketing.stock_vehicle_state(vehicle_id,photographed,photographed_at,updated_by,updated_at) values(${vehicleId}::uuid,${photographed},${photographed?sql`now()`:null},${user.id}::uuid,now()) on conflict(vehicle_id) do update set photographed=excluded.photographed,photographed_at=excluded.photographed_at,updated_by=excluded.updated_by,updated_at=now()`;return{ok:true,message:"تم تحديث حالة التصوير"};}
+async function stockData(sql:ReturnType<typeof getSql>){
+  const [cars,requests,locations]=await Promise.all([
+    loadOperationsCars(sql),
+    sql<any[]>`
+      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.note,
+        sl.name as source_location_name,dl.name as destination_location_name,
+        coalesce(json_agg(json_build_object('vehicleId',v.id::text,'vin',v.vin,'carName',v.car_name,'statement',v.statement,'note',rv.item_note) order by v.vin) filter(where v.id is not null),'[]'::json) as vehicles
+      from operations.transfer_requests r
+      left join operations.locations sl on sl.id=r.source_location_id
+      left join operations.locations dl on dl.id=r.destination_location_id
+      left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
+      left join operations.vehicles v on v.id=rv.vehicle_id
+      where r.request_kind='photography' and r.is_deleted=false
+      group by r.id,sl.name,dl.name
+      order by r.requested_at desc
+    `,
+    sql<any[]>`select id::text,code,name,branch_code from operations.locations where is_active=true order by sort_order,name`,
+  ]);
+  return{ok:true,cars,requests,locations};
+}
 
-async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#c65f3c') as color from core.users u where u.is_active=true and (exists(select 1 from marketing.department_users du where du.user_id=u.id) or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.code='marketing')) order by u.full_name`;return{ok:true,rows};}
+async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const vehicles=arrayValue(body.vehicles).map((item:any)=>({vehicleId:clean(item.vehicleId),note:clean(item.note)})).filter((item:any)=>item.vehicleId);
+  const destinationLocationId=clean(body.destinationLocationId);
+  if(!vehicles.length)throw new Error("اختر سيارة واحدة على الأقل");
+  if(!destinationLocationId)throw new Error("اختر المكان المستهدف");
+  const uniqueIds=[...new Set(vehicles.map((item:any)=>item.vehicleId))];
+  if(uniqueIds.length!==vehicles.length)throw new Error("لا يمكن اختيار السيارة نفسها أكثر من مرة");
+  return sql.begin(async tx=>{
+    const[destination]=await tx<any[]>`select id::text,code,name,branch_code from operations.locations where id=${destinationLocationId}::uuid and is_active=true`;
+    if(!destination)throw new Error("المكان المستهدف غير صحيح");
+    const cars:any[]=[];
+    for(const item of vehicles){
+      const[v]=await tx<any[]>`
+        select v.*,v.id::text,l.code as location_code,l.branch_code
+        from operations.vehicles v left join operations.locations l on l.id=v.location_id
+        where v.id=${item.vehicleId}::uuid and v.is_deleted=false and v.archived_at is null
+        for update of v
+      `;
+      if(!v)throw new Error("إحدى السيارات غير موجودة");
+      if(String(v.location_id)===destinationLocationId)throw new Error(`السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
+      const[active]=await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${item.vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
+      if(active)throw new Error(`السيارة ${v.vin} مرتبطة بطلب نشط ${active.request_no}`);
+      cars.push({...v,itemNote:item.note});
+    }
+    const source=cars[0];
+    if(cars.some((vehicle)=>String(vehicle.location_id)!==String(source.location_id)))throw new Error("يجب أن تكون كل سيارات طلب التصوير في المكان المصدر نفسه");
+    const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;
+    const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;
+    const[request]=await tx<any[]>`
+      insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,note)
+      values(${requestNo},'marketing','photography','photography',${source.location_id},${destinationLocationId}::uuid,'created',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null})
+      returning *,id::text
+    `;
+    for(const car of cars)await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${car.id}::uuid,${car.location_id},${car.status_code},${car.itemNote||null})`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,vehicles}))})`;
+    return{ok:true,request,message:"تم إنشاء طلب التصوير"};
+  });
+}
+
+async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and (exists(select 1 from marketing.department_users du where du.user_id=u.id) or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.code='marketing')) order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
 async function platformConnections(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select * from marketing.platform_connections order by platform`;return{ok:true,connections:rows.map(publicConnection)};}
@@ -745,7 +820,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
     if(request.method!=='POST')return response.status(405).json({ok:false,error:"Method not allowed"});
     const body=bodyObject(request),action=clean(body.action); let result:any;
-    const sensitive=new Set(['create_campaign','create_agenda','create_raw_folders','create_photo_request','save_department','save_assignment_action','save_creative_type','save_campaign_type','save_platform','delete_setting','save_package','delete_entity','review_template','save_publish_prep','publish_now','save_result_file','save_links','archive_entity','save_user_colors','save_connection','disconnect_connection','migrate_connection_env','mark_photographed']);
+    const sensitive=new Set(['create_campaign','create_agenda','create_raw_folders','create_photo_request','save_department','save_assignment_action','save_creative_type','save_campaign_type','save_platform','delete_setting','save_package','delete_entity','review_template','save_publish_prep','publish_now','save_result_file','save_links','archive_entity','save_user_colors','save_connection','disconnect_connection','migrate_connection_env']);
     if(sensitive.has(action)&&!isAdmin(user))return response.status(403).json({ok:false,error:"هذه العملية متاحة لمدير النظام فقط"});
     if(action==='create_campaign')result=await createCampaign(sql,body,user);
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
@@ -771,7 +846,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
     else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
-    else if(action==='mark_photographed')result=await markPhotographed(sql,body,user);
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='save_connection')result=await saveConnection(sql,body,user);
     else if(action==='disconnect_connection')result=await disconnectConnection(sql,body,user);

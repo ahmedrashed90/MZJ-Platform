@@ -7,13 +7,11 @@ import {
   ChartLineUp,
   CirclesFour,
   Database,
-  Gear,
   LinkSimple,
   Megaphone,
   Package,
   PaperPlaneTilt,
   PlusCircle,
-  UsersThree,
   UserSwitch,
 } from "@phosphor-icons/react";
 import { marketingFetch } from "./api";
@@ -31,9 +29,7 @@ const links = [
   { to: "/marketing/calendar", label: "التقويم", icon: CalendarBlank },
   { to: "/marketing/receipt-calendar", label: "تقويم الاستلام", icon: CalendarCheck },
   { to: "/marketing/stock", label: "الاستوك", icon: Car },
-  { to: "/marketing/departments", label: "الأقسام", icon: UsersThree },
   { to: "/marketing/attendance", label: "الحضور والانصراف", icon: UserSwitch },
-  { to: "/settings?section=marketing", label: "الإعدادات", icon: Gear },
 ];
 
 export function MarketingLayout() {

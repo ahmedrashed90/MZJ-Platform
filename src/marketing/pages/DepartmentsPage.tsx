@@ -6,7 +6,7 @@ import type { MarketingMeta } from "../types";
 
 type PlatformPostDraft = { name: string; width: string; height: string };
 
-export function DepartmentsPage() {
+export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [meta, setMeta] = useState<MarketingMeta | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -48,7 +48,7 @@ export function DepartmentsPage() {
     await save("delete_setting", { entity, id }, () => undefined);
   }
 
-  return <MarketingPage title="الأقسام" description="إدارة الأقسام واليوزرات وإجراءات التكليف والكرييتيفات وأنواع الحملات والمنصات.">
+  const content = <>
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}{message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
     <div className="marketing-settings-grid">
       <section className="marketing-card">
@@ -113,5 +113,8 @@ export function DepartmentsPage() {
         {(meta?.platforms || []).map((item) => <article key={item.id}><div><strong>{item.name}</strong><small>{(postTypesByPlatform.get(item.id) || []).map((post) => `${post.name} ${post.width && post.height ? `(${post.width}×${post.height})` : ""}`).join("، ") || "لا يوجد أنواع نشر"}</small></div><div className="marketing-inline-actions"><button onClick={() => setPlatform({ id: item.id, name: item.name, code: item.code, postTypes: postTypesByPlatform.get(item.id) || [{ name: "", width: "", height: "" }] })}><PencilSimple /></button><button className="danger" onClick={() => void remove("platform", item.id)}><Trash /></button></div></article>)}
       </section>
     </div>
-  </MarketingPage>;
+  </>;
+
+  if (embedded) return content;
+  return <MarketingPage title="الأقسام" description="إدارة الأقسام واليوزرات وإجراءات التكليف والكرييتيفات وأنواع الحملات والمنصات.">{content}</MarketingPage>;
 }

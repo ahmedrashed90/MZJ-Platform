@@ -5,7 +5,7 @@ const required = [
   ["src/App.tsx", 'path="/operations"'],
   ["src/App.tsx", '<Route index element={<InventoryPage />} />'],
   ["src/operations/OperationsLayout.tsx", "مخزون السيارات"],
-  ["src/operations/OperationsLayout.tsx", "طلبات النقل"],
+  ["src/operations/OperationsLayout.tsx", "الطلبات"],
   ["server/_operations-schema.ts", "operations.vehicle_statuses"],
   ["server/_operations-schema.ts", "operations.vehicle_deletion_audit"],
   ["server/_operations-schema.ts", "tracking_orders_source_identity_unique"],

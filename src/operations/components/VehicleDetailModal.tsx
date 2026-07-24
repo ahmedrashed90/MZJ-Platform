@@ -6,7 +6,7 @@ import type { OperationsMeta, VehicleDetail } from "../types";
 
 const tabs = [
   ["details", "البيانات"], ["sales", "طلب البيع"], ["checks", "التشيك"], ["approvals", "الموافقات"], ["movements", "الحركات"],
-  ["transfers", "طلبات النقل"], ["tracking", "التراكينج"], ["audit", "السجل"],
+  ["transfers", "الطلبات"], ["tracking", "التراكينج"], ["audit", "السجل"],
 ] as const;
 
 type TabKey = typeof tabs[number][0];
@@ -131,7 +131,7 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
         )}
       </Modal>
       <Modal open={Boolean(confirmAction)} title={confirmAction === "delete" ? "تأكيد مسح السيارة" : "تأكيد أرشفة السيارة"} subtitle={vehicle ? `${vehicle.vin} — ${vehicle.car_name || "سيارة"}` : undefined} onClose={() => { if (!actionLoading) { setConfirmAction(null); setReason(""); setConfirmVin(""); } }} className="operations-confirm-modal" level={1} initialFocusRef={reasonRef} footer={<><button type="button" className="secondary" onClick={() => { setConfirmAction(null); setReason(""); setConfirmVin(""); }} disabled={actionLoading}>إلغاء</button><button type="button" className={confirmAction === "delete" ? "danger" : "primary"} onClick={() => void runAction()} disabled={actionLoading || !reason.trim() || (confirmAction === "delete" && confirmVin.trim() !== (vehicle?.vin || ""))}>{actionLoading ? "جاري التنفيذ..." : "تأكيد نهائي"}</button></>}>
-        <div className={`operations-confirm-warning ${confirmAction === "delete" ? "danger" : ""}`}><WarningCircle size={24} /><p>{confirmAction === "delete" ? "سيتم مسح السيارة نهائيًا مع التشييك والموافقات والحركات وطلبات النقل وروابط التراكينج والبيانات المرتبطة. لا يمكن التراجع عن العملية." : "ستخرج السيارة من المخزون النشط مع الحفاظ على كل تاريخها."}</p></div>
+        <div className={`operations-confirm-warning ${confirmAction === "delete" ? "danger" : ""}`}><WarningCircle size={24} /><p>{confirmAction === "delete" ? "سيتم مسح السيارة نهائيًا مع التشييك والموافقات والحركات والطلبات وروابط التراكينج والبيانات المرتبطة. لا يمكن التراجع عن العملية." : "ستخرج السيارة من المخزون النشط مع الحفاظ على كل تاريخها."}</p></div>
         <label className="operations-field"><span>سبب الإجراء</span><textarea ref={reasonRef} value={reason} onChange={(event) => setReason(event.target.value)} rows={4} /></label>
         {confirmAction === "delete" ? <label className="operations-field"><span>اكتب رقم الهيكل للتأكيد: <b dir="ltr">{vehicle?.vin}</b></span><input dir="ltr" value={confirmVin} onChange={(event) => setConfirmVin(event.target.value)} placeholder="رقم الهيكل كاملًا" /></label> : null}
       </Modal>

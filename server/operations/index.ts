@@ -317,10 +317,27 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
 }
 
+const requestStageOrder = ["created", "request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
+
+function nextRequestStage(status: string) {
+  const currentIndex = requestStageOrder.indexOf(status as typeof requestStageOrder[number]);
+  return currentIndex >= 0 ? requestStageOrder[currentIndex + 1] || "" : "";
+}
+
+function canAdvanceRequest(row: any, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, nextStatus = nextRequestStage(row.status)) {
+  if (!nextStatus || row.cancelled_at) return false;
+  if (nextStatus === "completed") return row.requested_by === user.id;
+  if (isSystemAdmin(user)) return true;
+  if (nextStatus === "request_received") return hasPermission(user, "operations.transfer.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
+  if (nextStatus === "vehicle_sent") return hasPermission(user, "operations.transfer.send_vehicle") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
+  if (nextStatus === "vehicle_received") return hasPermission(user, "operations.transfer.receive_vehicle") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code);
+  return false;
+}
+
 async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const { page, pageSize, offset } = pageValues(request);
   const status = clean(request.query.status);
-  const kind = clean(request.query.kind) || "transfer";
+  const kind = clean(request.query.kind) || "all";
   const search = clean(request.query.search);
   const completedRaw = clean(request.query.completed);
   const hasCompletedFilter = completedRaw !== "";
@@ -329,7 +346,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
   const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
   const where = sql`
-    r.is_deleted=false and r.request_kind=${kind}
+    r.is_deleted=false and (${kind}='all' or r.request_kind=${kind})
     and (${status}='' or r.status=${status})
     and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
     and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
@@ -372,7 +389,17 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
     where ${where}
     order by r.requested_at desc limit ${pageSize} offset ${offset}
   `;
-  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
+  const visibleRows = rows.map((row) => {
+    const nextStatus = nextRequestStage(row.status);
+    return {
+      ...row,
+      next_status: nextStatus || null,
+      can_advance: canAdvanceRequest(row, user, nextStatus),
+      can_delete: !row.cancelled_at && row.status === "created" && (isSystemAdmin(user) || row.requested_by === user.id || hasPermission(user, "operations.transfer.delete")),
+      can_cancel: !row.cancelled_at && row.status !== "completed" && (isSystemAdmin(user) || row.requested_by === user.id || hasPermission(user, "operations.transfer.cancel")),
+    };
+  });
+  return { ok: true, rows: visibleRows, total: Number(count?.total || 0), page, pageSize };
 }
 
 async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -883,12 +910,12 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
     const requestNo = `TR-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n || 1).padStart(6,'0')}`;
     const [request] = await tx<any[]>`
       insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,note)
-      values (${requestNo},'operations','transfer','transfer',${source.location_id},${destinationLocationId}::uuid,'request_received',${who.id}::uuid,${who.name},${who.role},${who.branch},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null}) returning *,id::text
+      values (${requestNo},'operations','transfer','transfer',${source.location_id},${destinationLocationId}::uuid,'created',${who.id}::uuid,${who.name},${who.role},${who.branch},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null}) returning *,id::text
     `;
     for (const v of cars) await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status) values (${request.id}::uuid,${v.id}::uuid,${v.location_id},${v.status_code})`;
     try {
       await tx.savepoint(async (eventTx) => {
-        await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values (${request.id}::uuid,'request_received','created',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json({ requestNo, vehicleIds })})`;
+        await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values (${request.id}::uuid,'created','created',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json({ requestNo, vehicleIds })})`;
       });
     } catch (eventError) {
       console.error('Operations transfer create event failed', { requestId: request.id, eventError });
@@ -904,8 +931,6 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
   });
 }
 
-const transferOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"];
-
 async function transferAction(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const id = clean(body.id);
   const action = clean(body.transferAction);
@@ -913,10 +938,19 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
   const who = actor(user);
   if (!id || !action) throw new OperationError(400, "VALIDATION_ERROR", "الطلب والإجراء مطلوبان");
   return sql.begin(async (tx) => {
-    const [r] = await tx<any[]>`select *,id::text from operations.transfer_requests where id=${id}::uuid and is_deleted=false for update`;
-    if (!r) throw new OperationError(404, "CONFLICT", "طلب النقل غير موجود");
-    if (r.cancelled_at) throw new OperationError(409, "CONFLICT", "طلب النقل ملغي");
+    const [r] = await tx<any[]>`
+      select r.*,r.id::text,sl.code as source_location_code,dl.code as destination_location_code
+      from operations.transfer_requests r
+      left join operations.locations sl on sl.id=r.source_location_id
+      left join operations.locations dl on dl.id=r.destination_location_id
+      where r.id=${id}::uuid and r.is_deleted=false
+      for update of r
+    `;
+    if (!r) throw new OperationError(404, "CONFLICT", "الطلب غير موجود");
+    const requestLabel = r.request_kind === "photography" ? "طلب التصوير" : "طلب النقل";
+    if (r.cancelled_at) throw new OperationError(409, "CONFLICT", `${requestLabel} ملغي`);
     const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
+
     async function archiveEligibleItems() {
       if (r.request_kind !== "transfer") return [];
       const archivedVehicleIds: string[] = [];
@@ -926,70 +960,85 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       }
       return archivedVehicleIds;
     }
+
     if (action === "delete") {
       if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "الحذف متاح لمنشئ الطلب أو صاحب الصلاحية فقط");
       const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
-      if (r.status !== "request_received" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
+      if (r.status !== "created" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
       await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${who.id}::uuid,updated_at=now() where id=${id}::uuid`;
       try {
         await tx.savepoint(async (eventTx) => {
           await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'deleted',${reason||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json({ request:r,items })})`;
         });
       } catch (eventError) {
-        console.error('Operations transfer delete event failed', { requestId: id, eventError });
+        console.error("Operations request delete event failed", { requestId: id, eventError });
       }
       const autoArchivedVehicleIds = await archiveEligibleItems();
-      return { ok: true, autoArchivedVehicleIds, message: "تم حذف طلب النقل قبل بدء التنفيذ" };
+      return { ok: true, autoArchivedVehicleIds, message: `تم حذف ${requestLabel} قبل بدء التنفيذ` };
     }
+
     if (action === "cancel") {
       if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
-      if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء طلب النقل");
+      if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء الطلب");
       await tx`update operations.transfer_requests set cancelled_at=now(),cancelled_by=${who.id}::uuid,cancellation_reason=${reason},updated_at=now(),version=version+1 where id=${id}::uuid`;
       try {
         await tx.savepoint(async (eventTx) => {
           await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data) values (${id}::uuid,${r.status},'cancelled',${reason},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json(r)})`;
         });
       } catch (eventError) {
-        console.error('Operations transfer cancel event failed', { requestId: id, eventError });
+        console.error("Operations request cancel event failed", { requestId: id, eventError });
       }
       const autoArchivedVehicleIds = await archiveEligibleItems();
-      return { ok: true, autoArchivedVehicleIds, message: "تم إلغاء طلب النقل مع الحفاظ على السجل" };
+      return { ok: true, autoArchivedVehicleIds, message: `تم إلغاء ${requestLabel} مع الحفاظ على السجل` };
     }
-    const currentIndex = transferOrder.indexOf(r.status);
-    const next = clean(body.nextStatus) || transferOrder[currentIndex + 1];
-    if (!next || transferOrder.indexOf(next) !== currentIndex + 1) throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل طلب النقل بالترتيب");
-    const stagePermission: Record<string, string> = { vehicle_sent: "operations.transfer.send_vehicle", vehicle_received: "operations.transfer.receive_vehicle", completed: "operations.transfer.complete" };
-    if (stagePermission[next] && !hasPermission(user, stagePermission[next])) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية تنفيذ هذه المرحلة");
-    if (r.request_kind === "transfer" && next === "vehicle_sent" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.source_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة إرسال السيارة خاصة بالفرع المصدر");
-    if (r.request_kind === "transfer" && next === "vehicle_received" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.destination_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة استلام السيارة خاصة بالفرع المستهدف");
-    if (r.request_kind === "transfer" && next === "vehicle_received") {
+
+    const next = clean(body.nextStatus) || nextRequestStage(r.status);
+    const currentIndex = requestStageOrder.indexOf(r.status as typeof requestStageOrder[number]);
+    if (!next || currentIndex < 0 || requestStageOrder.indexOf(next as typeof requestStageOrder[number]) !== currentIndex + 1) {
+      throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل الطلب بالترتيب");
+    }
+    if (!canAdvanceRequest(r, user, next)) {
+      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء متاحة لمنشئ الطلب فقط");
+      if (next === "vehicle_received") throw new OperationError(403, "FORBIDDEN", "مرحلة تم استلام السيارة خاصة بمسؤول المكان المستهدف");
+      throw new OperationError(403, "FORBIDDEN", "هذه المرحلة خاصة بمسؤول مكان السيارة الحالي");
+    }
+
+    if (next === "vehicle_received") {
+      if (!r.destination_location_id) throw new OperationError(409, "INVALID_DESTINATION_LOCATION", "المكان المستهدف غير محدد في الطلب");
       for (const v of items) {
         const [locked] = await tx<any[]>`select *,id::text from operations.vehicles where id=${v.id}::uuid for update`;
         const [movement] = await tx<any[]>`
           insert into operations.movements(vehicle_id,from_location_id,to_location_id,old_status,new_status,note,performed_by,performed_by_name,performed_by_role,performed_by_branch,transfer_request_id,movement_type,before_data)
-          values (${v.id}::uuid,${locked.location_id},${r.destination_location_id},${locked.status_code},${locked.status_code},${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${id}::uuid,'transfer',${tx.json(locked)}) returning id::text
+          values (${v.id}::uuid,${locked.location_id},${r.destination_location_id},${locked.status_code},${locked.status_code},${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${id}::uuid,${r.request_kind === "photography" ? "photography" : "transfer"},${tx.json(locked)}) returning id::text
         `;
         const [updated] = await tx<any[]>`update operations.vehicles set location_id=${r.destination_location_id},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1 where id=${v.id}::uuid returning *,id::text`;
         await tx`update operations.movements set after_data=${tx.json(updated)} where id=${movement.id}::uuid`;
       }
     }
+
+    if (next === "completed" && r.request_kind === "photography" && items.length) {
+      const vehicleIds = items.map((item) => item.id);
+      await tx`update operations.vehicles set photographed=true,photographed_at=now(),photographed_by=${who.id}::uuid,updated_at=now(),version=version+1 where id in ${tx(vehicleIds)}`;
+    }
+
     await tx`update operations.transfer_requests set status=${next},completed_at=case when ${next}='completed' then now() else completed_at end,updated_at=now(),version=version+1 where id=${id}::uuid`;
     try {
       await tx.savepoint(async (eventTx) => {
         await eventTx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data,after_data) values (${id}::uuid,${next},'stage_completed',${clean(body.note)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${eventTx.json(r)},${eventTx.json({ status: next })})`;
       });
     } catch (eventError) {
-      console.error('Operations transfer stage event failed', { requestId: id, next, eventError });
+      console.error("Operations request stage event failed", { requestId: id, next, eventError });
     }
     try {
       await tx.savepoint(async (eventTx) => {
-        await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.transfer_request.${next}`},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},'تحديث طلب نقل',${r.request_no},${eventTx.json({ status: next })})`;
+        await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.request.${next}`},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},${`تحديث ${requestLabel}`},${r.request_no},${eventTx.json({ requestKind: r.request_kind, status: next })})`;
       });
     } catch (outboxError) {
-      console.error('Operations transfer stage outbox failed', { requestId: id, next, outboxError });
+      console.error("Operations request stage outbox failed", { requestId: id, next, outboxError });
     }
     const autoArchivedVehicleIds = next === "completed" ? await archiveEligibleItems() : [];
-    return { ok: true, autoArchivedVehicleIds, message: next === "completed" ? "تم إنهاء طلب النقل" : "تم تحديث مرحلة طلب النقل" };
+    const message = next === "completed" ? `تم إنهاء ${requestLabel}` : `تم تحديث مرحلة ${requestLabel}`;
+    return { ok: true, autoArchivedVehicleIds, message };
   });
 }
 

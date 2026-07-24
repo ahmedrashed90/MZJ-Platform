@@ -36,7 +36,6 @@ const MonitoringPage = lazy(() => import("./marketing/pages/MonitoringPage").the
 const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
-const DepartmentsPage = lazy(() => import("./marketing/pages/DepartmentsPage").then((module) => ({ default: module.DepartmentsPage })));
 const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
 
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
@@ -44,7 +43,6 @@ const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then
 const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManagementPage").then((module) => ({ default: module.VehicleManagementPage })));
 const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((module) => ({ default: module.MovementPage })));
 const TransferRequestsPage = lazy(() => import("./operations/pages/TransferRequestsPage").then((module) => ({ default: module.TransferRequestsPage })));
-const PhotographyRequestsPage = lazy(() => import("./operations/pages/PhotographyRequestsPage").then((module) => ({ default: module.PhotographyRequestsPage })));
 const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
 const MovementHistoryPage = lazy(() => import("./operations/pages/MovementHistoryPage").then((module) => ({ default: module.MovementHistoryPage })));
 
@@ -81,7 +79,7 @@ function PlatformRoutes() {
             <Route path="calendar" element={<MarketingCalendarPage />} />
             <Route path="receipt-calendar" element={<ReceiptCalendarPage />} />
             <Route path="stock" element={<StockPage />} />
-            <Route path="departments" element={<DepartmentsPage />} />
+            <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
             <Route path="attendance" element={<AttendancePage />} />
           </Route>
           <Route path="/operations" element={<OperationsLayout />}>
@@ -89,7 +87,7 @@ function PlatformRoutes() {
             <Route path="manage" element={<VehicleManagementPage />} />
             <Route path="movement" element={<MovementPage />} />
             <Route path="transfers" element={<TransferRequestsPage />} />
-            <Route path="photography" element={<PhotographyRequestsPage />} />
+            <Route path="photography" element={<Navigate to="/operations/transfers" replace />} />
             <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="all" element={<InventoryPage all />} />
             <Route path="movements" element={<MovementHistoryPage />} />

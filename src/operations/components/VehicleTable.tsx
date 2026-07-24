@@ -45,7 +45,7 @@ const columns: Column[] = [
   } },
   { key: "approvals", label: "الموافقات", width: 170, min: 135, max: 260, value: (row) => `${row.financial_approved ? "مالي تم" : "مالي لم يتم"} ${row.administrative_approved ? "إداري تم" : "إداري لم يتم"}`, render: (row) => <span className={row.financial_approved && row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "مالي ✓" : "مالي —"} / {row.administrative_approved ? "إداري ✓" : "إداري —"}</span> },
   { key: "checks", label: "التشيك", width: 95, min: 80, max: 150, value: () => "عرض", render: (row, onOpen) => <button type="button" className="operations-inline-link" onClick={() => onOpen(row.id)}>عرض</button> },
-  { key: "transfers", label: "طلبات النقل", width: 115, min: 95, max: 190, value: (row) => row.active_transfer_requests, render: (row) => Number(row.active_transfer_requests || 0) > 0 ? <span className="operations-warn-badge">{row.active_transfer_requests}</span> : <span className="operations-muted-badge">لا يوجد</span> },
+  { key: "transfers", label: "الطلبات", width: 115, min: 95, max: 190, value: (row) => row.active_transfer_requests, render: (row) => Number(row.active_transfer_requests || 0) > 0 ? <span className="operations-warn-badge">{row.active_transfer_requests}</span> : <span className="operations-muted-badge">لا يوجد</span> },
   { key: "archive", label: "الأرشيف", width: 100, min: 85, max: 160, value: (row) => row.archived_at ? "مؤرشف" : "نشط", render: (row) => row.archived_at ? <span className="operations-ok-badge">مؤرشف</span> : <span className="operations-muted-badge">نشط</span> },
 ];
 
