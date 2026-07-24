@@ -1,3 +1,0 @@
-TypeScript NodeNext server project check completed successfully with zero diagnostics.
-Checked: api/**/*.ts, server/**/*.ts, shared/**/*.ts, src/types.ts, vite.config.ts.
-The temporary external dependency type harness used by the verification environment is not included in the delivered source.

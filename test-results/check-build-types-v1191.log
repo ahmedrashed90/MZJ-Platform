@@ -1,8 +1,0 @@
-PASS: Effective access keeps query result sets separate
-PASS: Effective access reads the first permission row
-PASS: Effective access reads the first version row
-PASS: User profile reads the first database row
-PASS: NodeNext shared import has an explicit extension
-PASS: Legacy row-list property access is absent
-
-Build type regression checks: 6/6 passed.

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, requestIp, safeSecretEquals } from "../_auth.js";
 import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
 import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
-import { ACCESS_CONTROL_SQL } from "../_access-control-schema.js";
+import { ensureAccessControlSchema } from "../_access-control-schema.js";
 import { loadUserProfile } from "../_auth.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
@@ -37,7 +37,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   try {
     await runSqlScript(SCHEMA_SQL);
     await runSqlScript(SEED_SQL);
-    await runSqlScript(ACCESS_CONTROL_SQL);
+    await ensureAccessControlSchema();
     await ensureTrackingSchema();
     await ensureOperationsSchema();
     await ensureMarketingSchema();

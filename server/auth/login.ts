@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, loadUserProfile, requestIp } from "../_auth.js";
 import { logSecurityEvent } from "../_access-control.js";
 import { getSql } from "../_db.js";
+import { ensureAccessControlSchema } from "../_access-control-schema.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -17,6 +18,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!identifier || !password) return response.status(400).json({ ok: false, error: "أدخل بيانات تسجيل الدخول" });
 
   try {
+    await ensureAccessControlSchema();
     const sql = getSql();
     const [user] = await sql<{
       id: string;
@@ -72,9 +74,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const profile = await loadUserProfile(user.id);
     await logSecurityEvent({ request, user: profile, systemCode: "core", pageCode: "login", action: "login", result: "success", ipAddress: requestIp(request) });
     return response.status(200).json({ ok: true, user: profile });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Login failed", error);
     await logSecurityEvent({ request, userEmail: identifier, systemCode: "core", pageCode: "login", action: "login_failed", result: "failure", reason: "LOGIN_ERROR", ipAddress: requestIp(request) });
-    return response.status(500).json({ ok: false, error: "تعذر تسجيل الدخول" });
+    const schemaError = error?.message === "ACCESS_CONTROL_SCHEMA_NOT_READY" || error?.code === "42501" || error?.code === "42P01" || error?.code === "42703";
+    return response.status(500).json({
+      ok: false,
+      error: schemaError ? "تعذر تجهيز قاعدة بيانات الصلاحيات. تحقق من صلاحيات مستخدم PostgreSQL ثم أعد المحاولة" : "تعذر تسجيل الدخول",
+    });
   }
 }

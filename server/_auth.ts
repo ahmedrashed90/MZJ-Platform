@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getSql } from "./_db.js";
+import { ensureAccessControlSchema } from "./_access-control-schema.js";
 import { getEffectiveAccess, hasPermission, type EffectiveAccessSnapshot } from "./_access-control.js";
 
 export const SESSION_COOKIE = "mzj_session";
@@ -47,6 +48,7 @@ export function requestIp(request: VercelRequest) {
 }
 
 export async function loadUserProfile(userId: string): Promise<SessionUser | null> {
+  await ensureAccessControlSchema();
   const sql = getSql();
   const [rows, access] = await Promise.all([
     sql<{
@@ -94,6 +96,7 @@ export async function loadUserProfile(userId: string): Promise<SessionUser | nul
 }
 
 export async function createSession(request: VercelRequest, response: VercelResponse, userId: string) {
+  await ensureAccessControlSchema();
   const sql = getSql();
   const token = randomBytes(32).toString("hex");
   const hash = tokenHash(token);
@@ -122,6 +125,7 @@ export async function clearSession(request: VercelRequest, response: VercelRespo
 }
 
 export async function getSessionUser(request: VercelRequest): Promise<SessionUser | null> {
+  await ensureAccessControlSchema();
   const requestWithCache = request as VercelRequest & { [REQUEST_USER_KEY]?: SessionUser | null };
   if (REQUEST_USER_KEY in requestWithCache) return requestWithCache[REQUEST_USER_KEY] || null;
   const token = parseCookies(request.headers.cookie)[SESSION_COOKIE];

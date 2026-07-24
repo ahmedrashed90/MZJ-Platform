@@ -129,3 +129,13 @@
 - `scripts/check-build-types-v1191.mjs`: اختبار رجوع للمشكلة.
 - `docs/V1191-BUILD-TYPE-FIX-AR.md`: شرح سبب المشكلة والإصلاح.
 - لا توجد Migration جديدة ولا تغيير في أي فلو تشغيلي.
+
+
+## v1.19.2 — إصلاح تسجيل الدخول بعد الترقية
+
+- `server/_access-control-schema.ts`: إضافة فحص إصدار المخطط وخدمة Bootstrap مركزية تحت advisory lock.
+- `server/_auth.ts`: ضمان جاهزية المخطط قبل الجلسات وملف المستخدم.
+- `server/auth/login.ts`: تجهيز المخطط قبل المصادقة ورسالة خطأ دقيقة عند تعذر DDL.
+- `server/setup/initialize.ts`: استخدام نفس خدمة Bootstrap بدل مسار تهيئة مكرر.
+- `database/migrations/20260724_central_access_control_v1192_login_bootstrap.sql`: حالة إصدار المخطط.
+- `scripts/check-login-schema-bootstrap-v1192.mjs`: اختبار رجوع جديد.

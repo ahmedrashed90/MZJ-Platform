@@ -1,3 +1,5 @@
+import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
+
 export const ACCESS_CONTROL_SQL = String.raw`-- MZJ centralized access control. Safe and idempotent.
 
 create table if not exists core.systems (
@@ -514,4 +516,64 @@ select r.id,p.id from core.roles r join core.permissions p on p.code in ('crm.da
 where r.code in ('admin','system_admin')
 on conflict do nothing;
 
+
+create table if not exists core.access_control_schema_state (
+  id smallint primary key default 1 check(id=1),
+  version integer not null,
+  updated_at timestamptz not null default now()
+);
+insert into core.access_control_schema_state(id,version,updated_at)
+values(1,1192,now())
+on conflict(id) do update set version=greatest(core.access_control_schema_state.version,excluded.version),updated_at=now();
+
 `;
+
+
+const ACCESS_CONTROL_SCHEMA_VERSION = 1192;
+let accessControlSchemaPromise: Promise<void> | null = null;
+
+async function accessControlSchemaReady() {
+  const sql = getSql();
+  const [shape] = await sql<{ ready: boolean }[]>`
+    select
+      exists(select 1 from information_schema.tables where table_schema='core' and table_name='access_control_schema_state')
+      and exists(select 1 from information_schema.tables where table_schema='core' and table_name='user_systems')
+      and exists(select 1 from information_schema.tables where table_schema='core' and table_name='user_permission_overrides')
+      and exists(select 1 from information_schema.columns where table_schema='core' and table_name='users' and column_name='permission_version')
+      and exists(select 1 from information_schema.columns where table_schema='core' and table_name='sessions' and column_name='permission_version')
+      and exists(select 1 from information_schema.columns where table_schema='audit' and table_name='activity_log' and column_name='permission_code')
+      as ready
+  `;
+  if (!shape?.ready) return false;
+  const [state] = await sql<{ version: number }[]>`
+    select version::int from core.access_control_schema_state where id=1
+  `;
+  return Number(state?.version || 0) >= ACCESS_CONTROL_SCHEMA_VERSION;
+}
+
+/**
+ * Ensures the centralized access-control schema exists before authentication uses it.
+ * The readiness check is cheap; the full idempotent migration runs only when required.
+ * An advisory lock prevents concurrent serverless instances from applying DDL together.
+ */
+export function ensureAccessControlSchema() {
+  if (!accessControlSchemaPromise) {
+    accessControlSchemaPromise = (async () => {
+      if (await accessControlSchemaReady()) return;
+      await withDatabaseAdvisoryLock(
+        `mzj:access-control-schema:${ACCESS_CONTROL_SCHEMA_VERSION}`,
+        async () => {
+          if (await accessControlSchemaReady()) return;
+          await runSqlScript(ACCESS_CONTROL_SQL);
+          if (!(await accessControlSchemaReady())) {
+            throw new Error("ACCESS_CONTROL_SCHEMA_NOT_READY");
+          }
+        },
+      );
+    })().catch((error) => {
+      accessControlSchemaPromise = null;
+      throw error;
+    });
+  }
+  return accessControlSchemaPromise;
+}
