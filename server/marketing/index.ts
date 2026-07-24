@@ -1,918 +1,783 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { randomBytes } from "node:crypto";
+import crypto from "node:crypto";
 import { getSql } from "../_db.js";
-import { requireUser, type SessionUser } from "../_auth.js";
-import { buildSystemMediaStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
-
-type JsonPrimitive = string | number | boolean | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-type JsonObject = { [key: string]: JsonValue };
-type UnknownRecord = Record<string, unknown>;
-type SqlRow = Record<string, unknown>;
-
-class MarketingError extends Error {
-  constructor(public status: number, public code: string, message: string, public details?: JsonValue) {
-    super(message);
-  }
-}
+import { requireAdmin, requireUser, requestIp, type SessionUser } from "../_auth.js";
+import { ensureMarketingSchema } from "../_marketing-schema.js";
+import { ensureOperationsSchema } from "../_operations-schema.js";
+import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
-function asRecord(value: unknown): UnknownRecord { return value && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {}; }
-function asArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
-function asBoolean(value: unknown) { return value === true || value === "true" || value === 1 || value === "1"; }
-function asNumber(value: unknown, fallback = 0) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; }
-function nullableText(value: unknown) { const result = clean(value); return result || null; }
-function parseBody(request: VercelRequest): UnknownRecord {
-  if (request.body && typeof request.body === "object" && !Buffer.isBuffer(request.body)) return asRecord(request.body);
-  if (typeof request.body === "string") { try { return asRecord(JSON.parse(request.body)); } catch { return {}; } }
+function bodyObject(request: VercelRequest) {
+  if (request.body && typeof request.body === "object") return request.body as Record<string, any>;
+  if (typeof request.body === "string") { try { return JSON.parse(request.body || "{}"); } catch { return {}; } }
   return {};
 }
-function toJsonValue(value: unknown): JsonValue {
-  if (value === null) return null;
-  if (typeof value === "string") return value;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(toJsonValue);
-  if (typeof value === "object") {
-    const result: JsonObject = {};
-    for (const [key, item] of Object.entries(value as UnknownRecord)) result[key] = toJsonValue(item);
-    return result;
-  }
-  return clean(value);
+function bool(value: unknown) { return value === true || value === "true" || value === 1 || value === "1"; }
+function numberValue(value: unknown, fallback = 0) { const number = Number(value); return Number.isFinite(number) ? number : fallback; }
+function arrayValue<T = any>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+const TEMPLATE_FIELDS = ["proposedName", "goal", "mainMessage", "hook", "mainScript", "cta", "caption", "hashtags"] as const;
+function cleanTemplateData(value: unknown) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const output: Record<string, string> = {};
+  for (const key of TEMPLATE_FIELDS) if (Object.prototype.hasOwnProperty.call(input, key)) output[key] = clean(input[key]);
+  return output;
 }
 function isAdmin(user: SessionUser) { return user.roleCodes.some((code) => ["admin", "system_admin"].includes(code)); }
-function hasPermission(user: SessionUser, permission: string) { return isAdmin(user) || user.permissions.includes(permission); }
-function canViewMarketing(user: SessionUser) {
-  return isAdmin(user)
-    || user.departmentCodes.includes("marketing")
-    || user.permissions.some((permission) => permission.startsWith("marketing."));
+function canUseMarketing(user: SessionUser) {
+  return isAdmin(user) || user.permissions.includes("marketing.view") || user.departmentCodes.includes("marketing") || user.roleCodes.includes("marketing_user");
 }
-function requirePermission(user: SessionUser, permission: string) {
-  if (!hasPermission(user, permission)) throw new MarketingError(403, "FORBIDDEN", "لا تملك صلاحية تنفيذ هذا الإجراء");
+function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
+function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
+function sourceTable(sourceType: string) { return sourceType === "agenda" ? "marketing.agendas" : "marketing.campaigns"; }
+function tokenKey() {
+  return crypto.createHash("sha256").update(clean(process.env.MZJ_TOKEN_ENCRYPTION_KEY || process.env.SESSION_SECRET || process.env.MZJ_SETUP_KEY || "mzj-platform-local-development-key")).digest();
 }
-function ensureUuid(value: unknown, label: string) {
-  const text = clean(value);
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) throw new MarketingError(400, "VALIDATION_ERROR", `${label} غير صحيح`);
-  return text;
+function encryptToken(value: unknown) {
+  const text = clean(value); if (!text) return null;
+  const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv("aes-256-gcm", tokenKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(text, "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64url");
 }
-function dateOnly(value: unknown, label: string, required = false) {
-  const text = clean(value);
-  if (!text && !required) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new MarketingError(400, "VALIDATION_ERROR", `${label} غير صحيح`);
-  return text;
+function decryptToken(value: unknown) {
+  const text = clean(value); if (!text) return "";
+  const data = Buffer.from(text, "base64url"); const iv = data.subarray(0, 12); const tag = data.subarray(12, 28);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", tokenKey(), iv); decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data.subarray(28)), decipher.final()]).toString("utf8");
 }
-function pageValues(request: VercelRequest) {
-  const page = Math.max(1, Math.floor(asNumber(request.query.page, 1)));
-  const pageSize = Math.max(1, Math.min(500, Math.floor(asNumber(request.query.pageSize, 50))));
-  return { page, pageSize, offset: (page - 1) * pageSize };
-}
-function userCanSeeTask(user: SessionUser, row: SqlRow) {
-  return isAdmin(user) || hasPermission(user, "marketing.templates.review") || clean(row.assigned_to) === user.id;
-}
-function randomAgendaSuffix() { return randomBytes(5).toString("base64url").replace(/[^A-Z0-9]/gi, "").slice(0, 6).toUpperCase().padEnd(6, "X"); }
-
-async function assertSchema() {
-  const sql = getSql();
-  const [row] = await sql<{ ready: boolean }[]>`select to_regclass('marketing.departments') is not null and to_regclass('marketing.creative_instances') is not null and to_regclass('marketing.template_submissions') is not null as ready`;
-  if (!row?.ready) throw new MarketingError(503, "MARKETING_SCHEMA_REQUIRED", "شغّل ملف database/marketing_native_rebuild.sql أولًا");
-}
-
-async function loadMeta(user: SessionUser) {
-  const sql = getSql();
-  const [departments, creatives, campaignTypes, funnels, platforms, requestStatuses, packageCategories, users] = await Promise.all([
-    sql<SqlRow[]>`
-      select d.id::text,d.code,d.name,d.is_content,d.is_active,d.sort_order,
-        coalesce((select json_agg(json_build_object('id',u.id::text,'full_name',u.full_name,'email',u.email,'sort_order',du.sort_order) order by du.sort_order,u.full_name)
-          from marketing.department_users du join core.users u on u.id=du.user_id and u.is_active=true where du.department_id=d.id),'[]') as users,
-        coalesce((select json_agg(json_build_object('id',a.id::text,'name',a.name,'progress_percent',a.progress_percent,'admin_only',a.admin_only,'is_active',a.is_active,'sort_order',a.sort_order) order by a.sort_order,a.name)
-          from marketing.assignment_actions a where a.department_id=d.id),'[]') as actions
-      from marketing.departments d order by d.sort_order,d.name
-    `,
-    sql<SqlRow[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,d.name as primary_department_name,c.is_active,c.sort_order from marketing.creative_catalog c join marketing.departments d on d.id=c.primary_department_id order by c.sort_order,c.name`,
-    sql<SqlRow[]>`select id::text,name,code_prefix,is_active,sort_order from marketing.campaign_types order by sort_order,name`,
-    sql<SqlRow[]>`select id::text,name,is_active,sort_order from marketing.funnels order by sort_order,name`,
-    sql<SqlRow[]>`
-      select p.id::text,p.code,p.name,p.is_active,p.sort_order,
-        coalesce((select json_agg(json_build_object('id',t.id::text,'name',t.name,'width',t.width,'height',t.height,'is_active',t.is_active,'sort_order',t.sort_order) order by t.sort_order,t.name) from marketing.platform_post_types t where t.platform_id=p.id),'[]') as post_types
-      from marketing.platforms p order by p.sort_order,p.name
-    `,
-    sql<SqlRow[]>`select id::text,code,name,is_terminal,is_active,sort_order from marketing.request_statuses order by sort_order,name`,
-    sql<SqlRow[]>`select id::text,name,is_active,sort_order from marketing.package_categories order by sort_order,name`,
-    sql<SqlRow[]>`select u.id::text,u.full_name,u.email,u.can_receive_tasks,coalesce(array_agg(distinct d.code) filter(where d.id is not null),'{}') as department_codes from core.users u left join core.user_departments ud on ud.user_id=u.id left join core.departments d on d.id=ud.department_id where u.is_active=true group by u.id order by u.full_name`,
-  ]);
+function publicConnection(row: any) {
   return {
-    ok: true,
-    departments,
-    creatives,
-    campaignTypes,
-    funnels,
-    platforms,
-    requestStatuses,
-    packageCategories,
-    users,
-    permissions: {
-      isAdmin: isAdmin(user),
-      canView: canViewMarketing(user),
-      canManage: hasPermission(user, "marketing.manage"),
-      canManageSettings: hasPermission(user, "marketing.settings.manage"),
-      canReviewTemplates: hasPermission(user, "marketing.templates.review"),
-      canExecuteTasks: hasPermission(user, "marketing.tasks.execute"),
-      canManagePackages: hasPermission(user, "marketing.packages.manage"),
-      canManageRequests: hasPermission(user, "marketing.requests.manage"),
-    },
+    platform: row.platform, connected: Boolean(row.connected), status: row.status, state: row.state, source: row.source,
+    accountId: row.account_id || "", accountName: row.account_name || "", pageId: row.page_id || "", pageName: row.page_name || "",
+    igUserId: row.ig_user_id || "", username: row.username || "", pages: row.pages || [],
+    hasToken: Boolean(row.access_token_encrypted || row.user_access_token_encrypted || row.page_access_token_encrypted),
+    tokenStored: Boolean(row.access_token_encrypted || row.user_access_token_encrypted || row.page_access_token_encrypted),
+    connectedAtIso: row.connected_at || null, updatedAtIso: row.updated_at || null,
   };
 }
-
-async function campaignCodePreview(request: VercelRequest) {
-  const sql = getSql();
-  const campaignTypeId = ensureUuid(request.query.campaignTypeId, "نوع الحملة");
-  const campaignDate = dateOnly(request.query.campaignDate, "تاريخ الحملة", true) as string;
-  const [type] = await sql<SqlRow[]>`select code_prefix from marketing.campaign_types where id=${campaignTypeId}::uuid and is_active=true`;
-  if (!type) throw new MarketingError(404, "NOT_FOUND", "نوع الحملة غير متاح");
-  const baseCode = `${clean(type.code_prefix).toUpperCase()}-${campaignDate.slice(0, 7)}`;
-  const [counter] = await sql<{ last_sequence: number }[]>`select last_sequence from marketing.campaign_code_counters where base_code=${baseCode}`;
-  const sequence = Math.max(1, Math.floor(asNumber(counter?.last_sequence, 0)) + 1);
-  return { ok: true, campaignCode: sequence === 1 ? baseCode : `${baseCode}-${String(sequence).padStart(2, "0")}` };
+async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: string, entityType: string, entityId: string | null, afterData?: unknown, beforeData?: unknown, ip?: string | null) {
+  await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data,ip_address) values (${user.id}::uuid,'marketing',${action},${entityType},${entityId},${beforeData ? sql.json(beforeData as any) : null},${afterData ? sql.json(afterData as any) : null},${ip || null})`;
 }
 
-async function campaignRows(request: VercelRequest, user: SessionUser) {
-  const sql = getSql();
-  const { page, pageSize, offset } = pageValues(request);
-  const search = clean(request.query.search);
-  const kind = clean(request.query.kind);
-  const status = clean(request.query.status);
-  const from = clean(request.query.from);
-  const to = clean(request.query.to);
-  const archived = clean(request.query.archived) === "true";
-  const pattern = `%${search}%`;
-  const canSeeAll = isAdmin(user) || hasPermission(user, "marketing.manage");
-  const where = sql`
-    c.deleted_at is null
-    and (${archived}=true and c.archived_at is not null or ${archived}=false and c.archived_at is null)
-    and (${search}='' or c.name ilike ${pattern} or c.campaign_code ilike ${pattern} or coalesce(ct.name,'') ilike ${pattern})
-    and (${kind}='' or c.source_kind=${kind})
-    and (${status}='' or c.status=${status} or c.workflow_stage=${status})
-    and (${from}='' or c.created_at::date>=${from}::date)
-    and (${to}='' or c.created_at::date<=${to}::date)
-    and (${canSeeAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and t.assigned_to=${user.id}::uuid))
-  `;
-  const [count] = await sql<{ total: number }[]>`select count(*)::int as total from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where ${where}`;
-  const rows = await sql<SqlRow[]>`
-    select c.id::text,c.source_kind,c.campaign_code,c.name,c.campaign_date,c.publish_start_date,c.publish_end_date,c.objective,c.content_brief,c.status,c.workflow_stage,c.created_at,c.updated_at,c.archived_at,
-      ct.name as campaign_type_name,u.full_name as created_by_name,
-      (select count(*)::int from marketing.creative_instances i where i.campaign_id=c.id) as instances_count,
-      (select count(*)::int from marketing.tasks t where t.campaign_id=c.id) as tasks_count,
-      (select count(*)::int from marketing.tasks t where t.campaign_id=c.id and t.actual_received_at is not null) as received_tasks_count,
-      (select count(*)::int from marketing.tasks t where t.campaign_id=c.id and t.progress=100) as completed_tasks_count
-    from marketing.campaigns c
-    left join marketing.campaign_types ct on ct.id=c.campaign_type_id
-    left join core.users u on u.id=c.created_by
-    where ${where}
-    order by c.created_at desc limit ${pageSize} offset ${offset}
-  `;
-  return { ok: true, rows, total: Number(count?.total || 0), page, pageSize };
-}
-
-async function taskRowsForCampaign(campaignId: string) {
-  const sql = getSql();
-  return sql<SqlRow[]>`
-    select t.id::text,t.task_no,t.campaign_id::text,t.instance_id::text,t.task_kind,t.department_id::text,d.name as department_name,t.assigned_to::text,u.full_name as assigned_to_name,
-      t.content_writer_id::text,w.full_name as content_writer_name,t.template_task_id::text,t.status,t.progress,t.due_date,t.actual_received_at,t.completed_at,t.admin_note,t.rejection_reason,t.final_file_name,t.final_storage_key,
-      i.instance_code,cc.name as creative_name,cc.short_code,
-      coalesce((select json_agg(json_build_object('id',a.id::text,'name',a.name,'progress_percent',a.progress_percent,'admin_only',a.admin_only,'completed_at',a.completed_at,'completed_by',a.completed_by::text) order by a.sort_order,a.name) from marketing.task_action_items a where a.task_id=t.id),'[]') as actions,
-      coalesce((select json_agg(json_build_object('id',s.id::text,'version_no',s.version_no,'file_name',s.file_name,'storage_key',s.storage_key,'template_data',s.template_data,'review_status',s.review_status,'review_note',s.review_note,'submitted_at',s.submitted_at,'reviewed_at',s.reviewed_at) order by s.version_no desc) from marketing.template_submissions s where s.template_task_id=t.id),'[]') as submissions,
-      coalesce((select s.template_data from marketing.template_submissions s where s.template_task_id=coalesce(t.template_task_id,t.id) and s.review_status='approved' order by s.version_no desc limit 1),'{}'::jsonb) as approved_template_data
-    from marketing.tasks t
-    join marketing.creative_instances i on i.id=t.instance_id
-    join marketing.creative_catalog cc on cc.id=i.creative_id
-    join marketing.departments d on d.id=t.department_id
-    join core.users u on u.id=t.assigned_to
-    join core.users w on w.id=t.content_writer_id
-    where t.campaign_id=${campaignId}::uuid
-    order by d.sort_order,i.sequence_no,t.task_kind,t.task_no
-  `;
-}
-
-function calculateCampaignProgress(tasks: SqlRow[]) {
-  const departmentGroups = new Map<string, number[]>();
-  for (const task of tasks) {
-    const departmentId = clean(task.department_id);
-    if (!departmentId) continue;
-    const values = departmentGroups.get(departmentId) || [];
-    values.push(asNumber(task.progress));
-    departmentGroups.set(departmentId, values);
-  }
-  if (!departmentGroups.size) return 0;
-  let total = 0;
-  for (const values of departmentGroups.values()) total += values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
-  return Math.round((total / departmentGroups.size) * 100) / 100;
-}
-
-async function campaignDetail(id: string, user: SessionUser) {
-  const sql = getSql();
-  const [campaign] = await sql<SqlRow[]>`
-    select c.*,c.id::text,c.campaign_type_id::text,ct.name as campaign_type_name,u.full_name as created_by_name,
-      (select count(*)::int from marketing.creative_instances i where i.campaign_id=c.id) as instances_count,
-      (select count(*)::int from marketing.tasks t where t.campaign_id=c.id) as tasks_count,
-      (select count(*)::int from marketing.tasks t where t.campaign_id=c.id and t.actual_received_at is not null) as received_tasks_count,
-      (select count(*)::int from marketing.tasks t where t.campaign_id=c.id and t.progress=100) as completed_tasks_count
-    from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id left join core.users u on u.id=c.created_by
-    where c.id=${id}::uuid and c.deleted_at is null
-  `;
-  if (!campaign) throw new MarketingError(404, "NOT_FOUND", "الحملة أو الأجندة غير موجودة");
-  const canSeeAll = isAdmin(user) || hasPermission(user, "marketing.manage");
-  const hasAssignedTask = Boolean((await sql`select 1 from marketing.tasks where campaign_id=${id}::uuid and assigned_to=${user.id}::uuid limit 1`)[0]);
-  const canSee = canSeeAll || clean(campaign.created_by) === user.id || hasAssignedTask;
-  if (!canSee) throw new MarketingError(403, "FORBIDDEN", "لا تملك صلاحية عرض هذه البيانات");
-  const [allInstances, budgetItems, schedule, allTasks, links, agendaDays] = await Promise.all([
-    sql<SqlRow[]>`
-      select i.id::text,i.campaign_id::text,i.agenda_day_id::text,i.sequence_no,i.instance_code,i.content_received_date,i.content_notes,i.is_complete,
-        i.creative_id::text,cc.name as creative_name,cc.short_code,cc.primary_department_id::text,pd.name as primary_department_name,
-        ad.agenda_date,
-        coalesce((select json_agg(json_build_object('user_id',w.user_id::text,'full_name',u.full_name,'due_date',w.due_date,'notes',w.notes) order by u.full_name) from marketing.instance_content_writers w join core.users u on u.id=w.user_id where w.instance_id=i.id),'[]') as writers,
-        coalesce((select json_agg(json_build_object('id',x.id::text,'department_id',x.department_id::text,'department_name',d.name,'is_primary',x.is_primary,'due_date',x.due_date,'notes',x.notes,'assignments',coalesce((select json_agg(json_build_object('id',a.id::text,'executive_user_id',a.executive_user_id::text,'executive_name',eu.full_name,'content_writer_id',a.content_writer_id::text,'content_writer_name',cw.full_name,'due_date',a.due_date) order by eu.full_name,cw.full_name) from marketing.instance_assignments a join core.users eu on eu.id=a.executive_user_id join core.users cw on cw.id=a.content_writer_id where a.instance_department_id=x.id),'[]'::json)) order by x.is_primary desc,d.sort_order) from marketing.instance_departments x join marketing.departments d on d.id=x.department_id where x.instance_id=i.id),'[]') as departments,
-        coalesce((select json_agg(json_build_object('id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'exterior_color',v.exterior_color,'interior_color',v.interior_color,'model_year',v.model_year,'location_name',l.name) order by v.vin) from marketing.instance_vehicles iv join operations.vehicles v on v.id=iv.vehicle_id left join operations.locations l on l.id=v.location_id where iv.instance_id=i.id),'[]') as vehicles,
-        coalesce((select json_agg(json_build_object('platform_id',p.id::text,'platform_name',p.name,'post_type_id',pt.id::text,'post_type_name',pt.name,'width',pt.width,'height',pt.height) order by p.sort_order,pt.sort_order) from marketing.instance_platform_posts ip join marketing.platforms p on p.id=ip.platform_id join marketing.platform_post_types pt on pt.id=ip.post_type_id where ip.instance_id=i.id),'[]') as posts
-      from marketing.creative_instances i join marketing.creative_catalog cc on cc.id=i.creative_id join marketing.departments pd on pd.id=cc.primary_department_id left join marketing.agenda_days ad on ad.id=i.agenda_day_id
-      where i.campaign_id=${id}::uuid order by coalesce(ad.agenda_date,date '1900-01-01'),i.sequence_no
-    `,
-    sql<SqlRow[]>`
-      select b.id::text,b.funnel_id::text,f.name as funnel_name,b.instance_id::text,i.instance_code,cc.name as creative_name,b.ads_count,b.content_goal,b.expected_goal,b.sort_order,
-        coalesce((select json_agg(json_build_object('platform_id',p.id::text,'platform_name',p.name,'amount',v.amount) order by p.sort_order) from marketing.budget_platform_values v join marketing.platforms p on p.id=v.platform_id where v.budget_item_id=b.id),'[]') as platform_values
-      from marketing.budget_items b left join marketing.funnels f on f.id=b.funnel_id join marketing.creative_instances i on i.id=b.instance_id join marketing.creative_catalog cc on cc.id=i.creative_id where b.campaign_id=${id}::uuid order by b.sort_order,b.created_at
-    `,
-    sql<SqlRow[]>`
-      select s.id::text,s.publish_date,s.instance_id::text,i.instance_code,cc.name as creative_name,
-        coalesce((select json_agg(json_build_object('platform_id',p.id::text,'platform_name',p.name,'post_type_id',pt.id::text,'post_type_name',pt.name) order by p.sort_order,pt.sort_order) from marketing.publish_schedule_posts sp join marketing.platforms p on p.id=sp.platform_id join marketing.platform_post_types pt on pt.id=sp.post_type_id where sp.schedule_item_id=s.id),'[]') as posts
-      from marketing.publish_schedule_items s join marketing.creative_instances i on i.id=s.instance_id join marketing.creative_catalog cc on cc.id=i.creative_id where s.campaign_id=${id}::uuid order by s.publish_date,i.sequence_no
-    `,
-    taskRowsForCampaign(id),
-    sql<SqlRow[]>`select l.id::text,l.url,l.created_at,l.platform_id::text,p.name as platform_name from marketing.campaign_links l join marketing.platforms p on p.id=l.platform_id where l.campaign_id=${id}::uuid order by l.created_at desc`,
-    sql<SqlRow[]>`select id::text,agenda_date,sort_order from marketing.agenda_days where campaign_id=${id}::uuid order by agenda_date`,
+async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
+  const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels] = await Promise.all([
+    sql<any[]>`select id::text,full_name,email,mobile,is_active,can_receive_tasks from core.users where is_active=true order by full_name`,
+    sql<any[]>`select d.id::text,d.name,d.is_content,d.is_active,coalesce(json_agg(json_build_object('id',u.id::text,'fullName',u.full_name,'email',u.email) order by u.full_name) filter(where u.id is not null),'[]'::json) as users from marketing.departments d left join marketing.department_users du on du.department_id=d.id left join core.users u on u.id=du.user_id and u.is_active=true where d.is_active=true group by d.id order by d.is_content desc,d.name`,
+    sql<any[]>`select a.id::text,a.department_id::text,d.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join marketing.departments d on d.id=a.department_id where a.is_active=true order by d.name,a.sort_order,a.created_at`,
+    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,d.name as primary_department_name,c.is_active from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.is_active=true order by c.name`,
+    sql<any[]>`select id::text,name,short_code,code_prefix,sequence_value,is_active from marketing.campaign_types where is_active=true order by name`,
+    sql<any[]>`select id::text,code,name,is_active from marketing.platforms where is_active=true order by name`,
+    sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height from marketing.platform_post_types p where p.is_active=true order by p.name`,
+    sql<any[]>`select id::text,name,active,source,created_at from marketing.funnels where active=true order by created_at`,
   ]);
-  const progress = calculateCampaignProgress(allTasks);
-  if (canSeeAll || clean(campaign.created_by) === user.id) {
-    return { ok: true, campaign, instances: allInstances, budgetItems, schedule, tasks: allTasks, links, agendaDays, progress };
-  }
-  const tasks = allTasks.filter((task) => clean(task.assigned_to) === user.id);
-  const visibleInstanceIds = new Set(tasks.map((task) => clean(task.instance_id)).filter(Boolean));
-  const linkedWriterIds = new Set(tasks.map((task) => clean(task.content_writer_id)).filter(Boolean));
-  const instances = allInstances
-    .filter((instance) => visibleInstanceIds.has(clean(instance.id)))
-    .map((instance) => {
-      const writers = asArray(instance.writers).map(asRecord).filter((writer) => linkedWriterIds.has(clean(writer.user_id)));
-      const departments = asArray(instance.departments).map(asRecord).map((department) => {
-        const assignments = asArray(department.assignments).map(asRecord).filter((assignment) => clean(assignment.executive_user_id) === user.id || clean(assignment.content_writer_id) === user.id);
-        return { ...department, assignments };
-      }).filter((department) => asArray(department.assignments).length > 0);
-      return { ...instance, writers, departments };
-    });
-  return { ok: true, campaign, instances, budgetItems, schedule, tasks, links, agendaDays, progress };
+  const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
+  return { ok: true, users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicConnection), permissions: { isAdmin: isAdmin(user), canManage: isAdmin(user) || user.permissions.includes("marketing.manage") } };
 }
 
-async function dashboard(user: SessionUser) {
-  const sql = getSql();
-  const canReview = isAdmin(user) || hasPermission(user, "marketing.templates.review");
-  const canSeeAll = isAdmin(user) || hasPermission(user, "marketing.manage");
-  const taskRows = await sql<SqlRow[]>`
-    select t.id::text,t.task_no,t.campaign_id::text,t.instance_id::text,t.task_kind,t.department_id::text,d.name as department_name,t.assigned_to::text,u.full_name as assigned_to_name,t.content_writer_id::text,w.full_name as content_writer_name,t.template_task_id::text,t.status,t.progress,t.due_date,t.actual_received_at,t.completed_at,t.final_file_name,t.final_storage_key,
-      c.source_kind,c.campaign_code,c.name as campaign_name,c.workflow_stage,c.status as campaign_status,i.instance_code,cc.name as creative_name,cc.short_code,
-      exists(select 1 from marketing.template_submissions s where s.template_task_id=t.id and s.review_status='pending') as has_pending_submission,
-      coalesce((select s.template_data from marketing.template_submissions s where s.template_task_id=coalesce(t.template_task_id,t.id) and s.review_status='approved' order by s.version_no desc limit 1),'{}'::jsonb) as approved_template_data,
-      coalesce((select array_agg(distinct ip.platform_id::text) from marketing.instance_platform_posts ip where ip.instance_id=i.id),'{}') as platform_ids,
-      coalesce((select json_agg(json_build_object('platform_id',p.id::text,'platform_name',p.name,'post_type_id',pt.id::text,'post_type_name',pt.name) order by p.sort_order,pt.sort_order) from marketing.instance_platform_posts ip join marketing.platforms p on p.id=ip.platform_id join marketing.platform_post_types pt on pt.id=ip.post_type_id where ip.instance_id=i.id),'[]') as publishing_posts,
-      coalesce((select array_agg(distinct ps.publish_date::text order by ps.publish_date::text) from marketing.publish_schedule_items ps where ps.instance_id=i.id),'{}') as publish_dates
-    from marketing.tasks t join marketing.campaigns c on c.id=t.campaign_id and c.deleted_at is null and c.archived_at is null
-    join marketing.creative_instances i on i.id=t.instance_id join marketing.creative_catalog cc on cc.id=i.creative_id join marketing.departments d on d.id=t.department_id join core.users u on u.id=t.assigned_to join core.users w on w.id=t.content_writer_id
-    where (${canSeeAll}=true or t.assigned_to=${user.id}::uuid or (${canReview}=true and t.task_kind='template'))
-    order by d.sort_order,c.created_at desc,i.sequence_no,t.task_no
+async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
+  return sql<any[]>`
+    select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.exterior_color,v.interior_color,l.name as location_name,v.status_code,
+      coalesce(ms.photographed,false) as photographed,coalesce(ms.content_usage,'[]'::jsonb) as content_usage
+    from operations.vehicles v
+    left join operations.locations l on l.id=v.location_id
+    left join marketing.stock_vehicle_state ms on ms.vehicle_id=v.id
+    where v.is_deleted=false and v.archived_at is null and coalesce(v.is_inventory_active,true)=true
+    order by v.car_name,v.statement,v.exterior_color,v.interior_color,v.vin
   `;
-  const visibleTasks: SqlRow[] = taskRows.filter((row: SqlRow) => userCanSeeTask(user, row));
-  const campaignIds: string[] = [...new Set(visibleTasks.map((row: SqlRow) => clean(row.campaign_id)).filter(Boolean))];
-  const campaignCards: JsonObject[] = [];
-  for (const campaignId of campaignIds) {
-    const fullCampaignTasks = canSeeAll ? visibleTasks.filter((row: SqlRow) => clean(row.campaign_id) === campaignId) : await taskRowsForCampaign(campaignId);
-    const visibleCampaignTasks = visibleTasks.filter((row: SqlRow) => clean(row.campaign_id) === campaignId);
-    const sample = visibleCampaignTasks[0] || fullCampaignTasks[0] || {};
-    const hasReceivedTask = fullCampaignTasks.some((row: SqlRow) => Boolean(row.actual_received_at));
-    campaignCards.push({
-      id: campaignId,
-      name: clean(sample.campaign_name),
-      code: clean(sample.campaign_code),
-      sourceKind: clean(sample.source_kind),
-      workflowStage: clean(sample.workflow_stage),
-      progress: calculateCampaignProgress(fullCampaignTasks),
-      taskCount: fullCampaignTasks.length,
-      departmentCount: new Set(fullCampaignTasks.map((row: SqlRow) => clean(row.department_id))).size,
-      hasReceivedTask,
-    });
-  }
-  return {
-    ok: true,
-    tasks: visibleTasks,
-    required: visibleTasks.filter((row: SqlRow) => !row.actual_received_at && clean(row.status) !== "completed"),
-    readiness: campaignCards.filter((item) => clean(item.workflowStage) !== "publishing" && item.hasReceivedTask === true),
-    publishing: campaignCards.filter((item) => clean(item.workflowStage) === "publishing"),
-  };
 }
 
-async function stockRows(request: VercelRequest) {
-  const sql = getSql();
-  const search = clean(request.query.search);
-  const pattern = `%${search}%`;
-  const rows = await sql<SqlRow[]>`
-    select v.id::text,v.vin,v.car_name,v.statement,v.exterior_color,v.interior_color,v.model_year,v.status_code,s.name as status_name,l.id::text as location_id,l.name as location_name
-    from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
-    where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
-    order by v.vin limit 500
-  `;
-  return { ok: true, rows };
-}
-
-async function listPackages(request: VercelRequest) {
-  const sql = getSql();
-  const search = clean(request.query.search);
-  const categoryId = clean(request.query.categoryId);
-  const pattern = `%${search}%`;
-  const rows = await sql<SqlRow[]>`
-    select p.id::text,p.name,p.category_id::text,c.name as category_name,p.price,p.cash_discount_percent,p.registration_fee,p.insurance,p.issuance_fee,p.car_care_lines,p.delivery_type,p.is_active,p.created_at,p.updated_at
-    from marketing.car_packages p join marketing.package_categories c on c.id=p.category_id
-    where (${search}='' or p.name ilike ${pattern}) and (${categoryId}='' or p.category_id=${categoryId}::uuid)
-    order by c.sort_order,p.created_at desc
-  `;
-  return { ok: true, rows };
-}
-
-async function listPhotoRequests(user: SessionUser) {
-  const sql = getSql();
-  const all = isAdmin(user) || hasPermission(user, "marketing.requests.manage");
-  const rows = await sql<SqlRow[]>`
-    select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_by_branch,r.requested_at,r.photography_date,r.note,r.completed_at,r.updated_at,
-      coalesce(json_agg(json_build_object('id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'model_year',v.model_year,'exterior_color',v.exterior_color,'interior_color',v.interior_color,'location_name',l.name) order by v.vin) filter(where v.id is not null),'[]') as vehicles,
-      coalesce((select json_agg(json_build_object('id',x.id::text,'old_status',x.old_status,'new_status',x.new_status,'photography_date',x.photography_date,'note',x.note,'changed_by_name',x.changed_by_name,'created_at',x.created_at) order by x.created_at desc) from operations.photography_request_updates x where x.request_id=r.id),'[]') as updates
-    from operations.photography_requests r left join operations.photography_request_vehicles rv on rv.request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id left join operations.locations l on l.id=v.location_id
-    where r.is_deleted=false and (${all}=true or r.requested_by=${user.id}::uuid)
-    group by r.id order by r.requested_at desc
-  `;
-  return { ok: true, rows };
-}
-
-async function attendanceData(request: VercelRequest, user: SessionUser) {
-  const sql = getSql();
-  const from = clean(request.query.from) || new Date().toISOString().slice(0, 7) + "-01";
-  const to = clean(request.query.to) || new Date().toISOString().slice(0, 10);
-  const canSeeAll = isAdmin(user) || hasPermission(user, "marketing.manage");
-  const [settings] = await sql<SqlRow[]>`select work_start::text,work_end::text,late_after_minutes,work_days,updated_at from marketing.attendance_settings where id=true`;
-  const rows = await sql<SqlRow[]>`
-    select a.id::text,a.user_id::text,u.full_name,a.attendance_date,a.check_in_at,a.check_out_at,a.last_activity_at,a.note
-    from marketing.attendance_records a join core.users u on u.id=a.user_id
-    where a.attendance_date between ${from}::date and ${to}::date and (${canSeeAll}=true or a.user_id=${user.id}::uuid)
-    order by a.attendance_date desc,u.full_name
-  `;
-  const [today] = await sql<SqlRow[]>`select id::text,user_id::text,attendance_date,check_in_at,check_out_at,last_activity_at,note from marketing.attendance_records where user_id=${user.id}::uuid and attendance_date=current_date`;
-  return { ok: true, settings: settings || null, rows, today: today || null };
-}
-
-async function listConnections() {
-  const sql = getSql();
-  const rows = await sql<SqlRow[]>`select c.id::text,c.platform_id::text,p.name as platform_name,p.code as platform_code,c.account_name,c.account_external_id,c.connection_status,c.metadata,c.connected_at,c.updated_at from marketing.platform_connections c join marketing.platforms p on p.id=c.platform_id order by p.sort_order,c.updated_at desc`;
-  return { ok: true, rows };
-}
-
-async function saveSetting(body: UnknownRecord, user: SessionUser) {
-  requirePermission(user, "marketing.settings.manage");
-  const sql = getSql();
-  const entity = clean(body.entity);
-  const id = clean(body.id);
-  const result = await sql.begin(async (tx) => {
-    if (entity === "department") {
-      const code = clean(body.code); const name = clean(body.name);
-      if (!code || !name) throw new MarketingError(400, "VALIDATION_ERROR", "كود واسم القسم مطلوبان");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.departments set code=${code},name=${name},is_content=${asBoolean(body.isContent)},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"القسم")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.departments(code,name,is_content,is_active,sort_order,created_by) values(${code},${name},${asBoolean(body.isContent)},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)},${user.id}::uuid) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "القسم غير موجود");
-      await tx`delete from marketing.department_users where department_id=${clean(row.id)}::uuid`;
-      for (const userId of asArray(body.userIds).map(clean).filter(Boolean)) await tx`insert into marketing.department_users(department_id,user_id) values(${clean(row.id)}::uuid,${ensureUuid(userId,"المستخدم")}::uuid) on conflict do nothing`;
-      return row;
-    }
-    if (entity === "action") {
-      const departmentId = ensureUuid(body.departmentId, "القسم"); const name = clean(body.name); const pct = asNumber(body.progressPercent);
-      if (!name || pct < 0 || pct > 100) throw new MarketingError(400, "VALIDATION_ERROR", "اسم الإجراء ونسبته مطلوبان");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},progress_percent=${pct},admin_only=${asBoolean(body.adminOnly)},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"الإجراء")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.assignment_actions(department_id,name,progress_percent,admin_only,is_active,sort_order) values(${departmentId}::uuid,${name},${pct},${asBoolean(body.adminOnly)},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "الإجراء غير موجود");
-      return row;
-    }
-    if (entity === "creative") {
-      const name = clean(body.name); const shortCode = clean(body.shortCode); const departmentId = ensureUuid(body.primaryDepartmentId, "القسم الأساسي");
-      if (!name || !shortCode) throw new MarketingError(400, "VALIDATION_ERROR", "اسم الكرييتيف والكود المختصر مطلوبان");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.creative_catalog set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"الكرييتيف")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.creative_catalog(name,short_code,primary_department_id,is_active,sort_order) values(${name},${shortCode},${departmentId}::uuid,${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "الكرييتيف غير موجود");
-      return row;
-    }
-    if (entity === "campaign_type") {
-      const name = clean(body.name); const prefix = clean(body.codePrefix);
-      if (!name || !prefix) throw new MarketingError(400, "VALIDATION_ERROR", "اسم النوع والكود مطلوبان");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.campaign_types set name=${name},code_prefix=${prefix},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"نوع الحملة")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.campaign_types(name,code_prefix,is_active,sort_order) values(${name},${prefix},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "نوع الحملة غير موجود");
-      return row;
-    }
-    if (entity === "funnel") {
-      const name = clean(body.name); if (!name) throw new MarketingError(400, "VALIDATION_ERROR", "اسم Funnel مطلوب");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.funnels set name=${name},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"Funnel")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.funnels(name,is_active,sort_order) values(${name},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "Funnel غير موجود");
-      return row;
-    }
-    if (entity === "platform") {
-      const code = clean(body.code); const name = clean(body.name); if (!code || !name) throw new MarketingError(400, "VALIDATION_ERROR", "اسم وكود المنصة مطلوبان");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.platforms set code=${code},name=${name},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"المنصة")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.platforms(code,name,is_active,sort_order) values(${code},${name},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "المنصة غير موجودة");
-      return row;
-    }
-    if (entity === "post_type") {
-      const platformId = ensureUuid(body.platformId, "المنصة"); const name = clean(body.name); if (!name) throw new MarketingError(400, "VALIDATION_ERROR", "اسم نوع النشر مطلوب");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.platform_post_types set platform_id=${platformId}::uuid,name=${name},width=${asNumber(body.width) || null},height=${asNumber(body.height) || null},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"نوع النشر")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.platform_post_types(platform_id,name,width,height,is_active,sort_order) values(${platformId}::uuid,${name},${asNumber(body.width) || null},${asNumber(body.height) || null},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "نوع النشر غير موجود");
-      return row;
-    }
-    if (entity === "request_status") {
-      const code = clean(body.code); const name = clean(body.name); if (!code || !name) throw new MarketingError(400, "VALIDATION_ERROR", "كود واسم الحالة مطلوبان");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.request_statuses set code=${code},name=${name},is_terminal=${asBoolean(body.isTerminal)},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)} where id=${ensureUuid(id,"الحالة")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.request_statuses(code,name,is_terminal,is_active,sort_order) values(${code},${name},${asBoolean(body.isTerminal)},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "الحالة غير موجودة");
-      return row;
-    }
-    if (entity === "package_category") {
-      const name = clean(body.name); if (!name) throw new MarketingError(400, "VALIDATION_ERROR", "اسم التصنيف مطلوب");
-      const [row] = id
-        ? await tx<SqlRow[]>`update marketing.package_categories set name=${name},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},sort_order=${asNumber(body.sortOrder)},updated_at=now() where id=${ensureUuid(id,"التصنيف")}::uuid returning *,id::text`
-        : await tx<SqlRow[]>`insert into marketing.package_categories(name,is_active,sort_order) values(${name},${body.isActive === undefined ? true : asBoolean(body.isActive)},${asNumber(body.sortOrder)}) returning *,id::text`;
-      if (!row) throw new MarketingError(404, "NOT_FOUND", "التصنيف غير موجود");
-      return row;
-    }
-    throw new MarketingError(400, "UNSUPPORTED_ENTITY", "نوع الإعداد غير مدعوم");
+async function nextCampaignCode(sql: ReturnType<typeof getSql>, campaignTypeId: string) {
+  return sql.begin(async (tx) => {
+    const [type] = await tx<any[]>`select * from marketing.campaign_types where id=${campaignTypeId}::uuid and is_active=true for update`;
+    if (!type) throw new Error("نوع الحملة غير موجود");
+    const sequence = Number(type.sequence_value || 0) + 1;
+    await tx`update marketing.campaign_types set sequence_value=${sequence},updated_at=now() where id=${campaignTypeId}::uuid`;
+    const now = new Date(); const year = now.getUTCFullYear(); const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+    return `${safeCode(type.code_prefix || type.short_code)}-${year}-${month}-${String(sequence).padStart(3, "0")}`;
   });
-  await sql`insert into marketing.activity_log(user_id,action,entity_type,entity_id,after_data) values(${user.id}::uuid,'setting_saved',${entity},${clean(result.id)},${sql.json(toJsonValue(result))})`;
-  return { ok: true, row: result };
 }
 
-async function deleteSetting(body: UnknownRecord, user: SessionUser) {
-  requirePermission(user, "marketing.settings.manage");
-  const sql = getSql(); const entity = clean(body.entity); const id = ensureUuid(body.id, "السجل");
-  const map: Record<string, string> = {
-    department: "marketing.departments", action: "marketing.assignment_actions", creative: "marketing.creative_catalog", campaign_type: "marketing.campaign_types", funnel: "marketing.funnels", platform: "marketing.platforms", post_type: "marketing.platform_post_types", request_status: "marketing.request_statuses", package_category: "marketing.package_categories",
-  };
-  const table = map[entity]; if (!table) throw new MarketingError(400, "UNSUPPORTED_ENTITY", "نوع الإعداد غير مدعوم");
-  try { await sql.unsafe(`delete from ${table} where id=$1::uuid`, [id]); }
-  catch { throw new MarketingError(409, "IN_USE", "لا يمكن حذف السجل لأنه مستخدم؛ قم بتعطيله بدلًا من ذلك"); }
-  return { ok: true };
-}
+function contentDepartmentId(metaDepartments: any[]) { return clean(metaDepartments.find((item) => item.is_content)?.id); }
 
-async function createCampaign(body: UnknownRecord, user: SessionUser) {
-  requirePermission(user, "marketing.manage");
-  const sql = getSql();
-  const sourceKind = clean(body.sourceKind) === "agenda" ? "agenda" : "campaign";
-  const name = clean(body.name);
-  const campaignDate = dateOnly(body.campaignDate, "تاريخ الحملة", sourceKind === "campaign");
-  const publishStartDate = dateOnly(body.publishStartDate, "بداية النشر", true) as string;
-  const publishEndDate = dateOnly(body.publishEndDate, "نهاية النشر", true) as string;
-  if (!name) throw new MarketingError(400, "VALIDATION_ERROR", sourceKind === "agenda" ? "اسم الأجندة مطلوب" : "اسم الحملة مطلوب");
-  if (publishEndDate < publishStartDate) throw new MarketingError(400, "VALIDATION_ERROR", "نهاية النشر يجب ألا تسبق البداية");
-  const instances = asArray(body.instances).map(asRecord);
-  if (!instances.length) throw new MarketingError(400, "VALIDATION_ERROR", "أضف كرييتيف واحدًا على الأقل");
-  const idempotencyKey = clean(body.idempotencyKey);
-  if (!idempotencyKey) throw new MarketingError(400, "VALIDATION_ERROR", "مفتاح منع التكرار مطلوب");
-  const result = await sql.begin(async (tx) => {
-    await tx`select pg_advisory_xact_lock(hashtextextended(${`marketing:create:${idempotencyKey}`},0))`;
-    const [existingCampaign] = await tx<SqlRow[]>`select id::text,campaign_code from marketing.campaigns where idempotency_key=${idempotencyKey} and deleted_at is null limit 1`;
-    if (existingCampaign) return { campaignId: clean(existingCampaign.id), campaignCode: clean(existingCampaign.campaign_code), duplicate: true };
-    let campaignTypeId: string | null = null;
-    let campaignCode = "";
-    if (sourceKind === "campaign") {
-      campaignTypeId = ensureUuid(body.campaignTypeId, "نوع الحملة");
-      const [type] = await tx<SqlRow[]>`select code_prefix from marketing.campaign_types where id=${campaignTypeId}::uuid and is_active=true`;
-      if (!type) throw new MarketingError(400, "VALIDATION_ERROR", "نوع الحملة غير متاح");
-      const baseCode = `${clean(type.code_prefix).toUpperCase()}-${String(campaignDate || publishStartDate).slice(0, 7)}`;
-      const [counter] = await tx<{ last_sequence: number }[]>`
-        insert into marketing.campaign_code_counters(base_code,last_sequence)
-        values(${baseCode},1)
-        on conflict(base_code) do update set last_sequence=marketing.campaign_code_counters.last_sequence+1,updated_at=now()
-        returning last_sequence
-      `;
-      const sequence = Math.max(1, Math.floor(asNumber(counter?.last_sequence, 1)));
-      campaignCode = sequence === 1 ? baseCode : `${baseCode}-${String(sequence).padStart(2, "0")}`;
-    } else campaignCode = `AGENDA-${publishStartDate.slice(0,7).replace("-","")}-${randomAgendaSuffix()}`;
-    const [campaign] = await tx<SqlRow[]>`
-      insert into marketing.campaigns(source_kind,idempotency_key,campaign_code,name,campaign_type_id,campaign_date,publish_start_date,publish_end_date,objective,content_brief,status,workflow_stage,created_by)
-      values(${sourceKind},${idempotencyKey},${campaignCode},${name},${campaignTypeId}::uuid,${campaignDate},${publishStartDate}::date,${publishEndDate}::date,${nullableText(body.objective)},${nullableText(body.contentBrief)},'active','required',${user.id}::uuid)
-      returning *,id::text
+async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string }) {
+  const templates = new Map<string, string>();
+  let templateIndex = 0;
+  for (const content of input.contentAssignments) {
+    const contentUserId = clean(content.userId); if (!contentUserId) continue;
+    templateIndex += 1;
+    const taskNo = `${safeCode(input.sourceCode || input.sourceName)}_${input.sourceId.slice(0,8).toUpperCase()}_TPL_${input.creativeIndex}_${templateIndex}`;
+    const [template] = await tx<any[]>`
+      insert into marketing.task_templates(source_type,source_id,creative_id,content_user_id,task_no,status,progress,due_on,department_note,template_data)
+      values (${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,${contentUserId}::uuid,${taskNo},'not_started',0,${isoDate(content.dueOn)},${clean(content.note)||null},${tx.json({ sourceName: input.sourceName, sourceCode: input.sourceCode, creativeName: input.creativeName, creativeType: input.creativeType, requiredFromContent: input.requiredFromContent || "" })})
+      returning id::text
     `;
-    const agendaDayIds = new Map<string, string>();
-    if (sourceKind === "agenda") {
-      const dayValues = [...new Set(instances.map((item) => dateOnly(item.agendaDate, "تاريخ يوم الأجندة", true) as string))].sort();
-      for (const [index, day] of dayValues.entries()) {
-        if (day < publishStartDate || day > publishEndDate) throw new MarketingError(400, "VALIDATION_ERROR", "يوجد يوم خارج فترة الأجندة");
-        const [row] = await tx<SqlRow[]>`insert into marketing.agenda_days(campaign_id,agenda_date,sort_order) values(${clean(campaign.id)}::uuid,${day}::date,${index}) returning id::text`;
-        agendaDayIds.set(day, clean(row.id));
+    templates.set(contentUserId, template.id);
+    await tx`
+      insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note)
+      values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'content',${input.contentDepartmentId ? tx`${input.contentDepartmentId}::uuid` : null},${contentUserId}::uuid,${contentUserId}::uuid,${template.id}::uuid,'task_template',${`Task Template - ${input.creativeName}`},'required',${isoDate(content.dueOn)},0,${clean(content.note)||null})
+    `;
+  }
+  const groups = [
+    { departmentId: clean(input.primaryDepartmentId), assignments: input.primaryAssignments },
+    ...arrayValue(input.optionalAssignments).map((group: any) => ({ departmentId: clean(group.departmentId), assignments: arrayValue(group.assignments) })),
+  ];
+  let taskIndex = 0;
+  for (const group of groups) {
+    if (!group.departmentId) continue;
+    for (const assignment of arrayValue(group.assignments)) {
+      const assignedTo = clean(assignment.userId); if (!assignedTo) continue;
+      for (const contentUserId of arrayValue<string>(assignment.contentUserIds).map(clean).filter(Boolean)) {
+        const templateId = templates.get(contentUserId); if (!templateId) continue;
+        taskIndex += 1;
+        const [task] = await tx<any[]>`
+          insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note)
+          values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'execution',${group.departmentId}::uuid,${assignedTo}::uuid,${contentUserId}::uuid,${templateId}::uuid,'execution',${`${input.creativeName} - تنفيذ ${taskIndex}`},'required',${isoDate(assignment.dueOn)},0,${clean(assignment.note)||null})
+          returning id::text
+        `;
+        await tx`insert into marketing.task_action_progress(task_id,action_id) select ${task.id}::uuid,id from marketing.assignment_actions where department_id=${group.departmentId}::uuid and is_active=true on conflict do nothing`;
       }
     }
-    const instanceIds: string[] = [];
-    for (const [index, instanceInput] of instances.entries()) {
-      const creativeId = ensureUuid(instanceInput.creativeId, "الكرييتيف");
-      const [creative] = await tx<SqlRow[]>`select c.id::text,c.primary_department_id::text,c.short_code,d.id::text as department_id,d.name as department_name from marketing.creative_catalog c join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeId}::uuid and c.is_active=true`;
-      if (!creative) throw new MarketingError(400, "VALIDATION_ERROR", "أحد الكرييتيفات غير متاح");
-      const sequenceNo = index + 1; const instanceCode = `N${String(sequenceNo).padStart(2,"0")}`;
-      const agendaDate = sourceKind === "agenda" ? dateOnly(instanceInput.agendaDate, "تاريخ يوم الأجندة", true) as string : null;
-      const [instance] = await tx<SqlRow[]>`
-        insert into marketing.creative_instances(campaign_id,agenda_day_id,creative_id,sequence_no,instance_code,content_received_date,content_notes,is_complete)
-        values(${clean(campaign.id)}::uuid,${agendaDate ? agendaDayIds.get(agendaDate) || null : null}::uuid,${creativeId}::uuid,${sequenceNo},${instanceCode},${dateOnly(instanceInput.contentReceivedDate,"تاريخ استلام المحتوى")},${nullableText(instanceInput.contentNotes)},false)
-        returning id::text
+  }
+}
+
+async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const campaignTypeId = clean(body.campaignTypeId); const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd);
+  if (!campaignTypeId || !name || !start || !end) throw new Error("بيانات الحملة الأساسية غير مكتملة");
+  const code = clean(body.campaignCode) || await nextCampaignCode(sql, campaignTypeId);
+  const meta = await marketingMeta(sql, user); const contentId = contentDepartmentId(meta.departments);
+  return sql.begin(async (tx) => {
+    const [campaign] = await tx<any[]>`
+      insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
+      select ${code},${name},ct.id,ct.name,${clean(body.objective)||null},'required',${isoDate(body.campaignDate)||new Date().toISOString().slice(0,10)},${start},${end},${start}::date,${end}::date,${clean(body.requiredFromContent)||null},${tx.json(body)},0,${user.id}::uuid
+      from marketing.campaign_types ct where ct.id=${campaignTypeId}::uuid
+      returning id::text,campaign_code,name
+    `;
+    if (!campaign) throw new Error("نوع الحملة غير صحيح");
+    const creativeMap = new Map<string, string>();
+    let creativeIndex = 0;
+    for (const rawCreative of arrayValue(body.creatives)) {
+      creativeIndex += 1;
+      const creativeTypeId = clean(rawCreative.creativeTypeId);
+      const [creativeType] = await tx<any[]>`select c.*,d.name as department_name from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeTypeId}::uuid`;
+      if (!creativeType) continue;
+      const tempId = clean(rawCreative.tempId || rawCreative.id || `creative-${creativeIndex}`);
+      const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
+      const [creative] = await tx<any[]>`
+        insert into marketing.creatives(campaign_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
+        values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,${Math.max(1,numberValue(rawCreative.quantity,1))},'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(arrayValue(rawCreative.cars))},${tx.json(arrayValue(rawCreative.contentAssignments))},${tx.json(arrayValue(rawCreative.primaryAssignments))},${tx.json(arrayValue(rawCreative.optionalAssignments))},${tx.json(arrayValue(rawCreative.platforms))},${tx.json(rawCreative.notes || {})}) returning id::text
       `;
-      const instanceId = clean(instance.id); instanceIds.push(instanceId);
-      const [contentDepartment] = await tx<SqlRow[]>`select id::text from marketing.departments where is_content=true and is_active=true order by sort_order limit 1`;
-      if (!contentDepartment) throw new MarketingError(500, "CONFIGURATION_ERROR", "قسم المحتوى غير مضبوط في إعدادات التسويق");
-      const writers = asArray(instanceInput.writers).map(asRecord);
-      if (!writers.length) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: اختر كاتب محتوى واحدًا على الأقل`);
-      const writerIds = new Set<string>();
-      for (const writer of writers) {
-        const writerId = ensureUuid(writer.userId, "كاتب المحتوى"); writerIds.add(writerId);
-        const [writerMembership] = await tx`select 1 from marketing.department_users where department_id=${clean(contentDepartment.id)}::uuid and user_id=${writerId}::uuid`;
-        if (!writerMembership) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: كاتب المحتوى غير مرتبط بقسم المحتوى في الإعدادات`);
-        await tx`insert into marketing.instance_content_writers(instance_id,user_id,due_date,notes) values(${instanceId}::uuid,${writerId}::uuid,${dateOnly(writer.dueDate,"موعد كاتب المحتوى")},${nullableText(writer.notes)})`;
-      }
-      const departments = asArray(instanceInput.departments).map(asRecord);
-      const primaryExists = departments.some((item) => clean(item.departmentId) === clean(creative.primary_department_id));
-      if (!primaryExists) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: القسم الأساسي غير مكتمل`);
-      const assignmentRecords: Array<{ id: string; departmentId: string; executiveUserId: string; contentWriterId: string; dueDate: string | null }> = [];
-      for (const depInput of departments) {
-        const departmentId = ensureUuid(depInput.departmentId, "القسم");
-        const [department] = await tx<SqlRow[]>`select id::text,is_active,is_content from marketing.departments where id=${departmentId}::uuid`;
-        if (!department || !asBoolean(department.is_active) || asBoolean(department.is_content)) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: القسم التنفيذي غير متاح`);
-        const isPrimary = departmentId === clean(creative.primary_department_id);
-        const [instanceDepartment] = await tx<SqlRow[]>`insert into marketing.instance_departments(instance_id,department_id,is_primary,due_date,notes) values(${instanceId}::uuid,${departmentId}::uuid,${isPrimary},${dateOnly(depInput.dueDate,"موعد القسم")},${nullableText(depInput.notes)}) returning id::text`;
-        const assignments = asArray(depInput.assignments).map(asRecord);
-        if (!assignments.length) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: اختر مسؤولًا واربطه بكاتب محتوى داخل كل قسم`);
-        for (const assignment of assignments) {
-          const executiveUserId = ensureUuid(assignment.executiveUserId, "المسؤول التنفيذي");
-          const [executiveMembership] = await tx`select 1 from marketing.department_users where department_id=${departmentId}::uuid and user_id=${executiveUserId}::uuid`;
-          if (!executiveMembership) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: المسؤول التنفيذي غير مرتبط بالقسم في الإعدادات`);
-          const contentWriterId = ensureUuid(assignment.contentWriterId, "كاتب المحتوى المرتبط");
-          if (!writerIds.has(contentWriterId)) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: كاتب المحتوى المرتبط غير مختار داخل نفس الكرييتيف`);
-          const dueDate = dateOnly(assignment.dueDate, "موعد التسليم") || dateOnly(depInput.dueDate, "موعد القسم");
-          const [assignmentRow] = await tx<SqlRow[]>`insert into marketing.instance_assignments(instance_department_id,executive_user_id,content_writer_id,due_date) values(${clean(instanceDepartment.id)}::uuid,${executiveUserId}::uuid,${contentWriterId}::uuid,${dueDate}) returning id::text`;
-          assignmentRecords.push({ id: clean(assignmentRow.id), departmentId, executiveUserId, contentWriterId, dueDate });
+      creativeMap.set(tempId, creative.id);
+      await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent) });
+    }
+    for (const budget of arrayValue(body.budgets)) {
+      const creativeId = creativeMap.get(clean(budget.creativeTempId)) || null;
+      const amounts = arrayValue(budget.platformAmounts); const total = amounts.reduce((sum, item: any) => sum + numberValue(item.amount), 0);
+      await tx`insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total) values (${campaign.id}::uuid,${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},${creativeId ? tx`${creativeId}::uuid` : null},${Math.max(1,numberValue(budget.adsCount,1))},${clean(budget.contentGoal)||null},${clean(budget.expectedGoal)||null},${tx.json(amounts)},${total})`;
+    }
+    for (const item of arrayValue(body.schedule)) {
+      const creativeId = creativeMap.get(clean(item.creativeTempId)); if (!creativeId || !isoDate(item.date)) continue;
+      const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creativeId}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
+      const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
+      for (const scheduleTask of scheduleTasks) {
+        const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
+        for (const platform of arrayValue(item.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
+          await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'campaign',${campaign.id}::uuid,${creativeId}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${isoDate(item.date)},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
         }
       }
-      for (const vehicleId of [...new Set(asArray(instanceInput.vehicleIds).map(clean).filter(Boolean))]) {
-        const validVehicleId = ensureUuid(vehicleId, "السيارة");
-        const [vehicle] = await tx`select 1 from operations.vehicles where id=${validVehicleId}::uuid and is_deleted=false and archived_at is null`;
-        if (!vehicle) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: إحدى السيارات غير متاحة`);
-        await tx`insert into marketing.instance_vehicles(instance_id,vehicle_id) values(${instanceId}::uuid,${validVehicleId}::uuid)`;
-      }
-      for (const post of asArray(instanceInput.posts).map(asRecord)) {
-        const platformId = ensureUuid(post.platformId, "المنصة"); const postTypeId = ensureUuid(post.postTypeId, "نوع النشر");
-        const [valid] = await tx`select 1 from marketing.platform_post_types where id=${postTypeId}::uuid and platform_id=${platformId}::uuid and is_active=true`;
-        if (!valid) throw new MarketingError(400, "VALIDATION_ERROR", `${instanceCode}: نوع نشر غير تابع للمنصة`);
-        await tx`insert into marketing.instance_platform_posts(instance_id,platform_id,post_type_id) values(${instanceId}::uuid,${platformId}::uuid,${postTypeId}::uuid) on conflict do nothing`;
-      }
-      const templateIds = new Map<string, string>();
-      for (const writer of writers) {
-        const writerId = ensureUuid(writer.userId, "كاتب المحتوى");
-        const [seq] = await tx<{ n: number }[]>`select nextval('marketing.task_no_seq')::bigint as n`;
-        const taskNo = `MKT-${String(seq?.n || 1).padStart(8,"0")}`;
-        const [template] = await tx<SqlRow[]>`
-          insert into marketing.tasks(task_no,campaign_id,instance_id,task_kind,department_id,assigned_to,content_writer_id,status,progress,due_date)
-          values(${taskNo},${clean(campaign.id)}::uuid,${instanceId}::uuid,'template',${clean(contentDepartment.id)}::uuid,${writerId}::uuid,${writerId}::uuid,'new',0,${dateOnly(writer.dueDate,"موعد كاتب المحتوى")}) returning id::text
-        `;
-        templateIds.set(writerId, clean(template.id));
-      }
-      for (const assignment of assignmentRecords) {
-        const [seq] = await tx<{ n: number }[]>`select nextval('marketing.task_no_seq')::bigint as n`;
-        const taskNo = `MKT-${String(seq?.n || 1).padStart(8,"0")}`;
-        const templateTaskId = templateIds.get(assignment.contentWriterId);
-        if (!templateTaskId) throw new MarketingError(500, "DATA_ERROR", "تعذر ربط تاسك التنفيذ بـ Task Template الصحيحة");
-        const [execution] = await tx<SqlRow[]>`
-          insert into marketing.tasks(task_no,campaign_id,instance_id,task_kind,department_id,assigned_to,content_writer_id,template_task_id,assignment_id,status,progress,due_date)
-          values(${taskNo},${clean(campaign.id)}::uuid,${instanceId}::uuid,'execution',${assignment.departmentId}::uuid,${assignment.executiveUserId}::uuid,${assignment.contentWriterId}::uuid,${templateTaskId}::uuid,${assignment.id}::uuid,'waiting_template',0,${assignment.dueDate}) returning id::text
-        `;
-        const actions = await tx<SqlRow[]>`select id::text,name,progress_percent,admin_only,sort_order from marketing.assignment_actions where department_id=${assignment.departmentId}::uuid and is_active=true order by sort_order,name`;
-        const actionsTotal = actions.reduce((sum: number, action: SqlRow) => sum + asNumber(action.progress_percent), 0);
-        if (!actions.length || Math.abs(actionsTotal - 100) > 0.001) throw new MarketingError(500, "CONFIGURATION_ERROR", `إجراءات القسم يجب أن تكون موجودة ومجموع نسبها 100%`);
-        for (const action of actions) await tx`insert into marketing.task_action_items(task_id,source_action_id,name,progress_percent,admin_only,sort_order) values(${clean(execution.id)}::uuid,${clean(action.id)}::uuid,${clean(action.name)},${asNumber(action.progress_percent)},${asBoolean(action.admin_only)},${asNumber(action.sort_order)})`;
-      }
-      const [completion] = await tx<{ complete: boolean }[]>`
-        select exists(select 1 from marketing.instance_content_writers where instance_id=${instanceId}::uuid)
-          and exists(select 1 from marketing.instance_departments where instance_id=${instanceId}::uuid)
-          and not exists(select 1 from marketing.instance_departments d where d.instance_id=${instanceId}::uuid and not exists(select 1 from marketing.instance_assignments a where a.instance_department_id=d.id)) as complete
-      `;
-      await tx`update marketing.creative_instances set is_complete=${Boolean(completion?.complete)},updated_at=now() where id=${instanceId}::uuid`;
     }
-    for (const [index, item] of asArray(body.budgetItems).map(asRecord).entries()) {
-      const instanceIndex = Math.floor(asNumber(item.instanceIndex, -1));
-      const instanceId = instanceIds[instanceIndex]; if (!instanceId) throw new MarketingError(400, "VALIDATION_ERROR", "بند الميزانية مرتبط بكرييتيف غير موجود");
-      const funnelId = nullableText(item.funnelId);
-      if (funnelId) {
-        ensureUuid(funnelId, "Funnel");
-        const [funnel] = await tx`select 1 from marketing.funnels where id=${funnelId}::uuid and is_active=true`;
-        if (!funnel) throw new MarketingError(400, "VALIDATION_ERROR", "Funnel غير متاح");
-      }
-      const [budget] = await tx<SqlRow[]>`insert into marketing.budget_items(campaign_id,funnel_id,instance_id,ads_count,content_goal,expected_goal,sort_order) values(${clean(campaign.id)}::uuid,${funnelId}::uuid,${instanceId}::uuid,${Math.max(0,Math.floor(asNumber(item.adsCount)))},${nullableText(item.contentGoal)},${nullableText(item.expectedGoal)},${index}) returning id::text`;
-      for (const platformValue of asArray(item.platformValues).map(asRecord)) {
-        const platformId = ensureUuid(platformValue.platformId,"منصة الميزانية");
-        const [platform] = await tx`select 1 from marketing.platforms where id=${platformId}::uuid and is_active=true`;
-        if (!platform) throw new MarketingError(400, "VALIDATION_ERROR", "إحدى منصات الميزانية غير متاحة");
-        await tx`insert into marketing.budget_platform_values(budget_item_id,platform_id,amount) values(${clean(budget.id)}::uuid,${platformId}::uuid,${Math.max(0,asNumber(platformValue.amount))})`;
-      }
-    }
-    const scheduleInputs = sourceKind === "agenda"
-      ? instances.map((instance, instanceIndex) => ({ publishDate: instance.agendaDate, instanceIndex, posts: instance.posts }))
-      : asArray(body.schedule).map(asRecord);
-    for (const item of scheduleInputs) {
-      const schedule = asRecord(item); const instanceIndex = Math.floor(asNumber(schedule.instanceIndex, -1)); const instanceId = instanceIds[instanceIndex];
-      if (!instanceId) throw new MarketingError(400, "VALIDATION_ERROR", "منشور مرتبط بكرييتيف غير موجود");
-      const publishDate = dateOnly(schedule.publishDate, "تاريخ النشر", true) as string;
-      if (publishDate < publishStartDate || publishDate > publishEndDate) throw new MarketingError(400, "VALIDATION_ERROR", "يوجد منشور خارج فترة النشر");
-      const [scheduleRow] = await tx<SqlRow[]>`insert into marketing.publish_schedule_items(campaign_id,publish_date,instance_id) values(${clean(campaign.id)}::uuid,${publishDate}::date,${instanceId}::uuid) returning id::text`;
-      const schedulePosts = asArray(schedule.posts).map(asRecord);
-      if (!schedulePosts.length) throw new MarketingError(400, "VALIDATION_ERROR", "كل منشور في جدول النشر يحتاج منصة ونوع نشر");
-      for (const post of schedulePosts) {
-        const platformId = ensureUuid(post.platformId,"المنصة"); const postTypeId = ensureUuid(post.postTypeId,"نوع النشر");
-        const [validPost] = await tx`select 1 from marketing.platform_post_types where id=${postTypeId}::uuid and platform_id=${platformId}::uuid and is_active=true`;
-        if (!validPost) throw new MarketingError(400, "VALIDATION_ERROR", "نوع نشر غير تابع للمنصة في جدول النشر");
-        await tx`insert into marketing.publish_schedule_posts(schedule_item_id,platform_id,post_type_id) values(${clean(scheduleRow.id)}::uuid,${platformId}::uuid,${postTypeId}::uuid) on conflict do nothing`;
-      }
-    }
-    const after: JsonObject = { campaignId: clean(campaign.id), campaignCode, idempotencyKey };
-    await tx`insert into marketing.activity_log(user_id,action,entity_type,entity_id,after_data) values(${user.id}::uuid,'campaign_created',${sourceKind},${clean(campaign.id)},${tx.json(after)})`;
-    return { campaignId: clean(campaign.id), campaignCode, duplicate: false };
+    await audit(tx as any,user,"campaign_created","campaign",campaign.id,{ code,name },undefined,undefined);
+    return { ok: true, id: campaign.id, code, message: "تم إنشاء الحملة والتاسكات" };
   });
-  return { ok: true, ...result };
 }
 
-async function taskAction(body: UnknownRecord, user: SessionUser) {
-  const sql = getSql(); const action = clean(body.taskAction); const taskId = ensureUuid(body.taskId, "التاسك");
-  const result = await sql.begin(async (tx) => {
-    const [task] = await tx<SqlRow[]>`select *,id::text,assigned_to::text,template_task_id::text,campaign_id::text from marketing.tasks where id=${taskId}::uuid for update`;
-    if (!task) throw new MarketingError(404, "NOT_FOUND", "التاسك غير موجود");
-    const owner = clean(task.assigned_to) === user.id; const reviewer = isAdmin(user) || hasPermission(user, "marketing.templates.review");
-    if (action === "receive") {
-      if (!owner && !isAdmin(user)) throw new MarketingError(403, "FORBIDDEN", "التاسك غير مسند إليك");
-      if (clean(task.status) === "waiting_template") throw new MarketingError(409, "TEMPLATE_PENDING", "لا يمكن استلام التاسك قبل اعتماد Task Template المرتبطة");
-      if (task.actual_received_at) return task;
-      const [updated] = await tx<SqlRow[]>`update marketing.tasks set actual_received_at=now(),status=case when task_kind='template' then 'received' else 'active' end,updated_at=now() where id=${taskId}::uuid returning *,id::text`;
-      return updated;
+function datesBetween(start: string, end: string) {
+  const output: string[] = []; const date = new Date(`${start}T00:00:00Z`); const last = new Date(`${end}T00:00:00Z`);
+  while (date <= last && output.length < 370) { output.push(date.toISOString().slice(0,10)); date.setUTCDate(date.getUTCDate()+1); }
+  return output;
+}
+
+async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd); const monthKey = clean(body.monthKey);
+  if (!name || !start || !end || !monthKey) throw new Error("بيانات الأجندة الأساسية غير مكتملة");
+  const meta = await marketingMeta(sql,user); const contentId = contentDepartmentId(meta.departments);
+  return sql.begin(async (tx) => {
+    const [agenda] = await tx<any[]>`insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by) values (${name},${monthKey},${start},${end},'required',${tx.json(body)},0,${user.id}::uuid) returning id::text`;
+    let creativeIndex = 0;
+    for (const day of arrayValue(body.days)) {
+      const dayDate = isoDate(day.date); if (!dayDate) continue;
+      for (const rawCreative of arrayValue(day.creatives)) {
+        const quantity = Math.max(1,numberValue(rawCreative.quantity,1));
+        for (let instance=0; instance<quantity; instance += 1) {
+          creativeIndex += 1;
+          const creativeTypeId = clean(rawCreative.creativeTypeId);
+          const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
+          if (!creativeType) continue;
+          const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
+          const [creative] = await tx<any[]>`
+            insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
+            values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(arrayValue(rawCreative.cars))},${tx.json(arrayValue(rawCreative.contentAssignments))},${tx.json(arrayValue(rawCreative.primaryAssignments))},${tx.json(arrayValue(rawCreative.optionalAssignments))},${tx.json(arrayValue(rawCreative.platforms))},${dayDate},${tx.json(rawCreative.notes || {})}) returning id::text
+          `;
+          await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments:arrayValue(rawCreative.contentAssignments),primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments:arrayValue(rawCreative.primaryAssignments),optionalAssignments:arrayValue(rawCreative.optionalAssignments),requiredFromContent:"" });
+          const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creative.id}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
+          const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
+          for (const scheduleTask of scheduleTasks) {
+            const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
+            for (const platform of arrayValue(rawCreative.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
+              await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'agenda',${agenda.id}::uuid,${creative.id}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${dayDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
+            }
+          }
+        }
+      }
     }
-    if (action === "toggle_action") {
-      if (!owner && !isAdmin(user)) throw new MarketingError(403, "FORBIDDEN", "التاسك غير مسند إليك");
-      if (clean(task.task_kind) !== "execution") throw new MarketingError(400, "INVALID_TASK", "إجراءات التكليف متاحة للتاسكات التنفيذية فقط");
-      if (!task.actual_received_at) throw new MarketingError(409, "NOT_RECEIVED", "اضغط تم الاستلام أولًا");
-      const actionId = ensureUuid(body.actionId, "الإجراء");
-      const [item] = await tx<SqlRow[]>`select *,id::text from marketing.task_action_items where id=${actionId}::uuid and task_id=${taskId}::uuid for update`;
-      if (!item) throw new MarketingError(404, "NOT_FOUND", "إجراء التكليف غير موجود");
-      if (asBoolean(item.admin_only) && !reviewer) throw new MarketingError(403, "FORBIDDEN", "هذا الإجراء متاح للأدمن فقط");
-      const completed = !item.completed_at;
-      if (completed) await tx`update marketing.task_action_items set completed_at=now(),completed_by=${user.id}::uuid where id=${actionId}::uuid`;
-      else await tx`update marketing.task_action_items set completed_at=null,completed_by=null where id=${actionId}::uuid`;
-      const [progressRow] = await tx<{ progress: number }[]>`select least(100,coalesce(sum(progress_percent) filter(where completed_at is not null),0))::numeric as progress from marketing.task_action_items where task_id=${taskId}::uuid`;
-      const progress = asNumber(progressRow?.progress);
-      const [updated] = await tx<SqlRow[]>`update marketing.tasks set progress=${progress},status=case when ${progress}>=100 then 'completed' else 'active' end,completed_at=case when ${progress}>=100 then coalesce(completed_at,now()) else null end,updated_at=now() where id=${taskId}::uuid returning *,id::text`;
-      return updated;
-    }
-    if (action === "submit_template") {
-      if (!owner && !isAdmin(user)) throw new MarketingError(403, "FORBIDDEN", "التاسك غير مسند إليك");
-      if (clean(task.task_kind) !== "template") throw new MarketingError(400, "INVALID_TASK", "رفع Task Template متاح لتاسك الكاتب فقط");
-      if (!task.actual_received_at) throw new MarketingError(409, "NOT_RECEIVED", "اضغط تم الاستلام أولًا");
-      const [pending] = await tx`select 1 from marketing.template_submissions where template_task_id=${taskId}::uuid and review_status='pending' limit 1`;
-      if (pending) throw new MarketingError(409, "SUBMISSION_PENDING", "توجد نسخة مرفوعة قيد المراجعة بالفعل");
-      const [version] = await tx<{ version_no: number }[]>`select coalesce(max(version_no),0)::int+1 as version_no from marketing.template_submissions where template_task_id=${taskId}::uuid`;
-      const templateData = toJsonValue(asRecord(body.templateData));
-      if (!nullableText(body.storageKey) && Object.keys(asRecord(body.templateData)).length === 0) throw new MarketingError(400, "VALIDATION_ERROR", "أرفق ملف Task Template أو أدخل بياناتها");
-      await tx`insert into marketing.template_submissions(template_task_id,version_no,storage_key,file_name,template_data,review_status,submitted_by) values(${taskId}::uuid,${version?.version_no || 1},${nullableText(body.storageKey)},${nullableText(body.fileName)},${tx.json(templateData)},'pending',${user.id}::uuid)`;
-      const [updated] = await tx<SqlRow[]>`update marketing.tasks set status='template_review',admin_note=null,rejection_reason=null,updated_at=now() where id=${taskId}::uuid returning *,id::text`;
-      return updated;
-    }
-    if (["approve_template","request_revision","reject_template"].includes(action)) {
-      if (!reviewer) throw new MarketingError(403, "FORBIDDEN", "مراجعة Task Template متاحة لمدير النظام");
-      if (clean(task.task_kind) !== "template") throw new MarketingError(400, "INVALID_TASK", "التاسك ليس Task Template");
-      const [submission] = await tx<SqlRow[]>`select *,id::text from marketing.template_submissions where template_task_id=${taskId}::uuid and review_status='pending' order by version_no desc limit 1 for update`;
-      if (!submission) throw new MarketingError(409, "NO_PENDING_SUBMISSION", "لا توجد نسخة معلقة للمراجعة");
-      const note = nullableText(body.note);
-      if ((action === "request_revision" || action === "reject_template") && !note) throw new MarketingError(400, "VALIDATION_ERROR", "ملاحظة المراجعة مطلوبة");
-      const reviewStatus = action === "approve_template" ? "approved" : action === "request_revision" ? "revision_requested" : "rejected";
-      await tx`update marketing.template_submissions set review_status=${reviewStatus},review_note=${note},reviewed_by=${user.id}::uuid,reviewed_at=now() where id=${clean(submission.id)}::uuid`;
-      if (action === "approve_template") {
-        await tx`update marketing.tasks set status='completed',progress=100,completed_at=now(),admin_note=null,rejection_reason=null,updated_at=now() where id=${taskId}::uuid`;
-        await tx`update marketing.tasks set status=case when actual_received_at is null then 'new' else 'active' end,updated_at=now() where template_task_id=${taskId}::uuid and task_kind='execution' and status='waiting_template'`;
-      } else if (action === "request_revision") await tx`update marketing.tasks set status='template_revision',admin_note=${note},updated_at=now() where id=${taskId}::uuid`;
-      else await tx`update marketing.tasks set status='rejected',rejection_reason=${note},updated_at=now() where id=${taskId}::uuid`;
-      const [updated] = await tx<SqlRow[]>`select *,id::text from marketing.tasks where id=${taskId}::uuid`;
-      return updated;
-    }
-    if (action === "attach_final") {
-      if (!owner && !isAdmin(user)) throw new MarketingError(403, "FORBIDDEN", "التاسك غير مسند إليك");
-      if (clean(task.task_kind) !== "execution") throw new MarketingError(400, "INVALID_TASK", "الملف النهائي متاح للتاسك التنفيذي فقط");
-      if (!task.actual_received_at) throw new MarketingError(409, "NOT_RECEIVED", "اضغط تم الاستلام أولًا");
-      const storageKey = nullableText(body.storageKey); const fileName = nullableText(body.fileName);
-      if (!storageKey || !fileName) throw new MarketingError(400, "VALIDATION_ERROR", "بيانات الملف النهائي غير مكتملة");
-      const [updated] = await tx<SqlRow[]>`update marketing.tasks set final_storage_key=${storageKey},final_file_name=${fileName},updated_at=now() where id=${taskId}::uuid returning *,id::text`;
-      return updated;
-    }
-    throw new MarketingError(400, "UNSUPPORTED_ACTION", "إجراء التاسك غير مدعوم");
+    await audit(tx as any,user,"agenda_created","agenda",agenda.id,{ name,monthKey },undefined,undefined);
+    return { ok:true,id:agenda.id,message:"تم إنشاء الأجندة والتاسكات" };
   });
-  await sql`insert into marketing.activity_log(user_id,action,entity_type,entity_id,after_data) values(${user.id}::uuid,${action},'task',${taskId},${sql.json(toJsonValue(result))})`;
-  return { ok: true, task: result };
 }
 
-async function campaignAction(body: UnknownRecord, user: SessionUser) {
-  const sql = getSql(); const action = clean(body.campaignAction); const campaignId = ensureUuid(body.campaignId, "الحملة");
-  if (["archive","restore","delete","move_to_publish","save_result","add_link","create_raw_folders"].includes(action)) requirePermission(user, "marketing.manage");
-  if (action === "move_to_publish") {
-    const tasks = await taskRowsForCampaign(campaignId); const progress = calculateCampaignProgress(tasks);
-    if (progress < 100) throw new MarketingError(409, "NOT_COMPLETE", "لا يمكن نقل الحملة إلى قسم النشر قبل اكتمالها 100%");
-    await sql`update marketing.campaigns set workflow_stage='publishing',status='publishing',updated_at=now() where id=${campaignId}::uuid`;
-    return { ok: true };
-  }
-  if (action === "archive") { await sql`update marketing.campaigns set archived_at=now(),archived_by=${user.id}::uuid,updated_at=now() where id=${campaignId}::uuid`; return { ok: true }; }
-  if (action === "restore") { await sql`update marketing.campaigns set archived_at=null,archived_by=null,updated_at=now() where id=${campaignId}::uuid`; return { ok: true }; }
-  if (action === "delete") { await sql`update marketing.campaigns set deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now() where id=${campaignId}::uuid`; return { ok: true }; }
-  if (action === "save_result") { await sql`update marketing.campaigns set result_storage_key=${nullableText(body.storageKey)},result_file_name=${nullableText(body.fileName)},updated_at=now() where id=${campaignId}::uuid`; return { ok: true }; }
-  if (action === "add_link") {
-    const platformId = ensureUuid(body.platformId, "المنصة"); const url = clean(body.url); if (!/^https?:\/\//i.test(url)) throw new MarketingError(400, "VALIDATION_ERROR", "رابط الحملة غير صحيح");
-    const [row] = await sql<SqlRow[]>`insert into marketing.campaign_links(campaign_id,platform_id,url,created_by) values(${campaignId}::uuid,${platformId}::uuid,${url},${user.id}::uuid) returning id::text`;
-    return { ok: true, row };
-  }
-  if (action === "create_raw_folders") {
-    const [campaign] = await sql<SqlRow[]>`select id::text,campaign_code,name,publish_start_date,raw_folders from marketing.campaigns where id=${campaignId}::uuid`;
-    if (!campaign) throw new MarketingError(404, "NOT_FOUND", "الحملة غير موجودة");
-    const instances = await sql<SqlRow[]>`select i.instance_code,c.name as creative_name,c.short_code from marketing.creative_instances i join marketing.creative_catalog c on c.id=i.creative_id where i.campaign_id=${campaignId}::uuid order by i.sequence_no`;
-    const url = clean(process.env.MZJ_RAW_API_URL); const token = clean(process.env.MZJ_RAW_API_TOKEN);
-    if (!url || !token) throw new MarketingError(503, "RAW_API_NOT_CONFIGURED", "متغيرات MZJ_RAW_API_URL و MZJ_RAW_API_TOKEN غير مضبوطة");
-    const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-api-token": token }, body: JSON.stringify({ campaignCode: campaign.campaign_code, campaignName: campaign.name, publishStartDate: campaign.publish_start_date, creatives: instances }) });
-    const text = await response.text(); let payload: JsonValue = {};
-    try { payload = toJsonValue(text ? JSON.parse(text) : {}); } catch { payload = { ok: false, message: text || "Invalid raw server response" }; }
-    if (!response.ok) throw new MarketingError(response.status, "RAW_API_ERROR", clean(asRecord(payload).message) || "تعذر إنشاء فولدرات الخام", payload);
-    await sql`update marketing.campaigns set raw_folders=${sql.json(payload)},updated_at=now() where id=${campaignId}::uuid`;
-    return { ok: true, rawFolders: payload };
-  }
-  throw new MarketingError(400, "UNSUPPORTED_ACTION", "إجراء الحملة غير مدعوم");
+async function recalculateProgress(sql: any, sourceType: string, sourceId: string) {
+  const rows = await sql<any[]>`
+    select coalesce(t.department_id::text,'content') as department_id,avg(t.progress)::float as progress
+    from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
+    group by coalesce(t.department_id::text,'content')
+  `;
+  const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
+  if (sourceType === "agenda") await sql`update marketing.agendas set progress=${progress},status=case when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  else await sql`update marketing.campaigns set progress=${progress},status=case when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  return progress;
 }
 
-async function savePackage(body: UnknownRecord, user: SessionUser) {
-  requirePermission(user, "marketing.packages.manage");
-  const sql = getSql(); const id = clean(body.id); const name = clean(body.name); const categoryId = ensureUuid(body.categoryId, "التصنيف");
-  if (!name) throw new MarketingError(400, "VALIDATION_ERROR", "اسم الباقة مطلوب");
-  const careLines = asArray(body.carCareLines).map(clean).filter(Boolean);
-  const [row] = id
-    ? await sql<SqlRow[]>`update marketing.car_packages set name=${name},category_id=${categoryId}::uuid,price=${Math.max(0,asNumber(body.price))},cash_discount_percent=${Math.max(0,Math.min(100,asNumber(body.cashDiscountPercent)))},registration_fee=${asBoolean(body.registrationFee)},insurance=${asBoolean(body.insurance)},issuance_fee=${asBoolean(body.issuanceFee)},car_care_lines=${careLines},delivery_type=${clean(body.deliveryType)==='region'?'region':'home'},is_active=${body.isActive === undefined ? true : asBoolean(body.isActive)},updated_at=now() where id=${ensureUuid(id,"الباقة")}::uuid returning *,id::text`
-    : await sql<SqlRow[]>`insert into marketing.car_packages(name,category_id,price,cash_discount_percent,registration_fee,insurance,issuance_fee,car_care_lines,delivery_type,is_active,created_by) values(${name},${categoryId}::uuid,${Math.max(0,asNumber(body.price))},${Math.max(0,Math.min(100,asNumber(body.cashDiscountPercent)))},${asBoolean(body.registrationFee)},${asBoolean(body.insurance)},${asBoolean(body.issuanceFee)},${careLines},${clean(body.deliveryType)==='region'?'region':'home'},${body.isActive === undefined ? true : asBoolean(body.isActive)},${user.id}::uuid) returning *,id::text`;
-  if (!row) throw new MarketingError(404, "NOT_FOUND", "الباقة غير موجودة");
-  return { ok: true, row };
+async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
+  const ownFilter = isAdmin(user) ? sql`true` : sql`(t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)`;
+  const tasks = await sql<any[]>`
+    select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.note,
+      t.assigned_to::text,u.full_name as assigned_name,t.paired_content_user_id::text,cu.full_name as content_user_name,
+      d.id::text as department_id,d.name as department_name,c.name as creative_name,c.instance_code,
+      coalesce(cam.name,ag.name) as source_name,cam.campaign_code,tt.status as template_status,tt.approved_data,
+      f.id::text as final_file_id,f.original_name as final_file_name
+    from marketing.tasks t
+    left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id
+    left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files f on f.id=t.final_file_id
+    where t.is_deleted=false and ${ownFilter}
+    order by t.received_at nulls first,t.due_at nulls last,t.created_at
+  `;
+  const entities = await sql<any[]>`
+    select 'campaign' as source_type,id::text,name,campaign_code as code,status,progress::float,publish_start,publish_end,created_at from marketing.campaigns where is_deleted=false and archived_at is null
+    union all
+    select 'agenda',id::text,name,month_key,status,progress::float,publish_start,publish_end,created_at from marketing.agendas where archived_at is null
+    order by created_at desc
+  `;
+  return { ok:true, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, isAdmin:isAdmin(user) };
 }
 
-async function createPhotoRequest(body: UnknownRecord, user: SessionUser) {
-  const sql = getSql(); const vehicleIds = [...new Set(asArray(body.vehicleIds).map(clean).filter(Boolean))];
-  if (!vehicleIds.length) throw new MarketingError(400, "VALIDATION_ERROR", "اختر سيارة واحدة على الأقل");
-  const photographyDate = dateOnly(body.photographyDate, "تاريخ التصوير", true) as string;
-  const result = await sql.begin(async (tx) => {
-    for (const vehicleId of vehicleIds) {
-      const validId = ensureUuid(vehicleId, "السيارة");
-      const [vehicle] = await tx`select 1 from operations.vehicles where id=${validId}::uuid and is_deleted=false and archived_at is null`;
-      if (!vehicle) throw new MarketingError(400, "VALIDATION_ERROR", "إحدى السيارات غير موجودة");
-      const [active] = await tx<SqlRow[]>`select r.request_no from operations.photography_request_vehicles rv join operations.photography_requests r on r.id=rv.request_id where rv.vehicle_id=${validId}::uuid and r.is_deleted=false and r.status not in ('completed','cancelled') limit 1`;
-      if (active) throw new MarketingError(409, "DUPLICATE_ACTIVE_REQUEST", `السيارة مرتبطة بطلب تصوير نشط ${clean(active.request_no)}`);
+async function databaseRows(sql: ReturnType<typeof getSql>) {
+  const rows = await sql<any[]>`
+    select 'campaign' as source_type,c.id::text,c.campaign_date as record_date,c.campaign_code as code,c.name,coalesce(ct.name,c.campaign_type) as type,c.objective,c.publish_start,c.publish_end,c.status,c.progress::float,c.archived_at,c.created_at,
+      (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false) as tasks_count,
+      (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.progress>=100 and t.is_deleted=false) as completed_count,
+      c.result_file_id::text,coalesce(jsonb_array_length(c.links),0)::int as links_count
+    from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where c.is_deleted=false
+    union all
+    select 'agenda',a.id::text,a.created_at::date,a.month_key,a.name,'أجندة',null,a.publish_start,a.publish_end,a.status,a.progress::float,a.archived_at,a.created_at,
+      (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false),
+      (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.progress>=100 and t.is_deleted=false),
+      a.result_file_id::text,coalesce(jsonb_array_length(a.links),0)::int
+    from marketing.agendas a
+    order by created_at desc
+  `;
+  return { ok:true,rows };
+}
+
+async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, id: string) {
+  const [entity] = sourceType === "agenda"
+    ? await sql<any[]>`select 'agenda' as source_type,a.*,a.id::text,a.result_file_id::text from marketing.agendas a where a.id=${id}::uuid`
+    : await sql<any[]>`select 'campaign' as source_type,c.*,c.id::text,c.campaign_type_id::text,c.result_file_id::text,ct.name as campaign_type_name from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where c.id=${id}::uuid and c.is_deleted=false`;
+  if (!entity) throw new Error("السجل غير موجود");
+  const [creatives,tasks,budgets,schedule,reviewHistory,files] = await Promise.all([
+    sql<any[]>`select c.*,c.id::text,c.campaign_id::text,c.agenda_id::text,c.creative_type_id::text,c.primary_department_id::text,ct.name as creative_type_name,d.name as primary_department_name from marketing.creatives c left join marketing.creative_types ct on ct.id=c.creative_type_id left join marketing.departments d on d.id=c.primary_department_id where (${sourceType}='campaign' and c.campaign_id=${id}::uuid) or (${sourceType}='agenda' and c.agenda_id=${id}::uuid) order by c.created_at`,
+    sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false order by d.name,u.full_name`,
+    sourceType === "campaign" ? sql<any[]>`select b.*,b.id::text,b.funnel_id::text,b.creative_id::text,f.name as funnel_name,c.name as creative_name from marketing.budget_items b left join marketing.funnels f on f.id=b.funnel_id left join marketing.creatives c on c.id=b.creative_id where b.campaign_id=${id}::uuid order by b.created_at` : Promise.resolve([]),
+    sql<any[]>`select s.*,s.id::text,s.platform_id::text,s.post_type_id::text,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id where s.source_type=${sourceType} and s.source_id=${id}::uuid order by s.publish_date,p.name,pt.name`,
+    sql<any[]>`select h.*,h.id::text,h.task_template_id::text from marketing.task_review_history h join marketing.task_templates tt on tt.id=h.task_template_id where tt.source_type=${sourceType} and tt.source_id=${id}::uuid order by h.created_at desc`,
+    sql<any[]>`select f.*,f.id::text from marketing.files f where f.source_type=${sourceType} and f.source_id=${id}::uuid order by f.created_at desc`,
+  ]);
+  return { ok:true,entity,creatives,tasks,budgets,schedule,reviewHistory,files };
+}
+
+async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: SessionUser) {
+  const [task] = await sql<any[]>`
+    select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,
+      u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,c.cars,c.instance_code,
+      coalesce(cam.name,ag.name) as source_name,cam.campaign_code,cam.campaign_date,cam.campaign_type,cam.objective,cam.required_from_content,
+      coalesce(cam.publish_start,ag.publish_start) as campaign_start,coalesce(cam.publish_end,ag.publish_end) as campaign_end,
+      tt.task_no,tt.status as template_status,tt.progress as template_progress,tt.due_on as template_due_on,tt.department_note as template_department_note,tt.admin_note,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,
+      ff.original_name as final_file_name
+    from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id
+    where t.id=${id}::uuid and t.is_deleted=false
+  `;
+  if (!task) throw new Error("التاسك غير موجود");
+  if (!isAdmin(user) && task.assigned_to !== user.id && task.paired_content_user_id !== user.id) throw new Error("لا توجد صلاحية لعرض التاسك");
+  const actionsPromise = task.department_id
+    ? sql<any[]>`select a.id::text,a.name,a.percentage::float,a.admin_only,a.sort_order,coalesce(p.completed,false) as completed,p.completed_at,u.full_name as completed_by_name from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${id}::uuid left join core.users u on u.id=p.completed_by where a.department_id=${task.department_id}::uuid and a.is_active=true order by a.sort_order,a.created_at`
+    : Promise.resolve([] as any[]);
+  const [actions,history] = await Promise.all([
+    actionsPromise,
+    task.task_template_id ? sql<any[]>`select h.*,h.id::text from marketing.task_review_history h where h.task_template_id=${task.task_template_id}::uuid order by h.created_at desc` : Promise.resolve([]),
+  ]);
+  return { ok:true,task,actions,history,isAdmin:isAdmin(user) };
+}
+
+async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: SessionUser) {
+  const id=clean(body.id),name=clean(body.name),userIds=arrayValue<string>(body.userIds).map(clean).filter(Boolean); if(!name)throw new Error("اسم القسم مطلوب");
+  return sql.begin(async(tx)=>{ const [row]=id?await tx<any[]>`update marketing.departments set name=${name},is_content=${bool(body.isContent)},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.departments(name,is_content,created_by) values(${name},${bool(body.isContent)},${user.id}::uuid) returning *,id::text`; await tx`delete from marketing.department_users where department_id=${row.id}::uuid`; for(const userId of userIds)await tx`insert into marketing.department_users(department_id,user_id) values(${row.id}::uuid,${userId}::uuid) on conflict do nothing`; return{ok:true,row,message:"تم حفظ القسم"};});
+}
+async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
+async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id) values(${name},${shortCode},${departmentId}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
+async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
+async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
+async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id),name=clean(body.name),category=clean(body.category);if(!name||!category)throw new Error("اسم الباقة والتصنيف مطلوبان");const features=arrayValue(body.careFeatures).map(clean).filter(Boolean);const[row]=id?await sql<any[]>`update marketing.packages set name=${name},category=${category},price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${bool(body.insurance)},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(features)},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.packages(name,category,price,cash_discount,registration_fees,insurance,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category},${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${bool(body.insurance)},${bool(body.issuanceFees)},${sql.json(features)},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الباقة"};}
+async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){const entity=clean(body.entity),id=clean(body.id);const allowed:Record<string,string>={department:"marketing.departments",action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages"};const table=allowed[entity];if(!table||!id)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
+
+async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!isAdmin(user)&&task.assigned_to!==user.id)throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
+async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),fileId=clean(body.fileId),data=cleanTemplateData(body.templateData);
+  const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text,task_template_id::text from marketing.tasks where id=${taskId}::uuid and task_kind='task_template'`;
+  if(!task)throw new Error("Task Template غير موجود");
+  if(!isAdmin(user)&&task.assigned_to!==user.id)throw new Error("لا توجد صلاحية لرفع الملف");
+  await sql.begin(async tx=>{
+    await tx`update marketing.task_templates set file_id=${fileId}::uuid,template_data=template_data||${tx.json(data)},status='under_review',progress=50,updated_at=now() where id=${task.task_template_id}::uuid`;
+    await tx`update marketing.tasks set progress=50,status='under_review',updated_at=now() where id=${taskId}::uuid`;
+    await tx`insert into marketing.task_review_history(task_template_id,action,after_data,actor_id,actor_name) values(${task.task_template_id}::uuid,'uploaded',${tx.json(data)},${user.id}::uuid,${user.fullName})`;
+  });
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:"تم رفع Task Template وإرساله للمراجعة"};
+}
+async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");
+  const templateId=clean(body.templateId),action=clean(body.reviewAction),note=clean(body.note),data=cleanTemplateData(body.data);
+  const[template]=await sql<any[]>`select *,id::text,source_id::text from marketing.task_templates where id=${templateId}::uuid`;
+  if(!template)throw new Error("Task Template غير موجود");
+  let status=template.status,progress=numberValue(template.progress);
+  if(action==='approve'){status='approved';progress=100;}
+  else if(action==='request_edit'){status='revision_requested';progress=50;}
+  else if(action==='reject'){status='rejected';progress=0;}
+  else if(action==='edit'){status='under_review';progress=50;}
+  else throw new Error("إجراء المراجعة غير صحيح");
+  await sql.begin(async tx=>{
+    await tx`insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name) values(${templateId}::uuid,${action},${note||null},${tx.json(template)},${tx.json(data)},${user.id}::uuid,${user.fullName})`;
+    await tx`update marketing.task_templates set status=${status},progress=${progress},admin_note=${note||null},template_data=case when ${action} in ('edit','approve') then template_data||${tx.json(data)} else template_data end,approved_data=case when ${action}='approve' then template_data||${tx.json(data)} else approved_data end,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${templateId}::uuid`;
+    await tx`update marketing.tasks set status=${status},progress=${progress},updated_at=now() where task_template_id=${templateId}::uuid and task_kind='task_template'`;
+    if(action==='approve')await tx`update marketing.tasks set approved_template_data=(select approved_data from marketing.task_templates where id=${templateId}::uuid),updated_at=now() where task_template_id=${templateId}::uuid and task_kind='execution'`;
+  });
+  await recalculateProgress(sql,template.source_type,template.source_id);
+  return{ok:true,message:action==='approve'?"تم اعتماد التعليمات":"تم حفظ إجراء المراجعة"};
+}
+async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),actionId=clean(body.actionId),completed=bool(body.completed);
+  const[record]=await sql<any[]>`select t.id::text,t.source_type,t.source_id::text,t.assigned_to::text,a.admin_only,tt.status as template_status from marketing.tasks t join marketing.assignment_actions a on a.id=${actionId}::uuid left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid and t.is_deleted=false`;
+  if(!record)throw new Error("الإجراء أو التاسك غير موجود");
+  if(record.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
+  if(record.admin_only&&!isAdmin(user))throw new Error("هذا الإجراء خاص بمدير النظام");
+  if(!isAdmin(user)&&record.assigned_to!==user.id)throw new Error("لا توجد صلاحية لتنفيذ الإجراء");
+  await sql`insert into marketing.task_action_progress(task_id,action_id,completed,completed_by,completed_at) values(${taskId}::uuid,${actionId}::uuid,${completed},${completed?sql`${user.id}::uuid`:null},${completed?sql`now()`:null}) on conflict(task_id,action_id) do update set completed=excluded.completed,completed_by=excluded.completed_by,completed_at=excluded.completed_at`;
+  const[sum]=await sql<any[]>`select coalesce(sum(a.percentage) filter(where p.completed),0)::float as progress,count(a.id)::int as actions from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${taskId}::uuid where a.department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and a.is_active=true`;
+  const progress=Math.min(100,numberValue(sum?.progress));
+  await sql`update marketing.tasks set progress=${progress},status=case when ${progress}>=100 then 'completed' when ${progress}>0 then 'in_progress' when received_at is not null then 'received' else 'required' end,completed_at=case when ${progress}>=100 then now() else null end,updated_at=now() where id=${taskId}::uuid`;
+  await recalculateProgress(sql,record.source_type,record.source_id);
+  return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
+}
+async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const taskId=clean(body.taskId),fileId=clean(body.fileId);const[task]=await sql<any[]>`select t.*,t.id::text,t.source_id::text,t.assigned_to::text,tt.status as template_status from marketing.tasks t left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid`;if(!task)throw new Error("التاسك غير موجود");if(task.task_kind==='execution'&&task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");if(!isAdmin(user)&&task.assigned_to!==user.id)throw new Error("لا توجد صلاحية لرفع الملف");await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=${task.department_id} and is_active=true`;if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم رفع الملف النهائي"};}
+
+async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;if(!category)throw new Error("نوع الملف مطلوب");const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};}
+async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const fileId=clean(body.fileId);
+  const rows=isAdmin(user)
+    ? await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid returning id::text`
+    : await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and uploaded_by=${user.id}::uuid returning id::text`;
+  if(!rows.length)throw new Error("الملف غير موجود أو لا توجد صلاحية لتحديثه");
+  return{ok:true,message:"تم حفظ الملف"};
+}
+async function fileDownload(sql:ReturnType<typeof getSql>,id:string){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");const[file]=await sql<any[]>`select *,id::text from marketing.files where id=${id}::uuid and status='ready'`;if(!file)throw new Error("الملف غير موجود");return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size}};}
+
+async function publishPrep(sql:ReturnType<typeof getSql>) {
+  const rows=await sql<any[]>`
+    with representatives as (
+      select distinct on (group_id) *
+      from marketing.publish_schedule
+      order by group_id,created_at,id
+    )
+    select
+      r.group_id::text as id,
+      r.group_id::text,
+      r.source_type,
+      r.source_id::text,
+      r.creative_id::text,
+      r.task_id::text,
+      r.publish_date,
+      r.caption,
+      r.hashtags,
+      aggregate_data.status,
+      aggregate_data.schedule_ids,
+      aggregate_data.platform_name,
+      aggregate_data.post_type_name,
+      coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
+      c.name as creative_name,
+      c.instance_code,
+      coalesce(cam.name,ag.name) as source_name,
+      t.progress::float,
+      t.final_file_id::text,
+      f.original_name as final_file_name,
+      t.department_id::text,
+      d.name as department_name,
+      u.full_name as assigned_name
+    from representatives r
+    left join lateral (
+      select
+        array_agg(ps.id::text order by ps.created_at,ps.id) as schedule_ids,
+        case when bool_and(ps.status='published') then 'published' when bool_or(ps.status='failed') then 'failed' else 'waiting' end as status,
+        string_agg(distinct p.name,'، ') as platform_name,
+        string_agg(distinct pt.name,'، ') as post_type_name
+      from marketing.publish_schedule ps
+      left join marketing.platforms p on p.id=ps.platform_id
+      left join marketing.platform_post_types pt on pt.id=ps.post_type_id
+      where ps.group_id=r.group_id
+    ) aggregate_data on true
+    left join lateral (
+      select jsonb_agg(jsonb_build_object('platformId',grouped.platform_id,'postTypeIds',grouped.post_type_ids) order by grouped.platform_name) as platforms
+      from (
+        select ps.platform_id::text as platform_id,max(p.name) as platform_name,jsonb_agg(ps.post_type_id::text order by pt.name) as post_type_ids
+        from marketing.publish_schedule ps
+        left join marketing.platforms p on p.id=ps.platform_id
+        left join marketing.platform_post_types pt on pt.id=ps.post_type_id
+        where ps.group_id=r.group_id
+        group by ps.platform_id
+      ) grouped
+    ) platform_data on true
+    left join marketing.creatives c on c.id=r.creative_id
+    left join marketing.campaigns cam on r.source_type='campaign' and cam.id=r.source_id
+    left join marketing.agendas ag on r.source_type='agenda' and ag.id=r.source_id
+    left join lateral(
+      select x.* from marketing.tasks x
+      where x.id=r.task_id or (r.task_id is null and x.creative_id=r.creative_id and x.task_kind='execution' and x.is_deleted=false)
+      order by case when x.id=r.task_id then 0 else 1 end,x.updated_at desc
+      limit 1
+    )t on true
+    left join marketing.departments d on d.id=t.department_id
+    left join core.users u on u.id=t.assigned_to
+    left join marketing.files f on f.id=t.final_file_id
+    order by r.publish_date,r.created_at
+  `;
+  return{ok:true,rows};
+}
+async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");
+  const id=clean(body.id),publishDate=isoDate(body.publishDate),platforms=arrayValue(body.platforms);
+  const[current]=await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by created_at limit 1`;
+  if(!current)throw new Error("تاسك تجهيز النشر غير موجود");
+  if(!publishDate)throw new Error("تاريخ النشر مطلوب");
+  const combinations=platforms.flatMap((platform:any)=>arrayValue<string>(platform.postTypeIds).map((postTypeId)=>({platformId:clean(platform.platformId),postTypeId:clean(postTypeId)}))).filter((item:any)=>item.platformId&&item.postTypeId);
+  if(!combinations.length){const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);if(platformId&&postTypeId)combinations.push({platformId,postTypeId});}
+  if(!combinations.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+  await sql.begin(async tx=>{
+    await tx`delete from marketing.publish_schedule where group_id=${current.group_id}`;
+    for(const item of combinations)await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,status) values(${current.group_id},${current.source_type},${current.source_id},${current.creative_id},${current.task_id},${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},'waiting')`;
+  });
+  return{ok:true,message:"تم حفظ تجهيز النشر"};
+}
+
+async function graphRequest(path:string,method:"GET"|"POST",token:string,params:Record<string,any>={}){const version=clean(process.env.META_GRAPH_VERSION)||"v20.0";const url=new URL(`https://graph.facebook.com/${version}${path}`);const body=new URLSearchParams();for(const[key,value]of Object.entries(params)){if(value===undefined||value===null||value==='')continue;const text=typeof value==='object'?JSON.stringify(value):String(value);if(method==='GET')url.searchParams.set(key,text);else body.set(key,text);}if(method==='GET')url.searchParams.set('access_token',token);else body.set('access_token',token);const response=await fetch(url.toString(),{method,body:method==='POST'?body:undefined});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.error)throw new Error(payload.error?.message||`Meta API error ${response.status}`);return payload;}
+function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
+function normalizePostType(value:unknown){const text=clean(value).toLowerCase();if(text.includes('story')||text.includes('ستوري'))return'story';if(text.includes('reel')||text.includes('short')||text.includes('ريل'))return'reel';if(text.includes('photo')||text.includes('image')||text.includes('بوست صور')||text.includes('صورة'))return'photo_post';return text;}
+async function uploadFacebookStoryVideo(uploadUrl:string,token:string,mediaUrl:string){const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});const payload=await response.json().catch(()=>({}));if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو Story على Facebook (${response.status})`);return payload;}
+async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,user:SessionUser){
+  const[conn]=await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
+  if(!conn||!conn.connected)throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
+  const[file]=await sql<any[]>`select * from marketing.files where id=${schedule.final_file_id}::uuid and status='ready'`;
+  if(!file)throw new Error("الملف النهائي غير موجود");
+  const mediaUrl=createDownloadUrl(file.storage_key,3600),caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
+  let result:any;
+  if(schedule.platform_code==='facebook'){
+    const pageId=clean(conn.page_id),token=decryptToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
+    if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
+    if(postType==='story'){
+      if(looksVideo(file)){
+        const start=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'start'});
+        const videoId=start.video_id||start.id,uploadUrl=start.upload_url||start.uploadUrl;
+        if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع فيديو Story على Facebook");
+        const upload=await uploadFacebookStoryVideo(uploadUrl,token,mediaUrl);
+        const finish=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'finish',video_id:videoId});
+        result={start,upload,publish:finish};
+      }else{
+        const photo=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,published:false});
+        const photoId=photo.id||photo.photo_id;
+        if(!photoId)throw new Error("تعذر رفع صورة Story على Facebook");
+        const publish=await graphRequest(`/${pageId}/photo_stories`,'POST',token,{photo_id:photoId});
+        result={upload:photo,publish};
+      }
+    }else if(looksVideo(file))result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:mediaUrl,description:caption});
+    else result=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,caption,published:true});
+  }else if(schedule.platform_code==='instagram'){
+    const igId=clean(conn.ig_user_id||conn.account_id),token=decryptToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
+    if(!igId||!token)throw new Error("بيانات Instagram غير مكتملة");
+    const params:any={caption};
+    if(postType==='story'){
+      params.media_type='STORIES';
+      if(looksVideo(file))params.video_url=mediaUrl;else params.image_url=mediaUrl;
+    }else if(looksVideo(file)||postType==='reel'){
+      params.video_url=mediaUrl;params.media_type='REELS';params.share_to_feed=true;
+    }else params.image_url=mediaUrl;
+    const container=await graphRequest(`/${igId}/media`,'POST',token,params);
+    const creationId=container.id||container.creation_id;
+    if(!creationId)throw new Error("تعذر إنشاء ملف النشر على Instagram");
+    const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
+    result={create:container,publish};
+  }else throw new Error("المنصة غير مدعومة");
+  await sql.begin(async tx=>{
+    await tx`update marketing.publish_schedule set status='published',published_at=now(),publish_result=${tx.json(result)},updated_at=now() where id=${schedule.id}::uuid`;
+    await tx`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by) values(${schedule.id}::uuid,${schedule.platform_code},'published',${tx.json(result)},${user.id}::uuid)`;
+  });
+  return result;
+}
+async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!isAdmin(user))throw new Error("النشر الفعلي متاح لمدير النظام فقط");
+  const ids=arrayValue<string>(body.ids).map(clean).filter(Boolean);
+  if(!ids.length)throw new Error("حدد تاسكات النشر");
+  const results=[];
+  for(const id of ids){
+    const[schedule]=await sql<any[]>`
+      select s.*,s.id::text,p.code as platform_code,p.name as platform_name,pt.name as post_type_name,coalesce(direct_task.final_file_id,fallback_task.final_file_id)::text as final_file_id
+      from marketing.publish_schedule s
+      join marketing.platforms p on p.id=s.platform_id
+      left join marketing.platform_post_types pt on pt.id=s.post_type_id
+      left join marketing.tasks direct_task on direct_task.id=s.task_id
+      left join lateral(
+        select x.final_file_id from marketing.tasks x
+        where s.task_id is null and x.creative_id=s.creative_id and x.task_kind='execution' and x.final_file_id is not null and x.is_deleted=false
+        order by x.updated_at desc limit 1
+      )fallback_task on true
+      where s.id=${id}::uuid
+    `;
+    if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود"});continue;}
+    try{const result=await publishScheduleItem(sql,schedule,user);results.push({id,ok:true,result});}
+    catch(error:any){await sql`insert into marketing.publish_logs(schedule_id,platform,status,error,published_by) values(${id}::uuid,${schedule.platform_code||''},'failed',${clean(error?.message)},${user.id}::uuid)`;results.push({id,ok:false,error:clean(error?.message)});}
+  }
+  return{ok:true,results,message:"تم تنفيذ طلب النشر"};
+}
+async function saveResultFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id),fileId=clean(body.fileId);if(sourceType==='agenda')await sql`update marketing.agendas set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ ملف النتائج"};}
+async function saveLinks(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id),links=arrayValue(body.links).filter((item:any)=>clean(item.platform)&&clean(item.url));if(sourceType==='agenda')await sql`update marketing.agendas set links=${sql.json(links)},updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set links=${sql.json(links)},updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ روابط الحملة"};}
+async function archiveEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الأرشفة متاحة لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id);const[entity]=sourceType==='agenda'?await sql<any[]>`select result_file_id::text,links from marketing.agendas where id=${id}::uuid`:await sql<any[]>`select result_file_id::text,links from marketing.campaigns where id=${id}::uuid`;if(!entity)throw new Error("السجل غير موجود");const missing=[];if(!entity.result_file_id)missing.push("ملف نتائج الحملة");if(!arrayValue(entity.links).length)missing.push("روابط الحملة");if(missing.length)throw new Error(`لا يمكن أرشفة الحملة. الناقص: ${missing.join(" + ")}`);if(sourceType==='agenda')await sql`update marketing.agendas set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تمت الأرشفة"};}
+async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("المسح متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id);if(sourceType==='agenda')await sql`delete from marketing.agendas where id=${id}::uuid`;else await sql`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم المسح"};}
+
+async function monitoring(sql:ReturnType<typeof getSql>){const[totals,statuses,delayed,employees,departments,entities]=await Promise.all([sql<any[]>`select (select count(*) from marketing.campaigns where is_deleted=false and archived_at is null)::int as campaigns,(select count(*) from marketing.campaigns where is_deleted=false and archived_at is null and status<>'archived')::int as active_campaigns,(select count(*) from marketing.agendas where archived_at is null)::int as agendas,(select count(*) from marketing.tasks where is_deleted=false)::int as tasks,(select count(*) from marketing.tasks where is_deleted=false and due_at<now() and progress<100)::int as delayed,(select count(*) from marketing.tasks where is_deleted=false and progress=0)::int as waiting,(select count(*) from marketing.tasks where is_deleted=false and progress>0 and progress<100)::int as active,(select coalesce(avg(progress),0)::float from marketing.tasks where is_deleted=false) as progress`,sql<any[]>`select status,count(*)::int as count from marketing.tasks where is_deleted=false group by status order by count(*) desc`,sql<any[]>`select t.id::text,t.title,t.due_at,t.progress::float,u.full_name,d.name as department_name,coalesce(cam.name,ag.name) as source_name,greatest(0,current_date-t.due_at::date)::int as delay_days from marketing.tasks t left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id where t.is_deleted=false and t.due_at<now() and t.progress<100 order by t.due_at`,sql<any[]>`select u.id::text,u.full_name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress,count(*) filter(where t.due_at<now() and t.progress<100)::int as delayed,coalesce(sum(greatest(0,current_date-t.due_at::date)) filter(where t.due_at<now() and t.progress<100),0)::int as delay_days from core.users u join marketing.tasks t on t.assigned_to=u.id and t.is_deleted=false group by u.id order by progress desc`,sql<any[]>`select d.id::text,d.name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress from marketing.departments d left join marketing.tasks t on t.department_id=d.id and t.is_deleted=false where d.is_active=true group by d.id order by d.name`,sql<any[]>`select 'campaign' as source_type,id::text,name,progress::float,status from marketing.campaigns where is_deleted=false and archived_at is null union all select 'agenda',id::text,name,progress::float,status from marketing.agendas where archived_at is null order by progress desc`]);return{ok:true,totals:totals[0]||{},statuses,delayed,employees,departments,entities};}
+async function calendarData(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select s.id::text,s.publish_date,s.status,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code,coalesce(cam.name,ag.name) as source_name,u.full_name as assigned_name,coalesce(uc.color,'#2563eb') as user_color from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id left join lateral(select assigned_to from marketing.tasks t where t.creative_id=s.creative_id and t.task_kind='execution' order by t.created_at limit 1)t on true left join core.users u on u.id=t.assigned_to left join marketing.user_colors uc on uc.user_id=u.id order by s.publish_date`;return{ok:true,rows};}
+async function receiptCalendar(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select t.id::text,t.received_at,t.source_type,coalesce(cam.name,ag.name) as source_name,c.name as creative_name,u.full_name,d.name as department_name,coalesce(uc.color,'#2563eb') as user_color from marketing.tasks t left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id left join marketing.creatives c on c.id=t.creative_id left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.user_colors uc on uc.user_id=u.id where t.received_at is not null and t.is_deleted=false order by t.received_at`;return{ok:true,rows};}
+
+async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,request:VercelRequest){
+  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+  const value=(type:string)=>parts.find((part)=>part.type===type)?.value||'';
+  const todayKey=`${value('year')}-${value('month')}-${value('day')}`;
+  const from=isoDate(request.query.from)||todayKey;
+  const to=isoDate(request.query.to)||from;
+  const departmentId=clean(request.query.departmentId);
+  const requestedUserId=clean(request.query.userId);
+  const userId=isAdmin(user)?requestedUserId:user.id;
+  const status=clean(request.query.status);
+  const [settings]=await sql<any[]>`select * from marketing.attendance_settings where singleton=true`;
+  const today=await sql<any[]>`
+    select u.id::text,u.full_name,
+      string_agg(distinct d.name,'، ' order by d.name) as department_name,
+      r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status,
+      coalesce(max(p.last_activity_at)>now()-interval '5 minutes',false) as online,
+      max(p.last_activity_at) as last_activity_at,
+      max(p.last_activity_type) as last_activity_type
+    from core.users u
+    join marketing.department_users du on du.user_id=u.id
+    join marketing.departments d on d.id=du.department_id and d.is_active=true
+    left join marketing.attendance_records r on r.user_id=u.id and r.attendance_date=(now() at time zone 'Asia/Riyadh')::date
+    left join marketing.presence_status p on p.user_id=u.id
+    where u.is_active=true and (${isAdmin(user)} or u.id=${user.id}::uuid)
+    group by u.id,u.full_name,r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status
+    order by u.full_name`;
+  const reportUsers=await sql<any[]>`
+    select u.id::text,u.full_name,u.email,string_agg(distinct d.name,'، ' order by d.name) as department_name
+    from core.users u
+    join marketing.department_users du on du.user_id=u.id
+    join marketing.departments d on d.id=du.department_id and d.is_active=true
+    where u.is_active=true
+      and (${departmentId}='' or exists(select 1 from marketing.department_users fdu where fdu.user_id=u.id and fdu.department_id=${departmentId||null}::uuid))
+      and (${userId}='' or u.id=${userId||null}::uuid)
+    group by u.id,u.full_name,u.email
+    order by u.full_name`;
+  const rawRows=await sql<any[]>`
+    select r.*,r.id::text,r.user_id::text,r.attendance_date::text as attendance_date,u.full_name,
+      string_agg(distinct d.name,'، ' order by d.name) as department_name
+    from marketing.attendance_records r
+    join core.users u on u.id=r.user_id
+    left join marketing.department_users du on du.user_id=u.id
+    left join marketing.departments d on d.id=du.department_id
+    where r.attendance_date between ${from}::date and ${to}::date
+      and (${departmentId}='' or exists(select 1 from marketing.department_users fdu where fdu.user_id=u.id and fdu.department_id=${departmentId||null}::uuid))
+      and (${userId}='' or u.id=${userId||null}::uuid)
+    group by r.id,u.id,u.full_name
+    order by r.attendance_date desc,u.full_name`;
+  const [effective]=await sql<any[]>`
+    select min(r.attendance_date)::text as effective_from
+    from marketing.attendance_records r
+    where r.attendance_date between ${from}::date and ${to}::date
+      and exists(select 1 from marketing.department_users du where du.user_id=r.user_id)`;
+  const effectiveFrom=clean(effective?.effective_from);
+  const reportDays=effectiveFrom?datesBetween(effectiveFrom>from?effectiveFrom:from,to):[];
+  const recordsByUserDay=new Map<string,any>();
+  for(const row of rawRows)recordsByUserDay.set(`${row.user_id}:${clean(row.attendance_date).slice(0,10)}`,row);
+  let summary=reportUsers.map((employee:any)=>{
+    const records=reportDays.map((day)=>recordsByUserDay.get(`${employee.id}:${day}`)).filter(Boolean);
+    const present=records.length;
+    const absent=Math.max(0,reportDays.length-present);
+    const lateCount=records.filter((row:any)=>numberValue(row.delay_minutes)>0).length;
+    const lateTotal=records.reduce((sum:number,row:any)=>sum+numberValue(row.delay_minutes),0);
+    const noCheckout=records.filter((row:any)=>row.check_in&&!row.check_out).length;
+    const workTotal=records.reduce((sum:number,row:any)=>sum+numberValue(row.work_minutes),0);
+    const employeeStatus=lateCount?'late':present&&noCheckout?'no_checkout':present&&absent?'partial':present?'present':'absent';
+    return{user_id:employee.id,full_name:employee.full_name,email:employee.email,department_name:employee.department_name,status:employeeStatus,present,absent,late_count:lateCount,late_total:lateTotal,no_checkout:noCheckout,work_total:workTotal};
+  });
+  if(status==='present')summary=summary.filter((row:any)=>row.present>0);
+  if(status==='late')summary=summary.filter((row:any)=>row.late_count>0);
+  if(status==='absent')summary=summary.filter((row:any)=>row.absent>0);
+  if(status==='no_checkout')summary=summary.filter((row:any)=>row.no_checkout>0);
+  const includedUsers=new Set(summary.map((row:any)=>row.user_id));
+  const rows:any[]=[];
+  for(const employee of reportUsers){
+    if(!includedUsers.has(employee.id))continue;
+    for(const day of reportDays){
+      const record=recordsByUserDay.get(`${employee.id}:${day}`);
+      if(status==='absent'){
+        if(!record)rows.push({id:`${employee.id}:${day}`,user_id:employee.id,attendance_date:day,full_name:employee.full_name,department_name:employee.department_name,status:'absent',check_in:null,check_out:null,delay_minutes:0,work_minutes:0});
+        continue;
+      }
+      if(!record)continue;
+      if(status==='late'&&numberValue(record.delay_minutes)<=0)continue;
+      if(status==='no_checkout'&&(!record.check_in||record.check_out))continue;
+      rows.push({...record,status:record.check_in&&!record.check_out?'no_checkout':numberValue(record.delay_minutes)>0?'late':'present'});
     }
-    const requestNo = `PH-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${randomBytes(3).toString("hex").toUpperCase()}`;
-    const [request] = await tx<SqlRow[]>`insert into operations.photography_requests(request_no,status,requested_by,requested_by_name,requested_by_branch,photography_date,note,updated_by) values(${requestNo},'request_received',${user.id}::uuid,${user.fullName},${user.branches[0] || user.branchCodes[0] || null},${photographyDate}::date,${nullableText(body.note)},${user.id}::uuid) returning *,id::text`;
-    for (const vehicleId of vehicleIds) await tx`insert into operations.photography_request_vehicles(request_id,vehicle_id) values(${clean(request.id)}::uuid,${vehicleId}::uuid)`;
-    await tx`insert into operations.photography_request_updates(request_id,old_status,new_status,photography_date,note,changed_by,changed_by_name) values(${clean(request.id)}::uuid,null,'request_received',${photographyDate}::date,${nullableText(body.note)},${user.id}::uuid,${user.fullName})`;
-    return request;
-  });
-  return { ok: true, request: result };
+  }
+  rows.sort((a,b)=>String(b.attendance_date).localeCompare(String(a.attendance_date))||String(a.full_name).localeCompare(String(b.full_name),'ar'));
+  const totals=summary.reduce((acc:any,row:any)=>({present:acc.present+row.present,absent:acc.absent+row.absent,lateCount:acc.lateCount+row.late_count,lateTotal:acc.lateTotal+row.late_total,noCheckout:acc.noCheckout+row.no_checkout,workTotal:acc.workTotal+row.work_total}),{present:0,absent:0,lateCount:0,lateTotal:0,noCheckout:0,workTotal:0});
+  const [mine]=await sql<any[]>`select *,id::text from marketing.attendance_records where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date`;
+  return{ok:true,settings:settings||{},today,rows,summary,totals,effectiveFrom,mine:mine||null,isAdmin:isAdmin(user)};
+}
+async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const action=clean(body.attendanceAction);
+  if(action==='ping'){
+    await sql`insert into marketing.presence_status(user_id,online,last_activity_at,last_activity_type,updated_at) values(${user.id}::uuid,true,now(),${clean(body.activityType)||'فتح سيستم التسويق'},now()) on conflict(user_id) do update set online=true,last_activity_at=now(),last_activity_type=excluded.last_activity_type,updated_at=now()`;
+    return{ok:true};
+  }
+  if(action==='save_settings'){
+    if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");
+    await sql`update marketing.attendance_settings set work_start=${clean(body.workStart)}::time,work_end=${clean(body.workEnd)}::time,grace_minutes=${Math.max(0,numberValue(body.graceMinutes))},updated_by=${user.id}::uuid,updated_at=now() where singleton=true`;
+    return{ok:true,message:"تم حفظ إعدادات الدوام"};
+  }
+  if(action==='check_in'){
+    const [row]=await sql<any[]>`
+      with settings as(select work_start,grace_minutes from marketing.attendance_settings where singleton=true), calculated as(
+        select greatest(0,floor(extract(epoch from (((now() at time zone 'Asia/Riyadh')::time)-(work_start+(grace_minutes||' minutes')::interval)))/60))::int as delay_minutes from settings
+      )
+      insert into marketing.attendance_records(user_id,attendance_date,check_in,delay_minutes,status)
+      select ${user.id}::uuid,(now() at time zone 'Asia/Riyadh')::date,now(),delay_minutes,case when delay_minutes>0 then 'late' else 'present' end from calculated
+      on conflict(user_id,attendance_date) do update set
+        check_in=coalesce(marketing.attendance_records.check_in,excluded.check_in),
+        delay_minutes=case when marketing.attendance_records.check_in is null then excluded.delay_minutes else marketing.attendance_records.delay_minutes end,
+        status=case when marketing.attendance_records.check_in is null then excluded.status else marketing.attendance_records.status end,
+        updated_at=now()
+      returning *,id::text`;
+    return{ok:true,row,message:"تم تسجيل الحضور"};
+  }
+  if(action==='check_out'){
+    const [row]=await sql<any[]>`update marketing.attendance_records set check_out=now(),work_minutes=greatest(0,floor(extract(epoch from (now()-check_in))/60))::int,status=case when status='late' then 'late' else 'present' end,updated_at=now() where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date and check_in is not null returning *,id::text`;
+    if(!row)throw new Error("يجب تسجيل الحضور أولًا");
+    return{ok:true,row,message:"تم تسجيل الانصراف"};
+  }
+  throw new Error("إجراء الحضور غير صحيح");
 }
 
-async function photoRequestAction(body: UnknownRecord, user: SessionUser) {
-  requirePermission(user, "marketing.requests.manage");
-  const sql = getSql(); const id = ensureUuid(body.id, "الطلب"); const status = clean(body.status);
-  const [valid] = await sql`select 1 from marketing.request_statuses where code=${status} and is_active=true`;
-  if (!valid) throw new MarketingError(400, "VALIDATION_ERROR", "حالة الطلب غير صحيحة");
-  const row = await sql.begin(async (tx) => {
-    const [current] = await tx<SqlRow[]>`select *,id::text from operations.photography_requests where id=${id}::uuid and is_deleted=false for update`;
-    if (!current) throw new MarketingError(404, "NOT_FOUND", "طلب التصوير غير موجود");
-    const photographyDate = dateOnly(body.photographyDate,"تاريخ التصوير") || clean(current.photography_date) || null;
-    const note = body.note === undefined ? nullableText(current.note) : nullableText(body.note);
-    const [updated] = await tx<SqlRow[]>`update operations.photography_requests set status=${status},photography_date=${photographyDate}::date,note=${note},completed_at=case when ${status}='completed' then coalesce(completed_at,now()) else null end,updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`;
-    await tx`insert into operations.photography_request_updates(request_id,old_status,new_status,photography_date,note,changed_by,changed_by_name) values(${id}::uuid,${clean(current.status)},${status},${photographyDate}::date,${note},${user.id}::uuid,${user.fullName})`;
-    return updated;
-  });
-  return { ok: true, row };
-}
+async function stockData(sql:ReturnType<typeof getSql>){const cars=await loadOperationsCars(sql);const requests=await sql<any[]>`select r.id::text,r.request_no,r.status,r.requested_by_name,r.requested_at,r.note,coalesce(json_agg(json_build_object('vehicleId',v.id::text,'vin',v.vin,'carName',v.car_name,'statement',v.statement,'note',rv.item_note) order by v.vin) filter(where v.id is not null),'[]'::json) as vehicles from operations.transfer_requests r left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id where r.request_kind='photography' and r.is_deleted=false group by r.id order by r.requested_at desc`;return{ok:true,cars,requests};}
+async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const vehicles=arrayValue(body.vehicles).filter((item:any)=>clean(item.vehicleId));if(!vehicles.length)throw new Error("اختر سيارة واحدة على الأقل");return sql.begin(async tx=>{const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;const[first]=await tx<any[]>`select v.location_id::text,l.branch_code,l.code from operations.vehicles v left join operations.locations l on l.id=v.location_id where v.id=${clean(vehicles[0].vehicleId)}::uuid`;const[request]=await tx<any[]>`insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,note) values(${requestNo},'marketing','photography','photography',${first?.location_id?tx`${first.location_id}::uuid`:null},'request_received',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${first?.branch_code||first?.code||null},${clean(body.note)||null}) returning *,id::text`;for(const item of vehicles){const vehicleId=clean(item.vehicleId);const[v]=await tx<any[]>`select location_id,status_code from operations.vehicles where id=${vehicleId}::uuid`;await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${vehicleId}::uuid,${v?.location_id||null},${v?.status_code||null},${clean(item.note)||null})`;}await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'request_received','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json({requestKind:'photography',vehicles})})`;return{ok:true,request,message:"تم إنشاء طلب التصوير"};});}
+async function markPhotographed(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const vehicleId=clean(body.vehicleId),photographed=bool(body.photographed);await sql`insert into marketing.stock_vehicle_state(vehicle_id,photographed,photographed_at,updated_by,updated_at) values(${vehicleId}::uuid,${photographed},${photographed?sql`now()`:null},${user.id}::uuid,now()) on conflict(vehicle_id) do update set photographed=excluded.photographed,photographed_at=excluded.photographed_at,updated_by=excluded.updated_by,updated_at=now()`;return{ok:true,message:"تم تحديث حالة التصوير"};}
 
-async function attendanceAction(body: UnknownRecord, user: SessionUser) {
-  const sql = getSql(); const action = clean(body.attendanceAction);
-  if (action === "check_in") {
-    const [row] = await sql<SqlRow[]>`insert into marketing.attendance_records(user_id,attendance_date,check_in_at,last_activity_at) values(${user.id}::uuid,current_date,now(),now()) on conflict(user_id,attendance_date) do update set check_in_at=coalesce(marketing.attendance_records.check_in_at,excluded.check_in_at),last_activity_at=now(),updated_at=now() returning *,id::text`;
-    return { ok: true, row };
-  }
-  if (action === "check_out") {
-    const [row] = await sql<SqlRow[]>`update marketing.attendance_records set check_out_at=now(),last_activity_at=now(),updated_at=now() where user_id=${user.id}::uuid and attendance_date=current_date returning *,id::text`;
-    if (!row) throw new MarketingError(409, "NOT_CHECKED_IN", "سجل الحضور لليوم غير موجود");
-    return { ok: true, row };
-  }
-  if (action === "activity") { await sql`update marketing.attendance_records set last_activity_at=now(),updated_at=now() where user_id=${user.id}::uuid and attendance_date=current_date`; return { ok: true }; }
-  if (action === "save_settings") {
-    requirePermission(user, "marketing.manage");
-    const start = clean(body.workStart); const end = clean(body.workEnd); if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) throw new MarketingError(400, "VALIDATION_ERROR", "مواعيد الدوام غير صحيحة");
-    const days = asArray(body.workDays).map((item) => Math.floor(asNumber(item))).filter((item) => item >= 0 && item <= 6);
-    await sql`update marketing.attendance_settings set work_start=${start}::time,work_end=${end}::time,late_after_minutes=${Math.max(0,Math.floor(asNumber(body.lateAfterMinutes)))},work_days=${days},updated_by=${user.id}::uuid,updated_at=now() where id=true`;
-    return { ok: true };
-  }
-  throw new MarketingError(400, "UNSUPPORTED_ACTION", "إجراء الحضور غير مدعوم");
-}
+async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#2563eb') as color from core.users u where u.is_active=true and (exists(select 1 from marketing.department_users du where du.user_id=u.id) or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.code='marketing')) order by u.full_name`;return{ok:true,rows};}
+async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
-async function saveConnection(body: UnknownRecord, user: SessionUser) {
-  requirePermission(user, "marketing.manage");
-  const sql = getSql(); const id = clean(body.id); const platformId = ensureUuid(body.platformId, "المنصة");
-  const metadata = toJsonValue(asRecord(body.metadata));
-  const [row] = id
-    ? await sql<SqlRow[]>`update marketing.platform_connections set platform_id=${platformId}::uuid,account_name=${nullableText(body.accountName)},account_external_id=${nullableText(body.accountExternalId)},connection_status=${clean(body.connectionStatus)||'disconnected'},metadata=${sql.json(metadata)},connected_by=${user.id}::uuid,connected_at=case when ${clean(body.connectionStatus)}='connected' then coalesce(connected_at,now()) else connected_at end,updated_at=now() where id=${ensureUuid(id,"الربط")}::uuid returning *,id::text`
-    : await sql<SqlRow[]>`insert into marketing.platform_connections(platform_id,account_name,account_external_id,connection_status,metadata,connected_by,connected_at) values(${platformId}::uuid,${nullableText(body.accountName)},${nullableText(body.accountExternalId)},${clean(body.connectionStatus)||'disconnected'},${sql.json(metadata)},${user.id}::uuid,case when ${clean(body.connectionStatus)}='connected' then now() else null end) returning *,id::text`;
-  if (!row) throw new MarketingError(404, "NOT_FOUND", "الربط غير موجود");
-  return { ok: true, row };
-}
+async function platformConnections(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select * from marketing.platform_connections order by platform`;return{ok:true,connections:rows.map(publicConnection)};}
+async function saveConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const platform=clean(body.platform).toLowerCase();if(!['facebook','instagram'].includes(platform))throw new Error("المنصة غير مدعومة");const connected=body.connected===undefined?true:bool(body.connected);await sql`insert into marketing.platform_connections(platform,connected,status,state,source,account_id,account_name,page_id,page_name,ig_user_id,username,pages,access_token_encrypted,user_access_token_encrypted,page_access_token_encrypted,connected_at,updated_at,updated_by) values(${platform},${connected},${connected?'connected':'disconnected'},${connected?'ready':'idle'},'postgresql-manual-migration',${clean(body.accountId)||null},${clean(body.accountName)||null},${clean(body.pageId)||null},${clean(body.pageName)||null},${clean(body.igUserId)||null},${clean(body.username)||null},${sql.json(arrayValue(body.pages))},${clean(body.accessToken)?encryptToken(body.accessToken):null},${clean(body.userAccessToken)?encryptToken(body.userAccessToken):null},${clean(body.pageAccessToken)?encryptToken(body.pageAccessToken):null},${connected?sql`now()`:null},now(),${user.id}::uuid) on conflict(platform) do update set connected=excluded.connected,status=excluded.status,state=excluded.state,source=excluded.source,account_id=excluded.account_id,account_name=excluded.account_name,page_id=excluded.page_id,page_name=excluded.page_name,ig_user_id=excluded.ig_user_id,username=excluded.username,pages=excluded.pages,access_token_encrypted=coalesce(excluded.access_token_encrypted,marketing.platform_connections.access_token_encrypted),user_access_token_encrypted=coalesce(excluded.user_access_token_encrypted,marketing.platform_connections.user_access_token_encrypted),page_access_token_encrypted=coalesce(excluded.page_access_token_encrypted,marketing.platform_connections.page_access_token_encrypted),connected_at=coalesce(excluded.connected_at,marketing.platform_connections.connected_at),updated_at=now(),updated_by=excluded.updated_by`;return{ok:true,message:"تم حفظ ربط المنصة داخل PostgreSQL"};}
+async function disconnectConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const platform=clean(body.platform);await sql`update marketing.platform_connections set connected=false,status='disconnected',state='idle',access_token_encrypted=null,user_access_token_encrypted=null,page_access_token_encrypted=null,updated_at=now(),updated_by=${user.id}::uuid where platform=${platform}`;return{ok:true,message:"تم فصل الربط"};}
+async function migrateConnectionEnv(sql:ReturnType<typeof getSql>,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const userToken=clean(process.env.META_USER_ACCESS_TOKEN||process.env.META_ACCESS_TOKEN),pageToken=clean(process.env.META_PAGE_ACCESS_TOKEN||process.env.META_SYSTEM_PAGE_TOKEN),pageId=clean(process.env.META_DEFAULT_PAGE_ID||process.env.META_PAGE_ID),pageName=clean(process.env.META_PAGE_NAME),igId=clean(process.env.META_IG_USER_ID),username=clean(process.env.META_IG_USERNAME);if(!userToken&&!pageToken)throw new Error("لا توجد توكنات Meta حالية في متغيرات البيئة");await saveConnection(sql,{platform:'facebook',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:pageId,accountName:pageName,pageId,pageName},user);if(igId)await saveConnection(sql,{platform:'instagram',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:igId,accountName:username,igUserId:igId,username,pageId,pageName},user);return{ok:true,message:"تم نقل التوكنات الحالية إلى PostgreSQL"};}
 
-async function mediaAction(request: VercelRequest, body: UnknownRecord, user: SessionUser) {
-  if (!mediaStorageConfigured()) throw new MarketingError(503, "MEDIA_NOT_CONFIGURED", "تخزين الملفات R2 غير مضبوط");
-  const sql = getSql(); const action = clean(body.mediaAction);
-  if (action === "prepare_upload") {
-    const contextId = ensureUuid(body.contextId, "السجل"); const fileName = clean(body.fileName) || "file.bin"; const mediaType = clean(body.mediaType) || "document";
-    const storageKey = buildSystemMediaStorageKey({ systemCode: "marketing", contextId, fileName, mediaType });
-    return { ok: true, storageKey, uploadUrl: createUploadUrl(storageKey, 900), expiresIn: 900 };
-  }
-  if (action === "download") {
-    const storageKey = clean(body.storageKey); if (!storageKey.startsWith("marketing/")) throw new MarketingError(400, "VALIDATION_ERROR", "مفتاح الملف غير صحيح");
-    return { ok: true, url: createDownloadUrl(storageKey, 300) };
-  }
-  void request; void sql; void user;
-  throw new MarketingError(400, "UNSUPPORTED_ACTION", "إجراء الملف غير مدعوم");
-}
+async function createRawFolders(body:any){const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';const token=clean(process.env.MZJ_RAW_API_TOKEN);if(!token)throw new Error("MZJ_RAW_API_TOKEN غير مضبوط");const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token},body:JSON.stringify(body.payload||body)});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.ok===false)throw new Error(payload.message||"تعذر إنشاء فولدرات الخام");return payload;}
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
   try {
-    const user = await requireUser(request, response); if (!user) return;
-    await assertSchema();
-    const resource = clean(request.query.resource) || "meta";
-    if (request.method === "GET") {
-      if (resource === "meta") return response.status(200).json(await loadMeta(user));
-      if (!canViewMarketing(user)) throw new MarketingError(403, "FORBIDDEN", "لا تملك صلاحية عرض نظام التسويق");
-      if (resource === "dashboard") return response.status(200).json(await dashboard(user));
-      if (resource === "campaign_code_preview") return response.status(200).json(await campaignCodePreview(request));
-      if (resource === "campaigns") return response.status(200).json(await campaignRows(request, user));
-      if (resource === "campaign") return response.status(200).json(await campaignDetail(ensureUuid(request.query.id, "الحملة"), user));
-      if (resource === "stock") return response.status(200).json(await stockRows(request));
-      if (resource === "packages") return response.status(200).json(await listPackages(request));
-      if (resource === "photo_requests") return response.status(200).json(await listPhotoRequests(user));
-      if (resource === "attendance") return response.status(200).json(await attendanceData(request, user));
-      if (resource === "connections") return response.status(200).json(await listConnections());
-      return response.status(404).json({ ok: false, error: "Marketing resource not found" });
+    await ensureOperationsSchema(); await ensureMarketingSchema();
+    const user = await requireUser(request,response); if(!user)return;
+    if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
+    const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
+    if(request.method==='GET'){
+      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:await loadOperationsCars(sql)});
+      if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
+      if(resource==='database')return response.status(200).json(await databaseRows(sql));
+      if(resource==='entity')return response.status(200).json(await entityDetail(sql,clean(request.query.sourceType),clean(request.query.id)));
+      if(resource==='task')return response.status(200).json(await taskDetail(sql,clean(request.query.id),user));
+      if(resource==='packages')return response.status(200).json({ok:true,rows:await sql<any[]>`select *,id::text from marketing.packages where is_active=true order by category,name`});
+      if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql));
+      if(resource==='monitoring')return response.status(200).json(await monitoring(sql));
+      if(resource==='calendar')return response.status(200).json(await calendarData(sql));
+      if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql));
+      if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
+      if(resource==='stock')return response.status(200).json(await stockData(sql));
+      if(resource==='user_colors')return response.status(200).json(await userColors(sql));
+      if(resource==='platform_connections')return response.status(200).json(await platformConnections(sql));
+      if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id)));
+      if(resource==='campaign_code'){if(!isAdmin(user))return response.status(403).json({ok:false,message:'الإجراء متاح لمدير النظام فقط'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
+      return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
     }
-    if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
-    const body = parseBody(request); const action = clean(body.action);
-    if (!canViewMarketing(user)) throw new MarketingError(403, "FORBIDDEN", "لا تملك صلاحية استخدام نظام التسويق");
-    if (action === "save_setting") return response.status(200).json(await saveSetting(body, user));
-    if (action === "delete_setting") return response.status(200).json(await deleteSetting(body, user));
-    if (action === "create_campaign") return response.status(200).json(await createCampaign(body, user));
-    if (action === "task_action") return response.status(200).json(await taskAction(body, user));
-    if (action === "campaign_action") return response.status(200).json(await campaignAction(body, user));
-    if (action === "save_package") return response.status(200).json(await savePackage(body, user));
-    if (action === "delete_package") { requirePermission(user, "marketing.packages.manage"); await getSql()`delete from marketing.car_packages where id=${ensureUuid(body.id,"الباقة")}::uuid`; return response.status(200).json({ ok: true }); }
-    if (action === "create_photo_request") return response.status(200).json(await createPhotoRequest(body, user));
-    if (action === "photo_request_action") return response.status(200).json(await photoRequestAction(body, user));
-    if (action === "attendance_action") return response.status(200).json(await attendanceAction(body, user));
-    if (action === "save_connection") return response.status(200).json(await saveConnection(body, user));
-    if (action === "delete_connection") { requirePermission(user, "marketing.manage"); await getSql()`delete from marketing.platform_connections where id=${ensureUuid(body.id,"الربط")}::uuid`; return response.status(200).json({ ok: true }); }
-    if (action === "media_action") return response.status(200).json(await mediaAction(request, body, user));
-    return response.status(400).json({ ok: false, error: "إجراء التسويق غير مدعوم" });
-  } catch (error) {
-    if (error instanceof MarketingError) return response.status(error.status).json({ ok: false, code: error.code, error: error.message, details: error.details });
-    const code = clean((error as { code?: unknown }).code);
-    if (code === "23505") return response.status(409).json({ ok: false, code: "DUPLICATE", error: "السجل موجود بالفعل" });
-    if (code === "23503") return response.status(409).json({ ok: false, code: "IN_USE", error: "السجل مرتبط ببيانات أخرى ولا يمكن حذفه" });
-    console.error("Marketing API failed", error);
-    return response.status(500).json({ ok: false, error: "حدث خطأ داخل نظام التسويق" });
-  }
+    if(request.method!=='POST')return response.status(405).json({ok:false,error:"Method not allowed"});
+    const body=bodyObject(request),action=clean(body.action); let result:any;
+    const sensitive=new Set(['create_campaign','create_agenda','create_raw_folders','create_photo_request','save_department','save_assignment_action','save_creative_type','save_campaign_type','save_platform','delete_setting','save_package','delete_entity','review_template','save_publish_prep','publish_now','save_result_file','save_links','archive_entity','save_user_colors','save_connection','disconnect_connection','migrate_connection_env','mark_photographed']);
+    if(sensitive.has(action)&&!isAdmin(user))return response.status(403).json({ok:false,error:"هذه العملية متاحة لمدير النظام فقط"});
+    if(action==='create_campaign')result=await createCampaign(sql,body,user);
+    else if(action==='create_agenda')result=await createAgenda(sql,body,user);
+    else if(action==='save_department')result=await saveDepartment(sql,body,user);
+    else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body);
+    else if(action==='save_creative_type')result=await saveCreativeType(sql,body);
+    else if(action==='save_campaign_type')result=await saveCampaignType(sql,body);
+    else if(action==='save_platform')result=await savePlatform(sql,body);
+    else if(action==='delete_setting')result=await softDeleteSetting(sql,body);
+    else if(action==='save_package')result=await savePackage(sql,body,user);
+    else if(action==='receive_task')result=await receiveTask(sql,body,user);
+    else if(action==='upload_template')result=await uploadTemplate(sql,body,user);
+    else if(action==='review_template')result=await reviewTemplate(sql,body,user);
+    else if(action==='toggle_task_action')result=await toggleTaskAction(sql,body,user);
+    else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);
+    else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
+    else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
+    else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
+    else if(action==='publish_now')result=await publishNow(sql,body,user);
+    else if(action==='save_result_file')result=await saveResultFile(sql,body,user);
+    else if(action==='save_links')result=await saveLinks(sql,body,user);
+    else if(action==='archive_entity')result=await archiveEntity(sql,body,user);
+    else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
+    else if(action==='attendance')result=await attendanceAction(sql,body,user);
+    else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
+    else if(action==='mark_photographed')result=await markPhotographed(sql,body,user);
+    else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
+    else if(action==='save_connection')result=await saveConnection(sql,body,user);
+    else if(action==='disconnect_connection')result=await disconnectConnection(sql,body,user);
+    else if(action==='migrate_connection_env')result=await migrateConnectionEnv(sql,user);
+    else if(action==='create_raw_folders')result=await createRawFolders(body);
+    else throw new Error("الإجراء غير مدعوم");
+    await audit(sql,user,action,'marketing',clean(result?.id||body.id)||null,result,undefined,requestIp(request)).catch(()=>undefined);
+    return response.status(200).json(result);
+  } catch(error:any){console.error('Marketing API failed',error);const message=clean(error?.message)||"تعذر تنفيذ العملية";const status=/صلاحية|مدير النظام/.test(message)?403:/غير موجود/.test(message)?404:400;return response.status(status).json({ok:false,error:message});}
 }

@@ -52,10 +52,10 @@ function Item({ href, label, icon: Icon }: NavItem) {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const isAdmin = user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) ?? false;
+  const canViewMarketing = isAdmin || Boolean(user?.permissions.includes("marketing.view")) || Boolean(user?.departmentCodes.includes("marketing")) || Boolean(user?.roleCodes.includes("marketing_user"));
   const canViewOperations = isAdmin || Boolean(user?.permissions.includes("operations.view")) || Boolean(user?.departmentCodes.includes("operations")) || Boolean(user?.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code)));
   const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
-  const canViewMarketing = isAdmin || Boolean(user?.departmentCodes.includes("marketing")) || Boolean(user?.permissions.some((permission) => permission.startsWith("marketing.")));
-  const visibleItems = items.filter((item) => (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations) && (!item.marketingOnly || canViewMarketing));
+  const visibleItems = items.filter((item) => (!item.marketingOnly || canViewMarketing) && (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations));
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 

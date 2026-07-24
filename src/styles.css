@@ -3550,5 +3550,3 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-automation-option-row > button { border:1px solid #ecc8ca; border-radius:8px; background:#fff; padding:7px; cursor:pointer; }
 .crm-form-label textarea:disabled { opacity:.55; cursor:not-allowed; background:#f1eeec; }
 @media (max-width:850px) { .crm-automation-option-row { grid-template-columns:1fr 1fr; }.crm-automation-option-row > input:nth-child(3) { grid-column:1/-1; } }
-
-.operations-request-history{margin-top:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden}.operations-request-history summary{display:flex;align-items:center;gap:6px;padding:8px 10px;cursor:pointer;font-weight:800;background:#fff8f4}.operations-request-history>div{display:grid;grid-template-columns:auto 1fr 2fr;gap:8px;padding:8px 10px;border-top:1px solid var(--line)}.operations-request-history p{grid-column:1/-1;margin:0}.operations-requests-list>article:has(.operations-request-history){align-items:start}

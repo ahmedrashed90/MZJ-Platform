@@ -354,7 +354,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
           'vehicle_id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement,'model_year',v.model_year,
           'interior_color',v.interior_color,'exterior_color',v.exterior_color,
           'source_location_id',rv.source_location_id::text,'source_status',rv.source_status,
-          'current_location_name',cl.name,'current_status_name',coalesce(cs.name,v.status_code)
+          'current_location_name',cl.name,'current_status_name',coalesce(cs.name,v.status_code),'item_note',rv.item_note
         ) order by v.vin) as vehicles
       from operations.transfer_request_vehicles rv
       join operations.vehicles v on v.id=rv.vehicle_id
@@ -492,14 +492,11 @@ async function dashboardRequests(sql: ReturnType<typeof getSql>, request: Vercel
   const kind = clean(request.query.kind) || "transfer";
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
-  const hasCompletedFilter = request.query.completed !== undefined;
-  const completed = boolValue(request.query.completed);
   if (kind === "photo") {
     const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
     const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
     const where = sql`
       r.is_deleted=false
-      and (${hasCompletedFilter}=false or (${completed}=true and r.status in ('completed','cancelled')) or (${completed}=false and r.status not in ('completed','cancelled')))
       and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
         select 1 from operations.photography_request_vehicles px join operations.vehicles pv on pv.id=px.vehicle_id
         where px.request_id=r.id and pv.vin ilike ${pattern}
@@ -508,9 +505,8 @@ async function dashboardRequests(sql: ReturnType<typeof getSql>, request: Vercel
     `;
     const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.photography_requests r where ${where}`;
     const rows = await sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by_name as creator_name,r.requested_at,r.photography_date,r.note,r.updated_at,
-        coalesce(json_agg(json_build_object('id',v.id::text,'vin',v.vin,'car_name',v.car_name,'statement',v.statement) order by v.vin) filter(where v.id is not null),'[]') as vehicles,
-        coalesce((select json_agg(json_build_object('id',x.id::text,'old_status',x.old_status,'new_status',x.new_status,'photography_date',x.photography_date,'note',x.note,'changed_by_name',x.changed_by_name,'created_at',x.created_at) order by x.created_at desc) from operations.photography_request_updates x where x.request_id=r.id),'[]') as updates
+      select r.id::text,r.request_no,r.status,r.requested_by_name as creator_name,r.requested_at,r.photography_date,r.note,
+        coalesce(json_agg(json_build_object('vin',v.vin,'car_name',v.car_name,'statement',v.statement) order by v.vin) filter(where v.id is not null),'[]') as vehicles
       from operations.photography_requests r left join operations.photography_request_vehicles rv on rv.request_id=r.id left join operations.vehicles v on v.id=rv.vehicle_id
       where ${where}
       group by r.id order by r.requested_at desc limit 500
@@ -922,6 +918,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     if (r.cancelled_at) throw new OperationError(409, "CONFLICT", "طلب النقل ملغي");
     const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
     async function archiveEligibleItems() {
+      if (r.request_kind !== "transfer") return [];
       const archivedVehicleIds: string[] = [];
       for (const item of items) {
         const archive = await tryArchiveEligibleVehicle(tx, item.id, who);
@@ -963,9 +960,9 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     if (!next || transferOrder.indexOf(next) !== currentIndex + 1) throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل طلب النقل بالترتيب");
     const stagePermission: Record<string, string> = { vehicle_sent: "operations.transfer.send_vehicle", vehicle_received: "operations.transfer.receive_vehicle", completed: "operations.transfer.complete" };
     if (stagePermission[next] && !hasPermission(user, stagePermission[next])) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية تنفيذ هذه المرحلة");
-    if (next === "vehicle_sent" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.source_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة إرسال السيارة خاصة بالفرع المصدر");
-    if (next === "vehicle_received" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.destination_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة استلام السيارة خاصة بالفرع المستهدف");
-    if (next === "vehicle_received") {
+    if (r.request_kind === "transfer" && next === "vehicle_sent" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.source_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة إرسال السيارة خاصة بالفرع المصدر");
+    if (r.request_kind === "transfer" && next === "vehicle_received" && !isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(r.destination_branch_code)) throw new OperationError(403, "FORBIDDEN", "مرحلة استلام السيارة خاصة بالفرع المستهدف");
+    if (r.request_kind === "transfer" && next === "vehicle_received") {
       for (const v of items) {
         const [locked] = await tx<any[]>`select *,id::text from operations.vehicles where id=${v.id}::uuid for update`;
         const [movement] = await tx<any[]>`

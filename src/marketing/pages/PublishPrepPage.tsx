@@ -1,126 +1,200 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileArrowUp, Funnel, PaperPlaneTilt } from "@phosphor-icons/react";
-import { useOutletContext } from "react-router-dom";
-import { formatDate, marketingFetch } from "../api";
-import type { DashboardResponse, DashboardTask } from "../types";
-import type { MarketingOutletContext } from "../MarketingLayout";
-import { openMarketingFile } from "../components/files";
-import { Alert, Empty, PageHead, ProgressBar, StatusBadge } from "../components/Ui";
+import { CheckCircle, PencilSimple, PaperPlaneTilt, WarningCircle } from "@phosphor-icons/react";
+import { Modal } from "../../components/Modal";
+import { marketingDate, marketingFetch, marketingQuery } from "../api";
+import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
+import type { MarketingMeta } from "../types";
 
-type PrepStatus = "ready" | "waiting_date" | "missing" | "uploaded";
-
-type PreparedTask = {
-  task: DashboardTask;
-  status: PrepStatus;
-  statusLabel: string;
-  missing: string[];
-  caption: string;
-  hashtags: string;
-};
-
-function text(value: unknown) { return String(value ?? "").trim(); }
-
-function prepareTask(task: DashboardTask): PreparedTask {
-  const caption = text(task.approved_template_data?.caption);
-  const hashtags = text(task.approved_template_data?.hashtags);
-  const missing: string[] = [];
-  if (task.progress < 100) missing.push("اكتمال التاسك 100%");
-  if (!task.final_storage_key) missing.push("الملف النهائي");
-  if (!task.publish_dates.length) missing.push("تاريخ النشر");
-  if (!task.publishing_posts.length) missing.push("المنصات وأنواع النشر");
-  if (!caption) missing.push("الكابشن");
-  if (!hashtags) missing.push("الهاشتاج");
-  if (!missing.length) return { task, status: "ready", statusLabel: "جاهز للنشر", missing, caption, hashtags };
-  if (task.final_storage_key && task.progress >= 100 && !task.publish_dates.length) return { task, status: "waiting_date", statusLabel: "بانتظار التاريخ", missing, caption, hashtags };
-  if (task.final_storage_key) return { task, status: "uploaded", statusLabel: "تم رفع الملف النهائي", missing, caption, hashtags };
-  return { task, status: "missing", statusLabel: "ناقص", missing, caption, hashtags };
+function rowPlatforms(row: any) {
+  return Array.isArray(row?.platforms) ? row.platforms : [];
 }
 
 export function PublishPrepPage() {
-  const { meta } = useOutletContext<MarketingOutletContext>();
-  const [data, setData] = useState<DashboardResponse | null>(null);
-  const [status, setStatus] = useState("");
-  const [department, setDepartment] = useState("");
-  const [platform, setPlatform] = useState("");
-  const [search, setSearch] = useState("");
+  const [rows, setRows] = useState<any[]>([]);
+  const [meta, setMeta] = useState<MarketingMeta | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [editing, setEditing] = useState<any>(null);
+  const [filters, setFilters] = useState({ search: "", status: "", platform: "", department: "" });
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    marketingFetch<DashboardResponse>("/api/marketing?resource=dashboard")
-      .then(setData)
-      .catch((failure) => setError(failure instanceof Error ? failure.message : "تعذر تحميل تجهيز النشر"));
-  }, []);
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const [tasks, info] = await Promise.all([
+        marketingFetch<{ rows: any[] }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
+        marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`),
+      ]);
+      setRows(tasks.rows);
+      setMeta(info);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل تجهيز النشر");
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const prepared = useMemo(
-    () => (data?.tasks || []).filter((task) => task.task_kind === "execution").map(prepareTask),
-    [data],
-  );
-  const filtered = useMemo(() => prepared.filter((item) => {
-    const task = item.task;
-    if (status && item.status !== status) return false;
-    if (department && task.department_id !== department) return false;
-    if (platform && !task.platform_ids.includes(platform)) return false;
-    if (search && !`${task.task_no} ${task.campaign_name} ${task.creative_name} ${task.assigned_to_name} ${item.caption} ${item.hashtags}`.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  }), [department, platform, prepared, search, status]);
+  useEffect(() => { void load(); }, []);
 
-  const ready = prepared.filter((item) => item.status === "ready").length;
-  const waitingDate = prepared.filter((item) => item.status === "waiting_date").length;
-  const missing = prepared.filter((item) => item.status === "missing").length;
-  const uploaded = prepared.filter((item) => item.task.final_storage_key).length;
+  function missing(row: any) {
+    const values: string[] = [];
+    const platforms = rowPlatforms(row);
+    if (!row.final_file_id) values.push("الملف النهائي");
+    if (!String(row.caption || "").trim()) values.push("الكابشن");
+    if (!String(row.hashtags || "").trim()) values.push("الهاشتاج");
+    if (!row.publish_date) values.push("تاريخ النشر");
+    if (!platforms.length) values.push("المنصة");
+    if (!platforms.some((platform: any) => Array.isArray(platform.postTypeIds) && platform.postTypeIds.length)) values.push("نوع النشر");
+    return values;
+  }
 
-  return (
-    <div className="marketing-page">
-      <PageHead title="تجهيز النشر" description="متابعة تجهيز المنشورات النهائية وملفات الحملات والأجندات وجدول النشر." />
-      {error ? <Alert type="error">{error}</Alert> : null}
-      <div className="marketing-summary-cards publish">
-        <div><span>كل التاسكات</span><b>{prepared.length}</b><small>تاسكات تنفيذية</small></div>
-        <div><span>جاهز للنشر</span><b>{ready}</b><small>مكتملة وجاهزة</small></div>
-        <div><span>بانتظار التاريخ</span><b>{waitingDate}</b><small>مكتملة بدون تاريخ</small></div>
-        <div><span>ناقص</span><b>{missing}</b><small>تحتاج استكمال</small></div>
-        <div><span>ملفات مرفوعة</span><b>{uploaded}</b><small>الملفات النهائية</small></div>
-      </div>
-      <section className="marketing-filter-bar">
-        <Funnel size={20} />
-        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث في التاسكات..." />
-        <select value={status} onChange={(event) => setStatus(event.target.value)}>
-          <option value="">كل الحالات</option>
-          <option value="ready">جاهز للنشر</option>
-          <option value="waiting_date">بانتظار التاريخ</option>
-          <option value="uploaded">تم رفع الملف النهائي</option>
-          <option value="missing">ناقص</option>
-        </select>
-        <select value={platform} onChange={(event) => setPlatform(event.target.value)}>
-          <option value="">كل المنصات</option>
-          {meta.platforms.filter((item) => item.is_active).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
-        </select>
-        <select value={department} onChange={(event) => setDepartment(event.target.value)}>
-          <option value="">كل الأقسام</option>
-          {meta.departments.filter((item) => item.is_active && !item.is_content).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
-        </select>
-      </section>
-      <section className="marketing-final-files">
-        <header><div><small>الملفات النهائية</small><h2>كل ملفات التجهيز في مكان واحد</h2></div><span>{filtered.length}</span></header>
-        {filtered.map(({ task, statusLabel, missing: missingFields, caption, hashtags }) => (
-          <article key={task.id}>
-            <div><PaperPlaneTilt size={23} /><div><strong>{task.instance_code} - {task.creative_name}</strong><small>{task.campaign_name} · {task.task_no}</small></div></div>
-            <span>{task.department_name}</span>
-            <span>{task.assigned_to_name}</span>
-            <StatusBadge status={task.status} />
-            <ProgressBar value={task.progress} />
-            <div className="marketing-prep-meta">
-              <small>{task.publish_dates.length ? `تاريخ النشر: ${task.publish_dates.map((value) => formatDate(value)).join("، ")}` : "تاريخ النشر غير محدد"}</small>
-              <small>{task.publishing_posts.length ? task.publishing_posts.map((post) => `${post.platform_name}: ${post.post_type_name}`).join("، ") : "لا توجد منصات وأنواع نشر"}</small>
-              <small>{caption ? `الكابشن: ${caption}` : "الكابشن غير مكتمل"}</small>
-              <small>{hashtags ? `الهاشتاج: ${hashtags}` : "الهاشتاج غير مكتمل"}</small>
-              <b>{statusLabel}</b>
-              {missingFields.length ? <em>الناقص: {missingFields.join("، ")}</em> : null}
-            </div>
-            {task.final_storage_key ? <button type="button" onClick={() => void openMarketingFile(task.final_storage_key || "")}><FileArrowUp size={17} />فتح الملف النهائي</button> : <em>لا يوجد ملف نهائي</em>}
-          </article>
-        ))}
-        {!filtered.length ? <Empty text="لا توجد تاسكات مطابقة للفلاتر الحالية." /> : null}
-      </section>
+  function readiness(row: any) {
+    const absent = missing(row);
+    if (row.status === "published") return "تم النشر";
+    if (absent.length) return "ناقص";
+    if (new Date(`${String(row.publish_date).slice(0, 10)}T23:59:59`).getTime() > Date.now()) return "بانتظار التاريخ";
+    return "جاهز للنشر";
+  }
+
+  const filtered = useMemo(() => rows.filter((row) => {
+    const searchText = `${row.creative_name || ""} ${row.source_name || ""} ${row.assigned_name || ""} ${row.department_name || ""}`.toLowerCase();
+    return (!filters.search || searchText.includes(filters.search.toLowerCase()))
+      && (!filters.status || readiness(row) === filters.status)
+      && (!filters.platform || rowPlatforms(row).some((platform: any) => platform.platformId === filters.platform))
+      && (!filters.department || String(row.department_id || "") === filters.department);
+  }), [rows, filters]);
+
+  const stats = useMemo(() => ({
+    all: rows.length,
+    ready: rows.filter((row) => readiness(row) === "جاهز للنشر").length,
+    waiting: rows.filter((row) => readiness(row) === "بانتظار التاريخ").length,
+    missing: rows.filter((row) => readiness(row) === "ناقص").length,
+    files: rows.filter((row) => row.final_file_id).length,
+  }), [rows]);
+
+  async function save() {
+    if (!editing) return;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "save_publish_prep",
+          id: editing.id,
+          platforms: editing.platforms || [],
+          publishDate: String(editing.publish_date || "").slice(0, 10),
+          caption: editing.caption,
+          hashtags: editing.hashtags,
+        }),
+      });
+      setMessage(result.message);
+      setEditing(null);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر حفظ تجهيز النشر");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function publish() {
+    const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
+    if (selectedRows.some((row) => readiness(row) !== "جاهز للنشر")) {
+      setError("كل التاسكات المحددة يجب أن تكون جاهزة للنشر");
+      return;
+    }
+    const scheduleIds = [...new Set(selectedRows.flatMap((row) => Array.isArray(row.schedule_ids) ? row.schedule_ids : []))];
+    if (!scheduleIds.length) {
+      setError("لا توجد عناصر نشر داخل التاسكات المحددة");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const result = await marketingFetch<any>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "publish_now", ids: scheduleIds }),
+      });
+      const failed = result.results.filter((item: any) => !item.ok);
+      setMessage(failed.length ? `تم تنفيذ النشر مع ${failed.length} أخطاء` : "تم النشر بنجاح");
+      setSelectedIds([]);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر النشر");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <MarketingPage title="تجهيز النشر" description="تجهيز الملفات والكابشن والهاشتاج والتاريخ والمنصة قبل النشر الفعلي.">
+    {error ? <MarketingAlert>{error}</MarketingAlert> : null}
+    {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
+
+    <div className="marketing-stats five">
+      <article><small>كل التاسكات</small><strong>{stats.all}</strong></article>
+      <article><small>جاهز للنشر</small><strong>{stats.ready}</strong></article>
+      <article><small>بانتظار التاريخ</small><strong>{stats.waiting}</strong></article>
+      <article><small>ناقص</small><strong>{stats.missing}</strong></article>
+      <article><small>ملفات مرفوعة</small><strong>{stats.files}</strong></article>
     </div>
-  );
+
+    <section className="panel marketing-filter-bar">
+      <input placeholder="بحث" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
+      <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+        <option value="">كل الحالات</option><option>جاهز للنشر</option><option>بانتظار التاريخ</option><option>ناقص</option><option>تم النشر</option>
+      </select>
+      <select value={filters.platform} onChange={(event) => setFilters({ ...filters, platform: event.target.value })}>
+        <option value="">كل المنصات</option>{meta?.platforms.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+      </select>
+      <select value={filters.department} onChange={(event) => setFilters({ ...filters, department: event.target.value })}>
+        <option value="">كل الأقسام</option>{meta?.departments.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+      </select>
+      <button type="button" className="secondary" onClick={() => setFilters({ search: "", status: "", platform: "", department: "" })}>إعادة تعيين</button>
+    </section>
+
+    <section className="marketing-publish-list">
+      {filtered.map((row) => {
+        const absent = missing(row);
+        const ready = readiness(row);
+        return <article key={row.id} className={`marketing-publish-card status-${ready === "ناقص" ? "missing" : ready === "جاهز للنشر" ? "ready" : "waiting"}`}>
+          <label className="marketing-select-task"><input type="checkbox" checked={selectedIds.includes(row.id)} disabled={ready !== "جاهز للنشر"} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, row.id] : current.filter((id) => id !== row.id))} /></label>
+          <div className="marketing-publish-main">
+            <header><div><h3>{row.creative_name || "كرييتيف"}</h3><span>{row.source_name}</span></div><b>{ready}</b></header>
+            <div className="marketing-publish-meta">
+              <span>القسم: <strong>{row.department_name || "—"}</strong></span>
+              <span>المسؤول: <strong>{row.assigned_name || "—"}</strong></span>
+              <span>المنصة: <strong>{row.platform_name || "—"}</strong></span>
+              <span>نوع النشر: <strong>{row.post_type_name || "—"}</strong></span>
+              <span>تاريخ النشر: <strong>{marketingDate(row.publish_date)}</strong></span>
+              <span>الملف النهائي: <strong>{row.final_file_name || "—"}</strong></span>
+            </div>
+            <ProgressBar value={Number(row.progress || 0)} />
+            {absent.length ? <div className="marketing-missing"><WarningCircle size={17} />الناقص: {absent.join("، ")}</div> : null}
+          </div>
+          <button type="button" className="secondary" onClick={() => setEditing({ ...row, publish_date: String(row.publish_date || "").slice(0, 10), platforms: rowPlatforms(row).map((platform: any) => ({ platformId: platform.platformId, postTypeIds: [...(platform.postTypeIds || [])] })) })}><PencilSimple size={17} />تعديل</button>
+        </article>;
+      })}
+      {!loading && !filtered.length ? <div className="marketing-empty">لا توجد تاسكات تجهيز نشر.</div> : null}
+    </section>
+
+    {selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد {selectedIds.length}</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={17} />نشر الآن</button></div> : null}
+
+    <Modal open={Boolean(editing)} title="تعديل تجهيز النشر" onClose={() => setEditing(null)} footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={17} />حفظ</button></>}>
+      {editing ? <div className="marketing-form-grid">
+        <div className="full marketing-platform-select"><strong>المنصات وأنواع النشر</strong>{meta?.platforms.map((platform) => {
+          const selected = editing.platforms?.find((item: any) => item.platformId === platform.id);
+          return <section key={platform.id}>
+            <label className="marketing-check"><input type="checkbox" checked={Boolean(selected)} onChange={(event) => setEditing({ ...editing, platforms: event.target.checked ? [...(editing.platforms || []), { platformId: platform.id, postTypeIds: [] }] : (editing.platforms || []).filter((item: any) => item.platformId !== platform.id) })} />{platform.name}</label>
+            {selected ? <div className="marketing-check-grid">{meta.postTypes.filter((item) => item.platform_id === platform.id).map((postType) => <label className="marketing-check" key={postType.id}><input type="checkbox" checked={selected.postTypeIds.includes(postType.id)} onChange={(event) => setEditing({ ...editing, platforms: (editing.platforms || []).map((item: any) => item.platformId === platform.id ? { ...item, postTypeIds: event.target.checked ? [...item.postTypeIds, postType.id] : item.postTypeIds.filter((id: string) => id !== postType.id) } : item) })} />{postType.name}</label>)}</div> : null}
+          </section>;
+        })}</div>
+        <label><span>تاريخ النشر</span><input type="date" value={editing.publish_date || ""} onChange={(event) => setEditing({ ...editing, publish_date: event.target.value })} /></label>
+        <label className="full"><span>Caption</span><textarea rows={4} value={editing.caption || ""} onChange={(event) => setEditing({ ...editing, caption: event.target.value })} /></label>
+        <label className="full"><span>Hashtag</span><textarea rows={3} value={editing.hashtags || ""} onChange={(event) => setEditing({ ...editing, hashtags: event.target.value })} /></label>
+      </div> : null}
+    </Modal>
+  </MarketingPage>;
 }

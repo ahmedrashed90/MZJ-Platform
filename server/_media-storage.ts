@@ -25,18 +25,25 @@ function safeSegment(value: unknown, fallback: string) {
   return clean(value).normalize("NFKD").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120) || fallback;
 }
 
-export function buildSystemMediaStorageKey(input: { systemCode: string; contextId: string; fileName?: string; mediaType?: string }) {
+export function buildMediaStorageKey(input: { conversationId: string; fileName?: string; mediaType?: string }) {
   const now = new Date();
   const yyyy = now.getUTCFullYear();
   const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const system = safeSegment(input.systemCode, "system");
-  const context = safeSegment(input.contextId, "context");
+  const conversation = safeSegment(input.conversationId, "conversation");
   const filename = safeSegment(input.fileName, `${safeSegment(input.mediaType, "file")}-${crypto.randomUUID()}`);
-  return `${system}/${yyyy}/${mm}/${context}/${crypto.randomUUID()}-${filename}`;
+  return `crm/${yyyy}/${mm}/${conversation}/${crypto.randomUUID()}-${filename}`;
 }
 
-export function buildMediaStorageKey(input: { conversationId: string; fileName?: string; mediaType?: string }) {
-  return buildSystemMediaStorageKey({ systemCode: "crm", contextId: input.conversationId, fileName: input.fileName, mediaType: input.mediaType });
+export function buildMarketingStorageKey(input: { category: string; sourceType?: string; sourceId?: string; taskId?: string; fileName?: string }) {
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const category = safeSegment(input.category, "file");
+  const sourceType = safeSegment(input.sourceType, "marketing");
+  const sourceId = safeSegment(input.sourceId, "general");
+  const taskId = input.taskId ? `/${safeSegment(input.taskId, "task")}` : "";
+  const filename = safeSegment(input.fileName, `${category}-${crypto.randomUUID()}`);
+  return `marketing/${yyyy}/${mm}/${sourceType}/${sourceId}${taskId}/${crypto.randomUUID()}-${filename}`;
 }
 
 export function buildInboundMediaStorageKey(input: { channelCode: string; conversationExternalId: string; providerMessageId: string; fileName?: string; mediaType?: string }) {

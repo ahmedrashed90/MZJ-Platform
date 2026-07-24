@@ -436,6 +436,7 @@ alter table operations.transfer_request_vehicles add column if not exists transf
 alter table operations.transfer_request_vehicles add column if not exists vehicle_id uuid references operations.vehicles(id) on delete cascade;
 alter table operations.transfer_request_vehicles add column if not exists source_location_id uuid references operations.locations(id);
 alter table operations.transfer_request_vehicles add column if not exists source_status text;
+alter table operations.transfer_request_vehicles add column if not exists item_note text;
 alter table operations.transfer_request_vehicles add column if not exists created_at timestamptz not null default now();
 
 create table if not exists operations.transfer_request_events (
@@ -504,29 +505,13 @@ create table if not exists operations.photography_requests (
   photography_date date,
   note text,
   is_deleted boolean not null default false,
-  completed_at timestamptz,
-  updated_by uuid references core.users(id),
-  updated_at timestamptz not null default now()
+  completed_at timestamptz
 );
-alter table operations.photography_requests add column if not exists updated_by uuid references core.users(id);
-alter table operations.photography_requests add column if not exists updated_at timestamptz not null default now();
 create table if not exists operations.photography_request_vehicles (
   request_id uuid not null references operations.photography_requests(id) on delete cascade,
   vehicle_id uuid not null references operations.vehicles(id),
   primary key(request_id,vehicle_id)
 );
-create table if not exists operations.photography_request_updates (
-  id uuid primary key default gen_random_uuid(),
-  request_id uuid not null references operations.photography_requests(id) on delete cascade,
-  old_status text,
-  new_status text not null,
-  photography_date date,
-  note text,
-  changed_by uuid references core.users(id),
-  changed_by_name text,
-  created_at timestamptz not null default now()
-);
-create index if not exists operations_photography_updates_idx on operations.photography_request_updates(request_id,created_at desc);
 
 create table if not exists operations.vehicle_archive_events (
   id bigserial primary key,

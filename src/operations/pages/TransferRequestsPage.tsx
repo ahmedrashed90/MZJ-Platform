@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, CheckCircle, Trash, Truck, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { OperationsVehiclePicker } from "../components/OperationsVehiclePicker";
-import { PhotographyRequestsList } from "../components/PhotographyRequestsList";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "../components/ResizableOperationsTable";
 import { formatOperationsDate, operationsFetch, queryString } from "../api";
 import type { TransferRow, VehicleRow } from "../types";
@@ -17,7 +16,6 @@ type TransferVehicle = TransferRow["vehicles"][number];
 export function TransferRequestsPage() {
   const { meta } = useOperations();
   const [tab, setTab] = useState<"create" | "active" | "completed">("create");
-  const [requestKind, setRequestKind] = useState<"transfer" | "photo">("transfer");
   const [search, setSearch] = useState("");
   const [results, setResults] = useState<VehicleRow[]>([]);
   const [selectedCars, setSelectedCars] = useState<VehicleRow[]>([]);
@@ -60,7 +58,7 @@ export function TransferRequestsPage() {
     }
   }
 
-  useEffect(() => { if (tab !== "create" && requestKind === "transfer") void loadRows(); }, [tab, requestKind]);
+  useEffect(() => { if (tab !== "create") void loadRows(); }, [tab]);
 
   function addCar(row: VehicleRow) {
     setSelectedCars((current) => [...current, row]);
@@ -150,7 +148,7 @@ export function TransferRequestsPage() {
 
   return (
     <div className="module-page operations-page operations-transfer-page">
-      <header className="module-page-head"><div><h1>طلبات النقل</h1><p>إنشاء طلبات النقل ومتابعة طلبات النقل والتصوير المشتركة داخل نفس موديول العمليات.</p></div></header>
+      <header className="module-page-head"><div><h1>طلبات النقل</h1><p>إنشاء طلب نقل لسيارة أو عدة سيارات ومتابعة المراحل الأربع بين الفرع المصدر والمكان المستهدف.</p></div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 
@@ -185,15 +183,7 @@ export function TransferRequestsPage() {
         </section>
       ) : (
         <section className="panel operations-requests-panel">
-          <div className="operations-subtabs">
-            <button type="button" className={requestKind === "transfer" ? "active" : ""} onClick={() => setRequestKind("transfer")}>طلبات النقل</button>
-            <button type="button" className={requestKind === "photo" ? "active" : ""} onClick={() => { setSelected(null); setRequestKind("photo"); }}>طلبات التصوير</button>
-          </div>
-          {requestKind === "photo" ? (
-            <PhotographyRequestsList completed={tab === "completed"} />
-          ) : (
-            <div className="operations-requests-list">{!loading && !rows.length ? <div className="operations-empty-state"><Truck size={42} /><strong>لا توجد طلبات نقل</strong></div> : rows.map((row) => <article key={row.id} onClick={() => setSelected(row)}><div className="operations-request-icon"><Truck size={23} /></div><div className="operations-request-copy"><b>{row.request_no}</b><span>{row.source_location_name || "—"} <ArrowRight size={14} /> {row.destination_location_name || "—"}</span><small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small></div><span className={`operations-status status-${row.status}`}>{row.cancelled_at ? "ملغي" : stageLabels[row.status] || row.status}</span><strong>{row.vehicles_count}</strong></article>)}</div>
-          )}
+          <div className="operations-requests-list">{!loading && !rows.length ? <div className="operations-empty-state"><Truck size={42} /><strong>لا توجد طلبات</strong></div> : rows.map((row) => <article key={row.id} onClick={() => setSelected(row)}><div className="operations-request-icon"><Truck size={23} /></div><div className="operations-request-copy"><b>{row.request_no}</b><span>{row.source_location_name || "—"} <ArrowRight size={14} /> {row.destination_location_name || "—"}</span><small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small></div><span className={`operations-status status-${row.status}`}>{row.cancelled_at ? "ملغي" : stageLabels[row.status] || row.status}</span><strong>{row.vehicles_count}</strong></article>)}</div>
         </section>
       )}
 
