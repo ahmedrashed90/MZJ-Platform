@@ -25,7 +25,7 @@ function formatMoney(value: unknown) {
 
 function linkStatusLabel(value: unknown) {
   const key = String(value || "");
-  const labels: Record<string, string> = { linked: "تم الربط", created: "تم الإنشاء", updated: "تم التحديث", partial: "ربط جزئي", not_linked: "غير مربوط", missing_user_id: "مندوب NEXT ERP مفقود", user_not_mapped: "المستخدم غير مربوط", department_not_configured: "قسم المنصة غير محدد", platform_branch_not_configured: "فرع المنصة غير محدد", unsupported_department: "قسم غير صالح لـCRM", missing_phone: "رقم الجوال مفقود", ambiguous_phone: "رقم الجوال مكرر", skipped_status: "تم تخطي الربط" };
+  const labels: Record<string, string> = { linked: "تم الربط", created: "تم الإنشاء", updated: "تم التحديث", partial: "ربط جزئي", not_linked: "غير مربوط", missing_user_id: "إيميل NEXT ERP مفقود", user_not_mapped: "المستخدم غير مربوط", department_not_configured: "قسم المنصة غير محدد", platform_branch_not_configured: "فرع المنصة غير محدد", unsupported_department: "قسم غير صالح لـCRM", missing_phone: "رقم الجوال مفقود", ambiguous_phone: "رقم الجوال مكرر", skipped_status: "تم تخطي الربط" };
   return labels[key] || key || "—";
 }
 
@@ -91,7 +91,7 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
                       {[
                         ["العميل الحقيقي", order.actual_customer_name], ["رقم الجوال", order.actual_customer_phone],
                         ["Customer في NEXT ERP", order.accounting_customer_name], ["فرع البيع في NEXT ERP", order.erp_branch],
-                        ["مندوب NEXT ERP", order.erp_sales_person], ["معرّف مندوب NEXT ERP", order.erp_user_id],
+                        ["مندوب NEXT ERP", order.erp_sales_person], ["إيميل مستخدم NEXT ERP", order.erp_user_id],
                         ["مندوب المنصة", order.platform_user_name], ["فرع المنصة", order.platform_branch_name || order.platform_branch_code], ["تاريخ الطلب", order.order_date ? formatOperationsDate(order.order_date) : "—"],
                         ["السيارة", [order.item_type, order.item_category, order.item_model].filter(Boolean).join(" ")],
                         ["إجمالي السيارة", formatMoney(order.vehicle_total_incl_vat)], ["إجمالي الطلب", formatMoney(order.total_incl_vat)],

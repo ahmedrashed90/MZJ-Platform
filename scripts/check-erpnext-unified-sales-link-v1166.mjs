@@ -16,10 +16,7 @@ expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerName = 
 expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerPhone = alternateCustomer.name ? alternateCustomer.phone');
 expect("server/_erpnext-sales-order-sync.ts", '=== "to deliver and bill"', "only approved ERP status");
 reject("server/_erpnext-sales-order-sync.ts", '=== "completed"', "Completed status automation");
-expect("server/_erpnext-sales-order-sync.ts", "resolvePlatformUser(normalized.erpUserId)", "Sales Team user resolution");
-expect("server/_erpnext-sales-order-normalizer.ts", "resolvePrimarySalesTeamPerson", "primary Sales Team person resolution");
-expect("server/_erpnext-sales-order-normalizer.ts", "allocated_percentage", "Sales Team contribution priority");
-reject("server/_erpnext-sales-order-normalizer.ts", '"owner", "modified_by", "user", "user_id"', "submitter fallback for salesperson mapping");
+expect("server/_erpnext-sales-order-sync.ts", "resolvePlatformUser(normalized.erpUserId)", "email-only user resolution");
 reject("server/_erpnext-sales-order-sync.ts", "next_erp_branch", "legacy ERP branch user mapping");
 reject("server/_erpnext-sales-order-sync.ts", "branch_mismatch", "ERP branch matching gate");
 expect("server/_erpnext-sales-order-sync.ts", "if (!existing)", "create CRM customer when phone is not registered");
@@ -35,7 +32,7 @@ reject("server/_erpnext-integration-schema.ts", "core_users_next_erp_branch_idx"
 expect("server/access-control.ts", "nextErpUserId");
 reject("server/access-control.ts", "nextErpBranch", "legacy ERP branch form field");
 reject("server/access-control.ts", "next_erp_branch", "legacy ERP branch database field");
-expect("src/access-control/UsersPermissionsPanel.tsx", "مندوب NEXT ERP");
+expect("src/access-control/UsersPermissionsPanel.tsx", "NEXT ERP User ID");
 reject("src/access-control/UsersPermissionsPanel.tsx", "اسم الفرع في NEXT ERP", "legacy ERP branch UI field");
 expect("server/operations/index.ts", "integrations.erpnext_sales_order_vehicles");
 expect("src/operations/components/VehicleDetailModal.tsx", '["sales", "طلب البيع"]');
