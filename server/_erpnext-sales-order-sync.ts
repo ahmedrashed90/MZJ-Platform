@@ -945,9 +945,9 @@ export async function syncErpNextSalesOrder(input: {
   const userResolution = await resolvePlatformUser(normalized.erpUserId);
   const mapping = userResolution.mapping;
   if (userResolution.status === "missing_user_id") {
-    warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مستخدم NEXT ERP غير موجود في بيانات طلب البيع" });
+    warnings.push({ code: "ERP_USER_ID_MISSING", message: "مندوب البيع غير موجود في جدول Sales Team داخل طلب NEXT ERP" });
   } else if (userResolution.status === "user_not_mapped") {
-    warnings.push({ code: "ERP_USER_NOT_MAPPED", message: `لا يوجد مستخدم في المنصة مربوط بإيميل NEXT ERP: ${normalized.erpUserId}` });
+    warnings.push({ code: "ERP_USER_NOT_MAPPED", message: `لا يوجد مستخدم في المنصة مربوط بمندوب NEXT ERP: ${normalized.erpUserId}` });
   } else if (userResolution.status === "department_not_configured") {
     warnings.push({ code: "PLATFORM_DEPARTMENT_MISSING", message: "المستخدم المربوط لا يملك قسمًا أساسيًا في المنصة" });
   } else if (userResolution.status === "unsupported_department") {

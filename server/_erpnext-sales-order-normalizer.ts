@@ -201,29 +201,35 @@ function resolveTaxMetadata(doc: JsonRecord, body: JsonRecord) {
   };
 }
 
-function resolveSalesPerson(doc: JsonRecord, body: JsonRecord) {
-  const direct = pickText(doc, ["sales_person", "sales_person_name", "custom_sales_person", "salesperson"])
-    || pickText(body, ["SalesPerson", "salesPerson"]);
-  if (direct) return direct;
+function resolvePrimarySalesTeamPerson(doc: JsonRecord) {
   const salesTeam = asArray(pick(doc, ["sales_team", "salesTeam"]));
-  return salesTeam.map((row) => pickText(row, ["sales_person", "sales_person_name", "employee_name"])).find(Boolean) || "";
+  const candidates = salesTeam
+    .map((row, index) => ({
+      index,
+      name: pickText(row, ["sales_person", "sales_person_name", "employee_name"]),
+      contribution: numberValue(pick(row, [
+        "allocated_percentage", "contribution_percentage", "contribution", "percentage",
+      ])),
+    }))
+    .filter((candidate) => Boolean(candidate.name));
+
+  candidates.sort((left, right) => (right.contribution - left.contribution) || (left.index - right.index));
+  return candidates[0]?.name || "";
 }
 
-function resolveErpUserId(doc: JsonRecord, body: JsonRecord, items: JsonRecord[]) {
-  const direct = pickText(doc, [
-    "sales_person_email", "sales_user_email", "erp_user_id", "next_erp_user_id", "custom_sales_person_email",
-    "custom_sales_user_email", "owner", "modified_by", "user", "user_id",
-  ]) || pickText(body, ["SalesPersonEmail", "salesPersonEmail", "erpUserId", "nextErpUserId", "owner"]);
-  if (direct) return direct.toLowerCase();
+function resolveSalesPerson(doc: JsonRecord, body: JsonRecord) {
+  const fromSalesTeam = resolvePrimarySalesTeamPerson(doc);
+  if (fromSalesTeam) return fromSalesTeam;
 
-  const salesTeam = asArray(pick(doc, ["sales_team", "salesTeam"]));
-  const teamEmail = salesTeam
-    .map((row) => pickText(row, ["email", "user", "user_id", "sales_person_email", "employee_email"]))
-    .find(Boolean);
-  if (teamEmail) return teamEmail.toLowerCase();
+  return pickText(doc, ["sales_person", "sales_person_name", "custom_sales_person", "salesperson"])
+    || pickText(body, ["SalesPerson", "salesPerson"]);
+}
 
-  const itemOwner = items.map((item) => pickText(item, ["owner", "modified_by", "user", "user_id"])).find(Boolean);
-  return (itemOwner || "").toLowerCase();
+function resolveErpUserId(doc: JsonRecord, body: JsonRecord) {
+  // The employee who submits the Sales Order may be a branch administrator.
+  // Platform ownership must therefore come only from the Sales Person selected in Sales Team,
+  // never from owner/modified_by or item audit fields.
+  return resolveSalesPerson(doc, body);
 }
 
 function resolveAlternateCustomer(doc: JsonRecord, body: JsonRecord) {
@@ -310,7 +316,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     || pickText(body, ["OrderDate", "orderDate"]);
   const deliveryDate = pickText(doc, ["delivery_date", "expected_delivery_date", "DeliveryDate"])
     || pickText(body, ["DeliveryDate", "deliveryDate"]);
-  const erpUserId = resolveErpUserId(doc, body, vehicleItems);
+  const erpUserId = resolveErpUserId(doc, body);
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
   const erpStatus = pickText(doc, ["status", "order_status", "workflow_state"]) || pickText(body, ["status", "orderStatus"]);
   const erpEvent = pickText(body, ["event", "eventType"]) || "sales_order.submitted";
@@ -432,7 +438,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
 
   if (!actualCustomerName) warnings.push({ code: "CUSTOMER_NAME_MISSING", message: "اسم العميل الحقيقي غير موجود في طلب البيع" });
   if (!actualCustomerPhoneNormalized) warnings.push({ code: "CUSTOMER_PHONE_MISSING", message: "رقم جوال العميل الحقيقي غير موجود أو غير صالح" });
-  if (!erpUserId) warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مستخدم NEXT ERP غير موجود في طلب البيع" });
+  if (!erpUserId) warnings.push({ code: "ERP_USER_ID_MISSING", message: "مندوب البيع غير موجود في جدول Sales Team داخل طلب NEXT ERP" });
 
   return {
     orderNo,
