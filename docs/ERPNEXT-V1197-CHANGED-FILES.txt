@@ -1,0 +1,13 @@
+MZJ Platform v1.19.7 — NEXT ERP clean integration
+
+Modified:
+- package.json
+- DELIVERY_MANIFEST_AR.md
+- server/_erpnext-sales-order-normalizer.ts
+- server/_erpnext-sales-order-sync.ts
+
+Added:
+- scripts/check-erpnext-clean-integration-v1197.mjs
+- docs/ERPNEXT-CLEAN-INTEGRATION-V1197-AR.md
+- docs/ERPNEXT-V1197-CHANGED-FILES.txt
+- test-results/ERPNEXT-V1197-CLEAN-TEST-RESULTS.txt

@@ -748,19 +748,8 @@ export async function cancelErpNextSalesOrder(input: {
         order by cycle_no desc limit 1 for update
       `;
 
-      if (vehicle.archived_at || clean(vehicle.status_code) === "delivered") {
-        preserved += 1;
-        warnings.push({
-          code: "OPERATIONS_CANCEL_REVIEW_REQUIRED",
-          message: vehicle.archived_at
-            ? "السيارة مؤرشفة؛ تم تسجيل إلغاء طلب البيع دون إرجاع حالتها تلقائيًا"
-            : "السيارة مباع تم التسليم؛ تم تسجيل إلغاء طلب البيع وتحتاج مراجعة إدارية",
-          vin: clean(salesVehicle.vin),
-          itemNo: clean(salesVehicle.item_no),
-        });
-        continue;
-      }
-
+      // إلغاء طلب البيع يغلق دورة الموافقات النشطة كسجل ملغي حتى لو كانت
+      // السيارة مسلمة أو مؤرشفة. حالة السيارة نفسها تظل محفوظة في الحالتين.
       if (activeApproval) {
         const beforeApproval = { ...activeApproval };
         const [closedApproval] = await tx<any[]>`
@@ -777,6 +766,19 @@ export async function cancelErpNextSalesOrder(input: {
             ${order.platform_user_id||null}::uuid,${actorName},'NEXT ERP',${tx.json(beforeApproval)},${tx.json(closedApproval)}
           )
         `;
+      }
+
+      if (vehicle.archived_at || clean(vehicle.status_code) === "delivered") {
+        preserved += 1;
+        warnings.push({
+          code: "OPERATIONS_CANCEL_REVIEW_REQUIRED",
+          message: vehicle.archived_at
+            ? "السيارة مؤرشفة؛ تم تسجيل إلغاء طلب البيع دون إرجاع حالتها تلقائيًا"
+            : "السيارة مباع تم التسليم؛ تم تسجيل إلغاء طلب البيع وتحتاج مراجعة إدارية",
+          vin: clean(salesVehicle.vin),
+          itemNo: clean(salesVehicle.item_no),
+        });
+        continue;
       }
 
       if (clean(vehicle.status_code) === "under_delivery") {

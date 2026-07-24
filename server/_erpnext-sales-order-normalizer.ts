@@ -209,20 +209,21 @@ function resolveSalesPerson(doc: JsonRecord, body: JsonRecord) {
   return salesTeam.map((row) => pickText(row, ["sales_person", "sales_person_name", "employee_name"])).find(Boolean) || "";
 }
 
-function resolveErpUserId(doc: JsonRecord, _body: JsonRecord, _items: JsonRecord[]) {
-  const salesTeam = asArray(pick(doc, ["sales_team", "salesTeam"]));
-  const candidates = salesTeam
-    .map((row, index) => ({
-      index,
-      erpUserId: pickText(row, ["sales_person", "sales_person_name", "employee_name"]),
-      contribution: numberValue(pick(row, [
-        "allocated_percentage", "contribution_percentage", "contribution", "percentage",
-      ])),
-    }))
-    .filter((candidate) => Boolean(candidate.erpUserId));
+function resolveErpUserId(doc: JsonRecord, body: JsonRecord, items: JsonRecord[]) {
+  const direct = pickText(doc, [
+    "sales_person_email", "sales_user_email", "erp_user_id", "next_erp_user_id", "custom_sales_person_email",
+    "custom_sales_user_email", "owner", "modified_by", "user", "user_id",
+  ]) || pickText(body, ["SalesPersonEmail", "salesPersonEmail", "erpUserId", "nextErpUserId", "owner"]);
+  if (direct) return direct.toLowerCase();
 
-  candidates.sort((left, right) => (right.contribution - left.contribution) || (left.index - right.index));
-  return candidates[0]?.erpUserId || "";
+  const salesTeam = asArray(pick(doc, ["sales_team", "salesTeam"]));
+  const teamEmail = salesTeam
+    .map((row) => pickText(row, ["email", "user", "user_id", "sales_person_email", "employee_email"]))
+    .find(Boolean);
+  if (teamEmail) return teamEmail.toLowerCase();
+
+  const itemOwner = items.map((item) => pickText(item, ["owner", "modified_by", "user", "user_id"])).find(Boolean);
+  return (itemOwner || "").toLowerCase();
 }
 
 function resolveAlternateCustomer(doc: JsonRecord, body: JsonRecord) {
@@ -277,14 +278,25 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     throw new ErpNextSalesOrderError(400, `رقم طلب البيع غير موجود. الحقول المستلمة: ${Object.keys(doc).join(", ") || "لا توجد حقول"}`);
   }
 
+  const erpStatus = pickText(doc, ["status", "order_status", "workflow_state"])
+    || pickText(body, ["status", "orderStatus"]);
+  const erpEvent = pickText(body, ["event", "eventType"])
+    || pickText(doc, ["event", "event_type"])
+    || "sales_order.submitted";
+  const createdAt = pickText(doc, ["creation", "created_at", "createdAt", "Timestamp"])
+    || pickText(body, ["Timestamp", "createdAt", "creation"]);
+  const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
+  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
+  const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
+
   const rawItems = resolveItems(doc, body);
-  if (!rawItems.length) {
+  if (!rawItems.length && !isCancellation) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على جدول Items في طلب ${orderNo}`);
   }
 
   const feeItems = rawItems.filter(isRegistrationFeeItem);
   const vehicleItems = rawItems.filter((item) => !isRegistrationFeeItem(item));
-  if (!vehicleItems.length) {
+  if (!vehicleItems.length && !isCancellation) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على صف سيارة داخل طلب ${orderNo}`);
   }
 
@@ -311,13 +323,6 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     || pickText(body, ["DeliveryDate", "deliveryDate"]);
   const erpUserId = resolveErpUserId(doc, body, vehicleItems);
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
-  const erpStatus = pickText(doc, ["status", "order_status", "workflow_state"]) || pickText(body, ["status", "orderStatus"]);
-  const erpEvent = pickText(body, ["event", "eventType"]) || "sales_order.submitted";
-  const createdAt = pickText(doc, ["creation", "created_at", "createdAt", "Timestamp"])
-    || pickText(body, ["Timestamp", "createdAt"]);
-  const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
-  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
-  const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
   const explicitGrandTotal = numberValue(pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal"]));
@@ -429,9 +434,11 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     });
   });
 
-  if (!actualCustomerName) warnings.push({ code: "CUSTOMER_NAME_MISSING", message: "اسم العميل الحقيقي غير موجود في طلب البيع" });
-  if (!actualCustomerPhoneNormalized) warnings.push({ code: "CUSTOMER_PHONE_MISSING", message: "رقم جوال العميل الحقيقي غير موجود أو غير صالح" });
-  if (!erpUserId) warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مستخدم NEXT ERP غير موجود في طلب البيع" });
+  if (!isCancellation) {
+    if (!actualCustomerName) warnings.push({ code: "CUSTOMER_NAME_MISSING", message: "اسم العميل الحقيقي غير موجود في طلب البيع" });
+    if (!actualCustomerPhoneNormalized) warnings.push({ code: "CUSTOMER_PHONE_MISSING", message: "رقم جوال العميل الحقيقي غير موجود أو غير صالح" });
+    if (!erpUserId) warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مستخدم NEXT ERP غير موجود في طلب البيع" });
+  }
 
   return {
     orderNo,
