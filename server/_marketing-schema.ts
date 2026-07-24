@@ -78,15 +78,21 @@ create table if not exists marketing.platform_post_types (
 
 create table if not exists marketing.funnels (
   id uuid primary key default gen_random_uuid(),
-  name text not null unique,
+  name text not null,
   active boolean not null default true,
   source text not null default 'dashboard',
   created_at timestamptz not null default now()
 );
+alter table marketing.funnels add column if not exists active boolean not null default true;
+alter table marketing.funnels add column if not exists source text not null default 'dashboard';
+alter table marketing.funnels add column if not exists created_at timestamptz not null default now();
+create unique index if not exists marketing_funnels_name_uq on marketing.funnels(name);
 
-insert into marketing.funnels(name,active,source) values
-('Awareness',true,'dashboard'),('Leads',true,'dashboard'),('Conversion Message',true,'dashboard')
-on conflict(name) do update set active=true;
+insert into marketing.funnels(name,active,source)
+select seed.name,true,'dashboard'
+from (values ('Awareness'),('Leads'),('Conversion Message')) as seed(name)
+where not exists (select 1 from marketing.funnels current where current.name=seed.name);
+update marketing.funnels set active=true,source=coalesce(nullif(source,''),'dashboard');
 
 create table if not exists marketing.packages (
   id uuid primary key default gen_random_uuid(),
@@ -329,7 +335,7 @@ alter table marketing.presence_status add column if not exists last_activity_typ
 
 create table if not exists marketing.user_colors (
   user_id uuid primary key references core.users(id) on delete cascade,
-  color text not null default '#2563eb',
+  color text not null default '#c65f3c',
   updated_by uuid references core.users(id),
   updated_at timestamptz not null default now()
 );

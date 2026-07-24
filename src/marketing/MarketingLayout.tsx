@@ -6,7 +6,6 @@ import {
   Car,
   ChartLineUp,
   CirclesFour,
-  ClipboardText,
   Database,
   Gear,
   LinkSimple,
@@ -39,20 +38,32 @@ const links = [
 
 export function MarketingLayout() {
   useEffect(() => {
-    const ping = () => { void marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "attendance", attendanceAction: "ping", activityType: window.location.pathname }) }).catch(() => undefined); };
+    const ping = () => {
+      void marketingFetch("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "attendance", attendanceAction: "ping", activityType: window.location.pathname }),
+      }).catch(() => undefined);
+    };
     ping();
     const interval = window.setInterval(ping, 120000);
     const onVisibility = () => { if (document.visibilityState === "visible") ping(); };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", onVisibility); };
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   return (
     <div className="marketing-shell">
-      <aside className="marketing-nav" aria-label="قائمة سيستم التسويق">
-        <div className="marketing-nav-title"><ClipboardText size={23} weight="duotone" /><span>سيستم التسويق</span></div>
-        <nav>{links.map(({ to, label, icon: Icon, end }) => <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? "active" : ""}><Icon size={19} /><span>{label}</span></NavLink>)}</nav>
-      </aside>
+      <nav className="marketing-nav" aria-label="صفحات سيستم التسويق">
+        {links.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? "active" : ""}>
+            <Icon size={18} weight="duotone" />
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
       <section className="marketing-content"><Outlet /></section>
     </div>
   );
