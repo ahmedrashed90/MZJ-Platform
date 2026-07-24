@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "node:crypto";
 import { getSql } from "../_db.js";
-import { requireAdmin, requireUser, requestIp, type SessionUser } from "../_auth.js";
+import { requireUser, requestIp, type SessionUser } from "../_auth.js";
+import { canAccessSystem, isPlatformAdmin } from "../../shared/system-access.js";
+import { completePhotographyRequest } from "../operations/index.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
@@ -23,10 +25,8 @@ function cleanTemplateData(value: unknown) {
   for (const key of TEMPLATE_FIELDS) if (Object.prototype.hasOwnProperty.call(input, key)) output[key] = clean(input[key]);
   return output;
 }
-function isAdmin(user: SessionUser) { return user.roleCodes.some((code) => ["admin", "system_admin"].includes(code)); }
-function canUseMarketing(user: SessionUser) {
-  return isAdmin(user) || user.permissions.includes("marketing.view") || user.departmentCodes.includes("marketing") || user.roleCodes.includes("marketing_user");
-}
+function isAdmin(user: SessionUser) { return isPlatformAdmin(user); }
+function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
 function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
 function sourceTable(sourceType: string) { return sourceType === "agenda" ? "marketing.agendas" : "marketing.campaigns"; }
@@ -61,8 +61,62 @@ async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: 
 
 async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
   const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels] = await Promise.all([
-    sql<any[]>`select id::text,full_name,email,mobile,is_active,can_receive_tasks from core.users where is_active=true order by full_name`,
-    sql<any[]>`select d.id::text,d.name,d.is_content,d.is_active,coalesce(json_agg(json_build_object('id',u.id::text,'fullName',u.full_name,'email',u.email) order by u.full_name) filter(where u.id is not null),'[]'::json) as users from marketing.departments d left join marketing.department_users du on du.department_id=d.id left join core.users u on u.id=du.user_id and u.is_active=true where d.is_active=true group by d.id order by d.is_content desc,d.name`,
+    sql<any[]>`
+      select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
+      from core.users u
+      where u.is_active=true and (
+        exists(
+          select 1 from core.user_departments ud
+          join core.departments cd on cd.id=ud.department_id
+          where ud.user_id=u.id and cd.is_active=true and cd.system_code='marketing'
+        )
+        or exists(
+          select 1 from core.user_roles ur
+          join core.roles r on r.id=ur.role_id
+          where ur.user_id=u.id and r.code in ('marketing_user','admin','system_admin')
+        )
+        or exists(
+          select 1 from core.user_roles ur
+          join core.role_permissions rp on rp.role_id=ur.role_id
+          join core.permissions p on p.id=rp.permission_id
+          where ur.user_id=u.id and p.system_code='marketing'
+        )
+      )
+      order by u.full_name
+    `,
+    sql<any[]>`
+      select d.id::text,d.name,d.is_content,d.is_active,
+        coalesce(
+          json_agg(
+            json_build_object('id',u.id::text,'fullName',u.full_name,'email',u.email)
+            order by u.full_name
+          ) filter(where u.id is not null),
+          '[]'::json
+        ) as users
+      from marketing.departments d
+      left join marketing.department_users du on du.department_id=d.id
+      left join core.users u on u.id=du.user_id and u.is_active=true and (
+        exists(
+          select 1 from core.user_departments ud
+          join core.departments cd on cd.id=ud.department_id
+          where ud.user_id=u.id and cd.is_active=true and cd.system_code='marketing'
+        )
+        or exists(
+          select 1 from core.user_roles ur
+          join core.roles r on r.id=ur.role_id
+          where ur.user_id=u.id and r.code in ('marketing_user','admin','system_admin')
+        )
+        or exists(
+          select 1 from core.user_roles ur
+          join core.role_permissions rp on rp.role_id=ur.role_id
+          join core.permissions p on p.id=rp.permission_id
+          where ur.user_id=u.id and p.system_code='marketing'
+        )
+      )
+      where d.is_active=true
+      group by d.id
+      order by d.is_content desc,d.name
+    `,
     sql<any[]>`select a.id::text,a.department_id::text,d.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join marketing.departments d on d.id=a.department_id where a.is_active=true order by d.name,a.sort_order,a.created_at`,
     sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,d.name as primary_department_name,c.is_active from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.is_active=true order by c.name`,
     sql<any[]>`select id::text,name,short_code,code_prefix,sequence_value,is_active from marketing.campaign_types where is_active=true order by name`,
@@ -722,12 +776,13 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   throw new Error("إجراء الحضور غير صحيح");
 }
 
-async function stockData(sql:ReturnType<typeof getSql>){
+async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.note,
+      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.note,r.cancelled_at,
         sl.name as source_location_name,dl.name as destination_location_name,
+        (r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
         coalesce(json_agg(json_build_object('vehicleId',v.id::text,'vin',v.vin,'carName',v.car_name,'statement',v.statement,'note',rv.item_note) order by v.vin) filter(where v.id is not null),'[]'::json) as vehicles
       from operations.transfer_requests r
       left join operations.locations sl on sl.id=r.source_location_id
@@ -782,6 +837,8 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
   });
 }
 
+
+
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and (exists(select 1 from marketing.department_users du where du.user_id=u.id) or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.code='marketing')) order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
@@ -811,7 +868,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='calendar')return response.status(200).json(await calendarData(sql));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql));
       if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
-      if(resource==='stock')return response.status(200).json(await stockData(sql));
+      if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
       if(resource==='platform_connections')return response.status(200).json(await platformConnections(sql));
       if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id)));
@@ -846,6 +903,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
     else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
+    else if(action==='complete_photo_request')result=await completePhotographyRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='save_connection')result=await saveConnection(sql,body,user);
     else if(action==='disconnect_connection')result=await disconnectConnection(sql,body,user);

@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, type SessionUser } from "./_auth.js";
+import { canAccessSystem } from "../shared/system-access.js";
 
 export function canAccessTracking(user: SessionUser) {
-  return user.roleCodes.some((code) => ["admin", "tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code))
-    || (user.departmentCodes.includes("tracking") || user.departmentCodes.includes("operations"));
+  return canAccessSystem(user, "tracking");
 }
 
 export async function requireTrackingUser(request: VercelRequest, response: VercelResponse) {

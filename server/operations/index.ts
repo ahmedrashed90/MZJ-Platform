@@ -1042,6 +1042,22 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
   });
 }
 
+export async function completePhotographyRequest(
+  sql: ReturnType<typeof getSql>,
+  requestIdValue: string,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+  note = "",
+) {
+  const requestIdValueClean = clean(requestIdValue);
+  if (!requestIdValueClean) throw new OperationError(400, "VALIDATION_ERROR", "طلب التصوير غير محدد");
+  return transferAction(sql, {
+    id: requestIdValueClean,
+    transferAction: "advance",
+    nextStatus: "completed",
+    note,
+  }, user);
+}
+
 async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const vehicleId = clean(body.vehicleId);
   const type = clean(body.approvalType);

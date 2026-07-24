@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Sidebar } from "./components/Sidebar";
@@ -9,6 +9,7 @@ import { FirstAdminSetupPage } from "./pages/FirstAdminSetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlatformLoadingPage } from "./pages/PlatformLoadingPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { canAccessSystem, defaultSystemPath, isPlatformAdmin, type PlatformSystem } from "./systemAccess";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
 const CrmDashboardPage = lazy(() => import("./crm/pages/CrmDashboardPage").then((module) => ({ default: module.CrmDashboardPage })));
@@ -47,6 +48,24 @@ const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then
 const MovementHistoryPage = lazy(() => import("./operations/pages/MovementHistoryPage").then((module) => ({ default: module.MovementHistoryPage })));
 
 
+function SystemGuard({ system, children }: { system: PlatformSystem; children: ReactNode }) {
+  const { user } = useAuth();
+  if (!canAccessSystem(user, system)) return <Navigate to={defaultSystemPath(user)} replace />;
+  return <>{children}</>;
+}
+
+function HomeRoute() {
+  const { user } = useAuth();
+  if (!isPlatformAdmin(user)) return <Navigate to={defaultSystemPath(user)} replace />;
+  return <DashboardPage />;
+}
+
+function AdminRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  if (!isPlatformAdmin(user)) return <Navigate to={defaultSystemPath(user)} replace />;
+  return <>{children}</>;
+}
+
 function PlatformRoutes() {
   return (
     <div className="app-shell">
@@ -54,8 +73,8 @@ function PlatformRoutes() {
       <main className="page-shell">
         <Suspense fallback={<div className="crm-loading-panel">جاري تحميل الصفحة...</div>}>
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/crm" element={<CrmLayout />}>
+          <Route path="/" element={<HomeRoute />} />
+          <Route path="/crm" element={<SystemGuard system="crm"><CrmLayout /></SystemGuard>}>
             <Route index element={<CrmDashboardPage />} />
             <Route path="database" element={<CrmDatabasePage />} />
             <Route path="manual-leads" element={<CrmManualLeadsPage />} />
@@ -67,7 +86,7 @@ function PlatformRoutes() {
             <Route path="kpi" element={<CrmKpiPage />} />
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
-          <Route path="/marketing" element={<MarketingLayout />}>
+          <Route path="/marketing" element={<SystemGuard system="marketing"><MarketingLayout /></SystemGuard>}>
             <Route index element={<MarketingDashboardPage />} />
             <Route path="create-campaign" element={<CreateCampaignPage />} />
             <Route path="create-agenda" element={<CreateAgendaPage />} />
@@ -82,7 +101,7 @@ function PlatformRoutes() {
             <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
             <Route path="attendance" element={<AttendancePage />} />
           </Route>
-          <Route path="/operations" element={<OperationsLayout />}>
+          <Route path="/operations" element={<SystemGuard system="operations"><OperationsLayout /></SystemGuard>}>
             <Route index element={<InventoryPage />} />
             <Route path="manage" element={<VehicleManagementPage />} />
             <Route path="movement" element={<MovementPage />} />
@@ -93,15 +112,15 @@ function PlatformRoutes() {
             <Route path="movements" element={<MovementHistoryPage />} />
             <Route path="archive" element={<InventoryPage archived />} />
           </Route>
-          <Route path="/tracking" element={<TrackingLayout />}>
+          <Route path="/tracking" element={<SystemGuard system="tracking"><TrackingLayout /></SystemGuard>}>
             <Route index element={<TrackingOrdersPage />} />
             <Route path="archive" element={<TrackingOrdersPage archivedOnly />} />
             <Route path="delete" element={<TrackingDeletePage />} />
           </Route>
-          <Route path="/reports" element={<EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." />} />
-          <Route path="/database" element={<EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/activity" element={<EmptyModulePage title="سجل النشاط" description="سجل مركزي لجميع الإجراءات والتغييرات داخل المنصة." />} />
+          <Route path="/reports" element={<AdminRoute><EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." /></AdminRoute>} />
+          <Route path="/database" element={<AdminRoute><EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." /></AdminRoute>} />
+          <Route path="/settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
+          <Route path="/activity" element={<AdminRoute><EmptyModulePage title="سجل النشاط" description="سجل مركزي لجميع الإجراءات والتغييرات داخل المنصة." /></AdminRoute>} />
           <Route path="/help" element={<EmptyModulePage title="المساعدة" description="مركز المساعدة والتوثيق الخاص بمنصة MZJ." />} />
         </Routes>
         </Suspense>

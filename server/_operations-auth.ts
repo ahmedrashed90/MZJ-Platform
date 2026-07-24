@@ -1,8 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, type SessionUser } from "./_auth.js";
+import { canAccessSystem, isPlatformAdmin } from "../shared/system-access.js";
 
 export function isSystemAdmin(user: SessionUser) {
-  return user.roleCodes.some((code) => ["admin", "system_admin"].includes(code));
+  return isPlatformAdmin(user);
 }
 
 export function hasPermission(user: SessionUser, permission: string) {
@@ -10,10 +11,7 @@ export function hasPermission(user: SessionUser, permission: string) {
 }
 
 export function canAccessOperations(user: SessionUser) {
-  return isSystemAdmin(user)
-    || user.permissions.includes("operations.view")
-    || user.departmentCodes.includes("operations")
-    || user.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code));
+  return canAccessSystem(user, "operations");
 }
 
 export async function requireOperationsUser(request: VercelRequest, response: VercelResponse) {

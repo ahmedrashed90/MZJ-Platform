@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { SessionUser } from "./_auth.js";
 import { requireUser } from "./_auth.js";
+import { canAccessSystem } from "../shared/system-access.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { getSql } from "./_db.js";
 import { calculateLeadCompletion } from "./_crm-customer-fields.js";
@@ -43,9 +44,7 @@ export async function requireCrmUser(request: VercelRequest, response: VercelRes
   const user = await requireUser(request, response);
   if (!user) return null;
   await ensureCrmSchema();
-  const crmDepartments = new Set(["cash_sales", "finance_sales", "customer_service", "call_center"]);
-  const allowed = user.roleCodes.includes("admin") || user.roleCodes.includes("sales_manager") || user.departmentCodes.some((code) => crmDepartments.has(code));
-  if (!allowed) {
+  if (!canAccessSystem(user, "crm")) {
     response.status(403).json({ ok: false, error: "لا توجد صلاحية للدخول إلى CRM" });
     return null;
   }

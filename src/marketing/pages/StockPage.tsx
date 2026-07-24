@@ -26,6 +26,7 @@ type PhotoRequestRow = {
   source_location_name?: string | null;
   destination_location_name?: string | null;
   vehicles: PhotoRequestVehicle[];
+  can_complete?: boolean;
 };
 
 type StockPayload = {
@@ -94,6 +95,7 @@ export function StockPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [completingRequestId, setCompletingRequestId] = useState("");
 
   async function load() {
     setError("");
@@ -119,6 +121,8 @@ export function StockPage() {
       if (existing) {
         existing.quantity += 1;
         existing.usage.push(...contentUsage);
+        existing.photographed = Boolean(existing.photographed || car.photographed);
+        if (!existing.photographed_at && car.photographed_at) existing.photographed_at = car.photographed_at;
         if (car.location_name && !existing.locationNames.includes(car.location_name)) existing.locationNames.push(car.location_name);
       } else {
         map.set(key, {
@@ -234,6 +238,26 @@ export function StockPage() {
     if (!busy) resetRequest();
   }
 
+  async function completePhotoRequest(requestId: string) {
+    setBusy(true);
+    setCompletingRequestId(requestId);
+    setError("");
+    setMessage("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "complete_photo_request", id: requestId }),
+      });
+      setMessage(result.message);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر إنهاء طلب التصوير");
+    } finally {
+      setBusy(false);
+      setCompletingRequestId("");
+    }
+  }
+
   async function createRequest() {
     if (!selectedCars.length || !destinationLocationId) return;
     setBusy(true);
@@ -311,7 +335,7 @@ export function StockPage() {
         <h2>طلبات التصوير</h2>
         <div className="marketing-table-wrap">
           <table>
-            <thead><tr><th>رقم الطلب</th><th>الحالة</th><th>المسار</th><th>المنشئ</th><th>تاريخ الإنشاء</th><th>السيارات</th><th>الملاحظات</th></tr></thead>
+            <thead><tr><th>رقم الطلب</th><th>الحالة</th><th>المسار</th><th>المنشئ</th><th>تاريخ الإنشاء</th><th>السيارات</th><th>الملاحظات</th><th>الإجراء</th></tr></thead>
             <tbody>
               {(data?.requests || []).map((row) => (
                 <tr key={row.id}>
@@ -322,6 +346,18 @@ export function StockPage() {
                   <td>{marketingDate(row.requested_at, true)}</td>
                   <td>{row.vehicles.map((vehicle) => vehicle.vin).join("، ") || "—"}</td>
                   <td>{row.note || "—"}</td>
+                  <td>
+                    {row.can_complete ? (
+                      <button
+                        type="button"
+                        className="primary marketing-request-action-button"
+                        disabled={busy}
+                        onClick={() => void completePhotoRequest(row.id)}
+                      >
+                        {completingRequestId === row.id ? "جاري التنفيذ..." : "تم الانتهاء"}
+                      </button>
+                    ) : "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -13,24 +13,25 @@ import {
   UsersThree,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
+import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, isPlatformAdmin } from "../systemAccess";
 
 const items = [
-  { href: "/", label: "الداش بورد", icon: House },
-  { href: "/crm", label: "CRM", icon: UsersThree },
+  { href: "/", label: "الداش بورد", icon: House, adminOnly: true },
+  { href: "/crm", label: "CRM", icon: UsersThree, crmOnly: true },
   { href: "/marketing", label: "التسويق", icon: Megaphone, marketingOnly: true },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, operationsOnly: true },
   { href: "/tracking", label: "التراكينج", icon: MapPin, trackingOnly: true },
 ];
 
 const supportItems = [
-  { href: "/reports", label: "التقارير", icon: ChartBar },
-  { href: "/database", label: "قاعدة البيانات", icon: Database },
+  { href: "/reports", label: "التقارير", icon: ChartBar, adminOnly: true },
+  { href: "/database", label: "قاعدة البيانات", icon: Database, adminOnly: true },
   { href: "/settings", label: "الإعدادات", icon: Gear, adminOnly: true },
-  { href: "/activity", label: "سجل النشاط", icon: Pulse },
+  { href: "/activity", label: "سجل النشاط", icon: Pulse, adminOnly: true },
   { href: "/help", label: "المساعدة", icon: Question },
 ];
 
-type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean; marketingOnly?: boolean };
+type NavItem = { href: string; label: string; icon: typeof House; adminOnly?: boolean; crmOnly?: boolean; trackingOnly?: boolean; operationsOnly?: boolean; marketingOnly?: boolean };
 
 function Item({ href, label, icon: Icon }: NavItem) {
   return (
@@ -39,7 +40,7 @@ function Item({ href, label, icon: Icon }: NavItem) {
       end={href === "/"}
       className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
     >
-      {({ isActive }) => (
+      {({ isActive }: { isActive: boolean }) => (
         <>
           <Icon size={22} weight={isActive ? "fill" : "regular"} />
           <span>{label}</span>
@@ -51,11 +52,17 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const isAdmin = user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) ?? false;
-  const canViewMarketing = isAdmin || Boolean(user?.permissions.includes("marketing.view")) || Boolean(user?.departmentCodes.includes("marketing")) || Boolean(user?.roleCodes.includes("marketing_user"));
-  const canViewOperations = isAdmin || Boolean(user?.permissions.includes("operations.view")) || Boolean(user?.departmentCodes.includes("operations")) || Boolean(user?.roleCodes.some((code) => ["operations_user", "operations_manager", "finance_manager", "sales_manager", "branch_manager"].includes(code)));
-  const canViewTracking = isAdmin || user?.roleCodes.some((code) => ["tracking_user", "sales_manager", "branch_manager", "operations_user"].includes(code)) || (user?.departmentCodes.includes("tracking") || user?.departmentCodes.includes("operations"));
-  const visibleItems = items.filter((item) => (!item.marketingOnly || canViewMarketing) && (!item.trackingOnly || canViewTracking) && (!item.operationsOnly || canViewOperations));
+  const isAdmin = isPlatformAdmin(user);
+  const canViewCrm = canAccessCrm(user);
+  const canViewMarketing = canAccessMarketing(user);
+  const canViewOperations = canAccessOperations(user);
+  const canViewTracking = canAccessTracking(user);
+  const visibleItems = items.filter((item) =>
+    (!item.adminOnly || isAdmin)
+    && (!item.crmOnly || canViewCrm)
+    && (!item.marketingOnly || canViewMarketing)
+    && (!item.trackingOnly || canViewTracking)
+    && (!item.operationsOnly || canViewOperations));
   const visibleSupport = supportItems.filter((item) => !item.adminOnly || isAdmin);
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 

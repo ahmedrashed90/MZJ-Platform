@@ -665,3 +665,42 @@
 .marketing-photo-request-modal { width: min(1260px, 100%); }
 .marketing-photo-request-create { display: grid; gap: 14px; }
 .marketing-photo-request-table input { min-height: 40px; }
+
+/* Campaign and agenda assignment controls */
+.marketing-user-picker { display: grid; gap: 9px; }
+.marketing-user-picker-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.marketing-user-picker-title small { color: var(--muted); font-size: 11px; }
+.marketing-picker-empty {
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  color: var(--muted);
+  background: #fff;
+  font-size: 12px;
+}
+.marketing-link-users { align-items: center; padding-top: 4px; }
+.marketing-link-users > strong { width: 100%; font-size: 12px; }
+.marketing-link-users > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+.marketing-cars-picker { display: grid; gap: 10px; }
+.marketing-cars-search {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: #fff;
+}
+.marketing-cars-search input { width: 100%; min-height: 40px; border: 0; background: transparent; outline: 0; }
+.marketing-request-action-button { min-height: 34px; padding: 6px 11px; white-space: nowrap; }
