@@ -40,6 +40,7 @@ expect("Permission version invalidates stale sessions", contains("server/_auth.t
 expect("Explicit deny is evaluated before superadmin", contains("shared/access-control.ts", "user.deniedPermissions?.includes(code)", "platform.superadmin"));
 expect("Disabled systems block their non-core permissions", contains("shared/access-control.ts", "!user.systemAccess?.[system]?.enabled"));
 expect("Backend permission guard logs rejection", contains("server/_access-control.ts", "permission_denied", "result: \"denied\""));
+expect("Access control returns the selected user row instead of the query array", contains("server/access-control.ts", "const [userRows, roles, systems, overrides, access]", "const user = userRows[0]"));
 expect("Access control blocks self-edit", contains("server/access-control.ts", "لا يمكن تعديل الحساب الحالي من نفس الجلسة"));
 expect("Access control blocks self-role edit", contains("server/access-control.ts", "لا يمكن تعديل دورك الحالي من نفس الجلسة"));
 expect("System roles and per-system self roles cannot be edited indirectly", contains("server/access-control.ts", "before?.role?.is_system", "لا يمكن تعديل قالب دور نظامي", "select 1 from core.user_systems where user_id=${actor.id}::uuid and role_id=${id}::uuid"));
@@ -55,6 +56,7 @@ expect("Unified settings contains the only users and permissions UI", contains("
 expect("Unified settings separates all four system settings", contains("src/pages/SettingsPage.tsx", "إعدادات CRM", "إعدادات التسويق", "إعدادات العمليات", "إعدادات التتبع"));
 expect("Settings sections use specific permissions", contains("src/pages/SettingsPage.tsx", "settings.crm.view", "settings.marketing.view", "settings.operations.view", "settings.tracking.view"));
 expect("User editor contains four system tabs", contains("src/access-control/UsersPermissionsPanel.tsx", '"operations", "tracking", "marketing", "crm"'));
+expect("User editor explains why saving is unavailable", contains("src/access-control/UsersPermissionsPanel.tsx", "userFormIssues", "access-save-hint", "البيانات جاهزة للحفظ"));
 expect("User editor supports allow deny and inherit", contains("src/access-control/UsersPermissionsPanel.tsx", 'type OverrideEffect = "inherit" | "allow" | "deny"'));
 expect("User editor supports per-system data scope branches and departments", contains("src/access-control/UsersPermissionsPanel.tsx", "dataScope", "branchIds", "departmentIds"));
 expect("Role templates include core permissions", contains("src/access-control/UsersPermissionsPanel.tsx", 'const roleSystemOrder: AccessSystemCode[] = ["core", ...systemOrder]'));

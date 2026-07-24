@@ -157,7 +157,7 @@ async function listUsers() {
 
 async function userDetail(userId: string) {
   const sql = getSql();
-  const [user, roles, systems, overrides, access] = await Promise.all([
+  const [userRows, roles, systems, overrides, access] = await Promise.all([
     sql<any[]>`select id::text,employee_no,full_name,email,mobile,next_erp_user_id,is_active,can_receive_leads,can_receive_tasks,last_login_at,created_at,updated_at,permission_version from core.users where id=${userId}::uuid`,
     sql<any[]>`select r.id::text,r.code,r.name from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=${userId}::uuid order by r.name`,
     sql<any[]>`
@@ -171,6 +171,7 @@ async function userDetail(userId: string) {
     sql<any[]>`select p.code as permission_code,o.effect,o.reason from core.user_permission_overrides o join core.permissions p on p.id=o.permission_id where o.user_id=${userId}::uuid order by p.code`,
     getEffectiveAccess(userId),
   ]);
+  const user = userRows[0];
   if (!user) return null;
   return { user, roleIds: roles.map((row) => row.id), roles, systems, overrides, effective: access };
 }
