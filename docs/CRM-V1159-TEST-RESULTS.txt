@@ -1,0 +1,31 @@
+MZJ Platform v1.15.9 - Test Results
+===================================
+
+PASS - npm run typecheck
+- API and server import validation passed.
+- CRM service reclassification checks passed.
+- v1.15.9 focused checks passed:
+  * browser voice recording removed completely
+  * current attachment flow preserved
+  * requested report totals present
+  * sales totals use the sold field only
+  * customer report PDF fetches all filtered pages
+  * KPI PDF actions centered
+  * each KPI PDF target has dedicated content
+  * readable bold typography integrated into canonical styles
+- CRM module, completion, reference v27/v39, settings, entry/distribution, Mersal routing, tracking and operations checks passed.
+- TypeScript project build passed.
+
+PASS - npx vite build
+- 5223 modules transformed.
+- Production bundle generated successfully.
+
+PASS - Scope review
+- No database schema changes.
+- No server/API handler changes.
+- No distribution, permissions, status or automation logic changes.
+- No operations, tracking or marketing source changes.
+
+NOTE
+- PDF windows use the browser print dialog, matching the existing PDF export approach.
+- Runtime data verification still depends on the deployed PostgreSQL environment and real user records.
