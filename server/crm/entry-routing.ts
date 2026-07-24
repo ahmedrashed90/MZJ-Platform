@@ -1,11 +1,12 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { isCrmManager, requireCrmUser } from "../_crm-utils.js";
+import { requireCrmUser } from "../_crm-utils.js";
+import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إعدادات دخول وتوزيع العملاء متاحة للإدارة فقط" });
+  if (!hasPermission(user, "settings.crm.view")) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لمشاهدة إعدادات CRM" });
   if (request.method !== "GET") {
     return response.status(409).json({ ok: false, error: "رسائل واختيارات الفلو انتقلت إلى إعدادات الأوتوميشن. هذا التبويب مخصص لقواعد التوزيع فقط." });
   }

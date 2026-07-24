@@ -6,21 +6,18 @@ import { clean, ensureVehicleStageRows } from "../_tracking-utils.js";
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   await ensureTrackingSchema();
-  const key = clean(request.query.key || request.query.vin || request.query.order || request.query.orderNo || request.query.o);
-  if (!key) return response.status(400).json({ ok: false, error: "أدخل رقم الطلب أو رقم الهيكل" });
+  const token = clean(request.query.token);
+  if (!token) return response.status(400).json({ ok: false, error: "رابط التتبع غير صالح" });
 
   const sql = getSql();
   const [order] = await sql<any[]>`
     select o.*,o.id::text
     from tracking.orders o
     where coalesce(o.is_deleted,false)=false
-      and (
-        lower(o.sales_order_no)=lower(${key})
-        or exists (select 1 from tracking.order_vehicles v where v.order_id=o.id and lower(v.vin)=lower(${key}))
-      )
+      and o.tracking_token=${token}
     limit 1
   `;
-  if (!order) return response.status(404).json({ ok: false, error: "لم يتم العثور على طلب بهذا الرقم. تأكد من رقم الطلب أو رقم الهيكل وحاول مرة أخرى." });
+  if (!order) return response.status(404).json({ ok: false, error: "رابط التتبع غير صالح أو انتهت صلاحيته" });
 
   const vehicles = await sql<any[]>`
     select v.*,v.id::text

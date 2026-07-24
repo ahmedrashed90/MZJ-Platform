@@ -1,12 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { requireTrackingUser } from "../_tracking-auth.js";
+import { getSystemAccess, hasPermission } from "../_access-control.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.js";
 import { clean, ensureVehicleStageRows, recalculateTrackingOrder } from "../_tracking-utils.js";
 
-async function getOrderDetail(id: string) {
+async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<typeof requireTrackingUser>>>) {
+  const access = getSystemAccess(user, "tracking");
+  const unrestricted = access.dataScope === "all";
+  const branches = access.branchCodes.length ? access.branchCodes : ["__none__"];
   const sql = getSql();
   const [order] = await sql<any[]>`
     select o.*,o.id::text,
@@ -15,6 +19,7 @@ async function getOrderDetail(id: string) {
       coalesce((select count(*) from tracking.vehicle_stages vs join tracking.order_vehicles v on v.id=vs.vehicle_id join tracking.stages s on s.id=vs.stage_id and s.is_active=true where v.order_id=o.id),0)::int as total_stages
     from tracking.orders o
     where o.id=${id}::uuid and coalesce(o.is_deleted,false)=false
+      and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
   `;
   if (!order) return null;
 
@@ -75,7 +80,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method === "GET") {
     const id = clean(request.query.id);
     if (id) {
-      const detail = await getOrderDetail(id);
+      const detail = await getOrderDetail(id, user);
       if (!detail) return response.status(404).json({ ok: false, error: "طلب التتبع غير موجود" });
       return response.status(200).json({ ok: true, order: detail });
     }
@@ -85,6 +90,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const archivedOnly = ["1", "true", "yes"].includes(clean(request.query.archived).toLowerCase());
     const limit = Math.min(Math.max(Number(request.query.limit || 1000), 1), 2000);
     const pattern = `%${search}%`;
+    const access = getSystemAccess(user, "tracking");
+    const unrestricted = access.dataScope === "all";
+    const branches = access.branchCodes.length ? access.branchCodes : ["__none__"];
     const orders = await sql<any[]>`
       select
         o.id::text,o.sales_order_no,o.customer_name,o.customer_mobile,o.branch,o.order_date,o.delivery_date,o.sales_person,
@@ -98,6 +106,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join tracking.vehicle_stages vs on vs.vehicle_id=v.id
       left join tracking.stages sx on sx.id=vs.stage_id and sx.is_active=true
       where coalesce(o.is_deleted,false)=false
+        and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
         and coalesce(o.is_archived,false)=${archivedOnly}
         and (vs.id is null or sx.id is not null)
         and (${status}='' or o.status=${status})
@@ -118,7 +127,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         count(*) filter (where coalesce(is_archived,false)=false and status='in_progress')::int as in_progress,
         count(*) filter (where coalesce(is_archived,false)=false and status='completed')::int as completed,
         count(*) filter (where coalesce(is_archived,false)=true)::int as archived
-      from tracking.orders where coalesce(is_deleted,false)=false
+      from tracking.orders o where coalesce(is_deleted,false)=false
+        and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
     `;
     return response.status(200).json({ ok: true, orders, counts });
   }
@@ -144,7 +154,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       if (!archiveState) return response.status(404).json({ ok: false, error: "طلب التتبع غير موجود" });
       if (archiveState.is_archived) {
-        const detail = await getOrderDetail(orderId);
+        const detail = await getOrderDetail(orderId, user);
         return response.status(200).json({ ok: true, order: detail, message: "الطلب موجود في الأرشيف بالفعل" });
       }
       const totalStages = Number(archiveState.total_stages || 0);
@@ -158,7 +168,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             archive_reason='اكتملت جميع مراحل التتبع',updated_at=now()
         where id=${orderId}::uuid
       `;
-      const detail = await getOrderDetail(orderId);
+      const detail = await getOrderDetail(orderId, user);
       return response.status(200).json({ ok: true, order: detail, message: "تم نقل الطلب إلى الأرشيف" });
     }
 
@@ -170,7 +180,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!vehicleId || !stageId) return response.status(400).json({ ok: false, error: "السيارة والمرحلة مطلوبتان" });
 
     const [row] = await sql<any[]>`
-      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived
+      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived,o.branch
       from tracking.vehicle_stages vs
       join tracking.order_vehicles v on v.id=vs.vehicle_id
       join tracking.orders o on o.id=v.order_id
@@ -178,6 +188,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where vs.vehicle_id=${vehicleId}::uuid and vs.stage_id=${stageId}::uuid
     `;
     if (!row) return response.status(404).json({ ok: false, error: "مرحلة السيارة غير موجودة" });
+    const access = getSystemAccess(user, "tracking");
+    const canAccessOrder = access.dataScope === "all" || access.branchCodes.includes(clean(row.branch)) || Boolean((await sql<any[]>`select 1 from tracking.stage_events where order_id=${row.order_id}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
+    if (!canAccessOrder) return response.status(403).json({ ok: false, error: "الطلب خارج نطاق بياناتك" });
+    const stageNo = String(Number(row.sort_order || 0)).padStart(2, "0");
+    const permissionCode = action === "complete_stage" ? `tracking.stage.${stageNo}.complete` : `tracking.stage.${stageNo}.rollback`;
+    if (!hasPermission(user, permissionCode)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتنفيذ هذه المرحلة", permission: permissionCode });
+    if (action === "revert_stage" && !clean(body.note)) return response.status(400).json({ ok: false, error: "سبب التراجع مطلوب" });
+    if (action === "complete_stage") {
+      const [previousPending] = await sql<any[]>`
+        select 1 from tracking.vehicle_stages pvs join tracking.stages ps on ps.id=pvs.stage_id and ps.is_active=true
+        where pvs.vehicle_id=${vehicleId}::uuid and ps.sort_order<${Number(row.sort_order)} and pvs.status<>'completed' limit 1
+      `;
+      if (previousPending) return response.status(400).json({ ok: false, error: "لا يمكن تنفيذ المرحلة قبل استكمال المراحل السابقة" });
+    }
     if (row.is_archived) return response.status(400).json({ ok: false, error: "الطلب مؤرشف ولا يمكن تعديل مراحله" });
 
     if (action === "complete_stage") {
@@ -208,7 +232,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     await recalculateTrackingOrder(row.order_id);
-    const detail = await getOrderDetail(row.order_id);
+    const detail = await getOrderDetail(row.order_id, user);
     return response.status(200).json({ ok: true, order: detail, message: action === "complete_stage" ? "تم إنهاء المرحلة" : "تم التراجع عن المرحلة" });
   }
 

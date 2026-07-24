@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, isCrmManager, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, requireCrmUser } from "../_crm-utils.js";
+import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 
 type MersalTemplate = Record<string, unknown>;
@@ -131,8 +132,8 @@ function normalizedTemplate(template: MersalTemplate) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) {
-    return response.status(403).json({ ok: false, error: "مزامنة قوالب مرسال متاحة للإدارة فقط" });
+  if (!hasPermission(user, "settings.crm.manage")) {
+    return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإدارة إعدادات CRM" });
   }
   if (request.method !== "POST") {
     return response.status(405).json({ ok: false, error: "Method not allowed" });

@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser } from "../_auth.js";
 import { getSql } from "../_db.js";
-import { hasPermission, isSystemAdmin, primaryRole } from "../_operations-auth.js";
+import { primaryRole } from "../_operations-auth.js";
+import { getSystemAccess, hasPermission } from "../_access-control.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { OperationError, requestId, sendOperationError } from "../_operations-utils.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
@@ -15,16 +16,21 @@ export default async function handler(request: VercelRequest, response: VercelRe
     await ensureOperationsSchema();
     const user = await requireUser(request, response);
     if (!user) return;
-    if (!isSystemAdmin(user) && !hasPermission(user, "tracking.orders.delete")) {
-      return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية حذف طلبات التراكينج", requestId: traceId });
-    }
     const sql = getSql();
+    const access = getSystemAccess(user, "tracking");
+    const unrestricted = access.dataScope === "all";
+    const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch__"];
 
     if (request.method === "GET") {
+      if (!hasPermission(user, "tracking.delete.view")) {
+        return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية مشاهدة سجل حذف طلبات التراكينج", requestId: traceId });
+      }
       const deleted = await sql<any[]>`
         select d.id::text,d.order_internal_id::text,d.sales_order_no,d.customer_name,d.customer_mobile,d.reason,d.deleted_by_name,d.deleted_at,
-          d.source_identity,d.source_fingerprint,d.request_id
-        from tracking.deleted_orders d order by d.deleted_at desc limit 250
+          d.source_identity,d.source_fingerprint,d.request_id,d.snapshot->'order'->>'branch' as branch
+        from tracking.deleted_orders d
+        where (${unrestricted}=true or d.snapshot->'order'->>'branch' in ${sql(branchCodes)} or d.deleted_by=${user.id}::uuid)
+        order by d.deleted_at desc limit 250
       `;
       return response.status(200).json({ ok: true, deleted, requestId: traceId });
     }
@@ -32,6 +38,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed", requestId: traceId });
     const body = typeof request.body === "string" ? JSON.parse(request.body || "{}") : request.body || {};
     const action = clean(body.action);
+    const actionPermission = action === "delete_deleted_record" ? "tracking.order.deleted.restore" : "tracking.order.delete";
+    if (!hasPermission(user, actionPermission)) {
+      return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية تنفيذ هذا الإجراء", permission: actionPermission, requestId: traceId });
+    }
 
     if (action === "delete_deleted_record") {
       const deletedId = clean(body.deletedId);
@@ -50,6 +60,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
             "DELETED_TRACKING_REQUEST_NOT_FOUND",
             "سجل الطلب المحذوف غير موجود أو تم حذفه مسبقًا",
           );
+        }
+        const deletedBranch = clean(deletedOrder.snapshot?.order?.branch);
+        if (!unrestricted && !branchCodes.includes(deletedBranch) && clean(deletedOrder.deleted_by) !== user.id) {
+          throw new OperationError(403, "FORBIDDEN", "سجل الطلب خارج نطاق بياناتك");
         }
 
         await tx`delete from tracking.deleted_orders where id=${deletedId}::uuid`;
@@ -97,6 +111,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         for update
       `;
       if (!order) throw new OperationError(404, "TRACKING_REQUEST_NOT_FOUND", "الطلب غير موجود أو تم حذفه مسبقًا");
+      const assignedToUser = Boolean((await tx<any[]>`select 1 from tracking.stage_events where order_id=${orderId}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
+      if (!unrestricted && !branchCodes.includes(clean(order.branch)) && !assignedToUser) throw new OperationError(403, "FORBIDDEN", "الطلب خارج نطاق بياناتك");
       if (confirmation !== order.sales_order_no) throw new OperationError(400, "VALIDATION_ERROR", "اكتب رقم الطلب كاملًا لتأكيد الحذف");
 
       const vehicles = await tx<any[]>`select *,id::text,vehicle_id::text from tracking.order_vehicles where order_id=${orderId}::uuid order by created_at`;

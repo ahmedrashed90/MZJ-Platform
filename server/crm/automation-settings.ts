@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import {
   normalizeAutomationEndpoints,
@@ -308,10 +309,9 @@ export function toResponse(rows: AutomationSettingsRows, message?: string): Auto
 async function handleRequest(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إعدادات الأوتوميشن متاحة لإدارة CRM فقط" });
-  const sql = getSql();
-
   if (request.method === "GET") {
+    if (!hasPermission(user, "settings.crm.view")) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لمشاهدة إعدادات CRM" });
+    const sql = getSql();
     try {
       const rows = await readSettingsRows(sql);
       if (!rows) return response.status(409).json({ ok: false, error: "تعريف الأوتوميشن غير موجود في قاعدة البيانات الحالية" });
@@ -321,6 +321,10 @@ async function handleRequest(request: VercelRequest, response: VercelResponse) {
     }
   }
   if (!["POST", "PUT", "PATCH"].includes(request.method || "")) return response.status(405).json({ ok: false, error: "Method not allowed" });
+  if (!hasPermission(user, "settings.crm.manage") || !hasPermission(user, "crm.automation.manage")) {
+    return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإدارة الأوتوميشن" });
+  }
+  const sql = getSql();
 
   try {
     const body = record(parseBody(request));

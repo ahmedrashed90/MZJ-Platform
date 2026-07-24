@@ -13,7 +13,7 @@ type StageSetting = {
   is_active: boolean;
 };
 
-export function TrackingSettingsPanel() {
+export function TrackingSettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [stages, setStages] = useState<StageSetting[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState("");
@@ -59,6 +59,7 @@ export function TrackingSettingsPanel() {
   return (
     <section className="panel tracking-settings-panel">
       <div className="tracking-settings-head"><div><Path size={28} weight="duotone" /><span><h2>إعدادات مراحل التتبع</h2><p>تعديل اسم ووصف المرحلة وتفعيل زر SMS+ من مكان واحد.</p></span></div></div>
+      {readOnly ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>صلاحية مشاهدة فقط؛ تعديل مراحل التتبع يحتاج صلاحية إدارة إعدادات التتبع.</span></div> : null}
       {error ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>{error}</span></div> : null}
       {message ? <div className="success-banner tracking-success-banner"><CheckCircle size={20} weight="fill" /><span>{message}</span></div> : null}
       {loading ? <div className="tracking-loading">جاري تحميل المراحل...</div> : (
@@ -67,11 +68,11 @@ export function TrackingSettingsPanel() {
             <article key={stage.id}>
               <div className="tracking-settings-number">{stage.sort_order}</div>
               <div className="tracking-settings-fields">
-                <label><span>اسم المرحلة</span><input value={stage.name} onChange={(event) => update(stage.id, { name: event.target.value })} /></label>
-                <label><span>وصف المرحلة للعميل</span><textarea rows={2} value={stage.description || ""} onChange={(event) => update(stage.id, { description: event.target.value })} /></label>
-                <div className="tracking-settings-checks"><label><input type="checkbox" checked={stage.sms_enabled} onChange={(event) => update(stage.id, { sms_enabled: event.target.checked })} /><span>إظهار زر SMS+</span></label><label><input type="checkbox" checked={stage.is_active} onChange={(event) => update(stage.id, { is_active: event.target.checked })} /><span>المرحلة مفعلة</span></label></div>
+                <label><span>اسم المرحلة</span><input disabled={readOnly} value={stage.name} onChange={(event) => update(stage.id, { name: event.target.value })} /></label>
+                <label><span>وصف المرحلة للعميل</span><textarea disabled={readOnly} rows={2} value={stage.description || ""} onChange={(event) => update(stage.id, { description: event.target.value })} /></label>
+                <div className="tracking-settings-checks"><label><input disabled={readOnly} type="checkbox" checked={stage.sms_enabled} onChange={(event) => update(stage.id, { sms_enabled: event.target.checked })} /><span>إظهار زر SMS+</span></label><label><input disabled={readOnly} type="checkbox" checked={stage.is_active} onChange={(event) => update(stage.id, { is_active: event.target.checked })} /><span>المرحلة مفعلة</span></label></div>
               </div>
-              <button type="button" className="tracking-stage-save" onClick={() => void save(stage)} disabled={Boolean(saving)}><FloppyDisk size={17} />{saving === stage.id ? "جاري..." : "حفظ"}</button>
+              <button type="button" className="tracking-stage-save" onClick={() => void save(stage)} disabled={readOnly || Boolean(saving)}><FloppyDisk size={17} />{saving === stage.id ? "جاري..." : "حفظ"}</button>
             </article>
           ))}
         </div>

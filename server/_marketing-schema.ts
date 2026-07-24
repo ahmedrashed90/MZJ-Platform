@@ -499,8 +499,7 @@ insert into core.permissions(code,name,system_code) values
 ('marketing.view','عرض سيستم التسويق','marketing'),
 ('marketing.task.receive','استلام تاسكات التسويق','marketing'),
 ('marketing.task.execute','تنفيذ إجراءات التكليف','marketing'),
-('marketing.file.upload','رفع ملفات التسويق','marketing'),
-('marketing.manage','إدارة سيستم التسويق','marketing')
+('marketing.file.upload','رفع ملفات التسويق','marketing')
 on conflict(code) do update set name=excluded.name,system_code=excluded.system_code;
 
 insert into core.role_permissions(role_id,permission_id)

@@ -7,7 +7,7 @@ import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
 import type { CreativeDraft, MarketingMeta } from "../types";
 
-const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { isAdmin: false, canManage: false } };
+const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
 type AgendaDay = { date: string; creatives: CreativeDraft[] };
 function between(start: string, end: string) { const result:string[]=[]; if(!start||!end)return result; const current=new Date(`${start}T00:00:00Z`),last=new Date(`${end}T00:00:00Z`); while(current<=last&&result.length<370){result.push(current.toISOString().slice(0,10));current.setUTCDate(current.getUTCDate()+1);} return result; }
 

@@ -25,7 +25,7 @@ const pdfHeaders = [
 const checks = [
   ["Package version includes dashboard operations v1.16.1", packageVersion.localeCompare("1.16.1", undefined, { numeric: true }) >= 0],
   ["Department cards use department-specific open conversation totals", ["openCashConversations", "openFinanceConversations", "openServiceConversations"].every((key) => dashboardData.includes(key) && dashboardPage.includes(key))],
-  ["Open conversations exclude closed rows", dashboardData.includes("status='open' and closed_at is null") && dashboardData.includes("classification_state,'')<>'closed'")],
+  ["Open conversations exclude closed rows", (dashboardData.includes("status='open' and closed_at is null") || dashboardData.includes("c.status='open' and c.closed_at is null")) && (dashboardData.includes("classification_state,'')<>'closed'") || dashboardData.includes("c.classification_state,'')<>'closed'"))],
   ["Transferred conversations follow the current lead department", dashboardData.includes("coalesce(nullif(l.department_code,''),nullif(c.department_code,''))")],
   ["Shortages use the five-field vehicle combination", shortageFields.every((field) => dashboardData.includes(field) && operationsApi.includes(field))],
   ["Shortages use only active available, reserved, and note statuses", dashboardData.includes("v.status_code in ('available_for_sale','reserved','has_notes')") && operationsApi.includes("v.status_code in ('available_for_sale','reserved','has_notes')")],

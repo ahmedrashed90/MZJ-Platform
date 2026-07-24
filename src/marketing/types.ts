@@ -40,7 +40,7 @@ export type MarketingMeta = {
   funnels: Funnel[];
   cars: StockCar[];
   connections: any[];
-  permissions: { isAdmin: boolean; canManage: boolean };
+  permissions: { effective: string[] };
 };
 
 export type ContentAssignment = { userId: string; dueOn: string; note: string };

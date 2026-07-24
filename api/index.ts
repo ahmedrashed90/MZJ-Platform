@@ -3,6 +3,10 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import dashboardHandler from "../server/dashboard.js";
 import metaHandler from "../server/meta.js";
 import usersHandler from "../server/users.js";
+import accessControlHandler from "../server/access-control.js";
+import { requireUser } from "../server/_auth.js";
+import { requirePermissionForUser } from "../server/_access-control.js";
+import { resolveApiPermission } from "../server/_api-permissions.js";
 import loginHandler from "../server/auth/login.js";
 import logoutHandler from "../server/auth/logout.js";
 import meHandler from "../server/auth/me.js";
@@ -46,6 +50,7 @@ const routes = new Map<string, ApiHandler>([
   ["dashboard", dashboardHandler],
   ["meta", metaHandler],
   ["users", usersHandler],
+  ["access-control", accessControlHandler],
   ["auth/login", loginHandler],
   ["auth/logout", logoutHandler],
   ["auth/me", meHandler],
@@ -100,7 +105,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const route = resolveRoute(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.16.8" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.19.0" });
   }
 
   if (route === "integrations/media") {
@@ -127,6 +132,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   try {
+    const requirement = resolveApiPermission(route, request);
+    if (requirement) {
+      const user = await requireUser(request, response);
+      if (!user) return;
+      const allowed = await requirePermissionForUser(request, response, user, requirement.code, requirement);
+      if (!allowed) return;
+    }
     return await routeHandler(request, response);
   } catch (error) {
     console.error("Unhandled API route error", { route, error });

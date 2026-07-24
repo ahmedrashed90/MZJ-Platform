@@ -19,6 +19,8 @@ import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
 import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../systemAccess";
 
 const tabs = [
   { key: "automation", label: "إعدادات الأوتوميشن" },
@@ -32,12 +34,11 @@ const tabs = [
   { key: "quality", label: "مؤشرات التقارير" },
   { key: "data_review", label: "مراجعة أخطاء البيانات" },
   { key: "endpoints", label: "ربط المنصات والـ Workers" },
-  { key: "branches", label: "الفروع" },
   { key: "distribution", label: "توزيع العملاء" },
 ] as const;
 
 type Tab = typeof tabs[number]["key"];
-type Props = { embedded?: boolean };
+type Props = { embedded?: boolean; readOnly?: boolean };
 
 const blankStatus = { id: "", departmentCode: "cash", label: "", value: "", sortOrder: 10, isActive: true };
 const blankCustomerField = { id: "", fieldKey: "", label: "", fieldType: "text", sortOrder: 10, departmentKeys: [] as string[], isActive: true, isRequired: false, includeInCompletion: false, optionsText: "", isSystem: false, isLocked: false };
@@ -45,7 +46,6 @@ const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "m
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "manual", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
 const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", isActive: true };
-const blankBranch = { code: "", name: "", sortOrder: 0, isActive: true };
 const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCode: "", sourceCodes: [] as string[], memberIds: [] as string[], sortOrder: 10, preventConsecutive: true, isActive: true };
 
 function dbToQuality(raw: any) {
@@ -130,7 +130,13 @@ function templateStatusLabel(row: any) {
   return row.is_active ? "نشط" : "موقوف";
 }
 
-export function CrmAdminPage({ embedded = false }: Props) {
+export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
+  const { user } = useAuth();
+  const canViewDataReview = hasPermission(user, "crm.data_review.view");
+  const canExecuteDataReview = hasPermission(user, "crm.data_review.execute");
+  const canManageRouting = hasPermission(user, "crm.routing.manage");
+  const canManageAutomation = hasPermission(user, "crm.automation.manage");
+  const visibleTabs = tabs.filter((item) => item.key !== "data_review" || canViewDataReview);
   const [tab, setTab] = useState<Tab>("automation");
   const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
   const [statusForm, setStatusForm] = useState(blankStatus);
@@ -139,7 +145,6 @@ export function CrmAdminPage({ embedded = false }: Props) {
   const [templateForm, setTemplateForm] = useState(blankTemplate);
   const [mappingForm, setMappingForm] = useState(blankMapping);
   const [endpointForm, setEndpointForm] = useState(blankEndpoint);
-  const [branchForm, setBranchForm] = useState(blankBranch);
   const [ruleForm, setRuleForm] = useState(blankRule);
   const [quality, setQuality] = useState(dbToQuality(null));
   const [automaticTemplates, setAutomaticTemplates] = useState({ cashTotalCustomersEnabled: false, financeCallCenterEnabled: false });
@@ -152,6 +157,9 @@ export function CrmAdminPage({ embedded = false }: Props) {
   const [syncingMersal, setSyncingMersal] = useState(false);
 
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (!visibleTabs.some((item) => item.key === tab)) setTab(visibleTabs[0]?.key || "automation");
+  }, [tab, canViewDataReview]);
 
   async function load() {
     setLoading(true);
@@ -359,13 +367,14 @@ export function CrmAdminPage({ embedded = false }: Props) {
       )}
 
       <div className="crm-admin-tabs">
-        {tabs.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}>{item.label}</button>)}
+        {visibleTabs.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}>{item.label}</button>)}
       </div>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       {loading ? <div className="crm-loading-panel">جاري تحميل الإعدادات...</div> : null}
+      {readOnly ? <div className="connection-banner"><span>صلاحية مشاهدة فقط؛ تعديل إعدادات CRM يحتاج صلاحية الإدارة.</span></div> : null}
 
-
-      {tab === "automation" ? <CrmAutomationSettings /> : null}
+      <fieldset className="settings-readonly-fieldset" disabled={readOnly && tab !== "data_review" && tab !== "entry_routing"}>
+      {tab === "automation" ? <fieldset className="settings-readonly-fieldset" disabled={!canManageAutomation}><CrmAutomationSettings /></fieldset> : null}
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
 
       {tab === "statuses" ? (
@@ -548,7 +557,7 @@ export function CrmAdminPage({ embedded = false }: Props) {
       {tab === "data_review" ? (
         <div className="crm-quality-settings">
           <section className="crm-panel"><header><div><h2>مراجعة أخطاء بيانات CRM</h2><p>افحص البيانات، نزّل شيت Excel، اكتب القيمة المصححة، ثم ارفعه للمعاينة قبل تنفيذ أي تعديل.</p></div><div className="crm-head-actions"><button className="crm-secondary-button" disabled={!dataReview?.issues?.length} onClick={exportDataReview}><FileXls size={18} />تنزيل شيت المراجعة</button><label className="crm-secondary-button" aria-disabled={reviewLoading}><FileXls size={18} />رفع شيت التصحيح<input hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={reviewLoading} onChange={(event) => { const file = event.target.files?.[0]; if (file) void previewDataReviewFile(file); event.currentTarget.value = ""; }} /></label><button className="crm-primary-button" disabled={reviewLoading} onClick={() => void loadDataReview()}><ArrowClockwise size={18} />{reviewLoading ? "جاري الفحص..." : "بدء الفحص"}</button></div></header></section>
-          {reviewPreview ? <section className="crm-panel crm-list-panel crm-settings-full-table"><header><div><h2>معاينة التصحيحات</h2><p>لن يتم تعديل أي سجل حتى تكون كل الصفوف صالحة وتضغط تنفيذ.</p></div><button className="crm-primary-button" disabled={reviewLoading || reviewPreview.invalidCount > 0} onClick={() => void executeDataReviewCorrections()}><CheckCircle size={18} />تنفيذ {reviewPreview.validCount} تصحيح</button></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الصف</th><th>العميل</th><th>الحقل</th><th>القيمة القديمة</th><th>القيمة الجديدة</th><th>النتيجة</th></tr></thead><tbody>{reviewPreview.corrections.map((row: any) => <tr key={`${row.rowNumber}-${row.leadId}`} className={!row.valid ? "crm-row-inactive" : ""}><td>{row.rowNumber}</td><td>{row.customerName}</td><td>{row.field}</td><td>{row.oldValue || "—"}</td><td>{row.resolvedLabel || row.resolvedValue || row.newValue}</td><td>{row.valid ? "صالح للتنفيذ" : row.error}</td></tr>)}</tbody></table></div></section> : null}
+          {reviewPreview ? <section className="crm-panel crm-list-panel crm-settings-full-table"><header><div><h2>معاينة التصحيحات</h2><p>لن يتم تعديل أي سجل حتى تكون كل الصفوف صالحة وتضغط تنفيذ.</p></div><button className="crm-primary-button" disabled={!canExecuteDataReview || reviewLoading || reviewPreview.invalidCount > 0} onClick={() => void executeDataReviewCorrections()}><CheckCircle size={18} />تنفيذ {reviewPreview.validCount} تصحيح</button></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>الصف</th><th>العميل</th><th>الحقل</th><th>القيمة القديمة</th><th>القيمة الجديدة</th><th>النتيجة</th></tr></thead><tbody>{reviewPreview.corrections.map((row: any) => <tr key={`${row.rowNumber}-${row.leadId}`} className={!row.valid ? "crm-row-inactive" : ""}><td>{row.rowNumber}</td><td>{row.customerName}</td><td>{row.field}</td><td>{row.oldValue || "—"}</td><td>{row.resolvedLabel || row.resolvedValue || row.newValue}</td><td>{row.valid ? "صالح للتنفيذ" : row.error}</td></tr>)}</tbody></table></div></section> : null}
           {dataReview ? <>
             <section className="crm-report-summary"><article><span>العملاء المفحوصون</span><strong>{dataReview.checkedLeads}</strong></article><article><span>السجلات المتأثرة</span><strong>{dataReview.affectedLeads}</strong></article><article><span>إجمالي الأخطاء</span><strong>{dataReview.issueCount}</strong></article></section>
             <section className="crm-panel crm-list-panel"><header><h2>ملخص الأخطاء</h2></header><div className="crm-check-grid">{dataReview.summary.map((row: any) => <label key={row.code}><strong>{row.count}</strong><span>{row.label}</span></label>)}</div></section>
@@ -597,11 +606,8 @@ export function CrmAdminPage({ embedded = false }: Props) {
         </div>
       ) : null}
 
-      {tab === "branches" ? (
-        <div className="crm-admin-split"><section className="crm-panel crm-form-panel"><header><h2>{branchForm.code ? "تعديل فرع" : "إضافة فرع"}</h2></header><div className="crm-form-grid"><label><span>كود الفرع</span><input value={branchForm.code} onChange={(event) => setBranchForm((current) => ({ ...current, code: event.target.value }))} /></label><label><span>اسم الفرع</span><input value={branchForm.name} onChange={(event) => setBranchForm((current) => ({ ...current, name: event.target.value }))} /></label><label><span>الترتيب</span><input type="number" value={branchForm.sortOrder} onChange={(event) => setBranchForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label><label className="crm-switch-row"><input type="checkbox" checked={branchForm.isActive} onChange={(event) => setBranchForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>نشط</span></label></div><div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setBranchForm(blankBranch)}>جديد</button><button className="crm-primary-button" onClick={async () => { if (await save("branch", branchForm)) setBranchForm(blankBranch); }}><FloppyDisk size={18} />حفظ الفرع</button></div></section><section className="crm-panel crm-list-panel"><header><h2>الفروع المسجلة</h2></header><div className="crm-table-shell compact"><table className="crm-table"><thead><tr><th>اسم الفرع</th><th>الكود</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.branches.map((row: any) => <tr key={row.code}><td>{row.name}</td><td>{row.code}</td><td>{row.is_active ? "نشط" : "غير نشط"}</td><td><div className="crm-row-actions"><button onClick={() => setBranchForm({ code: row.code, name: row.name, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("branch", "", { code: row.code })}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div></section></div>
-      ) : null}
-
       {tab === "distribution" ? (
+        <fieldset className="settings-readonly-fieldset" disabled={!canManageRouting}>
         <div className="crm-distribution-settings crm-distribution-professional">
           <section className="crm-distribution-summary">
             <article><Shuffle size={24} weight="duotone" /><span>القواعد النشطة</span><strong>{distributionSummary.activeRules}</strong></article>
@@ -663,7 +669,9 @@ export function CrmAdminPage({ embedded = false }: Props) {
 
           <section className="crm-panel crm-list-panel crm-assignment-log-panel"><header><h2>سجل التوزيع</h2><span>آخر 100 عملية</span></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>التاريخ</th><th>القاعدة</th><th>القسم</th><th>الفرع</th><th>المصدر</th><th>المندوب</th><th>العملية</th></tr></thead><tbody>{data.assignmentLogs.map((row: any) => <tr key={row.id}><td>{formatDate(row.created_at)}</td><td>{row.rule_name || "التوزيع الافتراضي"}</td><td>{departmentLabel(row.department_code)}</td><td>{data.branches.find((branch: any) => branch.code === row.branch_code)?.name || row.branch_code || "—"}</td><td>{data.sources.find((source: any) => source.code === row.source_code)?.name || sourceLabel(row.source_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.action === "automatic_assignment" ? "توزيع تلقائي" : row.action}</td></tr>)}</tbody></table></div></section>
         </div>
+        </fieldset>
       ) : null}
+      </fieldset>
     </div>
   );
 }

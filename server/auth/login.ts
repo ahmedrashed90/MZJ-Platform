@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { createSession, requestIp } from "../_auth.js";
+import { createSession, loadUserProfile, requestIp } from "../_auth.js";
+import { logSecurityEvent } from "../_access-control.js";
 import { getSql } from "../_db.js";
 
 function clean(value: unknown) {
@@ -62,34 +63,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
 
     if (!user) {
+      await logSecurityEvent({ request, userEmail: identifier, systemCode: "core", pageCode: "login", action: "login_failed", result: "failure", reason: "INVALID_CREDENTIALS", ipAddress: requestIp(request) });
       return response.status(401).json({ ok: false, error: "بيانات تسجيل الدخول غير صحيحة" });
     }
 
     await sql`update core.users set last_login_at = now(), updated_at = now() where id = ${user.id}::uuid`;
     await createSession(request, response, user.id);
-    await sql`
-      insert into audit.activity_log(user_id, system_code, action, entity_type, entity_id, ip_address)
-      values (${user.id}::uuid, 'core', 'login', 'user', ${user.id}, ${requestIp(request)})
-    `.catch(() => undefined);
-
-    return response.status(200).json({
-      ok: true,
-      user: {
-        id: user.id,
-        employeeNo: user.employee_no,
-        fullName: user.full_name,
-        email: user.email,
-        mobile: user.mobile,
-        roles: user.roles || [],
-        roleCodes: user.role_codes || [],
-        departments: user.departments || [],
-        departmentCodes: user.department_codes || [],
-        branches: user.branches || [],
-        branchCodes: user.branch_codes || [],
-      },
-    });
+    const profile = await loadUserProfile(user.id);
+    await logSecurityEvent({ request, user: profile, systemCode: "core", pageCode: "login", action: "login", result: "success", ipAddress: requestIp(request) });
+    return response.status(200).json({ ok: true, user: profile });
   } catch (error) {
     console.error("Login failed", error);
+    await logSecurityEvent({ request, userEmail: identifier, systemCode: "core", pageCode: "login", action: "login_failed", result: "failure", reason: "LOGIN_ERROR", ipAddress: requestIp(request) });
     return response.status(500).json({ ok: false, error: "تعذر تسجيل الدخول" });
   }
 }

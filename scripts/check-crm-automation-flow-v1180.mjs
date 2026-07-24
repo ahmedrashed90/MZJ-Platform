@@ -207,7 +207,8 @@ requireTokens("settings API", settingsApi, [
   "AutomationSettingsResponse",
   "const automation = normalizeAutomationSettings",
   "body.automation",
-  "إعدادات الأوتوميشن متاحة لإدارة CRM فقط",
+  "settings.crm.manage",
+  "crm.automation.manage",
 ]);
 forbidTokens("settings API request contract", settingsApi, [
   "body.settings",

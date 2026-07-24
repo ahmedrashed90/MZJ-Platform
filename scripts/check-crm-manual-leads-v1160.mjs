@@ -4,7 +4,8 @@ const page = fs.readFileSync("src/crm/pages/CrmManualLeadsPage.tsx", "utf8");
 const api = fs.readFileSync("server/crm/manual-leads.ts", "utf8");
 const tracking = fs.readFileSync("src/tracking/TrackingLayout.tsx", "utf8");
 const settings = fs.readFileSync("src/pages/SettingsPage.tsx", "utf8");
-const meta = fs.readFileSync("server/meta.ts", "utf8");
+const accessApi = fs.readFileSync("server/access-control.ts", "utf8");
+const accessPage = fs.readFileSync("src/access-control/UsersPermissionsPanel.tsx", "utf8");
 
 const checks = [
   ["Manual lead form hides payment selector", !page.includes("<span>الدفع</span><select")],
@@ -17,7 +18,7 @@ const checks = [
   ["Registration date is generated automatically", api.includes("registered_at,location") && api.includes("${clean(body.financeType) || null},now()")],
   ["Tracking navigation no longer duplicates settings", !tracking.includes("/settings?section=tracking") && !tracking.includes("إعدادات التتبع")],
   ["Tracking settings remain in unified settings", settings.includes("TrackingSettingsPanel") && settings.includes("إعدادات التتبع")],
-  ["Role choices are deduplicated", meta.includes("distinct on (lower(trim(name)))") && settings.includes("visibleRoles")],
+  ["Role choices use central unique role IDs", accessApi.includes("from core.roles r where r.is_active=true") && accessPage.includes("key={role.id}")],
 ];
 
 let failed = false;

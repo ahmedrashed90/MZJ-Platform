@@ -2,6 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createSession, requestIp, safeSecretEquals } from "../_auth.js";
 import { databaseConfigured, getSql, runSqlScript } from "../_db.js";
 import { SCHEMA_SQL, SEED_SQL } from "../_schema.js";
+import { ACCESS_CONTROL_SQL } from "../_access-control-schema.js";
+import { loadUserProfile } from "../_auth.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
@@ -35,6 +37,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   try {
     await runSqlScript(SCHEMA_SQL);
     await runSqlScript(SEED_SQL);
+    await runSqlScript(ACCESS_CONTROL_SQL);
     await ensureTrackingSchema();
     await ensureOperationsSchema();
     await ensureMarketingSchema();
@@ -76,6 +79,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       await tx`insert into core.user_roles(user_id, role_id) values (${created.id}::uuid, ${adminRole.id}::uuid)`;
       await tx`
+        insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope)
+        select ${created.id}::uuid,s.code,true,${adminRole.id}::uuid,'all'
+        from core.systems s where s.code in ('crm','marketing','operations','tracking')
+        on conflict(user_id,system_code) do update set is_enabled=true,role_id=excluded.role_id,data_scope='all',updated_at=now()
+      `;
+      await tx`
         insert into audit.activity_log(user_id, system_code, action, entity_type, entity_id, after_data, ip_address)
         values (
           ${created.id}::uuid,
@@ -92,23 +101,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     });
 
     await createSession(request, response, user.id);
-    return response.status(201).json({
-      ok: true,
-      user: {
-        id: user.id,
-        employeeNo: user.employee_no,
-        fullName: user.full_name,
-        email: user.email,
-        mobile: user.mobile,
-        roles: ["مدير النظام"],
-        roleCodes: ["admin"],
-        departments: [],
-        departmentCodes: [],
-        branches: [],
-        branchCodes: [],
-        permissions: [],
-      },
-    });
+    const profile = await loadUserProfile(user.id);
+    return response.status(201).json({ ok: true, user: profile });
   } catch (error: any) {
     console.error("Platform initialization failed", error);
     if (error?.code === "23505") return response.status(409).json({ ok: false, error: "رقم الموظف أو البريد أو الجوال مستخدم بالفعل" });

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
+import { getSystemAccess } from "../_access-control.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
@@ -7,7 +8,6 @@ import { tryArchiveEligibleVehicle } from "../_operations-auto-archive.js";
 import { closeActiveVehicleApprovalCycle, ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "../_operations-approval-cycle.js";
 import {
   hasPermission,
-  isSystemAdmin,
   primaryBranch,
   primaryRole,
   requireOperationsPermission,
@@ -43,11 +43,13 @@ function actor(user: Awaited<ReturnType<typeof requireOperationsUser>>) {
 }
 
 function accessScope(sql: ReturnType<typeof getSql>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, alias = "l") {
-  if (isSystemAdmin(user) || user.branchCodes.length === 0) return sql`true`;
-  if (alias === "sl") return sql`coalesce(sl.branch_code,sl.code) in ${sql(user.branchCodes)}`;
-  if (alias === "dl") return sql`coalesce(dl.branch_code,dl.code) in ${sql(user.branchCodes)}`;
-  if (alias === "tl") return sql`coalesce(tl.branch_code,tl.code) in ${sql(user.branchCodes)}`;
-  return sql`coalesce(l.branch_code,l.code) in ${sql(user.branchCodes)}`;
+  const access = getSystemAccess(user, "operations");
+  if (access.dataScope === "all") return sql`true`;
+  if (!access.branchCodes.length) return sql`false`;
+  if (alias === "sl") return sql`coalesce(sl.branch_code,sl.code) in ${sql(access.branchCodes)}`;
+  if (alias === "dl") return sql`coalesce(dl.branch_code,dl.code) in ${sql(access.branchCodes)}`;
+  if (alias === "tl") return sql`coalesce(tl.branch_code,tl.code) in ${sql(access.branchCodes)}`;
+  return sql`coalesce(l.branch_code,l.code) in ${sql(access.branchCodes)}`;
 }
 
 function hasBranchAccess(
@@ -55,9 +57,10 @@ function hasBranchAccess(
   branchCode?: string | null,
   locationCode?: string | null,
 ) {
-  if (isSystemAdmin(user) || user.branchCodes.length === 0) return true;
+  const access = getSystemAccess(user, "operations");
+  if (access.dataScope === "all") return true;
   const candidates = [branchCode, locationCode].map((value) => clean(value)).filter(Boolean);
-  return candidates.some((value) => user.branchCodes.includes(value));
+  return candidates.some((value) => access.branchCodes.includes(value));
 }
 
 function assertBranchAccess(
@@ -100,8 +103,8 @@ async function loadMeta(sql: ReturnType<typeof getSql>, user: NonNullable<Awaite
       canCreateTransfer: hasPermission(user, "operations.transfer.create"),
       canApproveFinancial: hasPermission(user, "operations.approval.financial"),
       canApproveAdministrative: hasPermission(user, "operations.approval.administrative"),
-      canManageSettings: hasPermission(user, "operations.settings.manage"),
-      isSystemAdmin: isSystemAdmin(user),
+      canManageSettings: hasPermission(user, "settings.operations.manage"),
+      canEditVin: hasPermission(user, "operations.vehicle.vin.update"),
     },
   };
 }
@@ -326,11 +329,10 @@ function nextRequestStage(status: string) {
 
 function canAdvanceRequest(row: any, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, nextStatus = nextRequestStage(row.status)) {
   if (!nextStatus || row.cancelled_at) return false;
-  if (nextStatus === "completed") return row.requested_by === user.id;
-  if (isSystemAdmin(user)) return true;
-  if (nextStatus === "request_received") return hasPermission(user, "operations.transfer.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
-  if (nextStatus === "vehicle_sent") return hasPermission(user, "operations.transfer.send_vehicle") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
-  if (nextStatus === "vehicle_received") return hasPermission(user, "operations.transfer.receive_vehicle") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code);
+  if (nextStatus === "completed") return hasPermission(user, "operations.request.finish_order") && row.requested_by === user.id;
+  if (nextStatus === "request_received") return hasPermission(user, "operations.request.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
+  if (nextStatus === "vehicle_sent") return hasPermission(user, "operations.request.send_car") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
+  if (nextStatus === "vehicle_received") return hasPermission(user, "operations.request.receive_car") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code);
   return false;
 }
 
@@ -343,8 +345,9 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const hasCompletedFilter = completedRaw !== "";
   const completed = boolValue(request.query.completed);
   const pattern = `%${search}%`;
-  const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
-  const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+  const operationsAccess = getSystemAccess(user, "operations");
+  const isAdmin = operationsAccess.dataScope === "all";
+  const branches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
   const where = sql`
     r.is_deleted=false and (${kind}='all' or r.request_kind=${kind})
     and (${status}='' or r.status=${status})
@@ -395,8 +398,8 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
       ...row,
       next_status: nextStatus || null,
       can_advance: canAdvanceRequest(row, user, nextStatus),
-      can_delete: !row.cancelled_at && row.status === "created" && (isSystemAdmin(user) || row.requested_by === user.id || hasPermission(user, "operations.transfer.delete")),
-      can_cancel: !row.cancelled_at && row.status !== "completed" && (isSystemAdmin(user) || row.requested_by === user.id || hasPermission(user, "operations.transfer.cancel")),
+      can_delete: !row.cancelled_at && row.status === "created" && hasPermission(user, "operations.transfer.delete"),
+      can_cancel: !row.cancelled_at && row.status !== "completed" && hasPermission(user, "operations.transfer.cancel"),
     };
   });
   return { ok: true, rows: visibleRows, total: Number(count?.total || 0), page, pageSize };
@@ -466,8 +469,9 @@ async function dashboardShortages(sql: ReturnType<typeof getSql>, request: Verce
   const location = clean(request.query.location);
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
-  const unrestricted = isSystemAdmin(user) || user.branchCodes.length === 0;
-  const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+  const operationsAccess = getSystemAccess(user, "operations");
+  const unrestricted = operationsAccess.dataScope === "all";
+  const branches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
   const base = sql`
     with combinations as (
       select
@@ -520,8 +524,9 @@ async function dashboardRequests(sql: ReturnType<typeof getSql>, request: Vercel
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
   if (kind === "photo") {
-    const isAdmin = isSystemAdmin(user) || user.branchCodes.length === 0;
-    const branches = user.branchCodes.length ? user.branchCodes : ["__none__"];
+    const operationsAccess = getSystemAccess(user, "operations");
+    const isAdmin = operationsAccess.dataScope === "all";
+    const branches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
     const where = sql`
       r.is_deleted=false
       and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
@@ -576,7 +581,7 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
     if (!before) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
     assertBranchAccess(user, before.branch_code, before.location_code, "لا تملك صلاحية تعديل سيارة في هذا الفرع");
     const vin = clean(body.vin) || before.vin;
-    if (vin !== before.vin && !isSystemAdmin(user)) throw new OperationError(403, "FORBIDDEN", "تغيير رقم الهيكل متاح لمدير النظام فقط");
+    if (vin !== before.vin && !hasPermission(user, "operations.vehicle.vin.update")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية تعديل رقم الهيكل");
     const locationId = clean(body.locationId) || before.location_id;
     const statusCode = clean(body.statusCode) || before.status_code;
     if (String(locationId) !== String(before.location_id)) {
@@ -899,7 +904,7 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
       if (String(v.location_id) === destinationLocationId) throw new OperationError(400, "INVALID_DESTINATION_LOCATION", `السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
       const [active] = await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
       if (active) throw new OperationError(409, "DUPLICATE_ACTIVE_REQUEST", `السيارة ${v.vin} مرتبطة بطلب نقل نشط ${active.request_no}`);
-      if (!isSystemAdmin(user) && user.branchCodes.length && !user.branchCodes.includes(v.branch_code || v.location_code)) throw new OperationError(403, "FORBIDDEN", `لا تملك صلاحية إنشاء طلب للسيارة ${v.vin}`);
+      if (!hasBranchAccess(user, v.branch_code, v.location_code)) throw new OperationError(403, "FORBIDDEN", `لا تملك صلاحية إنشاء طلب للسيارة ${v.vin}`);
       cars.push(v);
     }
     const source = cars[0];
@@ -962,7 +967,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     }
 
     if (action === "delete") {
-      if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "الحذف متاح لمنشئ الطلب أو صاحب الصلاحية فقط");
+      if (!hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية حذف الطلب");
       const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
       if (r.status !== "created" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
       await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${who.id}::uuid,updated_at=now() where id=${id}::uuid`;
@@ -979,7 +984,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
 
     if (action === "cancel") {
       if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
-      if (!isSystemAdmin(user) && r.requested_by !== user.id && !hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء الطلب");
+      if (!hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء الطلب");
       await tx`update operations.transfer_requests set cancelled_at=now(),cancelled_by=${who.id}::uuid,cancellation_reason=${reason},updated_at=now(),version=version+1 where id=${id}::uuid`;
       try {
         await tx.savepoint(async (eventTx) => {
@@ -998,7 +1003,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل الطلب بالترتيب");
     }
     if (!canAdvanceRequest(r, user, next)) {
-      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء متاحة لمنشئ الطلب فقط");
+      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء تتطلب الصلاحية المخصصة وتظل متاحة لمنشئ الطلب فقط");
       if (next === "vehicle_received") throw new OperationError(403, "FORBIDDEN", "مرحلة تم استلام السيارة خاصة بمسؤول المكان المستهدف");
       throw new OperationError(403, "FORBIDDEN", "هذه المرحلة خاصة بمسؤول مكان السيارة الحالي");
     }
@@ -1079,7 +1084,6 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
     if (v.status_code !== "under_delivery" && !a.pending_delivery) throw new OperationError(409, "VEHICLE_NOT_ELIGIBLE", "الموافقات متاحة للسيارات مباع تحت التسليم أو المنتظرة للتسليم النهائي");
     const before = { ...a };
     if (action === "reset") {
-      if (!isSystemAdmin(user) && !hasPermission(user, "operations.approval.financial") && !hasPermission(user, "operations.approval.administrative")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية مسح الموافقات");
       [a] = await tx<any[]>`update operations.vehicle_approvals set financial_approved=false,administrative_approved=false,financial_approved_by=null,administrative_approved_by=null,financial_approved_by_name=null,administrative_approved_by_name=null,financial_approved_at=null,administrative_approved_at=null,pending_delivery=null,updated_at=now() where id=${a.id}::uuid returning *,id::text`;
     } else if (type === "financial") {
       [a] = await tx<any[]>`
@@ -1189,8 +1193,9 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
   const mode = clean(body.mode);
   if (!rows.length || !["replace", "add", "update"].includes(mode)) throw new OperationError(400, "IMPORT_VALIDATION_FAILED", "ملف الاستيراد أو وضع الاستيراد غير صحيح");
   const who = actor(user);
-  const unrestricted = isSystemAdmin(user) || user.branchCodes.length === 0;
-  const allowedBranches = user.branchCodes.length ? user.branchCodes : ["__all__"];
+  const operationAccess = getSystemAccess(user, "operations");
+  const unrestricted = operationAccess.dataScope === "all";
+  const allowedBranches = operationAccess.branchCodes.length ? operationAccess.branchCodes : ["__none__"];
   return sql.begin(async (tx) => {
     const report: any = { total: rows.length, inserted: 0, updated: 0, skipped: 0, failed: 0, errors: [], warnings: [] };
     const vins = new Set<string>();
@@ -1314,7 +1319,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else if (action === "approval_action") {
       result = await approvalAction(sql, body, user);
     } else if (action === "save_setting") {
-      if (!requireOperationsPermission(user, "operations.settings.manage", response)) return;
+      if (!requireOperationsPermission(user, "settings.operations.manage", response)) return;
       result = await saveOperationSetting(sql, body, user);
     } else if (action === "import_vehicles") {
       if (!requireOperationsPermission(user, "operations.vehicle.import", response)) return;

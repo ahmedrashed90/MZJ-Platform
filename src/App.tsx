@@ -9,7 +9,7 @@ import { FirstAdminSetupPage } from "./pages/FirstAdminSetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlatformLoadingPage } from "./pages/PlatformLoadingPage";
 import { SettingsPage } from "./pages/SettingsPage";
-import { canAccessSystem, defaultSystemPath, isPlatformAdmin, type PlatformSystem } from "./systemAccess";
+import { canAccessSystem, canOpenSettings, defaultSystemPath, hasPermission, type PlatformSystem } from "./systemAccess";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
 const CrmDashboardPage = lazy(() => import("./crm/pages/CrmDashboardPage").then((module) => ({ default: module.CrmDashboardPage })));
@@ -54,16 +54,20 @@ function SystemGuard({ system, children }: { system: PlatformSystem; children: R
   return <>{children}</>;
 }
 
-function HomeRoute() {
+function PermissionGuard({ permission, children }: { permission: string; children: ReactNode }) {
   const { user } = useAuth();
-  if (!isPlatformAdmin(user)) return <Navigate to={defaultSystemPath(user)} replace />;
-  return <DashboardPage />;
+  if (!hasPermission(user, permission)) return <Navigate to={defaultSystemPath(user)} replace />;
+  return <>{children}</>;
 }
 
-function AdminRoute({ children }: { children: ReactNode }) {
+function HomeRoute() {
+  return <PermissionGuard permission="platform.dashboard.view"><DashboardPage /></PermissionGuard>;
+}
+
+function SettingsRoute() {
   const { user } = useAuth();
-  if (!isPlatformAdmin(user)) return <Navigate to={defaultSystemPath(user)} replace />;
-  return <>{children}</>;
+  if (!canOpenSettings(user)) return <Navigate to={defaultSystemPath(user)} replace />;
+  return <SettingsPage />;
 }
 
 function PlatformRoutes() {
@@ -75,52 +79,52 @@ function PlatformRoutes() {
         <Routes>
           <Route path="/" element={<HomeRoute />} />
           <Route path="/crm" element={<SystemGuard system="crm"><CrmLayout /></SystemGuard>}>
-            <Route index element={<CrmDashboardPage />} />
-            <Route path="database" element={<CrmDatabasePage />} />
-            <Route path="manual-leads" element={<CrmManualLeadsPage />} />
-            <Route path="finance-history" element={<CrmFinanceHistoryPage />} />
-            <Route path="inbox" element={<CrmInboxPage />} />
-            <Route path="contacts" element={<CrmContactsPage />} />
-            <Route path="inbox-agent" element={<CrmInboxAgentPage />} />
-            <Route path="reports" element={<CrmReportsPage />} />
-            <Route path="kpi" element={<CrmKpiPage />} />
+            <Route index element={<PermissionGuard permission="crm.dashboard.view"><CrmDashboardPage /></PermissionGuard>} />
+            <Route path="database" element={<PermissionGuard permission="crm.database.view"><CrmDatabasePage /></PermissionGuard>} />
+            <Route path="manual-leads" element={<PermissionGuard permission="crm.manual_leads.view"><CrmManualLeadsPage /></PermissionGuard>} />
+            <Route path="finance-history" element={<PermissionGuard permission="crm.finance_history.view"><CrmFinanceHistoryPage /></PermissionGuard>} />
+            <Route path="inbox" element={<PermissionGuard permission="crm.inbox.view"><CrmInboxPage /></PermissionGuard>} />
+            <Route path="contacts" element={<PermissionGuard permission="crm.contacts.view"><CrmContactsPage /></PermissionGuard>} />
+            <Route path="inbox-agent" element={<PermissionGuard permission="crm.inbox_agent.view"><CrmInboxAgentPage /></PermissionGuard>} />
+            <Route path="reports" element={<PermissionGuard permission="crm.reports.view"><CrmReportsPage /></PermissionGuard>} />
+            <Route path="kpi" element={<PermissionGuard permission="crm.kpi.view"><CrmKpiPage /></PermissionGuard>} />
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
           <Route path="/marketing" element={<SystemGuard system="marketing"><MarketingLayout /></SystemGuard>}>
-            <Route index element={<MarketingDashboardPage />} />
-            <Route path="create-campaign" element={<CreateCampaignPage />} />
-            <Route path="create-agenda" element={<CreateAgendaPage />} />
-            <Route path="database" element={<MarketingDatabasePage />} />
-            <Route path="packages" element={<PackagesPage />} />
-            <Route path="platforms" element={<PlatformConnectionsPage />} />
-            <Route path="publish-prep" element={<PublishPrepPage />} />
-            <Route path="monitoring" element={<MonitoringPage />} />
-            <Route path="calendar" element={<MarketingCalendarPage />} />
-            <Route path="receipt-calendar" element={<ReceiptCalendarPage />} />
-            <Route path="stock" element={<StockPage />} />
+            <Route index element={<PermissionGuard permission="marketing.dashboard.view"><MarketingDashboardPage /></PermissionGuard>} />
+            <Route path="create-campaign" element={<PermissionGuard permission="marketing.create_campaign.view"><CreateCampaignPage /></PermissionGuard>} />
+            <Route path="create-agenda" element={<PermissionGuard permission="marketing.create_agenda.view"><CreateAgendaPage /></PermissionGuard>} />
+            <Route path="database" element={<PermissionGuard permission="marketing.database.view"><MarketingDatabasePage /></PermissionGuard>} />
+            <Route path="packages" element={<PermissionGuard permission="marketing.packages.view"><PackagesPage /></PermissionGuard>} />
+            <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><PlatformConnectionsPage /></PermissionGuard>} />
+            <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
+            <Route path="monitoring" element={<PermissionGuard permission="marketing.monitoring.view"><MonitoringPage /></PermissionGuard>} />
+            <Route path="calendar" element={<PermissionGuard permission="marketing.calendar.view"><MarketingCalendarPage /></PermissionGuard>} />
+            <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
+            <Route path="stock" element={<PermissionGuard permission="marketing.stock.view"><StockPage /></PermissionGuard>} />
             <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
-            <Route path="attendance" element={<AttendancePage />} />
+            <Route path="attendance" element={<PermissionGuard permission="marketing.attendance.view"><AttendancePage /></PermissionGuard>} />
           </Route>
           <Route path="/operations" element={<SystemGuard system="operations"><OperationsLayout /></SystemGuard>}>
-            <Route index element={<InventoryPage />} />
-            <Route path="manage" element={<VehicleManagementPage />} />
-            <Route path="movement" element={<MovementPage />} />
-            <Route path="transfers" element={<TransferRequestsPage />} />
+            <Route index element={<PermissionGuard permission="operations.inventory.view"><InventoryPage /></PermissionGuard>} />
+            <Route path="manage" element={<PermissionGuard permission="operations.manage.view"><VehicleManagementPage /></PermissionGuard>} />
+            <Route path="movement" element={<PermissionGuard permission="operations.movement.view"><MovementPage /></PermissionGuard>} />
+            <Route path="transfers" element={<PermissionGuard permission="operations.transfers.view"><TransferRequestsPage /></PermissionGuard>} />
             <Route path="photography" element={<Navigate to="/operations/transfers" replace />} />
-            <Route path="approvals" element={<ApprovalsPage />} />
-            <Route path="all" element={<InventoryPage all />} />
-            <Route path="movements" element={<MovementHistoryPage />} />
-            <Route path="archive" element={<InventoryPage archived />} />
+            <Route path="approvals" element={<PermissionGuard permission="operations.approvals.view"><ApprovalsPage /></PermissionGuard>} />
+            <Route path="all" element={<PermissionGuard permission="operations.all.view"><InventoryPage all /></PermissionGuard>} />
+            <Route path="movements" element={<PermissionGuard permission="operations.movements.view"><MovementHistoryPage /></PermissionGuard>} />
+            <Route path="archive" element={<PermissionGuard permission="operations.archive.view"><InventoryPage archived /></PermissionGuard>} />
           </Route>
           <Route path="/tracking" element={<SystemGuard system="tracking"><TrackingLayout /></SystemGuard>}>
-            <Route index element={<TrackingOrdersPage />} />
-            <Route path="archive" element={<TrackingOrdersPage archivedOnly />} />
-            <Route path="delete" element={<TrackingDeletePage />} />
+            <Route index element={<PermissionGuard permission="tracking.orders.view"><TrackingOrdersPage /></PermissionGuard>} />
+            <Route path="archive" element={<PermissionGuard permission="tracking.archive.view"><TrackingOrdersPage archivedOnly /></PermissionGuard>} />
+            <Route path="delete" element={<PermissionGuard permission="tracking.delete.view"><TrackingDeletePage /></PermissionGuard>} />
           </Route>
-          <Route path="/reports" element={<AdminRoute><EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." /></AdminRoute>} />
-          <Route path="/database" element={<AdminRoute><EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." /></AdminRoute>} />
-          <Route path="/settings" element={<AdminRoute><SettingsPage /></AdminRoute>} />
-          <Route path="/activity" element={<AdminRoute><EmptyModulePage title="سجل النشاط" description="سجل مركزي لجميع الإجراءات والتغييرات داخل المنصة." /></AdminRoute>} />
+          <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." /></PermissionGuard>} />
+          <Route path="/database" element={<PermissionGuard permission="platform.database.view"><EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." /></PermissionGuard>} />
+          <Route path="/settings" element={<SettingsRoute />} />
+          <Route path="/activity" element={<PermissionGuard permission="platform.activity.view"><EmptyModulePage title="سجل النشاط" description="سجل مركزي لجميع الإجراءات والتغييرات داخل المنصة." /></PermissionGuard>} />
           <Route path="/help" element={<EmptyModulePage title="المساعدة" description="مركز المساعدة والتوثيق الخاص بمنصة MZJ." />} />
         </Routes>
         </Suspense>

@@ -3,7 +3,7 @@ import fs from "node:fs";
 const required = [
   ["api/index.ts", '"operations", operationsHandler'],
   ["src/App.tsx", 'path="/operations"'],
-  ["src/App.tsx", '<Route index element={<InventoryPage />} />'],
+  ["src/App.tsx", '<Route index element={<PermissionGuard permission="operations.inventory.view"><InventoryPage /></PermissionGuard>} />'],
   ["src/operations/OperationsLayout.tsx", "مخزون السيارات"],
   ["src/operations/OperationsLayout.tsx", "الطلبات"],
   ["server/_operations-schema.ts", "operations.vehicle_statuses"],

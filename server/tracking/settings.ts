@@ -1,13 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireAdmin } from "../_auth.js";
+import { requireUser } from "../_auth.js";
+import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { clean } from "../_tracking-utils.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   await ensureTrackingSchema();
-  const user = await requireAdmin(request, response);
+  const user = await requireUser(request, response);
   if (!user) return;
+  const required = request.method === "GET" ? "settings.tracking.view" : "settings.tracking.manage";
+  if (!hasPermission(user, required)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإعدادات التتبع" });
   const sql = getSql();
 
   if (request.method === "GET") {

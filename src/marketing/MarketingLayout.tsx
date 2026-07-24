@@ -15,24 +15,28 @@ import {
   UserSwitch,
 } from "@phosphor-icons/react";
 import { marketingFetch } from "./api";
+import { useAuth } from "../auth/AuthContext";
+import { hasPermission } from "../systemAccess";
 import "./marketing.css";
 
 const links = [
-  { to: "/marketing", label: "الداش بورد", icon: CirclesFour, end: true },
-  { to: "/marketing/create-campaign", label: "إنشاء حملة", icon: Megaphone },
-  { to: "/marketing/create-agenda", label: "إنشاء أجندة", icon: PlusCircle },
-  { to: "/marketing/database", label: "قاعدة البيانات", icon: Database },
-  { to: "/marketing/packages", label: "إدارة الباقات", icon: Package },
-  { to: "/marketing/platforms", label: "ربط المنصات", icon: LinkSimple },
-  { to: "/marketing/publish-prep", label: "تجهيز النشر", icon: PaperPlaneTilt },
-  { to: "/marketing/monitoring", label: "المتابعة", icon: ChartLineUp },
-  { to: "/marketing/calendar", label: "التقويم", icon: CalendarBlank },
-  { to: "/marketing/receipt-calendar", label: "تقويم الاستلام", icon: CalendarCheck },
-  { to: "/marketing/stock", label: "الاستوك", icon: Car },
-  { to: "/marketing/attendance", label: "الحضور والانصراف", icon: UserSwitch },
+  { to: "/marketing", label: "الداش بورد", icon: CirclesFour, end: true, permission: "marketing.dashboard.view" },
+  { to: "/marketing/create-campaign", label: "إنشاء حملة", icon: Megaphone, permission: "marketing.create_campaign.view" },
+  { to: "/marketing/create-agenda", label: "إنشاء أجندة", icon: PlusCircle, permission: "marketing.create_agenda.view" },
+  { to: "/marketing/database", label: "قاعدة البيانات", icon: Database, permission: "marketing.database.view" },
+  { to: "/marketing/packages", label: "إدارة الباقات", icon: Package, permission: "marketing.packages.view" },
+  { to: "/marketing/platforms", label: "ربط المنصات", icon: LinkSimple, permission: "marketing.platforms.view" },
+  { to: "/marketing/publish-prep", label: "تجهيز النشر", icon: PaperPlaneTilt, permission: "marketing.publish_prep.view" },
+  { to: "/marketing/monitoring", label: "المتابعة", icon: ChartLineUp, permission: "marketing.monitoring.view" },
+  { to: "/marketing/calendar", label: "التقويم", icon: CalendarBlank, permission: "marketing.calendar.view" },
+  { to: "/marketing/receipt-calendar", label: "تقويم الاستلام", icon: CalendarCheck, permission: "marketing.receipt_calendar.view" },
+  { to: "/marketing/stock", label: "الاستوك", icon: Car, permission: "marketing.stock.view" },
+  { to: "/marketing/attendance", label: "الحضور والانصراف", icon: UserSwitch, permission: "marketing.attendance.view" },
 ];
 
 export function MarketingLayout() {
+  const { user } = useAuth();
+  const visibleLinks = links.filter((item) => hasPermission(user, item.permission));
   useEffect(() => {
     const ping = () => {
       void marketingFetch("/api/marketing", {
@@ -53,7 +57,7 @@ export function MarketingLayout() {
   return (
     <div className="marketing-shell">
       <nav className="marketing-nav" aria-label="صفحات سيستم التسويق">
-        {links.map(({ to, label, icon: Icon, end }) => (
+        {visibleLinks.map(({ to, label, icon: Icon, end }) => (
           <NavLink key={to} to={to} end={end} className={({ isActive }) => isActive ? "active" : ""}>
             <Icon size={18} weight="duotone" />
             <span>{label}</span>

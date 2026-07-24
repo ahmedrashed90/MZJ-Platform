@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean, isCrmManager, normalizePhone, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { clean, normalizePhone, parseBody, requireCrmUser, userScope, type Scope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { hasPermission } from "../_access-control.js";
 
 function norm(value: unknown) {
   return String(value ?? "").trim().replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").toLowerCase();
@@ -44,7 +45,7 @@ function inputValue(row: Record<string, unknown>, ...keys: string[]) {
   return "";
 }
 
-async function validateCorrections(rows: unknown[], sql: ReturnType<typeof getSql>): Promise<Correction[]> {
+async function validateCorrections(rows: unknown[], sql: ReturnType<typeof getSql>, scope: Scope): Promise<Correction[]> {
   const prepared = rows.map((item, index) => {
     const raw = item && typeof item === "object" ? item as Record<string, unknown> : {};
     const leadId = inputValue(raw, "معرّف العميل", "leadId", "lead_id");
@@ -76,7 +77,16 @@ async function validateCorrections(rows: unknown[], sql: ReturnType<typeof getSq
   const leadIds = [...new Set(prepared.filter((row) => row.validLeadId).map((row) => row.leadId))];
   const normalizedPhones = [...new Set(prepared.map((row) => row.normalizedPhone).filter(Boolean))];
   const [leads, departments, branches, users, statuses, sources, phoneMatches] = await Promise.all([
-    leadIds.length ? sql<any[]>`select *,id::text from crm.leads where id=any(${leadIds}::uuid[]) and is_deleted=false` : Promise.resolve([]),
+    leadIds.length ? sql<any[]>`
+      select l.*,l.id::text from crm.leads l
+      where l.id=any(${leadIds}::uuid[]) and l.is_deleted=false
+        and (
+          ${scope.all}::boolean
+          or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+          or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+        )
+    ` : Promise.resolve([]),
     sql<any[]>`select code,name from core.departments where is_active=true`,
     sql<any[]>`select code,name from core.branches where is_active=true`,
     sql<any[]>`
@@ -184,16 +194,18 @@ async function validateCorrections(rows: unknown[], sql: ReturnType<typeof getSq
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "مراجعة أخطاء البيانات متاحة للإدارة فقط" });
+  const body = request.method === "POST" ? parseBody(request) : {};
+  const action = request.method === "POST" ? (clean(body.action) || "preview") : "view";
+  const requiredPermission = action === "execute" ? "crm.data_review.execute" : "crm.data_review.view";
+  if (!hasPermission(user, requiredPermission)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لمراجعة أو تصحيح بيانات CRM" });
   const sql = getSql();
+  const scope = userScope(user);
 
   if (request.method === "POST") {
-    const body = parseBody(request);
-    const action = clean(body.action) || "preview";
     const rows = Array.isArray(body.rows) ? body.rows : [];
     if (!rows.length) return response.status(400).json({ ok: false, error: "الشيت لا يحتوي على صفوف تصحيح" });
     if (rows.length > 5000) return response.status(400).json({ ok: false, error: "الحد الأقصى 5000 صف في كل عملية مراجعة" });
-    const corrections = await validateCorrections(rows, sql);
+    const corrections = await validateCorrections(rows, sql, scope);
     const invalid = corrections.filter((row) => !row.valid);
     if (action === "preview") return response.status(200).json({ ok: true, action, validCount: corrections.length - invalid.length, invalidCount: invalid.length, corrections });
     if (action !== "execute") return response.status(400).json({ ok: false, error: "الإجراء غير صحيح" });
@@ -201,7 +213,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     await sql.begin(async (tx) => {
       for (const item of corrections) {
-        const [before] = await tx<any[]>`select *,id::text from crm.leads where id=${item.leadId}::uuid for update`;
+        const [before] = await tx<any[]>`
+          select l.*,l.id::text from crm.leads l
+          where l.id=${item.leadId}::uuid and l.is_deleted=false
+            and (
+              ${scope.all}::boolean
+              or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+              or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+              or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+            )
+          for update
+        `;
         if (!before) throw new Error(`العميل في الصف ${item.rowNumber} لم يعد موجودًا`);
         if (item.field === "phone") {
           await tx`update crm.leads set phone=${item.newValue},phone_normalized=${item.resolvedValue},updated_by=${user.id}::uuid,updated_at=now() where id=${item.leadId}::uuid`;
@@ -257,6 +279,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.user_branches aub on aub.user_id=assigned.id
       left join core.branches ab on ab.id=aub.branch_id
       where l.is_deleted=false
+        and (
+          ${scope.all}::boolean
+          or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+          or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+        )
       group by l.id,assigned.id
       order by coalesce(l.registered_at,l.created_at) desc
     `,

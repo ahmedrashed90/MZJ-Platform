@@ -27,11 +27,12 @@ export function normalizeSaudiPhone(value: unknown) {
   return /^9665\d{8}$/.test(digits) ? digits : "";
 }
 
-export function publicTrackingUrl(requestOrigin: string, vin: string, orderNo: string) {
+export function publicTrackingUrl(requestOrigin: string, trackingToken: string) {
   const configured = clean(process.env.TRACKING_PUBLIC_BASE_URL);
   const base = configured || requestOrigin;
-  const key = vin && !vin.startsWith("PENDING-") ? `vin=${encodeURIComponent(vin)}` : `order=${encodeURIComponent(orderNo)}`;
-  return `${base.replace(/\/$/, "")}/track?${key}`;
+  const token = clean(trackingToken);
+  if (!token) throw new Error("Tracking token is required");
+  return `${base.replace(/\/$/, "")}/track?token=${encodeURIComponent(token)}`;
 }
 
 export async function ensureVehicleStageRows(vehicleId: string) {

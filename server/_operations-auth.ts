@@ -1,13 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, type SessionUser } from "./_auth.js";
-import { canAccessSystem, isPlatformAdmin } from "../shared/system-access.js";
+import { canAccessSystem, hasPermission as centralHasPermission } from "../shared/system-access.js";
 
-export function isSystemAdmin(user: SessionUser) {
-  return isPlatformAdmin(user);
-}
 
 export function hasPermission(user: SessionUser, permission: string) {
-  return isSystemAdmin(user) || user.permissions.includes(permission);
+  return centralHasPermission(user, permission);
 }
 
 export function canAccessOperations(user: SessionUser) {
@@ -35,5 +32,5 @@ export function primaryRole(user: SessionUser) {
 }
 
 export function primaryBranch(user: SessionUser) {
-  return user.branches[0] || user.branchCodes[0] || "";
+  return user.systemAccess.operations?.branchCodes[0] || "";
 }

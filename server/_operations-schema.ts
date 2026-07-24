@@ -33,8 +33,7 @@ insert into core.permissions(code,name,system_code) values
 ('operations.approval.view','عرض الموافقات','operations'),
 ('operations.approval.financial','تنفيذ الموافقة المالية','operations'),
 ('operations.approval.administrative','تنفيذ الموافقة الإدارية','operations'),
-('operations.settings.manage','إدارة إعدادات العمليات','operations'),
-('tracking.orders.delete','حذف طلبات التراكينج','tracking')
+('settings.operations.manage','إدارة إعدادات العمليات','operations')
 on conflict (code) do update set name=excluded.name,system_code=excluded.system_code;
 
 insert into core.role_permissions(role_id,permission_id)

@@ -23,6 +23,7 @@ import {
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { Modal } from "../../components/Modal";
 import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../systemAccess";
 import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel } from "../api";
 import type { TrackingCounts, TrackingOrderDetail, TrackingOrderRow, TrackingStage, TrackingVehicle } from "../types";
 
@@ -56,7 +57,11 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteErrorMessage, setDeleteErrorMessage] = useState("");
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
-  const canDeleteTracking = Boolean(user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) || user?.permissions.includes("tracking.orders.delete"));
+  const canDeleteTracking = hasPermission(user, "tracking.order.delete");
+  const canCreateTrackingLink = hasPermission(user, "tracking.link.create");
+  const canCopyTrackingLink = hasPermission(user, "tracking.link.copy");
+  const canArchiveTracking = hasPermission(user, "tracking.order.archive");
+  const canSendTrackingSms = hasPermission(user, "tracking.sms.send");
 
   useEscapeToClose(Boolean(selected), () => setSelected(null));
 
@@ -97,6 +102,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
   async function stageAction(action: "complete_stage" | "revert_stage", vehicle: TrackingVehicle, stage: TrackingStage) {
     if (!selected) return;
+    const note = action === "revert_stage" ? window.prompt(`اكتب سبب التراجع عن مرحلة: ${stage.name}`)?.trim() || "" : "";
+    if (action === "revert_stage" && !note) return;
     const key = `${action}:${vehicle.id}:${stage.stage_id}`;
     setActionKey(key);
     setMessage("");
@@ -104,7 +111,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
     try {
       const payload = await trackingFetch<DetailResponse>("/api/tracking/orders", {
         method: "POST",
-        body: JSON.stringify({ action, vehicleId: vehicle.id, stageId: stage.stage_id }),
+        body: JSON.stringify({ action, vehicleId: vehicle.id, stageId: stage.stage_id, note }),
       });
       setSelected(payload.order);
       setMessage(payload.message || "تم تحديث المرحلة");
@@ -190,16 +197,13 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
     }
   }
 
-  function trackingUrl(vehicle?: TrackingVehicle | null) {
-    if (!selected) return "";
-    const key = vehicle && !vehicle.vin.startsWith("PENDING-")
-      ? `vin=${encodeURIComponent(vehicle.vin)}`
-      : `order=${encodeURIComponent(selected.sales_order_no)}`;
-    return `${window.location.origin}/track?${key}`;
+  function trackingUrl() {
+    if (!selected?.tracking_token) return "";
+    return `${window.location.origin}/track?token=${encodeURIComponent(selected.tracking_token)}`;
   }
 
-  async function copyLink(vehicle?: TrackingVehicle | null) {
-    const url = trackingUrl(vehicle);
+  async function copyLink() {
+    const url = trackingUrl();
     if (!url) return;
     await navigator.clipboard.writeText(url);
     setMessage("تم نسخ رابط تتبع العميل");
@@ -292,9 +296,9 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
             </header>
 
             <div className="tracking-detail-actions">
-              <button type="button" onClick={() => void copyLink(activeVehicle)}><Copy size={17} />نسخ رابط العميل</button>
-              <button type="button" onClick={() => window.open(trackingUrl(activeVehicle), "_blank")}><LinkSimple size={17} />فتح صفحة العميل</button>
-              {!selected.is_archived && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
+              {canCopyTrackingLink && selected.tracking_token ? <button type="button" onClick={() => void copyLink()}><Copy size={17} />نسخ رابط العميل</button> : null}
+              {canCreateTrackingLink && selected.tracking_token ? <button type="button" onClick={() => window.open(trackingUrl(), "_blank")}><LinkSimple size={17} />فتح صفحة العميل</button> : null}
+              {canArchiveTracking && !selected.is_archived && Number(selected.total_stages || 0) > 0 && Number(selected.completed_stages || 0) >= Number(selected.total_stages || 0) ? (
                 <button type="button" className="tracking-archive-button" onClick={() => void archiveOrder()} disabled={Boolean(actionKey)}>
                   <Archive size={17} />{actionKey === `archive:${selected.id}` ? "جاري الأرشفة..." : "أرشفة الطلب"}
                 </button>
@@ -360,9 +364,9 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                               <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
                             </div>
                             <div className="tracking-stage-actions">
-                              {!selected.is_archived && !done ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
-                              {!selected.is_archived && done ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
-                              {!selected.is_archived && stage.sms_enabled ? <button type="button" className="sms" onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
+                              {!selected.is_archived && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
+                              {!selected.is_archived && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
+                              {!selected.is_archived && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className="sms" onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
                             </div>
                           </article>
                         );

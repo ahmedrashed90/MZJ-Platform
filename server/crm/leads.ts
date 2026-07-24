@@ -99,8 +99,8 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
     where l.is_deleted = false
       and (
         ${scope.all}::boolean
-        or (${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
+        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
         or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
       )
       and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})
@@ -124,8 +124,8 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
     where l.is_deleted = false
       and (
         ${scope.all}::boolean
-        or (${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
-        or (not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
+        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to = ${scope.userId}::uuid)
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to = ${scope.userId}::uuid or l.call_center_assigned_to = ${scope.userId}::uuid))
         or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
       )
       and (${q || null}::text is null or concat_ws(' ', l.customer_name,l.phone,l.phone_normalized,l.car_name,l.car_category,l.source_name,l.campaign_name,l.notes) ilike ${q ? `%${q}%` : null})

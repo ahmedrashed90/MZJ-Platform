@@ -45,8 +45,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       )
       and (
         ${scope.all}::boolean
-        or (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-        or (not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+        or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
       )
     order by case when l.id::text=${leadId || ""} then 0 else 1 end,l.updated_at desc

@@ -1,22 +1,25 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { Archive, ListMagnifyingGlass, Trash } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
+import { hasPermission } from "../systemAccess";
 
 export function TrackingLayout() {
   const { user } = useAuth();
-  const isAdmin = user?.roleCodes.includes("admin") ?? false;
+  const canViewOrders = hasPermission(user, "tracking.orders.view");
+  const canViewArchive = hasPermission(user, "tracking.archive.view");
+  const canViewDelete = hasPermission(user, "tracking.delete.view");
   return (
     <section className="tracking-module">
       <nav className="crm-system-nav tracking-system-nav" aria-label="صفحات التتبع">
-        <NavLink to="/tracking" end className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
+        {canViewOrders ? <NavLink to="/tracking" end className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
           <ListMagnifyingGlass size={18} weight="duotone" />
           <span>طلبات التراكينج</span>
-        </NavLink>
-        <NavLink to="/tracking/archive" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
+        </NavLink> : null}
+        {canViewArchive ? <NavLink to="/tracking/archive" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
           <Archive size={18} weight="duotone" />
           <span>أرشيف الطلبات</span>
-        </NavLink>
-        {isAdmin ? (
+        </NavLink> : null}
+        {canViewDelete ? (
           <NavLink to="/tracking/delete" className={({ isActive }) => `crm-system-link ${isActive ? "active" : ""}`}>
             <Trash size={18} weight="duotone" />
             <span>حذف طلبات التتبع</span>

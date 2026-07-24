@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { randomUUID } from "node:crypto";
-import { audit, clean, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { audit, clean, parseBody, requireCrmUser } from "../_crm-utils.js";
+import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { normalizeCustomerFieldOptions } from "../_crm-customer-fields.js";
 
@@ -11,7 +12,8 @@ function stringList(value: unknown) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إعدادات CRM متاحة للإدارة فقط" });
+  const requiredPermission = request.method === "GET" ? "settings.crm.view" : "settings.crm.manage";
+  if (!hasPermission(user, requiredPermission)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإعدادات CRM" });
   const sql = getSql();
 
   if (request.method === "GET") {
@@ -371,20 +373,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (section === "branch") {
-    const code = clean(body.code);
-    if (!code) return response.status(400).json({ ok: false, error: "كود الفرع مطلوب" });
-    if (action === "delete") {
-      await sql`update core.branches set is_active=false,updated_at=now() where code=${code}`;
-      return response.status(200).json({ ok: true });
-    }
-    const [row] = await sql<any[]>`
-      insert into core.branches(code,name,is_active,sort_order,updated_at) values (${code},${clean(body.name)},${body.isActive!==false},${Number(body.sortOrder||0)},now())
-      on conflict (code) do update set name=excluded.name,is_active=excluded.is_active,sort_order=excluded.sort_order,updated_at=now() returning *
-    `;
-    return response.status(200).json({ ok: true, row });
+    return response.status(410).json({ ok: false, error: "إدارة الفروع نُقلت إلى الإعدادات المركزية > المستخدمون والصلاحيات > الفروع والأقسام" });
   }
 
   if (section === "assignment_rule") {
+    if (!hasPermission(user, "crm.routing.manage")) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإدارة قواعد توزيع العملاء" });
     const id = clean(body.id);
     if (action === "delete") {
       await sql`update crm.assignment_rules set is_active=false,updated_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
@@ -418,6 +411,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (section === "assignment_member") {
+    if (!hasPermission(user, "crm.routing.manage")) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإدارة قواعد توزيع العملاء" });
     const ruleId = clean(body.ruleId);
     const userId = clean(body.userId);
     if (!ruleId || !userId) return response.status(400).json({ ok: false, error: "قاعدة التوزيع والموظف مطلوبان" });

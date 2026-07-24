@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "node:crypto";
 import { getSql } from "../_db.js";
 import { requireUser, requestIp, type SessionUser } from "../_auth.js";
-import { canAccessSystem, isPlatformAdmin } from "../../shared/system-access.js";
+import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
+import { getSystemAccess } from "../_access-control.js";
 import { completePhotographyRequest } from "../operations/index.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
@@ -25,7 +26,61 @@ function cleanTemplateData(value: unknown) {
   for (const key of TEMPLATE_FIELDS) if (Object.prototype.hasOwnProperty.call(input, key)) output[key] = clean(input[key]);
   return output;
 }
-function isAdmin(user: SessionUser) { return isPlatformAdmin(user); }
+function marketingAccess(user: SessionUser) { return getSystemAccess(user, "marketing"); }
+function canViewAllTasks(user: SessionUser) { return hasPermission(user, "marketing.task.view_all") && marketingAccess(user).dataScope === "all"; }
+function marketingDepartmentCodes(user: SessionUser) { const codes = marketingAccess(user).departmentCodes; return codes.length ? codes : ["__no_department__"]; }
+async function canAccessMarketingEntity(sql: ReturnType<typeof getSql>, user: SessionUser, sourceType: string, sourceId: string) {
+  const access = marketingAccess(user);
+  if (access.dataScope === "all") return true;
+  const departmentCodes = marketingDepartmentCodes(user);
+  const createdByMe = access.dataScope === "created_by_me";
+  const departmentScoped = ["department", "departments", "branch_and_department"].includes(access.dataScope);
+  const [visible] = await sql<any[]>`
+    select 1
+    where exists (
+      select 1 from marketing.tasks t
+      where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
+        and (
+          t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+          or (${departmentScoped}=true and exists (
+            select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id
+            where ud.user_id in (t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}
+          ))
+        )
+    ) or (${createdByMe}=true and exists (
+      select 1 from marketing.campaigns c where ${sourceType}='campaign' and c.id=${sourceId}::uuid and c.created_by=${user.id}::uuid
+      union all
+      select 1 from marketing.agendas a where ${sourceType}='agenda' and a.id=${sourceId}::uuid and a.created_by=${user.id}::uuid
+    ))
+    limit 1
+  `;
+  return Boolean(visible);
+}
+async function assertMarketingEntityAccess(sql: ReturnType<typeof getSql>, user: SessionUser, sourceType: string, sourceId: string) {
+  if (!sourceId || !await canAccessMarketingEntity(sql, user, sourceType, sourceId)) throw new Error("السجل خارج نطاق بياناتك");
+}
+async function canAccessMarketingTask(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  const access = marketingAccess(user);
+  if (access.dataScope === "all") return true;
+  const departmentCodes = marketingDepartmentCodes(user);
+  const createdByMe = access.dataScope === "created_by_me";
+  const departmentScoped = ["department", "departments", "branch_and_department"].includes(access.dataScope);
+  const [visible] = await sql<any[]>`
+    select 1 from marketing.tasks t
+    where t.id=${taskId}::uuid and t.is_deleted=false and (
+      t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+      or (${departmentScoped}=true and exists (
+        select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id
+        where ud.user_id in (t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}
+      ))
+      or (${createdByMe}=true and (
+        exists(select 1 from marketing.campaigns c where t.source_type='campaign' and c.id=t.source_id and c.created_by=${user.id}::uuid)
+        or exists(select 1 from marketing.agendas a where t.source_type='agenda' and a.id=t.source_id and a.created_by=${user.id}::uuid)
+      ))
+    ) limit 1
+  `;
+  return Boolean(visible);
+}
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
 function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
@@ -64,24 +119,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     sql<any[]>`
       select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
       from core.users u
-      where u.is_active=true and (
-        exists(
-          select 1 from core.user_departments ud
-          join core.departments cd on cd.id=ud.department_id
-          where ud.user_id=u.id and cd.is_active=true and cd.system_code='marketing'
-        )
-        or exists(
-          select 1 from core.user_roles ur
-          join core.roles r on r.id=ur.role_id
-          where ur.user_id=u.id and r.code in ('marketing_user','admin','system_admin')
-        )
-        or exists(
-          select 1 from core.user_roles ur
-          join core.role_permissions rp on rp.role_id=ur.role_id
-          join core.permissions p on p.id=rp.permission_id
-          where ur.user_id=u.id and p.system_code='marketing'
-        )
-      )
+      where u.is_active=true and exists(select 1 from core.user_systems us where us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true)
       order by u.full_name
     `,
     sql<any[]>`
@@ -95,24 +133,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
         ) as users
       from marketing.departments d
       left join marketing.department_users du on du.department_id=d.id
-      left join core.users u on u.id=du.user_id and u.is_active=true and (
-        exists(
-          select 1 from core.user_departments ud
-          join core.departments cd on cd.id=ud.department_id
-          where ud.user_id=u.id and cd.is_active=true and cd.system_code='marketing'
-        )
-        or exists(
-          select 1 from core.user_roles ur
-          join core.roles r on r.id=ur.role_id
-          where ur.user_id=u.id and r.code in ('marketing_user','admin','system_admin')
-        )
-        or exists(
-          select 1 from core.user_roles ur
-          join core.role_permissions rp on rp.role_id=ur.role_id
-          join core.permissions p on p.id=rp.permission_id
-          where ur.user_id=u.id and p.system_code='marketing'
-        )
-      )
+      left join core.users u on u.id=du.user_id and u.is_active=true and exists(select 1 from core.user_systems us where us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true)
       where d.is_active=true
       group by d.id
       order by d.is_content desc,d.name
@@ -125,7 +146,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     sql<any[]>`select id::text,name,active,source,created_at from marketing.funnels where active=true order by created_at`,
   ]);
   const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
-  return { ok: true, users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicConnection), permissions: { isAdmin: isAdmin(user), canManage: isAdmin(user) || user.permissions.includes("marketing.manage") } };
+  return { ok: true, users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
 }
 
 async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
@@ -320,7 +341,24 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
 }
 
 async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
-  const ownFilter = isAdmin(user) ? sql`true` : sql`(t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)`;
+  const access = marketingAccess(user);
+  const unrestricted = access.dataScope === "all";
+  const createdByMe = access.dataScope === "created_by_me";
+  const departmentScoped = ["department", "departments", "branch_and_department"].includes(access.dataScope);
+  const departmentCodes = marketingDepartmentCodes(user);
+  const taskFilter = unrestricted
+    ? sql`true`
+    : sql`(
+      t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+      or (${departmentScoped}=true and exists(
+        select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id
+        where ud.user_id in (t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}
+      ))
+      or (${createdByMe}=true and (
+        exists(select 1 from marketing.campaigns x where t.source_type='campaign' and x.id=t.source_id and x.created_by=${user.id}::uuid)
+        or exists(select 1 from marketing.agendas x where t.source_type='agenda' and x.id=t.source_id and x.created_by=${user.id}::uuid)
+      ))
+    )`;
   const tasks = await sql<any[]>`
     select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.note,
       t.assigned_to::text,u.full_name as assigned_name,t.paired_content_user_id::text,cu.full_name as content_user_name,
@@ -333,37 +371,65 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files f on f.id=t.final_file_id
-    where t.is_deleted=false and ${ownFilter}
+    where t.is_deleted=false and ${taskFilter}
     order by t.received_at nulls first,t.due_at nulls last,t.created_at
   `;
   const entities = await sql<any[]>`
-    select 'campaign' as source_type,id::text,name,campaign_code as code,status,progress::float,publish_start,publish_end,created_at from marketing.campaigns where is_deleted=false and archived_at is null
+    select 'campaign' as source_type,c.id::text,c.name,c.campaign_code as code,c.status,c.progress::float,c.publish_start,c.publish_end,c.created_at
+    from marketing.campaigns c
+    where c.is_deleted=false and c.archived_at is null and (
+      ${unrestricted}=true or (${createdByMe}=true and c.created_by=${user.id}::uuid)
+      or exists(select 1 from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and ${taskFilter})
+    )
     union all
-    select 'agenda',id::text,name,month_key,status,progress::float,publish_start,publish_end,created_at from marketing.agendas where archived_at is null
+    select 'agenda',a.id::text,a.name,a.month_key,a.status,a.progress::float,a.publish_start,a.publish_end,a.created_at
+    from marketing.agendas a
+    where a.archived_at is null and (
+      ${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
+      or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and ${taskFilter})
+    )
     order by created_at desc
   `;
-  return { ok:true, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, isAdmin:isAdmin(user) };
+  return { ok:true, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, permissions:user.permissions.filter((code)=>code.startsWith("marketing.")) };
 }
 
-async function databaseRows(sql: ReturnType<typeof getSql>) {
+async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
+  const access = marketingAccess(user);
+  const unrestricted = access.dataScope === "all";
+  const createdByMe = access.dataScope === "created_by_me";
+  const departmentScoped = ["department", "departments", "branch_and_department"].includes(access.dataScope);
+  const departmentCodes = marketingDepartmentCodes(user);
   const rows = await sql<any[]>`
     select 'campaign' as source_type,c.id::text,c.campaign_date as record_date,c.campaign_code as code,c.name,coalesce(ct.name,c.campaign_type) as type,c.objective,c.publish_start,c.publish_end,c.status,c.progress::float,c.archived_at,c.created_at,
       (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false) as tasks_count,
       (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.progress>=100 and t.is_deleted=false) as completed_count,
       c.result_file_id::text,coalesce(jsonb_array_length(c.links),0)::int as links_count
-    from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where c.is_deleted=false
+    from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id
+    where c.is_deleted=false and (
+      ${unrestricted}=true or (${createdByMe}=true and c.created_by=${user.id}::uuid)
+      or exists(select 1 from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and (
+        t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+        or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}))
+      ))
+    )
     union all
     select 'agenda',a.id::text,a.created_at::date,a.month_key,a.name,'أجندة',null,a.publish_start,a.publish_end,a.status,a.progress::float,a.archived_at,a.created_at,
       (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false),
       (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.progress>=100 and t.is_deleted=false),
       a.result_file_id::text,coalesce(jsonb_array_length(a.links),0)::int
     from marketing.agendas a
+    where ${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
+      or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and (
+        t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+        or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}))
+      ))
     order by created_at desc
   `;
   return { ok:true,rows };
 }
 
-async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, id: string) {
+async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, id: string, user: SessionUser) {
+  await assertMarketingEntityAccess(sql,user,sourceType,id);
   const [entity] = sourceType === "agenda"
     ? await sql<any[]>`select 'agenda' as source_type,a.*,a.id::text,a.result_file_id::text from marketing.agendas a where a.id=${id}::uuid`
     : await sql<any[]>`select 'campaign' as source_type,c.*,c.id::text,c.campaign_type_id::text,c.result_file_id::text,ct.name as campaign_type_name from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where c.id=${id}::uuid and c.is_deleted=false`;
@@ -393,7 +459,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
     where t.id=${id}::uuid and t.is_deleted=false
   `;
   if (!task) throw new Error("التاسك غير موجود");
-  if (!isAdmin(user) && task.assigned_to !== user.id && task.paired_content_user_id !== user.id) throw new Error("لا توجد صلاحية لعرض التاسك");
+  if (!await canAccessMarketingTask(sql,user,id)) throw new Error("لا توجد صلاحية لعرض التاسك");
   const actionsPromise = task.department_id
     ? sql<any[]>`select a.id::text,a.name,a.percentage::float,a.admin_only,a.sort_order,coalesce(p.completed,false) as completed,p.completed_at,u.full_name as completed_by_name from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${id}::uuid left join core.users u on u.id=p.completed_by where a.department_id=${task.department_id}::uuid and a.is_active=true order by a.sort_order,a.created_at`
     : Promise.resolve([] as any[]);
@@ -401,7 +467,19 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
     actionsPromise,
     task.task_template_id ? sql<any[]>`select h.*,h.id::text from marketing.task_review_history h where h.task_template_id=${task.task_template_id}::uuid order by h.created_at desc` : Promise.resolve([]),
   ]);
-  return { ok:true,task,actions,history,isAdmin:isAdmin(user) };
+  return {
+    ok:true,task,actions,history,
+    permissions:{
+      canDownloadTemplate:hasPermission(user,"marketing.task_template.download"),
+      canUploadTemplate:hasPermission(user,task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload"),
+      canApproveTemplate:hasPermission(user,"marketing.task_template.approve"),
+      canRejectTemplate:hasPermission(user,"marketing.task_template.reject"),
+      canExecuteAction:hasPermission(user,"marketing.assignment_action.execute"),
+      canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
+      canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
+      canDownloadFile:hasPermission(user,"marketing.file.download"),
+    }
+  };
 }
 
 async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: SessionUser) {
@@ -415,12 +493,14 @@ async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=cle
 async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id),name=clean(body.name),category=clean(body.category);if(!name||!category)throw new Error("اسم الباقة والتصنيف مطلوبان");const features=arrayValue(body.careFeatures).map(clean).filter(Boolean);const[row]=id?await sql<any[]>`update marketing.packages set name=${name},category=${category},price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${bool(body.insurance)},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(dbJson(features))},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.packages(name,category,price,cash_discount,registration_fees,insurance,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category},${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${bool(body.insurance)},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الباقة"};}
 async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){const entity=clean(body.entity),id=clean(body.id);const allowed:Record<string,string>={department:"marketing.departments",action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages"};const table=allowed[entity];if(!table||!id)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
 
-async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!isAdmin(user)&&task.assigned_to!==user.id)throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
+async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);if(!hasPermission(user,"marketing.task.receive"))throw new Error("لا توجد صلاحية لاستلام التاسك");const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!await canAccessMarketingTask(sql,user,id))throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
 async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId),fileId=clean(body.fileId),data=cleanTemplateData(body.templateData);
   const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text,task_template_id::text from marketing.tasks where id=${taskId}::uuid and task_kind='task_template'`;
   if(!task)throw new Error("Task Template غير موجود");
-  if(!isAdmin(user)&&task.assigned_to!==user.id)throw new Error("لا توجد صلاحية لرفع الملف");
+  const uploadPermission=task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload";
+  if(!hasPermission(user,uploadPermission))throw new Error("لا توجد صلاحية لرفع Task Template");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفع الملف");
   await sql.begin(async tx=>{
     await tx`update marketing.task_templates set file_id=${fileId}::uuid,template_data=template_data||${tx.json(dbJson(data))},status='under_review',progress=50,updated_at=now() where id=${task.task_template_id}::uuid`;
     await tx`update marketing.tasks set progress=50,status='under_review',updated_at=now() where id=${taskId}::uuid`;
@@ -430,8 +510,9 @@ async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
   return{ok:true,message:"تم رفع Task Template وإرساله للمراجعة"};
 }
 async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");
   const templateId=clean(body.templateId),action=clean(body.reviewAction),note=clean(body.note),data=cleanTemplateData(body.data);
+  const permission=action==='approve'?'marketing.task_template.approve':'marketing.task_template.reject';
+  if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لمراجعة Task Template");
   const[template]=await sql<any[]>`select *,id::text,source_id::text from marketing.task_templates where id=${templateId}::uuid`;
   if(!template)throw new Error("Task Template غير موجود");
   let status=template.status,progress=numberValue(template.progress);
@@ -454,8 +535,9 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   const[record]=await sql<any[]>`select t.id::text,t.source_type,t.source_id::text,t.assigned_to::text,a.admin_only,tt.status as template_status from marketing.tasks t join marketing.assignment_actions a on a.id=${actionId}::uuid left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid and t.is_deleted=false`;
   if(!record)throw new Error("الإجراء أو التاسك غير موجود");
   if(record.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
-  if(record.admin_only&&!isAdmin(user))throw new Error("هذا الإجراء خاص بمدير النظام");
-  if(!isAdmin(user)&&record.assigned_to!==user.id)throw new Error("لا توجد صلاحية لتنفيذ الإجراء");
+  const actionPermission=record.admin_only?"marketing.assignment_action.admin":"marketing.assignment_action.execute";
+  if(!hasPermission(user,actionPermission))throw new Error(record.admin_only?"هذا الإجراء يحتاج صلاحية إجراء إداري":"لا توجد صلاحية لتنفيذ إجراء التكليف");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لتنفيذ الإجراء");
   await sql`insert into marketing.task_action_progress(task_id,action_id,completed,completed_by,completed_at) values(${taskId}::uuid,${actionId}::uuid,${completed},${completed?sql`${user.id}::uuid`:null},${completed?sql`now()`:null}) on conflict(task_id,action_id) do update set completed=excluded.completed,completed_by=excluded.completed_by,completed_at=excluded.completed_at`;
   const[sum]=await sql<any[]>`select coalesce(sum(a.percentage) filter(where p.completed),0)::float as progress,count(a.id)::int as actions from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${taskId}::uuid where a.department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and a.is_active=true`;
   const progress=Math.min(100,numberValue(sum?.progress));
@@ -463,20 +545,22 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   await recalculateProgress(sql,record.source_type,record.source_id);
   return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
 }
-async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const taskId=clean(body.taskId),fileId=clean(body.fileId);const[task]=await sql<any[]>`select t.*,t.id::text,t.source_id::text,t.assigned_to::text,tt.status as template_status from marketing.tasks t left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid`;if(!task)throw new Error("التاسك غير موجود");if(task.task_kind==='execution'&&task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");if(!isAdmin(user)&&task.assigned_to!==user.id)throw new Error("لا توجد صلاحية لرفع الملف");await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=${task.department_id} and is_active=true`;if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم رفع الملف النهائي"};}
+async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const taskId=clean(body.taskId),fileId=clean(body.fileId);if(!hasPermission(user,"marketing.task.final_file.upload"))throw new Error("لا توجد صلاحية لرفع الملف النهائي");const[task]=await sql<any[]>`select t.*,t.id::text,t.source_id::text,t.assigned_to::text,tt.status as template_status from marketing.tasks t left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid`;if(!task)throw new Error("التاسك غير موجود");if(task.task_kind==='execution'&&task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفع الملف");await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=${task.department_id} and is_active=true`;if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم رفع الملف النهائي"};}
 
-async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;if(!category)throw new Error("نوع الملف مطلوب");const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};}
+async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;if(!category)throw new Error("نوع الملف مطلوب");if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};}
 async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
   const fileId=clean(body.fileId);
-  const rows=isAdmin(user)
+  const rows=hasPermission(user,"marketing.file.view_others")
     ? await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid returning id::text`
     : await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and uploaded_by=${user.id}::uuid returning id::text`;
   if(!rows.length)throw new Error("الملف غير موجود أو لا توجد صلاحية لتحديثه");
   return{ok:true,message:"تم حفظ الملف"};
 }
-async function fileDownload(sql:ReturnType<typeof getSql>,id:string){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");const[file]=await sql<any[]>`select *,id::text from marketing.files where id=${id}::uuid and status='ready'`;if(!file)throw new Error("الملف غير موجود");return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size}};}
+async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;if(!file)throw new Error("الملف غير موجود");if(!hasPermission(user,"marketing.file.view_others")){const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;if(!allowed)throw new Error("الملف خارج نطاق بياناتك");}return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size}};}
 
-async function publishPrep(sql:ReturnType<typeof getSql>) {
+async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
+  const access=marketingAccess(user),unrestricted=access.dataScope==='all',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user),createdByMe=access.dataScope==='created_by_me';
   const rows=await sql<any[]>`
     with representatives as (
       select distinct on (group_id) *
@@ -542,15 +626,20 @@ async function publishPrep(sql:ReturnType<typeof getSql>) {
     left join marketing.departments d on d.id=t.department_id
     left join core.users u on u.id=t.assigned_to
     left join marketing.files f on f.id=t.final_file_id
+    where ${unrestricted}=true
+      or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+      or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}))
+      or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
     order by r.publish_date,r.created_at
   `;
   return{ok:true,rows};
 }
 async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");
+  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
   const id=clean(body.id),publishDate=isoDate(body.publishDate),platforms=arrayValue(body.platforms);
   const[current]=await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by created_at limit 1`;
   if(!current)throw new Error("تاسك تجهيز النشر غير موجود");
+  await assertMarketingEntityAccess(sql,user,clean(current.source_type),clean(current.source_id));
   if(!publishDate)throw new Error("تاريخ النشر مطلوب");
   const combinations=platforms.flatMap((platform:any)=>arrayValue<string>(platform.postTypeIds).map((postTypeId)=>({platformId:clean(platform.platformId),postTypeId:clean(postTypeId)}))).filter((item:any)=>item.platformId&&item.postTypeId);
   if(!combinations.length){const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);if(platformId&&postTypeId)combinations.push({platformId,postTypeId});}
@@ -616,7 +705,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   return result;
 }
 async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!isAdmin(user))throw new Error("النشر الفعلي متاح لمدير النظام فقط");
+  if(!hasPermission(user,"marketing.publish.now"))throw new Error("لا توجد صلاحية للنشر الفعلي");
   const ids=arrayValue<string>(body.ids).map(clean).filter(Boolean);
   if(!ids.length)throw new Error("حدد تاسكات النشر");
   const results=[];
@@ -635,19 +724,39 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
       where s.id=${id}::uuid
     `;
     if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود"});continue;}
-    try{const result=await publishScheduleItem(sql,schedule,user);results.push({id,ok:true,result});}
+    try{await assertMarketingEntityAccess(sql,user,clean(schedule.source_type),clean(schedule.source_id));const result=await publishScheduleItem(sql,schedule,user);results.push({id,ok:true,result});}
     catch(error:any){await sql`insert into marketing.publish_logs(schedule_id,platform,status,error,published_by) values(${id}::uuid,${schedule.platform_code||''},'failed',${clean(error?.message)},${user.id}::uuid)`;results.push({id,ok:false,error:clean(error?.message)});}
   }
   return{ok:true,results,message:"تم تنفيذ طلب النشر"};
 }
-async function saveResultFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id),fileId=clean(body.fileId);if(sourceType==='agenda')await sql`update marketing.agendas set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ ملف النتائج"};}
-async function saveLinks(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id),links=arrayValue(body.links).filter((item:any)=>clean(item.platform)&&clean(item.url));if(sourceType==='agenda')await sql`update marketing.agendas set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ روابط الحملة"};}
-async function archiveEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الأرشفة متاحة لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id);const[entity]=sourceType==='agenda'?await sql<any[]>`select result_file_id::text,links from marketing.agendas where id=${id}::uuid`:await sql<any[]>`select result_file_id::text,links from marketing.campaigns where id=${id}::uuid`;if(!entity)throw new Error("السجل غير موجود");const missing=[];if(!entity.result_file_id)missing.push("ملف نتائج الحملة");if(!arrayValue(entity.links).length)missing.push("روابط الحملة");if(missing.length)throw new Error(`لا يمكن أرشفة الحملة. الناقص: ${missing.join(" + ")}`);if(sourceType==='agenda')await sql`update marketing.agendas set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تمت الأرشفة"};}
-async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("المسح متاح لمدير النظام فقط");const sourceType=clean(body.sourceType),id=clean(body.id);if(sourceType==='agenda')await sql`delete from marketing.agendas where id=${id}::uuid`;else await sql`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم المسح"};}
+async function saveResultFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع ملف النتائج");const sourceType=clean(body.sourceType),id=clean(body.id),fileId=clean(body.fileId);await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`update marketing.agendas set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set result_file_id=${fileId}::uuid,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ ملف النتائج"};}
+async function saveLinks(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const sourceType=clean(body.sourceType),permission=sourceType==='agenda'?"marketing.agenda.edit":"marketing.campaign.edit";if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لتعديل الروابط");const id=clean(body.id),links=arrayValue(body.links).filter((item:any)=>clean(item.platform)&&clean(item.url));await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`update marketing.agendas set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set links=${sql.json(dbJson(links))},updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم حفظ روابط الحملة"};}
+async function archiveEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.campaign.archive"))throw new Error("لا توجد صلاحية لأرشفة الحملة");const sourceType=clean(body.sourceType),id=clean(body.id);await assertMarketingEntityAccess(sql,user,sourceType,id);const[entity]=sourceType==='agenda'?await sql<any[]>`select result_file_id::text,links from marketing.agendas where id=${id}::uuid`:await sql<any[]>`select result_file_id::text,links from marketing.campaigns where id=${id}::uuid`;if(!entity)throw new Error("السجل غير موجود");const missing=[];if(!entity.result_file_id)missing.push("ملف نتائج الحملة");if(!arrayValue(entity.links).length)missing.push("روابط الحملة");if(missing.length)throw new Error(`لا يمكن أرشفة الحملة. الناقص: ${missing.join(" + ")}`);if(sourceType==='agenda')await sql`update marketing.agendas set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;else await sql`update marketing.campaigns set archived_at=now(),archived_by=${user.id}::uuid,status='archived',updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تمت الأرشفة"};}
+async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const sourceType=clean(body.sourceType),id=clean(body.id);const permission=sourceType==='agenda'?'marketing.agenda.delete':'marketing.campaign.delete';if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لمسح السجل");await assertMarketingEntityAccess(sql,user,sourceType,id);if(sourceType==='agenda')await sql`delete from marketing.agendas where id=${id}::uuid`;else await sql`update marketing.campaigns set is_deleted=true,updated_at=now() where id=${id}::uuid`;return{ok:true,message:"تم المسح"};}
 
-async function monitoring(sql:ReturnType<typeof getSql>){const[totals,statuses,delayed,employees,departments,entities]=await Promise.all([sql<any[]>`select (select count(*) from marketing.campaigns where is_deleted=false and archived_at is null)::int as campaigns,(select count(*) from marketing.campaigns where is_deleted=false and archived_at is null and status<>'archived')::int as active_campaigns,(select count(*) from marketing.agendas where archived_at is null)::int as agendas,(select count(*) from marketing.tasks where is_deleted=false)::int as tasks,(select count(*) from marketing.tasks where is_deleted=false and due_at<now() and progress<100)::int as delayed,(select count(*) from marketing.tasks where is_deleted=false and progress=0)::int as waiting,(select count(*) from marketing.tasks where is_deleted=false and progress>0 and progress<100)::int as active,(select coalesce(avg(progress),0)::float from marketing.tasks where is_deleted=false) as progress`,sql<any[]>`select status,count(*)::int as count from marketing.tasks where is_deleted=false group by status order by count(*) desc`,sql<any[]>`select t.id::text,t.title,t.due_at,t.progress::float,u.full_name,d.name as department_name,coalesce(cam.name,ag.name) as source_name,greatest(0,current_date-t.due_at::date)::int as delay_days from marketing.tasks t left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id where t.is_deleted=false and t.due_at<now() and t.progress<100 order by t.due_at`,sql<any[]>`select u.id::text,u.full_name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress,count(*) filter(where t.due_at<now() and t.progress<100)::int as delayed,coalesce(sum(greatest(0,current_date-t.due_at::date)) filter(where t.due_at<now() and t.progress<100),0)::int as delay_days from core.users u join marketing.tasks t on t.assigned_to=u.id and t.is_deleted=false group by u.id order by progress desc`,sql<any[]>`select d.id::text,d.name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress from marketing.departments d left join marketing.tasks t on t.department_id=d.id and t.is_deleted=false where d.is_active=true group by d.id order by d.name`,sql<any[]>`select 'campaign' as source_type,id::text,name,progress::float,status from marketing.campaigns where is_deleted=false and archived_at is null union all select 'agenda',id::text,name,progress::float,status from marketing.agendas where archived_at is null order by progress desc`]);return{ok:true,totals:totals[0]||{},statuses,delayed,employees,departments,entities};}
-async function calendarData(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select s.id::text,s.publish_date,s.status,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code,coalesce(cam.name,ag.name) as source_name,u.full_name as assigned_name,coalesce(uc.color,'#6c3329') as user_color from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id left join lateral(select assigned_to from marketing.tasks t where t.creative_id=s.creative_id and t.task_kind='execution' order by t.created_at limit 1)t on true left join core.users u on u.id=t.assigned_to left join marketing.user_colors uc on uc.user_id=u.id order by s.publish_date`;return{ok:true,rows};}
-async function receiptCalendar(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select t.id::text,t.received_at,t.source_type,coalesce(cam.name,ag.name) as source_name,c.name as creative_name,u.full_name,d.name as department_name,coalesce(uc.color,'#6c3329') as user_color from marketing.tasks t left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id left join marketing.creatives c on c.id=t.creative_id left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.user_colors uc on uc.user_id=u.id where t.received_at is not null and t.is_deleted=false order by t.received_at`;return{ok:true,rows};}
+async function monitoring(sql:ReturnType<typeof getSql>,user:SessionUser){
+  const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
+  const taskFilter=unrestricted?sql`true`:sql`(t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (exists(select 1 from marketing.campaigns c where t.source_type='campaign' and c.id=t.source_id and c.created_by=${user.id}::uuid) or exists(select 1 from marketing.agendas a where t.source_type='agenda' and a.id=t.source_id and a.created_by=${user.id}::uuid))))`;
+  const[totals,statuses,delayed,employees,departments,entities]=await Promise.all([
+    sql<any[]>`with visible_tasks as(select t.* from marketing.tasks t where t.is_deleted=false and ${taskFilter}) select count(distinct source_id) filter(where source_type='campaign')::int as campaigns,count(distinct source_id) filter(where source_type='campaign' and status<>'archived')::int as active_campaigns,count(distinct source_id) filter(where source_type='agenda')::int as agendas,count(*)::int as tasks,count(*) filter(where due_at<now() and progress<100)::int as delayed,count(*) filter(where progress=0)::int as waiting,count(*) filter(where progress>0 and progress<100)::int as active,coalesce(avg(progress),0)::float as progress from visible_tasks`,
+    sql<any[]>`select t.status,count(*)::int as count from marketing.tasks t where t.is_deleted=false and ${taskFilter} group by t.status order by count(*) desc`,
+    sql<any[]>`select t.id::text,t.title,t.due_at,t.progress::float,u.full_name,d.name as department_name,coalesce(cam.name,ag.name) as source_name,greatest(0,current_date-t.due_at::date)::int as delay_days from marketing.tasks t left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id where t.is_deleted=false and ${taskFilter} and t.due_at<now() and t.progress<100 order by t.due_at`,
+    sql<any[]>`select u.id::text,u.full_name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress,count(*) filter(where t.due_at<now() and t.progress<100)::int as delayed,coalesce(sum(greatest(0,current_date-t.due_at::date)) filter(where t.due_at<now() and t.progress<100),0)::int as delay_days from core.users u join marketing.tasks t on t.assigned_to=u.id and t.is_deleted=false and ${taskFilter} group by u.id order by progress desc`,
+    sql<any[]>`select d.id::text,d.name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress from marketing.departments d left join marketing.tasks t on t.department_id=d.id and t.is_deleted=false and ${taskFilter} where d.is_active=true group by d.id order by d.name`,
+    sql<any[]>`select 'campaign' as source_type,c.id::text,c.name,c.progress::float,c.status from marketing.campaigns c where c.is_deleted=false and c.archived_at is null and (${unrestricted}=true or (${createdByMe}=true and c.created_by=${user.id}::uuid) or exists(select 1 from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and ${taskFilter})) union all select 'agenda',a.id::text,a.name,a.progress::float,a.status from marketing.agendas a where a.archived_at is null and (${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid) or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and ${taskFilter})) order by progress desc`
+  ]);
+  return{ok:true,totals:totals[0]||{},statuses,delayed,employees,departments,entities};
+}
+async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
+  const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
+  const rows=await sql<any[]>`select s.id::text,s.publish_date,s.status,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code,coalesce(cam.name,ag.name) as source_name,u.full_name as assigned_name,coalesce(uc.color,'#6c3329') as user_color from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id left join lateral(select assigned_to,paired_content_user_id from marketing.tasks t where t.id=s.task_id or (s.task_id is null and t.creative_id=s.creative_id and t.task_kind='execution' and t.is_deleted=false) order by case when t.id=s.task_id then 0 else 1 end,t.created_at limit 1)t on true left join core.users u on u.id=t.assigned_to left join marketing.user_colors uc on uc.user_id=u.id where ${unrestricted}=true or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid)) order by s.publish_date`;
+  return{ok:true,rows};
+}
+async function receiptCalendar(sql:ReturnType<typeof getSql>,user:SessionUser){
+  const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
+  const rows=await sql<any[]>`select t.id::text,t.received_at,t.source_type,coalesce(cam.name,ag.name) as source_name,c.name as creative_name,u.full_name,d.name as department_name,coalesce(uc.color,'#6c3329') as user_color from marketing.tasks t left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id left join marketing.creatives c on c.id=t.creative_id left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.user_colors uc on uc.user_id=u.id where t.received_at is not null and t.is_deleted=false and (${unrestricted}=true or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))) order by t.received_at`;
+  return{ok:true,rows};
+}
 
 async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,request:VercelRequest){
   const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
@@ -657,7 +766,7 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
   const to=isoDate(request.query.to)||from;
   const departmentId=clean(request.query.departmentId);
   const requestedUserId=clean(request.query.userId);
-  const userId=isAdmin(user)?requestedUserId:user.id;
+  const userId=hasPermission(user,"marketing.attendance.manage")?requestedUserId:user.id;
   const status=clean(request.query.status);
   const [settings]=await sql<any[]>`select * from marketing.attendance_settings where singleton=true`;
   const today=await sql<any[]>`
@@ -672,7 +781,7 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
     join marketing.departments d on d.id=du.department_id and d.is_active=true
     left join marketing.attendance_records r on r.user_id=u.id and r.attendance_date=(now() at time zone 'Asia/Riyadh')::date
     left join marketing.presence_status p on p.user_id=u.id
-    where u.is_active=true and (${isAdmin(user)} or u.id=${user.id}::uuid)
+    where u.is_active=true and (${hasPermission(user,"marketing.attendance.manage")} or u.id=${user.id}::uuid)
     group by u.id,u.full_name,r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status
     order by u.full_name`;
   const reportUsers=await sql<any[]>`
@@ -740,7 +849,7 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
   rows.sort((a,b)=>String(b.attendance_date).localeCompare(String(a.attendance_date))||String(a.full_name).localeCompare(String(b.full_name),'ar'));
   const totals=summary.reduce((acc:any,row:any)=>({present:acc.present+row.present,absent:acc.absent+row.absent,lateCount:acc.lateCount+row.late_count,lateTotal:acc.lateTotal+row.late_total,noCheckout:acc.noCheckout+row.no_checkout,workTotal:acc.workTotal+row.work_total}),{present:0,absent:0,lateCount:0,lateTotal:0,noCheckout:0,workTotal:0});
   const [mine]=await sql<any[]>`select *,id::text from marketing.attendance_records where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date`;
-  return{ok:true,settings:settings||{},today,rows,summary,totals,effectiveFrom,mine:mine||null,isAdmin:isAdmin(user)};
+  return{ok:true,settings:settings||{},today,rows,summary,totals,effectiveFrom,mine:mine||null,canManage:hasPermission(user,"marketing.attendance.manage")};
 }
 async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const action=clean(body.attendanceAction);
@@ -749,7 +858,7 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
     return{ok:true};
   }
   if(action==='save_settings'){
-    if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");
+    if(!hasPermission(user,"marketing.attendance.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الدوام");
     await sql`update marketing.attendance_settings set work_start=${clean(body.workStart)}::time,work_end=${clean(body.workEnd)}::time,grace_minutes=${Math.max(0,numberValue(body.graceMinutes))},updated_by=${user.id}::uuid,updated_at=now() where singleton=true`;
     return{ok:true,message:"تم حفظ إعدادات الدوام"};
   }
@@ -777,7 +886,7 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
 }
 
 async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
-  const requestAccessFilter=isAdmin(user)?sql`true`:sql`r.requested_by=${user.id}::uuid`;
+  const requestAccessFilter=marketingAccess(user).dataScope==="all"||hasPermission(user,"marketing.photo_request.complete")?sql`true`:sql`r.requested_by=${user.id}::uuid`;
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
@@ -861,12 +970,12 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
 
 
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and (exists(select 1 from marketing.department_users du where du.user_id=u.id) or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.code='marketing')) order by u.full_name`;return{ok:true,rows};}
-async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
+async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
 async function platformConnections(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select * from marketing.platform_connections order by platform`;return{ok:true,connections:rows.map(publicConnection)};}
-async function saveConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const platform=clean(body.platform).toLowerCase();if(!['facebook','instagram'].includes(platform))throw new Error("المنصة غير مدعومة");const connected=body.connected===undefined?true:bool(body.connected);await sql`insert into marketing.platform_connections(platform,connected,status,state,source,account_id,account_name,page_id,page_name,ig_user_id,username,pages,access_token_encrypted,user_access_token_encrypted,page_access_token_encrypted,connected_at,updated_at,updated_by) values(${platform},${connected},${connected?'connected':'disconnected'},${connected?'ready':'idle'},'postgresql-manual-migration',${clean(body.accountId)||null},${clean(body.accountName)||null},${clean(body.pageId)||null},${clean(body.pageName)||null},${clean(body.igUserId)||null},${clean(body.username)||null},${sql.json(dbJson(arrayValue(body.pages)))},${clean(body.accessToken)?encryptToken(body.accessToken):null},${clean(body.userAccessToken)?encryptToken(body.userAccessToken):null},${clean(body.pageAccessToken)?encryptToken(body.pageAccessToken):null},${connected?sql`now()`:null},now(),${user.id}::uuid) on conflict(platform) do update set connected=excluded.connected,status=excluded.status,state=excluded.state,source=excluded.source,account_id=excluded.account_id,account_name=excluded.account_name,page_id=excluded.page_id,page_name=excluded.page_name,ig_user_id=excluded.ig_user_id,username=excluded.username,pages=excluded.pages,access_token_encrypted=coalesce(excluded.access_token_encrypted,marketing.platform_connections.access_token_encrypted),user_access_token_encrypted=coalesce(excluded.user_access_token_encrypted,marketing.platform_connections.user_access_token_encrypted),page_access_token_encrypted=coalesce(excluded.page_access_token_encrypted,marketing.platform_connections.page_access_token_encrypted),connected_at=coalesce(excluded.connected_at,marketing.platform_connections.connected_at),updated_at=now(),updated_by=excluded.updated_by`;return{ok:true,message:"تم حفظ ربط المنصة داخل PostgreSQL"};}
-async function disconnectConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const platform=clean(body.platform);await sql`update marketing.platform_connections set connected=false,status='disconnected',state='idle',access_token_encrypted=null,user_access_token_encrypted=null,page_access_token_encrypted=null,updated_at=now(),updated_by=${user.id}::uuid where platform=${platform}`;return{ok:true,message:"تم فصل الربط"};}
-async function migrateConnectionEnv(sql:ReturnType<typeof getSql>,user:SessionUser){if(!isAdmin(user))throw new Error("الإجراء متاح لمدير النظام فقط");const userToken=clean(process.env.META_USER_ACCESS_TOKEN||process.env.META_ACCESS_TOKEN),pageToken=clean(process.env.META_PAGE_ACCESS_TOKEN||process.env.META_SYSTEM_PAGE_TOKEN),pageId=clean(process.env.META_DEFAULT_PAGE_ID||process.env.META_PAGE_ID),pageName=clean(process.env.META_PAGE_NAME),igId=clean(process.env.META_IG_USER_ID),username=clean(process.env.META_IG_USERNAME);if(!userToken&&!pageToken)throw new Error("لا توجد توكنات Meta حالية في متغيرات البيئة");await saveConnection(sql,{platform:'facebook',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:pageId,accountName:pageName,pageId,pageName},user);if(igId)await saveConnection(sql,{platform:'instagram',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:igId,accountName:username,igUserId:igId,username,pageId,pageName},user);return{ok:true,message:"تم نقل التوكنات الحالية إلى PostgreSQL"};}
+async function saveConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.connections.manage"))throw new Error("لا توجد صلاحية لإدارة ربط المنصات");const platform=clean(body.platform).toLowerCase();if(!['facebook','instagram'].includes(platform))throw new Error("المنصة غير مدعومة");const connected=body.connected===undefined?true:bool(body.connected);await sql`insert into marketing.platform_connections(platform,connected,status,state,source,account_id,account_name,page_id,page_name,ig_user_id,username,pages,access_token_encrypted,user_access_token_encrypted,page_access_token_encrypted,connected_at,updated_at,updated_by) values(${platform},${connected},${connected?'connected':'disconnected'},${connected?'ready':'idle'},'postgresql-manual-migration',${clean(body.accountId)||null},${clean(body.accountName)||null},${clean(body.pageId)||null},${clean(body.pageName)||null},${clean(body.igUserId)||null},${clean(body.username)||null},${sql.json(dbJson(arrayValue(body.pages)))},${clean(body.accessToken)?encryptToken(body.accessToken):null},${clean(body.userAccessToken)?encryptToken(body.userAccessToken):null},${clean(body.pageAccessToken)?encryptToken(body.pageAccessToken):null},${connected?sql`now()`:null},now(),${user.id}::uuid) on conflict(platform) do update set connected=excluded.connected,status=excluded.status,state=excluded.state,source=excluded.source,account_id=excluded.account_id,account_name=excluded.account_name,page_id=excluded.page_id,page_name=excluded.page_name,ig_user_id=excluded.ig_user_id,username=excluded.username,pages=excluded.pages,access_token_encrypted=coalesce(excluded.access_token_encrypted,marketing.platform_connections.access_token_encrypted),user_access_token_encrypted=coalesce(excluded.user_access_token_encrypted,marketing.platform_connections.user_access_token_encrypted),page_access_token_encrypted=coalesce(excluded.page_access_token_encrypted,marketing.platform_connections.page_access_token_encrypted),connected_at=coalesce(excluded.connected_at,marketing.platform_connections.connected_at),updated_at=now(),updated_by=excluded.updated_by`;return{ok:true,message:"تم حفظ ربط المنصة داخل PostgreSQL"};}
+async function disconnectConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.connections.manage"))throw new Error("لا توجد صلاحية لإدارة ربط المنصات");const platform=clean(body.platform);await sql`update marketing.platform_connections set connected=false,status='disconnected',state='idle',access_token_encrypted=null,user_access_token_encrypted=null,page_access_token_encrypted=null,updated_at=now(),updated_by=${user.id}::uuid where platform=${platform}`;return{ok:true,message:"تم فصل الربط"};}
+async function migrateConnectionEnv(sql:ReturnType<typeof getSql>,user:SessionUser){if(!hasPermission(user,"marketing.connections.manage"))throw new Error("لا توجد صلاحية لإدارة ربط المنصات");const userToken=clean(process.env.META_USER_ACCESS_TOKEN||process.env.META_ACCESS_TOKEN),pageToken=clean(process.env.META_PAGE_ACCESS_TOKEN||process.env.META_SYSTEM_PAGE_TOKEN),pageId=clean(process.env.META_DEFAULT_PAGE_ID||process.env.META_PAGE_ID),pageName=clean(process.env.META_PAGE_NAME),igId=clean(process.env.META_IG_USER_ID),username=clean(process.env.META_IG_USERNAME);if(!userToken&&!pageToken)throw new Error("لا توجد توكنات Meta حالية في متغيرات البيئة");await saveConnection(sql,{platform:'facebook',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:pageId,accountName:pageName,pageId,pageName},user);if(igId)await saveConnection(sql,{platform:'instagram',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:igId,accountName:username,igUserId:igId,username,pageId,pageName},user);return{ok:true,message:"تم نقل التوكنات الحالية إلى PostgreSQL"};}
 
 async function createRawFolders(body:any){const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';const token=clean(process.env.MZJ_RAW_API_TOKEN);if(!token)throw new Error("MZJ_RAW_API_TOKEN غير مضبوط");const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token},body:JSON.stringify(body.payload||body)});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.ok===false)throw new Error(payload.message||"تعذر إنشاء فولدرات الخام");return payload;}
 
@@ -878,28 +987,26 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
     if(request.method==='GET'){
-      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:await loadOperationsCars(sql)});
+      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create'))?await loadOperationsCars(sql):[]});
       if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
-      if(resource==='database')return response.status(200).json(await databaseRows(sql));
-      if(resource==='entity')return response.status(200).json(await entityDetail(sql,clean(request.query.sourceType),clean(request.query.id)));
+      if(resource==='database')return response.status(200).json(await databaseRows(sql,user));
+      if(resource==='entity')return response.status(200).json(await entityDetail(sql,clean(request.query.sourceType),clean(request.query.id),user));
       if(resource==='task')return response.status(200).json(await taskDetail(sql,clean(request.query.id),user));
       if(resource==='packages')return response.status(200).json({ok:true,rows:await sql<any[]>`select *,id::text from marketing.packages where is_active=true order by category,name`});
-      if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql));
-      if(resource==='monitoring')return response.status(200).json(await monitoring(sql));
-      if(resource==='calendar')return response.status(200).json(await calendarData(sql));
-      if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql));
+      if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
+      if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
+      if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
+      if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));
       if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
       if(resource==='platform_connections')return response.status(200).json(await platformConnections(sql));
-      if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id)));
-      if(resource==='campaign_code'){if(!isAdmin(user))return response.status(403).json({ok:false,message:'الإجراء متاح لمدير النظام فقط'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
+      if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id),user));
+      if(resource==='campaign_code'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,message:'لا توجد صلاحية لإنشاء حملة'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
       return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
     }
     if(request.method!=='POST')return response.status(405).json({ok:false,error:"Method not allowed"});
     const body=bodyObject(request),action=clean(body.action); let result:any;
-    const sensitive=new Set(['create_campaign','create_agenda','create_raw_folders','create_photo_request','save_department','save_assignment_action','save_creative_type','save_campaign_type','save_platform','delete_setting','save_package','delete_entity','review_template','save_publish_prep','publish_now','save_result_file','save_links','archive_entity','save_user_colors','save_connection','disconnect_connection','migrate_connection_env']);
-    if(sensitive.has(action)&&!isAdmin(user))return response.status(403).json({ok:false,error:"هذه العملية متاحة لمدير النظام فقط"});
     if(action==='create_campaign')result=await createCampaign(sql,body,user);
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
     else if(action==='save_department')result=await saveDepartment(sql,body,user);

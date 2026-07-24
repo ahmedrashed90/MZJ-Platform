@@ -8,7 +8,7 @@ import "../marketing.css";
 type MarketingSettingsTab = "departments" | "colors";
 type UserColorRow = { id: string; full_name: string; email?: string | null; color: string };
 
-export function MarketingSettingsPanel() {
+export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
   const [tab, setTab] = useState<MarketingSettingsTab>(requestedTab === "colors" ? "colors" : "departments");
@@ -69,6 +69,9 @@ export function MarketingSettingsPanel() {
         </nav>
       </section>
 
+      {readOnly ? <div className="connection-banner"><WarningCircle size={18} /><span>صلاحية مشاهدة فقط؛ تعديل إعدادات التسويق يحتاج صلاحية الإدارة.</span></div> : null}
+
+      <fieldset className="settings-readonly-fieldset" disabled={readOnly}>
       {tab === "departments" ? <DepartmentsPage embedded /> : null}
 
       {tab === "colors" ? (
@@ -88,6 +91,7 @@ export function MarketingSettingsPanel() {
           <button className="save-user-button" disabled={busy} onClick={() => void saveColors()}><FloppyDisk size={18} />حفظ ألوان المسؤولين</button>
         </section>
       ) : null}
+      </fieldset>
     </div>
   );
 }

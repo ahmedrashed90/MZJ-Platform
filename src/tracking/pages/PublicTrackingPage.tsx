@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, Car, CheckCircle, MagnifyingGlass, MapPin, WarningCircle } from "@phosphor-icons/react";
+import { Archive, Car, CheckCircle, MapPin, WarningCircle } from "@phosphor-icons/react";
 import { formatTrackingDate, formatTrackingMoney, trackingFetch } from "../api";
 import type { PublicTrackingOrder, TrackingVehicle } from "../types";
 
@@ -9,24 +9,23 @@ function visibleVin(vehicle: TrackingVehicle) {
 
 export function PublicTrackingPage() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
-  const initialKey = params.get("vin") || params.get("order") || params.get("orderNo") || params.get("o") || "";
-  const [key, setKey] = useState(initialKey);
+  const token = params.get("token") || "";
   const [order, setOrder] = useState<PublicTrackingOrder | null>(null);
   const [activeVehicleId, setActiveVehicleId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function search(value = key) {
-    const normalized = value.trim();
+  async function loadTracking() {
+    const normalized = token.trim();
     if (!normalized) {
-      setError("من فضلك أدخل رقم الطلب أو رقم الهيكل أولًا.");
+      setError("رابط التتبع غير صالح.");
       setOrder(null);
       return;
     }
     setLoading(true);
     setError("");
     try {
-      const payload = await trackingFetch<{ ok: boolean; order: PublicTrackingOrder }>(`/api/tracking/public?key=${encodeURIComponent(normalized)}`);
+      const payload = await trackingFetch<{ ok: boolean; order: PublicTrackingOrder }>(`/api/tracking/public?token=${encodeURIComponent(normalized)}`);
       setOrder(payload.order);
       setActiveVehicleId(payload.order.vehicles[0]?.id || "");
     } catch (searchError) {
@@ -37,7 +36,7 @@ export function PublicTrackingPage() {
     }
   }
 
-  useEffect(() => { if (initialKey) void search(initialKey); }, []);
+  useEffect(() => { void loadTracking(); }, [token]);
 
   const activeVehicle = useMemo(
     () => order?.vehicles.find((vehicle) => vehicle.id === activeVehicleId) || order?.vehicles[0] || null,
@@ -55,14 +54,10 @@ export function PublicTrackingPage() {
           <div><h1>تتبع طلبك</h1><p>مع مجموعة محمد بن ذعار العجمي للسيارات… أنت نجم الطريق ⭐</p></div>
         </header>
 
-        <section className="public-tracking-search">
-          <label htmlFor="tracking-key">اكتب رقم الطلب أو رقم الهيكل</label>
-          <div><input id="tracking-key" value={key} onChange={(event) => setKey(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void search(); }} placeholder="مثال: SAL-ORD-2026-00001 أو رقم الهيكل" /><button type="button" onClick={() => void search()} disabled={loading}><MagnifyingGlass size={20} />{loading ? "جاري البحث..." : "تتبع"}</button></div>
-        </section>
 
         {error ? <div className="public-tracking-error"><WarningCircle size={22} weight="fill" /><span>{error}</span></div> : null}
 
-        {!order && !loading && !error ? <div className="public-tracking-empty"><Car size={54} weight="duotone" /><h2>تابع طلب سيارتك خطوة بخطوة</h2><p>أدخل رقم الطلب أو رقم الهيكل لعرض بيانات الطلب والسيارات ومراحل التنفيذ.</p></div> : null}
+        {!order && !loading && !error ? <div className="public-tracking-empty"><Car size={54} weight="duotone" /><h2>تابع طلب سيارتك خطوة بخطوة</h2><p>استخدم رابط التتبع الآمن المرسل إليك لعرض بيانات الطلب ومراحل التنفيذ.</p></div> : null}
 
         {order ? (
           <div className="public-tracking-result">

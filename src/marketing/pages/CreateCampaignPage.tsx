@@ -7,7 +7,7 @@ import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
 import type { CreativeDraft, MarketingMeta } from "../types";
 
-const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { isAdmin: false, canManage: false } };
+const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
 const steps = ["بيانات الحملة", "الكرييتيف", "الميزانية", "جدول النشر", "المراجعة والإنشاء"];
 type Budget = { id: string; funnelId: string; creativeTempId: string; adsCount: number; contentGoal: string; expectedGoal: string; platformAmounts: Array<{ platformId: string; amount: number }> };
 type Schedule = { id: string; date: string; creativeTempId: string; platforms: Array<{ platformId: string; postTypeIds: string[] }> };

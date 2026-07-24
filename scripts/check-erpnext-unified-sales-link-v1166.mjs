@@ -29,11 +29,11 @@ expect("server/_erpnext-integration-schema.ts", "integrations.erpnext_sales_orde
 expect("server/_erpnext-integration-schema.ts", "integrations.erpnext_sales_order_vehicles");
 expect("server/_erpnext-integration-schema.ts", "next_erp_user_id");
 reject("server/_erpnext-integration-schema.ts", "core_users_next_erp_branch_idx", "legacy ERP branch index");
-expect("server/users.ts", "nextErpUserId");
-reject("server/users.ts", "nextErpBranch", "legacy ERP branch form field");
-reject("server/users.ts", "next_erp_branch", "legacy ERP branch database field");
-expect("src/pages/SettingsPage.tsx", "ID المستخدم في NEXT ERP (الإيميل)");
-reject("src/pages/SettingsPage.tsx", "اسم الفرع في NEXT ERP", "legacy ERP branch UI field");
+expect("server/access-control.ts", "nextErpUserId");
+reject("server/access-control.ts", "nextErpBranch", "legacy ERP branch form field");
+reject("server/access-control.ts", "next_erp_branch", "legacy ERP branch database field");
+expect("src/access-control/UsersPermissionsPanel.tsx", "NEXT ERP User ID");
+reject("src/access-control/UsersPermissionsPanel.tsx", "اسم الفرع في NEXT ERP", "legacy ERP branch UI field");
 expect("server/operations/index.ts", "integrations.erpnext_sales_order_vehicles");
 expect("src/operations/components/VehicleDetailModal.tsx", '["sales", "طلب البيع"]');
 expect("src/operations/components/VehicleDetailModal.tsx", "فرع البيع في NEXT ERP");

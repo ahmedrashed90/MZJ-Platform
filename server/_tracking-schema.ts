@@ -5,6 +5,17 @@ let trackingSchemaPromise: Promise<void> | null = null;
 const TRACKING_SCHEMA_SQL = String.raw`
 create schema if not exists tracking;
 
+alter table tracking.orders add column if not exists tracking_token text;
+update tracking.orders set tracking_token=encode(gen_random_bytes(24),'hex') where tracking_token is null or btrim(tracking_token)='';
+with duplicates as (
+  select id,row_number() over(partition by tracking_token order by id) as row_no
+  from tracking.orders where tracking_token is not null and btrim(tracking_token)<>''
+)
+update tracking.orders o set tracking_token=encode(gen_random_bytes(24),'hex')
+from duplicates d where d.id=o.id and d.row_no>1;
+alter table tracking.orders alter column tracking_token set default encode(gen_random_bytes(24),'hex');
+alter table tracking.orders alter column tracking_token set not null;
+create unique index if not exists tracking_orders_tracking_token_uidx on tracking.orders(tracking_token);
 alter table tracking.orders add column if not exists customer_vat text;
 alter table tracking.orders add column if not exists branch text;
 alter table tracking.orders add column if not exists delivery_date date;

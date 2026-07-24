@@ -1,10 +1,12 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { audit, clean, hasAnyRole, normalizePhone, parseBody, positiveInt, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { audit, clean, normalizePhone, parseBody, positiveInt, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
+import { hasPermission } from "../../shared/access-control.js";
 import { getSql } from "../_db.js";
 
 function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
   return {
     all: scope.all,
+    includeAssigned: scope.includeAssigned,
     callCenterOnly: scope.callCenterOnly,
     userId,
     departmentCodes: scope.departmentCodes,
@@ -13,7 +15,7 @@ function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
 }
 
 function canPurgeContact(user: any) {
-  return hasAnyRole(user, ["admin", "sales_manager"]);
+  return hasPermission(user, "crm.contacts.purge");
 }
 
 async function canAccessContact(contactId: string, user: any) {
@@ -31,13 +33,13 @@ async function canAccessContact(contactId: string, user: any) {
             where l.contact_id=c.id and l.is_deleted=false
               and (
                 (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-                or (not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+                or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
                 or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
               )
           )
           or exists (
             select 1 from crm.conversations cv
-            where cv.contact_id=c.id and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
+            where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
           )
         )
     ) as allowed
@@ -94,13 +96,13 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
         where l.contact_id=c.id and l.is_deleted=false
           and (
             (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-            or (not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+            or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
             or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
           )
       )
       or exists (
         select 1 from crm.conversations cv
-        where cv.contact_id=c.id and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
+        where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
       )
     )
       and (${like}::text is null or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized,latest.customer_name,latest.status_label,latest.notes) ilike ${like})
@@ -117,13 +119,13 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
         where l.contact_id=c.id and l.is_deleted=false
           and (
             (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-            or (not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+            or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
             or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
           )
       )
       or exists (
         select 1 from crm.conversations cv
-        where cv.contact_id=c.id and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
+        where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
       )
     )
       and (${like}::text is null or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like})
@@ -139,7 +141,7 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
     where ${scope.all}::boolean or exists(
       select 1 from crm.leads l where l.contact_id=c.id and l.is_deleted=false and (
         (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-        or (not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
       )
     )

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import type { PlatformSystem, SystemAccessConfig } from "../../shared/access-control";
 
 export type AuthUser = {
   id: string;
@@ -13,6 +14,11 @@ export type AuthUser = {
   branches: string[];
   branchCodes: string[];
   permissions: string[];
+  inheritedPermissions: string[];
+  directPermissions: string[];
+  deniedPermissions: string[];
+  systemAccess: Partial<Record<PlatformSystem, SystemAccessConfig>>;
+  permissionVersion: number;
 };
 
 export type SetupStatus = {

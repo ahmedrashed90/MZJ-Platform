@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { SessionUser } from "./_auth.js";
 import { requireUser } from "./_auth.js";
-import { canAccessSystem } from "../shared/system-access.js";
+import { canAccessSystem, hasPermission } from "../shared/system-access.js";
+import { getSystemAccess } from "./_access-control.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { getSql } from "./_db.js";
 import { calculateLeadCompletion } from "./_crm-customer-fields.js";
@@ -32,12 +33,12 @@ export function branchForDepartment(key: string) {
   return "";
 }
 
-export function hasAnyRole(user: SessionUser, roles: string[]) {
-  return user.roleCodes.some((role) => roles.includes(role));
-}
-
 export function isCrmManager(user: SessionUser) {
-  return hasAnyRole(user, ["admin", "sales_manager", "branch_manager"]);
+  return [
+    "crm.customer.bulk_transfer","crm.manual_lead.view_all","crm.manual_lead.duplicate.approve",
+    "crm.conversation.classify","crm.reports.agents","crm.kpi.rate_branch",
+    "crm.contacts.purge",
+  ].some((permission) => hasPermission(user, permission));
 }
 
 export async function requireCrmUser(request: VercelRequest, response: VercelResponse) {
@@ -53,6 +54,7 @@ export async function requireCrmUser(request: VercelRequest, response: VercelRes
 
 export type Scope = {
   all: boolean;
+  includeAssigned: boolean;
   departmentCodes: string[];
   branchCodes: string[];
   userId: string;
@@ -60,15 +62,18 @@ export type Scope = {
 };
 
 export function userScope(user: SessionUser): Scope {
-  const all = hasAnyRole(user, ["admin", "sales_manager"]);
-  const callCenterOnly = !all && user.departmentCodes.includes("call_center") && !user.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
-  return {
-    all,
-    departmentCodes: user.departmentCodes,
-    branchCodes: user.branchCodes,
-    userId: user.id,
-    callCenterOnly,
-  };
+  const access = getSystemAccess(user, "crm");
+  const all = access.dataScope === "all";
+  const includeAssigned = ["self", "assigned", "created_by_me", "workflow_assigned"].includes(access.dataScope);
+  const allCrmDepartments = ["cash_sales", "finance_sales", "customer_service", "call_center"];
+  const departmentCodes = ["branch", "branches"].includes(access.dataScope)
+    ? allCrmDepartments
+    : ["department", "departments", "branch_and_department"].includes(access.dataScope)
+      ? access.departmentCodes
+      : [];
+  const branchCodes = ["branch", "branches", "branch_and_department"].includes(access.dataScope) ? access.branchCodes : [];
+  const callCenterOnly = includeAssigned && access.departmentCodes.includes("call_center") && !access.departmentCodes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code));
+  return { all, includeAssigned, departmentCodes, branchCodes, userId: user.id, callCenterOnly };
 }
 
 export function parseBody(request: VercelRequest): Record<string, any> {

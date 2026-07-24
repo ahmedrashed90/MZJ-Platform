@@ -65,7 +65,7 @@ export function VehicleManagementPage() {
           <div className="operations-section-title"><Plus size={21} /><div><h2>{form.id ? "تعديل بيانات السيارة" : "إضافة سيارة"}</h2><p>{form.id ? "يمكن تعديل بيانات السيارة وحالتها، بينما يظل تغيير المكان من فلو الحركة." : "يتم التحقق من رقم الهيكل والمكان والحالة قبل الحفظ."}</p></div></div>
           {form.id ? <button type="button" className="operations-reset-form" onClick={() => setForm(emptyForm)}>إلغاء التعديل وإضافة سيارة جديدة</button> : null}
           <form className="operations-form-grid" onSubmit={save}>
-            <label><span>رقم الهيكل VIN</span><input required value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} /></label>
+            <label><span>رقم الهيكل VIN</span><input required disabled={Boolean(form.id) && !meta.permissions.canEditVin} value={form.vin} onChange={(e) => setForm({ ...form, vin: e.target.value })} /></label>
             <label><span>السيارة</span><input value={form.carName} onChange={(e) => setForm({ ...form, carName: e.target.value })} /></label>
             <label><span>البيان</span><input value={form.statement} onChange={(e) => setForm({ ...form, statement: e.target.value })} /></label>
             <label><span>الوكيل</span><input value={form.agentName} onChange={(e) => setForm({ ...form, agentName: e.target.value })} /></label>

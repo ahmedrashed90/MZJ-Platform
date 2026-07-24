@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CheckCircle, ShieldWarning, Trash, WarningCircle } from "@phosphor-icons/react";
 import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../systemAccess";
 import { formatTrackingDate, trackingFetch } from "../api";
 
 type DeletedRow = {
@@ -19,14 +20,15 @@ type DeletedRow = {
 
 export function TrackingDeletePage() {
   const { user } = useAuth();
-  const canDelete = Boolean(user?.roleCodes.some((code) => ["admin", "system_admin"].includes(code)) || user?.permissions.includes("tracking.orders.delete"));
+  const canViewDeleteLog = hasPermission(user, "tracking.delete.view");
+  const canRemoveDeletedRecord = hasPermission(user, "tracking.order.deleted.restore");
   const [deleted, setDeleted] = useState<DeletedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
 
   async function loadDeleted() {
-    if (!canDelete) return;
+    if (!canViewDeleteLog) return;
     setLoading(true); setError("");
     try {
       const payload = await trackingFetch<{ ok: boolean; deleted: DeletedRow[] }>("/api/tracking/delete");
@@ -36,7 +38,7 @@ export function TrackingDeletePage() {
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { void loadDeleted(); }, [canDelete]);
+  useEffect(() => { void loadDeleted(); }, [canViewDeleteLog]);
 
   async function deleteDeletedRecord(row: DeletedRow) {
     const confirmed = window.confirm(`سيتم حذف سجل الطلب ${row.sales_order_no} من الطلبات المحذوفة، وبعدها يمكن استقبال نفس الطلب من NEXT ERP مرة أخرى. هل تريد المتابعة؟`);
@@ -56,8 +58,8 @@ export function TrackingDeletePage() {
     }
   }
 
-  if (!canDelete) {
-    return <div className="module-page"><div className="panel tracking-access-denied"><ShieldWarning size={54} weight="duotone" /><h1>صلاحية حذف طلبات التراكينج مطلوبة</h1><p>هذه الصفحة متاحة لمدير النظام أو لمن لديه صلاحية tracking.orders.delete.</p></div></div>;
+  if (!canViewDeleteLog) {
+    return <div className="module-page"><div className="panel tracking-access-denied"><ShieldWarning size={54} weight="duotone" /><h1>صلاحية حذف طلبات التراكينج مطلوبة</h1><p>هذه الصفحة متاحة فقط لمن لديه صلاحية مشاهدة سجل حذف طلبات التراكينج.</p></div></div>;
   }
 
   return (
@@ -68,7 +70,7 @@ export function TrackingDeletePage() {
       <section className="panel tracking-deleted-log-panel">
         <div className="tracking-section-heading"><div><Trash size={20} /><h3>الطلبات المحذوفة</h3></div><span>{deleted.length}</span></div>
         <div className="tracking-table-wrap"><table className="tracking-table"><thead><tr><th>رقم الطلب</th><th>العميل</th><th>سبب الحذف</th><th>المنفذ</th><th>التاريخ</th><th>رقم المرجع</th><th>هوية المصدر</th><th>الإجراء</th></tr></thead><tbody>
-          {!loading && deleted.length === 0 ? <tr><td colSpan={8} className="table-empty">لا توجد طلبات محذوفة</td></tr> : deleted.map((row) => <tr key={row.id}><td><strong>{row.sales_order_no}</strong></td><td>{row.customer_name || "—"}<small>{row.customer_mobile || ""}</small></td><td>{row.reason}</td><td>{row.deleted_by_name || "—"}</td><td>{formatTrackingDate(row.deleted_at)}</td><td>{row.request_id || "—"}</td><td title={row.source_identity || row.source_fingerprint || ""}>{row.source_identity || row.source_fingerprint || "—"}</td><td><button type="button" className="tracking-refresh-button tracking-delete-order-button" onClick={() => void deleteDeletedRecord(row)} disabled={Boolean(deletingId)}><Trash size={16} />{deletingId === row.id ? "جارٍ الحذف" : "حذف"}</button></td></tr>)}
+          {!loading && deleted.length === 0 ? <tr><td colSpan={8} className="table-empty">لا توجد طلبات محذوفة</td></tr> : deleted.map((row) => <tr key={row.id}><td><strong>{row.sales_order_no}</strong></td><td>{row.customer_name || "—"}<small>{row.customer_mobile || ""}</small></td><td>{row.reason}</td><td>{row.deleted_by_name || "—"}</td><td>{formatTrackingDate(row.deleted_at)}</td><td>{row.request_id || "—"}</td><td title={row.source_identity || row.source_fingerprint || ""}>{row.source_identity || row.source_fingerprint || "—"}</td><td>{canRemoveDeletedRecord ? <button type="button" className="tracking-refresh-button tracking-delete-order-button" onClick={() => void deleteDeletedRecord(row)} disabled={Boolean(deletingId)}><Trash size={16} />{deletingId === row.id ? "جارٍ الحذف" : "حذف"}</button> : "—"}</td></tr>)}
         </tbody></table></div>
       </section>
     </div>

@@ -21,7 +21,7 @@ async function loadAccessibleLead(sql: any, scope: any, leadId: string) {
     from crm.leads l
     where l.id=${leadId}::uuid and l.is_deleted=false
       and (
-        ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+        ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
       )
     limit 1
@@ -153,7 +153,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         left join core.users cc on cc.id=c.call_center_assigned_to
         where c.id=${conversationId}::uuid
           and (
-            ${scope.all}::boolean or c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid
+            ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
             or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
           )
       `;
@@ -187,7 +187,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.users cc on cc.id=c.call_center_assigned_to
       where (${leadId || null}::uuid is null or c.lead_id=${leadId || null}::uuid)
         and (
-          ${scope.all}::boolean or c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid
+          ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
           or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
         )
       order by c.last_message_at desc nulls last,c.updated_at desc
@@ -213,7 +213,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.sources src on src.code=l.source_code
       where c.id=${conversationId}::uuid
         and (
-          ${scope.all}::boolean or c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid
+          ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (c.assigned_to=${scope.userId}::uuid or c.call_center_assigned_to=${scope.userId}::uuid))
           or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
         )
     `;

@@ -17,7 +17,7 @@ type AttendanceSummary = {
   work_total: number;
 };
 type AttendanceTotals = { present: number; absent: number; lateCount: number; lateTotal: number; noCheckout: number; workTotal: number };
-type AttendancePayload = { ok: boolean; settings: any; today: any[]; rows: any[]; summary: AttendanceSummary[]; totals: AttendanceTotals; effectiveFrom?: string; mine: any; isAdmin: boolean };
+type AttendancePayload = { ok: boolean; settings: any; today: any[]; rows: any[]; summary: AttendanceSummary[]; totals: AttendanceTotals; effectiveFrom?: string; mine: any; canManage: boolean };
 
 function minutesLabel(value: number) {
   const minutes = Math.max(0, Number(value || 0));
@@ -98,7 +98,7 @@ export function AttendancePage() {
       <div><h2>تسجيل اليوم</h2><p>{data?.mine?.check_in ? `تم تسجيل الحضور: ${marketingDate(data.mine.check_in, true)}` : "لم يتم تسجيل الحضور اليوم"}</p></div>
       {!data?.mine?.check_in ? <button className="marketing-primary" disabled={busy} onClick={() => void action("check_in")}>تسجيل حضور</button> : !data?.mine?.check_out ? <button className="marketing-primary" disabled={busy} onClick={() => void action("check_out")}>تسجيل انصراف</button> : <span className="marketing-status success">تم تسجيل الانصراف</span>}
     </section>
-    {data?.isAdmin ? <>
+    {data?.canManage ? <>
       <section className="marketing-card"><h2>إعدادات الدوام</h2><div className="marketing-form-row three"><label>بداية الدوام<input type="time" value={settings.workStart} onChange={(e) => setSettings({ ...settings, workStart: e.target.value })} /></label><label>نهاية الدوام<input type="time" value={settings.workEnd} onChange={(e) => setSettings({ ...settings, workEnd: e.target.value })} /></label><label>فترة السماح بالدقائق<input type="number" min="0" value={settings.graceMinutes} onChange={(e) => setSettings({ ...settings, graceMinutes: e.target.value })} /></label></div><button className="marketing-primary" disabled={busy} onClick={() => void action("save_settings", settings)}>حفظ الإعدادات</button></section>
       <div className="marketing-metric-grid four"><article><strong>{todayTotals.present}</strong><span>حاضر</span></article><article><strong>{todayTotals.late}</strong><span>متأخر</span></article><article><strong>{todayTotals.missing}</strong><span>لم يسجل</span></article><article><strong>{todayTotals.online}</strong><span>أونلاين الآن</span></article></div>
       <section className="marketing-card"><h2>متابعة حضور اليوم</h2><div className="marketing-table-wrap"><table><thead><tr><th>الموظف</th><th>القسم</th><th>الحضور</th><th>الأونلاين</th><th>وقت الحضور</th><th>وقت الانصراف</th><th>مدة التأخير</th><th>آخر ظهور</th><th>آخر نشاط</th></tr></thead><tbody>{(data?.today || []).map((row) => <tr key={row.id || row.full_name}><td>{row.full_name}</td><td>{row.department_name || "—"}</td><td>{row.status ? statusLabel(row.status) : "لم يسجل"}</td><td>{row.online ? "أونلاين" : "أوفلاين"}</td><td>{marketingDate(row.check_in, true)}</td><td>{marketingDate(row.check_out, true)}</td><td>{minutesLabel(row.delay_minutes || 0)}</td><td>{marketingDate(row.last_activity_at, true)}</td><td>{row.last_activity_type || "—"}</td></tr>)}</tbody></table></div></section>

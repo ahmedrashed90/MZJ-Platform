@@ -31,7 +31,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.sources src on src.code=l.source_code
       where l.id=${leadId}::uuid and l.is_deleted=false
         and (
-          ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+          ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
           or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
         )
     `;
@@ -62,7 +62,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             )
           )
           and (
-            ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+            ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
             or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
           )
       ), cutoffs(cutoff_key, cutoff_at) as (
@@ -148,7 +148,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         )
       )
       and (
-        ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+        ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
       )
       and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.status_label,sales.full_name,cc.full_name) ilike ${q ? `%${q}%` : null})
@@ -174,7 +174,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         )
       )
       and (
-        ${scope.all}::boolean or l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid
+        ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
       )
       and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.status_label,sales.full_name,cc.full_name) ilike ${q ? `%${q}%` : null})

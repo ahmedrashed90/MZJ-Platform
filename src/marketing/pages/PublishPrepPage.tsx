@@ -4,12 +4,17 @@ import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import type { MarketingMeta } from "../types";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../systemAccess";
 
 function rowPlatforms(row: any) {
   return Array.isArray(row?.platforms) ? row.platforms : [];
 }
 
 export function PublishPrepPage() {
+  const { user } = useAuth();
+  const canManagePrep = hasPermission(user, "marketing.publish_prep.manage");
+  const canPublishNow = hasPermission(user, "marketing.publish.now");
   const [rows, setRows] = useState<any[]>([]);
   const [meta, setMeta] = useState<MarketingMeta | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -160,7 +165,7 @@ export function PublishPrepPage() {
         const absent = missing(row);
         const ready = readiness(row);
         return <article key={row.id} className={`marketing-publish-card status-${ready === "ناقص" ? "missing" : ready === "جاهز للنشر" ? "ready" : "waiting"}`}>
-          <label className="marketing-select-task"><input type="checkbox" checked={selectedIds.includes(row.id)} disabled={ready !== "جاهز للنشر"} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, row.id] : current.filter((id) => id !== row.id))} /></label>
+          {canPublishNow ? <label className="marketing-select-task"><input type="checkbox" checked={selectedIds.includes(row.id)} disabled={ready !== "جاهز للنشر"} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, row.id] : current.filter((id) => id !== row.id))} /></label> : null}
           <div className="marketing-publish-main">
             <header><div><h3>{row.creative_name || "كرييتيف"}</h3><span>{row.source_name}</span></div><b>{ready}</b></header>
             <div className="marketing-publish-meta">
@@ -174,13 +179,13 @@ export function PublishPrepPage() {
             <ProgressBar value={Number(row.progress || 0)} />
             {absent.length ? <div className="marketing-missing"><WarningCircle size={17} />الناقص: {absent.join("، ")}</div> : null}
           </div>
-          <button type="button" className="secondary" onClick={() => setEditing({ ...row, publish_date: String(row.publish_date || "").slice(0, 10), platforms: rowPlatforms(row).map((platform: any) => ({ platformId: platform.platformId, postTypeIds: [...(platform.postTypeIds || [])] })) })}><PencilSimple size={17} />تعديل</button>
+          {canManagePrep ? <button type="button" className="secondary" onClick={() => setEditing({ ...row, publish_date: String(row.publish_date || "").slice(0, 10), platforms: rowPlatforms(row).map((platform: any) => ({ platformId: platform.platformId, postTypeIds: [...(platform.postTypeIds || [])] })) })}><PencilSimple size={17} />تعديل</button> : null}
         </article>;
       })}
       {!loading && !filtered.length ? <div className="marketing-empty">لا توجد تاسكات تجهيز نشر.</div> : null}
     </section>
 
-    {selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد {selectedIds.length}</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={17} />نشر الآن</button></div> : null}
+    {canPublishNow && selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد {selectedIds.length}</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={17} />نشر الآن</button></div> : null}
 
     <Modal open={Boolean(editing)} title="تعديل تجهيز النشر" onClose={() => setEditing(null)} footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={17} />حفظ</button></>}>
       {editing ? <div className="marketing-form-grid">
