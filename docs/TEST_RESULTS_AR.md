@@ -108,3 +108,15 @@ pnpm run build
   - `test-results/all-static-checks-v1202.log`
   - `test-results/transpile-v1202.log`
   - `test-results/build-attempt-v1202.log`
+
+## نتائج v1.20.5 — تصغير الداش بورد وتوضيح نسب الاكتمال
+
+- فحص CSS المخصص: **8/8 ناجح**.
+- جميع أوامر الفحص الثابتة الموجودة قبل `tsc -b`: **34/34 Script ناجح**.
+- Transpile Syntax: **165/165 ملف TypeScript/TSX ناجح**.
+- لم يتم تشغيل Build الإنتاج الكامل لأن حزم المشروع غير موجودة، ومحاولة الحصول على pnpm من npm فشلت بسبب `EAI_AGAIN`.
+- ملفات النتائج:
+  - `test-results/check-marketing-dashboard-compact-v1205.log`
+  - `test-results/all-static-checks-v1205.log`
+  - `test-results/transpile-v1205.log`
+  - `test-results/build-v1205-not-run.log`

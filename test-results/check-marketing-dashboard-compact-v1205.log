@@ -1,0 +1,9 @@
+PASS: compact department header
+PASS: compact task card
+PASS: compact assignee pill
+PASS: compact task actions
+PASS: light task progress
+PASS: light entity progress
+PASS: visible entity progress text
+PASS: canonical dashboard block edited once
+Dashboard compact/progress checks: 8/8 passed
