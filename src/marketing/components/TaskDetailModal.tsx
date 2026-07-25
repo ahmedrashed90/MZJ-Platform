@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import { CheckCircle, DownloadSimple, FileArrowUp, ShieldCheck, WarningCircle } from "@phosphor-icons/react";
+import {
+  ArrowsClockwise,
+  CheckCircle,
+  ChatCircleText,
+  DownloadSimple,
+  FileArrowUp,
+  FloppyDisk,
+  NotePencil,
+  ShieldCheck,
+  WarningCircle,
+  XCircle,
+} from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { downloadTaskTemplate, parseTaskTemplate } from "../templateExcel";
@@ -15,6 +26,91 @@ const writerLabels: Record<string, string> = {
   caption: "Caption",
   hashtags: "Hashtag",
 };
+
+type ReviewFeedback = {
+  generalNote: string;
+  selectedFields: string[];
+  fieldNotes: Record<string, string>;
+};
+
+const emptyFeedback: ReviewFeedback = {
+  generalNote: "",
+  selectedFields: [],
+  fieldNotes: {},
+};
+
+function parseReviewFeedback(value: unknown): ReviewFeedback {
+  const text = String(value || "").trim();
+  if (!text) return emptyFeedback;
+
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || parsed.kind !== "task_template_review_feedback") {
+      return { ...emptyFeedback, generalNote: text };
+    }
+
+    const selectedFields: string[] = Array.from(new Set<string>(
+      (Array.isArray(parsed.selectedFields) ? parsed.selectedFields : [])
+        .map((key: unknown) => String(key || ""))
+        .filter((key: string) => Boolean(writerLabels[key])),
+    ));
+
+    const fieldNotes = Object.fromEntries(
+      Object.entries(parsed.fieldNotes && typeof parsed.fieldNotes === "object" ? parsed.fieldNotes : {})
+        .map(([key, note]) => [key, String(note || "").trim()])
+        .filter(([key]) => Boolean(writerLabels[key])),
+    ) as Record<string, string>;
+
+    return {
+      generalNote: String(parsed.generalNote || "").trim(),
+      selectedFields: Array.from(new Set<string>([...selectedFields, ...Object.keys(fieldNotes)])),
+      fieldNotes,
+    };
+  } catch {
+    return { ...emptyFeedback, generalNote: text };
+  }
+}
+
+function serializeReviewFeedback(feedback: ReviewFeedback) {
+  const selectedFields = Array.from(new Set(
+    feedback.selectedFields.filter((key) => Boolean(writerLabels[key])),
+  ));
+  const fieldNotes = Object.fromEntries(
+    Object.entries(feedback.fieldNotes)
+      .map(([key, note]) => [key, String(note || "").trim()])
+      .filter(([key, note]) => Boolean(writerLabels[key]) && Boolean(note)),
+  );
+
+  if (!feedback.generalNote.trim() && !selectedFields.length && !Object.keys(fieldNotes).length) return "";
+
+  return JSON.stringify({
+    kind: "task_template_review_feedback",
+    version: 1,
+    generalNote: feedback.generalNote.trim(),
+    selectedFields,
+    fieldNotes,
+  });
+}
+
+function historyNoteText(value: unknown) {
+  const feedback = parseReviewFeedback(value);
+  const fieldNames = feedback.selectedFields.map((key) => writerLabels[key]).filter(Boolean);
+  if (feedback.generalNote && fieldNames.length) return `${feedback.generalNote}\nالحقول المطلوبة للتعديل: ${fieldNames.join("، ")}`;
+  if (feedback.generalNote) return feedback.generalNote;
+  if (fieldNames.length) return `الحقول المطلوبة للتعديل: ${fieldNames.join("، ")}`;
+  return "";
+}
+
+function templateStatusLabel(status: unknown) {
+  const labels: Record<string, string> = {
+    not_started: "لم يبدأ",
+    under_review: "قيد المراجعة",
+    revision_requested: "مطلوب تعديل",
+    rejected: "مرفوض",
+    approved: "معتمد",
+  };
+  return labels[String(status || "")] || String(status || "—");
+}
 
 function carsText(cars: unknown) {
   if (!Array.isArray(cars) || !cars.length) return "—";
@@ -44,6 +140,9 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [adminNote, setAdminNote] = useState("");
+  const [reviewSelectedFields, setReviewSelectedFields] = useState<string[]>([]);
+  const [reviewFieldNotes, setReviewFieldNotes] = useState<Record<string, string>>({});
+  const [activeReviewField, setActiveReviewField] = useState<string | null>(null);
   const [editData, setEditData] = useState<Record<string, string>>({});
 
   async function load() {
@@ -52,8 +151,12 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     setError("");
     try {
       const result = await marketingFetch<any>(`/api/marketing${marketingQuery({ resource: "task", id: taskId })}`);
+      const feedback = parseReviewFeedback(result.task.admin_note);
       setPayload(result);
-      setAdminNote(result.task.admin_note || "");
+      setAdminNote(feedback.generalNote);
+      setReviewSelectedFields(feedback.selectedFields);
+      setReviewFieldNotes(feedback.fieldNotes);
+      setActiveReviewField(null);
       setEditData(result.task.template_data || {});
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تحميل التاسك");
@@ -112,7 +215,47 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const task = payload?.task;
   const permissions = payload?.permissions || {};
   const canReview = Boolean(permissions.canApproveTemplate || permissions.canRejectTemplate);
+  const canViewFeedback = Boolean(permissions.canViewFeedback || canReview);
   const approved = task?.approved_data || task?.approved_template_data || {};
+  const selectedReviewCount = reviewSelectedFields.length;
+  const notedReviewCount = Object.values(reviewFieldNotes).filter((note: string) => note.trim()).length;
+  const showFeedback = canViewFeedback && task?.template_status !== "approved" && (Boolean(adminNote.trim()) || selectedReviewCount > 0);
+
+  function selectReviewField(key: string) {
+    if (!canReview) return;
+    setReviewSelectedFields((current) => current.includes(key) ? current : [...current, key]);
+  }
+
+  function openReviewField(key: string) {
+    if (!canReview) return;
+    selectReviewField(key);
+    setActiveReviewField(key);
+  }
+
+  function clearReviewField(key: string) {
+    setReviewSelectedFields((current) => current.filter((item) => item !== key));
+    setReviewFieldNotes((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    if (activeReviewField === key) setActiveReviewField(null);
+  }
+
+  function reviewAction(reviewActionName: "request_edit" | "edit" | "reject" | "approve") {
+    const feedback = serializeReviewFeedback({
+      generalNote: adminNote,
+      selectedFields: reviewSelectedFields,
+      fieldNotes: reviewFieldNotes,
+    });
+    return action({
+      action: "review_template",
+      templateId: task.task_template_id,
+      reviewAction: reviewActionName,
+      note: reviewActionName === "approve" ? "" : feedback,
+      data: editData,
+    });
+  }
 
   return (
     <Modal
@@ -130,7 +273,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
         <section className="marketing-task-overview">
           <div className="marketing-task-section-heading">
             <div><h3>ملخص التكليف</h3><p>كل بيانات الحملة والتكليف في مكان واحد.</p></div>
-            <span className={`marketing-task-status status-${task.status || "required"}`}>{task.status || "required"}</span>
+            <span className={`marketing-task-status status-${task.status || "required"}`}>{templateStatusLabel(task.status)}</span>
           </div>
           <div className="marketing-detail-grid">
             <DetailItem label="الحملة أو الأجندة" value={task.source_name} />
@@ -162,30 +305,101 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             </div>
           </section>
 
+          {!canReview && showFeedback ? <section className="marketing-revision-feedback-panel" aria-label="ملاحظات المراجع">
+            <div className="marketing-revision-feedback-heading">
+              <span><ChatCircleText size={22} weight="fill" /></span>
+              <div>
+                <h3>{task.template_status === "rejected" ? "ملاحظات الرفض" : "التعديلات المطلوبة من المراجع"}</h3>
+                <p>الحقول المظللة باللون الأصفر هي الحقول المطلوب مراجعتها قبل إعادة رفع Task Template.</p>
+              </div>
+              <b>{selectedReviewCount.toLocaleString("ar-SA")} حقل</b>
+            </div>
+            {adminNote ? <p className="marketing-revision-general-note">{adminNote}</p> : null}
+          </section> : null}
+
           <section className="marketing-task-section marketing-writer-section">
-            <div className="marketing-task-section-heading"><div><h3>بيانات كاتب المحتوى</h3><p>الحقول الطويلة مهيأة للكتابة والقراءة بدون تداخل.</p></div></div>
+            <div className="marketing-task-section-heading">
+              <div><h3>بيانات كاتب المحتوى</h3><p>{canReview ? "اضغط مرة واحدة لتحديد الحقل، واضغط مرتين لكتابة ملاحظة خاصة به." : "الحقول الطويلة مهيأة للقراءة بدون تداخل."}</p></div>
+              {canReview ? <div className="marketing-review-selection-summary"><b>{selectedReviewCount}</b><span>حقول محددة</span><small>{notedReviewCount} بملاحظات</small></div> : null}
+            </div>
+            {canReview ? <div className="marketing-review-instruction"><NotePencil size={19} /><span>اختيار الحقل لا يغيّر محتواه. اللون الأصفر يحدد فقط المكان المطلوب تعديله عند كاتب المحتوى.</span></div> : null}
             <div className="marketing-writer-form">
-              {Object.entries(writerLabels).map(([key, label]) => <label key={key} className={writerFieldClass(key)}>
-                <span>{label}</span>
-                <textarea rows={writerRows(key)} value={editData[key] || ""} disabled={!canReview} onChange={(event) => setEditData((current) => ({ ...current, [key]: event.target.value }))} />
-              </label>)}
+              {Object.entries(writerLabels).map(([key, label]) => {
+                const selected = reviewSelectedFields.includes(key);
+                const note = reviewFieldNotes[key] || "";
+                const noteOpen = selected && (activeReviewField === key || Boolean(note) || !canReview);
+                return <div
+                  key={key}
+                  className={`${writerFieldClass(key)} ${selected ? "review-selected" : ""} ${note ? "has-review-note" : ""}`}
+                  onClick={() => selectReviewField(key)}
+                  onDoubleClick={() => openReviewField(key)}
+                >
+                  <div className="marketing-writer-field-title">
+                    <span>{label}</span>
+                    {canReview ? selected
+                      ? <button type="button" className="review-field-clear" onClick={(event) => { event.stopPropagation(); clearReviewField(key); }}><XCircle size={16} />إلغاء التحديد</button>
+                      : <button type="button" className="review-field-select" onClick={(event) => { event.stopPropagation(); selectReviewField(key); }}><NotePencil size={16} />تحديد للمراجعة</button>
+                      : selected ? <b className="review-field-required"><WarningCircle size={16} weight="fill" />مطلوب تعديل</b> : null}
+                  </div>
+                  <textarea
+                    rows={writerRows(key)}
+                    value={editData[key] || ""}
+                    disabled={!canReview}
+                    onChange={(event) => setEditData((current) => ({ ...current, [key]: event.target.value }))}
+                    onDoubleClick={(event) => { event.stopPropagation(); openReviewField(key); }}
+                  />
+                  {noteOpen ? <div className="marketing-field-review-note" onClick={(event) => event.stopPropagation()}>
+                    <div><ChatCircleText size={18} weight="fill" /><strong>ملاحظة المراجع على {label}</strong></div>
+                    {canReview
+                      ? <textarea
+                        rows={3}
+                        value={note}
+                        autoFocus={activeReviewField === key}
+                        placeholder={`اكتب الملاحظة المطلوبة على ${label}`}
+                        onChange={(event) => setReviewFieldNotes((current) => ({ ...current, [key]: event.target.value }))}
+                      />
+                      : <p>{note || "هذا الحقل محدد للتعديل من المراجع."}</p>}
+                  </div> : null}
+                </div>;
+              })}
             </div>
           </section>
 
-          {canReview ? <section className="marketing-task-section admin">
-            <div className="marketing-task-section-heading"><div><h3><ShieldCheck size={21} />مراجعة واعتماد</h3><p>هذه الإجراءات مخصصة للمراجعة الإدارية فقط.</p></div></div>
-            <label className="marketing-review-note"><span>ملاحظة المراجع</span><textarea rows={4} value={adminNote} onChange={(event) => setAdminNote(event.target.value)} /></label>
-            <div className="marketing-review-actions">
-              {permissions.canRejectTemplate ? <>
-                <button type="button" onClick={() => void action({ action: "review_template", templateId: task.task_template_id, reviewAction: "request_edit", note: adminNote, data: editData })}>طلب تعديل</button>
-                <button type="button" onClick={() => void action({ action: "review_template", templateId: task.task_template_id, reviewAction: "edit", note: adminNote, data: editData })}>حفظ تعديل المراجع</button>
-                <button type="button" className="danger" onClick={() => void action({ action: "review_template", templateId: task.task_template_id, reviewAction: "reject", note: adminNote, data: editData })}>رفض</button>
-              </> : null}
-              {permissions.canApproveTemplate ? <button type="button" className="primary" onClick={() => void action({ action: "review_template", templateId: task.task_template_id, reviewAction: "approve", note: adminNote, data: editData })}><CheckCircle size={18} />اعتماد التعليمات</button> : null}
+          {canReview ? <section className="marketing-task-section admin marketing-review-workspace">
+            <div className="marketing-task-section-heading">
+              <div><h3><ShieldCheck size={21} />مراجعة واعتماد</h3><p>راجع الحقول، أضف الملاحظات المطلوبة، ثم اختر الإجراء المناسب.</p></div>
+              <span className={`marketing-template-review-status status-${task.template_status || "not_started"}`}>{templateStatusLabel(task.template_status)}</span>
+            </div>
+            <div className="marketing-review-overview">
+              <article><small>الحقول المحددة</small><strong>{selectedReviewCount.toLocaleString("ar-SA")}</strong><span>ستظهر باللون الأصفر للمستخدم</span></article>
+              <article><small>ملاحظات الحقول</small><strong>{notedReviewCount.toLocaleString("ar-SA")}</strong><span>ملاحظات مرتبطة بحقول محددة</span></article>
+              <article><small>حالة القالب</small><strong>{templateStatusLabel(task.template_status)}</strong><span>آخر حالة محفوظة في النظام</span></article>
+            </div>
+            <label className="marketing-review-note">
+              <span>ملاحظة عامة للمراجع</span>
+              <small>تظهر أعلى الحقول المطلوبة للتعديل، ويمكن تركها فارغة عند الاكتفاء بملاحظات الحقول.</small>
+              <textarea rows={4} value={adminNote} placeholder="اكتب ملاحظة عامة مختصرة وواضحة..." onChange={(event) => setAdminNote(event.target.value)} />
+            </label>
+            <div className="marketing-review-command-bar">
+              <div>
+                <strong>إجراءات المراجعة</strong>
+                <span>{selectedReviewCount ? `تم تحديد ${selectedReviewCount} حقل للمراجعة` : "لم يتم تحديد حقول للمراجعة"}</span>
+              </div>
+              <div className="marketing-review-actions">
+                {permissions.canRejectTemplate ? <>
+                  <button type="button" className="review-request" disabled={loading} onClick={() => void reviewAction("request_edit")}><ArrowsClockwise size={19} />طلب تعديل</button>
+                  <button type="button" className="review-save" disabled={loading} onClick={() => void reviewAction("edit")}><FloppyDisk size={19} />حفظ تعديل المراجع</button>
+                  <button type="button" className="review-reject" disabled={loading} onClick={() => void reviewAction("reject")}><XCircle size={19} weight="fill" />رفض</button>
+                </> : null}
+                {permissions.canApproveTemplate ? <button type="button" className="review-approve" disabled={loading} onClick={() => void reviewAction("approve")}><CheckCircle size={20} weight="fill" />اعتماد التعليمات</button> : null}
+              </div>
             </div>
           </section> : null}
 
-          {payload.history?.length ? <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>سجل المراجعات</h3></div></div><div className="marketing-history">{payload.history.map((item: any) => <article key={item.id}><strong>{item.action}</strong><span>{item.actor_name || "—"}</span><small>{new Date(item.created_at).toLocaleString("ar-SA")}</small>{item.note ? <p>{item.note}</p> : null}</article>)}</div></section> : null}
+          {payload.history?.length ? <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>سجل المراجعات</h3></div></div><div className="marketing-history">{payload.history.map((item: any) => {
+            const note = historyNoteText(item.note);
+            return <article key={item.id}><strong>{item.action}</strong><span>{item.actor_name || "—"}</span><small>{new Date(item.created_at).toLocaleString("ar-SA")}</small>{note ? <p>{note}</p> : null}</article>;
+          })}</div></section> : null}
         </> : <>
           {task.template_status !== "approved" ? <MarketingAlert type="info"><WarningCircle size={18} />في انتظار اعتماد Task Template</MarketingAlert> : <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>بيانات Task Template المعتمدة</h3></div></div><div className="marketing-approved-data">{Object.entries(writerLabels).map(([key, label]) => <div key={key} className={key === "mainScript" ? "full script" : ""}><small>{label}</small><p>{approved[key] || "—"}</p></div>)}</div></section>}
 

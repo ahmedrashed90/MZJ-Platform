@@ -568,6 +568,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canUploadTemplate:hasPermission(user,task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload"),
       canApproveTemplate:hasPermission(user,"marketing.task_template.approve"),
       canRejectTemplate:hasPermission(user,"marketing.task_template.reject"),
+      canViewFeedback:hasPermission(user,"marketing.task_template.view_feedback") || task.assigned_to===user.id || task.paired_content_user_id===user.id,
       canExecuteAction:hasPermission(user,"marketing.assignment_action.execute"),
       canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),

@@ -92,3 +92,19 @@ pnpm run build
 - فتح ملف XLSX والتحقق من اسم الورقة وRTL والعناوين وأبعاد الأعمدة وارتفاع صف السكريبت وWrap Text بواسطة OpenPyXL: **ناجح**.
 - `tsc -b` لم يكتمل بسبب عدم توفر حزم React وباقي `node_modules` في البيئة، وليس بسبب خطأ تركيب في الملفات المعدلة.
 - لم يتم اختبار PostgreSQL أو التخزين R2 حيًا لعدم توفر بيانات الاتصال في بيئة العمل.
+
+
+## نتائج v1.20.2 — مراجعة Task Template والداش بورد
+
+- `scripts/check-marketing-review-workflow-v1202.mjs`: **16/16 ناجح**.
+- جميع ملفات `scripts/check-*.mjs`: **33/33 Script ناجح**.
+- إجمالي Assertions المطبوعة بصيغة `PASS`: **258**.
+- Transpile Syntax لجميع ملفات TypeScript/TSX: **165 ملفًا، صفر أخطاء تركيب**.
+- تم التحقق من بقاء فلو `receive_task` كما هو، ومن فصل `required` و`received` بواسطة `received_at`.
+- لم يتم تنفيذ `pnpm run build` لأن Corepack فشل في تنزيل pnpm بسبب `EAI_AGAIN registry.npmjs.org`.
+- لم يتم اختبار PostgreSQL حيًا لعدم توفر `DATABASE_URL`.
+- سجلات الفحص:
+  - `test-results/check-marketing-review-workflow-v1202.log`
+  - `test-results/all-static-checks-v1202.log`
+  - `test-results/transpile-v1202.log`
+  - `test-results/build-attempt-v1202.log`
