@@ -466,12 +466,10 @@
 }
 .marketing-creatives-list,
 .marketing-actions-list,
-.marketing-budget-list,
-.marketing-schedule-list,
 .marketing-repeat-list { display: grid; gap: 12px; }
+.marketing-budget-list,
+.marketing-schedule-list { display: grid; gap: 16px; }
 .marketing-assignment-row,
-.marketing-budget-row,
-.marketing-schedule-row,
 .marketing-link-row,
 .photo-request-row {
   display: grid;
@@ -483,6 +481,290 @@
   padding: 12px;
   background: #fff;
 }
+
+.marketing-campaign-budget-step,
+.marketing-campaign-schedule-step { gap: 18px; }
+.marketing-campaign-step-head {
+  min-height: 72px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.marketing-campaign-step-head > div:last-child { display: grid; gap: 5px; }
+.marketing-campaign-step-head h2 { margin: 0; font-size: 24px; color: var(--ink); }
+.marketing-campaign-step-head p { margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; }
+.marketing-campaign-step-icon {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(145deg, #bf5b3d, #8c3829);
+  box-shadow: 0 10px 24px rgba(122,53,38,.18);
+}
+
+.marketing-budget-card,
+.marketing-schedule-card {
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  padding: 16px;
+  background: #fffdfc;
+  box-shadow: 0 10px 28px rgba(81,44,34,.05);
+  display: grid;
+  gap: 16px;
+}
+.marketing-budget-card-head,
+.marketing-schedule-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--line);
+}
+.marketing-budget-card-head > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 900;
+  color: var(--ink);
+}
+.marketing-budget-card-head > div strong {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--brand);
+  background: #fff2eb;
+  border: 1px solid #efd0c2;
+}
+.marketing-card-delete {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px !important;
+  padding: 0 !important;
+  border-radius: 13px !important;
+  color: #c44d45 !important;
+  background: #fff3f1 !important;
+  border-color: #f2d1cd !important;
+  box-shadow: none !important;
+}
+.marketing-card-delete:hover { background: #ffe9e6 !important; transform: translateY(-1px); }
+
+.marketing-budget-fields {
+  display: grid;
+  grid-template-columns: 1.05fr 1.25fr .75fr 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+.marketing-budget-fields label,
+.marketing-schedule-fields label { display: grid; gap: 7px; min-width: 0; }
+.marketing-budget-fields label > span,
+.marketing-schedule-fields label > span {
+  color: #6d5149;
+  font-size: 12px;
+  font-weight: 900;
+}
+.marketing-budget-fields input,
+.marketing-budget-fields select,
+.marketing-schedule-fields input,
+.marketing-schedule-fields select { width: 100%; min-width: 0; }
+.marketing-budget-platforms {
+  display: grid;
+  grid-template-columns: repeat(6,minmax(0,1fr));
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.marketing-budget-platforms section {
+  min-height: 116px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fffaf7;
+  display: grid;
+  align-content: space-between;
+  gap: 10px;
+  transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
+}
+.marketing-budget-platforms section.selected {
+  border-color: #cf9b87;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(89,54,47,.07);
+}
+.marketing-budget-platform-head,
+.marketing-schedule-platform-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+.marketing-budget-platform-head strong,
+.marketing-schedule-platform-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 12px;
+}
+.marketing-budget-platform-head input,
+.marketing-schedule-platform-head input { margin: 0; flex: 0 0 auto; }
+.marketing-budget-platforms section > input { min-height: 42px; text-align: center; }
+.marketing-budget-platforms section > input:disabled {
+  color: #a78d85;
+  background: #fbf7f5;
+  border-style: dashed;
+  cursor: not-allowed;
+  opacity: .78;
+}
+.marketing-budget-card-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+  color: #7e3e30;
+  font-size: 13px;
+  font-weight: 900;
+}
+.marketing-budget-card-total strong { font-size: 18px; color: var(--ink); }
+.marketing-add-budget,
+.marketing-add-schedule {
+  justify-self: start;
+  min-width: 170px;
+  color: var(--brand) !important;
+  background: #fff !important;
+  border-color: var(--line-strong) !important;
+  box-shadow: 0 7px 18px rgba(81,44,34,.05);
+}
+.marketing-add-budget:hover,
+.marketing-add-schedule:hover { background: #fff7f3 !important; border-color: #c98f79 !important; }
+.marketing-total-budget {
+  min-height: 70px;
+  padding: 15px 18px;
+  border: 1px solid #d8e9dc;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f5fbf6, #fbfffc);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #2f6d46;
+  font-size: 16px;
+  font-weight: 900;
+}
+.marketing-total-budget strong { font-size: 25px; color: #245c39; }
+
+.marketing-schedule-workspace {
+  display: grid;
+  grid-template-columns: 270px minmax(0,1fr);
+  gap: 16px;
+  align-items: start;
+}
+.marketing-schedule-period {
+  position: sticky;
+  top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 17px;
+  background: linear-gradient(180deg, #fffaf7, #fff);
+  display: grid;
+  gap: 11px;
+  box-shadow: 0 10px 24px rgba(81,44,34,.05);
+}
+.marketing-schedule-period > span {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 900;
+}
+.marketing-schedule-period > div {
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fff;
+  display: grid;
+  gap: 4px;
+}
+.marketing-schedule-period small { color: var(--muted); font-weight: 800; }
+.marketing-schedule-period strong { direction: ltr; text-align: right; font-size: 14px; }
+.marketing-schedule-period-count { background: #fff3ec !important; border-color: #efd1c3 !important; }
+.marketing-schedule-period-count strong { direction: rtl; font-size: 23px; color: var(--brand); }
+.marketing-schedule-days { min-width: 0; display: grid; gap: 14px; }
+.marketing-schedule-card-head > div { display: grid; gap: 4px; }
+.marketing-schedule-card-head span { color: var(--brand); font-size: 12px; font-weight: 900; }
+.marketing-schedule-card-head strong { color: var(--ink); font-size: 17px; }
+.marketing-schedule-card-head small { color: var(--muted); font-weight: 700; }
+.marketing-schedule-fields {
+  display: grid;
+  grid-template-columns: minmax(190px,.65fr) minmax(260px,1.35fr);
+  gap: 10px;
+  align-items: end;
+}
+.marketing-schedule-platforms {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.marketing-schedule-platforms section {
+  min-height: 118px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fffaf7;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+.marketing-schedule-platforms section.selected {
+  border-color: #cf9b87;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(89,54,47,.07);
+}
+.marketing-schedule-platform-placeholder {
+  min-height: 54px;
+  padding: 9px;
+  border: 1px dashed #e1c6ba;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #a07c72;
+  background: #fffdfb;
+  font-size: 11px;
+  font-weight: 700;
+}
+.marketing-campaign-empty-state {
+  min-height: 150px;
+  padding: 24px;
+  border: 1px dashed #ddc2b6;
+  border-radius: 17px;
+  background: #fffaf7;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  text-align: center;
+  color: #8f6358;
+}
+.marketing-campaign-empty-state strong { color: var(--ink); font-size: 15px; }
+.marketing-campaign-empty-state span { font-size: 12px; font-weight: 700; }
+
 .marketing-link-users,
 .marketing-chip-picker,
 .usage-tags { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -507,7 +789,6 @@
 .marketing-detail-grid article { background: #faf9f8; border: 1px solid var(--line); padding: 10px; border-radius: 9px; display: grid; gap: 3px; }
 .marketing-review-grid small,
 .marketing-detail-grid small { color: var(--muted); }
-.marketing-total-budget { font-size: 18px; font-weight: 800; color: #37764e; background: #f4fbf5; border: 1px solid #d5eadb; padding: 12px; border-radius: 10px; }
 .marketing-agenda-days article { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 11px; padding: 12px; background: #fff; }
 
 .marketing-day-editor-overlay,
@@ -764,6 +1045,12 @@
   .marketing-kanban { grid-template-columns: repeat(4,280px); }
   .marketing-form-row.five { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-filter-grid.stock { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .marketing-budget-fields { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .marketing-budget-platforms { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .marketing-schedule-workspace { grid-template-columns: 1fr; }
+  .marketing-schedule-period { position: static; grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .marketing-schedule-period > span { grid-column: 1 / -1; }
+  .marketing-schedule-platforms { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 760px) {
   .marketing-page-head,
@@ -796,6 +1083,19 @@
   .marketing-calendar-event { font-size: 9px; }
   .marketing-wizard-steps,
   .marketing-wizard-steps.three { grid-template-columns: 1fr; }
+  .marketing-campaign-step-head { align-items: flex-start; }
+  .marketing-campaign-step-head h2 { font-size: 20px; }
+  .marketing-budget-fields,
+  .marketing-schedule-fields,
+  .marketing-schedule-period { grid-template-columns: 1fr; }
+  .marketing-budget-platforms,
+  .marketing-schedule-platforms { grid-template-columns: 1fr; }
+  .marketing-budget-card,
+  .marketing-schedule-card { padding: 12px; }
+  .marketing-budget-card-total,
+  .marketing-total-budget { align-items: flex-start; flex-direction: column; }
+  .marketing-add-budget,
+  .marketing-add-schedule { width: 100%; justify-self: stretch; }
 }
 
 
