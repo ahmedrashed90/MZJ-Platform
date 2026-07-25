@@ -500,6 +500,115 @@ select r.id,p.id from core.roles r cross join core.permissions p
 where r.code='marketing_user' and p.code in ('marketing.view','marketing.task.receive','marketing.task.execute','marketing.file.upload')
 on conflict do nothing;
 
+-- Repair duplicate marketing department names left by older central-access versions.
+-- The selected canonical UUID is kept, all memberships and marketing references are moved,
+-- and no role or role_id data is touched.
+do $marketing_department_duplicate_repair$
+declare
+  name_group record;
+  duplicate_department record;
+  canonical_id uuid;
+  canonical_name text;
+  temporary_name text;
+begin
+  for name_group in
+    select lower(btrim(name)) as normalized_name
+    from core.departments
+    where system_code='marketing'
+    group by lower(btrim(name))
+    having count(*) > 1
+  loop
+    select d.id,d.name into canonical_id,canonical_name
+    from core.departments d
+    where d.system_code='marketing' and lower(btrim(d.name))=name_group.normalized_name
+    order by exists(select 1 from marketing.departments md where md.id=d.id) desc,d.is_active desc,d.created_at,d.id
+    limit 1;
+
+    for duplicate_department in
+      select d.id
+      from core.departments d
+      where d.system_code='marketing'
+        and lower(btrim(d.name))=name_group.normalized_name
+        and d.id<>canonical_id
+      order by d.created_at,d.id
+    loop
+      update core.users set permission_version=permission_version+1,updated_at=now()
+      where id in (
+        select user_id from core.user_system_departments where department_id=duplicate_department.id
+        union
+        select user_id from core.user_departments where department_id=duplicate_department.id
+      );
+      delete from core.sessions where user_id in (
+        select user_id from core.user_system_departments where department_id=duplicate_department.id
+        union
+        select user_id from core.user_departments where department_id=duplicate_department.id
+      );
+
+      if exists(select 1 from marketing.departments where id=duplicate_department.id) then
+        if not exists(select 1 from marketing.departments where id=canonical_id) then
+          temporary_name := canonical_name || ' [merge-' || substr(canonical_id::text,1,8) || '-' || substr(duplicate_department.id::text,1,8) || ']';
+          insert into marketing.departments(id,name,is_content,is_active,created_by,created_at,updated_at)
+          select canonical_id,temporary_name,is_content,is_active,created_by,created_at,updated_at
+          from marketing.departments where id=duplicate_department.id
+          on conflict(id) do nothing;
+        else
+          update marketing.departments canonical
+          set is_content=canonical.is_content or duplicate.is_content,
+              is_active=canonical.is_active or duplicate.is_active,
+              updated_at=greatest(canonical.updated_at,duplicate.updated_at)
+          from marketing.departments duplicate
+          where canonical.id=canonical_id and duplicate.id=duplicate_department.id;
+        end if;
+      end if;
+
+      if to_regclass('marketing.department_users') is not null then
+        insert into marketing.department_users(department_id,user_id,created_at)
+        select canonical_id,user_id,created_at from marketing.department_users where department_id=duplicate_department.id
+        on conflict do nothing;
+        delete from marketing.department_users where department_id=duplicate_department.id;
+      end if;
+
+      insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
+      select user_id,system_code,canonical_id,is_primary
+      from core.user_system_departments where department_id=duplicate_department.id
+      on conflict(user_id,system_code,department_id) do update
+      set is_primary=core.user_system_departments.is_primary or excluded.is_primary;
+      delete from core.user_system_departments where department_id=duplicate_department.id;
+
+      insert into core.user_departments(user_id,department_id,is_primary)
+      select user_id,canonical_id,is_primary from core.user_departments where department_id=duplicate_department.id
+      on conflict(user_id,department_id) do update
+      set is_primary=core.user_departments.is_primary or excluded.is_primary;
+      delete from core.user_departments where department_id=duplicate_department.id;
+
+      update marketing.assignment_actions set department_id=canonical_id where department_id=duplicate_department.id;
+      update marketing.creative_types set primary_department_id=canonical_id where primary_department_id=duplicate_department.id;
+      update marketing.creatives set primary_department_id=canonical_id where primary_department_id=duplicate_department.id;
+      update marketing.tasks set department_id=canonical_id where department_id=duplicate_department.id;
+      update marketing.creatives
+      set optional_assignments=replace(optional_assignments::text,duplicate_department.id::text,canonical_id::text)::jsonb
+      where optional_assignments::text like '%' || duplicate_department.id::text || '%';
+      update marketing.campaigns
+      set payload=replace(payload::text,duplicate_department.id::text,canonical_id::text)::jsonb
+      where payload::text like '%' || duplicate_department.id::text || '%';
+      update marketing.agendas
+      set payload=replace(payload::text,duplicate_department.id::text,canonical_id::text)::jsonb
+      where payload::text like '%' || duplicate_department.id::text || '%';
+
+      delete from marketing.departments where id=duplicate_department.id;
+      delete from core.departments where id=duplicate_department.id and system_code='marketing';
+    end loop;
+
+    update marketing.departments md set name=canonical_name,updated_at=now()
+    where md.id=canonical_id
+      and not exists(
+        select 1 from marketing.departments conflict
+        where conflict.id<>canonical_id and lower(btrim(conflict.name))=lower(btrim(canonical_name))
+      );
+  end loop;
+end
+$marketing_department_duplicate_repair$;
+
 -- Canonicalize marketing departments on core.departments IDs and migrate legacy membership once.
 do $marketing_department_canonical_sync$
 declare

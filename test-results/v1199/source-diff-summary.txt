@@ -1,0 +1,9 @@
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/package.json and ./package.json differ
+Only in ./scripts: check-marketing-department-access-v1199.mjs
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/server/_access-control-schema.ts and ./server/_access-control-schema.ts differ
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/server/_marketing-schema.ts and ./server/_marketing-schema.ts differ
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/server/marketing/index.ts and ./server/marketing/index.ts differ
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/src/access-control/UsersPermissionsPanel.tsx and ./src/access-control/UsersPermissionsPanel.tsx differ
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/src/marketing/pages/DepartmentsPage.tsx and ./src/marketing/pages/DepartmentsPage.tsx differ
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/src/pages/SettingsPage.tsx and ./src/pages/SettingsPage.tsx differ
+Files /mnt/data/mzj_pristine/MZJ-v1.19.7/src/styles.css and ./src/styles.css differ

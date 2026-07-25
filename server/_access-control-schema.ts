@@ -39,6 +39,13 @@ alter table core.roles add column if not exists description_ar text;
 alter table core.roles add column if not exists is_active boolean not null default true;
 alter table core.roles add column if not exists updated_at timestamptz not null default now();
 
+-- Older deployments created a global UNIQUE(name) constraint on departments.
+-- Department names are scoped by system, so that legacy constraint blocks a
+-- marketing department when another system already uses the same display name.
+alter table core.departments drop constraint if exists departments_name_key;
+create index if not exists core_departments_system_normalized_name_idx
+  on core.departments(system_code, lower(btrim(name)));
+
 alter table core.users add column if not exists permission_version bigint not null default 1;
 alter table core.users add column if not exists disabled_at timestamptz;
 alter table core.users add column if not exists disabled_by uuid references core.users(id);

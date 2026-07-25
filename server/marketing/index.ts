@@ -116,12 +116,31 @@ async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: 
 }
 
 async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
-  // Keep marketing-specific metadata mirrored on the canonical core department IDs.
+  // Keep marketing metadata mirrored without crashing when an older database
+  // contains the same marketing name under a different legacy ID. Existing
+  // metadata wins until the user edits it, while missing canonical IDs are
+  // inserted only when their normalized name is not already represented.
+  await sql`
+    update marketing.departments md
+    set name=d.name,is_active=d.is_active,updated_at=greatest(md.updated_at,d.updated_at)
+    from core.departments d
+    where d.id=md.id and d.system_code='marketing'
+      and not exists(
+        select 1 from marketing.departments conflicting_name
+        where conflicting_name.id<>md.id
+          and lower(btrim(conflicting_name.name))=lower(btrim(d.name))
+      )
+  `;
   await sql`
     insert into marketing.departments(id,name,is_content,is_active,created_at,updated_at)
     select d.id,d.name,false,d.is_active,d.created_at,d.updated_at
     from core.departments d
     where d.system_code='marketing'
+      and not exists(select 1 from marketing.departments by_id where by_id.id=d.id)
+      and not exists(
+        select 1 from marketing.departments by_name
+        where lower(btrim(by_name.name))=lower(btrim(d.name))
+      )
     on conflict(id) do update set name=excluded.name,is_active=excluded.is_active,updated_at=greatest(marketing.departments.updated_at,excluded.updated_at)
   `;
   const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels] = await Promise.all([
@@ -498,50 +517,96 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
   const name=clean(body.name);
   const userIds=[...new Set(arrayValue<string>(body.userIds).map(clean).filter(Boolean))];
   if(!name)throw new Error("اسم القسم مطلوب");
-  const result=await sql.begin(async(tx)=>{
-    const activeUsers=userIds.length?await tx<any[]>`
-      select id::text from core.users
-      where id in ${tx(userIds)} and is_active=true and coalesce(disabled_reason,'') not like 'ACCOUNT_DELETED:%'
-    `:[];
-    if(activeUsers.length!==userIds.length)throw new Error("يوجد مستخدم غير فعال أو غير موجود ضمن الاختيار");
+  try {
+    const result=await sql.begin(async(tx)=>{
+      const activeUsers=userIds.length?await tx<any[]>`
+        select id::text from core.users
+        where id in ${tx(userIds)} and is_active=true and coalesce(disabled_reason,'') not like 'ACCOUNT_DELETED:%'
+      `:[];
+      if(activeUsers.length!==userIds.length)throw new Error("يوجد مستخدم غير فعال أو غير موجود ضمن الاختيار");
 
-    let departmentId=requestedId;
-    let row:any;
-    if(departmentId){
-      const [existing]=await tx<any[]>`
-        select md.id::text,cd.name,md.is_content,md.is_active
-        from marketing.departments md join core.departments cd on cd.id=md.id
-        where md.id=${departmentId}::uuid and cd.system_code='marketing'
-      `;
-      if(!existing)throw new Error("قسم التسويق غير موجود");
-      await tx`update core.departments set name=${name},system_code='marketing',is_active=true,updated_at=now() where id=${departmentId}::uuid`;
-      [row]=await tx<any[]>`update marketing.departments set name=${name},is_content=${bool(body.isContent)},is_active=true,updated_at=now() where id=${departmentId}::uuid returning id::text,name,is_content,is_active`;
-    }else{
-      departmentId=crypto.randomUUID();
-      const code=`marketing_${departmentId.replace(/-/g,"").slice(0,16)}`;
-      await tx`insert into core.departments(id,code,name,system_code,is_active) values(${departmentId}::uuid,${code},${name},'marketing',true)`;
-      [row]=await tx<any[]>`insert into marketing.departments(id,name,is_content,is_active,created_by) values(${departmentId}::uuid,${name},${bool(body.isContent)},true,${user.id}::uuid) returning id::text,name,is_content,is_active`;
-    }
+      let departmentId=requestedId;
+      let row:any;
+      let reused=false;
+      if(departmentId){
+        const [existing]=await tx<any[]>`
+          select md.id::text,cd.name,md.is_content,md.is_active
+          from marketing.departments md join core.departments cd on cd.id=md.id
+          where md.id=${departmentId}::uuid and cd.system_code='marketing'
+        `;
+        if(!existing)throw new Error("قسم التسويق غير موجود");
+        const [duplicate]=await tx<any[]>`
+          select md.id::text
+          from marketing.departments md
+          join core.departments cd on cd.id=md.id and cd.system_code='marketing'
+          where md.id<>${departmentId}::uuid
+            and lower(btrim(cd.name))=lower(btrim(${name}))
+          limit 1
+        `;
+        if(duplicate)throw new Error("يوجد قسم تسويق آخر بنفس الاسم");
+        await tx`update core.departments set name=${name},is_active=true,updated_at=now() where id=${departmentId}::uuid and system_code='marketing'`;
+        [row]=await tx<any[]>`update marketing.departments set name=${name},is_content=${bool(body.isContent)},is_active=true,updated_at=now() where id=${departmentId}::uuid returning id::text,name,is_content,is_active`;
+      }else{
+        const [existingMarketing]=await tx<any[]>`
+          select md.id::text
+          from marketing.departments md
+          join core.departments cd on cd.id=md.id and cd.system_code='marketing'
+          where lower(btrim(md.name))=lower(btrim(${name}))
+             or lower(btrim(cd.name))=lower(btrim(${name}))
+          order by md.created_at
+          limit 1
+        `;
+        const [existingCore]=existingMarketing?[]:await tx<any[]>`
+          select id::text
+          from core.departments
+          where system_code='marketing' and lower(btrim(name))=lower(btrim(${name}))
+          order by is_active desc,created_at
+          limit 1
+        `;
+        departmentId=clean(existingMarketing?.id||existingCore?.id);
+        reused=Boolean(departmentId);
 
-    const previous=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${departmentId}::uuid`;
-    const previousIds=previous.map((item:any)=>clean(item.user_id));
-    const affected=[...new Set([...previousIds,...userIds])];
+        if(departmentId){
+          await tx`update core.departments set name=${name},is_active=true,updated_at=now() where id=${departmentId}::uuid and system_code='marketing'`;
+          [row]=await tx<any[]>`
+            insert into marketing.departments(id,name,is_content,is_active,created_by)
+            values(${departmentId}::uuid,${name},${bool(body.isContent)},true,${user.id}::uuid)
+            on conflict(id) do update set name=excluded.name,is_content=excluded.is_content,is_active=true,updated_at=now()
+            returning id::text,name,is_content,is_active
+          `;
+        }else{
+          departmentId=crypto.randomUUID();
+          const code=`marketing_${departmentId.replace(/-/g,"").slice(0,16)}`;
+          await tx`insert into core.departments(id,code,name,system_code,is_active) values(${departmentId}::uuid,${code},${name},'marketing',true)`;
+          [row]=await tx<any[]>`insert into marketing.departments(id,name,is_content,is_active,created_by) values(${departmentId}::uuid,${name},${bool(body.isContent)},true,${user.id}::uuid) returning id::text,name,is_content,is_active`;
+        }
+      }
 
-    await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${departmentId}::uuid and not (user_id::text = any(${userIds}::text[]))`;
-    for(const userId of userIds){
-      await tx`insert into core.user_system_departments(user_id,system_code,department_id,is_primary) values(${userId}::uuid,'marketing',${departmentId}::uuid,false) on conflict(user_id,system_code,department_id) do nothing`;
-    }
+      const previous=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${departmentId}::uuid`;
+      const previousIds=previous.map((item:any)=>clean(item.user_id));
+      const affected=[...new Set([...previousIds,...userIds])];
 
-    for(const userId of affected){
-      await tx`delete from core.user_departments ud where ud.user_id=${userId}::uuid and ud.department_id=${departmentId}::uuid and not exists(select 1 from core.user_system_departments usd where usd.user_id=ud.user_id and usd.department_id=ud.department_id)`;
-      await tx`insert into core.user_departments(user_id,department_id,is_primary) select ${userId}::uuid,${departmentId}::uuid,bool_or(is_primary) from core.user_system_departments where user_id=${userId}::uuid and department_id=${departmentId}::uuid group by user_id,department_id on conflict(user_id,department_id) do update set is_primary=excluded.is_primary`;
-      await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${userId}::uuid`;
-      await tx`delete from core.sessions where user_id=${userId}::uuid`;
-    }
-    return{row,departmentId,previousIds};
-  });
-  await audit(sql,user,requestedId?"department_updated":"department_created","department",result.departmentId,{name,isContent:bool(body.isContent),userIds},requestedId?{userIds:result.previousIds}:undefined);
-  return{ok:true,row:result.row,message:"تم حفظ القسم وربط الأقسام المسموحة للمستخدمين فعليًا"};
+      await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${departmentId}::uuid and not (user_id::text = any(${userIds}::text[]))`;
+      for(const userId of userIds){
+        await tx`insert into core.user_system_departments(user_id,system_code,department_id,is_primary) values(${userId}::uuid,'marketing',${departmentId}::uuid,false) on conflict(user_id,system_code,department_id) do nothing`;
+      }
+
+      for(const userId of affected){
+        await tx`delete from core.user_departments ud where ud.user_id=${userId}::uuid and ud.department_id=${departmentId}::uuid and not exists(select 1 from core.user_system_departments usd where usd.user_id=ud.user_id and usd.department_id=ud.department_id)`;
+        await tx`insert into core.user_departments(user_id,department_id,is_primary) select ${userId}::uuid,${departmentId}::uuid,bool_or(is_primary) from core.user_system_departments where user_id=${userId}::uuid and department_id=${departmentId}::uuid group by user_id,department_id on conflict(user_id,department_id) do update set is_primary=excluded.is_primary`;
+        await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${userId}::uuid`;
+        await tx`delete from core.sessions where user_id=${userId}::uuid`;
+      }
+      return{row,departmentId,previousIds,reused:!requestedId&&reused};
+    });
+    await audit(sql,user,requestedId?"department_updated":result.reused?"department_reused":"department_created","department",result.departmentId,{name,isContent:bool(body.isContent),userIds},requestedId?{userIds:result.previousIds}:undefined);
+    return{ok:true,row:result.row,message:result.reused?"تم ربط القسم الموجود وحفظ يوزراته فعليًا":"تم حفظ القسم وربط الأقسام المسموحة للمستخدمين فعليًا"};
+  } catch (failure) {
+    const error=failure as Error & { code?: string; constraint_name?: string; constraint?: string };
+    const constraint=clean(error.constraint_name||error.constraint);
+    if(error.code==='23505'&&constraint.includes('departments_name_key'))throw new Error("يوجد قسم بنفس الاسم؛ افتح القسم الموجود وعدّل يوزراته بدل إنشاء نسخة مكررة");
+    throw failure;
+  }
 }
 
 async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
