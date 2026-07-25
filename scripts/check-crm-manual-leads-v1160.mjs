@@ -18,7 +18,7 @@ const checks = [
   ["Registration date is generated automatically", api.includes("registered_at,location") && api.includes("${clean(body.financeType) || null},now()")],
   ["Tracking navigation no longer duplicates settings", !tracking.includes("/settings?section=tracking") && !tracking.includes("إعدادات التتبع")],
   ["Tracking settings remain in unified settings", settings.includes("TrackingSettingsPanel") && settings.includes("إعدادات التتبع")],
-  ["Role choices use central unique role IDs", accessApi.includes("from core.roles r where r.is_active=true") && accessPage.includes("key={role.id}")],
+  ["Role choices use canonical grouped role IDs", accessApi.includes("from core.roles r where r.is_active=true") && accessPage.includes("groupRolesByDisplayName") && accessPage.includes("key={group.key}")],
 ];
 
 let failed = false;

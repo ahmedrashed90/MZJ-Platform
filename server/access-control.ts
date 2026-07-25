@@ -11,7 +11,8 @@ import {
   type PermissionUser,
 } from "./_access-control.js";
 import { DATA_SCOPE_OPTIONS, SYSTEM_CATALOG, type DataScope, type PlatformSystem } from "../shared/access-control.js";
-import { ensureMarketingDepartmentAccess } from "./_marketing-department-access.js";
+import { ensureMarketingSchema } from "./_marketing-schema.js";
+import { ensureOperationsSchema } from "./_operations-schema.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -218,7 +219,7 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   const canReceiveLeads = bool(input.canReceiveLeads);
   const canReceiveTasks = bool(input.canReceiveTasks);
   const roleIds = array(body.roleIds);
-  const systems = Array.isArray(body.systems) ? body.systems.filter((item: any) => validSystem(item?.systemCode)) : [];
+  const submittedSystems = Array.isArray(body.systems) ? body.systems.filter((item: any) => validSystem(item?.systemCode)) : [];
   const overrides = Array.isArray(body.overrides) ? body.overrides.filter((item: any) => clean(item?.permissionCode) && ["allow", "deny"].includes(clean(item?.effect))) : [];
   const reason = clean(body.reason) || null;
   if (!fullName) throw Object.assign(new Error("اسم المستخدم مطلوب"), { status: 400 });
@@ -228,6 +229,16 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
 
   const before = creating ? null : await userSnapshot(userId);
   if (!creating && (!before || isDeletedAccount(before))) throw Object.assign(new Error("المستخدم غير موجود"), { status: 404 });
+
+  // Marketing departments and their users are managed only from Marketing Settings.
+  // Keep the central form as a read-only reflection and ignore stale clients that try
+  // to change marketing department membership from this endpoint.
+  const previousMarketingSystem = (before?.systems || []).find((item: any) => clean(item.systemCode) === "marketing");
+  const systems = submittedSystems.map((item: any) => clean(item.systemCode) !== "marketing" ? item : {
+    ...item,
+    departmentIds: creating ? [] : array(previousMarketingSystem?.departmentIds),
+    primaryDepartmentId: creating ? "" : clean(previousMarketingSystem?.primaryDepartmentId),
+  });
   const beforeUser = before?.user || {};
   const profileChanged = creating
     || clean(beforeUser.full_name) !== fullName
@@ -347,6 +358,7 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
         insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
         select ${id}::uuid,${system.code},x::uuid,x=${primaryDepartmentId} from unnest(${departmentIds}::text[]) x
       `;
+
     }
 
     await tx`delete from core.user_branches where user_id=${id}::uuid`;
@@ -552,6 +564,7 @@ async function saveOrgItem(request: VercelRequest, actor: PermissionUser, body: 
   if(kind==='department'){
     if(!hasPermission(actor,'settings.departments.manage'))throw Object.assign(new Error('لا توجد صلاحية لإدارة الأقسام'),{status:403});
     const code=safeRoleCode(body.code),name=clean(body.name),systemCode=clean(body.systemCode); if(!code||!name||!validSystem(systemCode))throw Object.assign(new Error('بيانات القسم غير مكتملة'),{status:400});
+    if(systemCode==='marketing')throw Object.assign(new Error('تتم إضافة وتعديل أقسام التسويق من تبويب إعدادات التسويق ← الأقسام'),{status:400});
     const [before]=id?await sql<any[]>`select to_jsonb(d) as snapshot from core.departments d where id=${id}::uuid`:[];
     const [row]=id?await sql<any[]>`update core.departments set code=${code},name=${name},system_code=${systemCode},is_active=${bool(body.isActive,true)},updated_at=now() where id=${id}::uuid returning id::text,code,name,system_code,is_active`:await sql<any[]>`insert into core.departments(code,name,system_code,is_active) values(${code},${name},${systemCode},${bool(body.isActive,true)}) returning id::text,code,name,system_code,is_active`;
     if(!row)throw Object.assign(new Error('القسم غير موجود'),{status:404});
@@ -568,7 +581,8 @@ export default async function handler(request: VercelRequest,response: VercelRes
   const actor=await requireUser(request,response); if(!actor)return;
   const resource=clean(request.query.resource)||'bootstrap';
   try{
-    await ensureMarketingDepartmentAccess();
+    await ensureOperationsSchema();
+    await ensureMarketingSchema();
     if(request.method==='GET'){
       if(resource==='bootstrap'){
         if(!canOpenAccessControl(actor))return response.status(403).json({ok:false,error:'لا توجد صلاحية لفتح المستخدمين والصلاحيات'});
