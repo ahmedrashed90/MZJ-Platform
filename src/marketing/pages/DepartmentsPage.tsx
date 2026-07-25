@@ -55,7 +55,7 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
         <h2>إضافة قسم جديد</h2>
         <label>اسم القسم<input value={department.name} onChange={(e) => setDepartment({ ...department, name: e.target.value })} /></label>
         <label className="marketing-check"><input type="checkbox" checked={department.isContent} onChange={(e) => setDepartment({ ...department, isContent: e.target.checked })} />إضافة قسم محتوى</label>
-        <label>اليوزرات داخل القسم<select multiple value={department.userIds} onChange={(e) => setDepartment({ ...department, userIds: Array.from(e.target.selectedOptions).map((option) => option.value) })}>{meta?.users.map((user) => <option key={user.id} value={user.id}>{user.full_name || user.fullName}</option>)}</select></label>
+        <label>اليوزرات داخل القسم — متزامنة مع المستخدمون والصلاحيات<select multiple value={department.userIds} onChange={(e) => setDepartment({ ...department, userIds: Array.from(e.target.selectedOptions).map((option) => option.value) })}>{meta?.users.map((user) => <option key={user.id} value={user.id}>{user.full_name || user.fullName}</option>)}</select></label>
         <button className="marketing-primary" disabled={busy} onClick={() => void save("save_department", department, () => setDepartment({ id: "", name: "", userIds: [], isContent: false }))}>{department.id ? "تعديل القسم" : "إضافة القسم"}</button>
       </section>
       <section className="marketing-card marketing-list-card">

@@ -1,4 +1,5 @@
 import { runSqlScript } from "./_db.js";
+import { ensureMarketingAccessBridge } from "./_marketing-access-bridge.js";
 
 let ready: Promise<void> | null = null;
 
@@ -34,7 +35,8 @@ create table if not exists marketing.departments (
   is_active boolean not null default true,
   created_by uuid references core.users(id),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  core_department_id uuid
 );
 
 create table if not exists marketing.department_users (
@@ -526,6 +528,7 @@ export async function ensureMarketingSchema() {
     });
   }
   await ready;
+  await ensureMarketingAccessBridge();
 }
 
 export { MARKETING_SCHEMA_SQL };
