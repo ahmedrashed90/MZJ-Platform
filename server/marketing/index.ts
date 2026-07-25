@@ -434,6 +434,19 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
   return progress;
 }
 
+async function dashboardVersion(sql: ReturnType<typeof getSql>) {
+  const [row] = await sql<any[]>`
+    select greatest(
+      coalesce((select max(updated_at) from marketing.tasks),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.task_templates),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.campaigns),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.agendas),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.user_colors),'epoch'::timestamptz)
+    )::text as version
+  `;
+  return clean(row?.version);
+}
+
 async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
   const access = marketingAccess(user);
   const unrestricted = access.dataScope === "all";
@@ -455,12 +468,15 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     )`;
   const tasks = await sql<any[]>`
     select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.note,
-      t.assigned_to::text,u.full_name as assigned_name,t.paired_content_user_id::text,cu.full_name as content_user_name,
+      t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
+      t.paired_content_user_id::text,cu.full_name as content_user_name,cuc.color as content_user_color,
       d.id::text as department_id,d.name as department_name,c.name as creative_name,c.instance_code,
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,tt.status as template_status,tt.approved_data,
       f.id::text as final_file_id,f.original_name as final_file_name
     from marketing.tasks t
     left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id
+    left join marketing.user_colors auc on auc.user_id=t.assigned_to
+    left join marketing.user_colors cuc on cuc.user_id=t.paired_content_user_id
     left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
@@ -484,7 +500,8 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     )
     order by created_at desc
   `;
-  return { ok:true, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, permissions:user.permissions.filter((code)=>code.startsWith("marketing.")) };
+  const version = await dashboardVersion(sql);
+  return { ok:true, version, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, permissions:user.permissions.filter((code)=>code.startsWith("marketing.")) };
 }
 
 async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
@@ -1212,6 +1229,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(request.method==='GET'){
       if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create'))?await loadOperationsCars(sql):[]});
       if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
+      if(resource==='dashboard_version')return response.status(200).json({ok:true,version:await dashboardVersion(sql)});
       if(resource==='database')return response.status(200).json(await databaseRows(sql,user));
       if(resource==='entity')return response.status(200).json(await entityDetail(sql,clean(request.query.sourceType),clean(request.query.id),user));
       if(resource==='task')return response.status(200).json(await taskDetail(sql,clean(request.query.id),user));

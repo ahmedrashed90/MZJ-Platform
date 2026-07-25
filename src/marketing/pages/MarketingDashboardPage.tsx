@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import {
   Archive,
   CaretDown,
@@ -12,6 +12,8 @@ import {
 import { marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { TaskDetailModal } from "../components/TaskDetailModal";
+
+const DASHBOARD_LIVE_POLL_MS = 1000;
 
 function templateStatusLabel(status: unknown) {
   const labels: Record<string, string> = {
@@ -32,6 +34,34 @@ function taskProgress(task: any) {
   return Math.max(0, Math.min(100, Number(task.progress || 0)));
 }
 
+function formatProgress(value: unknown) {
+  const safe = Math.max(0, Math.min(100, Number(value || 0)));
+  return `${safe.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
+}
+
+function sameAssignedUser(task: any) {
+  const assignedId = String(task.assigned_to || "").trim();
+  const contentId = String(task.paired_content_user_id || "").trim();
+  if (assignedId && contentId) return assignedId === contentId;
+  const assignedName = String(task.assigned_name || "").trim().toLocaleLowerCase("ar");
+  const contentName = String(task.content_user_name || "").trim().toLocaleLowerCase("ar");
+  return Boolean(assignedName && contentName && assignedName === contentName);
+}
+
+function assigneeColorStyle(value: unknown): CSSProperties | undefined {
+  const color = String(value || "").trim();
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return undefined;
+  const hex = match[1];
+  const red = Number.parseInt(hex.slice(0, 2), 16);
+  const green = Number.parseInt(hex.slice(2, 4), 16);
+  const blue = Number.parseInt(hex.slice(4, 6), 16);
+  return {
+    borderColor: color,
+    boxShadow: `5px 5px 0 ${color}, 0 8px 22px rgba(${red}, ${green}, ${blue}, .18)`,
+  };
+}
+
 function DashboardTaskCard({
   task,
   onOpen,
@@ -45,6 +75,7 @@ function DashboardTaskCard({
 }) {
   const statusLabel = templateStatusLabel(task.template_status);
   const progress = taskProgress(task);
+  const showContentWriter = Boolean(task.content_user_name) && !sameAssignedUser(task);
 
   return <article className="marketing-dashboard-task-card">
     <div className="marketing-dashboard-task-top">
@@ -53,18 +84,18 @@ function DashboardTaskCard({
     </div>
     <p className="marketing-dashboard-task-code">{task.campaign_code || task.source_name || "—"}</p>
     <div className="marketing-dashboard-task-progress">
-      <span>{progress.toLocaleString("ar-SA")}%</span>
+      <span dir="ltr" title={`نسبة الاكتمال: ${formatProgress(progress)}`} aria-label={`نسبة الاكتمال ${formatProgress(progress)}`}>{formatProgress(progress)}</span>
       <ProgressBar value={progress} />
     </div>
 
     <div className="marketing-dashboard-assignees">
       <div className="marketing-dashboard-assignee">
         <span>المسؤول</span>
-        <b><UserCircle size={18} weight="fill" />{task.assigned_name || "—"}</b>
+        <b style={assigneeColorStyle(task.assigned_user_color)}><UserCircle size={18} weight="fill" />{task.assigned_name || "—"}</b>
       </div>
-      {task.content_user_name ? <div className="marketing-dashboard-assignee content">
+      {showContentWriter ? <div className="marketing-dashboard-assignee content">
         <span>كاتب المحتوى</span>
-        <b><UserCircle size={18} weight="fill" />{task.content_user_name}</b>
+        <b style={assigneeColorStyle(task.content_user_color)}><UserCircle size={18} weight="fill" />{task.content_user_name}</b>
       </div> : null}
     </div>
 
@@ -88,25 +119,63 @@ export function MarketingDashboardPage() {
   const [expandedReadinessDepartments, setExpandedReadinessDepartments] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const versionRef = useRef("");
+  const loadInFlightRef = useRef(false);
+  const pulseInFlightRef = useRef(false);
 
-  async function load() {
-    setLoading(true);
-    setError("");
-    try {
-      setData(await marketingFetch<any>(`/api/marketing${marketingQuery({ resource: "dashboard" })}`));
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
-    } finally {
-      setLoading(false);
+  const load = useCallback(async (silent = false) => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
     }
-  }
+    try {
+      const payload = await marketingFetch<any>(`/api/marketing${marketingQuery({ resource: "dashboard" })}`);
+      setData(payload);
+      versionRef.current = String(payload.version || "");
+    } catch (failure) {
+      if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
+    } finally {
+      loadInFlightRef.current = false;
+      if (!silent) setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+
+    const refreshVisibleDashboard = () => {
+      if (document.visibilityState === "visible") void load(true);
+    };
+    const pollVersion = async () => {
+      if (document.visibilityState !== "visible" || pulseInFlightRef.current) return;
+      pulseInFlightRef.current = true;
+      try {
+        const pulse = await marketingFetch<{ version?: string }>(`/api/marketing${marketingQuery({ resource: "dashboard_version" })}`);
+        const nextVersion = String(pulse.version || "");
+        if (nextVersion && nextVersion !== versionRef.current) await load(true);
+      } catch {
+        // Keep the dashboard usable if one background pulse fails.
+      } finally {
+        pulseInFlightRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => void pollVersion(), DASHBOARD_LIVE_POLL_MS);
+    window.addEventListener("focus", refreshVisibleDashboard);
+    document.addEventListener("visibilitychange", refreshVisibleDashboard);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshVisibleDashboard);
+      document.removeEventListener("visibilitychange", refreshVisibleDashboard);
+    };
+  }, [load]);
 
   async function receive(id: string) {
     try {
       await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "receive_task", id }) });
-      await load();
+      await load(true);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر استلام التاسك");
     }
@@ -193,7 +262,7 @@ export function MarketingDashboardPage() {
               <button type="button" className="marketing-readiness-head marketing-dashboard-entity-head" onClick={() => toggleList(setExpandedEntities, entityKey)}>
                 <div>
                   <strong>{entity.name}</strong>
-                  <small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")} · {Number(entity.progress || 0).toLocaleString("ar-SA", { maximumFractionDigits: 1 })}%</small>
+                  <small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")} · <span dir="ltr">{formatProgress(entity.progress)}</span></small>
                 </div>
                 <span className="marketing-dashboard-entity-count">{tasks.length}</span>
                 {entityOpen ? <CaretUp size={18} /> : <CaretDown size={18} />}
@@ -209,7 +278,7 @@ export function MarketingDashboardPage() {
                   return <section className={`marketing-dashboard-department readiness ${open ? "open" : ""}`} key={departmentKey}>
                     <button type="button" className="marketing-dashboard-department-head" onClick={() => toggleList(setExpandedReadinessDepartments, expansionKey)}>
                       <span>{group.name}</span>
-                      <div><b>{completed}/{group.tasks.length} · {progress.toLocaleString("ar-SA", { maximumFractionDigits: 1 })}%</b>{open ? <CaretUp size={17} /> : <CaretDown size={17} />}</div>
+                      <div><b><span dir="ltr">{completed}/{group.tasks.length}</span> · <span dir="ltr">{formatProgress(progress)}</span></b>{open ? <CaretUp size={17} /> : <CaretDown size={17} />}</div>
                     </button>
                     {open ? <div className="marketing-dashboard-department-tasks">
                       {group.tasks.map((task: any) => <DashboardTaskCard key={task.id} task={task} onOpen={() => setTaskId(task.id)} />)}
@@ -225,6 +294,6 @@ export function MarketingDashboardPage() {
       <section className="marketing-kanban-column publishing"><header><div><PaperPlaneTilt size={23} /><h2>قسم النشر</h2></div><b>{data.entities.filter((item: any) => item.status === "publishing").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><PaperPlaneTilt size={36} weight="duotone" /><span>قسم النشر سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
       <section className="marketing-kanban-column archive"><header><div><Archive size={23} /><h2>قسم الأرشيف</h2></div><b>{data.entities.filter((item: any) => item.status === "archived").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><Archive size={36} weight="duotone" /><span>قسم الأرشيف سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
     </div>}
-    <TaskDetailModal taskId={taskId} onClose={() => setTaskId(null)} onChanged={() => void load()} />
+    <TaskDetailModal taskId={taskId} onClose={() => setTaskId(null)} onChanged={() => void load(true)} />
   </MarketingPage>;
 }

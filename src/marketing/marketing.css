@@ -1241,14 +1241,17 @@
   gap: 8px;
 }
 .marketing-dashboard-task-progress > span {
-  min-width: 37px;
-  padding: 4px 6px;
+  min-width: 46px;
+  padding: 5px 8px;
   border: 1px solid #ead4c8;
   border-radius: 999px;
   background: #fff8f3;
-  color: #9a543e;
-  font-size: 9px;
+  color: #7f3f2d;
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-size: 11px;
   font-weight: 900;
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 .marketing-dashboard-task-progress .marketing-progress { height: 10px; border: 0; }
@@ -1277,10 +1280,6 @@
   box-shadow: 5px 5px 0 #181818,0 8px 22px rgba(0,0,0,.13);
   overflow-wrap: anywhere;
   font-size: 11px;
-}
-.marketing-dashboard-assignee.content > b {
-  border-color: #79b4d5;
-  box-shadow: 5px 5px 0 #1c708f,0 8px 22px rgba(25,108,139,.15);
 }
 .marketing-dashboard-task-meta {
   display: grid;

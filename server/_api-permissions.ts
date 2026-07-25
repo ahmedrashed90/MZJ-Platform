@@ -107,7 +107,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   const resource = clean(request.query.resource) || "dashboard";
   if (method === "GET") {
     const map: Record<string, string> = {
-      meta: "system.marketing.access", dashboard: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
+      meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
       task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", monitoring: "marketing.monitoring.view",
       calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", attendance: "marketing.attendance.view", stock: "marketing.stock.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
