@@ -81,3 +81,14 @@ pnpm run build
 - فحص الصلاحيات المركزي: **88/88 ناجح**.
 - فحص Imports الخاص بـVercel: **ناجح**.
 - جميع ملفات `scripts/check-*.mjs` وعددها **27 Script**: ناجحة.
+
+## نتائج v1.20.1 — Task Template
+
+- `scripts/check-marketing-task-template-v1201.mjs`: **19/19 ناجح**.
+- جميع Scripts الفحص الثابتة الموجودة في أمر `typecheck` قبل `tsc -b`: **ناجحة**.
+- سجل الفحص يحتوي على **249 نتيجة PASS**.
+- Transpile Syntax لجميع ملفات TypeScript/TSX: **165 ملفًا، صفر أخطاء تركيب**.
+- إنشاء ملف XLSX من `buildTaskTemplateWorkbook` والتحقق من بنية ZIP: **ناجح**.
+- فتح ملف XLSX والتحقق من اسم الورقة وRTL والعناوين وأبعاد الأعمدة وارتفاع صف السكريبت وWrap Text بواسطة OpenPyXL: **ناجح**.
+- `tsc -b` لم يكتمل بسبب عدم توفر حزم React وباقي `node_modules` في البيئة، وليس بسبب خطأ تركيب في الملفات المعدلة.
+- لم يتم اختبار PostgreSQL أو التخزين R2 حيًا لعدم توفر بيانات الاتصال في بيئة العمل.

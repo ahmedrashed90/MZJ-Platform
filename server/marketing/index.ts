@@ -82,6 +82,35 @@ async function canAccessMarketingTask(sql: ReturnType<typeof getSql>, user: Sess
   `;
   return Boolean(visible);
 }
+async function requireTaskTemplateUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  if (!taskId) throw new Error("رقم التاسك مطلوب");
+  const [task] = await sql<any[]>`
+    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,t.paired_content_user_id::text,
+      t.task_template_id::text,tt.file_id::text as template_file_id
+    from marketing.tasks t
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if (!task || task.task_kind !== "task_template") throw new Error("Task Template غير موجود");
+  if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
+  const permission = task.template_file_id ? "marketing.task_template.reupload" : "marketing.task_template.upload";
+  if (!hasPermission(user, permission)) throw new Error("لا توجد صلاحية لرفع Task Template");
+  return task;
+}
+
+async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  if (!hasPermission(user, "marketing.task.final_file.upload")) throw new Error("لا توجد صلاحية لرفع الملف النهائي");
+  const [task] = await sql<any[]>`
+    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,tt.status as template_status
+    from marketing.tasks t
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if (!task) throw new Error("التاسك غير موجود");
+  if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
+  if (task.task_kind === "execution" && task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
+  return task;
+}
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
 function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
@@ -657,11 +686,10 @@ async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){const e
 async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);if(!hasPermission(user,"marketing.task.receive"))throw new Error("لا توجد صلاحية لاستلام التاسك");const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!await canAccessMarketingTask(sql,user,id))throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
 async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId),fileId=clean(body.fileId),data=cleanTemplateData(body.templateData);
-  const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text,task_template_id::text from marketing.tasks where id=${taskId}::uuid and task_kind='task_template'`;
-  if(!task)throw new Error("Task Template غير موجود");
-  const uploadPermission=task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload";
-  if(!hasPermission(user,uploadPermission))throw new Error("لا توجد صلاحية لرفع Task Template");
-  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفع الملف");
+  const task=await requireTaskTemplateUploadAccess(sql,user,taskId);
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  if(!file||file.category!=="task-template"||file.task_id!==taskId||file.status!=="ready")throw new Error("ملف Task Template غير صالح أو غير مرتبط بهذا التكليف");
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لاستخدام هذا الملف");
   await sql.begin(async tx=>{
     await tx`update marketing.task_templates set file_id=${fileId}::uuid,template_data=template_data||${tx.json(dbJson(data))},status='under_review',progress=50,updated_at=now() where id=${task.task_template_id}::uuid`;
     await tx`update marketing.tasks set progress=50,status='under_review',updated_at=now() where id=${taskId}::uuid`;
@@ -706,16 +734,49 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   await recalculateProgress(sql,record.source_type,record.source_id);
   return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
 }
-async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const taskId=clean(body.taskId),fileId=clean(body.fileId);if(!hasPermission(user,"marketing.task.final_file.upload"))throw new Error("لا توجد صلاحية لرفع الملف النهائي");const[task]=await sql<any[]>`select t.*,t.id::text,t.source_id::text,t.assigned_to::text,tt.status as template_status from marketing.tasks t left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid`;if(!task)throw new Error("التاسك غير موجود");if(task.task_kind==='execution'&&task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفع الملف");await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=${task.department_id} and is_active=true`;if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم رفع الملف النهائي"};}
+async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),fileId=clean(body.fileId);
+  const task=await requireFinalFileUploadAccess(sql,user,taskId);
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  if(!file||file.category!=="final-file"||file.task_id!==taskId||file.status!=="ready")throw new Error("الملف النهائي غير صالح أو غير مرتبط بهذا التكليف");
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لاستخدام هذا الملف");
+  await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;
+  const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and is_active=true`;
+  if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:"تم رفع الملف النهائي"};
+}
 
-async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;if(!category)throw new Error("نوع الملف مطلوب");if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};}
+async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
+  const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;
+  if(!category)throw new Error("نوع الملف مطلوب");
+  if(category==="task-template")await requireTaskTemplateUploadAccess(sql,user,taskId);
+  else if(category==="final-file")await requireFinalFileUploadAccess(sql,user,taskId);
+  else{
+    if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");
+    if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");
+    if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
+  }
+  const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});
+  const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;
+  return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};
+}
+
 async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
   const fileId=clean(body.fileId);
-  const rows=hasPermission(user,"marketing.file.view_others")
-    ? await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid returning id::text`
-    : await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and uploaded_by=${user.id}::uuid returning id::text`;
-  if(!rows.length)throw new Error("الملف غير موجود أو لا توجد صلاحية لتحديثه");
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  if(!file)throw new Error("الملف غير موجود");
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لتحديث الملف");
+  if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
+  else if(file.category==="final-file")await requireFinalFileUploadAccess(sql,user,file.task_id);
+  else{
+    if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
+    if(file.task_id&&!await canAccessMarketingTask(sql,user,file.task_id))throw new Error("التاسك خارج نطاق بياناتك");
+    if(file.source_id&&!file.task_id)await assertMarketingEntityAccess(sql,user,clean(file.source_type),file.source_id);
+  }
+  const rows=await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and status='uploading' returning id::text`;
+  if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
 }
 async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;if(!file)throw new Error("الملف غير موجود");if(!hasPermission(user,"marketing.file.view_others")){const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;if(!allowed)throw new Error("الملف خارج نطاق بياناتك");}return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size}};}
