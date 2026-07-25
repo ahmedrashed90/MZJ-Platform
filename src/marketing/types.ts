@@ -32,6 +32,7 @@ export type MarketingMeta = {
   ok: boolean;
   users: MarketingUser[];
   departments: MarketingDepartment[];
+  contentDepartmentId: string;
   actions: AssignmentAction[];
   creativeTypes: CreativeType[];
   campaignTypes: CampaignType[];

@@ -143,6 +143,41 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
       )
     on conflict(id) do update set name=excluded.name,is_active=excluded.is_active,updated_at=greatest(marketing.departments.updated_at,excluded.updated_at)
   `;
+
+  // Recover the single canonical content department ID. Older data can keep the
+  // user membership on the correct department while the is_content flag points
+  // to another row. Prefer the established content department name only as a
+  // repair fallback, then persist the chosen UUID so every screen uses the same ID.
+  const [contentDepartment] = await sql<any[]>`
+    select md.id::text
+    from marketing.departments md
+    join core.departments cd on cd.id=md.id and cd.system_code='marketing'
+    left join lateral (
+      select count(*)::int as members
+      from core.user_system_departments usd
+      where usd.system_code='marketing' and usd.department_id=md.id
+    ) membership on true
+    where md.is_active=true and cd.is_active=true
+      and (
+        md.is_content=true
+        or replace(lower(btrim(cd.name)), ' ', '') in ('قسمالمحتوى','المحتوى','content','contentdepartment')
+      )
+    order by
+      case when replace(lower(btrim(cd.name)), ' ', '') in ('قسمالمحتوى','المحتوى','content','contentdepartment') then 0 else 1 end,
+      md.is_content desc,
+      coalesce(membership.members,0) desc,
+      md.created_at,
+      md.id
+    limit 1
+  `;
+  const contentDepartmentIdValue=clean(contentDepartment?.id);
+  if(contentDepartmentIdValue){
+    await sql`
+      update marketing.departments
+      set is_content=(id=${contentDepartmentIdValue}::uuid),updated_at=case when is_content is distinct from (id=${contentDepartmentIdValue}::uuid) then now() else updated_at end
+      where is_content=true or id=${contentDepartmentIdValue}::uuid
+    `;
+  }
   const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels] = await Promise.all([
     sql<any[]>`
       select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
@@ -176,7 +211,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     sql<any[]>`select id::text,name,active,source,created_at from marketing.funnels where active=true order by created_at`,
   ]);
   const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
-  return { ok: true, users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
+  return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
 }
 
 async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
@@ -221,7 +256,7 @@ async function nextCampaignCode(sql: ReturnType<typeof getSql>, campaignTypeId: 
   });
 }
 
-function contentDepartmentId(metaDepartments: any[]) { return clean(metaDepartments.find((item) => item.is_content)?.id); }
+function contentDepartmentId(meta: { contentDepartmentId?: string; departments: any[] }) { return clean(meta.contentDepartmentId || meta.departments.find((item) => item.is_content)?.id); }
 
 async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string }) {
   const templates = new Map<string, string>();
@@ -268,7 +303,7 @@ async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<strin
   const campaignTypeId = clean(body.campaignTypeId); const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd);
   if (!campaignTypeId || !name || !start || !end) throw new Error("بيانات الحملة الأساسية غير مكتملة");
   const code = clean(body.campaignCode) || await nextCampaignCode(sql, campaignTypeId);
-  const meta = await marketingMeta(sql, user); const contentId = contentDepartmentId(meta.departments);
+  const meta = await marketingMeta(sql, user); const contentId = contentDepartmentId(meta);
   return sql.begin(async (tx) => {
     const [campaign] = await tx<any[]>`
       insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
@@ -323,7 +358,7 @@ function datesBetween(start: string, end: string) {
 async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
   const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd); const monthKey = clean(body.monthKey);
   if (!name || !start || !end || !monthKey) throw new Error("بيانات الأجندة الأساسية غير مكتملة");
-  const meta = await marketingMeta(sql,user); const contentId = contentDepartmentId(meta.departments);
+  const meta = await marketingMeta(sql,user); const contentId = contentDepartmentId(meta);
   return sql.begin(async (tx) => {
     const [agenda] = await tx<any[]>`insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by) values (${name},${monthKey},${start},${end},'required',${tx.json(dbJson(body))},0,${user.id}::uuid) returning id::text`;
     let creativeIndex = 0;
@@ -528,6 +563,9 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
       let departmentId=requestedId;
       let row:any;
       let reused=false;
+      if(bool(body.isContent)){
+        await tx`update marketing.departments set is_content=false,updated_at=now() where is_content=true and (${requestedId}='' or id<>nullif(${requestedId},'')::uuid)`;
+      }
       if(departmentId){
         const [existing]=await tx<any[]>`
           select md.id::text,cd.name,md.is_content,md.is_active

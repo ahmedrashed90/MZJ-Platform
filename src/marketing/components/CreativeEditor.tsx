@@ -110,7 +110,8 @@ export function CreativeEditor({
   const [carsOpen, setCarsOpen] = useState(false);
   const [carSearch, setCarSearch] = useState("");
   const creativeType = meta.creativeTypes.find((item) => item.id === value.creativeTypeId);
-  const contentDepartment = meta.departments.find((item) => item.is_content);
+  const contentDepartment = meta.departments.find((item) => item.id === meta.contentDepartmentId)
+    || meta.departments.find((item) => item.is_content);
   const primaryUsers = departmentUsers(meta, creativeType?.primary_department_id || "");
   const contentUsers = contentDepartment?.users || [];
 

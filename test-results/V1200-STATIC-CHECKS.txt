@@ -1,3 +1,15 @@
+=== node scripts/check-marketing-content-users-v1200.mjs ===
+PASS: Marketing meta reads department users from central allowed departments
+PASS: Marketing meta returns one explicit canonical content department ID
+PASS: Legacy inconsistent content flags are repaired onto the canonical content UUID
+PASS: Campaign and agenda task creation use the explicit content department ID
+PASS: Creative editor selects content users by contentDepartmentId before any compatibility fallback
+PASS: Campaign and agenda initialize the explicit content department field
+PASS: Saving a content department keeps one content flag without changing memberships
+PASS: Bilal appears in both content and montage even when the old content flag is stale
+
+Marketing content-user regression checks: 8/8 passed.
+=== node scripts/check-marketing-department-access-v1199.mjs ===
 PASS: Marketing API must not read/write the legacy department_users table
 PASS: Clean schema must not recreate legacy membership storage
 PASS: Marketing memberships must use central allowed departments
@@ -17,10 +29,12 @@ PASS: Saving a duplicate marketing name must reuse the existing canonical depart
 PASS: Marketing meta loading must skip legacy same-name ID collisions instead of failing
 PASS: Role template list must render one canonical row per display-name group
 PASS: Bilal multi-department acceptance scenario must preserve editing after content removal
+=== node scripts/check-central-access-sql-v1193.mjs ===
 PASS database/migrations/20260724_central_access_control_v1190.sql
 PASS database/seeds/20260724_central_access_catalog.sql
 PASS server/_access-control-schema.ts
 Central access SQL syntax regression checks passed: 3/3
+=== node scripts/check-login-schema-bootstrap-v1192.mjs ===
 PASS schema readiness state exists
 PASS schema bootstrap uses advisory lock
 PASS schema bootstrap verifies auth columns
@@ -30,6 +44,7 @@ PASS session lookup initializes schema
 PASS profile loading initializes schema
 PASS setup uses the same bootstrap service
 Login schema bootstrap checks passed: 8/8
+=== node scripts/check-build-types-v1191.mjs ===
 PASS: Effective access keeps query result sets separate
 PASS: Effective access reads the first permission row
 PASS: Effective access reads the first version row
@@ -38,6 +53,7 @@ PASS: NodeNext shared import has an explicit extension
 PASS: Legacy row-list property access is absent
 
 Build type regression checks: 6/6 passed.
+=== node scripts/check-central-access-control-v1190.mjs ===
 PASS: Package version is 1.19.4
 PASS: Four systems exist in central catalog
 PASS: Permission catalog is large enough for all systems
@@ -130,9 +146,13 @@ PASS: Operations actions no longer use a platform-admin shortcut
 PASS: No localStorage permission source remains
 
 Central access control checks: 90/90 passed.
+=== node scripts/check-api-imports.mjs ===
 API and server import extension check passed.
+=== node scripts/check-crm-service-reclassification-v1156.mjs ===
 CRM service reclassification v1.15.6 check passed
+=== node scripts/check-facebook-identity-auto-template-v1173.mjs ===
 Facebook canonical identity and automatic entry template v1.17.3 check passed
+=== node scripts/check-crm-reports-kpi-v1159.mjs ===
 PASS: Package version includes the CRM reports release
 PASS: Ownership page route remains removed
 PASS: Ownership navigation remains removed
@@ -149,6 +169,7 @@ PASS: Attachment action is compact and writing area is larger
 PASS: Readable bold typography is integrated in canonical styles
 PASS: Finance history layout remains unchanged
 PASS: Ownership page and dedicated handler files remain deleted
+=== node scripts/check-crm-manual-leads-v1160.mjs ===
 PASS: Manual lead form hides payment selector
 PASS: Manual lead form hides branch selector
 PASS: Manual lead form hides registration date input
@@ -160,13 +181,21 @@ PASS: Registration date is generated automatically
 PASS: Tracking navigation no longer duplicates settings
 PASS: Tracking settings remain in unified settings
 PASS: Role choices use central unique role IDs
+=== node scripts/check-crm-module.mjs ===
 CRM module structure and no-sample-data check passed.
+=== node scripts/check-customer-completion.mjs ===
 Dynamic customer completion calculation check passed.
+=== node scripts/check-crm-reference-v27.mjs ===
 CRM reference v27 structure, unread flow, finance differences, and category checks passed.
+=== node scripts/check-crm-settings-v180.mjs ===
 CRM settings v1.8 full-width layout, Worker-based Mersal sync, and distribution checks passed.
+=== node scripts/check-crm-reference-v39.mjs ===
 CRM reference v39 migration, reports, pagination, manual edit, XLSX export, and data-review checks passed.
+=== node scripts/check-crm-automation-flow-v1180.mjs ===
 CRM automation v1.18.0 static architecture and acceptance simulations: PASS
+=== node scripts/check-crm-finance-combined-details-v1180.mjs ===
 CRM finance combined details parser v1.18.0: PASS
+=== node scripts/check-worker-route-discovery-v194.mjs ===
 PASS: WhatsApp text uses the configured canonical worker route
 PASS: WhatsApp media may use its dedicated configured worker route
 PASS: Worker delivery has no route fallback loop
@@ -175,8 +204,11 @@ PASS: Mersal template name is preferred over provider numeric id
 PASS: UI request returns queued while Vercel finishes the provider call in the background
 PASS: Worker result is stored directly by the background platform task
 PASS: Admin exposes separate text/template and attachment worker route fields
+=== node scripts/check-tracking-module-v112.mjs ===
 Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, direct ERPNext webhook, and SMS+ checks passed.
+=== node scripts/check-operations-native-v2.mjs ===
 Operations Native V2 structure, branch scope, tracking delete, modal stack, dashboard drill-down, and source-identity checks passed.
+=== node scripts/check-dashboard-operations-v1161.mjs ===
 PASS: Package version includes dashboard operations v1.16.1
 PASS: Department cards use department-specific open conversation totals
 PASS: Open conversations exclude closed rows
@@ -196,6 +228,7 @@ PASS: Movement history provides A3 landscape PDF export
 PASS: A3 PDF contains every requested column
 PASS: A3 PDF renders present as correct and absent as wrong
 PASS: Movement API returns the requested vehicle, check, approval, actor, and request data
+=== node scripts/check-operations-workflow-v1162.mjs ===
 PASS: Version is 1.16.2 or newer
 PASS: Existing check history tables gain the missing note column
 PASS: Approval rows persist pending final delivery requests
@@ -210,6 +243,7 @@ PASS: Vehicle checks are rendered as separated professional cards
 PASS: Agency movement checks are rendered as separated editor cards
 PASS: Tracking request is a compact progress control with percentage tones
 PASS: Approval screen closes a vehicle after automatic final delivery
+=== node scripts/check-operations-fk-delete-v1163.mjs ===
 PASS: Canonical safety bag definition exists
 PASS: Legacy history codes are preserved before FK replacement
 PASS: History FK is repointed to canonical definitions
@@ -217,11 +251,17 @@ PASS: Deployment migration contains the same FK repair
 PASS: Vehicle delete removes related tracking SMS
 PASS: Vehicle delete remains transactional
 PASS: Inventory detail exposes complete vehicle delete action
+=== node scripts/check-erpnext-unified-sales-link-v1166.mjs ===
 ERPNext unified Sales Order -> Tracking + CRM + Operations v1.16.9 check passed.
+=== node scripts/check-tracking-deleted-release-v1168.mjs ===
 Tracking deleted-order release v1.16.9 check passed.
+=== node scripts/check-operations-auto-archive-v1169.mjs ===
 Operations automatic vehicle archive v1.16.9 check passed.
+=== node scripts/check-operations-approval-cycles-v1170.mjs ===
 Operations approval-cycle and vehicle-management status v1.17.0 check passed.
+=== node scripts/check-erpnext-clean-integration-v1197.mjs ===
 PASS: NEXT ERP clean integration runtime checks (v1.19.7 source)
+=== node scripts/check-erpnext-cancel-tracking-sync-v1194.mjs ===
 PASS: Package version is 1.19.4
 PASS: ERPNext instance identity includes creation
 PASS: ERPNext cancel route uses the unified endpoint
@@ -244,3 +284,4 @@ PASS: Migration exists
 PASS: Cancel webhook JSON exists
 
 ERPNext cancel/tracking sync checks: 20/20 passed.
+ALL_STATIC_NODE_CHECKS_PASSED
