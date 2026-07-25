@@ -1,0 +1,5 @@
+PASS server/marketing/index.ts
+PASS server/_marketing-schema.ts
+PASS src/marketing/pages/DepartmentsPage.tsx
+PASS src/pages/SettingsPage.tsx
+TRANSPILE_ERRORS=0
