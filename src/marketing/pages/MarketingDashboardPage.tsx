@@ -223,8 +223,11 @@ export function MarketingDashboardPage() {
             const open = expandedRequired.includes(departmentKey);
             return <section className={`marketing-dashboard-department ${open ? "open" : ""}`} key={departmentKey}>
               <button type="button" className="marketing-dashboard-department-head" onClick={() => toggleList(setExpandedRequired, departmentKey)}>
-                <span>{group.name}</span>
-                <div><b>{group.tasks.length}</b>{open ? <CaretUp size={17} /> : <CaretDown size={17} />}</div>
+                <span className="marketing-dashboard-department-name">{group.name}</span>
+                <div className="marketing-dashboard-department-controls">
+                  <span className="marketing-dashboard-department-summary simple">{group.tasks.length} تاسك</span>
+                  {open ? <CaretUp size={16} /> : <CaretDown size={16} />}
+                </div>
               </button>
               {open ? <div className="marketing-dashboard-department-tasks">
                 {group.tasks.map((task: any) => <DashboardTaskCard
@@ -260,12 +263,15 @@ export function MarketingDashboardPage() {
 
             return <article className={`marketing-readiness-card marketing-dashboard-entity ${entityOpen ? "open" : ""}`} key={entityKey}>
               <button type="button" className="marketing-readiness-head marketing-dashboard-entity-head" onClick={() => toggleList(setExpandedEntities, entityKey)}>
-                <div>
+                <div className="marketing-dashboard-entity-main">
                   <strong>{entity.name}</strong>
-                  <small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")} · <span dir="ltr">{formatProgress(entity.progress)}</span></small>
+                  <small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")}</small>
                 </div>
-                <span className="marketing-dashboard-entity-count">{tasks.length}</span>
-                {entityOpen ? <CaretUp size={18} /> : <CaretDown size={18} />}
+                <div className="marketing-dashboard-entity-stats">
+                  <span>{tasks.length} تاسك</span>
+                  <b dir="ltr">{formatProgress(entity.progress)}</b>
+                </div>
+                {entityOpen ? <CaretUp size={17} /> : <CaretDown size={17} />}
               </button>
               <ProgressBar value={entity.progress} />
 
@@ -277,8 +283,14 @@ export function MarketingDashboardPage() {
                   const progress = group.tasks.reduce((sum: number, task: any) => sum + taskProgress(task), 0) / Math.max(1, group.tasks.length);
                   return <section className={`marketing-dashboard-department readiness ${open ? "open" : ""}`} key={departmentKey}>
                     <button type="button" className="marketing-dashboard-department-head" onClick={() => toggleList(setExpandedReadinessDepartments, expansionKey)}>
-                      <span>{group.name}</span>
-                      <div><b><span dir="ltr">{completed}/{group.tasks.length}</span> · <span dir="ltr">{formatProgress(progress)}</span></b>{open ? <CaretUp size={17} /> : <CaretDown size={17} />}</div>
+                      <span className="marketing-dashboard-department-name">{group.name}</span>
+                      <div className="marketing-dashboard-department-controls">
+                        <span className="marketing-dashboard-department-summary">
+                          <small><span dir="ltr">{completed}/{group.tasks.length}</span> تاسك</small>
+                          <strong dir="ltr">{formatProgress(progress)}</strong>
+                        </span>
+                        {open ? <CaretUp size={16} /> : <CaretDown size={16} />}
+                      </div>
                     </button>
                     {open ? <div className="marketing-dashboard-department-tasks">
                       {group.tasks.map((task: any) => <DashboardTaskCard key={task.id} task={task} onOpen={() => setTaskId(task.id)} />)}
