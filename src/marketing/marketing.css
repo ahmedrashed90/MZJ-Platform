@@ -470,8 +470,7 @@
 }
 .marketing-day-editor,
 .marketing-modal,
-.marketing-task-modal,
-.marketing-database-modal {
+.marketing-task-modal {
   width: min(1100px,96vw);
   max-height: 92vh;
   overflow: auto;
@@ -482,8 +481,7 @@
 }
 .marketing-day-editor > header,
 .marketing-modal > header,
-.marketing-task-modal > header,
-.marketing-database-modal > header {
+.marketing-task-modal > header {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -497,12 +495,132 @@
 }
 .marketing-day-editor > header h2,
 .marketing-modal > header h2,
-.marketing-task-modal > header h2,
-.marketing-database-modal > header h2 { margin: 0; }
+.marketing-task-modal > header h2 { margin: 0; }
 .marketing-day-editor-body,
 .marketing-modal-body,
 .marketing-task-detail,
 .marketing-entity-detail { padding: 18px; display: grid; gap: 14px; }
+
+.mzj-modal-card.marketing-database-modal-fullscreen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: #f7f4f2;
+  box-shadow: none;
+}
+.marketing-database-modal-fullscreen .mzj-modal-header {
+  min-height: 72px;
+  padding: 14px clamp(18px,2.4vw,40px);
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+.marketing-database-modal-fullscreen .mzj-modal-header h2 { margin: 0; font-size: clamp(19px,1.6vw,26px); }
+.marketing-database-modal-fullscreen .mzj-modal-header p { margin-top: 4px; font-weight: 800; }
+.marketing-database-modal-fullscreen .mzj-modal-body { padding: 0; background: #f7f4f2; }
+.marketing-database-workspace {
+  width: 100%;
+  padding: 18px clamp(14px,2vw,32px) 36px;
+  display: grid;
+  gap: 16px;
+}
+.marketing-database-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 8px 20px rgba(81,44,34,.05);
+  backdrop-filter: blur(8px);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+.marketing-database-toolbar .marketing-detail-actions-top { width: 100%; justify-content: flex-end; }
+.marketing-database-section {
+  padding: 18px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(81,44,34,.04);
+}
+.marketing-database-section > h3 { margin: 0; font-size: 19px; }
+.marketing-database-summary-grid { grid-template-columns: repeat(6,minmax(0,1fr)); gap: 9px; }
+.marketing-database-summary-grid > div {
+  min-width: 0;
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fffdfc;
+  display: grid;
+  grid-template-columns: minmax(78px,auto) minmax(0,1fr);
+  align-items: center;
+  gap: 8px;
+}
+.marketing-database-summary-grid small { color: var(--muted); font-size: 11px; font-weight: 800; }
+.marketing-database-summary-grid strong { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
+.marketing-database-table table { min-width: 900px; }
+.marketing-database-two-column { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; align-items: start; }
+.marketing-database-empty {
+  min-height: 112px;
+  padding: 22px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 13px;
+  color: var(--muted);
+  background: #fffdfb;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  font-weight: 800;
+}
+.marketing-database-empty.compact { min-height: 72px; padding: 14px; }
+.marketing-database-upload-state {
+  min-height: 150px;
+  padding: 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 13px;
+  background: #fffdfb;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  text-align: center;
+}
+.marketing-database-upload-state p { margin: 0; color: var(--muted); font-weight: 800; }
+.marketing-database-link-row { grid-template-columns: 190px minmax(0,1fr) auto; align-items: center; }
+.marketing-schedule-table-wrap { overflow: auto; }
+.marketing-grouped-schedule-table { min-width: 560px !important; border-collapse: separate !important; border-spacing: 0; }
+.marketing-grouped-schedule-table th,
+.marketing-grouped-schedule-table td { border-inline-start: 1px solid var(--line); border-bottom: 1px solid var(--line); vertical-align: middle; }
+.marketing-grouped-schedule-table th:first-child,
+.marketing-grouped-schedule-table td:first-child { border-inline-end: 1px solid var(--line); }
+.marketing-grouped-schedule-table thead th { text-align: center; background: #f5f1ef; }
+.marketing-grouped-schedule-table tbody td { min-height: 42px; background: #fff; text-align: center; }
+.marketing-grouped-schedule-table .marketing-schedule-day { width: 27%; font-weight: 900; background: #faf7f5; }
+.marketing-grouped-schedule-table .marketing-schedule-platform { width: 33%; font-weight: 800; background: #fdfbf9; }
+
+@media (max-width: 1300px) {
+  .marketing-database-summary-grid { grid-template-columns: repeat(4,minmax(0,1fr)); }
+}
+@media (max-width: 980px) {
+  .marketing-database-two-column { grid-template-columns: 1fr; }
+  .marketing-database-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 680px) {
+  .marketing-database-modal-fullscreen .mzj-modal-header { min-height: 64px; padding: 11px 13px; }
+  .marketing-database-workspace { padding: 12px 9px 26px; }
+  .marketing-database-toolbar { position: static; }
+  .marketing-database-toolbar .marketing-detail-actions-top > * { flex: 1 1 145px; }
+  .marketing-database-summary-grid { grid-template-columns: 1fr; }
+  .marketing-database-summary-grid > div { grid-template-columns: 1fr; }
+  .marketing-database-link-row { grid-template-columns: 1fr; }
+}
 .marketing-modal > footer,
 .marketing-day-editor > footer { padding: 14px 18px; border-top: 1px solid var(--line); background: #fffaf7; display: flex; justify-content: flex-end; gap: 8px; }
 
@@ -726,12 +844,12 @@
 .marketing-task-modal-fullscreen .mzj-modal-header h2 { font-size: clamp(18px,2vw,25px); color: var(--ink); }
 .marketing-task-modal-fullscreen .mzj-modal-header p { font-weight: 700; }
 .marketing-task-modal-fullscreen .mzj-modal-body { padding: 0; background: #f7f4f2; }
-.marketing-task-modal-fullscreen .marketing-alert { margin: 18px auto 0; width: min(1480px,calc(100% - 36px)); }
+.marketing-task-modal-fullscreen .marketing-alert { margin: 16px clamp(12px,1.5vw,24px) 0; width: auto; }
 .marketing-task-modal-fullscreen .marketing-task-detail {
-  width: min(1480px,100%);
-  margin: 0 auto;
-  padding: 22px clamp(16px,3vw,34px) 42px;
-  gap: 18px;
+  width: 100%;
+  margin: 0;
+  padding: 18px clamp(12px,1.6vw,26px) 36px;
+  gap: 16px;
 }
 .marketing-task-overview,
 .marketing-task-toolbar,
@@ -750,11 +868,11 @@
 .marketing-task-status.status-completed { color: #237344; background: #eaf8ee; }
 .marketing-task-status.status-in_progress,
 .marketing-task-status.status-under_review { color: #8a4a2f; background: #fff3e8; }
-.marketing-task-modal-fullscreen .marketing-detail-grid { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
+.marketing-task-modal-fullscreen .marketing-detail-grid { grid-template-columns: repeat(6,minmax(0,1fr)); gap: 9px; }
 .marketing-task-modal-fullscreen .marketing-detail-grid > article {
   min-width: 0;
-  min-height: 82px;
-  padding: 12px 14px;
+  min-height: 68px;
+  padding: 10px 12px;
   border: 1px solid #ead9d0;
   border-radius: 12px;
   background: #fffcfa;
@@ -807,7 +925,7 @@
 .marketing-writer-field textarea:disabled { color: #4d3a34; background: #faf8f7; opacity: 1; cursor: text; }
 .marketing-writer-field textarea:focus,
 .marketing-review-note textarea:focus { border-color: #d89a7f; box-shadow: 0 0 0 3px rgba(198,95,60,.08); outline: 0; }
-.marketing-approved-data { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.marketing-approved-data { grid-template-columns: repeat(4,minmax(0,1fr)); }
 .marketing-approved-data > div { min-height: 96px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
 .marketing-approved-data > div.full { grid-column: 1/-1; }
 .marketing-approved-data > div.script { min-height: 250px; }
@@ -840,8 +958,13 @@
 .marketing-action-button > b { min-width: 48px; padding: 5px 8px; border-radius: 999px; background: rgba(124,59,46,.08); text-align: center; }
 .marketing-upload-button.disabled { pointer-events: none; opacity: .5; }
 
-@media (max-width: 1100px) {
+@media (max-width: 1450px) {
+  .marketing-task-modal-fullscreen .marketing-detail-grid { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .marketing-approved-data { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}
+@media (max-width: 1050px) {
   .marketing-task-modal-fullscreen .marketing-detail-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .marketing-approved-data { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 760px) {
   .marketing-task-modal-fullscreen .mzj-modal-header { min-height: 64px; padding: 12px 14px; }
