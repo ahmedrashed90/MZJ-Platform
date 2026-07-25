@@ -120,7 +120,7 @@ export function MarketingDashboardPage() {
     const map = new Map<string, { name: string; tasks: any[] }>();
     for (const task of data.required || []) {
       const key = task.department_id || task.department_name || "unknown";
-      const current = map.get(key) || { name: task.department_name || "قسم المحتوى", tasks: [] };
+      const current: { name: string; tasks: any[] } = map.get(key) || { name: task.department_name || "قسم المحتوى", tasks: [] };
       current.tasks.push(task);
       map.set(key, current);
     }
@@ -184,7 +184,7 @@ export function MarketingDashboardPage() {
             const departments = new Map<string, { name: string; tasks: any[] }>();
             tasks.forEach((task: any) => {
               const departmentKey = task.department_id || task.department_name || "unknown";
-              const current = departments.get(departmentKey) || { name: task.department_name || "قسم المحتوى", tasks: [] };
+              const current: { name: string; tasks: any[] } = departments.get(departmentKey) || { name: task.department_name || "قسم المحتوى", tasks: [] };
               current.tasks.push(task);
               departments.set(departmentKey, current);
             });
