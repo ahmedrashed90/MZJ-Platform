@@ -12,7 +12,6 @@ import {
 } from "./_access-control.js";
 import { DATA_SCOPE_OPTIONS, SYSTEM_CATALOG, type DataScope, type PlatformSystem } from "../shared/access-control.js";
 import { ensureMarketingSchema } from "./_marketing-schema.js";
-import { ensureOperationsSchema } from "./_operations-schema.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -233,11 +232,11 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   // Marketing departments and their users are managed only from Marketing Settings.
   // Keep the central form as a read-only reflection and ignore stale clients that try
   // to change marketing department membership from this endpoint.
-  const previousMarketingSystem = (before?.systems || []).find((item: any) => clean(item.systemCode) === "marketing");
+  const previousMarketingSystem = (before?.systems || []).find((item: any) => clean(item.system_code) === "marketing");
   const systems = submittedSystems.map((item: any) => clean(item.systemCode) !== "marketing" ? item : {
     ...item,
-    departmentIds: creating ? [] : array(previousMarketingSystem?.departmentIds),
-    primaryDepartmentId: creating ? "" : clean(previousMarketingSystem?.primaryDepartmentId),
+    departmentIds: creating ? [] : array(previousMarketingSystem?.department_ids),
+    primaryDepartmentId: creating ? "" : clean(previousMarketingSystem?.primary_department_id),
   });
   const beforeUser = before?.user || {};
   const profileChanged = creating
@@ -581,7 +580,6 @@ export default async function handler(request: VercelRequest,response: VercelRes
   const actor=await requireUser(request,response); if(!actor)return;
   const resource=clean(request.query.resource)||'bootstrap';
   try{
-    await ensureOperationsSchema();
     await ensureMarketingSchema();
     if(request.method==='GET'){
       if(resource==='bootstrap'){

@@ -599,13 +599,21 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
           and usd.is_primary is distinct from (ranked.row_no=1)
       `;
 
-      await tx`delete from core.user_departments where user_id::text=any(${affectedUserIds}::text[])`;
+      await tx`
+        delete from core.user_departments ud
+        using core.departments d
+        where ud.department_id=d.id
+          and d.system_code='marketing'
+          and ud.user_id::text=any(${affectedUserIds}::text[])
+      `;
       await tx`
         insert into core.user_departments(user_id,department_id,is_primary)
-        select user_id,department_id,bool_or(is_primary)
-        from core.user_system_departments
-        where user_id::text=any(${affectedUserIds}::text[])
-        group by user_id,department_id
+        select usd.user_id,usd.department_id,bool_or(usd.is_primary)
+        from core.user_system_departments usd
+        join core.departments d on d.id=usd.department_id and d.system_code='marketing'
+        where usd.system_code='marketing'
+          and usd.user_id::text=any(${affectedUserIds}::text[])
+        group by usd.user_id,usd.department_id
         on conflict(user_id,department_id) do update set is_primary=excluded.is_primary
       `;
       await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id::text=any(${affectedUserIds}::text[])`;
@@ -657,12 +665,21 @@ async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){
         from ranked where usd.user_id=ranked.user_id and usd.system_code='marketing' and usd.department_id=ranked.department_id
           and usd.is_primary is distinct from (ranked.row_no=1)
       `;
-      await tx`delete from core.user_departments where user_id::text=any(${affectedUserIds}::text[])`;
+      await tx`
+        delete from core.user_departments ud
+        using core.departments d
+        where ud.department_id=d.id
+          and d.system_code='marketing'
+          and ud.user_id::text=any(${affectedUserIds}::text[])
+      `;
       await tx`
         insert into core.user_departments(user_id,department_id,is_primary)
-        select user_id,department_id,bool_or(is_primary) from core.user_system_departments
-        where user_id::text=any(${affectedUserIds}::text[])
-        group by user_id,department_id
+        select usd.user_id,usd.department_id,bool_or(usd.is_primary)
+        from core.user_system_departments usd
+        join core.departments d on d.id=usd.department_id and d.system_code='marketing'
+        where usd.system_code='marketing'
+          and usd.user_id::text=any(${affectedUserIds}::text[])
+        group by usd.user_id,usd.department_id
         on conflict(user_id,department_id) do update set is_primary=excluded.is_primary
       `;
       await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id::text=any(${affectedUserIds}::text[])`;
