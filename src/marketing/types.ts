@@ -1,5 +1,5 @@
 export type MarketingUser = { id: string; full_name?: string; fullName?: string; email?: string | null };
-export type MarketingDepartment = { id: string; core_department_id?: string | null; name: string; is_content: boolean; users: MarketingUser[] };
+export type MarketingDepartment = { id: string; name: string; is_content: boolean; users: MarketingUser[] };
 export type AssignmentAction = { id: string; department_id: string; department_name: string; name: string; percentage: number; admin_only: boolean; sort_order: number };
 export type CreativeType = { id: string; name: string; short_code: string; primary_department_id: string; primary_department_name: string };
 export type CampaignType = { id: string; name: string; short_code: string; code_prefix: string; sequence_value: number };
