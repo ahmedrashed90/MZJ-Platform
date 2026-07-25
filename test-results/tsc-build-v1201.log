@@ -1,0 +1,17 @@
+TypeScript project build was attempted with global tsc.
+Status: NOT COMPLETED because project dependencies are not installed in this environment.
+Representative errors:
+src/App.tsx(1,48): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+src/App.tsx(2,54): error TS2307: Cannot find module 'react-router-dom' or its corresponding type declarations.
+src/App.tsx(53,46): error TS2875: This JSX tag requires the module path 'react/jsx-runtime' to exist, but none could be found. Make sure you have types for the appropriate package installed.
+src/App.tsx(75,5): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(77,7): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(78,29): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(78,84): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(131,7): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(132,5): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(144,27): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/App.tsx(144,87): error TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.
+src/access-control/UsersPermissionsPanel.tsx(1,46): error TS2307: Cannot find module 'react' or its corresponding type declarations.
+
+The complete source syntax pass was run separately across 165 TS/TSX files with 0 syntax diagnostics.

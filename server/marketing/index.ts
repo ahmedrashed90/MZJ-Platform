@@ -82,6 +82,35 @@ async function canAccessMarketingTask(sql: ReturnType<typeof getSql>, user: Sess
   `;
   return Boolean(visible);
 }
+async function requireTaskTemplateUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  if (!taskId) throw new Error("رقم التاسك مطلوب");
+  const [task] = await sql<any[]>`
+    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,t.paired_content_user_id::text,
+      t.task_template_id::text,tt.file_id::text as template_file_id
+    from marketing.tasks t
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if (!task || task.task_kind !== "task_template") throw new Error("Task Template غير موجود");
+  if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
+  const permission = task.template_file_id ? "marketing.task_template.reupload" : "marketing.task_template.upload";
+  if (!hasPermission(user, permission)) throw new Error("لا توجد صلاحية لرفع Task Template");
+  return task;
+}
+
+async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  if (!hasPermission(user, "marketing.task.final_file.upload")) throw new Error("لا توجد صلاحية لرفع الملف النهائي");
+  const [task] = await sql<any[]>`
+    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,tt.status as template_status
+    from marketing.tasks t
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if (!task) throw new Error("التاسك غير موجود");
+  if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
+  if (task.task_kind === "execution" && task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
+  return task;
+}
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
 function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
@@ -400,9 +429,22 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
     group by coalesce(t.department_id::text,'content')
   `;
   const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
-  if (sourceType === "agenda") await sql`update marketing.agendas set progress=${progress},status=case when status in ('publishing','archived') then status when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
-  else await sql`update marketing.campaigns set progress=${progress},status=case when status in ('publishing','archived') then status when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  if (sourceType === "agenda") await sql`update marketing.agendas set progress=${progress},status=case when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  else await sql`update marketing.campaigns set progress=${progress},status=case when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
   return progress;
+}
+
+async function dashboardVersion(sql: ReturnType<typeof getSql>) {
+  const [row] = await sql<any[]>`
+    select greatest(
+      coalesce((select max(updated_at) from marketing.tasks),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.task_templates),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.campaigns),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.agendas),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.user_colors),'epoch'::timestamptz)
+    )::text as version
+  `;
+  return clean(row?.version);
 }
 
 async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
@@ -426,12 +468,15 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     )`;
   const tasks = await sql<any[]>`
     select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.note,
-      t.assigned_to::text,u.full_name as assigned_name,t.paired_content_user_id::text,cu.full_name as content_user_name,
+      t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
+      t.paired_content_user_id::text,cu.full_name as content_user_name,cuc.color as content_user_color,
       d.id::text as department_id,d.name as department_name,c.name as creative_name,c.instance_code,
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,tt.status as template_status,tt.approved_data,
       f.id::text as final_file_id,f.original_name as final_file_name
     from marketing.tasks t
     left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id
+    left join marketing.user_colors auc on auc.user_id=t.assigned_to
+    left join marketing.user_colors cuc on cuc.user_id=t.paired_content_user_id
     left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
@@ -455,24 +500,8 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     )
     order by created_at desc
   `;
-  return { ok:true, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, permissions:user.permissions.filter((code)=>code.startsWith("marketing.")) };
-}
-
-async function moveEntityToPublishing(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لنقل الحملة أو الأجندة إلى قسم النشر");
-  const sourceType=clean(body.sourceType),id=clean(body.id);
-  if(!['campaign','agenda'].includes(sourceType)||!id)throw new Error("بيانات النقل غير مكتملة");
-  await assertMarketingEntityAccess(sql,user,sourceType,id);
-  return sql.begin(async(tx)=>{
-    const[row]=sourceType==='agenda'
-      ?await tx<any[]>`select id::text,name,progress::float,status from marketing.agendas where id=${id}::uuid and archived_at is null for update`
-      :await tx<any[]>`select id::text,name,progress::float,status from marketing.campaigns where id=${id}::uuid and is_deleted=false and archived_at is null for update`;
-    if(!row)throw new Error("الحملة أو الأجندة غير موجودة");
-    if(Number(row.progress||0)<100)throw new Error("لا يمكن النقل إلى قسم النشر قبل اكتمال الجاهزية بنسبة 100%");
-    if(sourceType==='agenda')await tx`update marketing.agendas set status='publishing',updated_at=now() where id=${id}::uuid`;
-    else await tx`update marketing.campaigns set status='publishing',updated_at=now() where id=${id}::uuid`;
-    return{ok:true,id,sourceType,message:"تم نقل العنصر إلى قسم النشر"};
-  });
+  const version = await dashboardVersion(sql);
+  return { ok:true, version, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, permissions:user.permissions.filter((code)=>code.startsWith("marketing.")) };
 }
 
 async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
@@ -519,7 +548,23 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
   const [creatives,tasks,budgets,schedule,reviewHistory,files] = await Promise.all([
     sql<any[]>`select c.*,c.id::text,c.campaign_id::text,c.agenda_id::text,c.creative_type_id::text,c.primary_department_id::text,ct.name as creative_type_name,d.name as primary_department_name from marketing.creatives c left join marketing.creative_types ct on ct.id=c.creative_type_id left join marketing.departments d on d.id=c.primary_department_id where (${sourceType}='campaign' and c.campaign_id=${id}::uuid) or (${sourceType}='agenda' and c.agenda_id=${id}::uuid) order by c.created_at`,
     sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false order by d.name,u.full_name`,
-    sourceType === "campaign" ? sql<any[]>`select b.*,b.id::text,b.funnel_id::text,b.creative_id::text,f.name as funnel_name,c.name as creative_name from marketing.budget_items b left join marketing.funnels f on f.id=b.funnel_id left join marketing.creatives c on c.id=b.creative_id where b.campaign_id=${id}::uuid order by b.created_at` : Promise.resolve([]),
+    sourceType === "campaign" ? sql<any[]>`
+      select b.*,b.id::text,b.funnel_id::text,b.creative_id::text,f.name as funnel_name,c.name as creative_name,
+        coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'platformId',part.value->>'platformId',
+            'platformName',coalesce(p.name,'منصة غير معروفة'),
+            'amount',coalesce(nullif(part.value->>'amount','')::numeric,0)
+          ) order by p.name)
+          from jsonb_array_elements(coalesce(b.platform_amounts,'[]'::jsonb)) part(value)
+          left join marketing.platforms p on p.id::text=part.value->>'platformId'
+        ),'[]'::jsonb) as platform_details
+      from marketing.budget_items b
+      left join marketing.funnels f on f.id=b.funnel_id
+      left join marketing.creatives c on c.id=b.creative_id
+      where b.campaign_id=${id}::uuid
+      order by b.created_at
+    ` : Promise.resolve([]),
     sql<any[]>`select s.*,s.id::text,s.platform_id::text,s.post_type_id::text,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id where s.source_type=${sourceType} and s.source_id=${id}::uuid order by s.publish_date,p.name,pt.name`,
     sql<any[]>`select h.*,h.id::text,h.task_template_id::text from marketing.task_review_history h join marketing.task_templates tt on tt.id=h.task_template_id where tt.source_type=${sourceType} and tt.source_id=${id}::uuid order by h.created_at desc`,
     sql<any[]>`select f.*,f.id::text from marketing.files f where f.source_type=${sourceType} and f.source_id=${id}::uuid order by f.created_at desc`,
@@ -556,6 +601,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canUploadTemplate:hasPermission(user,task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload"),
       canApproveTemplate:hasPermission(user,"marketing.task_template.approve"),
       canRejectTemplate:hasPermission(user,"marketing.task_template.reject"),
+      canViewFeedback:hasPermission(user,"marketing.task_template.view_feedback") || task.assigned_to===user.id || task.paired_content_user_id===user.id,
       canExecuteAction:hasPermission(user,"marketing.assignment_action.execute"),
       canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
@@ -668,8 +714,7 @@ async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){co
 async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id) values(${name},${shortCode},${departmentId}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
 async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
 async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
-
-async function packageOptions(sql:ReturnType<typeof getSql>){
+async function packageSettings(sql:ReturnType<typeof getSql>){
   const[categories,salesTypes]=await Promise.all([
     sql<any[]>`select id::text,name,sort_order from marketing.package_categories where is_active=true order by sort_order,name`,
     sql<any[]>`select id::text,name,sort_order from marketing.package_sales_types where is_active=true order by sort_order,name`,
@@ -677,56 +722,22 @@ async function packageOptions(sql:ReturnType<typeof getSql>){
   return{ok:true,categories,salesTypes};
 }
 
-async function packagesData(sql:ReturnType<typeof getSql>){
-  const rows=await sql<any[]>`
-    select p.*,p.id::text,p.category_id::text,p.sales_type_id::text,
-      coalesce(pc.name,p.category) as category_name,pst.name as sales_type_name
-    from marketing.packages p
-    left join marketing.package_categories pc on pc.id=p.category_id
-    left join marketing.package_sales_types pst on pst.id=p.sales_type_id
-    where p.is_active=true
-    order by coalesce(pc.sort_order,9999),coalesce(pc.name,p.category),p.name
-  `;
-  return{ok:true,rows};
-}
-
-async function savePackageOption(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+async function savePackageLookup(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الباقات");
-  const kind=clean(body.kind),id=clean(body.id),name=clean(body.name),sortOrder=numberValue(body.sortOrder);
-  if(!name)throw new Error("اسم الاختيار مطلوب");
-  if(kind==='category'){
-    const[row]=id
-      ?await sql<any[]>`update marketing.package_categories set name=${name},sort_order=${sortOrder},updated_at=now() where id=${id}::uuid returning id::text,name,sort_order`
-      :await sql<any[]>`insert into marketing.package_categories(name,sort_order) values(${name},${sortOrder}) returning id::text,name,sort_order`;
-    await sql`update marketing.packages set category=${name},updated_at=now() where category_id=${row.id}::uuid`;
-    return{ok:true,row,message:"تم حفظ تصنيف الباقات"};
-  }
-  if(kind==='sales_type'){
-    const[row]=id
-      ?await sql<any[]>`update marketing.package_sales_types set name=${name},sort_order=${sortOrder},updated_at=now() where id=${id}::uuid returning id::text,name,sort_order`
-      :await sql<any[]>`insert into marketing.package_sales_types(name,sort_order) values(${name},${sortOrder}) returning id::text,name,sort_order`;
-    return{ok:true,row,message:"تم حفظ نوع المبيعات"};
-  }
-  throw new Error("نوع إعداد الباقة غير صحيح");
-}
-
-async function deletePackageOption(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الباقات");
-  const kind=clean(body.kind),id=clean(body.id);
-  if(!id)throw new Error("بيانات الحذف غير صحيحة");
-  if(kind==='category'){
-    const[used]=await sql<any[]>`select 1 from marketing.packages where category_id=${id}::uuid and is_active=true limit 1`;
-    if(used)throw new Error("لا يمكن حذف التصنيف لأنه مستخدم في باقات حالية");
-    await sql`update marketing.package_categories set is_active=false,updated_at=now() where id=${id}::uuid`;
-    return{ok:true,message:"تم حذف التصنيف"};
-  }
-  if(kind==='sales_type'){
-    const[used]=await sql<any[]>`select 1 from marketing.packages where sales_type_id=${id}::uuid and is_active=true limit 1`;
-    if(used)throw new Error("لا يمكن حذف نوع المبيعات لأنه مستخدم في باقات حالية");
-    await sql`update marketing.package_sales_types set is_active=false,updated_at=now() where id=${id}::uuid`;
-    return{ok:true,message:"تم حذف نوع المبيعات"};
-  }
-  throw new Error("نوع إعداد الباقة غير صحيح");
+  const lookupType=clean(body.lookupType),id=clean(body.id),name=clean(body.name),sortOrder=Math.trunc(numberValue(body.sortOrder));
+  if(!name)throw new Error("اسم القيمة مطلوب");
+  const config=lookupType==='category'
+    ?{table:'marketing.package_categories',label:'التصنيف'}
+    :lookupType==='sales_type'
+      ?{table:'marketing.package_sales_types',label:'نوع المبيعات'}
+      :null;
+  if(!config)throw new Error("نوع الإعداد غير صحيح");
+  const duplicate=await sql.unsafe<any[]>(`select id::text from ${config.table} where lower(btrim(name))=lower(btrim($1)) and ($2::text='' or id<>$2::uuid) limit 1`,[name,id]);
+  if(duplicate.length)throw new Error(`${config.label} موجود بالفعل`);
+  const rows=id
+    ?await sql.unsafe<any[]>(`update ${config.table} set name=$1,sort_order=$2,is_active=true,updated_at=now() where id=$3::uuid returning id::text,name,sort_order`,[name,sortOrder,id])
+    :await sql.unsafe<any[]>(`insert into ${config.table}(name,sort_order,created_by) values($1,$2,$3::uuid) returning id::text,name,sort_order`,[name,sortOrder,user.id]);
+  return{ok:true,row:rows[0],message:`تم حفظ ${config.label}`};
 }
 
 async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -736,23 +747,23 @@ async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUs
     sql<any[]>`select id::text,name from marketing.package_categories where id=${categoryId}::uuid and is_active=true`,
     sql<any[]>`select id::text,name from marketing.package_sales_types where id=${salesTypeId}::uuid and is_active=true`,
   ]);
-  if(!category||!salesType)throw new Error("التصنيف أو نوع المبيعات غير موجود");
+  if(!category)throw new Error("التصنيف المحدد غير موجود");
+  if(!salesType)throw new Error("نوع المبيعات المحدد غير موجود");
   const features=arrayValue(body.careFeatures).map(clean).filter(Boolean);
   const[row]=id
-    ?await sql<any[]>`update marketing.packages set name=${name},category=${category.name},category_id=${category.id}::uuid,sales_type_id=${salesType.id}::uuid,price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${bool(body.insurance)},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(dbJson(features))},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text`
-    :await sql<any[]>`insert into marketing.packages(name,category,category_id,sales_type_id,price,cash_discount,registration_fees,insurance,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category.name},${category.id}::uuid,${salesType.id}::uuid,${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${bool(body.insurance)},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text`;
+    ?await sql<any[]>`update marketing.packages set name=${name},category=${category.name},category_id=${categoryId}::uuid,sales_type=${salesType.name},sales_type_id=${salesTypeId}::uuid,price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${bool(body.insurance)},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(dbJson(features))},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text,category_id::text,sales_type_id::text`
+    :await sql<any[]>`insert into marketing.packages(name,category,category_id,sales_type,sales_type_id,price,cash_discount,registration_fees,insurance,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category.name},${categoryId}::uuid,${salesType.name},${salesTypeId}::uuid,${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${bool(body.insurance)},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text,category_id::text,sales_type_id::text`;
   return{ok:true,row,message:"تم حفظ الباقة"};
 }
-async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){const entity=clean(body.entity),id=clean(body.id);if(!id)throw new Error("بيانات الحذف غير صحيحة");if(entity==='department'){await sql.begin(async tx=>{const users=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;await tx`update core.departments set is_active=false,updated_at=now() where id=${id}::uuid and system_code='marketing'`;await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;for(const item of users){await tx`delete from core.user_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid and not exists(select 1 from core.user_system_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid)`;await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${item.user_id}::uuid`;await tx`delete from core.sessions where user_id=${item.user_id}::uuid`;}});return{ok:true,message:"تم حذف القسم وإزالة عضويته من التسويق فقط"};}const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages"};const table=allowed[entity];if(!table)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
+async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const entity=clean(body.entity),id=clean(body.id);if((entity==='package_category'||entity==='package_sales_type')&&!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الباقات");if(!id)throw new Error("بيانات الحذف غير صحيحة");if(entity==='package_category'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and category_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف التصنيف لأنه مستخدم داخل باقات حالية");}if(entity==='package_sales_type'){const[used]=await sql<any[]>`select count(*)::int as count from marketing.packages where is_active=true and sales_type_id=${id}::uuid`;if(Number(used?.count||0)>0)throw new Error("لا يمكن حذف نوع المبيعات لأنه مستخدم داخل باقات حالية");}if(entity==='department'){await sql.begin(async tx=>{const users=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;await tx`update core.departments set is_active=false,updated_at=now() where id=${id}::uuid and system_code='marketing'`;await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;for(const item of users){await tx`delete from core.user_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid and not exists(select 1 from core.user_system_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid)`;await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${item.user_id}::uuid`;await tx`delete from core.sessions where user_id=${item.user_id}::uuid`;}});return{ok:true,message:"تم حذف القسم وإزالة عضويته من التسويق فقط"};}const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages",package_category:"marketing.package_categories",package_sales_type:"marketing.package_sales_types"};const table=allowed[entity];if(!table)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
 
 async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);if(!hasPermission(user,"marketing.task.receive"))throw new Error("لا توجد صلاحية لاستلام التاسك");const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!await canAccessMarketingTask(sql,user,id))throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
 async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId),fileId=clean(body.fileId),data=cleanTemplateData(body.templateData);
-  const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text,task_template_id::text from marketing.tasks where id=${taskId}::uuid and task_kind='task_template'`;
-  if(!task)throw new Error("Task Template غير موجود");
-  const uploadPermission=task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload";
-  if(!hasPermission(user,uploadPermission))throw new Error("لا توجد صلاحية لرفع Task Template");
-  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفع الملف");
+  const task=await requireTaskTemplateUploadAccess(sql,user,taskId);
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  if(!file||file.category!=="task-template"||file.task_id!==taskId||file.status!=="ready")throw new Error("ملف Task Template غير صالح أو غير مرتبط بهذا التكليف");
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لاستخدام هذا الملف");
   await sql.begin(async tx=>{
     await tx`update marketing.task_templates set file_id=${fileId}::uuid,template_data=template_data||${tx.json(dbJson(data))},status='under_review',progress=50,updated_at=now() where id=${task.task_template_id}::uuid`;
     await tx`update marketing.tasks set progress=50,status='under_review',updated_at=now() where id=${taskId}::uuid`;
@@ -797,16 +808,49 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   await recalculateProgress(sql,record.source_type,record.source_id);
   return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
 }
-async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const taskId=clean(body.taskId),fileId=clean(body.fileId);if(!hasPermission(user,"marketing.task.final_file.upload"))throw new Error("لا توجد صلاحية لرفع الملف النهائي");const[task]=await sql<any[]>`select t.*,t.id::text,t.source_id::text,t.assigned_to::text,tt.status as template_status from marketing.tasks t left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid`;if(!task)throw new Error("التاسك غير موجود");if(task.task_kind==='execution'&&task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفع الملف");await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=${task.department_id} and is_active=true`;if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم رفع الملف النهائي"};}
+async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),fileId=clean(body.fileId);
+  const task=await requireFinalFileUploadAccess(sql,user,taskId);
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  if(!file||file.category!=="final-file"||file.task_id!==taskId||file.status!=="ready")throw new Error("الملف النهائي غير صالح أو غير مرتبط بهذا التكليف");
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لاستخدام هذا الملف");
+  await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;
+  const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and is_active=true`;
+  if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:"تم رفع الملف النهائي"};
+}
 
-async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;if(!category)throw new Error("نوع الملف مطلوب");if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};}
+async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
+  const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;
+  if(!category)throw new Error("نوع الملف مطلوب");
+  if(category==="task-template")await requireTaskTemplateUploadAccess(sql,user,taskId);
+  else if(category==="final-file")await requireFinalFileUploadAccess(sql,user,taskId);
+  else{
+    if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");
+    if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");
+    if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
+  }
+  const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});
+  const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;
+  return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};
+}
+
 async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
   const fileId=clean(body.fileId);
-  const rows=hasPermission(user,"marketing.file.view_others")
-    ? await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid returning id::text`
-    : await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and uploaded_by=${user.id}::uuid returning id::text`;
-  if(!rows.length)throw new Error("الملف غير موجود أو لا توجد صلاحية لتحديثه");
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  if(!file)throw new Error("الملف غير موجود");
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لتحديث الملف");
+  if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
+  else if(file.category==="final-file")await requireFinalFileUploadAccess(sql,user,file.task_id);
+  else{
+    if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
+    if(file.task_id&&!await canAccessMarketingTask(sql,user,file.task_id))throw new Error("التاسك خارج نطاق بياناتك");
+    if(file.source_id&&!file.task_id)await assertMarketingEntityAccess(sql,user,clean(file.source_type),file.source_id);
+  }
+  const rows=await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and status='uploading' returning id::text`;
+  if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
 }
 async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;if(!file)throw new Error("الملف غير موجود");if(!hasPermission(user,"marketing.file.view_others")){const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;if(!allowed)throw new Error("الملف خارج نطاق بياناتك");}return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size}};}
@@ -1241,11 +1285,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(request.method==='GET'){
       if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create'))?await loadOperationsCars(sql):[]});
       if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
+      if(resource==='dashboard_version')return response.status(200).json({ok:true,version:await dashboardVersion(sql)});
       if(resource==='database')return response.status(200).json(await databaseRows(sql,user));
       if(resource==='entity')return response.status(200).json(await entityDetail(sql,clean(request.query.sourceType),clean(request.query.id),user));
       if(resource==='task')return response.status(200).json(await taskDetail(sql,clean(request.query.id),user));
-      if(resource==='packages')return response.status(200).json(await packagesData(sql));
-      if(resource==='package_options')return response.status(200).json(await packageOptions(sql));
+      if(resource==='packages')return response.status(200).json({ok:true,rows:await sql<any[]>`select p.*,p.id::text,p.category_id::text,p.sales_type_id::text,coalesce(c.name,p.category) as category_name,coalesce(s.name,p.sales_type,'—') as sales_type_name from marketing.packages p left join marketing.package_categories c on c.id=p.category_id left join marketing.package_sales_types s on s.id=p.sales_type_id where p.is_active=true order by coalesce(c.sort_order,999),coalesce(s.sort_order,999),p.name`});
+      if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
@@ -1267,11 +1312,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='save_creative_type')result=await saveCreativeType(sql,body);
     else if(action==='save_campaign_type')result=await saveCampaignType(sql,body);
     else if(action==='save_platform')result=await savePlatform(sql,body);
-    else if(action==='delete_setting')result=await softDeleteSetting(sql,body);
+    else if(action==='delete_setting')result=await softDeleteSetting(sql,body,user);
     else if(action==='save_package')result=await savePackage(sql,body,user);
-    else if(action==='save_package_option')result=await savePackageOption(sql,body,user);
-    else if(action==='delete_package_option')result=await deletePackageOption(sql,body,user);
-    else if(action==='move_to_publishing')result=await moveEntityToPublishing(sql,body,user);
+    else if(action==='save_package_lookup')result=await savePackageLookup(sql,body,user);
     else if(action==='receive_task')result=await receiveTask(sql,body,user);
     else if(action==='upload_template')result=await uploadTemplate(sql,body,user);
     else if(action==='review_template')result=await reviewTemplate(sql,body,user);

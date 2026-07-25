@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Car, MagnifyingGlass, MinusCircle, Plus, Trash } from "@phosphor-icons/react";
+import { Modal } from "../../components/Modal";
 import type {
   CreativeDraft,
   ExecutionAssignment,
@@ -100,7 +101,6 @@ export function CreativeEditor({
   onChange,
   onDelete,
   showPlatforms = false,
-  hideBasics = false,
   carsModal = false,
 }: {
   value: CreativeDraft;
@@ -108,7 +108,6 @@ export function CreativeEditor({
   onChange: (value: CreativeDraft) => void;
   onDelete: () => void;
   showPlatforms?: boolean;
-  hideBasics?: boolean;
   carsModal?: boolean;
 }) {
   const [carsOpen, setCarsOpen] = useState(false);
@@ -218,6 +217,31 @@ export function CreativeEditor({
     [meta.cars, carSearch],
   );
 
+
+  const carPickerContent = (
+    <div className="marketing-cars-picker marketing-cars-picker-dialog">
+      <div className="marketing-cars-picker-toolbar">
+        <label className="marketing-cars-search">
+          <MagnifyingGlass size={18} />
+          <input value={carSearch} onChange={(event) => setCarSearch(event.target.value)} placeholder="ابحث برقم الهيكل أو السيارة أو البيان أو اللون أو المكان" />
+        </label>
+        <span>المختار: <strong>{value.cars.length.toLocaleString("ar-SA")}</strong></span>
+      </div>
+      <div className="marketing-cars-grid">
+        {filteredCars.map((car) => (
+          <label key={car.id} className={value.cars.some((item) => item.id === car.id) ? "selected" : ""}>
+            <input type="checkbox" checked={value.cars.some((item) => item.id === car.id)} onChange={() => toggleCar(car)} />
+            <strong>{car.car_name || "سيارة"}</strong>
+            <span>{car.statement || "—"}</span>
+            <small>{car.exterior_color || "—"} / {car.interior_color || "—"}</small>
+            <code>{car.vin}</code>
+          </label>
+        ))}
+        {!filteredCars.length ? <p className="marketing-picker-empty">لا توجد سيارات مطابقة للبحث.</p> : null}
+      </div>
+    </div>
+  );
+
   return (
     <article className="marketing-creative-editor">
       <header>
@@ -228,29 +252,27 @@ export function CreativeEditor({
         <button type="button" className="icon-danger" onClick={onDelete}><Trash size={18} /></button>
       </header>
 
-      {!hideBasics ? (
-        <div className="marketing-form-grid compact">
-          <label>
-            <span>نوع الكرييتيف</span>
-            <select
-              value={value.creativeTypeId}
-              onChange={(event) => patch({ creativeTypeId: event.target.value, primaryAssignments: [] })}
-            >
-              <option value="">اختر الكرييتيف</option>
-              {meta.creativeTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>العدد</span>
-            <input
-              type="number"
-              min={1}
-              value={value.quantity}
-              onChange={(event) => patch({ quantity: Math.max(1, Number(event.target.value) || 1) })}
-            />
-          </label>
-        </div>
-      ) : null}
+      <div className="marketing-form-grid compact">
+        <label>
+          <span>نوع الكرييتيف</span>
+          <select
+            value={value.creativeTypeId}
+            onChange={(event) => patch({ creativeTypeId: event.target.value, primaryAssignments: [] })}
+          >
+            <option value="">اختر الكرييتيف</option>
+            {meta.creativeTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>العدد</span>
+          <input
+            type="number"
+            min={1}
+            value={value.quantity}
+            onChange={(event) => patch({ quantity: Math.max(1, Number(event.target.value) || 1) })}
+          />
+        </label>
+      </div>
 
       <section className="marketing-assignment-section">
         <h3>قسم المحتوى</h3>
@@ -440,48 +462,10 @@ export function CreativeEditor({
       <section className="marketing-assignment-section">
         <button type="button" className="marketing-cars-toggle" onClick={() => setCarsOpen(!carsOpen)}>
           <Car size={18} />
-          <span>السيارات</span>
+          <span>اختيار السيارات</span>
           <b>{value.cars.length}</b>
         </button>
-        {carsOpen ? (carsModal ? (
-          <div className="marketing-car-modal-backdrop">
-            <div className="marketing-car-modal">
-              <header><div><h3>اختيار سيارات الكرييتيف</h3><small>{creativeType?.name || "الكرييتيف"}</small></div><button type="button" onClick={() => setCarsOpen(false)}>×</button></header>
-              <div className="marketing-cars-picker">
-                <label className="marketing-cars-search">
-                  <MagnifyingGlass size={18} />
-                  <input value={carSearch} onChange={(event) => setCarSearch(event.target.value)} placeholder="ابحث برقم الهيكل أو السيارة أو البيان أو اللون أو المكان" />
-                </label>
-                <div className="marketing-cars-grid">
-                  {filteredCars.map((car) => (
-                    <label key={car.id} className={value.cars.some((item) => item.id === car.id) ? "selected" : ""}>
-                      <input type="checkbox" checked={value.cars.some((item) => item.id === car.id)} onChange={() => toggleCar(car)} />
-                      <strong>{car.car_name || "سيارة"}</strong><span>{car.statement || "—"}</span><small>{car.exterior_color || "—"} / {car.interior_color || "—"}</small><code>{car.vin}</code>
-                    </label>
-                  ))}
-                  {!filteredCars.length ? <p className="marketing-picker-empty">لا توجد سيارات مطابقة للبحث.</p> : null}
-                </div>
-              </div>
-              <footer><span>المحدد: {value.cars.length.toLocaleString("ar-SA")}</span><button type="button" className="primary" onClick={() => setCarsOpen(false)}>تأكيد الاختيار</button></footer>
-            </div>
-          </div>
-        ) : (
-          <div className="marketing-cars-picker">
-            <label className="marketing-cars-search">
-              <MagnifyingGlass size={18} />
-              <input value={carSearch} onChange={(event) => setCarSearch(event.target.value)} placeholder="ابحث برقم الهيكل أو السيارة أو البيان أو اللون أو المكان" />
-            </label>
-            <div className="marketing-cars-grid">
-              {filteredCars.map((car) => (
-                <label key={car.id} className={value.cars.some((item) => item.id === car.id) ? "selected" : ""}>
-                  <input type="checkbox" checked={value.cars.some((item) => item.id === car.id)} onChange={() => toggleCar(car)} />
-                  <strong>{car.car_name || "سيارة"}</strong><span>{car.statement || "—"}</span><small>{car.exterior_color || "—"} / {car.interior_color || "—"}</small><code>{car.vin}</code>
-                </label>
-              ))}
-              {!filteredCars.length ? <p className="marketing-picker-empty">لا توجد سيارات مطابقة للبحث.</p> : null}
-            </div>
-          </div>
-        )) : null}
+        {carsOpen && !carsModal ? carPickerContent : null}
       </section>
 
       {showPlatforms ? (
@@ -517,6 +501,7 @@ export function CreativeEditor({
           </div>
         </section>
       ) : null}
+      {carsModal ? <Modal open={carsOpen} title="اختيار سيارات الكرييتيف" subtitle={creativeType?.name || "الكرييتيف"} onClose={() => setCarsOpen(false)} className="marketing-cars-modal" footer={<button type="button" className="primary" onClick={() => setCarsOpen(false)}>تأكيد الاختيار</button>}>{carPickerContent}</Modal> : null}
     </article>
   );
 }
