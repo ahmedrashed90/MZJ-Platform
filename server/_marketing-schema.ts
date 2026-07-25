@@ -37,13 +37,6 @@ create table if not exists marketing.departments (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists marketing.department_users (
-  department_id uuid not null references marketing.departments(id) on delete cascade,
-  user_id uuid not null references core.users(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key(department_id,user_id)
-);
-
 create table if not exists marketing.assignment_actions (
   id uuid primary key default gen_random_uuid(),
   department_id uuid not null references marketing.departments(id) on delete cascade,
@@ -503,9 +496,97 @@ insert into core.permissions(code,name,system_code) values
 on conflict(code) do update set name=excluded.name,system_code=excluded.system_code;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id::uuid,p.id::uuid from core.roles r cross join core.permissions p
+select r.id,p.id from core.roles r cross join core.permissions p
 where r.code='marketing_user' and p.code in ('marketing.view','marketing.task.receive','marketing.task.execute','marketing.file.upload')
 on conflict do nothing;
+
+-- Canonicalize marketing departments on core.departments IDs and migrate legacy membership once.
+do $marketing_department_canonical_sync$
+declare
+  dep record;
+  canonical_id uuid;
+  generated_code text;
+begin
+  for dep in select * from marketing.departments order by created_at loop
+    canonical_id := null;
+    select d.id into canonical_id from core.departments d where d.id=dep.id and d.system_code='marketing' limit 1;
+    if canonical_id is null then
+      select d.id into canonical_id from core.departments d where d.system_code='marketing' and lower(trim(d.name))=lower(trim(dep.name)) order by d.created_at limit 1;
+    end if;
+    if canonical_id is null then
+      generated_code := 'marketing_' || substr(md5(dep.id::text),1,16);
+      if not exists(select 1 from core.departments where id=dep.id) then
+        insert into core.departments(id,code,name,system_code,is_active,created_at,updated_at)
+        values(dep.id,generated_code,dep.name,'marketing',dep.is_active,dep.created_at,dep.updated_at)
+        on conflict(code) do nothing;
+        select d.id into canonical_id from core.departments d where d.id=dep.id and d.system_code='marketing';
+      end if;
+      if canonical_id is null then
+        insert into core.departments(code,name,system_code,is_active)
+        values(generated_code || '_' || substr(md5(random()::text),1,6),dep.name,'marketing',dep.is_active)
+        returning id into canonical_id;
+      end if;
+    end if;
+
+    if canonical_id is distinct from dep.id then
+      -- Use a temporary unique name while both the legacy row and the canonical row coexist.
+      insert into marketing.departments(id,name,is_content,is_active,created_by,created_at,updated_at)
+      values(canonical_id,dep.name || ' [id-sync-' || substr(dep.id::text,1,8) || ']',dep.is_content,dep.is_active,dep.created_by,dep.created_at,dep.updated_at)
+      on conflict(id) do update set is_content=excluded.is_content,is_active=excluded.is_active,updated_at=excluded.updated_at;
+      if to_regclass('marketing.department_users') is not null then
+        insert into marketing.department_users(department_id,user_id,created_at)
+        select canonical_id,user_id,created_at from marketing.department_users where department_id=dep.id
+        on conflict do nothing;
+        delete from marketing.department_users where department_id=dep.id;
+      end if;
+      update marketing.assignment_actions set department_id=canonical_id where department_id=dep.id;
+      update marketing.creative_types set primary_department_id=canonical_id where primary_department_id=dep.id;
+      update marketing.creatives set primary_department_id=canonical_id where primary_department_id=dep.id;
+      update marketing.tasks set department_id=canonical_id where department_id=dep.id;
+      update marketing.creatives
+      set optional_assignments=replace(optional_assignments::text,dep.id::text,canonical_id::text)::jsonb
+      where optional_assignments::text like '%' || dep.id::text || '%';
+      update marketing.campaigns
+      set payload=replace(payload::text,dep.id::text,canonical_id::text)::jsonb
+      where payload::text like '%' || dep.id::text || '%';
+      update marketing.agendas
+      set payload=replace(payload::text,dep.id::text,canonical_id::text)::jsonb
+      where payload::text like '%' || dep.id::text || '%';
+      delete from marketing.departments where id=dep.id;
+    end if;
+    update marketing.departments md set name=cd.name,is_active=cd.is_active,updated_at=greatest(md.updated_at,cd.updated_at) from core.departments cd where md.id=canonical_id and cd.id=canonical_id and cd.system_code='marketing';
+  end loop;
+end
+$marketing_department_canonical_sync$;
+
+do $marketing_departments_core_fk$
+begin
+  if not exists(select 1 from pg_constraint where conname='marketing_departments_core_department_fk') then
+    alter table marketing.departments add constraint marketing_departments_core_department_fk foreign key(id) references core.departments(id) on delete cascade;
+  end if;
+end
+$marketing_departments_core_fk$;
+
+do $marketing_department_membership_migration$
+begin
+  if to_regclass('marketing.department_users') is not null then
+    insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
+    select du.user_id,'marketing',du.department_id,false
+    from marketing.department_users du
+    join core.departments d on d.id=du.department_id and d.system_code='marketing'
+    on conflict(user_id,system_code,department_id) do nothing;
+
+    insert into core.user_departments(user_id,department_id,is_primary)
+    select usd.user_id,usd.department_id,bool_or(usd.is_primary)
+    from core.user_system_departments usd
+    where usd.system_code='marketing'
+    group by usd.user_id,usd.department_id
+    on conflict(user_id,department_id) do update set is_primary=core.user_departments.is_primary or excluded.is_primary;
+
+    drop table marketing.department_users;
+  end if;
+end
+$marketing_department_membership_migration$;
 
 create table if not exists marketing.schema_state (
   id smallint primary key default 1 check(id = 1),

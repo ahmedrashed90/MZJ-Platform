@@ -4,6 +4,7 @@ import { getSql } from "../_db.js";
 import { requireUser, requestIp, type SessionUser } from "../_auth.js";
 import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
 import { getSystemAccess } from "../_access-control.js";
+import { ensureAccessControlSchema } from "../_access-control-schema.js";
 import { completePhotographyRequest } from "../operations/index.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
@@ -114,121 +115,42 @@ async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: 
   await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data,ip_address) values (${user.id}::uuid,'marketing',${action},${entityType},${entityId},${beforeData ? sql.json(dbJson(beforeData)) : null},${afterData ? sql.json(dbJson(afterData)) : null},${ip || null})`;
 }
 
-async function syncMarketingDepartmentsWithAccessControl(sql: ReturnType<typeof getSql>) {
-  await sql`
-    insert into core.departments(code,name,system_code,is_active)
-    select 'marketing_' || replace(md.id::text,'-',''),md.name,'marketing',md.is_active
-    from marketing.departments md
-    on conflict(code) do update
-    set name=excluded.name,system_code='marketing',is_active=excluded.is_active,updated_at=now()
-  `;
-
-  await sql`
-    update core.departments cd
-    set is_active=false,updated_at=now()
-    where cd.system_code='marketing'
-      and not exists (
-        select 1 from marketing.departments md
-        where cd.code='marketing_' || replace(md.id::text,'-','')
-      )
-      and cd.is_active=true
-  `;
-
-  await sql`
-    insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope)
-    select distinct du.user_id,'marketing',false,null::uuid,'workflow_assigned'
-    from marketing.department_users du
-    join marketing.departments md on md.id=du.department_id and md.is_active=true
-    on conflict(user_id,system_code) do nothing
-  `;
-
-  await sql`
-    delete from core.user_system_departments usd
-    using core.departments cd
-    where usd.system_code='marketing'
-      and usd.department_id=cd.id
-      and cd.system_code='marketing'
-      and not exists (
-        select 1
-        from marketing.departments md
-        join marketing.department_users du on du.department_id=md.id
-        where md.is_active=true
-          and cd.code='marketing_' || replace(md.id::text,'-','')
-          and du.user_id=usd.user_id
-      )
-  `;
-
-  await sql`
-    insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
-    select du.user_id,'marketing',cd.id,false
-    from marketing.department_users du
-    join marketing.departments md on md.id=du.department_id and md.is_active=true
-    join core.departments cd on cd.code='marketing_' || replace(md.id::text,'-','') and cd.system_code='marketing' and cd.is_active=true
-    on conflict(user_id,system_code,department_id) do nothing
-  `;
-
-  await sql`
-    with ranked as (
-      select usd.user_id,usd.department_id,
-        row_number() over(partition by usd.user_id order by usd.is_primary desc,md.is_content desc,md.name,usd.department_id) as row_no
-      from core.user_system_departments usd
-      join core.departments cd on cd.id=usd.department_id and cd.system_code='marketing' and cd.is_active=true
-      join marketing.departments md on cd.code='marketing_' || replace(md.id::text,'-','') and md.is_active=true
-      where usd.system_code='marketing'
-    )
-    update core.user_system_departments usd
-    set is_primary=(ranked.row_no=1)
-    from ranked
-    where usd.user_id=ranked.user_id
-      and usd.system_code='marketing'
-      and usd.department_id=ranked.department_id
-      and usd.is_primary is distinct from (ranked.row_no=1)
-  `;
-
-  await sql`
-    delete from core.user_departments ud
-    using core.departments cd
-    where ud.department_id=cd.id and cd.system_code='marketing'
-  `;
-
-  await sql`
-    insert into core.user_departments(user_id,department_id,is_primary)
-    select usd.user_id,usd.department_id,usd.is_primary
-    from core.user_system_departments usd
-    join core.departments cd on cd.id=usd.department_id and cd.system_code='marketing' and cd.is_active=true
-    where usd.system_code='marketing'
-    on conflict(user_id,department_id) do update set is_primary=excluded.is_primary
-  `;
-}
-
 async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) {
-  await syncMarketingDepartmentsWithAccessControl(sql);
+  // Keep marketing-specific metadata mirrored on the canonical core department IDs.
+  await sql`
+    insert into marketing.departments(id,name,is_content,is_active,created_at,updated_at)
+    select d.id,d.name,false,d.is_active,d.created_at,d.updated_at
+    from core.departments d
+    where d.system_code='marketing'
+    on conflict(id) do update set name=excluded.name,is_active=excluded.is_active,updated_at=greatest(marketing.departments.updated_at,excluded.updated_at)
+  `;
   const [users, departments, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels] = await Promise.all([
     sql<any[]>`
       select u.id::text,u.full_name,u.email,u.mobile,u.is_active,u.can_receive_tasks
       from core.users u
-      where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
-      order by u.full_name,u.email
+      where u.is_active=true
+        and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
+      order by u.full_name
     `,
     sql<any[]>`
-      select d.id::text,d.name,d.is_content,d.is_active,
+      select d.id::text,cd.name,d.is_content,(d.is_active and cd.is_active) as is_active,
         coalesce(
           json_agg(
             json_build_object('id',u.id::text,'fullName',u.full_name,'email',u.email)
-            order by u.full_name,u.email
+            order by u.full_name
           ) filter(where u.id is not null),
           '[]'::json
         ) as users
       from marketing.departments d
-      left join core.departments cd on cd.code='marketing_' || replace(d.id::text,'-','') and cd.system_code='marketing'
-      left join core.user_system_departments usd on usd.department_id=cd.id and usd.system_code='marketing'
+      join core.departments cd on cd.id=d.id and cd.system_code='marketing'
+      left join core.user_system_departments usd on usd.department_id=d.id and usd.system_code='marketing'
       left join core.users u on u.id=usd.user_id and u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%'
-      where d.is_active=true
-      group by d.id
-      order by d.is_content desc,d.name
+      where d.is_active=true and cd.is_active=true
+      group by d.id,cd.name,cd.is_active
+      order by d.is_content desc,cd.name
     `,
-    sql<any[]>`select a.id::text,a.department_id::text,d.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join marketing.departments d on d.id=a.department_id where a.is_active=true order by d.name,a.sort_order,a.created_at`,
-    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,d.name as primary_department_name,c.is_active from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.is_active=true order by c.name`,
+    sql<any[]>`select a.id::text,a.department_id::text,cd.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join core.departments cd on cd.id=a.department_id and cd.system_code='marketing' where a.is_active=true order by cd.name,a.sort_order,a.created_at`,
+    sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,cd.name as primary_department_name,c.is_active from marketing.creative_types c left join core.departments cd on cd.id=c.primary_department_id and cd.system_code='marketing' where c.is_active=true order by c.name`,
     sql<any[]>`select id::text,name,short_code,code_prefix,sequence_value,is_active from marketing.campaign_types where is_active=true order by name`,
     sql<any[]>`select id::text,code,name,is_active from marketing.platforms where is_active=true order by name`,
     sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height from marketing.platform_post_types p where p.is_active=true order by p.name`,
@@ -572,29 +494,62 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
 }
 
 async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: SessionUser) {
-  const id=clean(body.id),name=clean(body.name),userIds=[...new Set(arrayValue<string>(body.userIds).map(clean).filter(Boolean))];
+  const requestedId=clean(body.id);
+  const name=clean(body.name);
+  const userIds=[...new Set(arrayValue<string>(body.userIds).map(clean).filter(Boolean))];
   if(!name)throw new Error("اسم القسم مطلوب");
   const result=await sql.begin(async(tx)=>{
-    const [row]=id
-      ? await tx<any[]>`update marketing.departments set name=${name},is_content=${bool(body.isContent)},updated_at=now() where id=${id}::uuid returning *,id::text`
-      : await tx<any[]>`insert into marketing.departments(name,is_content,created_by) values(${name},${bool(body.isContent)},${user.id}::uuid) returning *,id::text`;
-    await tx`delete from marketing.department_users where department_id=${row.id}::uuid`;
-    if(userIds.length)await tx`
-      insert into marketing.department_users(department_id,user_id)
-      select ${row.id}::uuid,x::uuid from unnest(${userIds}::text[]) x
-      on conflict(department_id,user_id) do nothing
-    `;
-    return{ok:true,row,message:"تم حفظ القسم"};
+    const activeUsers=userIds.length?await tx<any[]>`
+      select id::text from core.users
+      where id in ${tx(userIds)} and is_active=true and coalesce(disabled_reason,'') not like 'ACCOUNT_DELETED:%'
+    `:[];
+    if(activeUsers.length!==userIds.length)throw new Error("يوجد مستخدم غير فعال أو غير موجود ضمن الاختيار");
+
+    let departmentId=requestedId;
+    let row:any;
+    if(departmentId){
+      const [existing]=await tx<any[]>`
+        select md.id::text,cd.name,md.is_content,md.is_active
+        from marketing.departments md join core.departments cd on cd.id=md.id
+        where md.id=${departmentId}::uuid and cd.system_code='marketing'
+      `;
+      if(!existing)throw new Error("قسم التسويق غير موجود");
+      await tx`update core.departments set name=${name},system_code='marketing',is_active=true,updated_at=now() where id=${departmentId}::uuid`;
+      [row]=await tx<any[]>`update marketing.departments set name=${name},is_content=${bool(body.isContent)},is_active=true,updated_at=now() where id=${departmentId}::uuid returning id::text,name,is_content,is_active`;
+    }else{
+      departmentId=crypto.randomUUID();
+      const code=`marketing_${departmentId.replace(/-/g,"").slice(0,16)}`;
+      await tx`insert into core.departments(id,code,name,system_code,is_active) values(${departmentId}::uuid,${code},${name},'marketing',true)`;
+      [row]=await tx<any[]>`insert into marketing.departments(id,name,is_content,is_active,created_by) values(${departmentId}::uuid,${name},${bool(body.isContent)},true,${user.id}::uuid) returning id::text,name,is_content,is_active`;
+    }
+
+    const previous=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${departmentId}::uuid`;
+    const previousIds=previous.map((item:any)=>clean(item.user_id));
+    const affected=[...new Set([...previousIds,...userIds])];
+
+    await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${departmentId}::uuid and not (user_id::text = any(${userIds}::text[]))`;
+    for(const userId of userIds){
+      await tx`insert into core.user_system_departments(user_id,system_code,department_id,is_primary) values(${userId}::uuid,'marketing',${departmentId}::uuid,false) on conflict(user_id,system_code,department_id) do nothing`;
+    }
+
+    for(const userId of affected){
+      await tx`delete from core.user_departments ud where ud.user_id=${userId}::uuid and ud.department_id=${departmentId}::uuid and not exists(select 1 from core.user_system_departments usd where usd.user_id=ud.user_id and usd.department_id=ud.department_id)`;
+      await tx`insert into core.user_departments(user_id,department_id,is_primary) select ${userId}::uuid,${departmentId}::uuid,bool_or(is_primary) from core.user_system_departments where user_id=${userId}::uuid and department_id=${departmentId}::uuid group by user_id,department_id on conflict(user_id,department_id) do update set is_primary=excluded.is_primary`;
+      await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${userId}::uuid`;
+      await tx`delete from core.sessions where user_id=${userId}::uuid`;
+    }
+    return{row,departmentId,previousIds};
   });
-  await syncMarketingDepartmentsWithAccessControl(sql);
-  return result;
+  await audit(sql,user,requestedId?"department_updated":"department_created","department",result.departmentId,{name,isContent:bool(body.isContent),userIds},requestedId?{userIds:result.previousIds}:undefined);
+  return{ok:true,row:result.row,message:"تم حفظ القسم وربط الأقسام المسموحة للمستخدمين فعليًا"};
 }
+
 async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
 async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id) values(${name},${shortCode},${departmentId}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
 async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
 async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
 async function savePackage(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id),name=clean(body.name),category=clean(body.category);if(!name||!category)throw new Error("اسم الباقة والتصنيف مطلوبان");const features=arrayValue(body.careFeatures).map(clean).filter(Boolean);const[row]=id?await sql<any[]>`update marketing.packages set name=${name},category=${category},price=${numberValue(body.price)},cash_discount=${numberValue(body.cashDiscount)},registration_fees=${bool(body.registrationFees)},insurance=${bool(body.insurance)},issuance_fees=${bool(body.issuanceFees)},care_features=${sql.json(dbJson(features))},delivery_home=${bool(body.deliveryHome)},delivery_region=${bool(body.deliveryRegion)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.packages(name,category,price,cash_discount,registration_fees,insurance,issuance_fees,care_features,delivery_home,delivery_region,created_by) values(${name},${category},${numberValue(body.price)},${numberValue(body.cashDiscount)},${bool(body.registrationFees)},${bool(body.insurance)},${bool(body.issuanceFees)},${sql.json(dbJson(features))},${bool(body.deliveryHome)},${bool(body.deliveryRegion)},${user.id}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الباقة"};}
-async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){const entity=clean(body.entity),id=clean(body.id);const allowed:Record<string,string>={department:"marketing.departments",action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages"};const table=allowed[entity];if(!table||!id)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);if(entity==='department')await syncMarketingDepartmentsWithAccessControl(sql);return{ok:true,message:"تم الحذف"};}
+async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){const entity=clean(body.entity),id=clean(body.id);if(!id)throw new Error("بيانات الحذف غير صحيحة");if(entity==='department'){await sql.begin(async tx=>{const users=await tx<any[]>`select user_id::text from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;await tx`update core.departments set is_active=false,updated_at=now() where id=${id}::uuid and system_code='marketing'`;await tx`delete from core.user_system_departments where system_code='marketing' and department_id=${id}::uuid`;for(const item of users){await tx`delete from core.user_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid and not exists(select 1 from core.user_system_departments where user_id=${item.user_id}::uuid and department_id=${id}::uuid)`;await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id=${item.user_id}::uuid`;await tx`delete from core.sessions where user_id=${item.user_id}::uuid`;}});return{ok:true,message:"تم حذف القسم وإزالة عضويته من التسويق فقط"};}const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages"};const table=allowed[entity];if(!table)throw new Error("بيانات الحذف غير صحيحة");await sql.unsafe(`update ${table} set is_active=false,updated_at=now() where id=$1::uuid`,[id]);return{ok:true,message:"تم الحذف"};}
 
 async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);if(!hasPermission(user,"marketing.task.receive"))throw new Error("لا توجد صلاحية لاستلام التاسك");const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!await canAccessMarketingTask(sql,user,id))throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
 async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -880,7 +835,7 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
       max(p.last_activity_at) as last_activity_at,
       max(p.last_activity_type) as last_activity_type
     from core.users u
-    join marketing.department_users du on du.user_id=u.id
+    join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
     join marketing.departments d on d.id=du.department_id and d.is_active=true
     left join marketing.attendance_records r on r.user_id=u.id and r.attendance_date=(now() at time zone 'Asia/Riyadh')::date
     left join marketing.presence_status p on p.user_id=u.id
@@ -890,10 +845,10 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
   const reportUsers=await sql<any[]>`
     select u.id::text,u.full_name,u.email,string_agg(distinct d.name,'، ' order by d.name) as department_name
     from core.users u
-    join marketing.department_users du on du.user_id=u.id
+    join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
     join marketing.departments d on d.id=du.department_id and d.is_active=true
     where u.is_active=true
-      and (${departmentId}='' or exists(select 1 from marketing.department_users fdu where fdu.user_id=u.id and fdu.department_id=${departmentId||null}::uuid))
+      and (${departmentId}='' or exists(select 1 from core.user_system_departments fdu where fdu.user_id=u.id and fdu.system_code='marketing' and fdu.department_id=${departmentId||null}::uuid))
       and (${userId}='' or u.id=${userId||null}::uuid)
     group by u.id,u.full_name,u.email
     order by u.full_name`;
@@ -902,10 +857,10 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
       string_agg(distinct d.name,'، ' order by d.name) as department_name
     from marketing.attendance_records r
     join core.users u on u.id=r.user_id
-    left join marketing.department_users du on du.user_id=u.id
+    left join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
     left join marketing.departments d on d.id=du.department_id
     where r.attendance_date between ${from}::date and ${to}::date
-      and (${departmentId}='' or exists(select 1 from marketing.department_users fdu where fdu.user_id=u.id and fdu.department_id=${departmentId||null}::uuid))
+      and (${departmentId}='' or exists(select 1 from core.user_system_departments fdu where fdu.user_id=u.id and fdu.system_code='marketing' and fdu.department_id=${departmentId||null}::uuid))
       and (${userId}='' or u.id=${userId||null}::uuid)
     group by r.id,u.id,u.full_name
     order by r.attendance_date desc,u.full_name`;
@@ -913,7 +868,7 @@ async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,req
     select min(r.attendance_date)::text as effective_from
     from marketing.attendance_records r
     where r.attendance_date between ${from}::date and ${to}::date
-      and exists(select 1 from marketing.department_users du where du.user_id=r.user_id)`;
+      and exists(select 1 from core.user_system_departments du where du.user_id=r.user_id and du.system_code='marketing')`;
   const effectiveFrom=clean(effective?.effective_from);
   const reportDays=effectiveFrom?datesBetween(effectiveFrom>from?effectiveFrom:from,to):[];
   const recordsByUserDay=new Map<string,any>();
@@ -1072,7 +1027,7 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
 
 
 
-async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and (exists(select 1 from marketing.department_users du where du.user_id=u.id) or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.code='marketing')) order by u.full_name`;return{ok:true,rows};}
+async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%' and exists(select 1 from core.user_system_departments du where du.user_id=u.id and du.system_code='marketing') order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
 async function platformConnections(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select * from marketing.platform_connections order by platform`;return{ok:true,connections:rows.map(publicConnection)};}
@@ -1085,7 +1040,7 @@ async function createRawFolders(body:any){const url=clean(process.env.MZJ_RAW_AP
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
   try {
-    await ensureOperationsSchema(); await ensureMarketingSchema();
+    await ensureAccessControlSchema(); await ensureOperationsSchema(); await ensureMarketingSchema();
     const user = await requireUser(request,response); if(!user)return;
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";

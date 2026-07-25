@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { PencilSimple, Plus, Trash } from "@phosphor-icons/react";
+import { CheckSquare, MagnifyingGlass, PencilSimple, Plus, Square, Trash } from "@phosphor-icons/react";
 import { MarketingPage, MarketingAlert } from "../components/MarketingPage";
 import { marketingFetch } from "../api";
 import type { MarketingMeta } from "../types";
@@ -12,6 +12,7 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [department, setDepartment] = useState({ id: "", name: "", userIds: [] as string[], isContent: false });
+  const [userSearch, setUserSearch] = useState("");
   const [assignmentAction, setAssignmentAction] = useState({ id: "", departmentId: "", name: "", percentage: "", adminOnly: false, sortOrder: "0" });
   const [creative, setCreative] = useState({ id: "", name: "", shortCode: "", primaryDepartmentId: "" });
   const [campaignType, setCampaignType] = useState({ id: "", name: "", shortCode: "", codePrefix: "" });
@@ -34,6 +35,16 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
     return map;
   }, [meta]);
 
+
+  const filteredUsers = useMemo(() => {
+    const term = userSearch.trim().toLowerCase();
+    return (meta?.users || []).filter((user) => !term || [user.full_name, user.fullName, user.email].some((value) => String(value || "").toLowerCase().includes(term)));
+  }, [meta?.users, userSearch]);
+
+  function toggleDepartmentUser(userId: string) {
+    setDepartment((current) => ({ ...current, userIds: current.userIds.includes(userId) ? current.userIds.filter((id) => id !== userId) : [...current.userIds, userId] }));
+  }
+
   async function save(action: string, body: Record<string, unknown>, reset: () => void) {
     setBusy(true); setError(""); setMessage("");
     try {
@@ -55,12 +66,20 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
         <h2>إضافة قسم جديد</h2>
         <label>اسم القسم<input value={department.name} onChange={(e) => setDepartment({ ...department, name: e.target.value })} /></label>
         <label className="marketing-check"><input type="checkbox" checked={department.isContent} onChange={(e) => setDepartment({ ...department, isContent: e.target.checked })} />إضافة قسم محتوى</label>
-        <label>اليوزرات داخل القسم<select multiple value={department.userIds} onChange={(e) => setDepartment({ ...department, userIds: Array.from(e.target.selectedOptions).map((option) => option.value) })}>{meta?.users.map((user) => <option key={user.id} value={user.id}>{user.full_name || user.fullName}</option>)}</select></label>
-        <button className="marketing-primary" disabled={busy} onClick={() => void save("save_department", department, () => setDepartment({ id: "", name: "", userIds: [], isContent: false }))}>{department.id ? "تعديل القسم" : "إضافة القسم"}</button>
+        <div className="marketing-department-users-field">
+          <div className="marketing-department-users-head"><span>اليوزرات داخل القسم</span><strong>{department.userIds.length.toLocaleString("ar-SA")} محدد</strong></div>
+          <label className="marketing-department-user-search"><MagnifyingGlass size={17} /><input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="ابحث بالاسم أو البريد" /></label>
+          <div className="marketing-department-user-list">
+            {filteredUsers.map((user) => { const selected = department.userIds.includes(user.id); return <button type="button" key={user.id} className={selected ? "selected" : ""} onClick={() => toggleDepartmentUser(user.id)}>{selected ? <CheckSquare size={19} weight="fill" /> : <Square size={19} />}<span><strong>{user.full_name || user.fullName}</strong><small>{user.email || "حساب فعال في المنصة"}</small></span></button>; })}
+            {!filteredUsers.length ? <p>لا توجد حسابات فعالة مطابقة للبحث.</p> : null}
+          </div>
+          <small className="marketing-department-source-note">الحفظ يحدّث الأقسام المسموحة للمستخدم في نظام التسويق فقط، دون تغيير القسم الأساسي أو أقسام الأنظمة الأخرى.</small>
+        </div>
+        <div className="marketing-settings-sticky-action"><button className="marketing-primary" disabled={busy} onClick={() => void save("save_department", department, () => { setDepartment({ id: "", name: "", userIds: [], isContent: false }); setUserSearch(""); })}>{department.id ? "حفظ تعديلات القسم" : "إضافة القسم"}</button></div>
       </section>
       <section className="marketing-card marketing-list-card">
         <h2>قائمة الأقسام</h2>
-        {(meta?.departments || []).map((item) => <article key={item.id}><div><strong>{item.name}</strong><small>{item.users.map((user) => user.fullName || user.full_name).join("، ") || "لا يوجد يوزرات"}</small></div><div className="marketing-inline-actions"><button onClick={() => setDepartment({ id: item.id, name: item.name, userIds: item.users.map((user) => user.id), isContent: item.is_content })}><PencilSimple /></button><button className="danger" onClick={() => void remove("department", item.id)}><Trash /></button></div></article>)}
+        {(meta?.departments || []).map((item) => <article key={item.id}><div><strong>{item.name}</strong><small>{item.users.map((user) => user.fullName || user.full_name).join("، ") || "لا يوجد يوزرات"}</small></div><div className="marketing-inline-actions"><button onClick={() => { setDepartment({ id: item.id, name: item.name, userIds: item.users.map((user) => user.id), isContent: item.is_content }); setUserSearch(""); window.scrollTo({ top: 0, behavior: "smooth" }); }}><PencilSimple /></button><button className="danger" onClick={() => void remove("department", item.id)}><Trash /></button></div></article>)}
       </section>
 
       <section className="marketing-card">

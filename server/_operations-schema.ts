@@ -37,12 +37,12 @@ insert into core.permissions(code,name,system_code) values
 on conflict (code) do update set name=excluded.name,system_code=excluded.system_code;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id::uuid,p.id::uuid from core.roles r cross join core.permissions p
+select r.id,p.id from core.roles r cross join core.permissions p
 where r.code in ('admin','system_admin')
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id::uuid,p.id::uuid from core.roles r join core.permissions p on p.code in (
+select r.id,p.id from core.roles r join core.permissions p on p.code in (
   'operations.view','operations.vehicle.create','operations.vehicle.edit','operations.vehicle.archive',
   'operations.vehicle.import','operations.vehicle.export','operations.movement.create','operations.movement.view',
   'operations.transfer.create','operations.transfer.view','operations.transfer.receive_order','operations.transfer.send_vehicle',
@@ -53,7 +53,7 @@ where r.code in ('operations_manager','operations_user')
 on conflict do nothing;
 
 insert into core.role_permissions(role_id,permission_id)
-select r.id::uuid,p.id::uuid from core.roles r join core.permissions p on p.code in (
+select r.id,p.id from core.roles r join core.permissions p on p.code in (
   'operations.view','operations.approval.view','operations.approval.financial','operations.movement.view','operations.vehicle.export'
 )
 where r.code in ('finance_manager')
