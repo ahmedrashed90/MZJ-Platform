@@ -124,25 +124,37 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     `,
     sql<any[]>`
       select d.id::text,d.core_department_id::text,d.name,d.is_content,d.is_active,
-        coalesce(
-          json_agg(
-            json_build_object('id',u.id::text,'fullName',u.full_name,'email',u.email)
-            order by u.full_name
-          ) filter(where u.id is not null),
-          '[]'::json
-        ) as users
+        coalesce((
+          select json_agg(
+            json_build_object('id',member.id::text,'fullName',member.full_name,'email',member.email)
+            order by member.full_name,member.id
+          )
+          from (
+            select distinct u.id,u.full_name,u.email
+            from core.user_system_departments usd
+            join core.users u
+              on u.id=usd.user_id
+             and u.is_active=true
+             and exists(
+               select 1 from core.user_systems us
+               where us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true
+             )
+            where usd.system_code='marketing'
+              and (
+                usd.department_id=d.core_department_id
+                or exists(
+                  select 1
+                  from core.departments assigned_department
+                  where assigned_department.id=usd.department_id
+                    and assigned_department.system_code='marketing'
+                    and translate(regexp_replace(lower(trim(assigned_department.name)),'[[:space:]]+','','g'),chr(8203)||chr(8204)||chr(8205)||chr(65279),'')
+                      = translate(regexp_replace(lower(trim(d.name)),'[[:space:]]+','','g'),chr(8203)||chr(8204)||chr(8205)||chr(65279),'')
+                )
+              )
+          ) member
+        ),'[]'::json) as users
       from marketing.departments d
-      left join core.user_system_departments usd
-        on usd.system_code='marketing' and usd.department_id=d.core_department_id
-      left join core.users u
-        on u.id=usd.user_id
-       and u.is_active=true
-       and exists(
-         select 1 from core.user_systems us
-         where us.user_id=u.id and us.system_code='marketing' and us.is_enabled=true
-       )
       where d.is_active=true
-      group by d.id
       order by d.is_content desc,d.name
     `,
     sql<any[]>`select a.id::text,a.department_id::text,d.name as department_name,a.name,a.percentage::float,a.admin_only,a.sort_order from marketing.assignment_actions a join marketing.departments d on d.id=a.department_id where a.is_active=true order by d.name,a.sort_order,a.created_at`,
@@ -503,8 +515,10 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
       const [matched]=await tx<any[]>`
         select id::text
         from core.departments
-        where system_code='marketing' and lower(trim(name))=lower(trim(${name}))
-        order by is_active desc,created_at
+        where system_code='marketing'
+          and translate(regexp_replace(lower(trim(name)),'[[:space:]]+','','g'),chr(8203)||chr(8204)||chr(8205)||chr(65279),'')
+            = translate(regexp_replace(lower(trim(${name})),'[[:space:]]+','','g'),chr(8203)||chr(8204)||chr(8205)||chr(65279),'')
+        order by is_active desc,created_at,id
         limit 1
       `;
       coreDepartmentId=clean(matched?.id);
@@ -519,17 +533,11 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
       `;
       coreDepartmentId=clean(created?.id);
     }
-    if(!coreDepartmentId)throw new Error("تعذر ربط القسم بصلاحيات المستخدمين");
+    if(!coreDepartmentId)throw new Error("تعذر ربط القسم بالأقسام المسموحة");
 
     await tx`update marketing.departments set core_department_id=${coreDepartmentId}::uuid,updated_at=now() where id=${row.id}::uuid`;
     await tx`update core.departments set name=${name},system_code='marketing',is_active=true,updated_at=now() where id=${coreDepartmentId}::uuid`;
-    await tx`
-      update core.departments cd set is_active=false,updated_at=now()
-      where cd.code='marketing' and cd.system_code='marketing' and cd.id<>${coreDepartmentId}::uuid
-        and not exists(select 1 from marketing.departments md where md.core_department_id=cd.id)
-        and exists(select 1 from marketing.departments md where md.is_active=true)
-    `;
-    return{ok:true,row:{...row,core_department_id:coreDepartmentId},message:"تم حفظ القسم وربطه بالأقسام المسموحة للمستخدمين"};
+    return{ok:true,row:{...row,core_department_id:coreDepartmentId},message:"تم حفظ القسم وربطه بالأقسام المسموحة"};
   });
 }
 async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
@@ -545,12 +553,8 @@ async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any){
       const [department]=await tx<any[]>`select core_department_id::text from marketing.departments where id=${id}::uuid`;
       await tx`update marketing.departments set is_active=false,updated_at=now() where id=${id}::uuid`;
       const coreDepartmentId=clean(department?.core_department_id);
-      if(coreDepartmentId){
-        await tx`update core.departments set is_active=false,updated_at=now() where id=${coreDepartmentId}::uuid`;
-        await tx`update core.users set permission_version=permission_version+1,updated_at=now() where id in(select user_id from core.user_system_departments where system_code='marketing' and department_id=${coreDepartmentId}::uuid)`;
-        await tx`delete from core.sessions where user_id in(select user_id from core.user_system_departments where system_code='marketing' and department_id=${coreDepartmentId}::uuid)`;
-      }
-      return{ok:true,message:"تم حذف القسم من التسويق والأقسام المسموحة"};
+      if(coreDepartmentId)await tx`update core.departments set is_active=false,updated_at=now() where id=${coreDepartmentId}::uuid`;
+      return{ok:true,message:"تم حذف القسم"};
     });
   }
   const allowed:Record<string,string>={action:"marketing.assignment_actions",creative_type:"marketing.creative_types",campaign_type:"marketing.campaign_types",platform:"marketing.platforms",package:"marketing.packages"};
