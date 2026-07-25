@@ -11,7 +11,6 @@ import {
   type PermissionUser,
 } from "./_access-control.js";
 import { DATA_SCOPE_OPTIONS, SYSTEM_CATALOG, type DataScope, type PlatformSystem } from "../shared/access-control.js";
-import { ensureMarketingAccessBridge, syncMarketingDepartmentUsersForUsers } from "./_marketing-access-bridge.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -361,7 +360,6 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       select ${id}::uuid,department_id,bool_or(is_primary) from core.user_system_departments where user_id=${id}::uuid group by department_id
       on conflict do nothing
     `;
-    await syncMarketingDepartmentUsersForUsers(tx, [id]);
 
     await tx`delete from core.user_permission_overrides where user_id=${id}::uuid`;
     for (const override of overrides) {
@@ -569,7 +567,6 @@ export default async function handler(request: VercelRequest,response: VercelRes
   const actor=await requireUser(request,response); if(!actor)return;
   const resource=clean(request.query.resource)||'bootstrap';
   try{
-    await ensureMarketingAccessBridge();
     if(request.method==='GET'){
       if(resource==='bootstrap'){
         if(!canOpenAccessControl(actor))return response.status(403).json({ok:false,error:'لا توجد صلاحية لفتح المستخدمين والصلاحيات'});

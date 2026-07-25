@@ -9,29 +9,8 @@ create table if not exists marketing.departments (
   is_active boolean not null default true,
   created_by uuid references core.users(id),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  core_department_id uuid
+  updated_at timestamptz not null default now()
 );
-alter table marketing.departments add column if not exists core_department_id uuid;
-
-do $marketing_department_core_fk$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conname = 'marketing_departments_core_department_fk'
-      and conrelid = 'marketing.departments'::regclass
-  ) then
-    alter table marketing.departments
-      add constraint marketing_departments_core_department_fk
-      foreign key(core_department_id) references core.departments(id) on delete restrict;
-  end if;
-end
-$marketing_department_core_fk$;
-
-create unique index if not exists marketing_departments_core_department_uq
-on marketing.departments(core_department_id)
-where core_department_id is not null;
 
 create table if not exists marketing.department_users (
   department_id uuid not null references marketing.departments(id) on delete cascade,

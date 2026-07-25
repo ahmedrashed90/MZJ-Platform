@@ -1,5 +1,4 @@
 import { runSqlScript } from "./_db.js";
-import { ensureMarketingAccessBridge } from "./_marketing-access-bridge.js";
 
 let ready: Promise<void> | null = null;
 
@@ -35,9 +34,14 @@ create table if not exists marketing.departments (
   is_active boolean not null default true,
   created_by uuid references core.users(id),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  core_department_id uuid
+  updated_at timestamptz not null default now()
 );
+
+alter table marketing.departments
+  add column if not exists core_department_id uuid references core.departments(id) on delete set null;
+create unique index if not exists marketing_departments_core_department_uidx
+  on marketing.departments(core_department_id)
+  where core_department_id is not null;
 
 create table if not exists marketing.department_users (
   department_id uuid not null references marketing.departments(id) on delete cascade,
@@ -45,6 +49,71 @@ create table if not exists marketing.department_users (
   created_at timestamptz not null default now(),
   primary key(department_id,user_id)
 );
+
+update marketing.departments md
+set core_department_id = (
+  select cd.id
+  from core.departments cd
+  where cd.system_code='marketing'
+    and cd.name=md.name
+  order by cd.is_active desc,cd.created_at,cd.id
+  limit 1
+)
+where md.core_department_id is null;
+
+insert into core.departments(code,name,system_code,is_active)
+select 'marketing_'||replace(md.id::text,'-',''),md.name,'marketing',md.is_active
+from marketing.departments md
+where md.core_department_id is null
+on conflict(code) do update set
+  name=excluded.name,
+  system_code='marketing',
+  is_active=excluded.is_active,
+  updated_at=now();
+
+update marketing.departments md
+set core_department_id=cd.id
+from core.departments cd
+where md.core_department_id is null
+  and cd.code='marketing_'||replace(md.id::text,'-','');
+
+update core.departments cd
+set name=md.name,system_code='marketing',is_active=md.is_active,updated_at=now()
+from marketing.departments md
+where md.core_department_id=cd.id
+  and (
+    cd.name is distinct from md.name
+    or cd.system_code is distinct from 'marketing'
+    or cd.is_active is distinct from md.is_active
+  );
+
+with legacy_assignments as (
+  select
+    du.user_id,
+    md.core_department_id as department_id,
+    row_number() over(partition by du.user_id order by md.is_content desc,md.name,md.id) as position
+  from marketing.department_users du
+  join marketing.departments md on md.id=du.department_id and md.core_department_id is not null
+  join core.users u on u.id=du.user_id and u.is_active=true
+  join core.user_systems us on us.user_id=du.user_id and us.system_code='marketing' and us.is_enabled=true
+  where not exists (
+    select 1
+    from core.user_system_departments existing
+    where existing.user_id=du.user_id and existing.system_code='marketing'
+  )
+)
+insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
+select user_id,'marketing',department_id,position=1
+from legacy_assignments
+on conflict(user_id,system_code,department_id) do nothing;
+
+insert into core.user_departments(user_id,department_id,is_primary)
+select user_id,department_id,is_primary
+from core.user_system_departments
+where system_code='marketing'
+on conflict(user_id,department_id) do update set is_primary=excluded.is_primary;
+
+delete from marketing.department_users;
 
 create table if not exists marketing.assignment_actions (
   id uuid primary key default gen_random_uuid(),
@@ -528,7 +597,6 @@ export async function ensureMarketingSchema() {
     });
   }
   await ready;
-  await ensureMarketingAccessBridge();
 }
 
 export { MARKETING_SCHEMA_SQL };
