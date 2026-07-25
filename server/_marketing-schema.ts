@@ -37,32 +37,46 @@ create table if not exists marketing.departments (
   updated_at timestamptz not null default now()
 );
 
-alter table marketing.departments
-  add column if not exists core_department_id uuid references core.departments(id) on delete set null;
-create unique index if not exists marketing_departments_core_department_uidx
-  on marketing.departments(core_department_id)
-  where core_department_id is not null;
+alter table marketing.departments add column if not exists core_department_id uuid;
 
-create table if not exists marketing.department_users (
-  department_id uuid not null references marketing.departments(id) on delete cascade,
-  user_id uuid not null references core.users(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key(department_id,user_id)
-);
+do $marketing_department_core_fk$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'marketing_departments_core_department_fk'
+      and conrelid = 'marketing.departments'::regclass
+  ) then
+    alter table marketing.departments
+      add constraint marketing_departments_core_department_fk
+      foreign key(core_department_id) references core.departments(id) on delete restrict;
+  end if;
+end
+$marketing_department_core_fk$;
 
 update marketing.departments md
 set core_department_id = (
   select cd.id
   from core.departments cd
-  where cd.system_code='marketing'
-    and cd.name=md.name
-  order by cd.is_active desc,cd.created_at,cd.id
+  where cd.system_code = 'marketing'
+    and lower(trim(cd.name)) = lower(trim(md.name))
+  order by cd.is_active desc, cd.created_at
   limit 1
 )
-where md.core_department_id is null;
+where md.core_department_id is null
+  and exists (
+    select 1
+    from core.departments cd
+    where cd.system_code = 'marketing'
+      and lower(trim(cd.name)) = lower(trim(md.name))
+  );
 
 insert into core.departments(code,name,system_code,is_active)
-select 'marketing_'||replace(md.id::text,'-',''),md.name,'marketing',md.is_active
+select
+  'marketing_' || left(replace(md.id::text,'-',''),20),
+  md.name,
+  'marketing',
+  md.is_active
 from marketing.departments md
 where md.core_department_id is null
 on conflict(code) do update set
@@ -72,48 +86,69 @@ on conflict(code) do update set
   updated_at=now();
 
 update marketing.departments md
-set core_department_id=cd.id
+set core_department_id = cd.id
 from core.departments cd
 where md.core_department_id is null
-  and cd.code='marketing_'||replace(md.id::text,'-','');
+  and cd.code = 'marketing_' || left(replace(md.id::text,'-',''),20);
 
 update core.departments cd
-set name=md.name,system_code='marketing',is_active=md.is_active,updated_at=now()
+set name=md.name,
+    system_code='marketing',
+    is_active=md.is_active,
+    updated_at=now()
 from marketing.departments md
 where md.core_department_id=cd.id
-  and (
-    cd.name is distinct from md.name
-    or cd.system_code is distinct from 'marketing'
-    or cd.is_active is distinct from md.is_active
-  );
+  and (cd.name is distinct from md.name or cd.system_code is distinct from 'marketing' or cd.is_active is distinct from md.is_active);
 
-with legacy_assignments as (
+update core.departments cd
+set is_active=false,updated_at=now()
+where cd.code='marketing'
+  and cd.system_code='marketing'
+  and not exists(select 1 from marketing.departments md where md.core_department_id=cd.id)
+  and exists(select 1 from marketing.departments md where md.is_active=true);
+
+create unique index if not exists marketing_departments_core_department_uidx
+  on marketing.departments(core_department_id)
+  where core_department_id is not null;
+
+-- Legacy table is retained only for database compatibility. User membership is read
+-- exclusively from core.user_system_departments for the marketing system.
+create table if not exists marketing.department_users (
+  department_id uuid not null references marketing.departments(id) on delete cascade,
+  user_id uuid not null references core.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key(department_id,user_id)
+);
+
+
+-- Preserve legacy memberships only for marketing users who do not yet have any
+-- centrally configured allowed departments. Once central assignments exist,
+-- they remain the sole source of truth.
+with legacy_memberships as (
   select
     du.user_id,
     md.core_department_id as department_id,
-    row_number() over(partition by du.user_id order by md.is_content desc,md.name,md.id) as position
+    row_number() over(partition by du.user_id order by md.name,md.id) = 1 as is_primary
   from marketing.department_users du
-  join marketing.departments md on md.id=du.department_id and md.core_department_id is not null
-  join core.users u on u.id=du.user_id and u.is_active=true
+  join marketing.departments md on md.id=du.department_id and md.is_active=true
   join core.user_systems us on us.user_id=du.user_id and us.system_code='marketing' and us.is_enabled=true
-  where not exists (
-    select 1
-    from core.user_system_departments existing
-    where existing.user_id=du.user_id and existing.system_code='marketing'
-  )
+  where md.core_department_id is not null
+    and not exists(
+      select 1 from core.user_system_departments existing
+      where existing.user_id=du.user_id and existing.system_code='marketing'
+    )
 )
 insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
-select user_id,'marketing',department_id,position=1
-from legacy_assignments
+select user_id,'marketing',department_id,is_primary
+from legacy_memberships
 on conflict(user_id,system_code,department_id) do nothing;
 
 insert into core.user_departments(user_id,department_id,is_primary)
 select user_id,department_id,is_primary
 from core.user_system_departments
 where system_code='marketing'
-on conflict(user_id,department_id) do update set is_primary=excluded.is_primary;
-
-delete from marketing.department_users;
+on conflict(user_id,department_id) do update
+set is_primary=core.user_departments.is_primary or excluded.is_primary;
 
 create table if not exists marketing.assignment_actions (
   id uuid primary key default gen_random_uuid(),
