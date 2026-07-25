@@ -51,7 +51,7 @@ export async function uploadMarketingFile(input: {
   });
   const uploaded = await fetch(prepared.uploadUrl, { method: "PUT", body: input.file, headers: { "content-type": input.file.type || "application/octet-stream" } });
   if (!uploaded.ok) throw new Error("تعذر رفع الملف إلى التخزين");
-  await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "mark_file_ready", fileId: prepared.fileId, category: input.category, sourceType: input.sourceType, sourceId: input.sourceId, taskId: input.taskId }) });
+  await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "mark_file_ready", fileId: prepared.fileId }) });
   return prepared.fileId;
 }
 

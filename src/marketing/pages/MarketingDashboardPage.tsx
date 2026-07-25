@@ -1,200 +1,56 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
-import {
-  Archive,
-  CaretDown,
-  CaretUp,
-  CheckCircle,
-  ClockCountdown,
-  PaperPlaneTilt,
-  Receipt,
-  UserCircle,
-} from "@phosphor-icons/react";
+import { useEffect, useMemo, useState } from "react";
+import { Archive, CheckCircle, ClockCountdown, PaperPlaneTilt, Receipt } from "@phosphor-icons/react";
 import { marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { TaskDetailModal } from "../components/TaskDetailModal";
 
-const DASHBOARD_LIVE_POLL_MS = 1000;
-
-function templateStatusLabel(status: unknown) {
-  const labels: Record<string, string> = {
-    not_started: "في انتظار رفع Task Template",
-    under_review: "في انتظار اعتماد Task Template",
-    revision_requested: "مطلوب تعديل Task Template",
-    rejected: "تم رفض Task Template",
-    approved: "تم اعتماد Task Template",
-  };
-  return labels[String(status || "")] || "";
-}
-
-function taskKindLabel(task: any) {
-  return task.task_kind === "task_template" ? "Task Template" : "تاسك تنفيذي";
-}
-
-function taskProgress(task: any) {
-  return Math.max(0, Math.min(100, Number(task.progress || 0)));
-}
-
-function formatProgress(value: unknown) {
-  const safe = Math.max(0, Math.min(100, Number(value || 0)));
-  return `${safe.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
-}
-
-function sameAssignedUser(task: any) {
-  const assignedId = String(task.assigned_to || "").trim();
-  const contentId = String(task.paired_content_user_id || "").trim();
-  if (assignedId && contentId) return assignedId === contentId;
-  const assignedName = String(task.assigned_name || "").trim().toLocaleLowerCase("ar");
-  const contentName = String(task.content_user_name || "").trim().toLocaleLowerCase("ar");
-  return Boolean(assignedName && contentName && assignedName === contentName);
-}
-
-function assigneeColorStyle(value: unknown): CSSProperties | undefined {
-  const color = String(value || "").trim();
-  const match = /^#([0-9a-f]{6})$/i.exec(color);
-  if (!match) return undefined;
-  const hex = match[1];
-  const red = Number.parseInt(hex.slice(0, 2), 16);
-  const green = Number.parseInt(hex.slice(2, 4), 16);
-  const blue = Number.parseInt(hex.slice(4, 6), 16);
-  return {
-    borderColor: color,
-    boxShadow: `5px 5px 0 ${color}, 0 8px 22px rgba(${red}, ${green}, ${blue}, .18)`,
-  };
-}
-
-function DashboardTaskCard({
-  task,
-  onOpen,
-  onReceive,
-  showReceive = false,
-}: {
-  task: any;
-  onOpen: () => void;
-  onReceive?: () => void;
-  showReceive?: boolean;
-}) {
-  const statusLabel = templateStatusLabel(task.template_status);
-  const progress = taskProgress(task);
-  const showContentWriter = Boolean(task.content_user_name) && !sameAssignedUser(task);
-
-  return <article className="marketing-dashboard-task-card">
-    <div className="marketing-dashboard-task-top">
-      <span className={`marketing-dashboard-task-badge status-${task.template_status || "not_started"}`}>{statusLabel || `${taskKindLabel(task)} - ${task.department_name || "القسم"}`}</span>
-      <strong>{task.creative_name || task.title || "تاسك"}</strong>
-    </div>
-    <p className="marketing-dashboard-task-code">{task.campaign_code || task.source_name || "—"}</p>
-    <div className="marketing-dashboard-task-progress">
-      <span dir="ltr" title={`نسبة الاكتمال: ${formatProgress(progress)}`} aria-label={`نسبة الاكتمال ${formatProgress(progress)}`}>{formatProgress(progress)}</span>
-      <ProgressBar value={progress} />
-    </div>
-
-    <div className="marketing-dashboard-assignees">
-      <div className="marketing-dashboard-assignee">
-        <span>المسؤول</span>
-        <b style={assigneeColorStyle(task.assigned_user_color)}><UserCircle size={18} weight="fill" />{task.assigned_name || "—"}</b>
-      </div>
-      {showContentWriter ? <div className="marketing-dashboard-assignee content">
-        <span>كاتب المحتوى</span>
-        <b style={assigneeColorStyle(task.content_user_color)}><UserCircle size={18} weight="fill" />{task.content_user_name}</b>
-      </div> : null}
-    </div>
-
-    <div className="marketing-dashboard-task-meta">
-      <div><span>القسم</span><strong>{task.department_name || "—"}</strong></div>
-      <div><span>الكرييتيف</span><strong>{task.creative_name || task.title || "—"}</strong></div>
-    </div>
-
-    <div className="marketing-dashboard-task-actions">
-      <button type="button" className="secondary" onClick={onOpen}>تفاصيل</button>
-      {showReceive && onReceive ? <button type="button" className="primary" onClick={onReceive}><CheckCircle size={17} />تم الاستلام</button> : null}
-    </div>
-  </article>;
-}
-
 export function MarketingDashboardPage() {
-  const [data, setData] = useState<any>({ required: [], received: [], entities: [] });
+  const [data, setData] = useState<any>({ required: [], received: [], entities: [], permissions: [] });
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [expandedRequired, setExpandedRequired] = useState<string[]>([]);
-  const [expandedEntities, setExpandedEntities] = useState<string[]>([]);
-  const [expandedReadinessDepartments, setExpandedReadinessDepartments] = useState<string[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [movingId, setMovingId] = useState("");
   const [error, setError] = useState("");
-  const versionRef = useRef("");
-  const loadInFlightRef = useRef(false);
-  const pulseInFlightRef = useRef(false);
 
-  const load = useCallback(async (silent = false) => {
-    if (loadInFlightRef.current) return;
-    loadInFlightRef.current = true;
-    if (!silent) {
-      setLoading(true);
-      setError("");
-    }
+  async function load() {
+    setLoading(true);
+    setError("");
     try {
-      const payload = await marketingFetch<any>(`/api/marketing${marketingQuery({ resource: "dashboard" })}`);
-      setData(payload);
-      versionRef.current = String(payload.version || "");
+      setData(await marketingFetch<any>(`/api/marketing${marketingQuery({ resource: "dashboard" })}`));
     } catch (failure) {
-      if (!silent) setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل الداش بورد");
     } finally {
-      loadInFlightRef.current = false;
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    void load();
-
-    const refreshVisibleDashboard = () => {
-      if (document.visibilityState === "visible") void load(true);
-    };
-    const pollVersion = async () => {
-      if (document.visibilityState !== "visible" || pulseInFlightRef.current) return;
-      pulseInFlightRef.current = true;
-      try {
-        const pulse = await marketingFetch<{ version?: string }>(`/api/marketing${marketingQuery({ resource: "dashboard_version" })}`);
-        const nextVersion = String(pulse.version || "");
-        if (nextVersion && nextVersion !== versionRef.current) await load(true);
-      } catch {
-        // Keep the dashboard usable if one background pulse fails.
-      } finally {
-        pulseInFlightRef.current = false;
-      }
-    };
-
-    const timer = window.setInterval(() => void pollVersion(), DASHBOARD_LIVE_POLL_MS);
-    window.addEventListener("focus", refreshVisibleDashboard);
-    document.addEventListener("visibilitychange", refreshVisibleDashboard);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refreshVisibleDashboard);
-      document.removeEventListener("visibilitychange", refreshVisibleDashboard);
-    };
-  }, [load]);
+  useEffect(() => { void load(); }, []);
 
   async function receive(id: string) {
     try {
       await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "receive_task", id }) });
-      await load(true);
+      await load();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر استلام التاسك");
     }
   }
 
-  function toggleList(setter: Dispatch<SetStateAction<string[]>>, key: string) {
-    setter((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
-  }
-
-  const requiredByDepartment = useMemo(() => {
-    const map = new Map<string, { name: string; tasks: any[] }>();
-    for (const task of data.required || []) {
-      const key = task.department_id || task.department_name || "unknown";
-      const current: { name: string; tasks: any[] } = map.get(key) || { name: task.department_name || "قسم المحتوى", tasks: [] };
-      current.tasks.push(task);
-      map.set(key, current);
+  async function moveToPublishing(sourceType: string, id: string) {
+    setMovingId(id);
+    setError("");
+    try {
+      await marketingFetch("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "move_to_publishing", sourceType, id }),
+      });
+      if (expanded === `${sourceType}:${id}`) setExpanded(null);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر النقل إلى قسم النشر");
+    } finally {
+      setMovingId("");
     }
-    return Array.from(map.entries());
-  }, [data.required]);
+  }
 
   const receivedBySource = useMemo(() => {
     const map = new Map<string, any[]>();
@@ -205,107 +61,102 @@ export function MarketingDashboardPage() {
     return map;
   }, [data.received]);
 
-  const readinessEntities = useMemo(
-    () => (data.entities || []).filter((item: any) => receivedBySource.has(`${item.source_type}:${item.id}`)),
-    [data.entities, receivedBySource],
+  const readinessEntities = useMemo(() => (data.entities || []).filter((item: any) => {
+    const key = `${item.source_type}:${item.id}`;
+    return receivedBySource.has(key) && !["publishing", "archived"].includes(item.status);
+  }), [data.entities, receivedBySource]);
+
+  const publishingEntities = useMemo(
+    () => (data.entities || []).filter((item: any) => item.status === "publishing"),
+    [data.entities],
   );
 
-  return <MarketingPage title="الداش بورد" description="متابعة المطلوب وجاهزية الحملات والأجندات داخل سيستم التسويق.">
-    {error ? <MarketingAlert>{error}</MarketingAlert> : null}
-    {loading ? <div className="marketing-empty">جاري تحميل الداش بورد...</div> : <div className="marketing-kanban marketing-dashboard-workflow">
-      <section className="marketing-kanban-column required marketing-dashboard-column">
-        <header>
-          <div><Receipt size={23} /><div><h2>TASK - المطلوب</h2><p>التاسكات التي لم يتم استلامها بعد، مجمعة حسب القسم.</p></div></div>
-          <b>{data.required.length}</b>
-        </header>
-        <div className="marketing-kanban-body">
-          {requiredByDepartment.length ? requiredByDepartment.map(([departmentKey, group]) => {
-            const open = expandedRequired.includes(departmentKey);
-            return <section className={`marketing-dashboard-department ${open ? "open" : ""}`} key={departmentKey}>
-              <button type="button" className="marketing-dashboard-department-head" onClick={() => toggleList(setExpandedRequired, departmentKey)}>
-                <span className="marketing-dashboard-department-name">{group.name}</span>
-                <div className="marketing-dashboard-department-controls">
-                  <span className="marketing-dashboard-department-summary simple">{group.tasks.length} تاسك</span>
-                  {open ? <CaretUp size={16} /> : <CaretDown size={16} />}
-                </div>
-              </button>
-              {open ? <div className="marketing-dashboard-department-tasks">
-                {group.tasks.map((task: any) => <DashboardTaskCard
-                  key={task.id}
-                  task={task}
-                  onOpen={() => setTaskId(task.id)}
-                  onReceive={() => void receive(task.id)}
-                  showReceive
-                />)}
-              </div> : null}
-            </section>;
-          }) : <div className="marketing-empty small">لا توجد تاسكات مطلوبة.</div>}
-        </div>
-      </section>
+  const canMoveToPublishing = Array.isArray(data.permissions) && data.permissions.includes("marketing.publish_prep.manage");
 
-      <section className="marketing-kanban-column readiness marketing-dashboard-column">
-        <header>
-          <div><ClockCountdown size={23} /><div><h2>جاهزية المطلوب</h2><p>التاسكات المستلمة، مجمعة حسب الحملة والقسم.</p></div></div>
-          <b>{readinessEntities.length}</b>
-        </header>
-        <div className="marketing-kanban-body">
-          {readinessEntities.length ? readinessEntities.map((entity: any) => {
-            const entityKey = `${entity.source_type}:${entity.id}`;
-            const tasks = receivedBySource.get(entityKey) || [];
-            const entityOpen = expandedEntities.includes(entityKey);
-            const departments = new Map<string, { name: string; tasks: any[] }>();
-            tasks.forEach((task: any) => {
-              const departmentKey = task.department_id || task.department_name || "unknown";
-              const current: { name: string; tasks: any[] } = departments.get(departmentKey) || { name: task.department_name || "قسم المحتوى", tasks: [] };
-              current.tasks.push(task);
-              departments.set(departmentKey, current);
-            });
+  return (
+    <MarketingPage title="الداش بورد" description="متابعة المطلوب وجاهزية الحملات والأجندات داخل سيستم التسويق.">
+      {error ? <MarketingAlert>{error}</MarketingAlert> : null}
+      {loading ? <div className="marketing-empty">جاري تحميل الداش بورد...</div> : (
+        <div className="marketing-kanban">
+          <section className="marketing-kanban-column required">
+            <header><div><Receipt size={23} /><h2>TASK - المطلوب</h2></div><b>{data.required.length}</b></header>
+            <div className="marketing-kanban-body">
+              {data.required.length ? data.required.map((task: any) => (
+                <article className="marketing-task-card" key={task.id}>
+                  <div className="marketing-task-card-top"><span>{task.department_name || "قسم المحتوى"}</span><small>{task.task_kind === "task_template" ? "Task Template" : "تاسك تنفيذي"}</small></div>
+                  <h3>{task.title}</h3>
+                  <p>{task.source_name}</p>
+                  <div className="marketing-card-meta"><span>المسؤول: <b>{task.assigned_name || "—"}</b></span><span>التسليم: <b>{String(task.due_at || "—").slice(0, 10)}</b></span></div>
+                  <div className="marketing-task-card-actions"><button type="button" className="secondary" onClick={() => setTaskId(task.id)}>التفاصيل</button><button type="button" className="primary" onClick={() => void receive(task.id)}><CheckCircle size={16} />تم الاستلام</button></div>
+                </article>
+              )) : <div className="marketing-empty small">لا توجد تاسكات مطلوبة.</div>}
+            </div>
+          </section>
 
-            return <article className={`marketing-readiness-card marketing-dashboard-entity ${entityOpen ? "open" : ""}`} key={entityKey}>
-              <button type="button" className="marketing-readiness-head marketing-dashboard-entity-head" onClick={() => toggleList(setExpandedEntities, entityKey)}>
-                <div className="marketing-dashboard-entity-main">
-                  <strong>{entity.name}</strong>
-                  <small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")}</small>
-                </div>
-                <div className="marketing-dashboard-entity-stats">
-                  <span>{tasks.length} تاسك</span>
-                  <b dir="ltr">{formatProgress(entity.progress)}</b>
-                </div>
-                {entityOpen ? <CaretUp size={17} /> : <CaretDown size={17} />}
-              </button>
-              <ProgressBar value={entity.progress} />
-
-              {entityOpen ? <div className="marketing-dashboard-readiness-departments">
-                {Array.from(departments.entries()).map(([departmentKey, group]) => {
-                  const expansionKey = `${entityKey}:${departmentKey}`;
-                  const open = expandedReadinessDepartments.includes(expansionKey);
-                  const completed = group.tasks.filter((task: any) => Number(task.progress || 0) >= 100).length;
-                  const progress = group.tasks.reduce((sum: number, task: any) => sum + taskProgress(task), 0) / Math.max(1, group.tasks.length);
-                  return <section className={`marketing-dashboard-department readiness ${open ? "open" : ""}`} key={departmentKey}>
-                    <button type="button" className="marketing-dashboard-department-head" onClick={() => toggleList(setExpandedReadinessDepartments, expansionKey)}>
-                      <span className="marketing-dashboard-department-name">{group.name}</span>
-                      <div className="marketing-dashboard-department-controls">
-                        <span className="marketing-dashboard-department-summary">
-                          <small><span dir="ltr">{completed}/{group.tasks.length}</span> تاسك</small>
-                          <strong dir="ltr">{formatProgress(progress)}</strong>
-                        </span>
-                        {open ? <CaretUp size={16} /> : <CaretDown size={16} />}
-                      </div>
+          <section className="marketing-kanban-column readiness">
+            <header><div><ClockCountdown size={23} /><h2>جاهزية المطلوب</h2></div><b>{readinessEntities.length}</b></header>
+            <div className="marketing-kanban-body">
+              {readinessEntities.length ? readinessEntities.map((entity: any) => {
+                const key = `${entity.source_type}:${entity.id}`;
+                const tasks = receivedBySource.get(key) || [];
+                const departments = new Map<string, any[]>();
+                tasks.forEach((task: any) => {
+                  const name = task.department_name || "قسم المحتوى";
+                  departments.set(name, [...(departments.get(name) || []), task]);
+                });
+                const ready = Number(entity.progress || 0) >= 100;
+                return (
+                  <article className="marketing-readiness-card" key={key}>
+                    <button type="button" className="marketing-readiness-head" onClick={() => setExpanded(expanded === key ? null : key)}>
+                      <div><strong>{entity.name}</strong><small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")}</small></div>
+                      <span>{Number(entity.progress || 0).toLocaleString("ar-SA", { maximumFractionDigits: 1 })}%</span>
                     </button>
-                    {open ? <div className="marketing-dashboard-department-tasks">
-                      {group.tasks.map((task: any) => <DashboardTaskCard key={task.id} task={task} onOpen={() => setTaskId(task.id)} />)}
-                    </div> : null}
-                  </section>;
-                })}
-              </div> : null}
-            </article>;
-          }) : <div className="marketing-empty small">لا توجد تاسكات مستلمة حتى الآن.</div>}
-        </div>
-      </section>
+                    <ProgressBar value={entity.progress} />
+                    {ready && canMoveToPublishing ? (
+                      <button type="button" className="marketing-move-publishing" disabled={movingId === entity.id} onClick={() => void moveToPublishing(entity.source_type, entity.id)}>
+                        <PaperPlaneTilt size={17} />{movingId === entity.id ? "جاري النقل..." : "نقل إلى قسم النشر"}
+                      </button>
+                    ) : null}
+                    {expanded === key ? (
+                      <div className="marketing-department-progress">
+                        {Array.from(departments.entries()).map(([name, departmentTasks]) => {
+                          const progress = departmentTasks.reduce((sum: number, item: any) => sum + Number(item.progress || 0), 0) / Math.max(1, departmentTasks.length);
+                          return (
+                            <section key={name}>
+                              <div><strong>{name}</strong><span>{departmentTasks.filter((item: any) => Number(item.progress) >= 100).length} / {departmentTasks.length}</span></div>
+                              <ProgressBar value={progress} />
+                              {departmentTasks.map((task: any) => <button key={task.id} type="button" onClick={() => setTaskId(task.id)}><span>{task.title}</span><b>{Number(task.progress || 0).toLocaleString("ar-SA")}%</b></button>)}
+                            </section>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              }) : <div className="marketing-empty small">لا توجد حملات أو أجندات في الجاهزية.</div>}
+            </div>
+          </section>
 
-      <section className="marketing-kanban-column publishing"><header><div><PaperPlaneTilt size={23} /><h2>قسم النشر</h2></div><b>{data.entities.filter((item: any) => item.status === "publishing").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><PaperPlaneTilt size={36} weight="duotone" /><span>قسم النشر سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
-      <section className="marketing-kanban-column archive"><header><div><Archive size={23} /><h2>قسم الأرشيف</h2></div><b>{data.entities.filter((item: any) => item.status === "archived").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><Archive size={36} weight="duotone" /><span>قسم الأرشيف سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
-    </div>}
-    <TaskDetailModal taskId={taskId} onClose={() => setTaskId(null)} onChanged={() => void load(true)} />
-  </MarketingPage>;
+          <section className="marketing-kanban-column publishing">
+            <header><div><PaperPlaneTilt size={23} /><h2>قسم النشر</h2></div><b>{publishingEntities.length}</b></header>
+            <div className="marketing-kanban-body">
+              {publishingEntities.length ? publishingEntities.map((entity: any) => (
+                <article className="marketing-publishing-card" key={`${entity.source_type}:${entity.id}`}>
+                  <div><strong>{entity.name}</strong><small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")}</small></div>
+                  <span>جاهزية {Number(entity.progress || 0).toLocaleString("ar-SA", { maximumFractionDigits: 1 })}%</span>
+                  <ProgressBar value={entity.progress} />
+                </article>
+              )) : <div className="marketing-empty small"><PaperPlaneTilt size={36} weight="duotone" /><span>لا توجد حملات أو أجندات منقولة إلى قسم النشر.</span></div>}
+            </div>
+          </section>
+
+          <section className="marketing-kanban-column archive">
+            <header><div><Archive size={23} /><h2>قسم الأرشيف</h2></div><b>{data.entities.filter((item: any) => item.status === "archived").length}</b></header>
+            <div className="marketing-kanban-body"><div className="marketing-empty small"><Archive size={36} weight="duotone" /><span>قسم الأرشيف سيتم تجهيزه في المرحلة اللاحقة.</span></div></div>
+          </section>
+        </div>
+      )}
+      <TaskDetailModal taskId={taskId} onClose={() => setTaskId(null)} onChanged={() => void load()} />
+    </MarketingPage>
+  );
 }

@@ -107,7 +107,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   const resource = clean(request.query.resource) || "dashboard";
   if (method === "GET") {
     const map: Record<string, string> = {
-      meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
+      meta: "system.marketing.access", dashboard: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
       task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", monitoring: "marketing.monitoring.view",
       calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", attendance: "marketing.attendance.view", stock: "marketing.stock.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
@@ -118,7 +118,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   const map: Record<string, string> = {
     create_campaign: "marketing.campaign.create", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access",
-    attach_final_file: "marketing.task.final_file.upload",
+    attach_final_file: "marketing.task.final_file.upload", prepare_upload: "marketing.file.upload", mark_file_ready: "marketing.file.upload",
     save_publish_prep: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload",
     archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
     create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", save_connection: "marketing.connections.manage",
@@ -127,12 +127,6 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
     save_user_colors: "settings.marketing.manage",
   };
-  if (action === "prepare_upload" || action === "mark_file_ready") {
-    const category = clean(payload.category);
-    if (category === "task-template") return req("system.marketing.access", "marketing", "dashboard", action);
-    if (category === "final-file") return req("marketing.task.final_file.upload", "marketing", "dashboard", action);
-    return req("marketing.file.upload", "marketing", resource, action);
-  }
   if (action === "review_template") {
     const review = clean(payload.reviewAction);
     return req(review === "approve" ? "marketing.task_template.approve" : "marketing.task_template.reject", "marketing", "dashboard", review);

@@ -109,10 +109,40 @@ from (values ('Awareness'),('Leads'),('Conversion Message')) as seed(name)
 where not exists (select 1 from marketing.funnels current where current.name=seed.name);
 update marketing.funnels set active=true,source=coalesce(nullif(source,''),'dashboard');
 
+create table if not exists marketing.package_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists marketing.package_sales_types (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+insert into marketing.package_categories(name,sort_order)
+select seed.name,seed.sort_order
+from (values ('العناية',10),('الفضية',20),('الذهبية',30),('VIP',40)) as seed(name,sort_order)
+where not exists(select 1 from marketing.package_categories current where lower(btrim(current.name))=lower(btrim(seed.name)));
+
+insert into marketing.package_sales_types(name,sort_order)
+select seed.name,seed.sort_order
+from (values ('مبيعات الكاش',10),('مبيعات القسط',20)) as seed(name,sort_order)
+where not exists(select 1 from marketing.package_sales_types current where lower(btrim(current.name))=lower(btrim(seed.name)));
+
 create table if not exists marketing.packages (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   category text not null,
+  category_id uuid references marketing.package_categories(id) on delete restrict,
+  sales_type_id uuid references marketing.package_sales_types(id) on delete restrict,
   price numeric(14,2) not null default 0,
   cash_discount numeric(6,2) not null default 0,
   registration_fees boolean not null default false,
@@ -126,6 +156,15 @@ create table if not exists marketing.packages (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table marketing.packages add column if not exists category_id uuid references marketing.package_categories(id) on delete restrict;
+alter table marketing.packages add column if not exists sales_type_id uuid references marketing.package_sales_types(id) on delete restrict;
+update marketing.packages p
+set category_id=c.id
+from marketing.package_categories c
+where p.category_id is null and lower(btrim(p.category))=lower(btrim(c.name));
+create index if not exists marketing_packages_category_idx on marketing.packages(category_id,is_active);
+create index if not exists marketing_packages_sales_type_idx on marketing.packages(sales_type_id,is_active);
 
 create table if not exists marketing.campaigns (
   id uuid primary key default gen_random_uuid(),
