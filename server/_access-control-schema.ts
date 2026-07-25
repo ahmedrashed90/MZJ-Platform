@@ -392,7 +392,7 @@ update core.system_pages
 set is_active=false,updated_at=now()
 where code='settings' and system_code in ('crm','marketing','operations','tracking');
 
-insert into core.roles(code,name,description_ar,is_system,is_active) values
+insert into core.roles(code,name,description_ar,is_system) values
 ('admin','مدير النظام','صلاحية كاملة للمنصة',true),
 ('system_admin','مدير النظام','قالب توافق لمدير النظام',true),
 ('sales_manager','مدير المبيعات','إدارة المبيعات داخل النطاق',true),
@@ -574,13 +574,13 @@ create table if not exists core.access_control_schema_state (
   updated_at timestamptz not null default now()
 );
 insert into core.access_control_schema_state(id,version,updated_at)
-values(1,119701,now())
+values(1,119702,now())
 on conflict(id) do update set version=greatest(core.access_control_schema_state.version,excluded.version),updated_at=now();
 
 `;
 
 
-const ACCESS_CONTROL_SCHEMA_VERSION = 119701;
+const ACCESS_CONTROL_SCHEMA_VERSION = 119702;
 let accessControlSchemaPromise: Promise<void> | null = null;
 
 async function accessControlSchemaReady() {

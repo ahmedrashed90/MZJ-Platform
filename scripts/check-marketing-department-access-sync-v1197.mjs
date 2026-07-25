@@ -84,8 +84,8 @@ expect("Legacy duplicate marketing role is consolidated", contains(
 ));
 expect("Access schema migration version was increased", contains(
   "server/_access-control-schema.ts",
-  "ACCESS_CONTROL_SCHEMA_VERSION = 119701",
-  "values(1,119701,now())",
+  "ACCESS_CONTROL_SCHEMA_VERSION = 119702",
+  "values(1,119702,now())",
 ));
 expect("Access bootstrap ensures the marketing department bridge", contains(
   "server/access-control.ts",

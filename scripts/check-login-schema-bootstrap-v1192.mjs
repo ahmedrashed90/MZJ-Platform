@@ -8,6 +8,7 @@ const setup = read('server/setup/initialize.ts');
 
 const checks = [
   ['schema readiness state exists', schema.includes('core.access_control_schema_state') && schema.includes('version,updated_at')],
+  ['role seed insert column count matches values', schema.includes('insert into core.roles(code,name,description_ar,is_system) values') && !schema.includes('insert into core.roles(code,name,description_ar,is_system,is_active) values')],
   ['schema bootstrap uses advisory lock', schema.includes('withDatabaseAdvisoryLock') && schema.includes('ensureAccessControlSchema')],
   ['schema bootstrap verifies auth columns', schema.includes("table_name='sessions' and column_name='permission_version'")],
   ['login initializes schema before query', login.includes('await ensureAccessControlSchema();')],
