@@ -9,6 +9,8 @@ import { FirstAdminSetupPage } from "./pages/FirstAdminSetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlatformLoadingPage } from "./pages/PlatformLoadingPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UnifiedReportsPage } from "./pages/UnifiedReportsPage";
+import { UnifiedDatabasePage } from "./pages/UnifiedDatabasePage";
 import { canAccessSystem, canOpenSettings, defaultSystemPath, hasPermission, type PlatformSystem } from "./systemAccess";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
@@ -121,8 +123,8 @@ function PlatformRoutes() {
             <Route path="archive" element={<PermissionGuard permission="tracking.archive.view"><TrackingOrdersPage archivedOnly /></PermissionGuard>} />
             <Route path="delete" element={<PermissionGuard permission="tracking.delete.view"><TrackingDeletePage /></PermissionGuard>} />
           </Route>
-          <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><EmptyModulePage title="التقارير" description="صفحة تقارير موحدة لجميع الأنظمة." /></PermissionGuard>} />
-          <Route path="/database" element={<PermissionGuard permission="platform.database.view"><EmptyModulePage title="قاعدة البيانات" description="واجهة موحدة للبحث والعرض والتصفية والتصدير." /></PermissionGuard>} />
+          <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
+          <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />
           <Route path="/settings" element={<SettingsRoute />} />
           <Route path="/activity" element={<PermissionGuard permission="platform.activity.view"><EmptyModulePage title="سجل النشاط" description="سجل مركزي لجميع الإجراءات والتغييرات داخل المنصة." /></PermissionGuard>} />
           <Route path="/help" element={<EmptyModulePage title="المساعدة" description="مركز المساعدة والتوثيق الخاص بمنصة MZJ." />} />
