@@ -400,26 +400,67 @@ async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string,
           const creativeTypeId = clean(rawCreative.creativeTypeId);
           const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
           if (!creativeType) continue;
-          const contentAssignments = arrayValue(rawCreative.contentAssignments);
+          const contentAssignmentMap = new Map<string, any>();
+          for (const assignment of arrayValue(rawCreative.contentAssignments)) {
+            const userId = clean(assignment.userId);
+            if (!userId) continue;
+            contentAssignmentMap.set(userId, { ...assignment, userId });
+          }
+          const contentAssignments = [...contentAssignmentMap.values()];
           const contentUserIds = contentAssignments.map((item: any) => clean(item.userId)).filter(Boolean);
-          const normalizeExecutionAssignments = (assignments: any[]) => arrayValue(assignments).map((assignment: any) => {
-            const linked = arrayValue<string>(assignment.contentUserIds).map(clean).filter((id) => contentUserIds.includes(id));
-            return {
-              ...assignment,
-              contentUserIds: linked.length || contentUserIds.length !== 1 ? linked : [contentUserIds[0]],
-            };
-          });
+          if (!contentUserIds.length) throw new Error(`اختر يوزر قسم المحتوى للكرييتيف ${creativeType.name}`);
+
+          const normalizeExecutionAssignments = (assignments: any[]) => {
+            const assignmentMap = new Map<string, any>();
+            for (const assignment of arrayValue(assignments)) {
+              const userId = clean(assignment.userId);
+              if (!userId) continue;
+              const linked = arrayValue<string>(assignment.contentUserIds).map(clean).filter((id) => contentUserIds.includes(id));
+              const existing = assignmentMap.get(userId);
+              assignmentMap.set(userId, {
+                ...(existing || assignment),
+                ...assignment,
+                userId,
+                contentUserIds: [...new Set([...(existing?.contentUserIds || []), ...linked])],
+              });
+            }
+            return [...assignmentMap.values()];
+          };
           const primaryAssignments = normalizeExecutionAssignments(rawCreative.primaryAssignments);
           const optionalAssignments = arrayValue(rawCreative.optionalAssignments).map((group: any) => ({
             ...group,
             assignments: normalizeExecutionAssignments(group.assignments),
           }));
+          const executionAssignments = [
+            ...primaryAssignments,
+            ...optionalAssignments.flatMap((group: any) => arrayValue(group.assignments)),
+          ];
+          if (!executionAssignments.length) throw new Error(`اختر يوزرًا تنفيذيًا للكرييتيف ${creativeType.name}`);
+          const coveredContentUsers = new Set(executionAssignments.flatMap((assignment: any) => arrayValue<string>(assignment.contentUserIds).map(clean).filter(Boolean)));
+          const missingContentUsers = contentUserIds.filter((id: string) => !coveredContentUsers.has(id));
+          if (missingContentUsers.length && executionAssignments.length === 1) {
+            executionAssignments[0].contentUserIds = [...new Set([...arrayValue<string>(executionAssignments[0].contentUserIds).map(clean).filter(Boolean), ...missingContentUsers])];
+          } else if (missingContentUsers.length) {
+            throw new Error(`كل Task Template يجب ربطه بتاسك تنفيذي داخل ${creativeType.name}`);
+          }
           const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
           const [creative] = await tx<any[]>`
             insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
             values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
           `;
           await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"" });
+          const templatesWithoutExecution = await tx<any[]>`
+            select tt.id::text
+            from marketing.task_templates tt
+            where tt.creative_id=${creative.id}::uuid
+              and not exists (
+                select 1 from marketing.tasks execution_task
+                where execution_task.task_template_id=tt.id
+                  and execution_task.task_kind='execution'
+                  and execution_task.is_deleted=false
+              )
+          `;
+          if (templatesWithoutExecution.length) throw new Error(`كل Task Template يجب أن يكون معه تاسك تنفيذي داخل ${creativeType.name}`);
           const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creative.id}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
           const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
           for (const scheduleTask of scheduleTasks) {
@@ -1073,7 +1114,7 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
       min(s.id::text) as id,
       s.publish_date,
       max(s.status) as status,
-      s.source_type,
+      t.source_type,
       p.name as platform_name,
       string_agg(distinct pt.name,'، ' order by pt.name) as post_type_name,
       c.name as creative_name,
@@ -1088,11 +1129,12 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
     left join marketing.platforms p on p.id=s.platform_id
     left join marketing.platform_post_types pt on pt.id=s.post_type_id
     left join marketing.creatives c on c.id=s.creative_id
-    left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id
-    left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join core.users u on u.id=t.assigned_to
     left join marketing.user_colors uc on uc.user_id=u.id
-    where ${unrestricted}=true
+    where (cam.id is not null or ag.id is not null) and (
+      ${unrestricted}=true
       or t.assigned_to=${user.id}::uuid
       or t.paired_content_user_id=${user.id}::uuid
       or (${departmentScoped}=true and exists(
@@ -1101,7 +1143,8 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
         where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}
       ))
       or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
-    group by s.publish_date,s.source_type,p.name,c.name,c.instance_code,cam.name,ag.name,t.id,t.title,u.full_name,uc.color
+    )
+    group by s.publish_date,t.source_type,p.name,c.name,c.instance_code,cam.name,ag.name,t.id,t.title,u.full_name,uc.color
     order by s.publish_date,coalesce(cam.name,ag.name),t.title,p.name
   `;
   return{ok:true,rows};

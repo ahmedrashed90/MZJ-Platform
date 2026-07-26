@@ -142,8 +142,18 @@ export function CreateAgendaPage() {
           ...creative.primaryAssignments,
           ...creative.optionalAssignments.flatMap((group) => group.assignments),
         ];
+        if (!executionAssignments.length) {
+          return `اختر يوزرًا تنفيذيًا واحدًا على الأقل داخل ${creativeType?.name || "الكرييتيف"}`;
+        }
         if (executionAssignments.some((assignment) => !assignment.contentUserIds.length)) {
           return `اربط كل يوزر تنفيذي بكاتب المحتوى داخل ${creativeType?.name || "الكرييتيف"}`;
+        }
+        const linkedContentUsers = new Set(executionAssignments.flatMap((assignment) => assignment.contentUserIds));
+        const unpairedTemplate = creative.contentAssignments.find((assignment) => !linkedContentUsers.has(assignment.userId));
+        if (unpairedTemplate) {
+          const contentUser = meta.users.find((item) => item.id === unpairedTemplate.userId);
+          const contentUserName = contentUser?.full_name || contentUser?.fullName || "كاتب المحتوى";
+          return `اربط Task Template الخاص بـ ${contentUserName} بتاسك تنفيذي داخل ${creativeType?.name || "الكرييتيف"}`;
         }
       }
     }
