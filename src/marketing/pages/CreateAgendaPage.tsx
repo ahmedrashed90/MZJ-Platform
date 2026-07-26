@@ -4,6 +4,7 @@ import { CalendarBlank, CalendarPlus, CheckCircle, FolderOpen, PencilSimple, Plu
 import { marketingFetch, marketingQuery } from "../api";
 import { CreativeEditor, newCreativeDraft } from "../components/CreativeEditor";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
+import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { relationshipCsv } from "../templateExcel";
 import type { CreativeDraft, MarketingMeta } from "../types";
 
@@ -115,6 +116,17 @@ export function CreateAgendaPage() {
   }
 
   const selectedDay = days.find((item) => item.date === editingDay);
+
+  useEscapeToClose(Boolean(selectedDay), () => setEditingDay(null));
+
+  useEffect(() => {
+    if (!selectedDay) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [selectedDay]);
 
   function addCreativeToDay() {
     if (!selectedDay || !addCreative.creativeTypeId) {

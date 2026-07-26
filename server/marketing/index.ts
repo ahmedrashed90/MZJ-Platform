@@ -871,8 +871,16 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       r.creative_id::text,
       r.task_id::text,
       r.publish_date,
-      r.caption,
-      r.hashtags,
+      coalesce(
+        nullif(r.caption,''),
+        nullif(t.approved_template_data->>'caption',''),
+        nullif(tt.approved_data->>'caption','')
+      ) as caption,
+      coalesce(
+        nullif(r.hashtags,''),
+        nullif(t.approved_template_data->>'hashtags',''),
+        nullif(tt.approved_data->>'hashtags','')
+      ) as hashtags,
       aggregate_data.status,
       aggregate_data.schedule_ids,
       aggregate_data.platform_name,
@@ -922,6 +930,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     left join marketing.departments d on d.id=t.department_id
     left join core.users u on u.id=t.assigned_to
     left join marketing.files f on f.id=t.final_file_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
     where ${unrestricted}=true
       or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
       or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}))
@@ -1045,12 +1054,92 @@ async function monitoring(sql:ReturnType<typeof getSql>,user:SessionUser){
 }
 async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
-  const rows=await sql<any[]>`select s.id::text,s.publish_date,s.status,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code,coalesce(cam.name,ag.name) as source_name,u.full_name as assigned_name,coalesce(uc.color,'#6c3329') as user_color from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id left join lateral(select assigned_to,paired_content_user_id from marketing.tasks t where t.id=s.task_id or (s.task_id is null and t.creative_id=s.creative_id and t.task_kind='execution' and t.is_deleted=false) order by case when t.id=s.task_id then 0 else 1 end,t.created_at limit 1)t on true left join core.users u on u.id=t.assigned_to left join marketing.user_colors uc on uc.user_id=u.id where ${unrestricted}=true or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid)) order by s.publish_date`;
+  const rows=await sql<any[]>`
+    select
+      s.id::text,
+      s.publish_date,
+      s.status,
+      s.source_type,
+      p.name as platform_name,
+      pt.name as post_type_name,
+      c.name as creative_name,
+      c.instance_code,
+      coalesce(cam.name,ag.name) as source_name,
+      t.title as task_title,
+      u.full_name as assigned_name,
+      d.name as department_name,
+      coalesce(uc.color,'#6c3329') as user_color
+    from marketing.publish_schedule s
+    left join marketing.platforms p on p.id=s.platform_id
+    left join marketing.platform_post_types pt on pt.id=s.post_type_id
+    left join marketing.creatives c on c.id=s.creative_id
+    left join marketing.campaigns cam on s.source_type='campaign' and cam.id=s.source_id
+    left join marketing.agendas ag on s.source_type='agenda' and ag.id=s.source_id
+    left join lateral(
+      select assigned_to,paired_content_user_id,title,department_id,id
+      from marketing.tasks t
+      where t.task_kind='execution'
+        and t.is_deleted=false
+        and (t.id=s.task_id or (s.task_id is null and t.creative_id=s.creative_id))
+      order by case when t.id=s.task_id then 0 else 1 end,t.created_at
+      limit 1
+    )t on true
+    left join core.users u on u.id=t.assigned_to
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.user_colors uc on uc.user_id=u.id
+    where t.id is not null and (
+      ${unrestricted}=true
+      or t.assigned_to=${user.id}::uuid
+      or t.paired_content_user_id=${user.id}::uuid
+      or (${departmentScoped}=true and exists(
+        select 1
+        from core.user_departments ud
+        join core.departments cd on cd.id=ud.department_id
+        where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}
+      ))
+      or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
+    )
+    order by s.publish_date,p.name,pt.name
+  `;
   return{ok:true,rows};
 }
 async function receiptCalendar(sql:ReturnType<typeof getSql>,user:SessionUser){
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
-  const rows=await sql<any[]>`select t.id::text,t.received_at,t.source_type,coalesce(cam.name,ag.name) as source_name,c.name as creative_name,u.full_name,d.name as department_name,coalesce(uc.color,'#6c3329') as user_color from marketing.tasks t left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id left join marketing.creatives c on c.id=t.creative_id left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.user_colors uc on uc.user_id=u.id where t.received_at is not null and t.is_deleted=false and (${unrestricted}=true or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))) order by t.received_at`;
+  const rows=await sql<any[]>`
+    select
+      t.id::text,
+      t.received_at,
+      t.source_type,
+      t.task_kind,
+      t.title as task_title,
+      coalesce(cam.name,ag.name) as source_name,
+      c.name as creative_name,
+      u.full_name,
+      d.name as department_name,
+      coalesce(uc.color,'#6c3329') as user_color
+    from marketing.tasks t
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    left join marketing.creatives c on c.id=t.creative_id
+    left join core.users u on u.id=t.assigned_to
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.user_colors uc on uc.user_id=u.id
+    where t.received_at is not null
+      and t.is_deleted=false
+      and (
+        ${unrestricted}=true
+        or t.assigned_to=${user.id}::uuid
+        or t.paired_content_user_id=${user.id}::uuid
+        or (${departmentScoped}=true and exists(
+          select 1
+          from core.user_departments ud
+          join core.departments cd on cd.id=ud.department_id
+          where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}
+        ))
+        or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
+      )
+    order by t.received_at
+  `;
   return{ok:true,rows};
 }
 

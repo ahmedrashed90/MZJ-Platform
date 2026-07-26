@@ -791,7 +791,6 @@
 .marketing-detail-grid small { color: var(--muted); }
 .marketing-agenda-days article { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 11px; padding: 12px; background: #fff; }
 
-.marketing-day-editor-overlay,
 .marketing-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -801,6 +800,15 @@
   padding: 24px;
   background: rgba(251,250,249,.94);
   backdrop-filter: blur(3px);
+}
+.marketing-day-editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  align-items: stretch;
+  padding: 0;
+  background: #f7f4f2;
 }
 .marketing-day-editor,
 .marketing-modal,
@@ -2108,7 +2116,7 @@
 .marketing-agenda-day-count strong { font-size: 20px; }
 .marketing-agenda-day-count small { color: var(--muted); font-size: 10px; }
 .marketing-agenda-review { padding: 18px; }
-.marketing-agenda-editor-v2 { width: min(1500px,97vw); height: min(94vh,980px); border: 1px solid var(--line-strong); border-radius: 19px; background: #f7f4f2; box-shadow: 0 28px 70px rgba(66,37,29,.16); display: grid; grid-template-rows: auto minmax(0,1fr) auto; overflow: hidden; }
+.marketing-agenda-editor-v2 { width: 100vw; height: 100dvh; max-width: none; max-height: none; border: 0; border-radius: 0; background: #f7f4f2; box-shadow: none; display: grid; grid-template-rows: auto minmax(0,1fr) auto; overflow: hidden; }
 .marketing-agenda-editor-v2 > header { min-height: 72px; padding: 13px 17px; border-bottom: 1px solid var(--line); background: #fff; display: flex; justify-content: space-between; align-items: center; }
 .marketing-agenda-editor-v2 > header > div { display: flex; align-items: center; gap: 10px; }
 .marketing-agenda-editor-v2 > header > div > span { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: var(--brand); background: #fff0ea; }
