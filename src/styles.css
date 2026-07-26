@@ -3603,7 +3603,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .access-users-grid {
   display: grid;
-  grid-template-columns: 340px minmax(0,1fr);
+  grid-template-columns: minmax(400px, 430px) minmax(0,1fr);
   gap: 16px;
   align-items: start;
 }
@@ -3616,7 +3616,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .access-users-list {
   position: sticky;
   top: 16px;
-  max-height: calc(100vh - 190px);
+  max-height: calc(100vh - 150px);
   overflow: hidden;
   display: grid;
   grid-template-rows: auto auto auto minmax(0,1fr);
@@ -3730,18 +3730,22 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .access-role-row {
   width: 100%;
   display: grid;
-  gap: 5px;
+  gap: 6px;
   position: relative;
   overflow: hidden;
   border: 1px solid #e9ded8;
   border-radius: 13px;
   background: #fff;
-  padding: 12px 13px;
+  padding: 13px 15px;
   text-align: right;
   color: inherit;
   font-family: inherit;
   cursor: pointer;
   transition: .18s ease;
+}
+.access-user-cards button {
+  min-height: 86px;
+  align-content: center;
 }
 .access-user-cards button:before {
   content: "";
@@ -3768,17 +3772,19 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .access-user-cards button.selected:before { background: var(--brand-2); }
 .access-user-card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 9px;
+  gap: 12px;
   color: inherit !important;
 }
 .access-user-card-head strong {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 1.45;
 }
 .access-user-card-head em,
 .access-editor-status {
@@ -3802,7 +3808,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .access-role-row small {
   color: var(--muted);
   font-size: 10px;
-  line-height: 1.5;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 .access-user-role {
   display: flex;
@@ -4321,7 +4328,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .settings-readonly-fieldset:disabled { opacity: 1; }
 
 @media (max-width: 1180px) {
-  .access-users-grid { grid-template-columns: 310px minmax(0,1fr); }
+  .access-users-grid { grid-template-columns: minmax(350px, 380px) minmax(0,1fr); }
   .access-copy-tools { grid-template-columns: 1fr 1fr; }
   .access-copy-tools label { grid-column: 1/-1; }
   .access-save-bar { grid-template-columns: 1fr; }
