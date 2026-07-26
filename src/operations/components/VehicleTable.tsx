@@ -8,7 +8,7 @@ type Column = {
   min: number;
   max: number;
   value: (row: VehicleRow) => unknown;
-  render: (row: VehicleRow, onOpen: (id: string) => void) => React.ReactNode;
+  render: (row: VehicleRow, onOpen: (id: string, tab?: "details" | "checks") => void) => React.ReactNode;
 };
 
 const STORAGE_KEY = "mzj.operations.vehicleTable.columnWidths.v1";
@@ -55,7 +55,7 @@ const columns: Column[] = [
   { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 205, min: 150, max: 460, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
   { key: "status", label: "الحالة", width: 145, min: 115, max: 260, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
   { key: "stateNote", label: "ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)", width: 260, min: 190, max: 520, value: (row) => row.state_note, render: (row) => <span title={row.state_note || ""}>{row.status_code === "has_notes" || row.state_note ? row.state_note || "—" : "—"}</span> },
-  { key: "checks", label: "التشييك", width: 175, min: 145, max: 260, value: (row) => { const summary = checkSummary(row); return `${summary.yes}/${summary.no}/${summary.unknown}`; }, render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link" title={summary.details.join("\n")} onClick={() => onOpen(row.id)}>نعم {summary.yes} · لا {summary.no}{summary.unknown ? ` · غير محدد ${summary.unknown}` : ""}</button>; } },
+  { key: "checks", label: "التشييك", width: 115, min: 95, max: 170, value: () => "عرض", render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link operations-check-view-button" title={summary.details.join("\n")} onClick={() => onOpen(row.id, "checks")}>عرض</button>; } },
   { key: "financialApproval", label: "الموافقة المالية", width: 145, min: 120, max: 220, value: (row) => row.financial_approved ? "نعم" : "لا", render: (row) => <span className={row.financial_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "نعم ✓" : "لا —"}</span> },
   { key: "administrativeApproval", label: "الموافقة الادارية", width: 155, min: 125, max: 230, value: (row) => row.administrative_approved ? "نعم" : "لا", render: (row) => <span className={row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.administrative_approved ? "نعم ✓" : "لا —"}</span> },
   { key: "tracking", label: "Tracking", width: 150, min: 130, max: 220, value: (row) => row.tracking_order_no, render: (row) => {
@@ -78,7 +78,7 @@ function initialWidths() {
   }
 }
 
-export function VehicleTable({ rows, onOpen, emptyText = "لا توجد سيارات مطابقة" }: { rows: VehicleRow[]; onOpen: (id: string) => void; emptyText?: string }) {
+export function VehicleTable({ rows, onOpen, emptyText = "لا توجد سيارات مطابقة" }: { rows: VehicleRow[]; onOpen: (id: string, tab?: "details" | "checks") => void; emptyText?: string }) {
   const [widths, setWidths] = useState<Record<string, number>>(initialWidths);
   const tableWidth = useMemo(() => columns.reduce((sum, column) => sum + (widths[column.key] || column.width), 0), [widths]);
 

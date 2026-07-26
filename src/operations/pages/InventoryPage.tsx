@@ -20,7 +20,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
   const [model, setModel] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedVehicle, setSelectedVehicle] = useState<{ id: string; tab: "details" | "checks" } | null>(null);
   const pageSize = 50;
   const showAll = all && !archived;
 
@@ -84,10 +84,10 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
           <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="الموديل" />
           <button type="button" onClick={() => { setPage(1); setAppliedSearch(search.trim()); }}><MagnifyingGlass size={17} />بحث</button>
         </div>
-        <VehicleTable rows={rows} onOpen={setSelectedId} />
+        <VehicleTable rows={rows} onOpen={(id, tab = "details") => setSelectedVehicle({ id, tab })} />
         <div className="operations-pagination"><button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => value - 1)}>السابق</button><span>صفحة {page} من {Math.max(1, Math.ceil(total / pageSize))}</span><button type="button" disabled={page * pageSize >= total || loading} onClick={() => setPage((value) => value + 1)}>التالي</button></div>
       </section>
-      <VehicleDetailModal id={selectedId} meta={meta} onClose={() => setSelectedId(null)} onChanged={() => void load()} />
+      <VehicleDetailModal id={selectedVehicle?.id || null} initialTab={selectedVehicle?.tab || "details"} meta={meta} onClose={() => setSelectedVehicle(null)} onChanged={() => void load()} />
     </div>
   );
 }

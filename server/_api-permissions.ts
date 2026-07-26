@@ -170,6 +170,7 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
   if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public"].includes(route)) return null;
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");
+  if (route === "activity" && request.method === "GET") return req("platform.activity.view", "core", "activity", "view");
   if (route.startsWith("crm/")) return crmRequirement(route, request);
   if (route === "operations") return operationsRequirement(request);
   if (route === "marketing") return marketingRequirement(request);

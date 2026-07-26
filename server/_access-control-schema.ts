@@ -123,6 +123,8 @@ alter table audit.activity_log add column if not exists rejection_reason text;
 alter table audit.activity_log add column if not exists rollback_reason text;
 alter table audit.activity_log add column if not exists request_id text;
 create index if not exists activity_log_security_idx on audit.activity_log(result,created_at desc);
+create index if not exists activity_log_feed_idx on audit.activity_log(created_at desc,id desc);
+create index if not exists activity_log_system_action_idx on audit.activity_log(system_code,action,created_at desc);
 
 insert into core.systems(code,name_ar,sort_order,is_active) values
 ('operations','العمليات',10,true),

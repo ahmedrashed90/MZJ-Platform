@@ -2,15 +2,17 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Sidebar } from "./components/Sidebar";
+import { ActivityTracker } from "./components/ActivityTracker";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DatabaseSetupPage } from "./pages/DatabaseSetupPage";
-import { EmptyModulePage } from "./pages/EmptyModulePage";
 import { FirstAdminSetupPage } from "./pages/FirstAdminSetupPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlatformLoadingPage } from "./pages/PlatformLoadingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { UnifiedReportsPage } from "./pages/UnifiedReportsPage";
 import { UnifiedDatabasePage } from "./pages/UnifiedDatabasePage";
+import { ActivityPage } from "./pages/ActivityPage";
+import { HelpPage } from "./pages/HelpPage";
 import { canAccessSystem, canOpenSettings, defaultSystemPath, hasPermission, type PlatformSystem } from "./systemAccess";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
@@ -75,6 +77,7 @@ function SettingsRoute() {
 function PlatformRoutes() {
   return (
     <div className="app-shell">
+      <ActivityTracker />
       <Sidebar />
       <main className="page-shell">
         <Suspense fallback={<div className="crm-loading-panel">جاري تحميل الصفحة...</div>}>
@@ -126,8 +129,8 @@ function PlatformRoutes() {
           <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
           <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />
           <Route path="/settings" element={<SettingsRoute />} />
-          <Route path="/activity" element={<PermissionGuard permission="platform.activity.view"><EmptyModulePage title="سجل النشاط" description="سجل مركزي لجميع الإجراءات والتغييرات داخل المنصة." /></PermissionGuard>} />
-          <Route path="/help" element={<EmptyModulePage title="المساعدة" description="مركز المساعدة والتوثيق الخاص بمنصة MZJ." />} />
+          <Route path="/activity" element={<PermissionGuard permission="platform.activity.view"><ActivityPage /></PermissionGuard>} />
+          <Route path="/help" element={<HelpPage />} />
         </Routes>
         </Suspense>
       </main>

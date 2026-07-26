@@ -29,7 +29,7 @@ function linkStatusLabel(value: unknown) {
   return labels[key] || key || "—";
 }
 
-export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: string | null; meta: OperationsMeta; onClose: () => void; onChanged?: () => void }) {
+export function VehicleDetailModal({ id, meta, initialTab = "details", onClose, onChanged }: { id: string | null; meta: OperationsMeta; initialTab?: TabKey; onClose: () => void; onChanged?: () => void }) {
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -49,7 +49,7 @@ export function VehicleDetailModal({ id, meta, onClose, onChanged }: { id: strin
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر فتح بيانات السيارة"); }
     finally { setLoading(false); }
   }
-  useEffect(() => { setVehicle(null); setTab("details"); if (id) void load(); }, [id]);
+  useEffect(() => { setVehicle(null); setTab(initialTab); if (id) void load(); }, [id, initialTab]);
 
   const currentApproval = useMemo(() => vehicle?.approvals.find((item) => item.is_active) || vehicle?.approvals[0], [vehicle]);
   const hasActiveSalesOrder = useMemo(() => Boolean(vehicle?.salesOrders?.some((item) => !item.is_cancelled)), [vehicle]);
