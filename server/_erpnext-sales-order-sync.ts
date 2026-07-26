@@ -974,9 +974,21 @@ export async function syncErpNextSalesOrder(input: {
     trackingOrderId,
     warnings,
   });
-  const canApplyBusinessLink = eligibleStatus && userResolution.status === "linked" && Boolean(mapping) && !order.is_cancelled;
+  // CRM needs a mapped platform user because the lead must be assigned to a real
+  // platform account. Operations does not: the VIN is the canonical inventory
+  // identity, so a valid submitted sale must still reserve the vehicle and open
+  // its approval cycle even when the ERP user mapping is incomplete.
+  const canApplyOperationsLink = eligibleStatus && !order.is_cancelled;
+  const canApplyCrmLink = canApplyOperationsLink
+    && userResolution.status === "linked"
+    && Boolean(mapping);
   if (order.is_cancelled) {
     warnings.push({ code: "ERP_INSTANCE_ALREADY_CANCELLED", message: "نسخة طلب البيع ملغاة بالفعل؛ لم يتم إعادة ربط CRM أو العمليات" });
+  } else if (canApplyOperationsLink && !canApplyCrmLink) {
+    warnings.push({
+      code: "CRM_LINK_SKIPPED_USER_MAPPING",
+      message: "تعذر ربط CRM لعدم اكتمال ربط مستخدم NEXT ERP، لكن تمت متابعة ربط السيارة بالعمليات ودورة الموافقات باستخدام رقم الهيكل",
+    });
   }
 
   let crm = {
@@ -986,7 +998,7 @@ export async function syncErpNextSalesOrder(input: {
     message: eligibleStatus ? "لم يتم ربط CRM لعدم اكتمال ربط مستخدم NEXT ERP" : "لم يتم تشغيل ربط CRM بسبب حالة الطلب",
   };
 
-  if (canApplyBusinessLink && !normalized.actualCustomerPhoneNormalized) {
+  if (canApplyCrmLink && !normalized.actualCustomerPhoneNormalized) {
     crm = {
       status: "missing_phone",
       leadId: null,
@@ -997,7 +1009,7 @@ export async function syncErpNextSalesOrder(input: {
       code: "CRM_CUSTOMER_PHONE_MISSING",
       message: "رقم جوال العميل الحقيقي مفقود أو غير صالح؛ لم يتم إنشاء أو تعديل عميل CRM",
     });
-  } else if (canApplyBusinessLink && mapping) {
+  } else if (canApplyCrmLink && mapping) {
     crm = await linkCrmCustomer({
       orderId: order.id,
       normalized,
@@ -1016,13 +1028,17 @@ export async function syncErpNextSalesOrder(input: {
     where id=${order.id}::uuid
   `;
 
-  const operationsSkipStatus = !eligibleStatus ? "skipped_status" : userResolution.status;
+  const operationsSkipStatus = !eligibleStatus
+    ? "skipped_status"
+    : order.is_cancelled
+      ? "cancelled"
+      : "not_applied";
   const operations = await linkOperationsVehicles({
     orderId: order.id,
     normalized,
     mapping,
     trackingResults,
-    canApplySale: canApplyBusinessLink,
+    canApplySale: canApplyOperationsLink,
     skipStatus: operationsSkipStatus,
     warnings,
   });

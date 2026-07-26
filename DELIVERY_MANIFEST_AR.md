@@ -1,3 +1,17 @@
+# بيان التسليم — إصلاح NEXT ERP للعمليات والموافقات
+
+- المصدر المباشر: `MZJ-Platform-main-activity-help-check-view-clean(1).zip`.
+- إصلاح السبب الجذري داخل `server/_erpnext-sales-order-sync.ts` بدون Endpoint بديل أو Patch جانبي.
+- فصل تحديث العمليات ودورة الموافقات عن شرط ربط مستخدم CRM.
+- طلب `To Deliver and Bill` يربط السيارة بالـVIN ويحولها إلى «مباع تحت التسليم» وينشئ دورة الموافقات حتى عند نقص ربط مستخدم NEXT ERP.
+- ربط CRM يظل مشروطًا بالمستخدم والفرع والقسم الصحيحين.
+- لا توجد Migration أو ملفات SQL جديدة مطلوبة.
+- اختبارات NEXT ERP: ناجحة، وجميع Scripts المشروع 37/37، وTranspile 172/172.
+
+راجع `docs/ERPNEXT-OPERATIONS-APPROVALS-CLEAN-FLOW-AR.md`.
+
+---
+
 # بيان التسليم — MZJ Platform v1.20.7
 
 ## تفاصيل Task Template وعرض قاعدة بيانات التسويق

@@ -99,4 +99,14 @@ const approvalClose = syncSource.indexOf("'all','cancelled'", approvalLookup);
 const deliveredGuard = syncSource.indexOf('if (vehicle.archived_at || clean(vehicle.status_code) === "delivered")', approvalLookup);
 assert.ok(approvalLookup >= 0 && approvalClose > approvalLookup && deliveredGuard > approvalClose, "يجب إغلاق دورة الموافقات قبل الحفاظ على حالة السيارة المسلمة أو المؤرشفة");
 
+const operationsGate = syncSource.indexOf('const canApplyOperationsLink = eligibleStatus && !order.is_cancelled;');
+const crmGate = syncSource.indexOf('const canApplyCrmLink = canApplyOperationsLink');
+const operationsCall = syncSource.indexOf('canApplySale: canApplyOperationsLink');
+const crmMissingPhoneGate = syncSource.indexOf('if (canApplyCrmLink && !normalized.actualCustomerPhoneNormalized)');
+assert.ok(operationsGate >= 0, "ربط العمليات يجب أن يعتمد على حالة الطلب وعدم الإلغاء فقط");
+assert.ok(crmGate > operationsGate, "ربط CRM يجب أن يظل مشروطًا بربط مستخدم المنصة");
+assert.ok(operationsCall > crmGate, "تحديث السيارة ودورة الموافقات يجب أن يستخدما بوابة العمليات المستقلة");
+assert.ok(crmMissingPhoneGate > crmGate, "شروط العميل يجب أن تطبق على CRM فقط");
+assert.equal(syncSource.includes('canApplySale: canApplyBusinessLink'), false, "لا يجوز أن يتوقف تحديث العمليات على ربط مستخدم CRM");
+
 console.log("PASS: NEXT ERP clean integration runtime checks (v1.19.7 source)");
