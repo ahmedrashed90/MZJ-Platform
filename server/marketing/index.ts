@@ -400,12 +400,26 @@ async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string,
           const creativeTypeId = clean(rawCreative.creativeTypeId);
           const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
           if (!creativeType) continue;
+          const contentAssignments = arrayValue(rawCreative.contentAssignments);
+          const contentUserIds = contentAssignments.map((item: any) => clean(item.userId)).filter(Boolean);
+          const normalizeExecutionAssignments = (assignments: any[]) => arrayValue(assignments).map((assignment: any) => {
+            const linked = arrayValue<string>(assignment.contentUserIds).map(clean).filter((id) => contentUserIds.includes(id));
+            return {
+              ...assignment,
+              contentUserIds: linked.length || contentUserIds.length !== 1 ? linked : [contentUserIds[0]],
+            };
+          });
+          const primaryAssignments = normalizeExecutionAssignments(rawCreative.primaryAssignments);
+          const optionalAssignments = arrayValue(rawCreative.optionalAssignments).map((group: any) => ({
+            ...group,
+            assignments: normalizeExecutionAssignments(group.assignments),
+          }));
           const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
           const [creative] = await tx<any[]>`
             insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
-            values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
+            values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
           `;
-          await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments:arrayValue(rawCreative.contentAssignments),primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments:arrayValue(rawCreative.primaryAssignments),optionalAssignments:arrayValue(rawCreative.optionalAssignments),requiredFromContent:"" });
+          await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"" });
           const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creative.id}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
           const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
           for (const scheduleTask of scheduleTasks) {
@@ -1056,12 +1070,12 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
   const rows=await sql<any[]>`
     select
-      s.id::text,
+      min(s.id::text) as id,
       s.publish_date,
-      s.status,
+      max(s.status) as status,
       s.source_type,
       p.name as platform_name,
-      pt.name as post_type_name,
+      string_agg(distinct pt.name,'، ' order by pt.name) as post_type_name,
       c.name as creative_name,
       c.instance_code,
       coalesce(cam.name,ag.name) as source_name,
@@ -1087,7 +1101,8 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
         where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}
       ))
       or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
-    order by s.publish_date,coalesce(cam.name,ag.name),t.title,p.name,pt.name
+    group by s.publish_date,s.source_type,p.name,c.name,c.instance_code,cam.name,ag.name,t.id,t.title,u.full_name,uc.color
+    order by s.publish_date,coalesce(cam.name,ag.name),t.title,p.name
   `;
   return{ok:true,rows};
 }
@@ -1113,7 +1128,7 @@ async function receiptCalendar(sql:ReturnType<typeof getSql>,user:SessionUser){
     left join core.users u on u.id=t.assigned_to
     left join marketing.departments d on d.id=t.department_id
     left join marketing.user_colors uc on uc.user_id=u.id
-    where t.received_at is not null and t.is_deleted=false and (
+    where t.received_at is not null and t.is_deleted=false and t.task_kind='execution' and (
       ${unrestricted}=true
       or t.assigned_to=${user.id}::uuid
       or t.paired_content_user_id=${user.id}::uuid

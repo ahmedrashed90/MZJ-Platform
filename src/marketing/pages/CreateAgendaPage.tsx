@@ -128,6 +128,38 @@ export function CreateAgendaPage() {
   const totalCreatives = days.reduce((sum, day) => sum + day.creatives.reduce((part, item) => part + item.quantity, 0), 0);
   const totalTemplates = days.reduce((sum, day) => sum + day.creatives.reduce((part, item) => part + item.contentAssignments.length * item.quantity, 0), 0);
 
+
+  function validateAgendaAssignments() {
+    for (const day of days) {
+      for (const creative of day.creatives) {
+        const creativeType = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId);
+        if (!creative.creativeTypeId) return `اختر نوع الكرييتيف في يوم ${dayLabel(day.date)}`;
+        if (!creative.contentAssignments.length) return `اختر يوزر قسم المحتوى في ${creativeType?.name || "الكرييتيف"} يوم ${dayLabel(day.date)}`;
+        if (creativeType?.primary_department_id && !creative.primaryAssignments.length) {
+          return `اختر يوزر القسم الأساسي ${creativeType.primary_department_name || ""} في ${creativeType.name}`;
+        }
+        const executionAssignments = [
+          ...creative.primaryAssignments,
+          ...creative.optionalAssignments.flatMap((group) => group.assignments),
+        ];
+        if (executionAssignments.some((assignment) => !assignment.contentUserIds.length)) {
+          return `اربط كل يوزر تنفيذي بكاتب المحتوى داخل ${creativeType?.name || "الكرييتيف"}`;
+        }
+      }
+    }
+    return "";
+  }
+
+  function goToReview() {
+    const issue = validateAgendaAssignments();
+    if (issue) {
+      setError(issue);
+      return;
+    }
+    setError("");
+    setStep(2);
+  }
+
   async function create() {
     setLoading(true);
     setError("");
@@ -253,7 +285,7 @@ export function CreateAgendaPage() {
                 );
               })}
             </div>
-            <footer className="marketing-wizard-footer"><button type="button" className="secondary" onClick={() => setStep(0)}>السابق</button><button type="button" className="primary" onClick={() => setStep(2)}>التالي: المراجعة والإنشاء</button></footer>
+            <footer className="marketing-wizard-footer"><button type="button" className="secondary" onClick={() => setStep(0)}>السابق</button><button type="button" className="primary" onClick={goToReview}>التالي: المراجعة والإنشاء</button></footer>
           </div>
         ) : null}
 
@@ -325,6 +357,8 @@ export function CreateAgendaPage() {
                         meta={meta}
                         showPlatforms
                         carsModal
+                        autoLinkSingleContentUser
+                        showTaskFlowSummary
                         onChange={(value) => updateDay(selectedDay.date, selectedDay.creatives.map((item, itemIndex) => itemIndex === index ? value : item))}
                         onDelete={() => updateDay(selectedDay.date, selectedDay.creatives.filter((_, itemIndex) => itemIndex !== index))}
                       />

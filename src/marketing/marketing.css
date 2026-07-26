@@ -2071,20 +2071,22 @@
 .marketing-monitor-kpis p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .marketing-monitor-kpis article.warning > span { color: #b33f3f; background: #fff0ef; }
 .marketing-monitor-kpis article.success > span { color: #287448; background: #effaf3; }
-.marketing-monitor-layout { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; align-items: start; }
-.marketing-monitor-section { display: grid; gap: 15px; min-width: 0; }
-.marketing-monitor-section > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.marketing-monitor-section > header h2 { margin: 0 0 5px; font-size: 19px; }
+.marketing-monitor-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; align-items: start; min-width: 0; }
+.marketing-monitor-section { display: grid; gap: 16px; min-width: 0; padding: 18px; overflow: visible; }
+.marketing-monitor-section > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap; min-width: 0; }
+.marketing-monitor-section > header > div { min-width: 0; flex: 1 1 280px; }
+.marketing-monitor-section > header h2 { margin: 0 0 5px; font-size: 19px; line-height: 1.45; overflow-wrap: anywhere; }
 .marketing-monitor-section > header p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .marketing-monitor-section > header > span { padding: 7px 11px; border-radius: 999px; color: var(--brand); background: #fff0ea; font-weight: 900; font-size: 11px; white-space: nowrap; }
 .marketing-monitor-bars { display: grid; gap: 10px; }
-.marketing-monitor-bars article { display: grid; grid-template-columns: minmax(125px,170px) minmax(0,1fr) 58px; gap: 11px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0e5df; }
+.marketing-monitor-bars article { display: grid; grid-template-columns: minmax(150px,.8fr) minmax(190px,1.6fr) 72px; gap: 12px; align-items: center; padding: 11px 2px; border-bottom: 1px solid #f0e5df; min-width: 0; }
 .marketing-monitor-bars article:last-child { border-bottom: 0; }
-.marketing-monitor-bars article > div { display: grid; gap: 3px; }
+.marketing-monitor-bars article > div { display: grid; gap: 3px; min-width: 0; }
+.marketing-monitor-bars article strong { overflow-wrap: anywhere; line-height: 1.5; }
 .marketing-monitor-bars article span { color: var(--muted); font-size: 11px; }
 .marketing-monitor-bars article > b { text-align: left; white-space: nowrap; }
-.marketing-monitor-entities { display: grid; gap: 9px; max-height: 420px; overflow: auto; padding-inline-end: 4px; }
-.marketing-monitor-entities article { display: grid; grid-template-columns: minmax(0,1fr) 220px; gap: 14px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfc; }
+.marketing-monitor-entities { display: grid; gap: 10px; min-width: 0; }
+.marketing-monitor-entities article { display: grid; grid-template-columns: minmax(0,1fr) minmax(180px,240px); gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfc; min-width: 0; }
 .marketing-monitor-entities article > div { min-width: 0; display: grid; gap: 5px; }
 .marketing-monitor-entities article > div:last-child { grid-template-columns: 56px minmax(0,1fr); align-items: center; }
 .marketing-monitor-entities strong,
@@ -2095,13 +2097,13 @@
 .marketing-delay-badge { display: inline-flex; padding: 5px 8px; border-radius: 999px; color: #b33f3f; background: #fff0ef; border: 1px solid #f0c5c1; font-weight: 900; white-space: nowrap; }
 .marketing-table-progress { min-width: 170px; display: grid; grid-template-columns: minmax(0,1fr) 48px; gap: 7px; align-items: center; }
 .marketing-performance-cards,
-.marketing-employee-performance { display: grid; gap: 9px; max-height: 460px; overflow: auto; padding-inline-end: 3px; }
-.marketing-performance-cards article { padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfc; display: grid; gap: 9px; }
+.marketing-employee-performance { display: grid; gap: 10px; min-width: 0; }
+.marketing-performance-cards article { padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfc; display: grid; gap: 10px; min-width: 0; }
 .marketing-performance-cards article > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .marketing-performance-cards article > header div { min-width: 0; display: grid; gap: 3px; }
 .marketing-performance-cards strong { overflow-wrap: anywhere; }
 .marketing-performance-cards small { color: var(--muted); }
-.marketing-employee-performance article { display: grid; grid-template-columns: 46px minmax(0,1fr) 62px; gap: 11px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfc; }
+.marketing-employee-performance article { display: grid; grid-template-columns: 46px minmax(0,1fr) 72px; gap: 12px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfc; min-width: 0; }
 .marketing-employee-avatar { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg,var(--brand),var(--brand-2)); font-weight: 900; }
 .marketing-employee-performance article > div:nth-child(2) { min-width: 0; display: grid; gap: 6px; }
 .marketing-employee-performance strong,
@@ -2157,16 +2159,32 @@
 .marketing-agenda-editor-summary > div { min-height: 62px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; display: grid; gap: 4px; }
 .marketing-agenda-editor-summary small { color: var(--muted); }
 .marketing-agenda-creative-stack { display: grid; gap: 15px; }
-.marketing-agenda-creative-stack .marketing-creative-editor { min-width: 0; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; padding: 16px; border-radius: 16px; background: #fff; }
+.marketing-agenda-creative-stack .marketing-creative-editor { min-width: 0; grid-template-columns: minmax(0,1fr); align-items: start; padding: 18px; border-radius: 16px; background: #fff; gap: 14px; }
 .marketing-agenda-creative-stack .marketing-creative-editor > header,
-.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-form-grid { grid-column: 1/-1; }
-.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section { min-width: 0; align-content: start; }
-.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section:nth-of-type(n+3) { grid-column: 1/-1; }
-.marketing-agenda-creative-stack .marketing-assignment-row { grid-template-columns: minmax(120px,.65fr) minmax(170px,.8fr) minmax(220px,1.5fr); }
+.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-form-grid,
+.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section,
+.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-agenda-task-flow { grid-column: 1/-1; min-width: 0; }
+.marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section { min-width: 0; align-content: start; padding: 16px; background: #fffdfc; }
+.marketing-agenda-creative-stack .marketing-assignment-row { grid-template-columns: minmax(150px,.7fr) minmax(190px,.85fr) minmax(260px,1.45fr); align-items: end; }
 .marketing-agenda-creative-stack .marketing-platform-select { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
 .marketing-agenda-creative-stack .marketing-platform-select > div { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; display: grid; gap: 10px; }
 .marketing-agenda-creative-stack .marketing-platform-select .platform-head { justify-content: flex-start; }
-.marketing-agenda-creative-stack .marketing-chip-picker button { min-width: 112px; justify-content: center; }
+.marketing-agenda-creative-stack .marketing-user-picker .marketing-chip-picker { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 8px; }
+.marketing-agenda-creative-stack .marketing-chip-picker button { width: 100%; min-width: 0; justify-content: center; min-height: 40px; }
+.marketing-agenda-creative-stack .marketing-execution-box,
+.marketing-agenda-creative-stack .marketing-optional-box { min-width: 0; background: #fff; }
+.marketing-agenda-creative-stack .marketing-link-users { padding: 11px; border: 1px dashed var(--line-strong); border-radius: 11px; background: #fffaf8; }
+.marketing-agenda-task-flow { display: grid; grid-template-columns: minmax(0,1fr) 32px minmax(0,1fr); gap: 10px; align-items: center; padding: 13px; border: 1px solid #ead5ca; border-radius: 14px; background: #fff8f4; }
+.marketing-agenda-task-flow article { min-width: 0; display: grid; grid-template-columns: 34px minmax(0,1fr) 34px; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.marketing-agenda-task-flow article > span,
+.marketing-agenda-task-flow article > b { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; font-style: normal; font-weight: 900; }
+.marketing-agenda-task-flow article > span { color: #fff; background: var(--brand); }
+.marketing-agenda-task-flow article > b { color: var(--brand); background: #fff0ea; }
+.marketing-agenda-task-flow article > div { min-width: 0; display: grid; gap: 3px; }
+.marketing-agenda-task-flow article strong,
+.marketing-agenda-task-flow article small { overflow-wrap: anywhere; }
+.marketing-agenda-task-flow article small { color: var(--muted); }
+.marketing-agenda-task-flow > i { text-align: center; color: var(--brand); font-size: 22px; font-style: normal; font-weight: 900; }
 .marketing-agenda-empty { min-height: 360px; border: 1px dashed var(--line-strong); border-radius: 16px; background: #fff; }
 .marketing-agenda-editor-v2 > footer { min-height: 70px; padding: 12px clamp(18px,2vw,34px); border-top: 1px solid var(--line); background: #fff; display: flex; justify-content: flex-start; align-items: center; }
 
@@ -2178,6 +2196,7 @@
   .marketing-publish-toolbar { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-publish-search { grid-column: 1/-1; }
   .marketing-monitor-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .marketing-monitor-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
   .marketing-package-settings-grid,
@@ -2212,8 +2231,13 @@
   .marketing-agenda-editor-main { overflow: visible; }
   .marketing-database-section-heading,
   .marketing-publish-card-v2 > header { flex-direction: column; }
-  .marketing-monitor-bars article { grid-template-columns: 1fr; }
+  .marketing-monitor-bars article { grid-template-columns: 1fr; gap: 7px; }
+  .marketing-monitor-bars article > b { text-align: right; }
   .marketing-monitor-entities article { grid-template-columns: 1fr; }
+  .marketing-employee-performance article { grid-template-columns: 42px minmax(0,1fr); }
+  .marketing-employee-performance article > b { grid-column: 2; }
+  .marketing-agenda-task-flow { grid-template-columns: 1fr; }
+  .marketing-agenda-task-flow > i { transform: rotate(-90deg); }
   .marketing-publish-content-grid { grid-template-columns: 1fr; }
   .marketing-package-options { grid-template-columns: 1fr; }
 }

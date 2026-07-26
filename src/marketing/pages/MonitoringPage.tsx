@@ -26,6 +26,8 @@ function statusLabel(value: unknown) {
     published: "تم النشر",
     failed: "فشل التنفيذ",
     rejected: "مرفوض",
+    revision_requested: "مطلوب تعديل",
+    uploading: "جاري الرفع",
     archived: "مؤرشف",
   };
   return labels[String(value || "")] || "غير محدد";

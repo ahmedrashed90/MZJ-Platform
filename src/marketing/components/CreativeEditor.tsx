@@ -102,6 +102,8 @@ export function CreativeEditor({
   onDelete,
   showPlatforms = false,
   carsModal = false,
+  autoLinkSingleContentUser = false,
+  showTaskFlowSummary = false,
 }: {
   value: CreativeDraft;
   meta: MarketingMeta;
@@ -109,6 +111,8 @@ export function CreativeEditor({
   onDelete: () => void;
   showPlatforms?: boolean;
   carsModal?: boolean;
+  autoLinkSingleContentUser?: boolean;
+  showTaskFlowSummary?: boolean;
 }) {
   const [carsOpen, setCarsOpen] = useState(false);
   const [carSearch, setCarSearch] = useState("");
@@ -128,26 +132,37 @@ export function CreativeEditor({
       ? value.contentAssignments.filter((item) => item.userId !== userId)
       : [...value.contentAssignments, { userId, dueOn: "", note: "" }];
     const selected = new Set(contentAssignments.map((item) => item.userId));
+    const singleContentUserId = autoLinkSingleContentUser && contentAssignments.length === 1
+      ? contentAssignments[0].userId
+      : "";
+    const normalizeLinks = (ids: string[]) => {
+      const kept = ids.filter((id) => selected.has(id));
+      return kept.length || !singleContentUserId ? kept : [singleContentUserId];
+    };
     patch({
       contentAssignments,
       primaryAssignments: value.primaryAssignments.map((item) => ({
         ...item,
-        contentUserIds: item.contentUserIds.filter((id) => selected.has(id)),
+        contentUserIds: normalizeLinks(item.contentUserIds),
       })),
       optionalAssignments: value.optionalAssignments.map((group) => ({
         ...group,
         assignments: group.assignments.map((item) => ({
           ...item,
-          contentUserIds: item.contentUserIds.filter((id) => selected.has(id)),
+          contentUserIds: normalizeLinks(item.contentUserIds),
         })),
       })),
     });
   }
 
-  function toggleExecutionUser(current: ExecutionAssignment[], userId: string) {
+  function toggleExecutionUser(
+    current: ExecutionAssignment[],
+    userId: string,
+    initialContentUserIds: string[] = [],
+  ) {
     return current.some((item) => item.userId === userId)
       ? current.filter((item) => item.userId !== userId)
-      : [...current, { userId, contentUserIds: [], dueOn: "", note: "" }];
+      : [...current, { userId, contentUserIds: initialContentUserIds, dueOn: "", note: "" }];
   }
 
   function updateExecution(
@@ -274,8 +289,24 @@ export function CreativeEditor({
         </label>
       </div>
 
-      <section className="marketing-assignment-section">
-        <h3>قسم المحتوى</h3>
+      {showTaskFlowSummary ? (
+        <section className="marketing-agenda-task-flow" aria-label="فلو إنشاء التاسكات">
+          <article>
+            <span>1</span>
+            <div><strong>Task Template</strong><small>يُنشأ ليوزرات قسم المحتوى</small></div>
+            <b>{value.contentAssignments.length.toLocaleString("ar-SA")}</b>
+          </article>
+          <i>←</i>
+          <article>
+            <span>2</span>
+            <div><strong>التاسكات التنفيذية</strong><small>تُنشأ للقسم الأساسي والأقسام الاختيارية</small></div>
+            <b>{(value.primaryAssignments.length + value.optionalAssignments.reduce((sum, group) => sum + group.assignments.length, 0)).toLocaleString("ar-SA")}</b>
+          </article>
+        </section>
+      ) : null}
+
+      <section className="marketing-assignment-section marketing-content-assignment">
+        <h3>قسم المحتوى · Task Template</h3>
         <UserPicker
           title="اختيار يوزرات قسم المحتوى"
           users={contentUsers}
@@ -312,8 +343,8 @@ export function CreativeEditor({
         ))}
       </section>
 
-      <section className="marketing-assignment-section">
-        <h3>القسم الأساسي</h3>
+      <section className="marketing-assignment-section marketing-primary-assignment">
+        <h3>القسم الأساسي · التاسك التنفيذي</h3>
         {creativeType ? (
           <>
             <UserPicker
@@ -321,7 +352,13 @@ export function CreativeEditor({
               users={primaryUsers}
               selectedIds={value.primaryAssignments.map((item) => item.userId)}
               onToggle={(userId) => patch({
-                primaryAssignments: toggleExecutionUser(value.primaryAssignments, userId),
+                primaryAssignments: toggleExecutionUser(
+                  value.primaryAssignments,
+                  userId,
+                  autoLinkSingleContentUser && value.contentAssignments.length === 1
+                    ? [value.contentAssignments[0].userId]
+                    : [],
+                ),
               })}
             />
             {value.primaryAssignments.map((assignment) => (
@@ -369,9 +406,9 @@ export function CreativeEditor({
         ) : <p className="muted">اختر نوع الكرييتيف أولًا.</p>}
       </section>
 
-      <section className="marketing-assignment-section">
+      <section className="marketing-assignment-section marketing-optional-assignment">
         <div className="marketing-section-title">
-          <h3>الأقسام الاختيارية</h3>
+          <h3>الأقسام الاختيارية · تاسكات تنفيذية</h3>
           <button type="button" className="secondary" onClick={addOptional}><Plus size={16} />إضافة قسم اختياري</button>
         </div>
         {value.optionalAssignments.map((group, index) => {
@@ -406,7 +443,13 @@ export function CreativeEditor({
                   selectedIds={group.assignments.map((item) => item.userId)}
                   onToggle={(userId) => updateOptional(index, {
                     ...group,
-                    assignments: toggleExecutionUser(group.assignments, userId),
+                    assignments: toggleExecutionUser(
+                      group.assignments,
+                      userId,
+                      autoLinkSingleContentUser && value.contentAssignments.length === 1
+                        ? [value.contentAssignments[0].userId]
+                        : [],
+                    ),
                   })}
                 />
               ) : null}
@@ -459,7 +502,7 @@ export function CreativeEditor({
         })}
       </section>
 
-      <section className="marketing-assignment-section">
+      <section className="marketing-assignment-section marketing-cars-assignment">
         <button type="button" className="marketing-cars-toggle" onClick={() => setCarsOpen(!carsOpen)}>
           <Car size={18} />
           <span>اختيار السيارات</span>
@@ -469,7 +512,7 @@ export function CreativeEditor({
       </section>
 
       {showPlatforms ? (
-        <section className="marketing-assignment-section">
+        <section className="marketing-assignment-section marketing-platform-assignment">
           <h3>المنصات وأنواع النشر</h3>
           <div className="marketing-platform-select">
             {meta.platforms.map((platform) => {
