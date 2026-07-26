@@ -26,15 +26,24 @@ const tx = async (strings, ...values) => {
   const statement = strings.reduce((result, part, index) => result + part + (index < values.length ? `__VALUE_${index}__` : ""), "");
   statements.push(statement);
   if (statement.includes("from operations.vehicles") && statement.includes("for update")) {
-    return [{ id: "11111111-1111-1111-1111-111111111111", vin: "VIN-TEST", status_code: "under_delivery", archived_at: null }];
+    return [{ id: "11111111-1111-1111-1111-111111111111", vin: "VIN-TEST", status_code: "under_delivery", state_note: "مباع تحت التسليم — طلب البيع SAL-TEST-1", location_id: "33333333-3333-3333-3333-333333333333", archived_at: null }];
   }
   if (statement.includes("as approvals_complete") && statement.includes("as tracking_complete")) {
     return [{ approvals_complete: true, active_transfer: false, tracking_complete: true }];
   }
+  if (statement.includes("select o.sales_order_no") && statement.includes("from tracking.order_vehicles")) {
+    return [{ sales_order_no: "SAL-TEST-1" }];
+  }
   if (statement.includes("update operations.vehicles")) {
     assert.match(statement, /status_code='delivered'/, "الأرشفة النهائية يجب أن تحول الحالة إلى delivered");
     assert.match(statement, /is_inventory_active=false/, "الأرشفة النهائية يجب أن تخرج السيارة من المخزون النشط");
-    return [{ id: "11111111-1111-1111-1111-111111111111", vin: "VIN-TEST", status_code: "delivered", archived_at: new Date().toISOString(), is_inventory_active: false }];
+    assert.match(statement, /state_note=__VALUE_0__/, "الأرشفة النهائية يجب أن تحفظ ملاحظة طلب البيع النظيفة");
+    return [{ id: "11111111-1111-1111-1111-111111111111", vin: "VIN-TEST", status_code: "delivered", state_note: "طلب البيع SAL-TEST-1", archived_at: new Date().toISOString(), is_inventory_active: false }];
+  }
+  if (statement.includes("insert into operations.movements")) {
+    assert.match(statement, /'delivered'/, "سجل الحركات يجب أن يسجل الحالة الجديدة delivered");
+    assert.match(statement, /'tracking_delivery'/, "سجل الحركات يجب أن يميز حركة التسليم النهائي");
+    return [];
   }
   if (statement.includes("insert into operations.vehicle_archive_events")) return [];
   throw new Error(`Unexpected SQL in final-delivery check: ${statement}`);
@@ -51,6 +60,8 @@ assert.equal(result.archived, true);
 assert.equal(result.reason, "archived");
 assert.equal(result.vehicle.status_code, "delivered");
 assert.equal(result.vehicle.is_inventory_active, false);
+assert.equal(result.vehicle.state_note, "طلب البيع SAL-TEST-1");
+assert.ok(statements.some((statement) => statement.includes("insert into operations.movements")), "يجب تسجيل حركة مباع تم التسليم");
 assert.ok(statements.some((statement) => statement.includes("insert into operations.vehicle_archive_events")), "يجب تسجيل حدث الأرشفة");
 
-console.log("Tracking final delivery -> delivered status + vehicle archive runtime check passed.");
+console.log("Tracking final delivery -> delivered movement + clean sales-order note + vehicle archive runtime check passed.");

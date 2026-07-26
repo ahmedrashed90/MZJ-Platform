@@ -41,6 +41,7 @@ export type NormalizedErpNextSalesOrder = {
   isCancellation: boolean;
   erpSalesPerson: string;
   erpUserId: string;
+  erpSubmittedBy: string;
   erpBranch: string;
   accountingCustomerName: string;
   actualCustomerName: string;
@@ -322,6 +323,8 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const deliveryDate = pickText(doc, ["delivery_date", "expected_delivery_date", "DeliveryDate"])
     || pickText(body, ["DeliveryDate", "deliveryDate"]);
   const erpUserId = resolveErpUserId(doc, body, vehicleItems);
+  const erpSubmittedBy = pickText(doc, ["modified_by", "modifiedBy", "submitted_by", "submittedBy", "owner"])
+    || pickText(body, ["modified_by", "modifiedBy", "submitted_by", "submittedBy", "owner"]);
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
@@ -449,6 +452,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     isCancellation,
     erpSalesPerson: salesPerson,
     erpUserId,
+    erpSubmittedBy,
     erpBranch: branch,
     accountingCustomerName,
     actualCustomerName,

@@ -4,6 +4,7 @@ import { exportExcel, operationsFetch, queryString } from "../api";
 import { VehicleDetailModal } from "../components/VehicleDetailModal";
 import { VehicleTable } from "../components/VehicleTable";
 import type { VehicleRow } from "../types";
+import { displayOperationsStateNote } from "../stateNote";
 import { useOperations } from "../useOperations";
 
 type ListResponse = { ok: boolean; rows: VehicleRow[]; total: number; page: number; pageSize: number };
@@ -60,7 +61,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
         ],
         allRows.map((row) => [
           row.vin,row.car_name,row.statement,row.agent_name,row.interior_color,row.exterior_color,row.model_year,row.plate_no,row.batch_no,row.location_name,
-          row.notes,row.shortage_note,row.status_name,row.state_note,
+          row.notes,row.shortage_note,row.status_name,displayOperationsStateNote(row),
           checkValue(row,"mats"),checkValue(row,"extinguisher"),checkValue(row,"safety_bag"),checkValue(row,"spare_tire"),checkValue(row,"remote"),
           checkValue(row,"screen"),checkValue(row,"radio"),checkValue(row,"ac"),checkValue(row,"camera"),checkValue(row,"sensor"),
           row.financial_approved ? "نعم" : "لا",row.administrative_approved ? "نعم" : "لا",row.tracking_order_no || "",

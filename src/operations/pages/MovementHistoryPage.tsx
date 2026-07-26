@@ -54,7 +54,7 @@ export function MovementHistoryPage() {
     setError("");
     try {
       const all = await fetchAllRows();
-      exportExcel("سجل-الحركات.xlsx", ["التاريخ والوقت","VIN","السيارة","البيان","المكان السابق","المكان الجديد","الحالة السابقة","الحالة الجديدة","منفذ الحركة","فرع المستخدم","الملاحظات","ملاحظات الحالة","حجز - نواقص - تحديد مكان","رقم الطلب","Batch ID"], all.map((row) => [row.created_at,row.vin,row.car_name,row.statement,row.from_location_name,row.to_location_name,row.old_status_name || row.old_status,row.new_status_name || row.new_status,row.performed_by_name,row.performed_by_branch,row.note,row.state_note,row.shortage_note,row.request_no || row.transfer_request_id,row.batch_id]));
+      exportExcel("سجل-الحركات.xlsx", ["التاريخ والوقت","VIN","السيارة","البيان","المكان السابق","المكان الجديد","الحالة السابقة","الحالة الجديدة","منفذ الحركة","إداري العمليات","فرع المستخدم","الملاحظات","ملاحظات الحالة","حجز - نواقص - تحديد مكان","رقم الطلب","Batch ID"], all.map((row) => [row.created_at,row.vin,row.car_name,row.statement,row.from_location_name,row.to_location_name,row.old_status_name || row.old_status,row.new_status_name || row.new_status,row.performed_by_name,row.operations_admin_name,row.performed_by_branch,row.note,row.state_note,row.shortage_note,row.request_no || row.transfer_request_id,row.batch_id]));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تصدير سجل الحركات");
     } finally {
@@ -79,7 +79,7 @@ export function MovementHistoryPage() {
         <td class="wrap">${safe(row.vehicle_notes)}</td><td class="wrap">${safe(row.shortage_note)}</td><td>${safe(row.old_status_name || row.old_status)}</td><td>${safe(row.new_status_name || row.new_status)}</td>
         <td>${mark(row.sensor_status)}</td><td>${mark(row.camera_status)}</td><td>${mark(row.ac_status)}</td><td>${mark(row.radio_status)}</td><td>${mark(row.screen_status)}</td>
         <td>${mark(row.remote_status)}</td><td>${mark(row.mats_status)}</td><td>${mark(row.extinguisher_status)}</td><td>${mark(row.safety_bag_status)}</td><td>${mark(row.spare_tire_status)}</td>
-        <td>${approval(row.financial_approved)}</td><td>${approval(row.administrative_approved)}</td><td>${safe(row.performed_by_name)}</td><td>${safe(row.request_no || row.transfer_request_id)}</td>
+        <td>${approval(row.financial_approved)}</td><td>${approval(row.administrative_approved)}</td><td>${safe(row.performed_by_name)}</td><td>${safe(row.operations_admin_name)}</td><td>${safe(row.request_no || row.transfer_request_id)}</td>
       </tr>`).join("");
       const filterSummary = [
         filters.search ? `بحث: ${filters.search}` : "",
@@ -101,8 +101,8 @@ export function MovementHistoryPage() {
         <th>رقم الهيكل (VIN)</th><th>السيارة</th><th>البيان</th><th>الوكيل</th><th>اللون الداخلي</th><th>اللون الخارجي</th><th>موديل</th><th>اللوحة</th><th>اسم الدفعة بالتاريخ</th><th>التاريخ</th>
         <th>المكان السابق</th><th>المكان الحالي</th><th>ملاحظات في السيارة</th><th>حجز - نواقص - تحديد مكان</th><th>الحالة السابقة</th><th>الحالة الحالية</th>
         <th>حساس</th><th>كاميرا</th><th>مكيف</th><th>مسجل</th><th>شاشة</th><th>ريموت</th><th>فرشات</th><th>طفاية</th><th>شنطة سلامة</th><th>اسبير</th>
-        <th>الموافقة المالية</th><th>الموافقة الإدارية</th><th>منفذ الحركة</th><th>رقم الطلب</th>
-      </tr></thead><tbody>${body || '<tr><td colspan="30">لا توجد بيانات مطابقة</td></tr>'}</tbody></table></body></html>`);
+        <th>الموافقة المالية</th><th>الموافقة الإدارية</th><th>منفذ الحركة</th><th>إداري العمليات</th><th>رقم الطلب</th>
+      </tr></thead><tbody>${body || '<tr><td colspan="31">لا توجد بيانات مطابقة</td></tr>'}</tbody></table></body></html>`);
       win.document.close();
       win.focus();
       win.setTimeout(() => win.print(), 300);

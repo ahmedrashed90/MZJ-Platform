@@ -88,10 +88,24 @@ export async function tryArchiveEligibleVehicle(
   const archiveAction = options?.action || "auto_archived";
   const actorId = String(actor.id || "").trim() || null;
   const actorName = String(actor.name || "").trim() || "النظام";
+  const [deliveryContext] = await tx`
+    select o.sales_order_no
+    from tracking.order_vehicles ov
+    join tracking.orders o on o.id=ov.order_id
+    where (ov.vehicle_id=${vehicleId}::uuid or (ov.vehicle_id is null and ov.vin=${vehicle.vin}))
+      and coalesce(o.is_deleted,false)=false
+    order by o.updated_at desc,o.created_at desc
+    limit 1
+  `;
+  const salesOrderNo = String(deliveryContext?.sales_order_no || "").trim();
+  const existingStateNote = String(vehicle.state_note || "").trim();
+  const cleanExistingStateNote = existingStateNote.replace(/^مباع\s+تحت\s+التسليم\s*[—-]\s*/u, "").trim();
+  const finalStateNote = salesOrderNo ? `طلب البيع ${salesOrderNo}` : cleanExistingStateNote || null;
 
   const [updated] = await tx`
     update operations.vehicles
     set status_code='delivered',
+        state_note=${finalStateNote},
         archived_at=now(),
         archived_by=${actorId}::uuid,
         archived_by_name=${actorName},
@@ -106,6 +120,19 @@ export async function tryArchiveEligibleVehicle(
   `;
 
   if (!updated) return { archived: false, reason: "already_archived", vehicle };
+
+  await tx`
+    insert into operations.movements(
+      vehicle_id,from_location_id,to_location_id,old_status,new_status,note,state_note,
+      performed_by,performed_by_name,performed_by_role,movement_type,before_data,after_data
+    ) values(
+      ${vehicleId}::uuid,${vehicle.location_id||null}::uuid,${vehicle.location_id||null}::uuid,
+      ${vehicle.status_code||null},'delivered','إتمام عملية التسليم بنجاح وأرشفة السيارة',${finalStateNote},
+      ${actorId}::uuid,${actorName},'إداري العمليات','tracking_delivery',
+      ${tx.json({ statusCode: vehicle.status_code || null, archivedAt: vehicle.archived_at || null, salesOrderNo: salesOrderNo || null })},
+      ${tx.json({ statusCode: "delivered", archivedAt: updated.archived_at, salesOrderNo: salesOrderNo || null, trackingCompletedBy: actorName })}
+    )
+  `;
 
   await tx`
     insert into operations.vehicle_archive_events(vehicle_id,action,reason,actor_id,actor_name,snapshot)

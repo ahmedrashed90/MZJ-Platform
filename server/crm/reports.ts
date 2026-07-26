@@ -135,7 +135,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,l.department_code,l.branch_code,
       l.status_label,l.car_name,l.notes,l.status_note,l.registered_at,l.created_at,l.updated_at,l.assigned_to::text,l.call_center_assigned_to::text,
       sales.full_name as assigned_name,cc.full_name as call_center_name,b.name as branch_name,src.name as catalog_source_name,
-      coalesce(src.report_group,'other') as source_report_group
+      coalesce(src.report_group,'other') as source_report_group,
+      coalesce((
+        select sum(greatest(
+          coalesce((select count(*) from tracking.order_vehicles tov where tov.order_id=so.tracking_order_id),0),
+          coalesce((
+            select sum(greatest(coalesce(sov.qty,1),1))
+            from integrations.erpnext_sales_order_vehicles sov
+            where sov.sales_order_id=so.id and coalesce(sov.is_cancelled,false)=false
+          ),0),
+          1
+        ))
+        from integrations.erpnext_sales_orders so
+        where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
+      ),0)::int as erp_vehicle_sales_count
     from crm.leads l
     left join core.users sales on sales.id=l.assigned_to
     left join core.users cc on cc.id=l.call_center_assigned_to
@@ -181,6 +194,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const makeMetrics = (rows: any[]) => {
     const count = (set: Set<string>) => rows.reduce((total, lead) => total + (set.has(norm(lead.status_label)) ? 1 : 0), 0);
+    const soldCount = rows.reduce((total, lead) => {
+      if (!salesNum.has(norm(lead.status_label))) return total;
+      return total + Math.max(1, Number(lead.erp_vehicle_sales_count || 0));
+    }, 0);
     const marketingDen = quality.marketing_denominator_mode === "statuses" ? count(marketingDenStatuses) : rows.length;
     const salesDen = quality.sales_denominator_mode === "all" ? rows.length : count(salesDenStatuses);
     const total = quality.total_mode === "statuses" ? count(totalStatuses) : rows.length;
@@ -191,7 +208,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       qualified: count(qualifiedStatuses),
       delayed: rows.filter((lead) => norm(lead.status_label) === norm("مؤجل")).length,
       potential: rows.filter((lead) => norm(lead.status_label) === norm("لم يتم الرد")).length,
-      sold: count(salesNum),
+      sold: soldCount,
       marketingQuality: percent(count(marketingNum), marketingDen),
       salesQuality: percent(count(salesNum), salesDen),
     };

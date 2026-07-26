@@ -18,6 +18,7 @@ export type MovementHistoryRow = {
   performed_by_name?: string | null;
   performed_by_role?: string | null;
   performed_by_branch?: string | null;
+  operations_admin_name?: string | null;
   vehicle_id: string;
   vin: string;
   car_name?: string | null;
@@ -57,6 +58,7 @@ const columns: ResizableOperationsColumn<MovementHistoryRow>[] = [
   { key: "oldStatus", label: "الحالة السابقة", width: 155, min: 115, max: 250, value: (row) => row.old_status_name || row.old_status, render: (row) => row.old_status_name || row.old_status || "—" },
   { key: "newStatus", label: "الحالة الجديدة", width: 155, min: 115, max: 250, value: (row) => row.new_status_name || row.new_status, render: (row) => row.new_status_name || row.new_status || "—" },
   { key: "actor", label: "منفذ الحركة", width: 155, min: 115, max: 280, value: (row) => row.performed_by_name, render: (row) => row.performed_by_name || "—" },
+  { key: "operationsAdmin", label: "إداري العمليات", width: 165, min: 120, max: 300, value: (row) => row.operations_admin_name, render: (row) => row.operations_admin_name || "—" },
   { key: "branch", label: "الفرع", width: 125, min: 95, max: 220, value: (row) => row.performed_by_branch, render: (row) => row.performed_by_branch || "—" },
   { key: "note", label: "الملاحظات", width: 220, min: 140, max: 480, value: (row) => row.note, render: (row) => <span title={row.note || ""}>{row.note || "—"}</span> },
   { key: "stateNote", label: "ملاحظات الحالة", width: 200, min: 140, max: 440, value: (row) => row.state_note, render: (row) => <span title={row.state_note || ""}>{row.state_note || "—"}</span> },
@@ -73,7 +75,7 @@ export function MovementHistoryTable({ rows }: { rows: MovementHistoryRow[] }) {
       rowKey={(row) => row.id}
       storageKey="mzj.operations.movementHistory.columnWidths.v2"
       emptyText="لا توجد حركات مطابقة"
-      minTableWidth={1600}
+      minTableWidth={1760}
       tableClassName="movements operations-movement-history-table"
     />
   );

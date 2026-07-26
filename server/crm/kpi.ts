@@ -195,7 +195,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
         coalesce(e.details->>'departmentCode', primary_department.code) as department_code,
         coalesce(e.details->>'departmentName', primary_department.name) as department_name,
         coalesce((
-          select count(*)::int
+          select sum(greatest(1,coalesce((
+            select sum(greatest(
+              coalesce((select count(*) from tracking.order_vehicles tov where tov.order_id=so.tracking_order_id),0),
+              coalesce((
+                select sum(greatest(coalesce(sov.qty,1),1))
+                from integrations.erpnext_sales_order_vehicles sov
+                where sov.sales_order_id=so.id and coalesce(sov.is_cancelled,false)=false
+              ),0),
+              1
+            ))
+            from integrations.erpnext_sales_orders so
+            where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
+          ),0)))::int
           from crm.leads l
           where l.assigned_to=u.id
             and l.status_label='تم البيع'

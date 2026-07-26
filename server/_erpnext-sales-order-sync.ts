@@ -533,7 +533,7 @@ async function linkOperationsVehicles(input: {
             [operationsVehicle] = await tx`
               update operations.vehicles set
                 status_code='under_delivery',updated_by=${mapping?.id||null}::uuid,updated_by_name=${actorName},
-                state_note=${`مباع تحت التسليم — طلب البيع ${normalized.orderNo}`},updated_at=now(),version=version+1
+                state_note=${`طلب البيع ${normalized.orderNo}`},updated_at=now(),version=version+1
               where id=${operationsVehicle.id}::uuid
               returning *,id::text,location_id::text
             `;
@@ -549,7 +549,13 @@ async function linkOperationsVehicles(input: {
                 ${oldStatus||null},'under_delivery',${`تحديث تلقائي من طلب البيع ${normalized.orderNo} في NEXT ERP`},${mapping?.id||null}::uuid,'erpnext_sale',
                 ${`فرع البيع في NEXT ERP: ${normalized.erpBranch||"—"}`},${actorName},'NEXT ERP',${mapping?.branch_name||mapping?.branch_code||null},
                 ${tx.json({ statusCode: oldStatus, locationId, salesOrderNo: normalized.orderNo })},
-                ${tx.json({ statusCode: "under_delivery", locationId, salesOrderNo: normalized.orderNo, salesBranch: normalized.erpBranch })}
+                ${tx.json({
+                  statusCode: "under_delivery",
+                  locationId,
+                  salesOrderNo: normalized.orderNo,
+                  salesBranch: normalized.erpBranch,
+                  erpSubmitter: normalized.erpSubmittedBy,
+                })}
               )
             `;
             await tx`

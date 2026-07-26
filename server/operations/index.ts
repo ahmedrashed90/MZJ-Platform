@@ -267,9 +267,12 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "tl");
   const rows = await sql<any[]>`
-    select m.id::text,m.batch_id::text,m.transfer_request_id::text,tr.request_no,m.created_at,m.movement_type,m.old_status,m.new_status,
-      coalesce(os.name,m.old_status) as old_status_name,coalesce(ns.name,m.new_status) as new_status_name,
+    select m.id::text,m.batch_id::text,m.transfer_request_id::text,tr.request_no,m.created_at,m.movement_type,m.old_status,
+      movement_state.new_status,
+      coalesce(os.name,m.old_status) as old_status_name,coalesce(ns.name,movement_state.new_status) as new_status_name,
       m.note,m.state_note,coalesce(m.shortage_note,v.shortage_note) as shortage_note,m.performed_by_name,m.performed_by_role,m.performed_by_branch,
+      coalesce(erp_order.operations_admin_name,nullif(m.after_data->>'erpSubmitter',''),
+        case when m.movement_type='tracking_delivery' then m.performed_by_name else null end) as operations_admin_name,
       v.id::text as vehicle_id,v.vin,v.car_name,v.statement,v.agent_name,v.interior_color,v.exterior_color,v.model_year,v.plate_no,v.batch_no,v.notes as vehicle_notes,
       fl.code as from_location_code,fl.name as from_location_name,tl.code as to_location_code,tl.name as to_location_name,
       coalesce(checks.sensor_status,'unknown') as sensor_status,coalesce(checks.camera_status,'unknown') as camera_status,
@@ -282,8 +285,41 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     left join operations.locations fl on fl.id=m.from_location_id
     left join operations.locations tl on tl.id=m.to_location_id
     left join operations.vehicle_statuses os on os.code=m.old_status
-    left join operations.vehicle_statuses ns on ns.code=m.new_status
+    left join lateral (
+      select case
+        when m.movement_type='erpnext_sale'
+          and v.status_code='delivered'
+          and v.archived_at is not null
+          and not exists (
+            select 1 from operations.movements delivered_movement
+            where delivered_movement.vehicle_id=m.vehicle_id
+              and delivered_movement.movement_type='tracking_delivery'
+          )
+        then 'delivered'
+        else m.new_status
+      end as new_status
+    ) movement_state on true
+    left join operations.vehicle_statuses ns on ns.code=movement_state.new_status
     left join operations.transfer_requests tr on tr.id=m.transfer_request_id
+    left join lateral (
+      select coalesce(u.full_name,submitter.erp_submitter) as operations_admin_name
+      from integrations.erpnext_sales_orders so
+      cross join lateral (
+        select coalesce(
+          nullif(so.source_payload #>> '{doc,modified_by}',''),
+          nullif(so.source_payload #>> '{doc,modifiedBy}',''),
+          nullif(so.source_payload #>> '{doc,owner}',''),
+          nullif(so.source_payload->>'modified_by',''),
+          nullif(so.source_payload->>'modifiedBy',''),
+          nullif(so.source_payload->>'owner','')
+        ) as erp_submitter
+      ) submitter
+      left join core.users u on lower(u.email)=lower(submitter.erp_submitter)
+        or lower(coalesce(u.next_erp_user_id,''))=lower(submitter.erp_submitter)
+      where so.sales_order_no=coalesce(nullif(m.after_data->>'salesOrderNo',''),nullif(m.before_data->>'salesOrderNo',''))
+      order by so.updated_at desc
+      limit 1
+    ) erp_order on true
     left join lateral (
       select
         max(status) filter(where item_code='sensor') as sensor_status,
@@ -304,8 +340,8 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     ) approval on true
     where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
-      and (${status}='' or m.new_status=${status})
-      and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`})
+      and (${status}='' or movement_state.new_status=${status})
+      and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
       and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date)
       and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
       and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time)
@@ -316,9 +352,42 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
   const [count] = await sql<{ total: number }[]>`
     select count(*)::int as total from operations.movements m join operations.vehicles v on v.id=m.vehicle_id
     left join operations.locations fl on fl.id=m.from_location_id left join operations.locations tl on tl.id=m.to_location_id
+    left join lateral (
+      select case
+        when m.movement_type='erpnext_sale'
+          and v.status_code='delivered'
+          and v.archived_at is not null
+          and not exists (
+            select 1 from operations.movements delivered_movement
+            where delivered_movement.vehicle_id=m.vehicle_id
+              and delivered_movement.movement_type='tracking_delivery'
+          )
+        then 'delivered'
+        else m.new_status
+      end as new_status
+    ) movement_state on true
+    left join lateral (
+      select coalesce(u.full_name,submitter.erp_submitter) as operations_admin_name
+      from integrations.erpnext_sales_orders so
+      cross join lateral (
+        select coalesce(
+          nullif(so.source_payload #>> '{doc,modified_by}',''),
+          nullif(so.source_payload #>> '{doc,modifiedBy}',''),
+          nullif(so.source_payload #>> '{doc,owner}',''),
+          nullif(so.source_payload->>'modified_by',''),
+          nullif(so.source_payload->>'modifiedBy',''),
+          nullif(so.source_payload->>'owner','')
+        ) as erp_submitter
+      ) submitter
+      left join core.users u on lower(u.email)=lower(submitter.erp_submitter)
+        or lower(coalesce(u.next_erp_user_id,''))=lower(submitter.erp_submitter)
+      where so.sales_order_no=coalesce(nullif(m.after_data->>'salesOrderNo',''),nullif(m.before_data->>'salesOrderNo',''))
+      order by so.updated_at desc
+      limit 1
+    ) erp_order on true
     where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
-      and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or m.new_status=${status})
-      and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`})
+      and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or movement_state.new_status=${status})
+      and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
       and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date) and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
       and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time) and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}

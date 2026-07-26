@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { VehicleRow } from "../types";
+import { displayOperationsStateNote } from "../stateNote";
 
 type Column = {
   key: string;
@@ -54,7 +55,7 @@ const columns: Column[] = [
   { key: "notes", label: "ملاحظات في السيارة", width: 175, min: 125, max: 420, value: (row) => row.notes, render: (row) => <span title={row.notes || ""}>{row.notes || "—"}</span> },
   { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 205, min: 150, max: 460, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
   { key: "status", label: "الحالة", width: 145, min: 115, max: 260, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
-  { key: "stateNote", label: "ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)", width: 260, min: 190, max: 520, value: (row) => row.state_note, render: (row) => <span title={row.state_note || ""}>{row.status_code === "has_notes" || row.state_note ? row.state_note || "—" : "—"}</span> },
+  { key: "stateNote", label: "ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)", width: 260, min: 190, max: 520, value: (row) => displayOperationsStateNote(row), render: (row) => { const note = displayOperationsStateNote(row); return <span title={note}>{row.status_code === "has_notes" || note ? note || "—" : "—"}</span>; } },
   { key: "checks", label: "التشييك", width: 115, min: 95, max: 170, value: () => "عرض", render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link operations-check-view-button" title={summary.details.join("\n")} onClick={() => onOpen(row.id, "checks")}>عرض</button>; } },
   { key: "financialApproval", label: "الموافقة المالية", width: 145, min: 120, max: 220, value: (row) => row.financial_approved ? "نعم" : "لا", render: (row) => <span className={row.financial_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "نعم ✓" : "لا —"}</span> },
   { key: "administrativeApproval", label: "الموافقة الادارية", width: 155, min: 125, max: 230, value: (row) => row.administrative_approved ? "نعم" : "لا", render: (row) => <span className={row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.administrative_approved ? "نعم ✓" : "لا —"}</span> },
