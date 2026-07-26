@@ -1096,13 +1096,25 @@ async function deleteEntity(sql:ReturnType<typeof getSql>,body:any,user:SessionU
 
 async function monitoring(sql:ReturnType<typeof getSql>,user:SessionUser){
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',createdByMe=access.dataScope==='created_by_me',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user);
-  const taskFilter=unrestricted?sql`true`:sql`(t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (exists(select 1 from marketing.campaigns c where t.source_type='campaign' and c.id=t.source_id and c.created_by=${user.id}::uuid) or exists(select 1 from marketing.agendas a where t.source_type='agenda' and a.id=t.source_id and a.created_by=${user.id}::uuid))))`;
+  const liveSourceFilter=sql`(
+    (t.source_type='campaign' and exists(
+      select 1 from marketing.campaigns source_campaign
+      where source_campaign.id=t.source_id and source_campaign.is_deleted=false and source_campaign.archived_at is null
+    ))
+    or
+    (t.source_type='agenda' and exists(
+      select 1 from marketing.agendas source_agenda
+      where source_agenda.id=t.source_id and source_agenda.archived_at is null
+    ))
+  )`;
+  const accessTaskFilter=unrestricted?sql`true`:sql`(t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (exists(select 1 from marketing.campaigns c where t.source_type='campaign' and c.id=t.source_id and c.created_by=${user.id}::uuid) or exists(select 1 from marketing.agendas a where t.source_type='agenda' and a.id=t.source_id and a.created_by=${user.id}::uuid))))`;
+  const taskFilter=sql`(${liveSourceFilter} and ${accessTaskFilter})`;
   const[totals,statuses,delayed,employees,departments,entities]=await Promise.all([
     sql<any[]>`with visible_tasks as(select t.* from marketing.tasks t where t.is_deleted=false and ${taskFilter}) select count(distinct source_id) filter(where source_type='campaign')::int as campaigns,count(distinct source_id) filter(where source_type='campaign' and status<>'archived')::int as active_campaigns,count(distinct source_id) filter(where source_type='agenda')::int as agendas,count(*)::int as tasks,count(*) filter(where due_at<now() and progress<100)::int as delayed,count(*) filter(where progress=0)::int as waiting,count(*) filter(where progress>0 and progress<100)::int as active,coalesce(avg(progress),0)::float as progress from visible_tasks`,
     sql<any[]>`select t.status,count(*)::int as count from marketing.tasks t where t.is_deleted=false and ${taskFilter} group by t.status order by count(*) desc`,
     sql<any[]>`select t.id::text,t.title,t.due_at,t.progress::float,u.full_name,d.name as department_name,coalesce(cam.name,ag.name) as source_name,greatest(0,current_date-t.due_at::date)::int as delay_days from marketing.tasks t left join core.users u on u.id=t.assigned_to left join marketing.departments d on d.id=t.department_id left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id where t.is_deleted=false and ${taskFilter} and t.due_at<now() and t.progress<100 order by t.due_at`,
     sql<any[]>`select u.id::text,u.full_name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress,count(*) filter(where t.due_at<now() and t.progress<100)::int as delayed,coalesce(sum(greatest(0,current_date-t.due_at::date)) filter(where t.due_at<now() and t.progress<100),0)::int as delay_days from core.users u join marketing.tasks t on t.assigned_to=u.id and t.is_deleted=false and ${taskFilter} group by u.id order by progress desc`,
-    sql<any[]>`select d.id::text,d.name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress from marketing.departments d left join marketing.tasks t on t.department_id=d.id and t.is_deleted=false and ${taskFilter} where d.is_active=true group by d.id order by d.name`,
+    sql<any[]>`select d.id::text,d.name,count(t.id)::int as tasks,coalesce(avg(t.progress),0)::float as progress from marketing.departments d left join marketing.tasks t on t.department_id=d.id and t.is_deleted=false and ${taskFilter} where d.is_active=true group by d.id having count(t.id)>0 order by d.name`,
     sql<any[]>`select 'campaign' as source_type,c.id::text,c.name,c.progress::float,c.status from marketing.campaigns c where c.is_deleted=false and c.archived_at is null and (${unrestricted}=true or (${createdByMe}=true and c.created_by=${user.id}::uuid) or exists(select 1 from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and ${taskFilter})) union all select 'agenda',a.id::text,a.name,a.progress::float,a.status from marketing.agendas a where a.archived_at is null and (${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid) or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and ${taskFilter})) order by progress desc`
   ]);
   return{ok:true,totals:totals[0]||{},statuses,delayed,employees,departments,entities};
@@ -1133,7 +1145,10 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join core.users u on u.id=t.assigned_to
     left join marketing.user_colors uc on uc.user_id=u.id
-    where (cam.id is not null or ag.id is not null) and (
+    where (
+      (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
+      or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+    ) and (
       ${unrestricted}=true
       or t.assigned_to=${user.id}::uuid
       or t.paired_content_user_id=${user.id}::uuid
@@ -1171,7 +1186,12 @@ async function receiptCalendar(sql:ReturnType<typeof getSql>,user:SessionUser){
     left join core.users u on u.id=t.assigned_to
     left join marketing.departments d on d.id=t.department_id
     left join marketing.user_colors uc on uc.user_id=u.id
-    where t.received_at is not null and t.is_deleted=false and t.task_kind='execution' and (
+    where t.received_at is not null and t.is_deleted=false and t.task_kind='execution'
+      and (
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+      )
+      and (
       ${unrestricted}=true
       or t.assigned_to=${user.id}::uuid
       or t.paired_content_user_id=${user.id}::uuid

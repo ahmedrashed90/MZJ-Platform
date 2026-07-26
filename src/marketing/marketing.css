@@ -2144,6 +2144,28 @@
 .marketing-agenda-editor-v2 > header > div > span { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: var(--brand); background: #fff0ea; }
 .marketing-agenda-editor-v2 h2 { margin: 0 0 4px; font-size: 22px; }
 .marketing-agenda-editor-v2 header p { margin: 0; color: var(--muted); }
+.marketing-agenda-editor-v2 label { min-width: 0; display: grid; gap: 6px; color: #6f625c; font-size: 13px; font-weight: 800; }
+.marketing-agenda-editor-v2 input,
+.marketing-agenda-editor-v2 select,
+.marketing-agenda-editor-v2 textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  padding: 9px 11px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  outline: none;
+}
+.marketing-agenda-editor-v2 input:focus,
+.marketing-agenda-editor-v2 select:focus,
+.marketing-agenda-editor-v2 textarea:focus {
+  border-color: #c98970;
+  box-shadow: 0 0 0 3px rgba(198,95,60,.12);
+}
 .marketing-close-button { width: 42px; height: 42px; padding: 0 !important; color: #7c635a !important; background: #fff !important; border: 1px solid var(--line) !important; border-radius: 12px !important; box-shadow: none !important; }
 .marketing-agenda-editor-layout { min-width: 0; min-height: 0; display: grid; grid-template-columns: 330px minmax(0,1fr); direction: rtl; overflow: hidden; }
 .marketing-agenda-add-panel { min-width: 0; padding: 20px; border-inline-start: 1px solid var(--line); background: #fff; display: grid; align-content: start; gap: 14px; overflow-y: auto; overflow-x: hidden; }
@@ -2165,13 +2187,33 @@
 .marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section,
 .marketing-agenda-creative-stack .marketing-creative-editor > .marketing-agenda-task-flow { grid-column: 1/-1; min-width: 0; }
 .marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section { min-width: 0; align-content: start; padding: 16px; background: #fffdfc; }
-.marketing-agenda-creative-stack .marketing-assignment-row { grid-template-columns: minmax(150px,.7fr) minmax(190px,.85fr) minmax(260px,1.45fr); align-items: end; }
+.marketing-agenda-creative-stack .marketing-assignment-row {
+  grid-template-columns: minmax(150px,.7fr) minmax(190px,.85fr) minmax(260px,1.45fr);
+  align-items: end;
+  padding: 10px 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.marketing-agenda-creative-stack .marketing-assignment-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.marketing-agenda-creative-stack .marketing-assignment-row > strong {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding-inline: 4px;
+}
+.marketing-agenda-creative-stack .marketing-assignment-row input[type="date"],
+.marketing-agenda-creative-stack .marketing-assignment-row input:not([type]) {
+  min-height: 42px;
+  border-radius: 10px;
+}
 .marketing-agenda-creative-stack .marketing-platform-select { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
 .marketing-agenda-creative-stack .marketing-platform-select > div { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fff; display: grid; gap: 10px; }
 .marketing-agenda-creative-stack .marketing-platform-select .platform-head { justify-content: flex-start; }
 .marketing-agenda-creative-stack .marketing-user-picker .marketing-chip-picker { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 8px; }
 .marketing-agenda-creative-stack .marketing-chip-picker button { width: 100%; min-width: 0; justify-content: center; min-height: 40px; }
-.marketing-agenda-creative-stack .marketing-execution-box,
+.marketing-agenda-creative-stack .marketing-execution-box { min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .marketing-agenda-creative-stack .marketing-optional-box { min-width: 0; background: #fff; }
 .marketing-agenda-creative-stack .marketing-link-users { padding: 11px; border: 1px dashed var(--line-strong); border-radius: 11px; background: #fffaf8; }
 .marketing-agenda-task-flow { display: grid; grid-template-columns: minmax(0,1fr) 32px minmax(0,1fr); gap: 10px; align-items: center; padding: 13px; border: 1px solid #ead5ca; border-radius: 14px; background: #fff8f4; }
