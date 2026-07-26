@@ -44,6 +44,7 @@ export type VehicleRow = {
   tracking_order_no?: string | null;
   tracking_status?: string | null;
   tracking_progress?: number;
+  check_values?: Record<string, string>;
   active_transfer_requests?: number;
 };
 

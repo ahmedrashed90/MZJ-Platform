@@ -21,20 +21,43 @@ function trackingProgressTone(value?: number | null) {
   return "low";
 }
 
+const CHECK_ITEMS = [
+  ["mats", "فرشات"], ["extinguisher", "طفاية"], ["safety_bag", "شنطة"], ["spare_tire", "اسبير"], ["remote", "ريموت"],
+  ["screen", "شاشة"], ["radio", "مسجل"], ["ac", "مكيف"], ["camera", "كاميرا"], ["sensor", "حساس"],
+] as const;
+
+function checkSummary(row: VehicleRow) {
+  let yes = 0;
+  let no = 0;
+  let unknown = 0;
+  const details = CHECK_ITEMS.map(([code, label]) => {
+    const status = row.check_values?.[code];
+    if (status === "ok") { yes += 1; return `${label}: نعم`; }
+    if (status === "missing") { no += 1; return `${label}: لا`; }
+    unknown += 1;
+    return `${label}: غير محدد`;
+  });
+  return { yes, no, unknown, details };
+}
+
 const columns: Column[] = [
-  { key: "vin", label: "الهيكل VIN", width: 190, min: 135, max: 360, value: (row) => row.vin, render: (row, onOpen) => <button type="button" className="operations-vin-link" onClick={() => onOpen(row.id)}>{row.vin}</button> },
+  { key: "vin", label: "الهيكل (VIN)", width: 190, min: 135, max: 360, value: (row) => row.vin, render: (row, onOpen) => <button type="button" className="operations-vin-link" onClick={() => onOpen(row.id)}>{row.vin}</button> },
   { key: "car", label: "السيارة", width: 150, min: 110, max: 300, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
   { key: "statement", label: "البيان", width: 150, min: 110, max: 320, value: (row) => row.statement, render: (row) => row.statement || "—" },
   { key: "agent", label: "الوكيل", width: 125, min: 95, max: 240, value: (row) => row.agent_name, render: (row) => row.agent_name || "—" },
   { key: "interior", label: "اللون الداخلي", width: 125, min: 95, max: 220, value: (row) => row.interior_color, render: (row) => row.interior_color || "—" },
   { key: "exterior", label: "اللون الخارجي", width: 125, min: 95, max: 220, value: (row) => row.exterior_color, render: (row) => row.exterior_color || "—" },
-  { key: "model", label: "الموديل", width: 95, min: 80, max: 170, value: (row) => row.model_year, render: (row) => row.model_year || "—" },
+  { key: "model", label: "موديل", width: 95, min: 80, max: 170, value: (row) => row.model_year, render: (row) => row.model_year || "—" },
   { key: "plate", label: "اللوحة", width: 110, min: 90, max: 200, value: (row) => row.plate_no, render: (row) => row.plate_no || "—" },
   { key: "batch", label: "اسم الدفعة بالتاريخ", width: 155, min: 125, max: 290, value: (row) => row.batch_no, render: (row) => row.batch_no || "—" },
   { key: "location", label: "المكان", width: 115, min: 90, max: 220, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
   { key: "notes", label: "ملاحظات في السيارة", width: 175, min: 125, max: 420, value: (row) => row.notes, render: (row) => <span title={row.notes || ""}>{row.notes || "—"}</span> },
   { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 205, min: 150, max: 460, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
   { key: "status", label: "الحالة", width: 145, min: 115, max: 260, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
+  { key: "stateNote", label: "ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)", width: 260, min: 190, max: 520, value: (row) => row.state_note, render: (row) => <span title={row.state_note || ""}>{row.status_code === "has_notes" || row.state_note ? row.state_note || "—" : "—"}</span> },
+  { key: "checks", label: "التشييك", width: 175, min: 145, max: 260, value: (row) => { const summary = checkSummary(row); return `${summary.yes}/${summary.no}/${summary.unknown}`; }, render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link" title={summary.details.join("\n")} onClick={() => onOpen(row.id)}>نعم {summary.yes} · لا {summary.no}{summary.unknown ? ` · غير محدد ${summary.unknown}` : ""}</button>; } },
+  { key: "financialApproval", label: "الموافقة المالية", width: 145, min: 120, max: 220, value: (row) => row.financial_approved ? "نعم" : "لا", render: (row) => <span className={row.financial_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "نعم ✓" : "لا —"}</span> },
+  { key: "administrativeApproval", label: "الموافقة الادارية", width: 155, min: 125, max: 230, value: (row) => row.administrative_approved ? "نعم" : "لا", render: (row) => <span className={row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.administrative_approved ? "نعم ✓" : "لا —"}</span> },
   { key: "tracking", label: "Tracking", width: 150, min: 130, max: 220, value: (row) => row.tracking_order_no, render: (row) => {
     const progress = Math.max(0, Math.min(100, Number(row.tracking_progress || 0)));
     return row.tracking_order_id ? (
@@ -43,10 +66,6 @@ const columns: Column[] = [
       </button>
     ) : <span className="operations-muted-badge">لا يوجد طلب</span>;
   } },
-  { key: "approvals", label: "الموافقات", width: 170, min: 135, max: 260, value: (row) => `${row.financial_approved ? "مالي تم" : "مالي لم يتم"} ${row.administrative_approved ? "إداري تم" : "إداري لم يتم"}`, render: (row) => <span className={row.financial_approved && row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "مالي ✓" : "مالي —"} / {row.administrative_approved ? "إداري ✓" : "إداري —"}</span> },
-  { key: "checks", label: "التشيك", width: 95, min: 80, max: 150, value: () => "عرض", render: (row, onOpen) => <button type="button" className="operations-inline-link" onClick={() => onOpen(row.id)}>عرض</button> },
-  { key: "transfers", label: "الطلبات", width: 115, min: 95, max: 190, value: (row) => row.active_transfer_requests, render: (row) => Number(row.active_transfer_requests || 0) > 0 ? <span className="operations-warn-badge">{row.active_transfer_requests}</span> : <span className="operations-muted-badge">لا يوجد</span> },
-  { key: "archive", label: "الأرشيف", width: 100, min: 85, max: 160, value: (row) => row.archived_at ? "مؤرشف" : "نشط", render: (row) => row.archived_at ? <span className="operations-ok-badge">مؤرشف</span> : <span className="operations-muted-badge">نشط</span> },
 ];
 
 function initialWidths() {

@@ -148,6 +148,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       coalesce(a.financial_note,'') as financial_note,coalesce(a.administrative_note,'') as administrative_note,
       coalesce(tr.active_orders,0)::int as tracking_active_orders,tr.order_id::text as tracking_order_id,tr.sales_order_no as tracking_order_no,
       tr.status as tracking_status,coalesce(tr.progress,0)::int as tracking_progress,
+      coalesce(checks.check_values,'{}'::jsonb) as check_values,
       coalesce(req.active_requests,0)::int as active_transfer_requests
     from operations.vehicles v
     left join operations.locations l on l.id=v.location_id
@@ -166,6 +167,11 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       order by case when o.status='in_progress' then 0 when o.status='not_started' then 1 else 2 end,o.updated_at desc
       limit 1
     ) tr on true
+    left join lateral (
+      select jsonb_object_agg(cv.item_code,cv.status) as check_values
+      from operations.vehicle_check_values cv
+      where cv.vehicle_id=v.id
+    ) checks on true
     left join lateral (
       select count(distinct r.id)::int as active_requests
       from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id
@@ -1188,6 +1194,19 @@ async function saveOperationSetting(sql: ReturnType<typeof getSql>, body: Record
   throw new OperationError(400, "VALIDATION_ERROR", "نوع الإعداد غير مدعوم");
 }
 
+const IMPORT_CHECK_COLUMNS = [
+  ["mats", "فرشات"], ["extinguisher", "طفاية"], ["safety_bag", "شنطة"], ["spare_tire", "اسبير"], ["remote", "ريموت"],
+  ["screen", "شاشة"], ["radio", "مسجل"], ["ac", "مكيف"], ["camera", "كاميرا"], ["sensor", "حساس"],
+] as const;
+
+function importedCheckStatus(value: unknown) {
+  const normalized = clean(value).toLowerCase().replace(/\s+/g, "");
+  if (!normalized) return "";
+  if (["نعم", "yes", "y", "1", "true", "موجود", "تم"].includes(normalized)) return "ok";
+  if (["لا", "no", "n", "0", "false", "ناقص", "غيرموجود"].includes(normalized)) return "missing";
+  return "";
+}
+
 async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
   const rows = Array.isArray(body.rows) ? body.rows : [];
   const mode = clean(body.mode);
@@ -1201,11 +1220,14 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
     const vins = new Set<string>();
     const normalized = rows.map((raw: any, index: number) => ({
       row: index + 2,
-      vin: clean(raw.vin || raw["رقم الهيكل"] || raw["الهيكل"]),
+      vin: clean(raw.vin || raw["الهيكل (VIN)"] || raw["رقم الهيكل"] || raw["الهيكل"]),
       carName: clean(raw.carName || raw["السيارة"]), statement: clean(raw.statement || raw["البيان"]), agentName: clean(raw.agentName || raw["الوكيل"]),
       exteriorColor: clean(raw.exteriorColor || raw["خارجي"] || raw["اللون الخارجي"]), interiorColor: clean(raw.interiorColor || raw["داخلي"] || raw["اللون الداخلي"]),
       modelYear: clean(raw.modelYear || raw["موديل"]), plateNo: clean(raw.plateNo || raw["اللوحة"]), batchNo: clean(raw.batchNo || raw["اسم الدفعة بالتاريخ"]),
-      locationCode: clean(raw.locationCode || raw["المكان"]), statusCode: clean(raw.statusCode || raw["الحالة"]), notes: clean(raw.notes || raw["ملاحظات في السيارة"]),
+      locationCode: clean(raw.locationCode || raw["المكان"]), statusCode: clean(raw.statusCode || raw["الحالة"]),
+      notes: clean(raw.notes || raw["ملاحظات في السيارة"]), shortageNote: clean(raw.shortageNote || raw["حجز - نواقص - تحديد مكان"]),
+      stateNote: clean(raw.stateNote || raw["ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)"]),
+      checks: IMPORT_CHECK_COLUMNS.map(([itemCode, column]) => ({ itemCode, status: importedCheckStatus(raw[column]) })).filter((item) => item.status),
     }));
     for (const row of normalized) {
       if (!row.vin) { report.failed++; report.errors.push({ row: row.row, error: "رقم الهيكل مطلوب" }); continue; }
@@ -1228,16 +1250,35 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
       if (existing && mode === "add") { report.skipped++; report.warnings.push({ row: row.row, vin: row.vin, warning: "موجودة بالفعل؛ وضع الإضافة لا يعدل السيارات الحالية" }); continue; }
       try {
         await tx.savepoint(async (rowTx) => {
+          let vehicleId = existing?.id;
           if (!existing) {
-            await rowTx`insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,notes,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name) values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${status?.code||'available_for_sale'},${row.notes||null},${Boolean(row.notes)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})`;
+            const [created] = await rowTx<any[]>`
+              insert into operations.vehicles(vin,car_name,statement,agent_name,exterior_color,interior_color,model_year,plate_no,batch_no,location_id,status_code,notes,state_note,shortage_note,has_notes,is_inventory_active,created_by,created_by_name,updated_by,updated_by_name)
+              values (${row.vin},${row.carName||null},${row.statement||null},${row.agentName||null},${row.exteriorColor||null},${row.interiorColor||null},${row.modelYear||null},${row.plateNo||null},${row.batchNo||null},${location.id}::uuid,${status?.code||'available_for_sale'},${row.notes||null},${row.stateNote||null},${row.shortageNote||null},${status?.code==='has_notes' || Boolean(row.notes) || Boolean(row.stateNote)},true,${who.id}::uuid,${who.name},${who.id}::uuid,${who.name})
+              returning id::text
+            `;
+            vehicleId = created.id;
           } else {
             await rowTx`
               update operations.vehicles set car_name=coalesce(nullif(${row.carName},''),car_name),statement=coalesce(nullif(${row.statement},''),statement),agent_name=coalesce(nullif(${row.agentName},''),agent_name),
                 exterior_color=coalesce(nullif(${row.exteriorColor},''),exterior_color),interior_color=coalesce(nullif(${row.interiorColor},''),interior_color),model_year=coalesce(nullif(${row.modelYear},''),model_year),
                 plate_no=coalesce(nullif(${row.plateNo},''),plate_no),batch_no=coalesce(nullif(${row.batchNo},''),batch_no),notes=coalesce(nullif(${row.notes},''),notes),
+                state_note=coalesce(nullif(${row.stateNote},''),state_note),shortage_note=coalesce(nullif(${row.shortageNote},''),shortage_note),
+                has_notes=case when status_code='has_notes' or nullif(${row.notes},'') is not null or nullif(${row.stateNote},'') is not null then true else has_notes end,
                 is_inventory_active=true,updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
               where id=${existing.id}::uuid
             `;
+          }
+          for (const check of row.checks) {
+            const [oldCheck] = await rowTx<any[]>`select status from operations.vehicle_check_values where vehicle_id=${vehicleId}::uuid and item_code=${check.itemCode}`;
+            await rowTx`
+              insert into operations.vehicle_check_values(vehicle_id,item_code,status,note,updated_by,updated_by_name,updated_at)
+              values (${vehicleId}::uuid,${check.itemCode},${check.status},null,${who.id}::uuid,${who.name},now())
+              on conflict(vehicle_id,item_code) do update set status=excluded.status,updated_by=excluded.updated_by,updated_by_name=excluded.updated_by_name,updated_at=now()
+            `;
+            if (oldCheck?.status !== check.status) {
+              await rowTx`insert into operations.vehicle_check_history(vehicle_id,item_code,old_status,new_status,changed_by,changed_by_name) values (${vehicleId}::uuid,${check.itemCode},${oldCheck?.status||null},${check.status},${who.id}::uuid,${who.name})`;
+            }
           }
         });
         if (!existing) report.inserted++;

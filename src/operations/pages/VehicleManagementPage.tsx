@@ -42,7 +42,12 @@ export function VehicleManagementPage() {
   }
 
   function downloadTemplate() {
-    exportExcel("قالب-استيراد-السيارات.xlsx", ["رقم الهيكل","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","موديل","اللوحة","اسم الدفعة بالتاريخ","المكان","الحالة","ملاحظات في السيارة"], []);
+    exportExcel("قالب-استيراد-السيارات.xlsx", [
+      "الهيكل (VIN)","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","موديل","اللوحة","اسم الدفعة بالتاريخ","المكان",
+      "ملاحظات في السيارة","حجز - نواقص - تحديد مكان","الحالة","ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)",
+      "فرشات","طفاية","شنطة","اسبير","ريموت","شاشة","مسجل","مكيف","كاميرا","حساس",
+      "الموافقة المالية","الموافقة الادارية","Tracking",
+    ], []);
   }
 
   async function importFile(file: File) {
@@ -76,6 +81,7 @@ export function VehicleManagementPage() {
             <label><span>اسم الدفعة بالتاريخ</span><input value={form.batchNo} onChange={(e) => setForm({ ...form, batchNo: e.target.value })} /></label>
             <label><span>المكان</span><select required disabled={Boolean(form.id)} value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label><span>الحالة</span><select value={form.statusCode} onChange={(e) => setForm({ ...form, statusCode: e.target.value })}>{meta.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+            {form.statusCode === "has_notes" ? <label className="wide"><span>ملاحظات السيارات</span><textarea required value={form.stateNote} onChange={(e) => setForm({ ...form, stateNote: e.target.value })} /></label> : null}
             <label><span>المصدر</span><input value={form.sourceType} onChange={(e) => setForm({ ...form, sourceType: e.target.value })} /></label>
             <label className="wide"><span>ملاحظات في السيارة</span><textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label>
             <label className="wide"><span>حجز - نواقص - تحديد مكان</span><textarea value={form.shortageNote} onChange={(e) => setForm({ ...form, shortageNote: e.target.value })} /></label>

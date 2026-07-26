@@ -49,7 +49,23 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
         const payload = await operationsFetch<ListResponse>(`/api/operations${queryString({ ...params, page: current, pageSize: 200 })}`);
         allRows.push(...payload.rows);
       }
-      exportExcel(`${archived ? "أرشيف-السيارات" : all ? "جميع-السيارات" : "مخزون-السيارات"}.xlsx`, ["رقم الهيكل","السيارة","البيان","موديل","داخلي","خارجي","المكان","الحالة"], allRows.map((row) => [row.vin,row.car_name,row.statement,row.model_year,row.interior_color,row.exterior_color,row.location_name,row.status_name]));
+      const checkValue = (row: VehicleRow, code: string) => row.check_values?.[code] === "ok" ? "نعم" : row.check_values?.[code] === "missing" ? "لا" : "";
+      exportExcel(
+        `${archived ? "أرشيف-السيارات" : all ? "جميع-السيارات" : "مخزون-السيارات"}.xlsx`,
+        [
+          "الهيكل (VIN)","السيارة","البيان","الوكيل","اللون الداخلي","اللون الخارجي","موديل","اللوحة","اسم الدفعة بالتاريخ","المكان",
+          "ملاحظات في السيارة","حجز - نواقص - تحديد مكان","الحالة","ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)",
+          "فرشات","طفاية","شنطة","اسبير","ريموت","شاشة","مسجل","مكيف","كاميرا","حساس",
+          "الموافقة المالية","الموافقة الادارية","Tracking",
+        ],
+        allRows.map((row) => [
+          row.vin,row.car_name,row.statement,row.agent_name,row.interior_color,row.exterior_color,row.model_year,row.plate_no,row.batch_no,row.location_name,
+          row.notes,row.shortage_note,row.status_name,row.state_note,
+          checkValue(row,"mats"),checkValue(row,"extinguisher"),checkValue(row,"safety_bag"),checkValue(row,"spare_tire"),checkValue(row,"remote"),
+          checkValue(row,"screen"),checkValue(row,"radio"),checkValue(row,"ac"),checkValue(row,"camera"),checkValue(row,"sensor"),
+          row.financial_approved ? "نعم" : "لا",row.administrative_approved ? "نعم" : "لا",row.tracking_order_no || "",
+        ]),
+      );
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تصدير البيانات"); }
     finally { setLoading(false); }
   }
