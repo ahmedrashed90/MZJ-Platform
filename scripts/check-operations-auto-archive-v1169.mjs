@@ -23,5 +23,6 @@ expect("server/operations/index.ts", "next === \"completed\" ? await archiveElig
 expect("server/operations/index.ts", "const autoArchivedVehicleIds = await archiveEligibleItems();", "transfer cancel/delete trigger");
 expect("server/operations/index.ts", "for update of v", "manual archive nullable outer join fix");
 expect("server/_operations-auto-archive.ts", "is_inventory_active=false", "archive inventory removal");
+expect("server/_operations-auto-archive.ts", "status_code='delivered'", "final tracking delivery status");
 
 console.log("Operations automatic vehicle archive v1.16.9 check passed.");

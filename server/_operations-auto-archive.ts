@@ -26,6 +26,9 @@ export const AUTOMATIC_VEHICLE_ARCHIVE_REASON =
  * 2) no non-deleted/non-cancelled transfer request is still incomplete,
  * 3) at least one linked tracking vehicle has every active stage completed.
  *
+ * Finalizing the archive is the canonical delivery completion point: the vehicle
+ * becomes `delivered` and leaves active inventory in the same atomic update.
+ *
  * The vehicle row is locked directly (without an outer join), which keeps the
  * decision and update atomic and avoids PostgreSQL's nullable-side FOR UPDATE error.
  */
@@ -88,11 +91,14 @@ export async function tryArchiveEligibleVehicle(
 
   const [updated] = await tx`
     update operations.vehicles
-    set archived_at=now(),
+    set status_code='delivered',
+        archived_at=now(),
         archived_by=${actorId}::uuid,
         archived_by_name=${actorName},
         archive_reason=${archiveReason},
         is_inventory_active=false,
+        updated_by=${actorId}::uuid,
+        updated_by_name=${actorName},
         updated_at=now(),
         version=version+1
     where id=${vehicleId}::uuid and archived_at is null
