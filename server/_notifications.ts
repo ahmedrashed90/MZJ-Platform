@@ -58,6 +58,100 @@ function clean(value: unknown) { return String(value ?? "").trim(); }
 function values(input?: Array<string | null | undefined>) { return [...new Set((input || []).map(clean).filter(Boolean))]; }
 function validUuid(value: string) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
 
+const OPERATIONS_REQUEST_STAGE_LABELS: Record<string, string> = {
+  created: "تم الإنشاء",
+  request_received: "تم استلام الطلب",
+  vehicle_sent: "تم إرسال السيارة",
+  vehicle_received: "تم استلام السيارة",
+  completed: "تم الانتهاء",
+};
+const TRACKING_ACTION_LABELS: Record<string, string> = {
+  complete_stage: "تم إنهاء المرحلة",
+  revert_stage: "تم التراجع عن المرحلة",
+  archive_order: "تم تحديث أرشفة الطلب",
+};
+const TRACKING_ARCHIVE_LABELS: Record<string, string> = {
+  archived: "تمت الأرشفة",
+  restored: "تمت الاستعادة",
+};
+const APPROVAL_TYPE_LABELS: Record<string, string> = {
+  financial: "الموافقة المالية",
+  administrative: "الموافقة الإدارية",
+};
+const APPROVAL_ACTION_LABELS: Record<string, string> = {
+  approve: "اعتماد",
+  revert: "تراجع عن الاعتماد",
+  note: "إضافة أو تحديث ملاحظة",
+  reset: "إعادة ضبط الموافقات",
+};
+const CRM_SOURCE_LABELS: Record<string, string> = {
+  facebook: "فيسبوك",
+  instagram: "إنستجرام",
+  whatsapp: "واتساب",
+  manychat: "ManyChat",
+  tiktok: "تيك توك",
+  web: "الموقع الإلكتروني",
+};
+
+function cleanOptional(value: unknown) {
+  const normalized = clean(value);
+  return normalized || "";
+}
+
+function truncateNotificationText(value: unknown, max = 240) {
+  const normalized = clean(value).replace(/\s+/g, " ");
+  if (!normalized) return "";
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized;
+}
+
+function detailLine(label: string, value: unknown) {
+  const normalized = cleanOptional(value);
+  return normalized ? `${label}: ${normalized}` : "";
+}
+
+function detailCount(label: string, value: unknown) {
+  if (value === null || value === undefined || value === "") return "";
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue)) return `${label}: ${numberValue}`;
+  const normalized = cleanOptional(value);
+  return normalized ? `${label}: ${normalized}` : "";
+}
+
+function detailPath(label: string, fromValue: unknown, toValue: unknown) {
+  const fromText = cleanOptional(fromValue);
+  const toText = cleanOptional(toValue);
+  if (!fromText && !toText) return "";
+  if (fromText && toText) return `${label}: ${fromText} ← ${toText}`;
+  return `${label}: ${fromText || toText}`;
+}
+
+function joinDetails(lines: Array<string | null | undefined>) {
+  return lines.map((line) => cleanOptional(line)).filter(Boolean).join("\n");
+}
+
+function operationsRequestKindLabel(value: unknown) {
+  return clean(value) === "photography" ? "طلب تصوير" : "طلب نقل";
+}
+
+function operationsRequestStageLabel(value: unknown) {
+  const normalized = clean(value);
+  return OPERATIONS_REQUEST_STAGE_LABELS[normalized] || normalized || "—";
+}
+
+function trackingArchiveStateLabel(archived: boolean) {
+  return archived ? TRACKING_ARCHIVE_LABELS.archived : TRACKING_ARCHIVE_LABELS.restored;
+}
+
+function approvalStateLabel(value: unknown) {
+  return value === true ? "معتمدة" : value === false ? "غير معتمدة" : "—";
+}
+
+function crmSourceLabel(value: unknown) {
+  const normalized = clean(value).toLowerCase();
+  return CRM_SOURCE_LABELS[normalized] || cleanOptional(value);
+}
+
+
 export function isSystemAdministrator(user: Pick<PermissionUser, "roleCodes" | "permissions"> | null | undefined) {
   if (!user) return false;
   return hasPermission(user as PermissionUser, "platform.superadmin") || (user.roleCodes || []).some((code) => ["admin", "system_admin"].includes(code));
@@ -358,8 +452,24 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
   const actor = { actorId: user.id, actorName: user.fullName };
   if (action === "create_campaign" || action === "create_agenda") {
     const sourceType = action === "create_agenda" ? "agenda" : "campaign";
+    const sourceLabel = sourceType === "agenda" ? "الأجندة" : "الحملة";
     const name = clean(body?.name) || (sourceType === "agenda" ? "الأجندة الجديدة" : "الحملة الجديدة");
-    await createNotification({ systemCode: "marketing", eventType: `${sourceType}_created`, title: sourceType === "agenda" ? "تم إنشاء أجندة جديدة" : "تم إنشاء حملة جديدة", body: `${name} بواسطة ${user.fullName}`, entityType: sourceType, entityId: id, actionUrl: "/marketing", severity: "success", ...actor, dedupeKey: notificationDedupe(`marketing-${sourceType}-created`, id) });
+    await createNotification({
+      systemCode: "marketing",
+      eventType: `${sourceType}_created`,
+      title: sourceType === "agenda" ? "تم إنشاء أجندة جديدة" : "تم إنشاء حملة جديدة",
+      body: joinDetails([
+        detailLine(sourceLabel, name),
+        detailLine("النوع", sourceLabel),
+        detailLine("بواسطة", user.fullName),
+      ]),
+      entityType: sourceType,
+      entityId: id,
+      actionUrl: "/marketing",
+      severity: "success",
+      ...actor,
+      dedupeKey: notificationDedupe(`marketing-${sourceType}-created`, id),
+    });
     if (id && validUuid(id)) {
       const tasks = await sql<any[]>`
         select id::text,title,assigned_to::text,paired_content_user_id::text
@@ -369,9 +479,20 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
       for (const task of tasks) {
         for (const userId of values([task.assigned_to, task.paired_content_user_id])) {
           await createNotification({
-            systemCode: "marketing", eventType: "task_assigned", title: "تم إسناد تكليف جديد",
-            body: task.title || name, entityType: "task", entityId: task.id, actionUrl: "/marketing",
-            audienceUserIds: [userId], severity: "info", ...actor,
+            systemCode: "marketing",
+            eventType: "task_assigned",
+            title: "تم إسناد تكليف جديد",
+            body: joinDetails([
+              detailLine("السجل", name),
+              detailLine("التكليف", task.title || "تكليف جديد"),
+              detailLine("بواسطة", user.fullName),
+            ]),
+            entityType: "task",
+            entityId: task.id,
+            actionUrl: "/marketing",
+            audienceUserIds: [userId],
+            severity: "info",
+            ...actor,
             dedupeKey: notificationDedupe("marketing-task-assigned", task.id, userId),
           });
         }
@@ -408,26 +529,46 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
         limit 1
       `;
     }
-    const actionName = clean(taskRef?.action_name);
-    const detail = action === "toggle_task_action" && actionName
-      ? `${title}: ${actionName}${taskRef?.title ? ` - ${taskRef.title}` : ""}`
-      : `${clean(result?.message) || title}${taskRef?.title ? ` - ${taskRef.title}` : ""}`;
-    await createNotification({
-      systemCode: "marketing", eventType, title, body: `${detail} بواسطة ${user.fullName}`,
-      entityType: taskRef?.id ? "task" : "marketing", entityId: clean(taskRef?.id || id), actionUrl: "/marketing",
-      audienceUserIds: taskRef ? [taskRef.assigned_to, taskRef.paired_content_user_id] : [],
-      severity, ...actor,
-      dedupeKey: notificationDedupe(`marketing-${eventType}`, clean(taskRef?.id || id), clean(body?.actionId), clean(result?.progress), Date.now()),
-    });
+    let source: any = null;
     if (taskRef?.source_id) {
-      const [source] = taskRef.source_type === "agenda"
+      [source] = taskRef.source_type === "agenda"
         ? await sql<any[]>`select name,progress from marketing.agendas where id=${taskRef.source_id}::uuid`
         : await sql<any[]>`select name,progress from marketing.campaigns where id=${taskRef.source_id}::uuid`;
+    }
+    const actionName = clean(taskRef?.action_name);
+    await createNotification({
+      systemCode: "marketing",
+      eventType,
+      title,
+      body: joinDetails([
+        detailLine(taskRef?.source_type === "agenda" ? "الأجندة" : "الحملة", source?.name || "—"),
+        detailLine("التكليف", taskRef?.title || "—"),
+        detailLine("الإجراء", action === "toggle_task_action" && actionName ? actionName : clean(result?.message) || title),
+        detailLine("بواسطة", user.fullName),
+      ]),
+      entityType: taskRef?.id ? "task" : "marketing",
+      entityId: clean(taskRef?.id || id),
+      actionUrl: "/marketing",
+      audienceUserIds: taskRef ? [taskRef.assigned_to, taskRef.paired_content_user_id] : [],
+      severity,
+      ...actor,
+      dedupeKey: notificationDedupe(`marketing-${eventType}`, clean(taskRef?.id || id), clean(body?.actionId), clean(result?.progress), Date.now()),
+    });
+    if (taskRef?.source_id && source) {
       const threshold = Math.min(100, Math.floor(Number(source?.progress || 0) / 25) * 25);
       if (threshold > 0) await createNotification({
-        systemCode: "marketing", eventType: "progress_threshold", title: `نسبة التقدم ${threshold}%`,
-        body: `${source?.name || "السجل"} وصل إلى ${threshold}%`, entityType: taskRef.source_type,
-        entityId: taskRef.source_id, actionUrl: "/marketing", severity: threshold === 100 ? "success" : "info", ...actor,
+        systemCode: "marketing",
+        eventType: "progress_threshold",
+        title: `نسبة التقدم ${threshold}%`,
+        body: joinDetails([
+          detailLine(taskRef.source_type === "agenda" ? "الأجندة" : "الحملة", source?.name || "السجل"),
+          detailLine("نسبة التقدم", `${threshold}%`),
+        ]),
+        entityType: taskRef.source_type,
+        entityId: taskRef.source_id,
+        actionUrl: "/marketing",
+        severity: threshold === 100 ? "success" : "info",
+        ...actor,
         dedupeKey: notificationDedupe("marketing-progress", taskRef.source_type, taskRef.source_id, threshold),
       });
     }
@@ -456,63 +597,242 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
     archive_vehicle: { event: "vehicle_archived", title: "تم تحديث أرشفة السيارة", severity: "warning", type: "vehicle", url: "/operations/archive" },
     import_vehicles: { event: "vehicles_imported", title: "تم استيراد السيارات", severity: "success", type: "vehicle", url: "/operations/manage" },
   };
-  const item = map[action]; if (!item) return;
+  const item = map[action];
+  if (!item) return;
+
   let branchCodes = values([result?.request?.source_branch_code, result?.request?.destination_branch_code]);
-  if (item.type === "request" && id && validUuid(id) && !branchCodes.length) {
-    const [request] = await sql<any[]>`
-      select source_branch_code,destination_branch_code from operations.transfer_requests where id=${id}::uuid
+  let requestSummary: any = null;
+  let vehicleSummary: any = null;
+  let destinationSummary: any = null;
+
+  const requestId = item.type === "request" ? id : clean(body?.requestId || body?.id);
+  if (requestId && validUuid(requestId)) {
+    [requestSummary] = await sql<any[]>`
+      select r.id::text,r.request_no,r.request_kind,r.status,r.cancellation_reason,r.note,
+        sl.name as source_location_name,dl.name as destination_location_name,
+        r.source_branch_code,r.destination_branch_code,
+        count(rv.vehicle_id)::int as vehicles_count
+      from operations.transfer_requests r
+      left join operations.locations sl on sl.id=r.source_location_id
+      left join operations.locations dl on dl.id=r.destination_location_id
+      left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
+      where r.id=${requestId}::uuid
+      group by r.id,sl.name,dl.name
     `;
-    branchCodes = values([request?.source_branch_code, request?.destination_branch_code]);
-  } else if (item.type === "vehicle" && id && validUuid(id)) {
-    const [vehicle] = await sql<any[]>`
-      select l.branch_code,l.code as location_code
-      from operations.vehicles v left join operations.locations l on l.id=v.location_id
-      where v.id=${id}::uuid
-    `;
-    branchCodes = values([vehicle?.branch_code, vehicle?.location_code]);
-  } else if (action === "move_vehicles") {
-    const vehicleIds = values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : Array.isArray(body?.ids) ? body.ids : []).filter(validUuid);
-    if (vehicleIds.length) {
-      const locations = await sql<any[]>`
-        select distinct l.branch_code,l.code as location_code
-        from operations.vehicles v left join operations.locations l on l.id=v.location_id
-        where v.id in ${sql(vehicleIds)}
-      `;
-      branchCodes = values(locations.flatMap((row) => [row.branch_code, row.location_code]));
-    }
+    branchCodes = values([branchCodes[0], branchCodes[1], requestSummary?.source_branch_code, requestSummary?.destination_branch_code]);
   }
-  await createNotification({ systemCode: "operations", eventType: item.event, title: item.title, body: `${clean(result?.message) || item.title} بواسطة ${user.fullName}`, entityType: item.type, entityId: id, actionUrl: item.url, severity: item.severity, branchCodes, ...actor, dedupeKey: notificationDedupe(`operations-${item.event}`, id, clean(body?.workflowAction || body?.transferAction || body?.status || body?.newStatus), Date.now()) });
+
+  const vehicleId = clean(body?.vehicleId || result?.vehicle?.id || (item.type === "vehicle" ? id : ""));
+  if (vehicleId && validUuid(vehicleId)) {
+    [vehicleSummary] = await sql<any[]>`
+      select v.id::text,v.vin,v.car_name,v.statement,v.archived_at,v.status_code,l.name as location_name,l.branch_code,l.code as location_code
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id=${vehicleId}::uuid
+    `;
+    branchCodes = values([branchCodes[0], branchCodes[1], vehicleSummary?.branch_code, vehicleSummary?.location_code]);
+  }
+
+  const destinationLocationId = clean(body?.destinationLocationId);
+  if (destinationLocationId && validUuid(destinationLocationId)) {
+    [destinationSummary] = await sql<any[]>`select name,branch_code,code from operations.locations where id=${destinationLocationId}::uuid`;
+    branchCodes = values([branchCodes[0], branchCodes[1], destinationSummary?.branch_code, destinationSummary?.code]);
+  }
+
+  let title = item.title;
+  let bodyText = "";
+
+  if (action === "create_transfer" || action === "transfer_action") {
+    const transferAction = clean(body?.transferAction);
+    const actionLabel = transferAction === "delete"
+      ? "حذف الطلب"
+      : transferAction === "cancel"
+        ? "إلغاء الطلب"
+        : "تحديث المرحلة";
+    title = action === "create_transfer"
+      ? `تم إنشاء ${operationsRequestKindLabel(requestSummary?.request_kind)}`
+      : transferAction === "cancel"
+        ? `تم إلغاء ${operationsRequestKindLabel(requestSummary?.request_kind)}`
+        : transferAction === "delete"
+          ? `تم حذف ${operationsRequestKindLabel(requestSummary?.request_kind)}`
+          : `تم تحديث مرحلة ${operationsRequestKindLabel(requestSummary?.request_kind)}`;
+    bodyText = joinDetails([
+      detailLine("رقم الطلب", requestSummary?.request_no),
+      detailLine("نوع الطلب", operationsRequestKindLabel(requestSummary?.request_kind)),
+      detailLine("الإجراء", action === "create_transfer" ? "إنشاء الطلب" : actionLabel),
+      detailLine("المرحلة الحالية", operationsRequestStageLabel(requestSummary?.status || (action === "create_transfer" ? "created" : ""))),
+      detailPath("المسار", requestSummary?.source_location_name, requestSummary?.destination_location_name),
+      detailCount("عدد السيارات", requestSummary?.vehicles_count || values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : []).length),
+      detailLine(transferAction === "cancel" ? "سبب الإلغاء" : "ملاحظة", clean(body?.reason) || clean(body?.note) || clean(requestSummary?.note)),
+      detailLine("بواسطة", user.fullName),
+    ]);
+  } else if (action === "approval_action") {
+    const approvalType = clean(body?.approvalType);
+    const approvalAction = clean(body?.approvalAction);
+    title = result?.delivered ? "اكتملت الموافقتان وتم التسليم النهائي" : item.title;
+    bodyText = joinDetails([
+      detailLine("السيارة", [clean(vehicleSummary?.vin), clean(vehicleSummary?.car_name || vehicleSummary?.statement)].filter(Boolean).join(" - ")),
+      detailLine("نوع الموافقة", APPROVAL_TYPE_LABELS[approvalType] || approvalType),
+      detailLine("الإجراء", APPROVAL_ACTION_LABELS[approvalAction] || approvalAction),
+      detailLine("الموافقة المالية", approvalStateLabel(result?.approval?.financial_approved)),
+      detailLine("الموافقة الإدارية", approvalStateLabel(result?.approval?.administrative_approved)),
+      detailLine("المكان الحالي", vehicleSummary?.location_name),
+      detailLine("التسليم النهائي", result?.delivered ? "تم" : "لم يتم"),
+      detailLine("ملاحظة", body?.note),
+      detailLine("بواسطة", user.fullName),
+    ]);
+  } else if (action === "move_vehicles") {
+    const vehicleIds = values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : Array.isArray(body?.ids) ? body.ids : []);
+    bodyText = joinDetails([
+      detailCount("عدد السيارات", vehicleIds.length || result?.movedCount || result?.updatedCount),
+      detailLine("المكان المستهدف", destinationSummary?.name),
+      detailLine("الحالة الجديدة", clean(body?.newStatus)),
+      detailLine("بواسطة", user.fullName),
+    ]);
+  } else if (action === "create_vehicle" || action === "update_vehicle" || action === "archive_vehicle") {
+    bodyText = joinDetails([
+      detailLine("السيارة", [clean(vehicleSummary?.vin), clean(vehicleSummary?.car_name || vehicleSummary?.statement)].filter(Boolean).join(" - ")),
+      detailLine("المكان الحالي", vehicleSummary?.location_name),
+      detailLine("الحالة", vehicleSummary?.status_code),
+      detailLine("الأرشفة", action === "archive_vehicle" ? (vehicleSummary?.archived_at ? "مؤرشفة" : "غير مؤرشفة") : ""),
+      detailLine("بواسطة", user.fullName),
+    ]);
+  } else if (action === "import_vehicles") {
+    bodyText = joinDetails([
+      detailLine("وضع الاستيراد", clean(body?.mode)),
+      detailCount("إجمالي الصفوف", result?.report?.total || result?.total),
+      detailCount("المضاف", result?.report?.inserted),
+      detailCount("المحدث", result?.report?.updated),
+      detailCount("المتجاوز", result?.report?.skipped),
+      detailCount("الفاشل", result?.report?.failed),
+      detailLine("بواسطة", user.fullName),
+    ]);
+  }
+
+  await createNotification({
+    systemCode: "operations",
+    eventType: item.event,
+    title,
+    body: bodyText || `${clean(result?.message) || item.title} بواسطة ${user.fullName}`,
+    entityType: item.type,
+    entityId: id,
+    actionUrl: item.url,
+    severity: item.severity,
+    branchCodes,
+    ...actor,
+    dedupeKey: notificationDedupe(`operations-${item.event}`, id || requestId || vehicleId, clean(body?.workflowAction || body?.transferAction || body?.status || body?.newStatus || body?.approvalAction), Date.now()),
+  });
 }
 
 export async function emitTrackingNotification(user: PermissionUser, action: string, body: any, result: any) {
   const sql = getSql();
   const orderId = clean(body?.orderId || body?.id || result?.orderId);
   const stageNo = clean(body?.stageNo);
+  const stageId = clean(body?.stageId);
   const map: Record<string, [string, string, NotificationSeverity]> = {
     complete_stage: ["stage_completed", "تم إنهاء مرحلة من مراحل الطلب", "success"],
     revert_stage: ["stage_reverted", "تم التراجع عن مرحلة من مراحل الطلب", "warning"],
     archive_order: ["order_archive_updated", body?.archived ? "تمت أرشفة الطلب" : "تمت استعادة الطلب", "warning"],
   };
-  const item = map[action]; if (!item) return;
+  const item = map[action];
+  if (!item) return;
+
   const [order] = orderId && validUuid(orderId)
-    ? await sql<any[]>`select branch from tracking.orders where id=${orderId}::uuid`
+    ? await sql<any[]>`select id::text,sales_order_no,branch from tracking.orders where id=${orderId}::uuid`
     : [null];
-  await createNotification({ systemCode: "tracking", eventType: item[0], title: item[1], body: `${clean(result?.message) || item[1]} بواسطة ${user.fullName}`, entityType: "tracking_order", entityId: orderId, actionUrl: body?.archived ? "/tracking/archive" : "/tracking", severity: item[2], actorId: user.id, actorName: user.fullName, branchCodes: [order?.branch], dedupeKey: notificationDedupe(`tracking-${item[0]}`, orderId, stageNo, Date.now()) });
+  const [stage] = stageId && validUuid(stageId)
+    ? await sql<any[]>`select name,sort_order from tracking.stages where id=${stageId}::uuid`
+    : stageNo
+      ? [{ name: `المرحلة ${stageNo}`, sort_order: Number(stageNo) }]
+      : [null];
+
+  const stageLabel = stage?.name ? `${String(Number(stage?.sort_order || stageNo || 0)).padStart(2, "0")} - ${stage.name}` : (stageNo ? `المرحلة ${stageNo}` : "");
+  const affectedVehicles = Number(result?.affectedVehicles || 0);
+  const title = action === "archive_order"
+    ? item[1]
+    : `${TRACKING_ACTION_LABELS[action] || item[1]}${stage?.name ? `: ${stage.name}` : ""}`;
+  const bodyText = joinDetails([
+    detailLine("رقم الطلب", order?.sales_order_no),
+    detailLine("المرحلة", stageLabel),
+    detailCount("عدد السيارات المتأثرة", affectedVehicles || ""),
+    detailLine("حالة الأرشفة", action === "archive_order" ? trackingArchiveStateLabel(Boolean(body?.archived || result?.archived || result?.order?.is_archived)) : ""),
+    detailLine(action === "revert_stage" ? "سبب التراجع" : "ملاحظة", clean(body?.note)),
+    detailLine("الفرع", order?.branch),
+    detailLine("بواسطة", user.fullName),
+  ]);
+
+  await createNotification({
+    systemCode: "tracking",
+    eventType: item[0],
+    title,
+    body: bodyText || `${clean(result?.message) || item[1]} بواسطة ${user.fullName}`,
+    entityType: "tracking_order",
+    entityId: orderId,
+    actionUrl: body?.archived ? "/tracking/archive" : "/tracking",
+    severity: item[2],
+    actorId: user.id,
+    actorName: user.fullName,
+    branchCodes: [order?.branch],
+    dedupeKey: notificationDedupe(`tracking-${item[0]}`, orderId, stageNo || stageId, Date.now()),
+  });
 }
 
 export async function emitCrmLeadNotification(user: PermissionUser, event: "created" | "status" | "transfer", lead: any, before?: any) {
   const audience = [lead?.assigned_to, lead?.call_center_assigned_to];
   const title = event === "created" ? "دخل عميل جديد إلى النظام" : event === "transfer" ? "تم تحويل العميل إلى قسم آخر" : "تم تحديث حالة العميل";
-  const body = event === "status" ? `${lead?.customer_name || "العميل"}: ${before?.status_label || "—"} ← ${lead?.status_label || "—"}` : `${lead?.customer_name || "عميل"} بواسطة ${user.fullName}`;
+  const body = joinDetails([
+    detailLine("العميل", lead?.customer_name || "عميل"),
+    detailLine("الحالة السابقة", event === "status" ? (before?.status_label || before?.status || "—") : event === "transfer" ? (before?.department_label || before?.department_code || "—") : ""),
+    detailLine(event === "status" ? "الحالة الحالية" : event === "transfer" ? "القسم الحالي" : "الحالة", lead?.status_label || lead?.status || lead?.department_label || lead?.department_code || "—"),
+    detailLine("الفرع", lead?.branch_name || lead?.branch_code),
+    detailLine("القسم", lead?.department_label || lead?.department_code),
+    detailLine("المندوب", lead?.assigned_to_name || lead?.assigned_user_name),
+    detailLine("الكول سنتر", lead?.call_center_assigned_to_name || lead?.call_center_name),
+    detailLine("بواسطة", user.fullName),
+  ]);
   const eventVersion = event === "created" ? lead?.created_at : lead?.updated_at || Date.now();
-  await createNotification({ systemCode: "crm", eventType: `lead_${event}`, title, body, entityType: "lead", entityId: clean(lead?.id), actionUrl: lead?.id ? `/crm?lead=${encodeURIComponent(clean(lead.id))}` : "/crm", severity: event === "created" ? "success" : "info", actorId: user.id, actorName: user.fullName, audienceUserIds: audience, branchCodes: [lead?.branch_code], departmentCodes: [lead?.department_code], dedupeKey: notificationDedupe(`crm-lead-${event}`, lead?.id, eventVersion) });
+  await createNotification({
+    systemCode: "crm",
+    eventType: `lead_${event}`,
+    title,
+    body,
+    entityType: "lead",
+    entityId: clean(lead?.id),
+    actionUrl: lead?.id ? `/crm?lead=${encodeURIComponent(clean(lead.id))}` : "/crm",
+    severity: event === "created" ? "success" : "info",
+    actorId: user.id,
+    actorName: user.fullName,
+    audienceUserIds: audience,
+    branchCodes: [lead?.branch_code],
+    departmentCodes: [lead?.department_code],
+    dedupeKey: notificationDedupe(`crm-lead-${event}`, lead?.id, eventVersion),
+  });
 }
 
 export async function emitInboundMessageNotification(input: { eventKey: string; source: string; lead?: any; conversation?: any; message?: any }) {
   const lead = input.lead || {};
   const conversation = input.conversation || {};
   const customerName = clean(lead.customer_name || conversation.customer_name) || "عميل";
-  const preview = clean(input.message?.body || conversation.preview_text) || "رسالة واردة جديدة";
-  await createNotification({ systemCode: "crm", eventType: "customer_message_received", title: `رسالة واردة من ${customerName}`, body: preview.slice(0, 240), entityType: "conversation", entityId: clean(conversation.id), actionUrl: "/crm/inbox", severity: "info", audienceUserIds: [lead.assigned_to, lead.call_center_assigned_to, conversation.assigned_to, conversation.call_center_assigned_to], branchCodes: [lead.branch_code, conversation.branch_code], departmentCodes: [lead.department_code, conversation.department_code], dedupeKey: notificationDedupe("crm-inbound-message", input.source, input.eventKey) });
+  const preview = truncateNotificationText(input.message?.body || conversation.preview_text || "رسالة واردة جديدة", 220);
+  await createNotification({
+    systemCode: "crm",
+    eventType: "customer_message_received",
+    title: `رسالة واردة من ${customerName}`,
+    body: joinDetails([
+      detailLine("العميل", customerName),
+      detailLine("القناة", crmSourceLabel(input.source)),
+      detailLine("نص الرسالة", preview),
+      detailLine("المندوب", lead.assigned_to_name || conversation.assigned_to_name),
+      detailLine("الكول سنتر", lead.call_center_assigned_to_name || conversation.call_center_assigned_to_name),
+    ]),
+    entityType: "conversation",
+    entityId: clean(conversation.id),
+    actionUrl: "/crm/inbox",
+    severity: "info",
+    audienceUserIds: [lead.assigned_to, lead.call_center_assigned_to, conversation.assigned_to, conversation.call_center_assigned_to],
+    branchCodes: [lead.branch_code, conversation.branch_code],
+    departmentCodes: [lead.department_code, conversation.department_code],
+    dedupeKey: notificationDedupe("crm-inbound-message", input.source, input.eventKey),
+  });
 }
 
