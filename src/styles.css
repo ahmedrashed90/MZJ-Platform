@@ -4886,6 +4886,10 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .notification-row-copy strong { font-size: 12px; line-height: 1.45; }
 .notification-row-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; overflow: hidden; display: block; max-height: 4.7em; }
 .notification-row-copy time { color: var(--muted); font-size: 9px; }
+.notification-actor { min-width: 0; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.notification-actor>svg { flex: 0 0 auto; color: var(--brand-2); }
+.notification-actor>span { flex: 0 0 auto; }
+.notification-actor>b { min-width: 0; color: var(--ink); font-size: 10px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .notification-row>i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-2); }
 .notification-popover>footer { min-height: 45px; border-top: 1px solid var(--line); display: grid; place-items: center; background: #fcfaf9; }
 .notification-empty { min-height: 130px; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 12px; }
@@ -4936,7 +4940,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .notification-toast-card[data-severity="danger"] .notification-toast-icon { color: #bd2933; background: #fff0f1; }
 .notification-toast-copy { min-width: 0; display: grid; gap: 4px; }
 .notification-toast-copy strong { font-size: 13px; line-height: 1.45; }
-.notification-toast-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; display: block; overflow: hidden; max-height: 6.2em; }
+.notification-toast-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; display: block; overflow: hidden; max-height: 4.7em; }
 .notification-toast-copy time { color: var(--muted); font-size: 9px; }
 .notification-toast-close { position: absolute; top: 9px; left: 9px; width: 27px; height: 27px; border: 0; border-radius: 8px; background: #faf5f2; display: grid; place-items: center; cursor: pointer; color: #6d5149; }
 .notification-toast-progress { position: absolute; right: 0; bottom: 0; height: 3px; width: 100%; background: var(--brand-2); transform-origin: right center; animation-name: notification-toast-progress; animation-timing-function: linear; animation-fill-mode: forwards; }

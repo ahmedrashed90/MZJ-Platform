@@ -72,7 +72,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         }
         if (result.createLead && result.lead?.id) {
           const [lead] = await sql<any[]>`select *,id::text,assigned_to::text,call_center_assigned_to::text from crm.leads where id=${result.lead.id}::uuid`;
-          if (lead) await createNotification({ systemCode: "crm", eventType: "lead_created_from_channel", title: "دخل عميل جديد إلى النظام", body: `${lead.customer_name || "عميل"} من ${source}`, entityType: "lead", entityId: lead.id, actionUrl: `/crm?lead=${encodeURIComponent(lead.id)}`, severity: "success", audienceUserIds: [lead.assigned_to,lead.call_center_assigned_to], branchCodes: [lead.branch_code], departmentCodes: [lead.department_code], dedupeKey: notificationDedupe("crm-channel-lead", source, eventKey) }).catch((error) => console.error("Inbound lead notification failed", error));
+          if (lead) await createNotification({ systemCode: "crm", eventType: "lead_created_from_channel", title: "دخل عميل جديد إلى النظام", body: `${lead.customer_name || "عميل"} من ${source}`, entityType: "lead", entityId: lead.id, actionUrl: `/crm?lead=${encodeURIComponent(lead.id)}`, severity: "success", actorName: `تكامل ${source}`, audienceUserIds: [lead.assigned_to,lead.call_center_assigned_to], branchCodes: [lead.branch_code], departmentCodes: [lead.department_code], dedupeKey: notificationDedupe("crm-channel-lead", source, eventKey) }).catch((error) => console.error("Inbound lead notification failed", error));
         }
       }
       return response.status(202).json({

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, Check, CheckCircle, Info, Megaphone, MapPin, SuitcaseSimple, UsersThree, WarningCircle } from "@phosphor-icons/react";
+import { Bell, Check, CheckCircle, Info, Megaphone, MapPin, SuitcaseSimple, UserCircle, UsersThree, WarningCircle } from "@phosphor-icons/react";
 import { useNavigate } from "react-router-dom";
 import { fetchNotifications, updateNotifications } from "./api";
 import type { NotificationSystem, PlatformNotification } from "./types";
@@ -11,6 +11,7 @@ const labels: Record<NotificationSystem, string> = { crm: "CRM", marketing: "ا�
 const icons = { crm: UsersThree, marketing: Megaphone, operations: SuitcaseSimple, tracking: MapPin };
 
 function formatDate(value: string) { return new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh" }).format(new Date(value)); }
+function notificationActorName(item: PlatformNotification) { return item.actor_name?.trim() || "النظام"; }
 function RowIcon({ item }: { item: PlatformNotification }) { const Icon = item.severity === "warning" || item.severity === "danger" ? WarningCircle : item.severity === "success" ? CheckCircle : icons[item.system_code] || Info; return <Icon size={22} weight="duotone" />; }
 
 export function NotificationsCenterPage() {
@@ -51,7 +52,7 @@ export function NotificationsCenterPage() {
           {!loading ? rows.map((item) => (
             <button type="button" key={item.id} className={`notifications-center-row ${item.read_at ? "read" : "unread"}`} data-severity={item.severity} onClick={() => void openItem(item)}>
               <span className="notifications-center-icon"><RowIcon item={item} /></span>
-              <span className="notifications-center-copy"><span><b>{labels[item.system_code]}</b>{!item.read_at ? <i>جديد</i> : null}</span><strong>{item.title}</strong>{item.body ? <small>{item.body}</small> : null}</span>
+              <span className="notifications-center-copy"><span><b>{labels[item.system_code]}</b>{!item.read_at ? <i>جديد</i> : null}</span><strong>{item.title}</strong><span className="notification-actor"><UserCircle size={14} weight="duotone" /><span>المسؤول:</span><b>{notificationActorName(item)}</b></span>{item.body ? <small>{item.body}</small> : null}</span>
               <time>{formatDate(item.created_at)}</time>
             </button>
           )) : null}

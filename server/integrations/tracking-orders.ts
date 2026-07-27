@@ -273,6 +273,7 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
     systemCode: "tracking", eventType: "order_created", title: "تم إنشاء طلب تتبع جديد",
     body: `${orderNo}${clean(body.customerName) ? ` - ${clean(body.customerName)}` : ""}`,
     entityType: "tracking_order", entityId: result.order.id, actionUrl: "/tracking", severity: "success",
+    actorName: "NEXT ERP",
     branchCodes: [clean(body.branch)], dedupeKey: notificationDedupe("tracking-order-created", source.sourceIdentity),
   }).catch((error) => console.error("Tracking order creation notification failed", error));
   return {

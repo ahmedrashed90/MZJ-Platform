@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, Check, CheckCircle, Info, Megaphone, MapPin, SuitcaseSimple, UsersThree, WarningCircle, X } from "@phosphor-icons/react";
+import { Bell, Check, CheckCircle, Info, Megaphone, MapPin, SuitcaseSimple, UserCircle, UsersThree, WarningCircle, X } from "@phosphor-icons/react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { fetchNotificationPreferences, fetchNotifications, updateNotifications } from "./api";
@@ -30,6 +30,10 @@ function routeSystem(pathname: string): NotificationSystem | null {
   if (pathname.startsWith("/operations")) return "operations";
   if (pathname.startsWith("/tracking")) return "tracking";
   return null;
+}
+
+function notificationActorName(item: PlatformNotification) {
+  return item.actor_name?.trim() || "النظام";
 }
 
 function NotificationIcon({ item }: { item: PlatformNotification }) {
@@ -220,7 +224,7 @@ export function NotificationBell() {
               {!loading ? rows.map((item) => (
                 <button type="button" key={item.id} className={`notification-row ${item.read_at ? "read" : "unread"}`} data-severity={item.severity} onClick={() => void openItem(item)}>
                   <span className="notification-row-icon"><NotificationIcon item={item} /></span>
-                  <span className="notification-row-copy"><strong>{item.title}</strong>{item.body ? <small>{item.body}</small> : null}<time>{relativeTime(item.created_at)}</time></span>
+                  <span className="notification-row-copy"><strong>{item.title}</strong><span className="notification-actor"><UserCircle size={13} weight="duotone" /><span>المسؤول:</span><b>{notificationActorName(item)}</b></span>{item.body ? <small>{item.body}</small> : null}<time>{relativeTime(item.created_at)}</time></span>
                   {!item.read_at ? <i aria-label="غير مقروء" /> : null}
                 </button>
               )) : null}
@@ -236,6 +240,7 @@ export function NotificationBell() {
               <span className="notification-toast-icon"><NotificationIcon item={toastItem} /></span>
               <span className="notification-toast-copy">
                 <strong>{toastItem.title}</strong>
+                <span className="notification-actor"><UserCircle size={13} weight="duotone" /><span>المسؤول:</span><b>{notificationActorName(toastItem)}</b></span>
                 {toastItem.body ? <small>{toastItem.body}</small> : null}
                 <time>{relativeTime(toastItem.created_at)}</time>
               </span>

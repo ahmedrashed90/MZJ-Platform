@@ -69,6 +69,7 @@ check("Notification preferences are persisted per user", /core\.notification_pre
 check("Notification preferences API is authenticated and routed", /notificationSettingsHandler/.test(api) && /requireUser\(request, response\)/.test(notificationSettingsEndpoint));
 check("Notification settings are available from the unified settings page", /key: "notifications"/.test(settingsPage) && /<NotificationSettingsPanel \/>/.test(settingsPage));
 check("Notification settings cover sound toast duration and system alerts", /soundEnabled/.test(notificationSettings) && /toastEnabled/.test(notificationSettings) && /toastDurationSeconds/.test(notificationSettings) && /systemAlerts/.test(notificationSettings));
+check("Every notification exposes the responsible actor", /actorName = clean\(input\.actorName\) \|\| "النظام"/.test(helper) && /notificationActorName/.test(bell) && /المسؤول:/.test(bell) && /notificationActorName/.test(center) && /المسؤول:/.test(center));
 
 console.log(`Internal notification regression checks: ${passed}/${passed + failed} passed.`);
 if (failed) process.exit(1);
