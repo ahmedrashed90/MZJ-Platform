@@ -24,19 +24,26 @@ import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
 
 const tabs = [
-  { key: "automation", label: "إعدادات الأوتوميشن" },
-  { key: "entry_routing", label: "دخول وتوزيع العملاء" },
-  { key: "statuses", label: "حالات العملاء" },
-  { key: "customer_fields", label: "بيانات العميل" },
-  { key: "sources", label: "المصادر" },
-  { key: "templates", label: "القوالب والرسائل" },
-  { key: "mappings", label: "ربط الحالات بالقوالب" },
-  { key: "automatic_templates", label: "الإرسال التلقائي" },
-  { key: "quality", label: "مؤشرات التقارير" },
-  { key: "kpi_access", label: "السرعة والكفاءة" },
-  { key: "data_review", label: "مراجعة أخطاء البيانات" },
-  { key: "endpoints", label: "ربط المنصات والـ Workers" },
-  { key: "distribution", label: "توزيع العملاء" },
+  { key: "automation", label: "إعدادات الأوتوميشن", description: "قواعد استقبال الرسائل ومسارات التنفيذ التلقائي", group: "workflow" },
+  { key: "entry_routing", label: "دخول العملاء", description: "بوابات الدخول والتوجيه الأولي للعملاء", group: "workflow" },
+  { key: "distribution", label: "توزيع العملاء", description: "قواعد الدور والمندوبين المؤهلين للتوزيع", group: "workflow" },
+  { key: "statuses", label: "حالات العملاء", description: "حالات الداش بورد وترتيبها حسب القسم", group: "customer" },
+  { key: "customer_fields", label: "بيانات العميل", description: "الحقول الإضافية ونسبة اكتمال الملف", group: "customer" },
+  { key: "sources", label: "المصادر", description: "مصادر العملاء وتصنيفها داخل التقارير", group: "customer" },
+  { key: "templates", label: "القوالب والرسائل", description: "الرسائل السريعة وقوالب التواصل المعتمدة", group: "communication" },
+  { key: "mappings", label: "ربط الحالات بالقوالب", description: "القالب المرسل عند انتقال العميل بين الحالات", group: "communication" },
+  { key: "automatic_templates", label: "الإرسال التلقائي", description: "تشغيل وإيقاف الرسائل التلقائية", group: "communication" },
+  { key: "endpoints", label: "ربط المنصات والـ Workers", description: "مسارات الإرسال والاستقبال والتكاملات", group: "communication" },
+  { key: "quality", label: "مؤشرات التقارير", description: "معادلات جودة التسويق والمبيعات وكروت الملخص", group: "control" },
+  { key: "kpi_access", label: "السرعة والكفاءة", description: "تحديد المستخدمين المسؤولين عن أجزاء تقييم KPI", group: "control" },
+  { key: "data_review", label: "مراجعة أخطاء البيانات", description: "اكتشاف أخطاء بيانات العملاء وتصحيحها", group: "control" },
+] as const;
+
+const tabGroups = [
+  { key: "workflow", label: "التشغيل والتوزيع", description: "دخول العميل والأتمتة وقواعد التوزيع" },
+  { key: "customer", label: "بيانات العملاء", description: "الحالات والحقول والمصادر" },
+  { key: "communication", label: "التواصل والتكاملات", description: "القوالب والإرسال وربط المنصات" },
+  { key: "control", label: "التقارير والرقابة", description: "المؤشرات والصلاحيات وجودة البيانات" },
 ] as const;
 
 type Tab = typeof tabs[number]["key"];
@@ -362,15 +369,24 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
           <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />إعادة تحميل</button>
         </header>
       ) : (
-        <div className="crm-embedded-settings-head">
-          <div><h2>إعدادات CRM</h2><p>الحالات والمصادر والقوالب والفروع والتوزيع والربط مع المنصات.</p></div>
-          <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
+        <div className="crm-settings-toolbar">
+          <div><span>إدارة CRM</span><h2>إعدادات العملاء والمبيعات</h2><p>كل إعدادات التشغيل والتواصل والتقارير مرتبة في مجموعات واضحة.</p></div>
+          <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث البيانات"}</button>
         </div>
       )}
 
-      <div className="crm-admin-tabs">
-        {visibleTabs.map((item) => <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}>{item.label}</button>)}
-      </div>
+      <section className="crm-settings-navigation" aria-label="تبويبات إعدادات CRM">
+        {tabGroups.map((group) => {
+          const groupTabs = visibleTabs.filter((item) => item.group === group.key);
+          if (!groupTabs.length) return null;
+          return (
+            <article key={group.key} className="crm-settings-tab-group">
+              <header><strong>{group.label}</strong><small>{group.description}</small></header>
+              <div>{groupTabs.map((item) => <button type="button" key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}><span>{item.label}</span><small>{item.description}</small></button>)}</div>
+            </article>
+          );
+        })}
+      </section>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       {loading ? <div className="crm-loading-panel">جاري تحميل الإعدادات...</div> : null}
       {readOnly ? <div className="connection-banner"><span>صلاحية مشاهدة فقط؛ تعديل إعدادات CRM يحتاج صلاحية الإدارة.</span></div> : null}

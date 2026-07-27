@@ -29,4 +29,8 @@ create table if not exists crm.kpi_section_permissions (
 create index if not exists crm_kpi_section_permissions_user_idx
   on crm.kpi_section_permissions(user_id,section_code);
 
+insert into core.schema_migrations(version)
+values('crm-kpi-permissions-sold-quantity-20260728')
+on conflict(version) do nothing;
+
 commit;
