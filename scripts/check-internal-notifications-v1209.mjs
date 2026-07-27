@@ -28,6 +28,7 @@ const notificationSettingsEndpoint = read("server/notification-settings.ts");
 const preferencesMigration = read("database/migrations/20260728_notification_preferences.sql");
 const styles = read("src/styles.css");
 const center = read("src/notifications/NotificationsCenterPage.tsx");
+const presentation = read("src/notifications/presentation.ts");
 const schema = read("database/schema.sql");
 const runtimeSchema = read("server/_schema.ts");
 const migration = read("database/migrations/20260727_internal_notifications.sql");
@@ -69,7 +70,11 @@ check("Notification preferences are persisted per user", /core\.notification_pre
 check("Notification preferences API is authenticated and routed", /notificationSettingsHandler/.test(api) && /requireUser\(request, response\)/.test(notificationSettingsEndpoint));
 check("Notification settings are available from the unified settings page", /key: "notifications"/.test(settingsPage) && /<NotificationSettingsPanel \/>/.test(settingsPage));
 check("Notification settings cover sound toast duration and system alerts", /soundEnabled/.test(notificationSettings) && /toastEnabled/.test(notificationSettings) && /toastDurationSeconds/.test(notificationSettings) && /systemAlerts/.test(notificationSettings));
-check("Every notification exposes the responsible actor", /actorName = clean\(input\.actorName\) \|\| "النظام"/.test(helper) && /notificationActorName/.test(bell) && /المسؤول:/.test(bell) && /notificationActorName/.test(center) && /المسؤول:/.test(center));
+
+check("Every notification surface shows the responsible party separately", /notificationResponsibleName/.test(bell) && /notificationResponsibleName/.test(center) && /المسؤول:/.test(bell) && /المسؤول:/.test(center));
+check("Detailed notification text is not clamped or ellipsized", /notification-row-copy small[^}]*white-space: pre-line[^}]*overflow-wrap: anywhere/.test(styles) && /notification-toast-copy small[^}]*white-space: pre-line[^}]*overflow-wrap: anywhere/.test(styles) && !/notification-toast-copy small[^}]*max-height/.test(styles) && !/notification-row-copy small[^}]*max-height/.test(styles));
+check("Automated notification sources have responsible names", /actorName: customerName/.test(helper) && /actorName: `تكامل \$\{source\}`/.test(inbound) && /actorName: source\.integrationSource/.test(trackingIngest));
+check("Responsible-name fallback is centralized", /export function notificationResponsibleName/.test(presentation) && /return "النظام"/.test(presentation));
 
 console.log(`Internal notification regression checks: ${passed}/${passed + failed} passed.`);
 if (failed) process.exit(1);

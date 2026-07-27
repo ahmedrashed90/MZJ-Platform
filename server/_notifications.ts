@@ -294,7 +294,6 @@ export async function createNotification(input: NotificationInput) {
   const branches = values(input.branchCodes);
   const departments = values(input.departmentCodes);
   const dedupeKey = clean(input.dedupeKey) || null;
-  const actorName = clean(input.actorName) || "النظام";
   const [row] = await sql<{ id: string }[]>`
     insert into core.notifications(
       system_code,event_type,title,body,entity_type,entity_id,action_url,severity,actor_id,actor_name,
@@ -302,7 +301,7 @@ export async function createNotification(input: NotificationInput) {
     ) values (
       ${input.systemCode},${clean(input.eventType) || "event"},${clean(input.title)},${clean(input.body) || null},
       ${clean(input.entityType) || null},${clean(input.entityId) || null},${clean(input.actionUrl) || null},${input.severity || "info"},
-      ${input.actorId && validUuid(input.actorId) ? input.actorId : null}::uuid,${actorName},
+      ${input.actorId && validUuid(input.actorId) ? input.actorId : null}::uuid,${clean(input.actorName) || null},
       ${audience}::uuid[],${branches}::text[],${departments}::text[],${sql.json(input.metadata || {})},${dedupeKey}
     )
     on conflict(dedupe_key) where dedupe_key is not null do nothing
@@ -462,6 +461,7 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
       body: joinDetails([
         detailLine(sourceLabel, name),
         detailLine("النوع", sourceLabel),
+        detailLine("بواسطة", user.fullName),
       ]),
       entityType: sourceType,
       entityId: id,
@@ -485,7 +485,8 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
             body: joinDetails([
               detailLine("السجل", name),
               detailLine("التكليف", task.title || "تكليف جديد"),
-                  ]),
+              detailLine("بواسطة", user.fullName),
+            ]),
             entityType: "task",
             entityId: task.id,
             actionUrl: "/marketing",
@@ -543,6 +544,7 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
         detailLine(taskRef?.source_type === "agenda" ? "الأجندة" : "الحملة", source?.name || "—"),
         detailLine("التكليف", taskRef?.title || "—"),
         detailLine("الإجراء", action === "toggle_task_action" && actionName ? actionName : clean(result?.message) || title),
+        detailLine("بواسطة", user.fullName),
       ]),
       entityType: taskRef?.id ? "task" : "marketing",
       entityId: clean(taskRef?.id || id),
@@ -662,6 +664,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
       detailPath("المسار", requestSummary?.source_location_name, requestSummary?.destination_location_name),
       detailCount("عدد السيارات", requestSummary?.vehicles_count || values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : []).length),
       detailLine(transferAction === "cancel" ? "سبب الإلغاء" : "ملاحظة", clean(body?.reason) || clean(body?.note) || clean(requestSummary?.note)),
+      detailLine("بواسطة", user.fullName),
     ]);
   } else if (action === "approval_action") {
     const approvalType = clean(body?.approvalType);
@@ -676,6 +679,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
       detailLine("المكان الحالي", vehicleSummary?.location_name),
       detailLine("التسليم النهائي", result?.delivered ? "تم" : "لم يتم"),
       detailLine("ملاحظة", body?.note),
+      detailLine("بواسطة", user.fullName),
     ]);
   } else if (action === "move_vehicles") {
     const vehicleIds = values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : Array.isArray(body?.ids) ? body.ids : []);
@@ -683,6 +687,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
       detailCount("عدد السيارات", vehicleIds.length || result?.movedCount || result?.updatedCount),
       detailLine("المكان المستهدف", destinationSummary?.name),
       detailLine("الحالة الجديدة", clean(body?.newStatus)),
+      detailLine("بواسطة", user.fullName),
     ]);
   } else if (action === "create_vehicle" || action === "update_vehicle" || action === "archive_vehicle") {
     bodyText = joinDetails([
@@ -690,6 +695,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
       detailLine("المكان الحالي", vehicleSummary?.location_name),
       detailLine("الحالة", vehicleSummary?.status_code),
       detailLine("الأرشفة", action === "archive_vehicle" ? (vehicleSummary?.archived_at ? "مؤرشفة" : "غير مؤرشفة") : ""),
+      detailLine("بواسطة", user.fullName),
     ]);
   } else if (action === "import_vehicles") {
     bodyText = joinDetails([
@@ -699,6 +705,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
       detailCount("المحدث", result?.report?.updated),
       detailCount("المتجاوز", result?.report?.skipped),
       detailCount("الفاشل", result?.report?.failed),
+      detailLine("بواسطة", user.fullName),
     ]);
   }
 
@@ -706,7 +713,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
     systemCode: "operations",
     eventType: item.event,
     title,
-    body: bodyText || (clean(result?.message) || item.title),
+    body: bodyText || `${clean(result?.message) || item.title} بواسطة ${user.fullName}`,
     entityType: item.type,
     entityId: id,
     actionUrl: item.url,
@@ -751,13 +758,14 @@ export async function emitTrackingNotification(user: PermissionUser, action: str
     detailLine("حالة الأرشفة", action === "archive_order" ? trackingArchiveStateLabel(Boolean(body?.archived || result?.archived || result?.order?.is_archived)) : ""),
     detailLine(action === "revert_stage" ? "سبب التراجع" : "ملاحظة", clean(body?.note)),
     detailLine("الفرع", order?.branch),
+    detailLine("بواسطة", user.fullName),
   ]);
 
   await createNotification({
     systemCode: "tracking",
     eventType: item[0],
     title,
-    body: bodyText || (clean(result?.message) || item[1]),
+    body: bodyText || `${clean(result?.message) || item[1]} بواسطة ${user.fullName}`,
     entityType: "tracking_order",
     entityId: orderId,
     actionUrl: body?.archived ? "/tracking/archive" : "/tracking",
@@ -780,6 +788,7 @@ export async function emitCrmLeadNotification(user: PermissionUser, event: "crea
     detailLine("القسم", lead?.department_label || lead?.department_code),
     detailLine("المندوب", lead?.assigned_to_name || lead?.assigned_user_name),
     detailLine("الكول سنتر", lead?.call_center_assigned_to_name || lead?.call_center_name),
+    detailLine("بواسطة", user.fullName),
   ]);
   const eventVersion = event === "created" ? lead?.created_at : lead?.updated_at || Date.now();
   await createNotification({
@@ -820,7 +829,7 @@ export async function emitInboundMessageNotification(input: { eventKey: string; 
     entityId: clean(conversation.id),
     actionUrl: "/crm/inbox",
     severity: "info",
-    actorName: `العميل: ${customerName}`,
+    actorName: customerName,
     audienceUserIds: [lead.assigned_to, lead.call_center_assigned_to, conversation.assigned_to, conversation.call_center_assigned_to],
     branchCodes: [lead.branch_code, conversation.branch_code],
     departmentCodes: [lead.department_code, conversation.department_code],

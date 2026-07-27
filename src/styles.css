@@ -4884,12 +4884,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .notification-row[data-severity="danger"] .notification-row-icon { background: #fff0f1; color: #bd2933; }
 .notification-row-copy { min-width: 0; display: grid; gap: 3px; }
 .notification-row-copy strong { font-size: 12px; line-height: 1.45; }
-.notification-row-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; overflow: hidden; display: block; max-height: 4.7em; }
+.notification-row-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; display: block; }
 .notification-row-copy time { color: var(--muted); font-size: 9px; }
-.notification-actor { min-width: 0; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; line-height: 1.4; }
-.notification-actor>svg { flex: 0 0 auto; color: var(--brand-2); }
-.notification-actor>span { flex: 0 0 auto; }
-.notification-actor>b { min-width: 0; color: var(--ink); font-size: 10px; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .notification-row>i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-2); }
 .notification-popover>footer { min-height: 45px; border-top: 1px solid var(--line); display: grid; place-items: center; background: #fcfaf9; }
 .notification-empty { min-height: 130px; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 12px; }
@@ -4922,7 +4918,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .notifications-center-copy>span b { color: var(--brand-2); font-size: 9px; }
 .notifications-center-copy>span i { padding: 2px 6px; border-radius: 999px; background: var(--peach); color: var(--brand); font-size: 8px; font-style: normal; }
 .notifications-center-copy>strong { font-size: 13px; }
-.notifications-center-copy>small { color: var(--muted); font-size: 11px; line-height: 1.6; white-space: pre-line; }
+.notifications-center-copy>small { color: var(--muted); font-size: 11px; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
 .notifications-center-row>time { color: var(--muted); font-size: 10px; text-align: left; direction: rtl; }
 @media(max-width:900px){.notification-popover{right:12px;bottom:auto;top:66px;width:min(390px,calc(100vw - 24px));max-height:calc(100vh - 82px)}.notification-toast-stack{right:12px;bottom:12px;width:min(350px,calc(100vw - 24px))}.notifications-center-row{grid-template-columns:40px minmax(0,1fr)}.notifications-center-row>time{grid-column:2;text-align:right}.notifications-center-head{padding-top:52px}.notifications-center-toolbar{align-items:flex-start}.notifications-center-actions{width:100%;justify-content:space-between}}
 
@@ -4940,7 +4936,9 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .notification-toast-card[data-severity="danger"] .notification-toast-icon { color: #bd2933; background: #fff0f1; }
 .notification-toast-copy { min-width: 0; display: grid; gap: 4px; }
 .notification-toast-copy strong { font-size: 13px; line-height: 1.45; }
-.notification-toast-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; display: block; overflow: hidden; max-height: 4.7em; }
+.notification-toast-copy small { color: #766a65; font-size: 10px; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; display: block; }
+.notification-responsible { width: fit-content; max-width: 100%; padding: 4px 8px; border: 1px solid #eadbd4; border-radius: 8px; background: #fff8f4; color: #674a42; display: inline-flex; align-items: center; gap: 4px; font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+.notification-responsible b { color: var(--brand-2); font-size: inherit; }
 .notification-toast-copy time { color: var(--muted); font-size: 9px; }
 .notification-toast-close { position: absolute; top: 9px; left: 9px; width: 27px; height: 27px; border: 0; border-radius: 8px; background: #faf5f2; display: grid; place-items: center; cursor: pointer; color: #6d5149; }
 .notification-toast-progress { position: absolute; right: 0; bottom: 0; height: 3px; width: 100%; background: var(--brand-2); transform-origin: right center; animation-name: notification-toast-progress; animation-timing-function: linear; animation-fill-mode: forwards; }
