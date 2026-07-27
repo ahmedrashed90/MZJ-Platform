@@ -1,3 +1,24 @@
+# بيان التسليم — فصل مندوب NEXT ERP ودعم عميل بدون جوال
+
+- المصدر المباشر: `MZJ-Platform-main (12).zip`.
+- التنفيذ داخل مسارات التكامل الأصلية فقط، بدون Patch جانبي أو Endpoint بديل أو Migration ترقيعية.
+- مندوب البيع يُستخرج من `Sales Team` ثم `Sales Person → Employee → user_id`، ولا يتم استخدام `owner` أو `modified_by` كمندوب بديل.
+- منفذ `on_submit` يُحفظ منفصلًا كـ«إداري العمليات» من `modified_by` ويظهر بجانب مندوب البيع في سجل الحركات.
+- طلب البيع لمعرض آخر ينشئ عميل CRM بحالة «تم البيع» حتى بدون رقم جوال، دون إنشاء رقم وهمي.
+- منع التكرار للعميل بدون جوال يعتمد على هوية العميل الثابتة `Sales Order.customer` داخل `crm.contact_identities`.
+- إضافة رقم جوال لاحقًا تحدّث نفس العميل، ولا تنشئ سجلًا جديدًا.
+- تم تحديث Webhookي `on_submit` و`on_cancel` داخل `integration-assets` بنفس فصل الهويات.
+- تم الحفاظ على تحويل السيارة والموافقات والتسليم النهائي والأرشفة وعدّ السيارات المباعة دون تغيير.
+- لا يوجد ملف SQL مطلوب.
+- جميع Scripts الفحص الثابتة: 39/39 ناجحة.
+- فحص تركيب TypeScript/TSX: 173/173 ناجح.
+- Render واختبار JSON للـWebhookين: ناجح.
+- Build الإنتاج الكامل غير منفذ لأن النسخة المرفوعة لا تحتوي على `node_modules`.
+
+راجع `docs/ERPNEXT-SALES-REP-OPTIONAL-PHONE-CLEAN-FLOW-AR.md` و`test-results/ERPNEXT-SALES-REP-OPTIONAL-PHONE-TEST-RESULTS.txt`.
+
+---
+
 # بيان التسليم — سجل الحركات والأرشيف وعدّ السيارات المباعة
 
 - المصدر المباشر: `MZJ-Platform-Tracking-Delivered-Archive-CLEAN-FULL.zip`.

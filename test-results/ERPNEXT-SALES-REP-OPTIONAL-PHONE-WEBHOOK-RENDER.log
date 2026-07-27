@@ -1,0 +1,2 @@
+PASS integration-assets/MZJ-ERPNext-Sales-Order-Webhook-JSON.txt
+PASS integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt

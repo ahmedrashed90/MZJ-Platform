@@ -10,7 +10,11 @@ expect("server/_operations-auto-archive.ts", "'tracking_delivery'", "tracking de
 expect("server/_operations-auto-archive.ts", "${vehicle.status_code||null},'delivered'", "delivered new status");
 expect("server/_operations-auto-archive.ts", "const finalStateNote = salesOrderNo ? `طلب البيع ${salesOrderNo}`", "clean archive sales-order note");
 expect("server/_erpnext-sales-order-normalizer.ts", "erpSubmittedBy", "ERP submitter normalization");
+expect("server/_erpnext-sales-order-normalizer.ts", "erpSubmittedByName", "ERP submitter display name normalization");
+expect("server/_erpnext-sales-order-sync.ts", "erpSubmitterName: normalized.erpSubmittedByName", "operations admin name movement metadata");
 expect("server/operations/index.ts", "as operations_admin_name", "operations administrator API field");
+expect("server/operations/index.ts", "operations_admin_email", "operations administrator explicit webhook identity");
+expect("server/operations/index.ts", "operations_admin_name", "operations administrator explicit webhook name");
 expect("src/operations/components/MovementHistoryTable.tsx", "إداري العمليات", "operations administrator movement column");
 expect("src/operations/stateNote.ts", "replace(/^مباع\\s+تحت\\s+التسليم", "legacy archive note cleanup");
 expect("server/crm/reports.ts", "erp_vehicle_sales_count", "vehicle-aware sold metric");

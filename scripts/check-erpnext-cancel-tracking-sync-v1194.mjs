@@ -27,7 +27,7 @@ expect("Public tracking shows cancellation instead of continuing the live flow",
 expect("Runtime schemas include cancellation columns", contains("server/_tracking-schema.ts", "cancellation_reason", "source_instance_key", "erp_created_at") && contains("server/_erpnext-integration-schema.ts", "crm_previous_state", "is_cancelled", "cancelled_at"));
 expect("Approval action constraint supports cancellation", contains("server/_operations-schema.ts", "position('cancelled'", "'reset','cancelled'"));
 expect("Migration exists", fs.existsSync("database/migrations/20260724_erpnext_cancel_tracking_sync_v1194.sql"));
-expect("Cancel webhook JSON exists", fs.existsSync("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt") && contains("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt", '"event": "sales_order.cancelled"', '"creation": "{{ doc.creation }}"'));
+expect("Cancel webhook JSON exists", fs.existsSync("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt") && contains("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt", '"event": "sales_order.cancelled"', '"creation": {{ (doc.creation or \'\') | tojson }}'));
 
 let failed = 0;
 for (const [label, passed] of checks) {

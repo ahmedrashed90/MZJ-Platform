@@ -19,6 +19,9 @@ export type ErpNextVehiclePayload = JsonRecord & {
   deliveryDate?: string;
   salesPerson?: string;
   erpUserId?: string;
+  erpCustomerId?: string;
+  erpSubmittedBy?: string;
+  erpSubmittedByName?: string;
   erpStatus?: string;
   erpEvent?: string;
   erpCreatedAt?: string;
@@ -41,7 +44,9 @@ export type NormalizedErpNextSalesOrder = {
   isCancellation: boolean;
   erpSalesPerson: string;
   erpUserId: string;
+  erpCustomerId: string;
   erpSubmittedBy: string;
+  erpSubmittedByName: string;
   erpBranch: string;
   accountingCustomerName: string;
   actualCustomerName: string;
@@ -210,21 +215,22 @@ function resolveSalesPerson(doc: JsonRecord, body: JsonRecord) {
   return salesTeam.map((row) => pickText(row, ["sales_person", "sales_person_name", "employee_name"])).find(Boolean) || "";
 }
 
-function resolveErpUserId(doc: JsonRecord, body: JsonRecord, items: JsonRecord[]) {
+function resolveErpUserId(doc: JsonRecord, body: JsonRecord) {
+  // This identity is always the sales representative. The user who submits the
+  // document is captured separately and must never become the CRM owner.
   const direct = pickText(doc, [
-    "sales_person_email", "sales_user_email", "erp_user_id", "next_erp_user_id", "custom_sales_person_email",
-    "custom_sales_user_email", "owner", "modified_by", "user", "user_id",
-  ]) || pickText(body, ["SalesPersonEmail", "salesPersonEmail", "erpUserId", "nextErpUserId", "owner"]);
+    "sales_rep_email", "sales_person_email", "sales_user_email", "erp_user_id", "next_erp_user_id",
+    "custom_sales_person_email", "custom_sales_user_email",
+  ]) || pickText(body, [
+    "SalesRepEmail", "salesRepEmail", "SalesPersonEmail", "salesPersonEmail", "erpUserId", "nextErpUserId",
+  ]);
   if (direct) return direct.toLowerCase();
 
   const salesTeam = asArray(pick(doc, ["sales_team", "salesTeam"]));
   const teamEmail = salesTeam
-    .map((row) => pickText(row, ["email", "user", "user_id", "sales_person_email", "employee_email"]))
+    .map((row) => pickText(row, ["sales_rep_email", "email", "user", "user_id", "sales_person_email", "employee_email"]))
     .find(Boolean);
-  if (teamEmail) return teamEmail.toLowerCase();
-
-  const itemOwner = items.map((item) => pickText(item, ["owner", "modified_by", "user", "user_id"])).find(Boolean);
-  return (itemOwner || "").toLowerCase();
+  return (teamEmail || "").toLowerCase();
 }
 
 function resolveAlternateCustomer(doc: JsonRecord, body: JsonRecord) {
@@ -305,6 +311,8 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const directRegistrationFee = numberValue(pick(doc, ["registration_fee", "custom_registration_fee", "RegistrationFee"]));
   const registrationFee = directRegistrationFee || feeItems.reduce((sum, item) => sum + itemAmount(item), 0);
 
+  const erpCustomerId = pickText(doc, ["customer_id", "customer_code", "customer", "party", "party_id", "CustomerId"])
+    || pickText(body, ["CustomerId", "customerId", "customer", "partyId"]);
   const accountingCustomerName = pickText(doc, ["customer_name", "customer", "party_name", "CustomerName"])
     || pickText(body, ["CustomerName", "customerName"]);
   const customerVat = pickText(doc, ["tax_id", "customer_vat", "vat_number", "tax_number", "CustomerVAT"])
@@ -322,9 +330,14 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     || pickText(body, ["OrderDate", "orderDate"]);
   const deliveryDate = pickText(doc, ["delivery_date", "expected_delivery_date", "DeliveryDate"])
     || pickText(body, ["DeliveryDate", "deliveryDate"]);
-  const erpUserId = resolveErpUserId(doc, body, vehicleItems);
-  const erpSubmittedBy = pickText(doc, ["modified_by", "modifiedBy", "submitted_by", "submittedBy", "owner"])
-    || pickText(body, ["modified_by", "modifiedBy", "submitted_by", "submittedBy", "owner"]);
+  const erpUserId = resolveErpUserId(doc, body);
+  const erpSubmittedBy = pickText(doc, [
+    "operations_admin_email", "operations_submitter_email", "modified_by", "modifiedBy", "submitted_by", "submittedBy", "owner",
+  ]) || pickText(body, [
+    "operations_admin_email", "operationsAdminEmail", "operations_submitter_email", "modified_by", "modifiedBy", "submitted_by", "submittedBy", "owner",
+  ]);
+  const erpSubmittedByName = pickText(doc, ["operations_admin_name", "operations_submitter_name"])
+    || pickText(body, ["operations_admin_name", "operationsAdminName", "operations_submitter_name"]);
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
@@ -384,6 +397,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
       actualCustomerName,
       actualCustomerPhone,
       erpUserId,
+      erpCustomerId,
+      erpSubmittedBy,
+      erpSubmittedByName,
       erpStatus,
       erpEvent,
       erpCreatedAt,
@@ -439,8 +455,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
 
   if (!isCancellation) {
     if (!actualCustomerName) warnings.push({ code: "CUSTOMER_NAME_MISSING", message: "اسم العميل الحقيقي غير موجود في طلب البيع" });
-    if (!actualCustomerPhoneNormalized) warnings.push({ code: "CUSTOMER_PHONE_MISSING", message: "رقم جوال العميل الحقيقي غير موجود أو غير صالح" });
-    if (!erpUserId) warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مستخدم NEXT ERP غير موجود في طلب البيع" });
+    if (!erpUserId) warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مندوب البيع في NEXT ERP غير موجود في طلب البيع" });
   }
 
   return {
@@ -452,7 +467,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     isCancellation,
     erpSalesPerson: salesPerson,
     erpUserId,
+    erpCustomerId,
     erpSubmittedBy,
+    erpSubmittedByName,
     erpBranch: branch,
     accountingCustomerName,
     actualCustomerName,
