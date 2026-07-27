@@ -52,6 +52,9 @@ check("Tracking creation and stages emit notifications", /emitTrackingNotificati
 check("Read and mark-all actions are implemented", /markNotifications/.test(endpoint) && /markAllRead/.test(bell) && /markAll/.test(center));
 check("No notification tab was added to any system layout", !/NotificationBell|NotificationsCenter|مركز الإشعارات/.test(layouts));
 check("Notification state is database-backed, not localStorage-backed", !/localStorage/.test(helper + endpoint + bell + center));
+check("Notification metadata uses a JSON-safe recursive type", /export type NotificationJsonValue/.test(helper) && !/metadata\?: Record<string, unknown>/.test(helper));
+check("Notification count queries read the first result row", /const countRow = countRows\[0\]/.test(helper) && /const unreadRow = unreadRows\[0\]/.test(helper));
+check("NEXT ERP notification uses normalized customer fields", /normalized\.actualCustomerName/.test(erp) && /normalized\.accountingCustomerName/.test(erp) && !/normalized\.customerName/.test(erp));
 
 console.log(`Internal notification regression checks: ${passed}/${passed + failed} passed.`);
 if (failed) process.exit(1);

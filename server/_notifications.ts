@@ -4,6 +4,14 @@ import { hasPermission, type PermissionUser } from "./_access-control.js";
 export type NotificationSystem = "crm" | "marketing" | "operations" | "tracking";
 export type NotificationSeverity = "info" | "success" | "warning" | "danger";
 
+export type NotificationJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | NotificationJsonValue[]
+  | { [key: string]: NotificationJsonValue };
+
 export type NotificationInput = {
   systemCode: NotificationSystem;
   eventType: string;
@@ -18,7 +26,7 @@ export type NotificationInput = {
   audienceUserIds?: Array<string | null | undefined>;
   branchCodes?: Array<string | null | undefined>;
   departmentCodes?: Array<string | null | undefined>;
-  metadata?: Record<string, unknown>;
+  metadata?: { [key: string]: NotificationJsonValue };
   dedupeKey?: string | null;
 };
 
@@ -172,7 +180,7 @@ export async function listNotifications(user: PermissionUser, options: { system?
   `;
 
   const unreadOnly = Boolean(options.unreadOnly);
-  const [countRow, unreadRow, rows] = await Promise.all([
+  const [countRows, unreadRows, rows] = await Promise.all([
     sql<{ total: number }[]>`
       select count(*)::int as total from core.notifications n
       left join core.notification_user_state s on s.notification_id=n.id and s.user_id=${user.id}::uuid
@@ -192,6 +200,8 @@ export async function listNotifications(user: PermissionUser, options: { system?
       order by n.created_at desc,n.id desc limit ${limit} offset ${offset}
     `,
   ]);
+  const countRow = countRows[0];
+  const unreadRow = unreadRows[0];
   return { ok: true, rows, total: Number(countRow?.total || 0), unread: Number(unreadRow?.unread || 0), system: system || "all" };
 }
 

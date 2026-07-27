@@ -1121,7 +1121,7 @@ export async function syncErpNextSalesOrder(input: {
           systemCode: "crm",
           eventType: "lead_created",
           title: "دخل عميل جديد إلى النظام",
-          body: `${createdLead.customer_name || normalized.customerName || "عميل"} من طلب NEXT ERP ${normalized.orderNo}`,
+          body: `${createdLead.customer_name || normalized.actualCustomerName || normalized.accountingCustomerName || "عميل"} من طلب NEXT ERP ${normalized.orderNo}`,
           entityType: "lead",
           entityId: crm.leadId,
           actionUrl: `/crm?lead=${encodeURIComponent(crm.leadId)}`,
