@@ -13,7 +13,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
   const [rules, users] = await Promise.all([
     sql<any[]>`
-      select r.id::text,r.name,r.department_code,r.branch_code,r.strategy,r.is_active,r.sort_order,
+      select r.id::text,r.name,r.department_code,r.branch_code,r.assignment_mode as strategy,r.is_active,r.sort_order,
         count(m.user_id)::integer as member_count,
         count(m.user_id) filter(where m.is_active=true)::integer as active_member_count
       from crm.assignment_rules r
