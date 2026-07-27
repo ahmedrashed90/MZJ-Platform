@@ -132,6 +132,7 @@ function leadCoreValues(lead: CrmLead, serviceKey: ServiceKey) {
     car_model: value(lead.car_model),
     color: value(lead.color),
     finance_type: value(lead.finance_type) || (serviceKey === "finance" ? "general" : ""),
+    sold_quantity: value(lead.sold_quantity || 1),
     notes: value(lead.notes),
   };
 }
@@ -360,7 +361,14 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   function setField(field: CrmCustomerField, next: string) {
     if (field.field_key === "status_label") {
-      const nextForm = { ...activeForm, values: { ...activeForm.values, status_label: next } };
+      const nextForm = {
+        ...activeForm,
+        values: {
+          ...activeForm.values,
+          status_label: next,
+          sold_quantity: next === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
+        },
+      };
       setForm(nextForm);
       applyStatusTemplate(nextForm);
       return;
@@ -416,6 +424,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         carModel: activeForm.values.car_model,
         color: activeForm.values.color,
         financeType: activeForm.values.finance_type,
+        soldQuantity: activeForm.values.status_label === "تم البيع" ? Math.max(1, Math.floor(Number(activeForm.values.sold_quantity || 1))) : undefined,
         newNote: noteDraft.trim(),
         customFields: activeForm.customFields,
       };
@@ -619,7 +628,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
           <section className="crm-drawer-details crm-customer-details-panel">
             <header className="crm-customer-details-title"><h3>بيانات العميل</h3><span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span></header>
-            <div className="crm-form-grid">{configuredFields.map(renderField)}</div>
+            <div className="crm-form-grid">
+              {configuredFields.map(renderField)}
+              {activeForm.values.status_label === "تم البيع" && (department === "cash" || department === "finance") ? (
+                <label className="crm-sold-quantity-field"><span>عدد المباع <b className="crm-required-mark"> *</b></span><input type="number" min="1" step="1" value={activeForm.values.sold_quantity || "1"} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_quantity: String(Math.max(1, Math.floor(Number(event.target.value || 1)))) } } : current)} /></label>
+              ) : null}
+            </div>
             {department === "finance" ? credit?.amount == null ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
             <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>

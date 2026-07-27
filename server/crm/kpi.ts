@@ -171,11 +171,38 @@ function calculate(detailsInput: KpiDetails, workDaysInput: number) {
   };
 }
 
+async function resolveKpiAccess(sql: ReturnType<typeof getSql>, user: any) {
+  const rows = await sql<{ section_code: string; configured_count: number; current_user_allowed: boolean }[]>`
+    select section_code,count(*)::int as configured_count,bool_or(user_id=${user.id}::uuid) as current_user_allowed
+    from crm.kpi_section_permissions p
+    join core.users allowed_user on allowed_user.id=p.user_id and allowed_user.is_active=true
+    where p.section_code in ('speed','efficiency')
+    group by p.section_code
+  `;
+  const manager = isCrmManager(user);
+  const speed = rows.find((row) => row.section_code === "speed");
+  const efficiency = rows.find((row) => row.section_code === "efficiency");
+  const canEditSpeed = Number(speed?.configured_count || 0) > 0 ? speed?.current_user_allowed === true : manager;
+  const canEditEfficiency = Number(efficiency?.configured_count || 0) > 0 ? efficiency?.current_user_allowed === true : manager;
+  const canEditBase = manager;
+  return {
+    canEditSpeed,
+    canEditEfficiency,
+    canEditBase,
+    canSave: canEditSpeed || canEditEfficiency || canEditBase,
+    speedConfigured: Number(speed?.configured_count || 0) > 0,
+    efficiencyConfigured: Number(efficiency?.configured_count || 0) > 0,
+  };
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
   const sql = getSql();
   const scope = userScope(user);
+  const permissions = await resolveKpiAccess(sql, user);
+  const evaluatorCanSeeAllAgents = permissions.canEditSpeed || permissions.canEditEfficiency;
+  const kpiScopeAll = scope.all || evaluatorCanSeeAllAgents;
 
   if (request.method === "GET") {
     const from = clean(request.query.from);
@@ -195,7 +222,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         coalesce(e.details->>'departmentCode', primary_department.code) as department_code,
         coalesce(e.details->>'departmentName', primary_department.name) as department_name,
         coalesce((
-          select sum(greatest(1,coalesce((
+          select sum(greatest(1,coalesce(l.sold_quantity,(
             select sum(greatest(
               coalesce((select count(*) from tracking.order_vehicles tov where tov.order_id=so.tracking_order_id),0),
               coalesce((
@@ -207,7 +234,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             ))
             from integrations.erpnext_sales_orders so
             where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
-          ),0)))::int
+          ),1)))::int
           from crm.leads l
           where l.assigned_to=u.id
             and l.status_label='تم البيع'
@@ -233,7 +260,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and (${agent || null}::uuid is null or e.user_id=${agent || null}::uuid)
         and (${branch || null}::text is null or coalesce(e.details->>'branchCode',primary_branch.code)=${branch || null})
         and (
-          ${scope.all}::boolean
+          ${kpiScopeAll}::boolean
           or exists (
             select 1
             from core.user_departments sud
@@ -242,7 +269,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           )
         )
         and (
-          ${scope.all}::boolean
+          ${kpiScopeAll}::boolean
           or ${scope.branchCodes.length === 0}::boolean
           or exists (
             select 1 from core.user_branches sub join core.branches sb on sb.id=sub.branch_id
@@ -270,17 +297,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.user_branches ub on ub.user_id=u.id
       left join core.branches b on b.id=ub.branch_id
       where u.is_active=true
-        and (${scope.all}::boolean or d.code=any(${scope.departmentCodes}::text[]))
-        and (${scope.all}::boolean or ${scope.branchCodes.length === 0}::boolean or b.code=any(${scope.branchCodes}::text[]))
+        and (${kpiScopeAll}::boolean or d.code=any(${scope.departmentCodes}::text[]))
+        and (${kpiScopeAll}::boolean or ${scope.branchCodes.length === 0}::boolean or b.code=any(${scope.branchCodes}::text[]))
       group by u.id
       order by min(b.sort_order),u.full_name
     `;
 
-    return response.status(200).json({ ok: true, rows, agents });
+    return response.status(200).json({ ok: true, rows, agents, permissions });
   }
 
   if (request.method === "POST" || request.method === "PUT") {
-    if (!isCrmManager(user)) return response.status(403).json({ ok: false, error: "إضافة التقييم متاحة للإدارة فقط" });
+    if (!permissions.canSave) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لتعديل أي جزء من تقييم KPI" });
     const body = parseBody(request);
     const userId = clean(body.userId);
     const periodStart = clean(body.periodStart);
@@ -298,25 +325,39 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join core.user_branches ub on ub.user_id=u.id
       left join core.branches b on b.id=ub.branch_id
       where u.id=${userId}::uuid and u.is_active=true
-        and (${scope.all}::boolean or d.code=any(${scope.departmentCodes}::text[]))
-        and (${scope.all}::boolean or ${scope.branchCodes.length === 0}::boolean or b.code=any(${scope.branchCodes}::text[]))
+        and (${kpiScopeAll}::boolean or d.code=any(${scope.departmentCodes}::text[]))
+        and (${kpiScopeAll}::boolean or ${scope.branchCodes.length === 0}::boolean or b.code=any(${scope.branchCodes}::text[]))
       group by u.id
     `;
     if (!agent) return response.status(404).json({ ok: false, error: "المندوب غير موجود أو خارج صلاحيتك" });
 
-    const details = body.details && typeof body.details === "object" ? body.details as KpiDetails : {};
-    details.branchCode = clean(body.branchCode || details.branchCode || agent.branch_code);
-    details.branchName = clean(body.branchName || details.branchName || agent.branch_name);
-    details.departmentCode = clean(body.departmentCode || details.departmentCode || agent.department_code);
-    details.departmentName = clean(body.departmentName || details.departmentName || agent.department_name);
+    const [existing] = await sql<any[]>`
+      select *,id::text,user_id::text
+      from crm.kpi_evaluations
+      where user_id=${userId}::uuid and period_start=${periodStart}::date and period_end=${periodEnd}::date
+    `;
+    const incomingDetails = body.details && typeof body.details === "object" ? body.details as KpiDetails : {};
+    const existingDetails = existing?.details && typeof existing.details === "object" ? existing.details as KpiDetails : {};
+    const details: KpiDetails = {
+      ...existingDetails,
+      workDays: businessDays(periodStart, periodEnd),
+      branchCode: clean(body.branchCode || incomingDetails.branchCode || existingDetails.branchCode || agent.branch_code),
+      branchName: clean(body.branchName || incomingDetails.branchName || existingDetails.branchName || agent.branch_name),
+      departmentCode: clean(body.departmentCode || incomingDetails.departmentCode || existingDetails.departmentCode || agent.department_code),
+      departmentName: clean(body.departmentName || incomingDetails.departmentName || existingDetails.departmentName || agent.department_name),
+      speed: permissions.canEditSpeed ? (incomingDetails.speed || existingDetails.speed || {}) : (existingDetails.speed || {}),
+      efficiency: permissions.canEditEfficiency ? (incomingDetails.efficiency || existingDetails.efficiency || {}) : (existingDetails.efficiency || {}),
+      dailyPerformance: permissions.canEditBase ? (incomingDetails.dailyPerformance || {}) : (existingDetails.dailyPerformance || {}),
+    };
     const calculated = calculate(details, businessDays(periodStart, periodEnd));
+    const notes = permissions.canEditBase ? (clean(body.notes) || null) : (existing?.notes || null);
 
     const [row] = await sql<any[]>`
       insert into crm.kpi_evaluations(user_id,period_start,period_end,total_sales,speed_score,efficiency_score,discipline_score,value_score,total_score,rating,details,notes,evaluated_by)
       values (
         ${userId}::uuid,${periodStart}::date,${periodEnd}::date,${Math.round(calculated.salesCount)},
         ${calculated.speedRate},${calculated.efficiencyRate},${calculated.disciplineRate},${calculated.valueRate},${calculated.finalRate},${calculated.rating},
-        ${sql.json(calculated.details as any)},${clean(body.notes) || null},${user.id}::uuid
+        ${sql.json(calculated.details as any)},${notes},${user.id}::uuid
       )
       on conflict (user_id,period_start,period_end) do update set
         total_sales=excluded.total_sales,

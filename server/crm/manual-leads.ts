@@ -169,7 +169,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const branchCode = clean(row.branch_code) || branchForDepartment(serviceKey);
       const paymentType = clean(row.payment_type) || paymentTypeForService(serviceKey);
       const assignedTo = clean(row.requested_assigned_to) || clean(row.requested_by);
-      const callCenterTo = clean(row.requested_call_center_to) || null;
+      const callCenterTo = null;
       const sourceCode = clean(body.sourceCode || row.source_code || "branch");
       const sourceName = await resolveSourceName(sourceCode);
       const [duplicate] = await sql<any[]>`
@@ -181,14 +181,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       await sql.begin(async (tx) => {
         await tx`
-          update crm.manual_lead_requests set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},duplicate_lead_id=${duplicate?.id || null}::uuid,approval_status=${duplicate ? "pending" : "approved"},updated_at=now()
+          update crm.manual_lead_requests set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},requested_call_center_to=null,car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},duplicate_lead_id=${duplicate?.id || null}::uuid,approval_status=${duplicate ? "pending" : "approved"},updated_at=now()
           where id=${id}::uuid
         `;
         if (row.created_lead_id) {
           const customerFields = await getCustomerFieldDefinitions();
           const completionPercent = calculateLeadCompletion({ customerName, phone, sourceCode, statusLabel: "عميل جديد", serviceKey, location: clean(body.location), carName: clean(body.carName), carCategory: clean(body.carCategory), carModel: clean(body.carModel), color: clean(body.color), financeType: clean(body.financeType) }, customerFields);
           await tx`
-            update crm.leads set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},source_name=${sourceName},car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},completion_percent=${completionPercent},updated_by=${user.id}::uuid,updated_at=now()
+            update crm.leads set customer_name=${customerName},phone=${phone},phone_normalized=${phoneNormalized},source_code=${sourceCode},source_name=${sourceName},car_name=${clean(body.carName) || null},car_category=${clean(body.carCategory) || null},car_model=${clean(body.carModel) || null},color=${clean(body.color) || null},finance_type=${clean(body.financeType) || null},location=${clean(body.location) || null},notes=${clean(body.notes) || null},call_center_assigned_to=null,call_center_name_snapshot=null,completion_percent=${completionPercent},updated_by=${user.id}::uuid,updated_at=now()
             where id=${row.created_lead_id}::uuid
           `;
         }
@@ -233,7 +233,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         source_history=coalesce(source_history,'[]'::jsonb) || ${sql.json([{ source: row.source_code, at: new Date().toISOString() }])}::jsonb,
         car_name=coalesce(nullif(${row.car_name},''),car_name),car_category=coalesce(nullif(${row.car_category},''),car_category),car_model=coalesce(nullif(${row.car_model},''),car_model),color=coalesce(nullif(${row.color},''),color),finance_type=coalesce(nullif(${row.finance_type},''),finance_type),location=coalesce(nullif(${row.location},''),location),
         registered_at=coalesce(${row.registered_at}::timestamptz,registered_at),notes=concat_ws(E'\n',notes,${row.notes || null}),
-        assigned_to=coalesce(${clean(body.assignedTo) || row.requested_assigned_to}::uuid,assigned_to),call_center_assigned_to=coalesce(${clean(body.callCenterAssignedTo) || row.requested_call_center_to}::uuid,call_center_assigned_to),
+        assigned_to=coalesce(${clean(body.assignedTo) || row.requested_assigned_to}::uuid,assigned_to),
         updated_by=${user.id}::uuid,updated_at=now()
       where id=${targetId}::uuid returning id::text
     `;

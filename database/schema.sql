@@ -135,6 +135,7 @@ create table if not exists crm.leads (
   dashboard_message_read_at timestamptz,
   assigned_to uuid references core.users(id),
   call_center_assigned_to uuid references core.users(id),
+  sold_quantity integer check (sold_quantity is null or sold_quantity >= 1),
   notes text,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),

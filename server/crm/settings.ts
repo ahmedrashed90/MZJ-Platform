@@ -17,7 +17,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   if (request.method === "GET") {
-    const [statuses, templates, mappings, quality, automaticTemplateSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers] = await Promise.all([
+    const [statuses, templates, mappings, quality, automaticTemplateSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers, kpiSectionPermissionRows] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
       sql`
@@ -87,6 +87,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
         group by u.id
         order by u.full_name
       `,
+      sql`
+        select p.section_code,p.user_id::text,u.full_name,u.is_active
+        from crm.kpi_section_permissions p
+        join core.users u on u.id=p.user_id
+        where u.is_active=true
+        order by p.section_code,u.full_name
+      `,
     ]);
 
     const rules = (assignmentRules as any[]).map((rule) => {
@@ -110,6 +117,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       assignmentRules: rules,
       assignmentLogs,
       assignmentUsers,
+      kpiSectionPermissions: {
+        speedUserIds: (kpiSectionPermissionRows as any[]).filter((row) => row.section_code === "speed").map((row) => row.user_id),
+        efficiencyUserIds: (kpiSectionPermissionRows as any[]).filter((row) => row.section_code === "efficiency").map((row) => row.user_id),
+        rows: kpiSectionPermissionRows,
+      },
     });
   }
 
@@ -292,6 +304,37 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     await audit(user, "crm_automatic_template_settings_saved", "crm_runtime_settings", "default", row);
     return response.status(200).json({ ok: true, row, message: "تم حفظ إعدادات الإرسال التلقائي" });
+  }
+
+  if (section === "kpi_section_permissions") {
+    const speedUserIds = [...new Set(stringList(body.speedUserIds))];
+    const efficiencyUserIds = [...new Set(stringList(body.efficiencyUserIds))];
+    const allUserIds = [...new Set([...speedUserIds, ...efficiencyUserIds])];
+    if (allUserIds.length) {
+      const activeUsers = await sql<{ id: string }[]>`select id::text from core.users where is_active=true and id=any(${allUserIds}::uuid[])`;
+      const activeIds = new Set(activeUsers.map((row) => row.id));
+      const invalidIds = allUserIds.filter((id) => !activeIds.has(id));
+      if (invalidIds.length) return response.status(400).json({ ok: false, error: "يوجد مستخدم غير نشط أو غير موجود ضمن الاختيارات" });
+    }
+    const before = await sql<any[]>`select section_code,user_id::text from crm.kpi_section_permissions order by section_code,user_id`;
+    await sql.begin(async (tx) => {
+      await tx`delete from crm.kpi_section_permissions where section_code in ('speed','efficiency')`;
+      if (speedUserIds.length) {
+        await tx`
+          insert into crm.kpi_section_permissions(section_code,user_id,created_by,updated_at)
+          select 'speed',value::uuid,${user.id}::uuid,now() from unnest(${speedUserIds}::text[]) value
+        `;
+      }
+      if (efficiencyUserIds.length) {
+        await tx`
+          insert into crm.kpi_section_permissions(section_code,user_id,created_by,updated_at)
+          select 'efficiency',value::uuid,${user.id}::uuid,now() from unnest(${efficiencyUserIds}::text[]) value
+        `;
+      }
+    });
+    const after = { speedUserIds, efficiencyUserIds };
+    await audit(user, "crm_kpi_section_permissions_saved", "kpi_section_permissions", "default", after, before);
+    return response.status(200).json({ ok: true, ...after, message: "تم حفظ مسؤولي السرعة والكفاءة" });
   }
 
   if (section === "quality") {

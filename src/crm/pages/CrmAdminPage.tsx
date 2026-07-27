@@ -17,6 +17,7 @@ import { crmFetch, formatDate } from "../api";
 import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
 import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
+import { CrmKpiAccessSettings } from "../components/CrmKpiAccessSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
 import { useAuth } from "../../auth/AuthContext";
@@ -32,6 +33,7 @@ const tabs = [
   { key: "mappings", label: "ربط الحالات بالقوالب" },
   { key: "automatic_templates", label: "الإرسال التلقائي" },
   { key: "quality", label: "مؤشرات التقارير" },
+  { key: "kpi_access", label: "السرعة والكفاءة" },
   { key: "data_review", label: "مراجعة أخطاء البيانات" },
   { key: "endpoints", label: "ربط المنصات والـ Workers" },
   { key: "distribution", label: "توزيع العملاء" },
@@ -138,7 +140,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const canManageAutomation = hasPermission(user, "crm.automation.manage");
   const visibleTabs = tabs.filter((item) => item.key !== "data_review" || canViewDataReview);
   const [tab, setTab] = useState<Tab>("automation");
-  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [] });
+  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [], kpiSectionPermissions: { speedUserIds: [], efficiencyUserIds: [] } });
   const [statusForm, setStatusForm] = useState(blankStatus);
   const [customerFieldForm, setCustomerFieldForm] = useState(blankCustomerField);
   const [sourceForm, setSourceForm] = useState(blankSource);
@@ -376,6 +378,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       <fieldset className="settings-readonly-fieldset" disabled={readOnly && tab !== "data_review" && tab !== "entry_routing"}>
       {tab === "automation" ? <fieldset className="settings-readonly-fieldset" disabled={!canManageAutomation}><CrmAutomationSettings /></fieldset> : null}
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
+      {tab === "kpi_access" ? <CrmKpiAccessSettings users={data.assignmentUsers || []} value={data.kpiSectionPermissions} onSaved={load} /> : null}
 
       {tab === "statuses" ? (
         <AdminStack

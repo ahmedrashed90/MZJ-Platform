@@ -4986,3 +4986,28 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .notification-popover { right: 12px; bottom: auto; top: 66px; width: min(390px,calc(100vw - 24px)); max-height: calc(100vh - 82px); }
   .notification-toast-stack { right: 12px; bottom: 12px; width: min(350px,calc(100vw - 24px)); }
 }
+
+
+/* CRM KPI permissions and sold quantity */
+.crm-kpi-access-settings { display: grid; gap: 16px; }
+.crm-kpi-access-intro { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.crm-kpi-access-intro > div { display: flex; align-items: flex-start; gap: 12px; }
+.crm-kpi-access-intro h2, .crm-kpi-access-card h3 { margin: 0; }
+.crm-kpi-access-intro p, .crm-kpi-access-card p { margin: 5px 0 0; color: var(--muted); }
+.crm-kpi-access-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.crm-kpi-access-card { min-width: 0; }
+.crm-kpi-access-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.crm-kpi-access-card > header > div { display: flex; align-items: flex-start; gap: 10px; }
+.crm-kpi-access-card > header > b { min-width: 34px; height: 34px; border-radius: 999px; display: inline-grid; place-items: center; background: var(--surface-soft); border: 1px solid var(--line); }
+.crm-kpi-access-users { display: grid; gap: 8px; max-height: 430px; overflow: auto; padding-inline-end: 4px; }
+.crm-kpi-access-users > label { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; background: var(--surface); }
+.crm-kpi-access-users > label.selected { border-color: var(--brand-2); background: var(--surface-soft); }
+.crm-kpi-access-users > label span { display: grid; gap: 3px; min-width: 0; }
+.crm-kpi-access-users > label small { color: var(--muted); white-space: normal; }
+.kpi-permission-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.kpi-permission-fieldset:disabled { opacity: .78; }
+.crm-sold-quantity-field input { font-weight: 700; }
+@media (max-width: 900px) {
+  .crm-kpi-access-grid { grid-template-columns: 1fr; }
+  .crm-kpi-access-intro { align-items: stretch; flex-direction: column; }
+}

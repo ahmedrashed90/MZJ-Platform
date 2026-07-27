@@ -87,7 +87,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     const detailRows = await sql<any[]>`
       select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,l.department_code,l.branch_code,
-        l.status_label,l.car_name,l.notes,l.status_note,l.registered_at,l.created_at,l.updated_at,l.assigned_to::text,l.call_center_assigned_to::text,
+        l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.registered_at,l.created_at,l.updated_at,l.assigned_to::text,l.call_center_assigned_to::text,
         sales.full_name as assigned_name,cc.full_name as call_center_name,b.name as branch_name,src.name as catalog_source_name,
         coalesce(src.report_group,'other') as source_report_group
       from crm.leads l
@@ -133,7 +133,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const leads = await sql<any[]>`
     select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,l.department_code,l.branch_code,
-      l.status_label,l.car_name,l.notes,l.status_note,l.registered_at,l.created_at,l.updated_at,l.assigned_to::text,l.call_center_assigned_to::text,
+      l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.registered_at,l.created_at,l.updated_at,l.assigned_to::text,l.call_center_assigned_to::text,
+      exists (
+        select 1
+        from core.user_departments aud
+        join core.departments ad on ad.id=aud.department_id
+        where aud.user_id=l.assigned_to and ad.code='call_center'
+      ) as assigned_is_call_center,
       sales.full_name as assigned_name,cc.full_name as call_center_name,b.name as branch_name,src.name as catalog_source_name,
       coalesce(src.report_group,'other') as source_report_group,
       coalesce((
@@ -195,8 +201,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const makeMetrics = (rows: any[]) => {
     const count = (set: Set<string>) => rows.reduce((total, lead) => total + (set.has(norm(lead.status_label)) ? 1 : 0), 0);
     const soldCount = rows.reduce((total, lead) => {
-      if (!salesNum.has(norm(lead.status_label))) return total;
-      return total + Math.max(1, Number(lead.erp_vehicle_sales_count || 0));
+      if (!salesNum.has(norm(lead.status_label)) || lead.assigned_is_call_center === true) return total;
+      const manualQuantity = Number(lead.sold_quantity);
+      const erpQuantity = Number(lead.erp_vehicle_sales_count);
+      const quantity = Number.isFinite(manualQuantity) && manualQuantity >= 1
+        ? manualQuantity
+        : Number.isFinite(erpQuantity) && erpQuantity >= 1 ? erpQuantity : 1;
+      return total + Math.max(1, Math.floor(quantity));
     }, 0);
     const marketingDen = quality.marketing_denominator_mode === "statuses" ? count(marketingDenStatuses) : rows.length;
     const salesDen = quality.sales_denominator_mode === "all" ? rows.length : count(salesDenStatuses);
@@ -228,7 +239,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const sourceRows = group(leads, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name));
   const sourceGroup = (groupName: string) => group(leads.filter((row) => row.source_report_group === groupName), "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name));
-  const salesRows = leads.filter((row) => row.department_code !== "customer_service");
+  const salesRows = leads.filter((row) => row.department_code !== "customer_service" && row.assigned_is_call_center !== true);
   const departments = group(salesRows, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`);
   const agents = group(salesRows, "agent", (row) => row.assigned_to || "__none__", (row) => row.assigned_name || "غير موزع");
   const serviceRows = leads.filter((row) => row.department_code === "customer_service");

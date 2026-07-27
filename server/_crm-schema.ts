@@ -43,6 +43,18 @@ alter table crm.leads add column if not exists assignment_mode text;
 alter table crm.leads add column if not exists last_contact_at timestamptz;
 alter table crm.leads add column if not exists responsible_name_snapshot text;
 alter table crm.leads add column if not exists call_center_name_snapshot text;
+alter table crm.leads add column if not exists sold_quantity integer;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='crm_leads_sold_quantity_positive'
+      and conrelid='crm.leads'::regclass
+  ) then
+    alter table crm.leads add constraint crm_leads_sold_quantity_positive
+      check (sold_quantity is null or sold_quantity >= 1);
+  end if;
+end $$;
 
 alter table crm.conversations add column if not exists service_key text;
 alter table crm.conversations add column if not exists department_code text;
@@ -209,6 +221,16 @@ create table if not exists integrations.outbound_jobs (
   processed_at timestamptz
 );
 create index if not exists integrations_outbound_jobs_status_idx on integrations.outbound_jobs(status, created_at);
+
+create table if not exists crm.kpi_section_permissions (
+  section_code text not null check (section_code in ('speed','efficiency')),
+  user_id uuid not null references core.users(id) on delete cascade,
+  created_by uuid references core.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (section_code,user_id)
+);
+create index if not exists crm_kpi_section_permissions_user_idx on crm.kpi_section_permissions(user_id,section_code);
 
 create table if not exists crm.kpi_evaluations (
   id uuid primary key default gen_random_uuid(),

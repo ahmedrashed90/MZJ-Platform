@@ -6,6 +6,13 @@ import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOw
 import { emitCrmLeadNotification } from "../_notifications.js";
 
 
+function soldQuantity(value: unknown) {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(1, Math.floor(parsed));
+}
+
 function riyadhNoteTimestamp(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Riyadh",
@@ -58,6 +65,7 @@ function leadPayload(body: Record<string, any>) {
     statusNote: clean(body.statusNote ?? body.status_note),
     assignedTo: clean(body.assignedTo ?? body.assigned_to) || null,
     callCenterAssignedTo: clean(body.callCenterAssignedTo ?? body.call_center_assigned_to) || null,
+    soldQuantity: soldQuantity(body.soldQuantity ?? body.sold_quantity),
     extraData: body.customFields ?? body.extraData ?? body.extra_data ?? {},
   };
 }
@@ -180,14 +188,14 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
       car_name, car_category, location, age, salary, obligation, salary_bank, car_model, car_type, color,
       finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
       assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
-      responsible_name_snapshot, call_center_name_snapshot, completion_percent, credit_limit, credit_qualified
+      responsible_name_snapshot, call_center_name_snapshot, sold_quantity, completion_percent, credit_limit, credit_qualified
     ) values (
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
       ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
       ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
-      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
+      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
     ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
   `;
   await sql`
@@ -293,6 +301,12 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     }
   }
 
+  if (input.statusLabel === "تم البيع") {
+    input.soldQuantity = Math.max(1, Math.floor(Number(input.soldQuantity || before.sold_quantity || 1)));
+  } else if (input.soldQuantity == null && before.sold_quantity != null) {
+    input.soldQuantity = Math.max(1, Math.floor(Number(before.sold_quantity)));
+  }
+
   const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
   const statusChanged = clean(before.status_label) !== input.statusLabel;
@@ -333,6 +347,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       call_center_assigned_to=${callCenterAssignedTo}::uuid,
       responsible_name_snapshot=${assignedName || null},
       call_center_name_snapshot=${callCenterName || null},
+      sold_quantity=${input.soldQuantity},
       updated_by=${user.id}::uuid,
       updated_at=now()
     where id=${id}::uuid
