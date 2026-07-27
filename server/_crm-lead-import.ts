@@ -264,7 +264,22 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
   }
 
   let createdLead = false;
-  if (!lead) {
+  const requestService = first(request?.service_key, request?.department_code).toLowerCase();
+  const leadService = first(lead?.service_key, lead?.department_code).toLowerCase();
+  const requestNeedsFinanceDistribution = Boolean(
+    request &&
+    ["finance", "finance_sales"].includes(requestService) &&
+    (!request.assigned_to || !request.call_center_assigned_to),
+  );
+  const leadNeedsFinanceDistribution = Boolean(
+    lead &&
+    !request &&
+    ["finance", "finance_sales"].includes(leadService) &&
+    !lead.assigned_to,
+  );
+  const shouldClassifyForDistribution = !lead || requestNeedsFinanceDistribution || leadNeedsFinanceDistribution;
+
+  if (shouldClassifyForDistribution) {
     const classified = await classifyConversationService({
       conversationId: conversation.id,
       serviceKey: "finance",
@@ -274,7 +289,7 @@ export async function processLeadImportEvent(routeSource: string, eventId: strin
       skipAutomaticTemplate: true,
       requestedBranchCode: "online",
     });
-    createdLead = classified.reused !== true;
+    createdLead = !lead && classified.reused !== true;
     request = classified.request;
     [lead] = await sql<any[]>`
       select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
