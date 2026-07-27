@@ -1,0 +1,182 @@
+import { getSql } from "./_db.js";
+import type { DashboardData } from "../src/types.js";
+import type { SessionUser } from "./_auth.js";
+import { canAccessSystem } from "../shared/system-access.js";
+import { getSystemAccess } from "./_access-control.js";
+
+const locationNames = [
+  ["warehouse", "المستودع"],
+  ["agency", "الوكالة"],
+  ["hall", "الصالة"],
+  ["qadisiyah", "القادسية"],
+  ["multaqa", "الملتقى"],
+] as const;
+
+function emptyData(): DashboardData {
+  return {
+    connected: false,
+    generatedAt: new Date().toISOString(),
+    sectionErrors: {},
+    crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
+    marketing: { campaigns: null, scheduled: null, delayed: null },
+    tracking: { requests: null, inProgress: null, completed: null },
+    operations: {
+      inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, underDelivery: null, delivered: null, hasNotes: null },
+      locations: locationNames.map(([key, name]) => ({ key, name, actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null })),
+      approvals: { total: null, missingFinancial: null, missingAdministrative: null, completed: null },
+      shortages: { total: null, multaqa: null, hall: null, qadisiyah: null },
+      transfers: { total: null, transferTotal: null, photographyTotal: null, requestReceived: null, vehicleReceived: null, vehicleSent: null, completed: null },
+      salesTracking: { total: null, notStarted: null, inProgress: null, completed: null },
+    },
+  };
+}
+
+function asNumber(value: unknown): number { return Number(value ?? 0); }
+function errorText(error: unknown) { return error instanceof Error ? error.message : "تعذر تحميل القسم"; }
+
+export async function getDashboardData(user: SessionUser): Promise<DashboardData> {
+  const data = emptyData();
+  let sql: ReturnType<typeof getSql>;
+  try {
+    sql = getSql();
+    await sql`select 1`;
+    data.connected = true;
+  } catch (error) {
+    console.error("Dashboard database health check failed", error);
+    return data;
+  }
+
+  if (canAccessSystem(user, "crm")) {
+  try {
+    const crmAccess = getSystemAccess(user, "crm");
+    const crmAll = crmAccess.dataScope === "all";
+    const crmAssigned = ["self","assigned","created_by_me","workflow_assigned"].includes(crmAccess.dataScope);
+    const crmBranches = crmAccess.branchCodes.length ? crmAccess.branchCodes : ["__none__"];
+    const crmDepartments = crmAccess.departmentCodes.length ? crmAccess.departmentCodes : ["__none__"];
+    const [[row], recent, series] = await Promise.all([
+      sql<any[]>`select
+        (select count(*) from crm.leads where is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as total_customers,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)})) where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed') as open_conversations,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)})) where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,''))='cash_sales') as open_cash_conversations,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)})) where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,'')) in ('finance_sales','call_center')) as open_finance_conversations,
+        (select count(*) from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)})) where c.status='open' and c.closed_at is null and coalesce(c.classification_state,'')<>'closed' and coalesce(nullif(l.department_code,''),nullif(c.department_code,''))='customer_service') as open_service_conversations,
+        (select count(*) from crm.leads where status_label='لم يتم الرد' and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as no_answer_customers,
+        (select count(*) from crm.leads where status_label='تم البيع' and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as sold,
+        (select count(*) from crm.leads where department_code='cash_sales' and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as cash_sales,
+        (select count(*) from crm.leads where department_code in ('finance_sales','call_center') and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as finance_sales,
+        (select count(*) from crm.leads where department_code='customer_service' and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as customer_service,
+        (select count(*) from crm.leads where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date=(now() at time zone 'Asia/Riyadh')::date and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as new_today,
+        (select count(*) from crm.leads where (coalesce(registered_at,created_at) at time zone 'Asia/Riyadh')::date>=date_trunc('week',now() at time zone 'Asia/Riyadh')::date and is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (assigned_to=${user.id}::uuid or call_center_assigned_to=${user.id}::uuid or created_by=${user.id}::uuid)) or (branch_code in ${sql(crmBranches)} and department_code in ${sql(crmDepartments)}))) as new_this_week`,
+      sql<any[]>`select c.id::text,coalesce(c.customer_name,l.customer_name,'عميل') as customer_name,coalesce(c.preview_text,'') as preview_text,c.last_message_at,coalesce(c.unread_count,0) as unread_count,coalesce(c.lead_id::text,'') as lead_id,coalesce(l.department_code,'') as department_code from crm.conversations c join crm.leads l on l.id=c.lead_id and l.is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)})) order by c.last_message_at desc nulls last limit 5`,
+      sql<any[]>`select to_char(day,'DD/MM') as label,count(l.id)::int as value from generate_series((now() at time zone 'Asia/Riyadh')::date-interval '6 days',(now() at time zone 'Asia/Riyadh')::date,interval '1 day') day left join crm.leads l on (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date=day::date and l.is_deleted=false and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)})) group by day order by day`,
+    ]);
+    data.crm = {
+      totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations), openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
+      recentConversations: recent.map((item) => ({ id: item.id, customerName: item.customer_name, preview: item.preview_text, time: item.last_message_at ? new Date(item.last_message_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "", unreadCount: asNumber(item.unread_count), leadId: item.lead_id, department: item.department_code === "finance_sales" || item.department_code === "call_center" ? "finance" : item.department_code === "customer_service" ? "service" : "cash" })),
+      newCustomersSeries: series.map((item) => ({ label: item.label, value: asNumber(item.value) })),
+    };
+  } catch (error) { data.sectionErrors!.crm = errorText(error); console.error("Dashboard CRM query failed", error); }
+  }
+
+  if (canAccessSystem(user, "marketing")) {
+  try {
+    const marketingAccess = getSystemAccess(user, "marketing");
+    const marketingAll = marketingAccess.dataScope === "all";
+    const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed from marketing.campaigns c where is_deleted=false and (${marketingAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`;
+    data.marketing = { campaigns: asNumber(row?.campaigns), scheduled: asNumber(row?.scheduled), delayed: asNumber(row?.delayed) };
+  } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
+  }
+
+  if (canAccessSystem(user, "tracking")) {
+  try {
+    const trackingAccess = getSystemAccess(user, "tracking");
+    const trackingAll = trackingAccess.dataScope === "all";
+    const trackingBranches = trackingAccess.branchCodes.length ? trackingAccess.branchCodes : ["__none__"];
+    const [row] = await sql<any[]>`select count(*) filter(where coalesce(is_archived,false)=false)::int as requests,count(*) filter(where coalesce(is_archived,false)=false and status='in_progress')::int as in_progress,count(*) filter(where status='completed' or coalesce(is_archived,false)=true)::int as completed from tracking.orders o where coalesce(is_deleted,false)=false and (${trackingAll}=true or o.branch in ${sql(trackingBranches)} or exists(select 1 from tracking.order_stages os where os.order_id=o.id and (os.completed_by=${user.id}::uuid or os.reverted_by=${user.id}::uuid)))`;
+    data.tracking = { requests: asNumber(row?.requests), inProgress: asNumber(row?.in_progress), completed: asNumber(row?.completed) };
+    data.operations.salesTracking = { total: asNumber(row?.requests), notStarted: 0, inProgress: asNumber(row?.in_progress), completed: asNumber(row?.completed) };
+    const [st] = await sql<any[]>`select count(*) filter(where coalesce(is_archived,false)=false and status='not_started')::int as not_started from tracking.orders o where coalesce(is_deleted,false)=false and (${trackingAll}=true or o.branch in ${sql(trackingBranches)} or exists(select 1 from tracking.order_stages os where os.order_id=o.id and (os.completed_by=${user.id}::uuid or os.reverted_by=${user.id}::uuid)))`;
+    data.operations.salesTracking.notStarted = asNumber(st?.not_started);
+  } catch (error) { data.sectionErrors!.tracking = errorText(error); console.error("Dashboard tracking query failed", error); }
+  }
+
+  if (canAccessSystem(user, "operations")) {
+  try {
+    const operationsAccess = getSystemAccess(user, "operations");
+    const globalOperationsAccess = operationsAccess.dataScope === "all";
+    const operationBranches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
+    const canSeeMultaqa = globalOperationsAccess || operationBranches.includes("multaqa");
+    const canSeeHall = globalOperationsAccess || operationBranches.includes("hall");
+    const canSeeQadisiyah = globalOperationsAccess || operationBranches.includes("qadisiyah");
+    const [locations, [inventory], [approval], [shortage], [transfer], [photo]] = await Promise.all([
+      sql<any[]>`select l.code as key,l.name,
+        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true))::int as actual_total,
+        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery')::int as under_delivery,
+        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale')::int as available_for_sale,
+        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved')::int as reserved,
+        count(v.id) filter(where v.is_deleted=false and v.status_code='delivered')::int as delivered,
+        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true))::int as has_notes
+        from operations.locations l left join operations.vehicles v on v.location_id=l.id left join operations.vehicle_statuses s on s.code=v.status_code
+        where l.is_active=true and (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})
+        group by l.code,l.name,l.sort_order order by l.sort_order`,
+      sql<any[]>`select
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true))::int as actual_total,
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and l.is_agency=true)::int as agency,
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale')::int as available_for_sale,
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved')::int as reserved,
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery')::int as under_delivery,
+        count(*) filter(where v.is_deleted=false and v.status_code='delivered')::int as delivered,
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true))::int as has_notes
+        from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
+        where (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})`,
+      sql<any[]>`select count(*)::int as total,count(*) filter(where a.financial_approved=false)::int as missing_financial,count(*) filter(where a.administrative_approved=false)::int as missing_administrative,count(*) filter(where a.financial_approved=true and a.administrative_approved=true)::int as completed
+        from operations.vehicle_approvals a join operations.vehicles v on v.id=a.vehicle_id left join operations.locations l on l.id=v.location_id
+        where a.is_active=true and (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})`,
+      sql<any[]>`with combinations as (
+          select
+            coalesce(nullif(trim(v.car_name),''),'—') as car_name,
+            coalesce(nullif(trim(v.statement),''),'—') as statement,
+            coalesce(nullif(trim(v.model_year),''),'—') as model_year,
+            coalesce(nullif(trim(v.exterior_color),''),'—') as exterior_color,
+            coalesce(nullif(trim(v.interior_color),''),'—') as interior_color,
+            count(*) filter(where l.code='warehouse')::int as warehouse_qty,
+            count(*) filter(where l.code='hall')::int as hall_qty,
+            count(*) filter(where l.code='multaqa')::int as multaqa_qty,
+            count(*) filter(where l.code='qadisiyah')::int as qadisiyah_qty
+          from operations.vehicles v
+          join operations.locations l on l.id=v.location_id
+          where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true
+            and v.status_code in ('available_for_sale','reserved','has_notes')
+            and l.code in ('warehouse','hall','multaqa','qadisiyah')
+            and regexp_replace(coalesce(v.statement,''), '[[:space:]]+', '', 'g') !~* '(حساس|كاميرا|شاشة|مسجل|ريموت|فرشات|طفاية|شنطةسلامة|اسبير|إسبير)'
+          group by coalesce(nullif(trim(v.car_name),''),'—'),coalesce(nullif(trim(v.statement),''),'—'),coalesce(nullif(trim(v.model_year),''),'—'),coalesce(nullif(trim(v.exterior_color),''),'—'),coalesce(nullif(trim(v.interior_color),''),'—')
+        ), shortages as (
+          select *,warehouse_qty+hall_qty+multaqa_qty+qadisiyah_qty as total_qty
+          from combinations
+        )
+        select
+          (count(*) filter(where multaqa_qty=0 and total_qty>0 and ${canSeeMultaqa}=true)
+           + count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)
+           + count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true))::int as total,
+          count(*) filter(where multaqa_qty=0 and total_qty>0 and ${canSeeMultaqa}=true)::int as multaqa,
+          count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)::int as hall,
+          count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true)::int as qadisiyah
+        from shortages`,
+      sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total,count(*) filter(where r.is_deleted=false and r.status='request_received')::int as request_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_received')::int as vehicle_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_sent')::int as vehicle_sent,count(*) filter(where r.is_deleted=false and r.status='completed')::int as completed
+        from operations.transfer_requests r
+        where (${globalOperationsAccess}=true or r.source_branch_code in ${sql(operationBranches)} or r.destination_branch_code in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
+      sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total from operations.photography_requests r
+        where (${globalOperationsAccess}=true or r.requested_by_branch in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
+    ]);
+    data.operations.inventory = { actualTotal: asNumber(inventory?.actual_total), agency: asNumber(inventory?.agency), availableForSale: asNumber(inventory?.available_for_sale), reserved: asNumber(inventory?.reserved), underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes) };
+    data.operations.locations = locations.map((item) => ({ key: item.key, name: item.name, actualTotal: asNumber(item.actual_total), underDelivery: asNumber(item.under_delivery), availableForSale: asNumber(item.available_for_sale), reserved: asNumber(item.reserved), delivered: asNumber(item.delivered), hasNotes: asNumber(item.has_notes) }));
+    if (!data.operations.locations.length) data.operations.locations = emptyData().operations.locations;
+    data.operations.approvals = { total: asNumber(approval?.total), missingFinancial: asNumber(approval?.missing_financial), missingAdministrative: asNumber(approval?.missing_administrative), completed: asNumber(approval?.completed) };
+    data.operations.shortages = { total: asNumber(shortage?.total), multaqa: asNumber(shortage?.multaqa), hall: asNumber(shortage?.hall), qadisiyah: asNumber(shortage?.qadisiyah) };
+    data.operations.transfers = { total: asNumber(transfer?.total) + asNumber(photo?.total), transferTotal: asNumber(transfer?.total), photographyTotal: asNumber(photo?.total), requestReceived: asNumber(transfer?.request_received), vehicleReceived: asNumber(transfer?.vehicle_received), vehicleSent: asNumber(transfer?.vehicle_sent), completed: asNumber(transfer?.completed) };
+  } catch (error) { data.sectionErrors!.operations = errorText(error); console.error("Dashboard operations query failed", error); }
+  }
+
+  data.generatedAt = new Date().toISOString();
+  return data;
+}
