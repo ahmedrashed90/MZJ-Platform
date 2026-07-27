@@ -12,6 +12,20 @@ export type NotificationJsonValue =
   | NotificationJsonValue[]
   | { [key: string]: NotificationJsonValue };
 
+export type NotificationPreferences = {
+  soundEnabled: boolean;
+  toastEnabled: boolean;
+  toastDurationSeconds: 3 | 5 | 8 | 10;
+  systemAlerts: Record<NotificationSystem, boolean>;
+};
+
+export type NotificationPreferencesInput = Partial<{
+  soundEnabled: boolean;
+  toastEnabled: boolean;
+  toastDurationSeconds: number;
+  systemAlerts: Partial<Record<NotificationSystem, boolean>>;
+}>;
+
 export type NotificationInput = {
   systemCode: NotificationSystem;
   eventType: string;
@@ -32,6 +46,13 @@ export type NotificationInput = {
 
 let schemaPromise: Promise<void> | null = null;
 const SYSTEMS: NotificationSystem[] = ["crm", "marketing", "operations", "tracking"];
+const TOAST_DURATIONS = [3, 5, 8, 10] as const;
+const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  soundEnabled: true,
+  toastEnabled: true,
+  toastDurationSeconds: 5,
+  systemAlerts: { crm: true, marketing: true, operations: true, tracking: true },
+};
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function values(input?: Array<string | null | undefined>) { return [...new Set((input || []).map(clean).filter(Boolean))]; }
@@ -83,8 +104,92 @@ export async function ensureNotificationsSchema() {
       )
     `;
     await sql`create index if not exists core_notification_state_user_idx on core.notification_user_state(user_id,read_at,dismissed_at)`;
+    await sql`
+      create table if not exists core.notification_preferences (
+        user_id uuid primary key references core.users(id) on delete cascade,
+        sound_enabled boolean not null default true,
+        toast_enabled boolean not null default true,
+        toast_duration_seconds smallint not null default 5 check (toast_duration_seconds in (3,5,8,10)),
+        crm_alerts_enabled boolean not null default true,
+        marketing_alerts_enabled boolean not null default true,
+        operations_alerts_enabled boolean not null default true,
+        tracking_alerts_enabled boolean not null default true,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      )
+    `;
   })().catch((error) => { schemaPromise = null; throw error; });
   return schemaPromise;
+}
+
+function preferenceBoolean(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function preferenceDuration(value: unknown, fallback: NotificationPreferences["toastDurationSeconds"]) {
+  const duration = Number(value);
+  return TOAST_DURATIONS.includes(duration as (typeof TOAST_DURATIONS)[number])
+    ? duration as NotificationPreferences["toastDurationSeconds"]
+    : fallback;
+}
+
+function mapNotificationPreferences(row?: Record<string, unknown> | null): NotificationPreferences {
+  return {
+    soundEnabled: preferenceBoolean(row?.sound_enabled, DEFAULT_NOTIFICATION_PREFERENCES.soundEnabled),
+    toastEnabled: preferenceBoolean(row?.toast_enabled, DEFAULT_NOTIFICATION_PREFERENCES.toastEnabled),
+    toastDurationSeconds: preferenceDuration(row?.toast_duration_seconds, DEFAULT_NOTIFICATION_PREFERENCES.toastDurationSeconds),
+    systemAlerts: {
+      crm: preferenceBoolean(row?.crm_alerts_enabled, true),
+      marketing: preferenceBoolean(row?.marketing_alerts_enabled, true),
+      operations: preferenceBoolean(row?.operations_alerts_enabled, true),
+      tracking: preferenceBoolean(row?.tracking_alerts_enabled, true),
+    },
+  };
+}
+
+export async function getNotificationPreferences(userId: string) {
+  await ensureNotificationsSchema();
+  const sql = getSql();
+  const [row] = await sql<Record<string, unknown>[]>`
+    select sound_enabled,toast_enabled,toast_duration_seconds,crm_alerts_enabled,marketing_alerts_enabled,
+      operations_alerts_enabled,tracking_alerts_enabled
+    from core.notification_preferences where user_id=${userId}::uuid
+  `;
+  return mapNotificationPreferences(row);
+}
+
+export async function saveNotificationPreferences(userId: string, input: NotificationPreferencesInput) {
+  await ensureNotificationsSchema();
+  const current = await getNotificationPreferences(userId);
+  const next: NotificationPreferences = {
+    soundEnabled: preferenceBoolean(input.soundEnabled, current.soundEnabled),
+    toastEnabled: preferenceBoolean(input.toastEnabled, current.toastEnabled),
+    toastDurationSeconds: preferenceDuration(input.toastDurationSeconds, current.toastDurationSeconds),
+    systemAlerts: {
+      crm: preferenceBoolean(input.systemAlerts?.crm, current.systemAlerts.crm),
+      marketing: preferenceBoolean(input.systemAlerts?.marketing, current.systemAlerts.marketing),
+      operations: preferenceBoolean(input.systemAlerts?.operations, current.systemAlerts.operations),
+      tracking: preferenceBoolean(input.systemAlerts?.tracking, current.systemAlerts.tracking),
+    },
+  };
+  const sql = getSql();
+  const [row] = await sql<Record<string, unknown>[]>`
+    insert into core.notification_preferences(
+      user_id,sound_enabled,toast_enabled,toast_duration_seconds,crm_alerts_enabled,marketing_alerts_enabled,
+      operations_alerts_enabled,tracking_alerts_enabled,updated_at
+    ) values (
+      ${userId}::uuid,${next.soundEnabled},${next.toastEnabled},${next.toastDurationSeconds},${next.systemAlerts.crm},
+      ${next.systemAlerts.marketing},${next.systemAlerts.operations},${next.systemAlerts.tracking},now()
+    )
+    on conflict(user_id) do update set
+      sound_enabled=excluded.sound_enabled,toast_enabled=excluded.toast_enabled,
+      toast_duration_seconds=excluded.toast_duration_seconds,crm_alerts_enabled=excluded.crm_alerts_enabled,
+      marketing_alerts_enabled=excluded.marketing_alerts_enabled,operations_alerts_enabled=excluded.operations_alerts_enabled,
+      tracking_alerts_enabled=excluded.tracking_alerts_enabled,updated_at=now()
+    returning sound_enabled,toast_enabled,toast_duration_seconds,crm_alerts_enabled,marketing_alerts_enabled,
+      operations_alerts_enabled,tracking_alerts_enabled
+  `;
+  return mapNotificationPreferences(row);
 }
 
 export async function createNotification(input: NotificationInput) {

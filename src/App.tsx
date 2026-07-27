@@ -3,7 +3,6 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Sidebar } from "./components/Sidebar";
 import { ActivityTracker } from "./components/ActivityTracker";
-import { NotificationBell } from "./notifications/NotificationBell";
 import { NotificationsCenterPage } from "./notifications/NotificationsCenterPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DatabaseSetupPage } from "./pages/DatabaseSetupPage";
@@ -88,7 +87,6 @@ function PlatformRoutes() {
     <div className="app-shell">
       <ActivityTracker />
       <Sidebar />
-      <NotificationBell />
       <main className="page-shell">
         <Suspense fallback={<div className="crm-loading-panel">جاري تحميل الصفحة...</div>}>
         <Routes>

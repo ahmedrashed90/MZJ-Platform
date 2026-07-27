@@ -45,6 +45,7 @@ import operationsHandler from "../server/operations/index.js";
 import marketingHandler from "../server/marketing/index.js";
 import activityHandler from "../server/activity.js";
 import notificationsHandler from "../server/notifications.js";
+import notificationSettingsHandler from "../server/notification-settings.js";
 import { ensureRequestId, logApiWriteIfMissing } from "../server/_activity.js";
 import { getSessionUser } from "../server/_auth.js";
 import type { PermissionUser } from "../server/_access-control.js";
@@ -93,6 +94,7 @@ const routes = new Map<string, ApiHandler>([
   ["marketing", marketingHandler],
   ["activity", activityHandler],
   ["notifications", notificationsHandler],
+  ["notification-settings", notificationSettingsHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {

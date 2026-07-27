@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { ChartBar, Database, Gear, House, MapPin, Megaphone, Pulse, Question, SignOut, SuitcaseSimple, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
+import { NotificationBell } from "../notifications/NotificationBell";
 import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canOpenSettings, hasPermission } from "../systemAccess";
 
 const items = [
@@ -32,6 +33,6 @@ export function Sidebar() {
   return <aside className="sidebar">
     <div className="brand-block"><img src="/logo.png" alt="MZJ" /><span>مجموعة محمد بن ذعار العجمي</span></div>
     <nav className="sidebar-nav" aria-label="القائمة الرئيسية"><div className="nav-group">{visibleItems.map((item) => <Item key={item.href} {...item} />)}</div><div className="nav-separator" /><div className="nav-group">{visibleSupport.map((item) => <Item key={item.href} {...item} />)}</div></nav>
-    <div className="sidebar-account" aria-label="الحساب"><div className="account-avatar">{user?.fullName.trim().slice(0, 1) || "م"}</div><div className="account-copy"><strong>{user?.fullName}</strong><span>{roleText}</span></div><button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={18} /></button></div>
+    <div className="sidebar-account" aria-label="الحساب"><div className="account-avatar">{user?.fullName.trim().slice(0, 1) || "م"}</div><div className="account-copy"><strong>{user?.fullName}</strong><span>{roleText}</span></div><NotificationBell /><button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={18} /></button></div>
   </aside>;
 }

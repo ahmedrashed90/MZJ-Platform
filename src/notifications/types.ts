@@ -24,3 +24,10 @@ export type NotificationsResponse = {
   system: NotificationSystem | "all";
   canViewAll: boolean;
 };
+
+export type NotificationPreferences = {
+  soundEnabled: boolean;
+  toastEnabled: boolean;
+  toastDurationSeconds: 3 | 5 | 8 | 10;
+  systemAlerts: Record<NotificationSystem, boolean>;
+};

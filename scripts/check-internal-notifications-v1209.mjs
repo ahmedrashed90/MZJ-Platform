@@ -21,6 +21,12 @@ const endpoint = read("server/notifications.ts");
 const api = read("api/index.ts");
 const app = read("src/App.tsx");
 const bell = read("src/notifications/NotificationBell.tsx");
+const sidebar = read("src/components/Sidebar.tsx");
+const settingsPage = read("src/pages/SettingsPage.tsx");
+const notificationSettings = read("src/notifications/NotificationSettingsPanel.tsx");
+const notificationSettingsEndpoint = read("server/notification-settings.ts");
+const preferencesMigration = read("database/migrations/20260728_notification_preferences.sql");
+const styles = read("src/styles.css");
 const center = read("src/notifications/NotificationsCenterPage.tsx");
 const schema = read("database/schema.sql");
 const runtimeSchema = read("server/_schema.ts");
@@ -55,6 +61,14 @@ check("Notification state is database-backed, not localStorage-backed", !/localS
 check("Notification metadata uses a JSON-safe recursive type", /export type NotificationJsonValue/.test(helper) && !/metadata\?: Record<string, unknown>/.test(helper));
 check("Notification count queries read the first result row", /const countRow = countRows\[0\]/.test(helper) && /const unreadRow = unreadRows\[0\]/.test(helper));
 check("NEXT ERP notification uses normalized customer fields", /normalized\.actualCustomerName/.test(erp) && /normalized\.accountingCustomerName/.test(erp) && !/normalized\.customerName/.test(erp));
+check("Notification bell is mounted in the sidebar account area", /<NotificationBell \/>/.test(sidebar) && !/<NotificationBell \/>/.test(app));
+check("Unread badge keeps the red visual state", /notification-bell-button>span/.test(styles) && /background: var\(--red\)/.test(styles));
+check("New notifications trigger an audible alert", /createAudioContext/.test(bell) && /playNotificationSound/.test(bell));
+check("New notifications show a timed in-page card", /notification-toast-card/.test(bell) && /setTimeout\(\(\) => setToastItem\(null\)/.test(bell));
+check("Notification preferences are persisted per user", /core\.notification_preferences/.test(helper) && /user_id uuid primary key/.test(preferencesMigration));
+check("Notification preferences API is authenticated and routed", /notificationSettingsHandler/.test(api) && /requireUser\(request, response\)/.test(notificationSettingsEndpoint));
+check("Notification settings are available from the unified settings page", /key: "notifications"/.test(settingsPage) && /<NotificationSettingsPanel \/>/.test(settingsPage));
+check("Notification settings cover sound toast duration and system alerts", /soundEnabled/.test(notificationSettings) && /toastEnabled/.test(notificationSettings) && /toastDurationSeconds/.test(notificationSettings) && /systemAlerts/.test(notificationSettings));
 
 console.log(`Internal notification regression checks: ${passed}/${passed + failed} passed.`);
 if (failed) process.exit(1);

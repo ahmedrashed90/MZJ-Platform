@@ -1,4 +1,4 @@
-import type { NotificationsResponse } from "./types";
+import type { NotificationPreferences, NotificationsResponse } from "./types";
 
 async function readJson(response: Response) {
   const payload = await response.json().catch(() => ({}));
@@ -22,4 +22,21 @@ export async function updateNotifications(input: { ids?: string[]; system?: stri
     body: JSON.stringify(input),
   });
   return readJson(response) as Promise<{ ok: boolean; updated: number }>;
+}
+
+export async function fetchNotificationPreferences() {
+  const response = await fetch("/api/notification-settings", { credentials: "include", cache: "no-store" });
+  const payload = await readJson(response) as { ok: boolean; preferences: NotificationPreferences };
+  return payload.preferences;
+}
+
+export async function saveNotificationPreferences(preferences: NotificationPreferences) {
+  const response = await fetch("/api/notification-settings", {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(preferences),
+  });
+  const payload = await readJson(response) as { ok: boolean; preferences: NotificationPreferences };
+  return payload.preferences;
 }
