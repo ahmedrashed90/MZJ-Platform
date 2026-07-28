@@ -1379,8 +1379,22 @@ async function saveOperationSetting(sql: ReturnType<typeof getSql>, body: Record
       on conflict(code) do update set name=excluded.name,sort_order=excluded.sort_order,is_actual_stock=excluded.is_actual_stock,is_delivery_status=excluded.is_delivery_status,is_terminal=excluded.is_terminal,is_active=excluded.is_active
       returning *
     `;
-    await sql`update core.users set permission_version=permission_version+1,updated_at=now() where id in(select user_id from core.user_system_vehicle_statuses where system_code='operations' and status_code=${row.code})`;
-    await sql`delete from core.sessions where user_id in(select user_id from core.user_system_vehicle_statuses where system_code='operations' and status_code=${row.code})`;
+    const assignedStatus = JSON.stringify([row.code]);
+    await sql`
+      update core.users set permission_version=permission_version+1,updated_at=now()
+      where id in(
+        select us.user_id from core.user_systems us
+        where us.system_code='operations'
+          and coalesce(us.settings->'vehicleStatusCodes','[]'::jsonb) @> ${assignedStatus}::jsonb
+      )
+    `;
+    await sql`
+      delete from core.sessions where user_id in(
+        select us.user_id from core.user_systems us
+        where us.system_code='operations'
+          and coalesce(us.settings->'vehicleStatusCodes','[]'::jsonb) @> ${assignedStatus}::jsonb
+      )
+    `;
     await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data) values (${who.id}::uuid,'operations','operation_status_saved','vehicle_status',${row.code},${sql.json(row)})`;
     return { ok: true, row, message: "تم حفظ إعداد الحالة وربطها بصلاحيات المستخدمين" };
   }

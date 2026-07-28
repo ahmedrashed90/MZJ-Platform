@@ -141,7 +141,7 @@ async function userSnapshot(userId: string) {
         'systemCode',us.system_code,'isEnabled',us.is_enabled,'roleId',us.role_id::text,'dataScope',us.data_scope,
         'branchIds',coalesce((select jsonb_agg(usb.branch_id::text order by usb.is_primary desc) from core.user_system_branches usb where usb.user_id=u.id and usb.system_code=us.system_code),'[]'::jsonb),
         'departmentIds',coalesce((select jsonb_agg(usd.department_id::text order by usd.is_primary desc) from core.user_system_departments usd where usd.user_id=u.id and usd.system_code=us.system_code),'[]'::jsonb),
-        'vehicleStatusCodes',coalesce((select jsonb_agg(uvs.status_code order by vs.sort_order,vs.name,uvs.status_code) from core.user_system_vehicle_statuses uvs left join operations.vehicle_statuses vs on vs.code=uvs.status_code where uvs.user_id=u.id and uvs.system_code=us.system_code),'[]'::jsonb),
+        'vehicleStatusCodes',coalesce(us.settings->'vehicleStatusCodes','[]'::jsonb),
         'primaryBranchId',(select usb.branch_id::text from core.user_system_branches usb where usb.user_id=u.id and usb.system_code=us.system_code order by usb.is_primary desc limit 1),
         'primaryDepartmentId',(select usd.department_id::text from core.user_system_departments usd where usd.user_id=u.id and usd.system_code=us.system_code order by usd.is_primary desc limit 1)
       ) order by us.system_code) from core.user_systems us where us.user_id=u.id),'[]'::jsonb),
@@ -179,7 +179,7 @@ async function userDetail(userId: string) {
       select us.system_code,us.is_enabled,us.role_id::text,us.data_scope,
         coalesce((select array_agg(usb.branch_id::text order by usb.is_primary desc,b.sort_order,b.name) from core.user_system_branches usb join core.branches b on b.id=usb.branch_id where usb.user_id=us.user_id and usb.system_code=us.system_code),'{}') as branch_ids,
         coalesce((select array_agg(usd.department_id::text order by usd.is_primary desc,d.name) from core.user_system_departments usd join core.departments d on d.id=usd.department_id where usd.user_id=us.user_id and usd.system_code=us.system_code),'{}') as department_ids,
-        coalesce((select array_agg(uvs.status_code order by vs.sort_order,vs.name,uvs.status_code) from core.user_system_vehicle_statuses uvs left join operations.vehicle_statuses vs on vs.code=uvs.status_code where uvs.user_id=us.user_id and uvs.system_code=us.system_code),'{}') as vehicle_status_codes,
+        coalesce(us.settings->'vehicleStatusCodes','[]'::jsonb) as vehicle_status_codes,
         (select usb.branch_id::text from core.user_system_branches usb where usb.user_id=us.user_id and usb.system_code=us.system_code order by usb.is_primary desc limit 1) as primary_branch_id,
         (select usd.department_id::text from core.user_system_departments usd where usd.user_id=us.user_id and usd.system_code=us.system_code order by usd.is_primary desc limit 1) as primary_department_id
       from core.user_systems us where us.user_id=${userId}::uuid order by us.system_code
@@ -338,14 +338,23 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       if (!config) continue;
       const dataScope = validScope(config.dataScope) ? clean(config.dataScope) : "assigned";
       const roleId = clean(config.roleId) || null;
-      await tx`
-        insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope,updated_at)
-        values(${id}::uuid,${system.code},${bool(config.isEnabled)},${roleId}::uuid,${dataScope},now())
-        on conflict(user_id,system_code) do update set is_enabled=excluded.is_enabled,role_id=excluded.role_id,data_scope=excluded.data_scope,updated_at=now()
-      `;
       const branchIds = array(config.branchIds);
       const departmentIds = array(config.departmentIds);
-      const vehicleStatusCodes = system.code === "operations" ? array(config.vehicleStatusCodes) : [];
+      const vehicleStatusCodes = system.code === "operations" ? array(config.vehicleStatusCodes).sort() : [];
+      const systemSettings = system.code === "operations" ? { vehicleStatusCodes } : {};
+      await tx`
+        insert into core.user_systems as existing(user_id,system_code,is_enabled,role_id,data_scope,settings,updated_at)
+        values(${id}::uuid,${system.code},${bool(config.isEnabled)},${roleId}::uuid,${dataScope},${tx.json(systemSettings)},now())
+        on conflict(user_id,system_code) do update set
+          is_enabled=excluded.is_enabled,
+          role_id=excluded.role_id,
+          data_scope=excluded.data_scope,
+          settings=case
+            when excluded.system_code='operations' then jsonb_set(coalesce(existing.settings,'{}'::jsonb),'{vehicleStatusCodes}',coalesce(excluded.settings->'vehicleStatusCodes','[]'::jsonb),true)
+            else existing.settings
+          end,
+          updated_at=now()
+      `;
       const requestedPrimaryBranchId = clean(config.primaryBranchId);
       const requestedPrimaryDepartmentId = clean(config.primaryDepartmentId);
       const primaryBranchId = branchIds.includes(requestedPrimaryBranchId) ? requestedPrimaryBranchId : branchIds[0] || null;
@@ -359,13 +368,6 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       if (departmentIds.length) await tx`
         insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
         select ${id}::uuid,${system.code},x::uuid,x=${primaryDepartmentId} from unnest(${departmentIds}::text[]) x
-      `;
-      await tx`delete from core.user_system_vehicle_statuses where user_id=${id}::uuid and system_code=${system.code}`;
-      if (vehicleStatusCodes.length) await tx`
-        insert into core.user_system_vehicle_statuses(user_id,system_code,status_code)
-        select ${id}::uuid,${system.code},s.code
-        from operations.vehicle_statuses s
-        where s.code in ${tx(vehicleStatusCodes)} and s.is_active=true
       `;
     }
 

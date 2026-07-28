@@ -1,14 +1,5 @@
--- ربط إعدادات العمليات مع المستخدمين والصلاحيات دون إنشاء مسار بيانات موازٍ.
-
-create table if not exists core.user_system_vehicle_statuses (
-  user_id uuid not null references core.users(id) on delete cascade,
-  system_code text not null default 'operations',
-  status_code text not null,
-  created_at timestamptz not null default now(),
-  primary key(user_id,system_code,status_code)
-);
-create index if not exists user_system_vehicle_statuses_lookup_idx
-  on core.user_system_vehicle_statuses(system_code,status_code,user_id);
+-- ربط المواقع والفروع التشغيلية بدليل الفروع المركزي من نفس مصدر البيانات.
+-- نطاق حالات السيارات محفوظ داخل core.user_systems.settings الموجود أصلًا؛ لذلك لا يحتاج جدول صلاحيات إضافيًا.
 
 alter table operations.locations
   add column if not exists core_branch_id uuid references core.branches(id) on delete set null;

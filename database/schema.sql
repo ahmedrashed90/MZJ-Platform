@@ -105,16 +105,6 @@ create table if not exists core.user_branches (
   primary key (user_id, branch_id)
 );
 
-create table if not exists core.user_system_vehicle_statuses (
-  user_id uuid not null references core.users(id) on delete cascade,
-  system_code text not null default 'operations',
-  status_code text not null,
-  created_at timestamptz not null default now(),
-  primary key (user_id, system_code, status_code)
-);
-create index if not exists user_system_vehicle_statuses_lookup_idx
-  on core.user_system_vehicle_statuses(system_code,status_code,user_id);
-
 create table if not exists crm.leads (
   id uuid primary key default gen_random_uuid(),
   legacy_id text unique,
