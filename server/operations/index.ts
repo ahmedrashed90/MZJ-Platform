@@ -717,8 +717,11 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
   const who = actor(user);
   return sql.begin(async (tx) => {
     const [before] = await tx<any[]>`
-      select v.*,v.id::text,l.branch_code,l.code as location_code,l.name as location_name
-      from operations.vehicles v left join operations.locations l on l.id=v.location_id
+      select v.*,v.id::text,l.branch_code,l.code as location_code,l.name as location_name,
+        coalesce(current_status.name,v.status_code) as status_name
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      left join operations.vehicle_statuses current_status on current_status.code=v.status_code
       where v.id=${id}::uuid and v.is_deleted=false and v.archived_at is null for update of v
     `;
     if (!before) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
@@ -748,6 +751,7 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
 
     let row = detailsRow;
     let pendingApproval = false;
+    let statusMovementId: string | null = null;
     if (statusCode !== before.status_code) {
       if (statusCode === "delivered") {
         const approval = await ensureActiveVehicleApprovalCycle(tx, id);
@@ -787,6 +791,7 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
           movementType: "vehicle_management",
         });
         row = movementResult.vehicle;
+        statusMovementId = movementResult.movement.id;
         if (statusCode === "delivered") await closeActiveVehicleApprovalCycle(tx, id);
       }
     }
@@ -796,6 +801,11 @@ async function updateVehicle(sql: ReturnType<typeof getSql>, body: Record<string
       ok: true,
       vehicle: row,
       pendingApproval,
+      statusChanged: statusCode !== before.status_code && !pendingApproval,
+      previousStatusCode: before.status_code,
+      previousStatusName: before.status_name,
+      currentStatusCode: row.status_code,
+      movementId: statusMovementId,
       message: pendingApproval ? "تم تحديث بيانات السيارة وإرسال حالة مباع تم التسليم للموافقات" : "تم تحديث بيانات السيارة",
     };
   });
@@ -1028,7 +1038,13 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       const activeBatch = await ensureBatch();
       const result = await persistVehicleMovement(tx, { vehicle: v, destination, newStatus, raw, generalNote: clean(body.note), who, batchId: activeBatch.id });
       if (newStatus === "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
-      moved.push({ vehicleId, vin: v.vin, movementId: result.movement.id });
+      moved.push({
+        vehicleId,
+        vin: v.vin,
+        movementId: result.movement.id,
+        previousStatusCode: v.status_code,
+        currentStatusCode: newStatus,
+      });
     }
 
     const parts: string[] = [];

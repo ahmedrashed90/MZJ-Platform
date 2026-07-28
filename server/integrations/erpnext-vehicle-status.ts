@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { safeSecretEquals } from "../_auth.js";
 import { getSql } from "../_db.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
+import { emitVehicleInventoryStatusNotification } from "../_notifications.js";
 import { clean } from "../_tracking-utils.js";
 
 type StatusMapping = {
@@ -145,6 +146,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
           reservedByName: vehicle.reserved_by_name || null,
           reservedByEmail: vehicle.reserved_by_email || null,
           reservedAt: vehicle.reserved_at || null,
+          actorId: matchedUser?.id || null,
+          actorName,
           movementId: null,
           batchId: null,
         };
@@ -249,6 +252,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         reservedByName: updated.reserved_by_name || null,
         reservedByEmail: updated.reserved_by_email || null,
         reservedAt: updated.reserved_at || null,
+        actorId: matchedUser?.id || null,
+        actorName,
       };
     });
 
@@ -258,6 +263,29 @@ export default async function handler(request: VercelRequest, response: VercelRe
         code: "VEHICLE_NOT_FOUND",
         serialNo: payload.serialNo,
         error: "لم يتم العثور على سيارة فعالة في المنصة بنفس رقم الهيكل",
+      });
+    }
+
+    if (result.changed && result.statusChanged) {
+      await emitVehicleInventoryStatusNotification({
+        vehicleId: result.vehicleId,
+        previousStatusCode: result.previousStatus,
+        previousStatusName: result.previousStatusName,
+        currentStatusCode: result.currentStatus,
+        currentStatusName: result.currentStatusName,
+        actorId: result.actorId,
+        actorName: result.actorName,
+        reservationAdminName: result.reservedByName,
+        reservationAdminEmail: result.reservedByEmail,
+        changedAt: payload.modifiedAt,
+        sourceName: "NEXT ERP",
+        eventKey: result.movementId || `${payload.event}:${payload.serialNo}:${payload.modifiedAt || result.currentStatus}`,
+      }).catch((notificationError) => {
+        console.error("ERPNext vehicle status notification failed", {
+          vehicleId: result.vehicleId,
+          currentStatus: result.currentStatus,
+          notificationError,
+        });
       });
     }
 

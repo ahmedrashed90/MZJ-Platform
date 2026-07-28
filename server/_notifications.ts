@@ -92,6 +92,10 @@ const CRM_SOURCE_LABELS: Record<string, string> = {
   tiktok: "تيك توك",
   web: "الموقع الإلكتروني",
 };
+const INVENTORY_STATUS_LABELS: Record<string, string> = {
+  reserved: "حجز",
+  available_for_sale: "متاح للبيع",
+};
 
 function cleanOptional(value: unknown) {
   const normalized = clean(value);
@@ -575,9 +579,128 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
   }
 }
 
+export type VehicleInventoryStatusNotificationInput = {
+  vehicleId: string;
+  previousStatusCode?: string | null;
+  previousStatusName?: string | null;
+  currentStatusCode: string;
+  currentStatusName?: string | null;
+  actorId?: string | null;
+  actorName?: string | null;
+  reservationAdminName?: string | null;
+  reservationAdminEmail?: string | null;
+  changedAt?: string | null;
+  sourceName?: string | null;
+  eventKey?: string | null;
+};
+
+export async function emitVehicleInventoryStatusNotification(input: VehicleInventoryStatusNotificationInput) {
+  const vehicleId = clean(input.vehicleId);
+  const previousStatusCode = clean(input.previousStatusCode);
+  const currentStatusCode = clean(input.currentStatusCode);
+  if (!validUuid(vehicleId) || !INVENTORY_STATUS_LABELS[currentStatusCode] || previousStatusCode === currentStatusCode) return null;
+
+  const sql = getSql();
+  const [vehicle] = await sql<any[]>`
+    select v.id::text,v.vin,v.car_name,v.statement,v.reserved_by_name,v.reserved_by_email,v.reserved_at,
+      l.name as location_name,l.branch_code,l.code as location_code,
+      coalesce(current_status.name,v.status_code) as current_status_name,
+      coalesce(previous_status.name,nullif(${clean(input.previousStatusName)},''),nullif(${previousStatusCode},'')) as previous_status_name
+    from operations.vehicles v
+    left join operations.locations l on l.id=v.location_id
+    left join operations.vehicle_statuses current_status on current_status.code=v.status_code
+    left join operations.vehicle_statuses previous_status on previous_status.code=nullif(${previousStatusCode},'')
+    where v.id=${vehicleId}::uuid and v.is_deleted=false
+    limit 1
+  `;
+  if (!vehicle) return null;
+
+  const currentStatusName = INVENTORY_STATUS_LABELS[currentStatusCode] || clean(input.currentStatusName) || vehicle.current_status_name || currentStatusCode;
+  const previousStatusName = clean(input.previousStatusName) || clean(vehicle.previous_status_name) || previousStatusCode || "—";
+  const reservationAdminName = currentStatusCode === "reserved"
+    ? clean(input.reservationAdminName || vehicle.reserved_by_name || input.actorName)
+    : "";
+  const reservationAdminEmail = currentStatusCode === "reserved"
+    ? clean(input.reservationAdminEmail || vehicle.reserved_by_email)
+    : "";
+  const responsibleName = clean(input.actorName || reservationAdminName || input.sourceName) || "النظام";
+  const sourceName = clean(input.sourceName);
+  const vehicleLabel = [clean(vehicle.vin), clean(vehicle.car_name || vehicle.statement)].filter(Boolean).join(" - ");
+
+  return createNotification({
+    systemCode: "operations",
+    eventType: currentStatusCode === "reserved" ? "vehicle_reserved" : "vehicle_available_for_sale",
+    title: `تم تغيير حالة السيارة إلى ${currentStatusName}`,
+    body: joinDetails([
+      detailLine("السيارة", vehicleLabel),
+      detailLine("الحالة السابقة", previousStatusName),
+      detailLine("الحالة الحالية", currentStatusName),
+      detailLine("المكان", vehicle.location_name),
+      detailLine("الإداري الذي حجز", reservationAdminName),
+      detailLine("بريد إداري الحجز", reservationAdminEmail),
+      detailLine("مصدر التحديث", sourceName),
+    ]),
+    entityType: "vehicle",
+    entityId: vehicleId,
+    actionUrl: "/operations",
+    severity: currentStatusCode === "reserved" ? "warning" : "success",
+    actorId: input.actorId && validUuid(clean(input.actorId)) ? clean(input.actorId) : null,
+    actorName: responsibleName,
+    branchCodes: [vehicle.branch_code, vehicle.location_code],
+    metadata: {
+      responsibleName,
+      sourceName,
+      reservationAdminName,
+      previousStatusCode,
+      currentStatusCode,
+    },
+    dedupeKey: notificationDedupe(
+      "operations-vehicle-inventory-status",
+      vehicleId,
+      previousStatusCode,
+      currentStatusCode,
+      input.eventKey || input.changedAt || Date.now(),
+    ),
+  });
+}
+
 export async function emitOperationsNotification(user: PermissionUser, action: string, body: any, result: any) {
   const sql = getSql();
   const actor = { actorId: user.id, actorName: user.fullName };
+  const requestedStatusCode = clean(result?.currentStatusCode || result?.vehicle?.status_code || body?.newStatus || body?.statusCode);
+
+  if (action === "update_vehicle" && result?.statusChanged && INVENTORY_STATUS_LABELS[requestedStatusCode]) {
+    await emitVehicleInventoryStatusNotification({
+      vehicleId: clean(result?.vehicle?.id || body?.id),
+      previousStatusCode: clean(result?.previousStatusCode),
+      currentStatusCode: requestedStatusCode,
+      actorId: user.id,
+      actorName: user.fullName,
+      reservationAdminName: requestedStatusCode === "reserved" ? clean(result?.vehicle?.reserved_by_name || user.fullName) : null,
+      reservationAdminEmail: requestedStatusCode === "reserved" ? clean(result?.vehicle?.reserved_by_email || user.email) : null,
+      sourceName: "منصة العمليات",
+      eventKey: clean(result?.movementId) || clean(result?.vehicle?.updated_at),
+    });
+    return;
+  }
+
+  if (action === "move_vehicles" && INVENTORY_STATUS_LABELS[requestedStatusCode] && Array.isArray(result?.moved) && result.moved.length) {
+    const statusChangedVehicles = result.moved.filter((movedVehicle: any) => clean(movedVehicle?.previousStatusCode) !== requestedStatusCode);
+    for (const movedVehicle of statusChangedVehicles) {
+      await emitVehicleInventoryStatusNotification({
+        vehicleId: clean(movedVehicle?.vehicleId),
+        previousStatusCode: clean(movedVehicle?.previousStatusCode),
+        currentStatusCode: requestedStatusCode,
+        actorId: user.id,
+        actorName: user.fullName,
+        reservationAdminName: requestedStatusCode === "reserved" ? user.fullName : null,
+        reservationAdminEmail: requestedStatusCode === "reserved" ? user.email : null,
+        sourceName: "منصة العمليات",
+        eventKey: clean(movedVehicle?.movementId),
+      });
+    }
+    if (statusChangedVehicles.length === result.moved.length) return;
+  }
   const id = clean(
     result?.vehicle?.id
     || result?.request?.id

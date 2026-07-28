@@ -1,4 +1,0 @@
-Command: corepack pnpm install --frozen-lockfile
-Result: FAILED before dependency installation.
-Reason: getaddrinfo EAI_AGAIN registry.npmjs.org while Corepack attempted to download pnpm 9.15.9.
-Production build was not claimed as successful.
