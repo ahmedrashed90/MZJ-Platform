@@ -1,14 +1,17 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { safeSecretEquals } from "../_auth.js";
 import { getSql } from "../_db.js";
+import { ensureOperationsSchema } from "../_operations-schema.js";
 import { clean } from "../_tracking-utils.js";
 
-const RESERVED_STATUS_CODE = "reserved";
-const RESERVED_STATUS_VALUES = new Set([
-  "reserved",
-  "حجز",
-  "محجوز",
-  "محجوزة",
+type StatusMapping = {
+  code: "reserved" | "available_for_sale";
+  isReserved: boolean;
+};
+
+const STATUS_MAPPINGS = new Map<string, StatusMapping>([
+  ["محجوزة", { code: "reserved", isReserved: true }],
+  ["متاحة للحجز", { code: "available_for_sale", isReserved: false }],
 ]);
 
 function requestBody(request: VercelRequest) {
@@ -67,17 +70,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   const incomingStatus = normalizedStatus(payload.vehicleStatus);
-  if (!RESERVED_STATUS_VALUES.has(incomingStatus)) {
+  const mapping = STATUS_MAPPINGS.get(incomingStatus);
+  if (!mapping) {
     return response.status(200).json({
       ok: true,
       ignored: true,
       serialNo: payload.serialNo,
       vehicleStatus: payload.vehicleStatus,
-      message: "تم تجاهل الحدث لأن المزامنة الحالية مخصصة لحالة محجوزة فقط",
+      message: "تم تجاهل الحالة لأن المزامنة مخصصة فقط لمحجوزة ومتاحة للحجز",
     });
   }
 
   try {
+    await ensureOperationsSchema();
     const sql = getSql();
     const result = await sql.begin(async (tx) => {
       const [vehicle] = await tx<any[]>`
@@ -99,91 +104,151 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
       const [targetStatus] = await tx<any[]>`
         select code,name from operations.vehicle_statuses
-        where code=${RESERVED_STATUS_CODE} and is_active=true
+        where code=${mapping.code} and is_active=true
         limit 1
       `;
       if (!targetStatus) {
-        const error = new Error("حالة الحجز غير مفعلة في إعدادات العمليات");
+        const error = new Error(mapping.isReserved
+          ? "حالة الحجز غير مفعلة في إعدادات العمليات"
+          : "حالة متاح للبيع غير مفعلة في إعدادات العمليات");
         (error as Error & { status?: number }).status = 409;
         throw error;
       }
 
-      if (vehicle.status_code === RESERVED_STATUS_CODE) {
+      const [matchedUser] = await tx<any[]>`
+        select id::text,full_name,email,next_erp_user_id
+        from core.users
+        where lower(trim(coalesce(next_erp_user_id,'')))=lower(trim(${payload.modifiedBy}))
+           or lower(trim(coalesce(email,'')))=lower(trim(${payload.modifiedBy}))
+        order by case when lower(trim(coalesce(next_erp_user_id,'')))=lower(trim(${payload.modifiedBy})) then 0 else 1 end
+        limit 1
+      `;
+      const actorName = clean(matchedUser?.full_name) || payload.modifiedBy;
+      const statusChanged = vehicle.status_code !== mapping.code;
+      const reservationMetadataMissing = mapping.isReserved
+        && (!clean(vehicle.reserved_by_name) || !clean(vehicle.reserved_by_email) || !vehicle.reserved_at);
+      const reservationMetadataPresent = !mapping.isReserved
+        && (clean(vehicle.reserved_by_name) || clean(vehicle.reserved_by_email) || vehicle.reserved_at);
+      const reservationChanged = Boolean(reservationMetadataMissing || reservationMetadataPresent);
+
+      if (!statusChanged && !reservationChanged) {
         return {
           found: true as const,
           changed: false,
+          statusChanged: false,
+          reservationChanged: false,
           vehicleId: vehicle.id,
           previousStatus: vehicle.status_code,
           previousStatusName: vehicle.status_name,
           currentStatus: targetStatus.code,
           currentStatusName: targetStatus.name,
+          reservedByName: vehicle.reserved_by_name || null,
+          reservedByEmail: vehicle.reserved_by_email || null,
+          reservedAt: vehicle.reserved_at || null,
           movementId: null,
           batchId: null,
         };
       }
 
       const before = { ...vehicle };
-      const [batch] = await tx<any[]>`
-        insert into operations.movement_batches(
-          destination_location_id,new_status,general_note,requested_count,
-          performed_by,performed_by_name,performed_by_role,performed_by_branch
-        ) values (
-          ${vehicle.location_id},${RESERVED_STATUS_CODE},
-          ${`مزامنة حالة السيارة من NEXT ERP: ${payload.vehicleStatus}`},1,
-          null,${payload.modifiedBy},'erpnext_webhook',${vehicle.branch_code || null}
-        ) returning id::text,batch_no
-      `;
+      let movementId: string | null = null;
+      let batchId: string | null = null;
 
-      const [movement] = await tx<any[]>`
-        insert into operations.movements(
-          vehicle_id,from_location_id,to_location_id,old_status,new_status,note,
-          performed_by,performed_by_name,performed_by_role,performed_by_branch,
-          batch_id,movement_type,before_data
-        ) values (
-          ${vehicle.id}::uuid,${vehicle.location_id},${vehicle.location_id},
-          ${vehicle.status_code},${RESERVED_STATUS_CODE},
-          ${`تم تغيير حالة السيارة إلى محجوزة من NEXT ERP${payload.modifiedAt ? ` بتاريخ ${payload.modifiedAt}` : ""}`},
-          null,${payload.modifiedBy},'erpnext_webhook',${vehicle.branch_code || null},
-          ${batch.id}::uuid,'erpnext_vehicle_status',${tx.json(before)}
-        ) returning id::text
-      `;
+      if (statusChanged) {
+        const [batch] = await tx<any[]>`
+          insert into operations.movement_batches(
+            destination_location_id,new_status,general_note,requested_count,
+            performed_by,performed_by_name,performed_by_role,performed_by_branch
+          ) values (
+            ${vehicle.location_id},${mapping.code},
+            ${`مزامنة حالة السيارة من NEXT ERP: ${payload.vehicleStatus}`},1,
+            ${matchedUser?.id || null}::uuid,${actorName},'erpnext_webhook',${vehicle.branch_code || null}
+          ) returning id::text,batch_no
+        `;
+        batchId = batch.id;
 
-      const [updated] = await tx<any[]>`
-        update operations.vehicles set
-          status_code=${RESERVED_STATUS_CODE},
-          has_notes=false,
-          updated_by=null,
-          updated_by_name=${payload.modifiedBy},
-          updated_at=now(),
-          version=version+1
-        where id=${vehicle.id}::uuid
-        returning *,id::text
-      `;
+        const [movement] = await tx<any[]>`
+          insert into operations.movements(
+            vehicle_id,from_location_id,to_location_id,old_status,new_status,note,
+            performed_by,performed_by_name,performed_by_role,performed_by_branch,
+            batch_id,movement_type,before_data
+          ) values (
+            ${vehicle.id}::uuid,${vehicle.location_id},${vehicle.location_id},
+            ${vehicle.status_code},${mapping.code},
+            ${`تم تغيير حالة السيارة إلى ${targetStatus.name} من NEXT ERP${payload.modifiedAt ? ` بتاريخ ${payload.modifiedAt}` : ""}`},
+            ${matchedUser?.id || null}::uuid,${actorName},'erpnext_webhook',${vehicle.branch_code || null},
+            ${batch.id}::uuid,'erpnext_vehicle_status',${tx.json(before)}
+          ) returning id::text
+        `;
+        movementId = movement.id;
+      }
 
-      await tx`
-        update operations.movements
-        set after_data=${tx.json(updated)}
-        where id=${movement.id}::uuid
-      `;
+      const [updated] = mapping.isReserved
+        ? await tx<any[]>`
+            update operations.vehicles set
+              status_code=${mapping.code},
+              has_notes=false,
+              reserved_by_email=${payload.modifiedBy},
+              reserved_by_name=${actorName},
+              reserved_at=coalesce(nullif(${payload.modifiedAt},'')::timestamptz,now()),
+              updated_by=${matchedUser?.id || null}::uuid,
+              updated_by_name=${actorName},
+              updated_at=now(),
+              version=version+1
+            where id=${vehicle.id}::uuid
+            returning *,id::text
+          `
+        : await tx<any[]>`
+            update operations.vehicles set
+              status_code=${mapping.code},
+              has_notes=false,
+              reserved_by_email=null,
+              reserved_by_name=null,
+              reserved_at=null,
+              updated_by=${matchedUser?.id || null}::uuid,
+              updated_by_name=${actorName},
+              updated_at=now(),
+              version=version+1
+            where id=${vehicle.id}::uuid
+            returning *,id::text
+          `;
+
+      if (movementId) {
+        await tx`
+          update operations.movements
+          set after_data=${tx.json(updated)}
+          where id=${movementId}::uuid
+        `;
+      }
       await tx`
         insert into audit.activity_log(
           user_id,system_code,action,entity_type,entity_id,before_data,after_data
         ) values (
-          null,'operations','erpnext_vehicle_status_synced','vehicle',${vehicle.id},
-          ${tx.json(before)},${tx.json({ ...updated, erpEvent: payload.event, erpModifiedBy: payload.modifiedBy, erpModifiedAt: payload.modifiedAt || null })}
+          ${matchedUser?.id || null}::uuid,'operations','erpnext_vehicle_status_synced','vehicle',${vehicle.id},
+          ${tx.json(before)},${tx.json({
+            ...updated,
+            erpEvent: payload.event,
+            erpModifiedBy: payload.modifiedBy,
+            erpModifiedAt: payload.modifiedAt || null,
+          })}
         )
       `;
 
       return {
         found: true as const,
         changed: true,
+        statusChanged,
+        reservationChanged,
         vehicleId: vehicle.id,
-        movementId: movement.id,
-        batchId: batch.id,
+        movementId,
+        batchId,
         previousStatus: vehicle.status_code,
         previousStatusName: vehicle.status_name,
         currentStatus: targetStatus.code,
         currentStatusName: targetStatus.name,
+        reservedByName: updated.reserved_by_name || null,
+        reservedByEmail: updated.reserved_by_email || null,
+        reservedAt: updated.reserved_at || null,
       };
     });
 
@@ -196,11 +261,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
       });
     }
 
+    const message = result.changed
+      ? mapping.isReserved
+        ? "تم تحديث حالة السيارة إلى حجز وتسجيل الإداري الذي حجز"
+        : "تم تحديث حالة السيارة إلى متاح للبيع ومسح بيانات الحجز"
+      : "حالة السيارة وبيانات الحجز متزامنة بالفعل";
+
     return response.status(200).json({
       ok: true,
       serialNo: payload.serialNo,
       vehicleStatus: payload.vehicleStatus,
       changed: result.changed,
+      statusChanged: result.statusChanged,
+      reservationChanged: result.reservationChanged,
       vehicleId: result.vehicleId,
       movementId: result.movementId,
       batchId: result.batchId,
@@ -208,9 +281,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       previousStatusName: result.previousStatusName,
       currentStatus: result.currentStatus,
       currentStatusName: result.currentStatusName,
-      message: result.changed
-        ? "تم تحديث حالة السيارة إلى محجوزة في المنصة"
-        : "حالة السيارة في المنصة محجوزة بالفعل",
+      reservedByName: result.reservedByName,
+      reservedByEmail: result.reservedByEmail,
+      reservedAt: result.reservedAt,
+      message,
     });
   } catch (error) {
     console.error("ERPNext vehicle status webhook failed", {

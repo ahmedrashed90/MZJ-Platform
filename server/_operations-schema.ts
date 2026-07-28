@@ -138,6 +138,9 @@ alter table operations.vehicles add column if not exists created_by uuid referen
 alter table operations.vehicles add column if not exists created_by_name text;
 alter table operations.vehicles add column if not exists updated_by uuid references core.users(id);
 alter table operations.vehicles add column if not exists updated_by_name text;
+alter table operations.vehicles add column if not exists reserved_by_email text;
+alter table operations.vehicles add column if not exists reserved_by_name text;
+alter table operations.vehicles add column if not exists reserved_at timestamptz;
 alter table operations.vehicles add column if not exists legacy_id text;
 alter table operations.vehicles add column if not exists version integer not null default 1;
 alter table operations.vehicles add column if not exists photographed boolean not null default false;

@@ -32,6 +32,9 @@ export type VehicleRow = {
   archive_reason?: string | null;
   created_by_name?: string | null;
   updated_by_name?: string | null;
+  reserved_by_email?: string | null;
+  reserved_by_name?: string | null;
+  reserved_at?: string | null;
   created_at: string;
   updated_at: string;
   version: number;

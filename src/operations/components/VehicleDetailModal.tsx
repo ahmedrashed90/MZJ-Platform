@@ -76,7 +76,7 @@ export function VehicleDetailModal({ id, meta, initialTab = "details", onClose, 
                 {[
                   ["رقم الهيكل", vehicle.vin], ["السيارة", vehicle.car_name], ["البيان", vehicle.statement], ["الوكيل", vehicle.agent_name],
                   ["اللون الداخلي", vehicle.interior_color], ["اللون الخارجي", vehicle.exterior_color], ["الموديل", vehicle.model_year], ["اللوحة", vehicle.plate_no],
-                  ["اسم الدفعة", vehicle.batch_no], ["المكان الحالي", vehicle.location_name], ["الحالة الحالية", vehicle.status_name], ["ملاحظات السيارة", vehicle.notes],
+                  ["اسم الدفعة", vehicle.batch_no], ["المكان الحالي", vehicle.location_name], ["الحالة الحالية", vehicle.status_name], ["الإداري الذي حجز", vehicle.reserved_by_name || vehicle.reserved_by_email], ["تاريخ الحجز", vehicle.reserved_at ? formatOperationsDate(vehicle.reserved_at) : "—"], ["ملاحظات السيارة", vehicle.notes],
                   ["ملاحظات الحالة", vehicle.state_note], ["حجز - نواقص - تحديد مكان", vehicle.shortage_note], ["المنشئ", vehicle.created_by_name], ["آخر تعديل", formatOperationsDate(vehicle.updated_at)],
                 ].map(([label, value]) => <div key={label}><small>{label}</small><strong>{value || "—"}</strong></div>)}
               </div>
