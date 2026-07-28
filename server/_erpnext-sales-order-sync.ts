@@ -40,11 +40,15 @@ function serviceKeyFromDepartment(value: unknown) {
 }
 
 
-function isSupportedCrmDepartment(value: unknown) {
-  const code = clean(value).toLowerCase();
-  return ["cash_sales", "finance_sales"].includes(code)
-    || code.includes("كاش")
-    || code.includes("تمويل");
+function isSupportedCrmDepartment(codeValue: unknown, nameValue: unknown) {
+  const code = clean(codeValue).toLowerCase();
+  const name = clean(nameValue).toLowerCase();
+  const identity = `${code} ${name}`;
+  return ["cash_sales", "finance_sales", "wholesale", "wholesale_sales"].includes(code)
+    || identity.includes("كاش")
+    || identity.includes("تمويل")
+    || identity.includes("جملة")
+    || identity.includes("wholesale");
 }
 function paymentType(serviceKey: string) {
   if (serviceKey === "finance") return "تمويل";
@@ -79,18 +83,22 @@ async function resolvePlatformUser(erpUserId: string): Promise<{
       dep.code as department_code,dep.name as department_name,
       br.code as branch_code,br.name as branch_name
     from core.users u
+    join core.user_systems us
+      on us.user_id=u.id and us.system_code='crm' and us.is_enabled=true
     left join lateral (
       select d.code,d.name
-      from core.user_departments ud join core.departments d on d.id=ud.department_id
-      where ud.user_id=u.id
-      order by ud.is_primary desc,d.created_at,d.code
+      from core.user_system_departments usd
+      join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+      where usd.user_id=u.id and usd.system_code='crm'
+      order by usd.is_primary desc,d.created_at,d.code
       limit 1
     ) dep on true
     left join lateral (
       select b.code,b.name
-      from core.user_branches ub join core.branches b on b.id=ub.branch_id
-      where ub.user_id=u.id
-      order by ub.is_primary desc,b.created_at,b.code
+      from core.user_system_branches usb
+      join core.branches b on b.id=usb.branch_id and b.is_active=true
+      where usb.user_id=u.id and usb.system_code='crm'
+      order by usb.is_primary desc,b.created_at,b.code
       limit 1
     ) br on true
     where u.is_active=true and lower(trim(u.next_erp_user_id))=lower(trim(${erpUserId}))
@@ -98,7 +106,7 @@ async function resolvePlatformUser(erpUserId: string): Promise<{
   `;
   if (!candidate) return { status: "user_not_mapped", mapping: null, candidate: null };
   if (!clean(candidate.department_code)) return { status: "department_not_configured", mapping: null, candidate };
-  if (!isSupportedCrmDepartment(candidate.department_code)) return { status: "unsupported_department", mapping: null, candidate };
+  if (!isSupportedCrmDepartment(candidate.department_code, candidate.department_name)) return { status: "unsupported_department", mapping: null, candidate };
   if (!clean(candidate.branch_code)) return { status: "platform_branch_not_configured", mapping: null, candidate };
   return { status: "linked", mapping: candidate, candidate };
 }
