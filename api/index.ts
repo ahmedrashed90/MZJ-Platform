@@ -41,6 +41,7 @@ import trackingDeleteHandler from "../server/tracking/delete.js";
 import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
 import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-sales-order.js";
+import erpNextVehicleStatusIntegrationHandler from "../server/integrations/erpnext-vehicle-status.js";
 import operationsHandler from "../server/operations/index.js";
 import marketingHandler from "../server/marketing/index.js";
 import activityHandler from "../server/activity.js";
@@ -90,6 +91,7 @@ const routes = new Map<string, ApiHandler>([
   ["tracking/settings", trackingSettingsHandler],
   ["integrations/tracking/orders", trackingIntegrationHandler],
   ["integrations/erpnext/sales-order", erpNextSalesOrderIntegrationHandler],
+  ["integrations/erpnext/serial-no-status", erpNextVehicleStatusIntegrationHandler],
   ["operations", operationsHandler],
   ["marketing", marketingHandler],
   ["activity", activityHandler],
@@ -128,6 +130,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (route === "integrations/erpnext/sales-order") {
     return erpNextSalesOrderIntegrationHandler(request, response);
+  }
+
+  if (route === "integrations/erpnext/serial-no-status") {
+    return erpNextVehicleStatusIntegrationHandler(request, response);
   }
 
   if (route.startsWith("integrations/")) {
