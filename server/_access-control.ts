@@ -88,6 +88,7 @@ export async function getEffectiveAccess(userId: string): Promise<EffectiveAcces
       role_code: string | null;
       branch_codes: string[] | null;
       department_codes: string[] | null;
+      vehicle_status_codes: string[] | null;
     }[]>`
       select
         us.system_code,
@@ -106,7 +107,12 @@ export async function getEffectiveAccess(userId: string): Promise<EffectiveAcces
           from core.user_system_departments usd
           join core.departments d on d.id=usd.department_id and d.is_active=true
           where usd.user_id=us.user_id and usd.system_code=us.system_code
-        ),'{}') as department_codes
+        ),'{}') as department_codes,
+        coalesce((
+          select array_agg(uvs.status_code order by uvs.status_code)
+          from core.user_system_vehicle_statuses uvs
+          where uvs.user_id=us.user_id and uvs.system_code=us.system_code
+        ),'{}') as vehicle_status_codes
       from core.user_systems us
       left join core.roles r on r.id=us.role_id
       where us.user_id=${userId}::uuid
@@ -126,6 +132,7 @@ export async function getEffectiveAccess(userId: string): Promise<EffectiveAcces
       roleCode: row.role_code,
       branchCodes: normalizeArray(row.branch_codes),
       departmentCodes: normalizeArray(row.department_codes),
+      vehicleStatusCodes: normalizeArray(row.vehicle_status_codes),
     };
   }
 
@@ -151,6 +158,7 @@ export function getSystemAccess(user: PermissionUser, system: PlatformSystem): S
     roleCode: null,
     branchCodes: [],
     departmentCodes: [],
+    vehicleStatusCodes: [],
   };
 }
 

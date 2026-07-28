@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser, requestIp } from "./_auth.js";
 import { getSql } from "./_db.js";
+import { ensureOperationsSchema } from "./_operations-schema.js";
 import {
   getEffectiveAccess,
   hasPermission,
@@ -49,15 +50,18 @@ const SCOPE_GRANT_MATRIX: Record<DataScope, DataScope[]> = {
 };
 
 async function actorCanGrantScope(actor: PermissionUser, systems: any[]) {
-  if (hasPermission(actor, "platform.superadmin")) return true;
+  const isSuperadmin = hasPermission(actor, "platform.superadmin");
   const sql = getSql();
   const branchIds = [...new Set(systems.flatMap((item: any) => array(item?.branchIds)))];
   const departmentIds = [...new Set(systems.flatMap((item: any) => array(item?.departmentIds)))];
-  const [branches, departments] = await Promise.all([
+  const vehicleStatusCodes = [...new Set(systems.flatMap((item: any) => clean(item?.systemCode) === "operations" ? array(item?.vehicleStatusCodes) : []))];
+  const [branches, departments, vehicleStatuses] = await Promise.all([
     branchIds.length ? sql<{ id: string; code: string }[]>`select id::text,code from core.branches where id in ${sql(branchIds)} and is_active=true` : Promise.resolve([]),
     departmentIds.length ? sql<{ id: string; code: string; system_code: string | null }[]>`select id::text,code,system_code from core.departments where id in ${sql(departmentIds)} and is_active=true` : Promise.resolve([]),
+    vehicleStatusCodes.length ? sql<{ code: string }[]>`select code from operations.vehicle_statuses where code in ${sql(vehicleStatusCodes)} and is_active=true` : Promise.resolve([]),
   ]);
-  if (branches.length !== branchIds.length || departments.length !== departmentIds.length) return false;
+  if (branches.length !== branchIds.length || departments.length !== departmentIds.length || vehicleStatuses.length !== vehicleStatusCodes.length) return false;
+  if (isSuperadmin) return true;
   const branchCodeById = new Map(branches.map((row) => [row.id, row.code]));
   const departmentById = new Map(departments.map((row) => [row.id, row]));
 
@@ -70,10 +74,14 @@ async function actorCanGrantScope(actor: PermissionUser, systems: any[]) {
     if (!SCOPE_GRANT_MATRIX[actorAccess.dataScope]?.includes(requestedScope)) return false;
     const requestedBranchCodes = array(config?.branchIds).map((id) => branchCodeById.get(id)).filter(Boolean) as string[];
     const requestedDepartments = array(config?.departmentIds).map((id) => departmentById.get(id)).filter(Boolean) as { code: string; system_code: string | null }[];
+    const requestedVehicleStatuses = systemCode === "operations" ? array(config?.vehicleStatusCodes) : [];
     if (requestedDepartments.some((row) => row.system_code && row.system_code !== systemCode)) return false;
     if (actorAccess.dataScope !== "all") {
       if (requestedBranchCodes.some((code) => !actorAccess.branchCodes.includes(code))) return false;
       if (requestedDepartments.some((row) => !actorAccess.departmentCodes.includes(row.code))) return false;
+    }
+    if (systemCode === "operations" && actorAccess.vehicleStatusCodes.length) {
+      if (!requestedVehicleStatuses.length || requestedVehicleStatuses.some((code) => !actorAccess.vehicleStatusCodes.includes(code))) return false;
     }
   }
   return true;
@@ -115,6 +123,7 @@ function accessPayloadSignature(roleIds: string[], systems: any[], overrides: an
       systemCode: clean(item.systemCode), isEnabled: bool(item.isEnabled), roleId: clean(item.roleId),
       dataScope: validScope(item.dataScope) ? clean(item.dataScope) : "assigned",
       branchIds: array(item.branchIds).sort(), departmentIds: array(item.departmentIds).sort(),
+      vehicleStatusCodes: clean(item.systemCode) === "operations" ? array(item.vehicleStatusCodes).sort() : [],
       primaryBranchId: clean(item.primaryBranchId), primaryDepartmentId: clean(item.primaryDepartmentId),
     })).sort((a: any, b: any) => a.systemCode.localeCompare(b.systemCode)),
     overrides: overrides.map((item: any) => ({ permissionCode: clean(item.permissionCode), effect: clean(item.effect) }))
@@ -132,6 +141,7 @@ async function userSnapshot(userId: string) {
         'systemCode',us.system_code,'isEnabled',us.is_enabled,'roleId',us.role_id::text,'dataScope',us.data_scope,
         'branchIds',coalesce((select jsonb_agg(usb.branch_id::text order by usb.is_primary desc) from core.user_system_branches usb where usb.user_id=u.id and usb.system_code=us.system_code),'[]'::jsonb),
         'departmentIds',coalesce((select jsonb_agg(usd.department_id::text order by usd.is_primary desc) from core.user_system_departments usd where usd.user_id=u.id and usd.system_code=us.system_code),'[]'::jsonb),
+        'vehicleStatusCodes',coalesce((select jsonb_agg(uvs.status_code order by vs.sort_order,vs.name,uvs.status_code) from core.user_system_vehicle_statuses uvs left join operations.vehicle_statuses vs on vs.code=uvs.status_code where uvs.user_id=u.id and uvs.system_code=us.system_code),'[]'::jsonb),
         'primaryBranchId',(select usb.branch_id::text from core.user_system_branches usb where usb.user_id=u.id and usb.system_code=us.system_code order by usb.is_primary desc limit 1),
         'primaryDepartmentId',(select usd.department_id::text from core.user_system_departments usd where usd.user_id=u.id and usd.system_code=us.system_code order by usd.is_primary desc limit 1)
       ) order by us.system_code) from core.user_systems us where us.user_id=u.id),'[]'::jsonb),
@@ -169,6 +179,7 @@ async function userDetail(userId: string) {
       select us.system_code,us.is_enabled,us.role_id::text,us.data_scope,
         coalesce((select array_agg(usb.branch_id::text order by usb.is_primary desc,b.sort_order,b.name) from core.user_system_branches usb join core.branches b on b.id=usb.branch_id where usb.user_id=us.user_id and usb.system_code=us.system_code),'{}') as branch_ids,
         coalesce((select array_agg(usd.department_id::text order by usd.is_primary desc,d.name) from core.user_system_departments usd join core.departments d on d.id=usd.department_id where usd.user_id=us.user_id and usd.system_code=us.system_code),'{}') as department_ids,
+        coalesce((select array_agg(uvs.status_code order by vs.sort_order,vs.name,uvs.status_code) from core.user_system_vehicle_statuses uvs left join operations.vehicle_statuses vs on vs.code=uvs.status_code where uvs.user_id=us.user_id and uvs.system_code=us.system_code),'{}') as vehicle_status_codes,
         (select usb.branch_id::text from core.user_system_branches usb where usb.user_id=us.user_id and usb.system_code=us.system_code order by usb.is_primary desc limit 1) as primary_branch_id,
         (select usd.department_id::text from core.user_system_departments usd where usd.user_id=us.user_id and usd.system_code=us.system_code order by usd.is_primary desc limit 1) as primary_department_id
       from core.user_systems us where us.user_id=${userId}::uuid order by us.system_code
@@ -183,7 +194,7 @@ async function userDetail(userId: string) {
 
 async function bootstrap() {
   const sql = getSql();
-  const [systems, pages, permissions, roles, branches, departments] = await Promise.all([
+  const [systems, pages, permissions, roles, branches, departments, vehicleStatuses] = await Promise.all([
     sql<any[]>`select code,name_ar,sort_order,is_active from core.systems where code in ('crm','marketing','operations','tracking') order by sort_order`,
     sql<any[]>`select id::text,system_code,code,name_ar,route,sort_order,is_active from core.system_pages where is_active=true order by system_code,sort_order`,
     sql<any[]>`select id::text,code,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order from core.permissions where is_active=true order by system_code,sort_order,code`,
@@ -195,8 +206,9 @@ async function bootstrap() {
     `,
     sql<any[]>`select id::text,code,name,is_active,sort_order from core.branches order by is_active desc,sort_order,name`,
     sql<any[]>`select id::text,code,name,system_code,is_active from core.departments order by is_active desc,system_code,name`,
+    sql<any[]>`select code,name,is_active,sort_order from operations.vehicle_statuses order by is_active desc,sort_order,name`,
   ]);
-  return { systems, pages, permissions, roles, branches, departments, dataScopes: DATA_SCOPE_OPTIONS };
+  return { systems, pages, permissions, roles, branches, departments, vehicleStatuses, dataScopes: DATA_SCOPE_OPTIONS };
 }
 
 async function saveUser(request: VercelRequest, actor: PermissionUser, body: Record<string, any>) {
@@ -248,13 +260,13 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   const creatingWithAccess = creating && (
     roleIds.length > 0
     || overrides.length > 0
-    || systems.some((item: any) => bool(item.isEnabled) || clean(item.roleId) || array(item.branchIds).length || array(item.departmentIds).length)
+    || systems.some((item: any) => bool(item.isEnabled) || clean(item.roleId) || array(item.branchIds).length || array(item.departmentIds).length || array(item.vehicleStatusCodes).length)
   );
   const requestedAccessChanged = creating
     ? creatingWithAccess
     : accessPayloadSignature(roleIds, systems, overrides) !== accessPayloadSignature(
         (before?.roles || []).map((item: any) => clean(item.id)),
-        (before?.systems || []).map((item: any) => ({ systemCode:item.systemCode,isEnabled:item.isEnabled,roleId:item.roleId,dataScope:item.dataScope,branchIds:item.branchIds,departmentIds:item.departmentIds,primaryBranchId:item.primaryBranchId,primaryDepartmentId:item.primaryDepartmentId })),
+        (before?.systems || []).map((item: any) => ({ systemCode:item.systemCode,isEnabled:item.isEnabled,roleId:item.roleId,dataScope:item.dataScope,branchIds:item.branchIds,departmentIds:item.departmentIds,vehicleStatusCodes:item.vehicleStatusCodes,primaryBranchId:item.primaryBranchId,primaryDepartmentId:item.primaryDepartmentId })),
         (before?.overrides || []).map((item: any) => ({ permissionCode:item.permissionCode,effect:item.effect })),
       );
   if (requestedAccessChanged && !hasPermission(actor, "settings.permissions.manage")) {
@@ -277,11 +289,12 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       || clean(item.dataScope) !== clean(previous.dataScope)
       || JSON.stringify(array(item.branchIds).sort()) !== JSON.stringify(array(previous.branchIds).sort())
       || JSON.stringify(array(item.departmentIds).sort()) !== JSON.stringify(array(previous.departmentIds).sort())
+      || JSON.stringify(array(item.vehicleStatusCodes).sort()) !== JSON.stringify(array(previous.vehicleStatusCodes).sort())
       || clean(item.primaryBranchId) !== clean(previous.primaryBranchId)
       || clean(item.primaryDepartmentId) !== clean(previous.primaryDepartmentId);
   });
   if (requestedAccessChanged && scopeSystemsToValidate.length && !await actorCanGrantScope(actor, scopeSystemsToValidate)) {
-    throw Object.assign(new Error("لا يمكنك منح نطاق بيانات أو فروع أو أقسام خارج نطاقك الفعلي"), { status: 403 });
+    throw Object.assign(new Error("لا يمكنك منح نطاق بيانات أو فروع أو أقسام خارج نطاقك الفعلي، ولا حالات سيارات خارج الحالات المسموحة لك"), { status: 403 });
   }
   const requiredPermission = creating
     ? "settings.users.create"
@@ -332,6 +345,7 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       `;
       const branchIds = array(config.branchIds);
       const departmentIds = array(config.departmentIds);
+      const vehicleStatusCodes = system.code === "operations" ? array(config.vehicleStatusCodes) : [];
       const requestedPrimaryBranchId = clean(config.primaryBranchId);
       const requestedPrimaryDepartmentId = clean(config.primaryDepartmentId);
       const primaryBranchId = branchIds.includes(requestedPrimaryBranchId) ? requestedPrimaryBranchId : branchIds[0] || null;
@@ -345,6 +359,13 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
       if (departmentIds.length) await tx`
         insert into core.user_system_departments(user_id,system_code,department_id,is_primary)
         select ${id}::uuid,${system.code},x::uuid,x=${primaryDepartmentId} from unnest(${departmentIds}::text[]) x
+      `;
+      await tx`delete from core.user_system_vehicle_statuses where user_id=${id}::uuid and system_code=${system.code}`;
+      if (vehicleStatusCodes.length) await tx`
+        insert into core.user_system_vehicle_statuses(user_id,system_code,status_code)
+        select ${id}::uuid,${system.code},s.code
+        from operations.vehicle_statuses s
+        where s.code in ${tx(vehicleStatusCodes)} and s.is_active=true
       `;
     }
 
@@ -543,6 +564,7 @@ async function saveOrgItem(request: VercelRequest, actor: PermissionUser, body: 
     const [before]=id?await sql<any[]>`select to_jsonb(b) as snapshot from core.branches b where id=${id}::uuid`:[];
     const [row]=id?await sql<any[]>`update core.branches set code=${code},name=${name},sort_order=${Number(body.sortOrder)||0},is_active=${bool(body.isActive,true)},updated_at=now() where id=${id}::uuid returning id::text,code,name,is_active,sort_order`:await sql<any[]>`insert into core.branches(code,name,sort_order,is_active) values(${code},${name},${Number(body.sortOrder)||0},${bool(body.isActive,true)}) returning id::text,code,name,is_active,sort_order`;
     if(!row)throw Object.assign(new Error('الفرع غير موجود'),{status:404});
+    await sql`update operations.locations set code=${row.code},name=${row.name},sort_order=${row.sort_order},is_active=${row.is_active},updated_at=now() where core_branch_id=${row.id}::uuid`;
     if(id){await sql`update core.users set permission_version=permission_version+1,updated_at=now() where id in(select user_id from core.user_branches where branch_id=${row.id}::uuid union select user_id from core.user_system_branches where branch_id=${row.id}::uuid)`;await sql`delete from core.sessions where user_id in(select user_id from core.user_branches where branch_id=${row.id}::uuid union select user_id from core.user_system_branches where branch_id=${row.id}::uuid)`;}
     await sql`insert into core.permission_change_log(changed_by,change_type,before_data,after_data,reason,request_id,ip_address,user_agent) values(${actor.id}::uuid,${id?'branch_updated':'branch_created'},${before?.snapshot?sql.json(before.snapshot):null},${sql.json(row)},${reason},${requestId(request)},${requestIp(request)},${requestUserAgent(request)})`;
     await logSecurityEvent({request,user:actor,systemCode:'core',pageCode:'settings',permissionCode:'settings.branches.manage',action:id?'branch_updated':'branch_created',entityType:'branch',entityId:row.id,result:'success',afterData:row});
@@ -567,6 +589,7 @@ export default async function handler(request: VercelRequest,response: VercelRes
   const actor=await requireUser(request,response); if(!actor)return;
   const resource=clean(request.query.resource)||'bootstrap';
   try{
+    await ensureOperationsSchema();
     if(request.method==='GET'){
       if(resource==='bootstrap'){
         if(!canOpenAccessControl(actor))return response.status(403).json({ok:false,error:'لا توجد صلاحية لفتح المستخدمين والصلاحيات'});

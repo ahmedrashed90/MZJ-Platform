@@ -21,6 +21,7 @@ export type SystemAccessConfig = {
   roleCode: string | null;
   branchCodes: string[];
   departmentCodes: string[];
+  vehicleStatusCodes: string[];
 };
 
 export type AccessUserShape = {

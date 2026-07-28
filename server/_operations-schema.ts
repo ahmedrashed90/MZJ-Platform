@@ -109,8 +109,23 @@ from seed where not exists (select 1 from operations.vehicle_statuses s where s.
 alter table operations.locations add column if not exists branch_code text;
 alter table operations.locations add column if not exists is_agency boolean not null default false;
 alter table operations.locations add column if not exists updated_at timestamptz not null default now();
+alter table operations.locations add column if not exists core_branch_id uuid references core.branches(id) on delete set null;
 update operations.locations set branch_code=case code when 'hall' then 'hall' when 'qadisiyah' then 'qadisiyah' when 'multaqa' then 'multaqa' else null end where branch_code is null;
 update operations.locations set is_agency=(code='agency');
+
+insert into core.branches(code,name,is_active,sort_order)
+select l.code,l.name,l.is_active,l.sort_order
+from operations.locations l
+on conflict(code) do update set
+  name=excluded.name,is_active=excluded.is_active,sort_order=excluded.sort_order,updated_at=now();
+
+update operations.locations l
+set core_branch_id=b.id,updated_at=now()
+from core.branches b
+where b.code=l.code and l.core_branch_id is distinct from b.id;
+
+create unique index if not exists operations_locations_core_branch_unique
+  on operations.locations(core_branch_id) where core_branch_id is not null;
 
 alter table operations.vehicles add column if not exists is_inventory_active boolean not null default true;
 alter table operations.vehicles add column if not exists state_note text;
