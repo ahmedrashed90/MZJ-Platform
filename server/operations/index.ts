@@ -177,6 +177,7 @@ async function listVehicles(sql: ReturnType<typeof getSql>, request: VercelReque
       v.id::text,v.vin,v.car_name,v.statement,v.agent_name,v.exterior_color,v.interior_color,v.model_year,v.plate_no,v.batch_no,
       v.location_id::text,l.code as location_code,l.name as location_name,l.branch_code,
       v.status_code,coalesce(s.name,v.status_code) as status_name,v.source_type,v.has_notes,v.notes,v.state_note,v.shortage_note,
+      v.reserved_by_email,v.reserved_by_name,v.reserved_at,
       v.archived_at,v.archive_reason,v.created_by_name,v.updated_by_name,v.created_at,v.updated_at,v.version,
       coalesce(a.financial_approved,false) as financial_approved,
       coalesce(a.administrative_approved,false) as administrative_approved,
