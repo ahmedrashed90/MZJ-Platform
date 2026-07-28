@@ -28,7 +28,7 @@ export function VehicleManagementPage() {
 
   function edit(row: VehicleRow) {
     setForm({ id: row.id, vin: row.vin, carName: row.car_name || "", statement: row.statement || "", agentName: row.agent_name || "", exteriorColor: row.exterior_color || "", interiorColor: row.interior_color || "", modelYear: row.model_year || "", plateNo: row.plate_no || "", batchNo: row.batch_no || "", locationId: row.location_id || "", statusCode: row.status_code, sourceType: row.source_type || "", notes: row.notes || "", stateNote: row.state_note || "", shortageNote: row.shortage_note || "" });
-    setResults([]); setSearch(row.vin);
+    setResults([]); setSearch("");
   }
 
   async function save(event: React.FormEvent) {
@@ -134,7 +134,26 @@ export function VehicleManagementPage() {
         </section>
       </div>
 
-      <section className="panel operations-search-edit-panel"><div className="operations-section-title"><MagnifyingGlass size={21} /><div><h2>البحث للتعديل</h2><p>ابحث برقم الهيكل أو السيارة ثم اختر السجل.</p></div></div><label className="operations-search"><MagnifyingGlass size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="اكتب جزءًا من رقم الهيكل" /></label>{results.length ? <div className="operations-search-results">{results.map((row) => <button key={row.id} type="button" onClick={() => edit(row)}><b>{row.vin}</b><span>{row.car_name || "—"} · {row.location_name || "—"} · {row.status_name}</span></button>)}</div> : null}</section>
+      <section className="panel operations-search-edit-panel">
+        <div className="operations-section-title"><MagnifyingGlass size={21} /><div><h2>البحث للتعديل</h2><p>ابحث برقم الهيكل أو السيارة ثم اختر السجل.</p></div></div>
+        <div className="operations-vehicle-search operations-management-vehicle-search">
+          <label className="operations-search">
+            <MagnifyingGlass size={18} />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="اكتب جزءًا من رقم الهيكل" autoComplete="off" />
+          </label>
+          {results.length ? (
+            <div className="operations-search-results" role="listbox" aria-label="نتائج البحث للتعديل">
+              {results.map((row) => (
+                <button key={row.id} type="button" role="option" onClick={() => edit(row)}>
+                  <b dir="ltr">{row.vin}</b>
+                  <span>{row.car_name || "—"} · {row.statement || "بدون بيان"}</span>
+                  <small>{row.location_name || "بدون مكان"} · {row.status_name || row.status_code}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </section>
     </div>
   );
 }

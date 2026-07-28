@@ -357,7 +357,7 @@ export function TransferRequestsPage() {
               ) : null}
               {selected.can_delete ? (
                 <button type="button" className="danger" onClick={() => setConfirmAction("delete")}>
-                  <Trash size={17} />حذف قبل التنفيذ
+                  <Trash size={17} />{selected.cancelled_at ? "حذف الطلب الملغي" : "حذف قبل التنفيذ"}
                 </button>
               ) : null}
               {selected.can_cancel ? <button type="button" onClick={() => setConfirmAction("cancel")}>إلغاء الطلب</button> : null}
@@ -368,7 +368,7 @@ export function TransferRequestsPage() {
 
       <Modal
         open={Boolean(confirmAction)}
-        title={confirmAction === "delete" ? "حذف الطلب" : "إلغاء الطلب"}
+        title={confirmAction === "delete" ? (selected?.cancelled_at ? "حذف الطلب الملغي" : "حذف الطلب") : "إلغاء الطلب"}
         onClose={() => setConfirmAction(null)}
         level={1}
         className="operations-confirm-modal"
@@ -381,7 +381,7 @@ export function TransferRequestsPage() {
       >
         <div className="operations-confirm-warning danger">
           <WarningCircle size={24} />
-          <p>{confirmAction === "delete" ? "يتم الحذف فقط قبل تنفيذ أي مرحلة، مع بقاء الحدث في سجل التدقيق." : "سيتم إيقاف المراحل الجديدة مع الحفاظ على كل الإجراءات السابقة."}</p>
+          <p>{confirmAction === "delete" ? (selected?.cancelled_at ? "سيتم حذف الطلب الملغي من قوائم العمليات مع الاحتفاظ بأحداثه في سجل التدقيق." : "يتم الحذف فقط قبل تنفيذ أي مرحلة، مع بقاء الحدث في سجل التدقيق.") : "سيتم إيقاف المراحل الجديدة مع الحفاظ على كل الإجراءات السابقة."}</p>
         </div>
         <label className="operations-field">
           <span>السبب {confirmAction === "cancel" ? "— مطلوب" : ""}</span>

@@ -3,6 +3,7 @@ import type { DashboardData } from "../src/types.js";
 import type { SessionUser } from "./_auth.js";
 import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
+import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 
 const locationNames = [
   ["warehouse", "المستودع"],
@@ -108,7 +109,10 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
     const canSeeMultaqa = globalOperationsAccess || operationBranches.includes("multaqa");
     const canSeeHall = globalOperationsAccess || operationBranches.includes("hall");
     const canSeeQadisiyah = globalOperationsAccess || operationBranches.includes("qadisiyah");
-    const [locations, [inventory], [approval], [shortage], [transfer], [photo]] = await Promise.all([
+    const approvalVisibilityScope = operationsApprovalVisibilityScope(sql, user);
+    const requestAccessScope = operationsRequestAccessScope(sql, user);
+    const requestHasActiveVehicle = operationsRequestHasActiveVehicle(sql, user);
+    const [locations, [inventory], [approval], [shortage], [transfer]] = await Promise.all([
       sql<any[]>`select l.code as key,l.name,
         count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true))::int as actual_total,
         count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery')::int as under_delivery,
@@ -131,7 +135,7 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
         where (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})`,
       sql<any[]>`select count(*)::int as total,count(*) filter(where a.financial_approved=false)::int as missing_financial,count(*) filter(where a.administrative_approved=false)::int as missing_administrative,count(*) filter(where a.financial_approved=true and a.administrative_approved=true)::int as completed
         from operations.vehicle_approvals a join operations.vehicles v on v.id=a.vehicle_id left join operations.locations l on l.id=v.location_id
-        where a.is_active=true and (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})`,
+        where ${approvalVisibilityScope}`,
       sql<any[]>`with combinations as (
           select
             coalesce(nullif(trim(v.car_name),''),'—') as car_name,
@@ -162,18 +166,25 @@ export async function getDashboardData(user: SessionUser): Promise<DashboardData
           count(*) filter(where hall_qty=0 and total_qty>0 and ${canSeeHall}=true)::int as hall,
           count(*) filter(where qadisiyah_qty=0 and total_qty>0 and ${canSeeQadisiyah}=true)::int as qadisiyah
         from shortages`,
-      sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total,count(*) filter(where r.is_deleted=false and r.status='request_received')::int as request_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_received')::int as vehicle_received,count(*) filter(where r.is_deleted=false and r.status='vehicle_sent')::int as vehicle_sent,count(*) filter(where r.is_deleted=false and r.status='completed')::int as completed
+      sql<any[]>`select
+          count(*)::int as total,
+          count(*) filter(where r.request_kind='transfer')::int as transfer_total,
+          count(*) filter(where r.request_kind='photography')::int as photography_total,
+          count(*) filter(where r.status='request_received')::int as request_received,
+          count(*) filter(where r.status='vehicle_received')::int as vehicle_received,
+          count(*) filter(where r.status='vehicle_sent')::int as vehicle_sent,
+          count(*) filter(where r.status='completed')::int as completed
         from operations.transfer_requests r
-        where (${globalOperationsAccess}=true or r.source_branch_code in ${sql(operationBranches)} or r.destination_branch_code in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
-      sql<any[]>`select count(*) filter(where r.is_deleted=false)::int as total from operations.photography_requests r
-        where (${globalOperationsAccess}=true or r.requested_by_branch in ${sql(operationBranches)} or r.requested_by=${user.id}::uuid)`,
+        where r.is_deleted=false
+          and ${requestAccessScope}
+          and (r.cancelled_at is not null or ${requestHasActiveVehicle})`,
     ]);
     data.operations.inventory = { actualTotal: asNumber(inventory?.actual_total), agency: asNumber(inventory?.agency), availableForSale: asNumber(inventory?.available_for_sale), reserved: asNumber(inventory?.reserved), underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes) };
     data.operations.locations = locations.map((item) => ({ key: item.key, name: item.name, actualTotal: asNumber(item.actual_total), underDelivery: asNumber(item.under_delivery), availableForSale: asNumber(item.available_for_sale), reserved: asNumber(item.reserved), delivered: asNumber(item.delivered), hasNotes: asNumber(item.has_notes) }));
     if (!data.operations.locations.length) data.operations.locations = emptyData().operations.locations;
     data.operations.approvals = { total: asNumber(approval?.total), missingFinancial: asNumber(approval?.missing_financial), missingAdministrative: asNumber(approval?.missing_administrative), completed: asNumber(approval?.completed) };
     data.operations.shortages = { total: asNumber(shortage?.total), multaqa: asNumber(shortage?.multaqa), hall: asNumber(shortage?.hall), qadisiyah: asNumber(shortage?.qadisiyah) };
-    data.operations.transfers = { total: asNumber(transfer?.total) + asNumber(photo?.total), transferTotal: asNumber(transfer?.total), photographyTotal: asNumber(photo?.total), requestReceived: asNumber(transfer?.request_received), vehicleReceived: asNumber(transfer?.vehicle_received), vehicleSent: asNumber(transfer?.vehicle_sent), completed: asNumber(transfer?.completed) };
+    data.operations.transfers = { total: asNumber(transfer?.total), transferTotal: asNumber(transfer?.transfer_total), photographyTotal: asNumber(transfer?.photography_total), requestReceived: asNumber(transfer?.request_received), vehicleReceived: asNumber(transfer?.vehicle_received), vehicleSent: asNumber(transfer?.vehicle_sent), completed: asNumber(transfer?.completed) };
   } catch (error) { data.sectionErrors!.operations = errorText(error); console.error("Dashboard operations query failed", error); }
   }
 

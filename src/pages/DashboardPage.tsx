@@ -585,14 +585,14 @@ export function DashboardPage() {
               </div>
             </OperationCard>
 
-            <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={() => setOperationsSelection({ mode: "requests" })}>
+            <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={() => setOperationsSelection({ mode: "requests", kind: "all", title: "طلبات النقل والتصوير" })}>
               <div className="operation-metrics-grid">
-                <OperationMetric label="طلبات النقل" value={operations?.transfers.transferTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="طلبات التصوير" value={operations?.transfers.photographyTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
-                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => setOperationsSelection({ mode: "requests" })} />
+                <OperationMetric label="طلبات النقل" value={operations?.transfers.transferTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "transfer", title: "طلبات النقل" })} />
+                <OperationMetric label="طلبات التصوير" value={operations?.transfers.photographyTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "photography", title: "طلبات التصوير" })} />
+                <OperationMetric label="تم استلام الطلب" value={operations?.transfers.requestReceived ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "all", status: "request_received", title: "الطلبات — تم استلام الطلب" })} />
+                <OperationMetric label="تم استلام السيارة" value={operations?.transfers.vehicleReceived ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "all", status: "vehicle_received", title: "الطلبات — تم استلام السيارة" })} />
+                <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "all", status: "vehicle_sent", title: "الطلبات — تم إرسال السيارة" })} />
+                <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "all", status: "completed", title: "الطلبات — تم الانتهاء" })} />
               </div>
             </OperationCard>
 

@@ -15,6 +15,11 @@ import {
 } from "../_operations-auth.js";
 import { emitOperationsNotification } from "../_notifications.js";
 import {
+  operationsApprovalVisibilityScope,
+  operationsRequestAccessScope,
+  operationsRequestHasActiveVehicle,
+} from "../_operations-query-scope.js";
+import {
   boolValue,
   clean,
   intValue,
@@ -476,28 +481,30 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const completedRaw = clean(request.query.completed);
   const hasCompletedFilter = completedRaw !== "";
   const completed = boolValue(request.query.completed);
+  const includeCancelled = clean(request.query.includeCancelled) !== "false";
   const pattern = `%${search}%`;
-  const operationsAccess = getSystemAccess(user, "operations");
-  const isAdmin = operationsAccess.dataScope === "all";
-  const branches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
   const allowedStatuses = allowedVehicleStatusCodes(user);
   const statusUnrestricted = !allowedStatuses.length;
   const statusCodes = allowedStatuses.length ? allowedStatuses : ["__none__"];
+  const requestAccessScope = operationsRequestAccessScope(sql, user);
+  const activeVehicleScope = operationsRequestHasActiveVehicle(sql, user);
   const where = sql`
-    r.is_deleted=false and (${kind}='all' or r.request_kind=${kind})
+    r.is_deleted=false
+    and ${requestAccessScope}
+    and (${includeCancelled}=true or r.cancelled_at is null)
+    and (r.cancelled_at is not null or ${activeVehicleScope})
+    and (${kind}='all' or r.request_kind=${kind})
     and (${status}='' or r.status=${status})
     and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
     and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
-      select 1 from operations.transfer_request_vehicles rx join operations.vehicles vx on vx.id=rx.vehicle_id
-      where rx.transfer_request_id=r.id and (vx.vin ilike ${pattern} or coalesce(vx.car_name,'') ilike ${pattern} or coalesce(vx.statement,'') ilike ${pattern})
-    ))
-    and (${isAdmin}=true or r.source_branch_code in ${sql(branches)} or r.destination_branch_code in ${sql(branches)}
-      or exists(select 1 from operations.locations scope_location where scope_location.id in (r.source_location_id,r.destination_location_id) and scope_location.code in ${sql(branches)})
-      or r.requested_by=${user.id}::uuid)
-    and (${statusUnrestricted}=true or exists(
-      select 1 from operations.transfer_request_vehicles status_rv
-      join operations.vehicles status_v on status_v.id=status_rv.vehicle_id
-      where status_rv.transfer_request_id=r.id and status_v.status_code in ${sql(statusCodes)}
+      select 1
+      from operations.transfer_request_vehicles rx
+      join operations.vehicles vx on vx.id=rx.vehicle_id
+      where rx.transfer_request_id=r.id
+        and vx.is_deleted=false
+        and (r.cancelled_at is not null or (vx.archived_at is null and vx.is_inventory_active=true))
+        and (${statusUnrestricted}=true or vx.status_code in ${sql(statusCodes)})
+        and (vx.vin ilike ${pattern} or coalesce(vx.car_name,'') ilike ${pattern} or coalesce(vx.statement,'') ilike ${pattern})
     ))
   `;
   const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.transfer_requests r where ${where}`;
@@ -523,6 +530,8 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
       left join operations.locations cl on cl.id=v.location_id
       left join operations.vehicle_statuses cs on cs.code=v.status_code
       where rv.transfer_request_id=r.id
+        and v.is_deleted=false
+        and (r.cancelled_at is not null or (v.archived_at is null and v.is_inventory_active=true))
         and (${statusUnrestricted}=true or v.status_code in ${sql(statusCodes)})
     ) cars on true
     left join lateral (
@@ -537,12 +546,13 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   `;
   const visibleRows = rows.map((row) => {
     const nextStatus = nextRequestStage(row.status);
+    const cancelled = Boolean(row.cancelled_at);
     return {
       ...row,
       next_status: nextStatus || null,
       can_advance: canAdvanceRequest(row, user, nextStatus),
-      can_delete: !row.cancelled_at && row.status === "created" && hasPermission(user, "operations.transfer.delete"),
-      can_cancel: !row.cancelled_at && row.status !== "completed" && hasPermission(user, "operations.transfer.cancel"),
+      can_delete: (cancelled || row.status === "created") && hasPermission(user, "operations.transfer.delete"),
+      can_cancel: !cancelled && row.status !== "completed" && hasPermission(user, "operations.transfer.cancel"),
     };
   });
   return { ok: true, rows: visibleRows, total: Number(count?.total || 0), page, pageSize };
@@ -552,8 +562,7 @@ async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequ
   const filter = clean(request.query.filter);
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
-  const scope = accessScope(sql, user, "l");
-  const statusScope = vehicleStatusScope(sql, user);
+  const visibilityScope = operationsApprovalVisibilityScope(sql, user);
   const rows = await sql<any[]>`
     select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
       a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.pending_delivery,a.updated_at,
@@ -563,10 +572,9 @@ async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequ
     join operations.vehicles v on v.id=a.vehicle_id
     left join operations.locations l on l.id=v.location_id
     left join operations.locations dl on dl.id=nullif(a.pending_delivery->>'destinationLocationId','')::uuid
-    where a.is_active=true and v.is_deleted=false and v.archived_at is null
-      and (v.status_code='under_delivery' or a.pending_delivery is not null)
+    where ${visibilityScope}
       and (${filter}='' or (${filter}='missing_financial' and a.financial_approved=false) or (${filter}='missing_administrative' and a.administrative_approved=false) or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true))
-      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}) and ${scope} and ${statusScope}
+      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern})
     order by a.updated_at desc
   `;
   return { ok: true, rows };
@@ -670,42 +678,15 @@ async function dashboardShortages(sql: ReturnType<typeof getSql>, request: Verce
 }
 
 async function dashboardRequests(sql: ReturnType<typeof getSql>, request: VercelRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
-  const kind = clean(request.query.kind) || "transfer";
-  const search = clean(request.query.search);
-  const pattern = `%${search}%`;
-  if (kind === "photo") {
-    const operationsAccess = getSystemAccess(user, "operations");
-    const isAdmin = operationsAccess.dataScope === "all";
-    const branches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
-    const allowedStatuses = allowedVehicleStatusCodes(user);
-    const statusUnrestricted = !allowedStatuses.length;
-    const statusCodes = allowedStatuses.length ? allowedStatuses : ["__none__"];
-    const where = sql`
-      r.is_deleted=false
-      and (${search}='' or coalesce(r.request_no,'') ilike ${pattern} or coalesce(r.requested_by_name,'') ilike ${pattern} or exists(
-        select 1 from operations.photography_request_vehicles px join operations.vehicles pv on pv.id=px.vehicle_id
-        where px.request_id=r.id and pv.vin ilike ${pattern}
-      ))
-      and (${isAdmin}=true or r.requested_by_branch in ${sql(branches)} or r.requested_by=${user.id}::uuid)
-      and (${statusUnrestricted}=true or exists(
-        select 1 from operations.photography_request_vehicles status_rv
-        join operations.vehicles status_v on status_v.id=status_rv.vehicle_id
-        where status_rv.request_id=r.id and status_v.status_code in ${sql(statusCodes)}
-      ))
-    `;
-    const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.photography_requests r where ${where}`;
-    const rows = await sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by_name as creator_name,r.requested_at,r.photography_date,r.note,
-        coalesce(json_agg(json_build_object('vin',v.vin,'car_name',v.car_name,'statement',v.statement) order by v.vin) filter(where v.id is not null),'[]') as vehicles
-      from operations.photography_requests r
-      left join operations.photography_request_vehicles rv on rv.request_id=r.id
-      left join operations.vehicles v on v.id=rv.vehicle_id and (${statusUnrestricted}=true or v.status_code in ${sql(statusCodes)})
-      where ${where}
-      group by r.id order by r.requested_at desc limit 500
-    `;
-    return { ok: true, rows, total: Number(count?.total || 0) };
-  }
-  return listTransfers(sql, { query: { ...request.query, kind: "transfer", pageSize: "200" } }, user);
+  const requestedKind = clean(request.query.kind) || "all";
+  const kind = requestedKind === "photo" ? "photography" : requestedKind;
+  return listTransfers(sql, {
+    query: {
+      ...request.query,
+      kind,
+      pageSize: "200",
+    },
+  }, user);
 }
 
 async function createVehicle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -1121,7 +1102,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     `;
     if (!r) throw new OperationError(404, "CONFLICT", "الطلب غير موجود");
     const requestLabel = r.request_kind === "photography" ? "طلب التصوير" : "طلب النقل";
-    if (r.cancelled_at) throw new OperationError(409, "CONFLICT", `${requestLabel} ملغي`);
+    if (r.cancelled_at && action !== "delete") throw new OperationError(409, "CONFLICT", `${requestLabel} ملغي`);
     const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
     for (const item of items) assertVehicleStatusAccess(user, item.status_code, `لا تملك صلاحية تنفيذ إجراء على السيارة ${item.vin} بحالتها الحالية`);
 
@@ -1137,8 +1118,11 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
 
     if (action === "delete") {
       if (!hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية حذف الطلب");
-      const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
-      if (r.status !== "created" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
+      const cancelledRequest = Boolean(r.cancelled_at);
+      if (!cancelledRequest) {
+        const [events] = await tx<{ count: number }[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${id}::uuid and action<>'created'`;
+        if (r.status !== "created" || Number(events?.count || 0) > 0) throw new OperationError(409, "CONFLICT", "لا يمكن حذف الطلب بعد بدء التنفيذ. استخدم الإلغاء.");
+      }
       await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${who.id}::uuid,updated_at=now() where id=${id}::uuid`;
       try {
         await tx.savepoint(async (eventTx) => {
@@ -1148,7 +1132,11 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
         console.error("Operations request delete event failed", { requestId: id, eventError });
       }
       const autoArchivedVehicleIds = await archiveEligibleItems();
-      return { ok: true, autoArchivedVehicleIds, message: `تم حذف ${requestLabel} قبل بدء التنفيذ` };
+      return {
+        ok: true,
+        autoArchivedVehicleIds,
+        message: cancelledRequest ? `تم حذف ${requestLabel} الملغي` : `تم حذف ${requestLabel} قبل بدء التنفيذ`,
+      };
     }
 
     if (action === "cancel") {

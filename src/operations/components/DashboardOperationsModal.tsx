@@ -4,9 +4,12 @@ import { Modal } from "../../components/Modal";
 import { exportExcel, operationsFetch, queryString } from "../api";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "./ResizableOperationsTable";
 
+type RequestKindFilter = "all" | "transfer" | "photography";
+type RequestStatusFilter = "" | "request_received" | "vehicle_received" | "vehicle_sent" | "completed";
+
 export type DashboardOperationsSelection =
   | { mode: "vehicles"; locationCode: string; locationName: string; metric: string; metricName: string }
-  | { mode: "requests" }
+  | { mode: "requests"; kind?: RequestKindFilter; status?: RequestStatusFilter; title: string }
   | { mode: "shortages"; locationCode: string; locationName: string }
   | { mode: "approvals"; filter: "" | "missing_financial" | "missing_administrative" | "completed"; title: string };
 
@@ -31,11 +34,28 @@ type RequestVehicle = { vin?: string; car_name?: string; statement?: string; mod
 type RequestRow = {
   id: string;
   request_no?: string;
+  request_kind?: string;
   status?: string;
+  cancelled_at?: string | null;
   requested_by_name?: string;
   creator_name?: string;
   requested_at?: string;
+  source_location_name?: string;
+  destination_location_name?: string;
   vehicles?: RequestVehicle[];
+};
+
+const requestKindLabels: Record<string, string> = {
+  transfer: "طلب نقل",
+  photography: "طلب تصوير",
+};
+
+const requestStatusLabels: Record<string, string> = {
+  created: "طلب جديد",
+  request_received: "تم استلام الطلب",
+  vehicle_received: "تم استلام السيارة",
+  vehicle_sent: "تم إرسال السيارة",
+  completed: "تم الانتهاء",
 };
 
 
@@ -84,7 +104,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
   const [shortageRows, setShortageRows] = useState<ShortageRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [kind, setKind] = useState<"transfer" | "photo">("transfer");
+  const [kind, setKind] = useState<RequestKindFilter>("all");
   const [detail, setDetail] = useState<RequestRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -106,7 +126,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         setTotal(Number(payload.total || 0));
       } else if (selection.mode === "requests") {
         const payload = await operationsFetch<{ rows: RequestRow[]; total: number }>(
-          `/api/operations${queryString({ resource: "dashboard_requests", kind, search })}`,
+          `/api/operations${queryString({ resource: "dashboard_requests", kind, status: selection.status || "", search })}`,
         );
         setRequestRows(payload.rows || []);
         setRows([]);
@@ -148,7 +168,12 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     setApprovalRows([]);
     setShortageRows([]);
     setTotal(0);
-  }, [selection, kind]);
+    if (selection?.mode === "requests") setKind(selection.kind || "all");
+  }, [selection]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [kind]);
 
   useEffect(() => {
     if (selection) void load();
@@ -239,7 +264,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     if (!selection) return "";
     if (selection.mode === "vehicles") return `${selection.locationName} — ${selection.metricName}`;
     if (selection.mode === "shortages") return `نواقص السيارات — ${selection.locationName}`;
-    if (selection.mode === "approvals") return selection.title;
+    if (selection.mode === "approvals" || selection.mode === "requests") return selection.title;
     return "طلبات النقل والتصوير";
   }, [selection]);
 
@@ -261,8 +286,9 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         <div className="dashboard-operations-toolbar">
           {selection?.mode === "requests" ? (
             <div className="operations-subtabs">
+              <button className={kind === "all" ? "active" : ""} type="button" onClick={() => setKind("all")}>الكل</button>
               <button className={kind === "transfer" ? "active" : ""} type="button" onClick={() => setKind("transfer")}>النقل</button>
-              <button className={kind === "photo" ? "active" : ""} type="button" onClick={() => setKind("photo")}>التصوير</button>
+              <button className={kind === "photography" ? "active" : ""} type="button" onClick={() => setKind("photography")}>التصوير</button>
             </div>
           ) : null}
           <label className="operations-search">
@@ -349,9 +375,9 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
             {!loading && !requestRows.length ? <div className="operations-empty-state">لا توجد طلبات</div> : requestRows.map((row) => (
               <article key={row.id}>
                 <div>
-                  <strong>{row.request_no || "طلب"}</strong>
-                  <span>المنشئ: {row.requested_by_name || row.creator_name || "—"}</span>
-                  <small>تاريخ الطلب: {row.requested_at ? new Date(row.requested_at).toLocaleString("ar-SA") : "—"}</small>
+                  <strong>{row.request_no || "طلب"} · {requestKindLabels[row.request_kind || ""] || "طلب"}</strong>
+                  <span>{row.source_location_name || "—"} ← {row.destination_location_name || "—"}</span>
+                  <small>{row.cancelled_at ? "ملغي" : requestStatusLabels[row.status || ""] || row.status || "—"} · {row.requested_by_name || row.creator_name || "—"} · {row.requested_at ? new Date(row.requested_at).toLocaleString("ar-SA") : "—"}</small>
                 </div>
                 <button type="button" onClick={() => setDetail(row)}>تفاصيل</button>
               </article>
