@@ -251,47 +251,75 @@ async function linkCrmCustomer(input: {
     `;
     const identity = erpCustomerIdentity(normalized);
     const candidates = new Map<string, any>();
+    const rememberCandidate = (candidate: any, priority = 1) => {
+      if (!candidate) return;
+      const contactKey = clean(candidate.contact_id) || `lead:${clean(candidate.id)}`;
+      const current = candidates.get(contactKey);
+      const candidatePriority = Math.max(priority, candidate.has_erp_history ? 2 : 1);
+      if (!current || candidatePriority > Number(current.__candidate_priority || 0)) {
+        candidates.set(contactKey, { ...candidate, __candidate_priority: candidatePriority });
+      }
+    };
 
     if (clean(integrationState?.crm_lead_id)) {
       const [linkedLead] = await tx`
         select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
-          assigned.full_name as assigned_name
+          assigned.full_name as assigned_name,true as has_erp_history
         from crm.leads l
         left join core.users assigned on assigned.id=l.assigned_to
         where l.id=${clean(integrationState.crm_lead_id)}::uuid and l.is_deleted=false
         limit 1 for update of l
       `;
-      if (linkedLead) candidates.set(linkedLead.id, linkedLead);
+      rememberCandidate(linkedLead, 3);
     }
 
     const identityMatches = await tx`
-      select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
-        assigned.full_name as assigned_name
+      select chosen.*
       from crm.contact_identities ci
-      join crm.leads l on l.contact_id=ci.contact_id and l.is_deleted=false
-      left join core.users assigned on assigned.id=l.assigned_to
+      join lateral (
+        select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
+          assigned.full_name as assigned_name,
+          exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) as has_erp_history
+        from crm.leads l
+        left join core.users assigned on assigned.id=l.assigned_to
+        where l.contact_id=ci.contact_id and l.is_deleted=false
+        order by exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) desc,
+          (l.current_request_id is not null) desc,l.updated_at desc,l.created_at desc
+        limit 1 for update of l
+      ) chosen on true
       where ci.channel_code='erpnext' and ci.external_id=${identity.externalId}
-      order by (l.current_request_id is not null) desc,l.updated_at desc,l.created_at desc
-      limit 3
-      for update of l
+      limit 1
     `;
-    for (const match of identityMatches) candidates.set(match.id, match);
+    for (const match of identityMatches) rememberCandidate(match, 2);
 
     if (normalized.actualCustomerPhoneNormalized) {
       const phoneMatches = await tx`
-        select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
-          assigned.full_name as assigned_name
-        from crm.leads l
-        left join core.users assigned on assigned.id=l.assigned_to
-        where l.is_deleted=false and (
-          l.phone_normalized=${normalized.actualCustomerPhoneNormalized}
-          or right(regexp_replace(coalesce(l.phone_normalized,l.phone,''),'\D','','g'),9)=right(${normalized.actualCustomerPhoneNormalized},9)
-        )
-        order by (l.current_request_id is not null) desc,l.updated_at desc,l.created_at desc
+        select chosen.*
+        from crm.contacts contact_match
+        join lateral (
+          select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
+            assigned.full_name as assigned_name,
+            exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) as has_erp_history
+          from crm.leads l
+          left join core.users assigned on assigned.id=l.assigned_to
+          where l.contact_id=contact_match.id and l.is_deleted=false
+          order by exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) desc,
+            (l.current_request_id is not null) desc,l.updated_at desc,l.created_at desc
+          limit 1 for update of l
+        ) chosen on true
+        where contact_match.primary_phone_normalized=${normalized.actualCustomerPhoneNormalized}
+          or right(regexp_replace(coalesce(contact_match.primary_phone_normalized,contact_match.primary_phone,''),'\D','','g'),9)=right(${normalized.actualCustomerPhoneNormalized},9)
+          or exists (
+            select 1 from crm.leads phone_lead
+            where phone_lead.contact_id=contact_match.id and phone_lead.is_deleted=false and (
+              phone_lead.phone_normalized=${normalized.actualCustomerPhoneNormalized}
+              or right(regexp_replace(coalesce(phone_lead.phone_normalized,phone_lead.phone,''),'\D','','g'),9)=right(${normalized.actualCustomerPhoneNormalized},9)
+            )
+          )
+        order by chosen.has_erp_history desc,chosen.updated_at desc,chosen.created_at desc
         limit 3
-        for update of l
       `;
-      for (const match of phoneMatches) candidates.set(match.id, match);
+      for (const match of phoneMatches) rememberCandidate(match, 1);
     }
 
     const matches = [...candidates.values()];
@@ -300,7 +328,7 @@ async function linkCrmCustomer(input: {
         status: "ambiguous_customer",
         leadId: null,
         created: false,
-        message: "هوية عميل NEXT ERP مرتبطة بأكثر من عميل في CRM",
+        message: "بيانات عميل NEXT ERP مرتبطة بأكثر من جهة اتصال؛ لم يتم إنشاء عميل مكرر",
       };
     }
 
@@ -729,6 +757,41 @@ async function linkOperationsVehicles(input: {
   };
 }
 
+async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
+  if (!clean(leadId)) return;
+  const sql = getSql();
+  const [sales] = await sql<any[]>`
+    select
+      coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_quantity,
+      coalesce(sum(coalesce(so.total_incl_vat,0)),0)::float as total_sales_amount,
+      coalesce(json_agg(so.sales_order_no order by coalesce(so.order_date,so.received_at::date),so.received_at) filter(where so.id is not null),'[]'::json) as sales_orders
+    from integrations.erpnext_sales_orders so
+    left join lateral (
+      select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
+      from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
+    ) vehicle_stats on true
+    where so.crm_lead_id=${clean(leadId)}::uuid and coalesce(so.is_cancelled,false)=false
+  `;
+  const soldQuantity = Math.max(0, Number(sales?.sold_quantity || 0));
+  const salesOrders = Array.isArray(sales?.sales_orders) ? [...new Set(sales.sales_orders.map((value: unknown) => clean(value)).filter(Boolean))] : [];
+  await sql`
+    update crm.leads set
+      sold_quantity=case
+        when ${soldQuantity}>0 then ${soldQuantity}
+        when status_label='تم البيع' then greatest(coalesce(sold_quantity,1),1)
+        else 0
+      end,
+      extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
+        salesOrders,
+        erpSalesOrdersCount: salesOrders.length,
+        erpSoldQuantity: soldQuantity,
+        totalSalesAmount: Number(sales?.total_sales_amount || 0),
+      })},
+      updated_at=now()
+    where id=${clean(leadId)}::uuid
+  `;
+}
+
 export async function cancelErpNextSalesOrder(input: {
   normalized: NormalizedErpNextSalesOrder;
 }) {
@@ -1044,6 +1107,7 @@ export async function cancelErpNextSalesOrder(input: {
     };
   });
 
+  if ((result as any)?.crm?.leadId) await refreshCrmLeadSalesSnapshot((result as any).crm.leadId);
   return { ...result, warnings: uniqueWarnings(warnings) };
 }
 
@@ -1186,6 +1250,7 @@ export async function syncErpNextSalesOrder(input: {
       crm_link_status=${crm.status},operations_link_status=${operations.status},warnings=${sql.json(finalWarnings)},updated_at=now()
     where id=${order.id}::uuid
   `;
+  if (crm.leadId) await refreshCrmLeadSalesSnapshot(crm.leadId);
 
   return {
     integrationOrderId: order.id,

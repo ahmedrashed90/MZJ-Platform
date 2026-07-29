@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, normalizePhone, parseBody, positiveInt, requireCrmUser, sourceLabel, userScope } from "../_crm-utils.js";
 import { hasPermission } from "../../shared/access-control.js";
 import { getSql } from "../_db.js";
+import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 
 function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
   return {
@@ -65,7 +66,11 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
       latest.id::text as latest_lead_id,latest.customer_name,latest.status_label,latest.department_code,latest.branch_code,
       latest.service_key,latest.source_code,latest.source_name,latest.notes,latest.assigned_to::text,latest.call_center_assigned_to::text,
       sales.full_name as assigned_name,cc.full_name as call_center_name,
-      activity.last_activity_at
+      activity.last_activity_at,
+      coalesce(sales_stats.sales_orders_count,0)::int as sales_orders_count,
+      coalesce(sales_stats.sold_vehicles_count,0)::int as sold_vehicles_count,
+      coalesce(sales_stats.total_sales_amount,0)::float as total_sales_amount,
+      sales_stats.last_sale_at
     from crm.contacts c
     left join lateral (
       select
@@ -82,6 +87,19 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
     ) latest on true
     left join core.users sales on sales.id=latest.assigned_to
     left join core.users cc on cc.id=latest.call_center_assigned_to
+    left join lateral (
+      select
+        count(distinct so.id) filter(where coalesce(so.is_cancelled,false)=false)::int as sales_orders_count,
+        coalesce(sum(case when coalesce(so.is_cancelled,false)=false then coalesce(vehicle_stats.vehicle_qty,1) else 0 end),0)::int as sold_vehicles_count,
+        coalesce(sum(case when coalesce(so.is_cancelled,false)=false then coalesce(so.total_incl_vat,0) else 0 end),0)::float as total_sales_amount,
+        max(coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at)) filter(where coalesce(so.is_cancelled,false)=false) as last_sale_at
+      from integrations.erpnext_sales_orders so
+      join crm.leads sales_lead on sales_lead.id=so.crm_lead_id and sales_lead.contact_id=c.id
+      left join lateral (
+        select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
+        from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
+      ) vehicle_stats on true
+    ) sales_stats on true
     left join lateral (
       select greatest(
         coalesce((select max(coalesce(l.updated_at,l.created_at)) from crm.leads l where l.contact_id=c.id),'epoch'::timestamptz),
@@ -105,7 +123,15 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
         where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
       )
     )
-      and (${like}::text is null or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized,latest.customer_name,latest.status_label,latest.notes) ilike ${like})
+      and (
+        ${like}::text is null
+        or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized,latest.customer_name,latest.status_label,latest.notes) ilike ${like}
+        or exists (
+          select 1 from integrations.erpnext_sales_orders search_order
+          join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
+          where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
+        )
+      )
     order by activity.last_activity_at desc,c.updated_at desc
     limit ${limit} offset ${offset}
   `;
@@ -128,7 +154,20 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
         where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
       )
     )
-      and (${like}::text is null or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like})
+      and (
+        ${like}::text is null
+        or concat_ws(' ',c.display_name,c.primary_phone,c.primary_phone_normalized) ilike ${like}
+        or exists (
+          select 1 from crm.leads search_lead
+          where search_lead.contact_id=c.id and search_lead.is_deleted=false
+            and concat_ws(' ',search_lead.customer_name,search_lead.status_label,search_lead.notes) ilike ${like}
+        )
+        or exists (
+          select 1 from integrations.erpnext_sales_orders search_order
+          join crm.leads search_lead on search_lead.id=search_order.crm_lead_id
+          where search_lead.contact_id=c.id and search_order.sales_order_no ilike ${like}
+        )
+      )
   `;
 
   const [summary] = await sql<any[]>`
@@ -138,11 +177,18 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
       count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='closed'))::int as completed_contacts,
       count(*) filter(where exists(select 1 from crm.conversations cv where cv.contact_id=c.id))::int as contacts_with_conversations
     from crm.contacts c
-    where ${scope.all}::boolean or exists(
-      select 1 from crm.leads l where l.contact_id=c.id and l.is_deleted=false and (
-        (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-        or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+    where (
+      ${scope.all}::boolean
+      or exists(
+        select 1 from crm.leads l where l.contact_id=c.id and l.is_deleted=false and (
+          (${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
+          or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+          or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
+        )
+      )
+      or exists (
+        select 1 from crm.conversations cv
+        where cv.contact_id=c.id and ${scope.includeAssigned}::boolean and (cv.assigned_to=${scope.userId}::uuid or cv.call_center_assigned_to=${scope.userId}::uuid)
       )
     )
   `;
@@ -157,7 +203,7 @@ async function contactProfile(request: VercelRequest, response: VercelResponse, 
   const [contact] = await sql<any[]>`select *,id::text from crm.contacts where id=${id}::uuid limit 1`;
   if (!contact) return response.status(404).json({ ok: false, error: "جهة الاتصال غير موجودة" });
 
-  const [identities, leads, requests, conversations, messages, events, ownership] = await Promise.all([
+  const [identities, leads, requests, conversations, messages, events, ownership, salesOrders] = await Promise.all([
     sql<any[]>`select id::text,channel_code,external_id,participant_id,page_id,display_name,metadata,created_at,updated_at from crm.contact_identities where contact_id=${id}::uuid order by updated_at desc`,
     sql<any[]>`
       select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
@@ -205,6 +251,33 @@ async function contactProfile(request: VercelRequest, response: VercelResponse, 
       from crm.ownership_events o
       where o.contact_id=${id}::uuid order by o.created_at desc limit 300
     `,
+    sql<any[]>`
+      select
+        so.id::text,so.sales_order_no,so.source_instance_key,so.erp_status,so.erp_event,so.erp_sales_person,
+        so.accounting_customer_name,so.actual_customer_name,so.actual_customer_phone,so.order_date,so.delivery_date,
+        so.erp_branch,so.platform_user_id::text,so.platform_user_name,so.platform_department_code,so.platform_department_name,
+        so.platform_branch_code,so.platform_branch_name,so.crm_lead_id::text,so.tracking_order_id::text,
+        so.subtotal_before_tax::float,so.tax_value::float,so.total_incl_vat::float,so.registration_fee::float,
+        so.user_link_status,so.crm_link_status,so.operations_link_status,so.is_cancelled,so.cancelled_at,so.cancellation_reason,
+        so.received_at,so.updated_at,
+        coalesce(vehicle_stats.vehicle_qty,1)::int as vehicle_qty,
+        coalesce(vehicle_stats.vehicles,'[]'::json) as vehicles
+      from integrations.erpnext_sales_orders so
+      join crm.leads l on l.id=so.crm_lead_id
+      left join lateral (
+        select
+          nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty,
+          coalesce(json_agg(json_build_object(
+            'id',sov.id::text,'itemNo',sov.item_no,'vin',sov.vin,'itemType',sov.item_type,'itemCategory',sov.item_category,
+            'itemModel',sov.item_model,'interiorColor',sov.interior_color,'exteriorColor',sov.exterior_color,'dealer',sov.dealer,
+            'qty',sov.qty::float,'unitPrice',sov.unit_price::float,'itemValue',sov.item_value::float,'totalInclVat',sov.total_incl_vat::float,
+            'operationsStatusCode',sov.operations_status_code,'isCancelled',sov.is_cancelled
+          ) order by sov.created_at) filter(where sov.id is not null),'[]'::json) as vehicles
+        from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
+      ) vehicle_stats on true
+      where l.contact_id=${id}::uuid
+      order by coalesce(so.order_date,so.received_at::date) desc,so.received_at desc
+    `,
   ]);
 
   for (const lead of leads) {
@@ -212,7 +285,19 @@ async function contactProfile(request: VercelRequest, response: VercelResponse, 
     delete lead.catalog_source_name;
   }
   const notes = leads.flatMap((lead) => clean(lead.notes) ? [{ leadId: lead.id, customerName: lead.customer_name, text: lead.notes, updatedAt: lead.updated_at }] : []);
-  return response.status(200).json({ ok: true, contact, identities, leads, requests, conversations, messages, events, ownership, notes, canPurge: canPurgeContact(user) });
+  const activeSalesOrders = salesOrders.filter((order: any) => !order.is_cancelled);
+  const salesSummary = {
+    ordersCount: activeSalesOrders.length,
+    allOrdersCount: salesOrders.length,
+    cancelledOrdersCount: salesOrders.length - activeSalesOrders.length,
+    soldVehiclesCount: activeSalesOrders.reduce((total: number, order: any) => total + Math.max(1, Number(order.vehicle_qty || 1)), 0),
+    subtotalBeforeTax: activeSalesOrders.reduce((total: number, order: any) => total + Number(order.subtotal_before_tax || 0), 0),
+    taxValue: activeSalesOrders.reduce((total: number, order: any) => total + Number(order.tax_value || 0), 0),
+    registrationFee: activeSalesOrders.reduce((total: number, order: any) => total + Number(order.registration_fee || 0), 0),
+    totalSalesAmount: activeSalesOrders.reduce((total: number, order: any) => total + Number(order.total_incl_vat || 0), 0),
+    lastSaleAt: activeSalesOrders[0]?.order_date || activeSalesOrders[0]?.received_at || null,
+  };
+  return response.status(200).json({ ok: true, contact, identities, leads, requests, conversations, messages, events, ownership, notes, salesOrders, salesSummary, canPurge: canPurgeContact(user) });
 }
 
 async function purgeContact(request: VercelRequest, response: VercelResponse, user: any) {
@@ -268,6 +353,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const user = await requireCrmUser(request, response);
   if (!user) return;
   response.setHeader("Cache-Control", "no-store");
+  await ensureErpNextSalesOrderSchema();
   if (request.method === "GET") {
     const id = clean(request.query.id);
     return id ? contactProfile(request, response, user, id) : listContacts(request, response, user);

@@ -8,6 +8,7 @@ import {
   CheckCircle,
   Clock,
   CurrencyCircleDollar,
+  DotsSixVertical,
   FileMagnifyingGlass,
   GearSix,
   Handbag,
@@ -314,6 +315,8 @@ export function DashboardPage() {
   const [appliedRange, setAppliedRange] = useState(defaultDashboardRange);
   const [draftRange, setDraftRange] = useState(defaultDashboardRange);
   const [dateOpen, setDateOpen] = useState(false);
+  const [operationWidgetOrder, setOperationWidgetOrder] = useState<string[]>([]);
+  const [draggedOperationWidget, setDraggedOperationWidget] = useState<string | null>(null);
   const detailsRequestId = useRef(0);
   useEscapeToClose(dateOpen, () => setDateOpen(false));
 
@@ -328,7 +331,10 @@ export function DashboardPage() {
         return payload as DashboardData;
       })
       .then((payload) => {
-        if (active) setData(payload);
+        if (active) {
+          setData(payload);
+          setOperationWidgetOrder(payload.layout?.operationWidgetOrder || []);
+        }
       })
       .catch(() => {
         if (active) setData(null);
@@ -417,6 +423,45 @@ export function DashboardPage() {
     setDateOpen(false);
     setDetails(null);
     setOperationsSelection(null);
+  }
+
+  const defaultOperationWidgetOrder = ["inventory", "location:warehouse", "location:agency", "location:hall", "location:qadisiyah", "location:multaqa", "approvals", "shortages", "transfers", "sales-tracking"];
+  const effectiveOperationWidgetOrder = [...operationWidgetOrder, ...defaultOperationWidgetOrder.filter((id) => !operationWidgetOrder.includes(id))];
+  const operationWidgetPosition = (id: string) => effectiveOperationWidgetOrder.indexOf(id);
+
+  async function persistOperationWidgetOrder(next: string[]) {
+    setOperationWidgetOrder(next);
+    try {
+      const response = await fetch("/api/dashboard", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operationWidgetOrder: next }) });
+      if (!response.ok) throw new Error("تعذر حفظ ترتيب الكروت");
+    } catch {
+      setOperationWidgetOrder(data?.layout?.operationWidgetOrder || defaultOperationWidgetOrder);
+    }
+  }
+
+  function dropOperationWidget(targetId: string) {
+    if (!draggedOperationWidget || draggedOperationWidget === targetId) return;
+    const next = effectiveOperationWidgetOrder.filter((id) => id !== draggedOperationWidget);
+    const targetIndex = Math.max(0, next.indexOf(targetId));
+    next.splice(targetIndex, 0, draggedOperationWidget);
+    setDraggedOperationWidget(null);
+    void persistOperationWidgetOrder(next);
+  }
+
+  function draggableOperationWidget(id: string, content: React.ReactNode) {
+    return <div
+      key={id}
+      className={`dashboard-operation-widget ${draggedOperationWidget === id ? "dragging" : ""}`}
+      style={{ order: operationWidgetPosition(id) }}
+      draggable
+      onDragStart={(event) => { setDraggedOperationWidget(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+      onDrop={(event) => { event.preventDefault(); dropOperationWidget(id); }}
+      onDragEnd={() => setDraggedOperationWidget(null)}
+    >
+      <span className="dashboard-card-drag-handle" title="اسحب لتغيير ترتيب الكارت"><DotsSixVertical size={20} weight="bold" /></span>
+      {content}
+    </div>;
   }
 
   return (
@@ -576,23 +621,28 @@ export function DashboardPage() {
               <span className="section-kicker">سيستم العمليات</span>
               <h2>بيانات العمليات</h2>
             </div>
-            <Briefcase size={26} weight="duotone" />
+            <div className="operation-layout-actions"><button type="button" className="secondary" onClick={() => void persistOperationWidgetOrder(defaultOperationWidgetOrder)}>إعادة الترتيب الافتراضي</button><Briefcase size={26} weight="duotone" /></div>
           </div>
 
-          <div className="operations-grid locations-row">
-            <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
+          <div className="operations-grid operations-widget-grid reorderable-operations-grid">
+            {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />
               </div>
               <div className="inventory-tags">
                 <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "agency", locationName: "الوكالة", metric: "actual_total", metricName: "الإجمالي الفعلي" })} />
+                <OperationMetric label="حجز" value={operations?.inventory.reserved ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "reserved", metricName: "حجز", branchesOnly: true })} />
                 <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "available_for_sale", metricName: "متاح للبيع" })} />
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
               </div>
-              <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) و(مباع تم التسليم)</p>
-            </OperationCard>
+              <p className="operation-note">الإجمالي الفعلي = مخزون الفروع + الوكالة بدون (مباع تحت التسليم) و(مباع تم التسليم)</p>
+              <div className="inventory-reserved-branches">
+                <strong>الحجز حسب الفروع</strong>
+                <div>{(operations?.inventory.reservedByLocation || []).map((item) => <button type="button" key={item.key} onClick={() => setOperationsSelection({ mode: "vehicles", locationCode: item.key, locationName: item.name, metric: "reserved", metricName: "حجز" })}><span>{item.name}</span><Value value={item.value} /></button>)}</div>
+              </div>
+            </OperationCard>)}
 
             {(operations?.locations ?? [
               { key: "warehouse", name: "المستودع", actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null },
@@ -609,7 +659,7 @@ export function DashboardPage() {
                 { label: "مباع تم التسليم", value: location.delivered },
                 { label: "بها ملاحظات", value: location.hasNotes },
               ];
-              return (
+              return draggableOperationWidget(`location:${location.key}`,
                 <OperationCard key={location.key} title={location.name} onView={() => setOperationsSelection({ mode: "vehicles", locationCode: location.key, locationName: location.name, metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
                   <div className="operation-metrics-grid">
                     {rows.map((row) => {
@@ -620,10 +670,8 @@ export function DashboardPage() {
                 </OperationCard>
               );
             })}
-          </div>
 
-          <div className="operations-grid lower-row">
-            <OperationCard
+            {draggableOperationWidget("approvals", <OperationCard
               title="كارت الموافقة المالية والإدارية"
               badge={operations?.approvals.total ?? null}
               onView={() => setOperationsSelection({ mode: "approvals", filter: "", title: "كل سيارات الموافقات المالية والإدارية" })}
@@ -654,17 +702,17 @@ export function DashboardPage() {
                   </button>
                 )) : <span className="dashboard-approval-notes-empty">لا توجد ملاحظات مسجلة حاليًا</span>}
               </div>
-            </OperationCard>
+            </OperationCard>)}
 
-            <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => setOperationsSelection({ mode: "shortages", locationCode: "", locationName: "كل الفروع" })}>
+            {draggableOperationWidget("shortages", <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => setOperationsSelection({ mode: "shortages", locationCode: "", locationName: "كل الفروع" })}>
               <div className="operation-metrics-grid three-columns">
                 <OperationMetric label="الملتقى" value={operations?.shortages.multaqa ?? null} onOpen={() => setOperationsSelection({ mode: "shortages", locationCode: "multaqa", locationName: "الملتقى" })} />
                 <OperationMetric label="الصالة" value={operations?.shortages.hall ?? null} onOpen={() => setOperationsSelection({ mode: "shortages", locationCode: "hall", locationName: "الصالة" })} />
                 <OperationMetric label="القادسية" value={operations?.shortages.qadisiyah ?? null} onOpen={() => setOperationsSelection({ mode: "shortages", locationCode: "qadisiyah", locationName: "القادسية" })} />
               </div>
-            </OperationCard>
+            </OperationCard>)}
 
-            <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={() => setOperationsSelection({ mode: "requests", kind: "all", title: "طلبات النقل والتصوير" })}>
+            {draggableOperationWidget("transfers", <OperationCard title="طلبات النقل والتصوير" badge={operations?.transfers.total ?? null} onView={() => setOperationsSelection({ mode: "requests", kind: "all", title: "طلبات النقل والتصوير" })}>
               <div className="operation-metrics-grid">
                 <OperationMetric label="طلبات النقل" value={operations?.transfers.transferTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "transfer", title: "طلبات النقل" })} />
                 <OperationMetric label="طلبات التصوير" value={operations?.transfers.photographyTotal ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "photography", title: "طلبات التصوير" })} />
@@ -673,9 +721,9 @@ export function DashboardPage() {
                 <OperationMetric label="تم إرسال السيارة" value={operations?.transfers.vehicleSent ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "all", status: "vehicle_sent", title: "الطلبات — تم إرسال السيارة" })} />
                 <OperationMetric label="تم الانتهاء" value={operations?.transfers.completed ?? null} onOpen={() => setOperationsSelection({ mode: "requests", kind: "all", status: "completed", title: "الطلبات — تم الانتهاء" })} />
               </div>
-            </OperationCard>
+            </OperationCard>)}
 
-            <OperationCard title="تتبع إجراءات البيع (Tracking)" badge={operations?.salesTracking.total ?? null} className="tracking-operation-card" onView={() => open("تتبع إجراءات البيع (Tracking)", [
+            {draggableOperationWidget("sales-tracking", <OperationCard title="تتبع إجراءات البيع (Tracking)" badge={operations?.salesTracking.total ?? null} className="tracking-operation-card" onView={() => open("تتبع إجراءات البيع (Tracking)", [
               { label: "طلبات لم تبدأ", value: operations?.salesTracking.notStarted ?? null },
               { label: "طلبات تحت الإجراء", value: operations?.salesTracking.inProgress ?? null },
               { label: "طلبات مكتملة", value: operations?.salesTracking.completed ?? null },
@@ -689,7 +737,7 @@ export function DashboardPage() {
                 <OperationMetric label="طلبات تحت الإجراء" value={operations?.salesTracking.inProgress ?? null} onOpen={() => void openTrackingList("طلبات تحت الإجراء", "in_progress")} />
                 <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => void openTrackingList("طلبات مكتملة", "completed")} />
               </div>
-            </OperationCard>
+            </OperationCard>)}
           </div>
         </section>
       </div>

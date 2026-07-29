@@ -8,7 +8,7 @@ type RequestKindFilter = "all" | "transfer" | "photography";
 type RequestStatusFilter = "" | "request_received" | "vehicle_received" | "vehicle_sent" | "completed";
 
 export type DashboardOperationsSelection =
-  | { mode: "vehicles"; locationCode: string; locationName: string; metric: string; metricName: string }
+  | { mode: "vehicles"; locationCode: string; locationName: string; metric: string; metricName: string; branchesOnly?: boolean }
   | { mode: "requests"; kind?: RequestKindFilter; status?: RequestStatusFilter; title: string }
   | { mode: "shortages"; locationCode: string; locationName: string }
   | { mode: "approvals"; filter: "" | "missing_financial" | "missing_administrative" | "completed"; title: string };
@@ -144,7 +144,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     try {
       if (selection.mode === "vehicles") {
         const payload = await operationsFetch<{ rows: Vehicle[]; total: number }>(
-          `/api/operations${queryString({ resource: "dashboard_vehicles", location: selection.locationCode, metric: selection.metric, search, page, pageSize })}`,
+          `/api/operations${queryString({ resource: "dashboard_vehicles", location: selection.locationCode, metric: selection.metric, branchesOnly: selection.branchesOnly ? "1" : "", search, page, pageSize })}`,
         );
         setRows(payload.rows || []);
         setRequestRows([]);
@@ -215,7 +215,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
       const pages = Math.max(1, Math.ceil(total / 200));
       for (let current = 1; current <= pages; current += 1) {
         const payload = await operationsFetch<{ rows: Vehicle[] }>(
-          `/api/operations${queryString({ resource: "dashboard_vehicles", location: selection.locationCode, metric: selection.metric, search, page: current, pageSize: 200 })}`,
+          `/api/operations${queryString({ resource: "dashboard_vehicles", location: selection.locationCode, metric: selection.metric, branchesOnly: selection.branchesOnly ? "1" : "", search, page: current, pageSize: 200 })}`,
         );
         all.push(...(payload.rows || []));
       }

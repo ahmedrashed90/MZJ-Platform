@@ -28,6 +28,18 @@ function cleanTemplateData(value: unknown) {
   for (const key of TEMPLATE_FIELDS) if (Object.prototype.hasOwnProperty.call(input, key)) output[key] = clean(input[key]);
   return output;
 }
+function validateTemplateData(value: unknown) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const keys = Object.keys(input);
+  const unknown = keys.filter((key) => !TEMPLATE_FIELDS.includes(key as any));
+  const missing = TEMPLATE_FIELDS.filter((key) => !Object.prototype.hasOwnProperty.call(input, key));
+  if (unknown.length || missing.length) throw new Error("ملف Task Template لا يطابق الحقول المعتمدة في النظام");
+  const output = cleanTemplateData(input);
+  const required = ["proposedName", "goal", "mainMessage", "hook", "mainScript", "cta"];
+  const empty = required.filter((key) => !clean(output[key]));
+  if (empty.length) throw new Error("ملف Task Template ناقص بيانات إلزامية. راجع المعاينة وأعد الرفع");
+  return output;
+}
 function marketingAccess(user: SessionUser) { return getSystemAccess(user, "marketing"); }
 function canViewAllTasks(user: SessionUser) { return hasPermission(user, "marketing.task.view_all") && marketingAccess(user).dataScope === "all"; }
 function marketingDepartmentCodes(user: SessionUser) { const codes = marketingAccess(user).departmentCodes; return codes.length ? codes : ["__no_department__"]; }
@@ -656,6 +668,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canDownloadTemplate:hasPermission(user,"marketing.task_template.download"),
       canUploadTemplate:hasPermission(user,task.template_file_id?"marketing.task_template.reupload":"marketing.task_template.upload"),
       canApproveTemplate:hasPermission(user,"marketing.task_template.approve"),
+      canUnapproveTemplate:hasPermission(user,"marketing.task_template.approve"),
       canRejectTemplate:hasPermission(user,"marketing.task_template.reject"),
       canViewFeedback:hasPermission(user,"marketing.task_template.view_feedback") || task.assigned_to===user.id || task.paired_content_user_id===user.id,
       canExecuteAction:hasPermission(user,"marketing.assignment_action.execute"),
@@ -815,7 +828,7 @@ async function softDeleteSetting(sql:ReturnType<typeof getSql>,body:any,user:Ses
 
 async function receiveTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){const id=clean(body.id);if(!hasPermission(user,"marketing.task.receive"))throw new Error("لا توجد صلاحية لاستلام التاسك");const[task]=await sql<any[]>`select *,id::text,source_id::text,assigned_to::text from marketing.tasks where id=${id}::uuid and is_deleted=false`;if(!task)throw new Error("التاسك غير موجود");if(!await canAccessMarketingTask(sql,user,id))throw new Error("لا توجد صلاحية لاستلام التاسك");await sql`update marketing.tasks set received_at=coalesce(received_at,now()),status=case when status='required' then 'received' else status end,updated_at=now() where id=${id}::uuid`;if(task.task_kind==='task_template')await sql`update marketing.task_templates set received_at=coalesce(received_at,now()),updated_at=now() where id=${task.task_template_id}::uuid`;await recalculateProgress(sql,task.source_type,task.source_id);return{ok:true,message:"تم الاستلام"};}
 async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  const taskId=clean(body.taskId),fileId=clean(body.fileId),data=cleanTemplateData(body.templateData);
+  const taskId=clean(body.taskId),fileId=clean(body.fileId),data=validateTemplateData(body.templateData);
   const task=await requireTaskTemplateUploadAccess(sql,user,taskId);
   const[file]=await sql<any[]>`select id::text,category,task_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
   if(!file||file.category!=="task-template"||file.task_id!==taskId||file.status!=="ready")throw new Error("ملف Task Template غير صالح أو غير مرتبط بهذا التكليف");
@@ -830,10 +843,22 @@ async function uploadTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
 }
 async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const templateId=clean(body.templateId),action=clean(body.reviewAction),note=clean(body.note),data=cleanTemplateData(body.data);
-  const permission=action==='approve'?'marketing.task_template.approve':'marketing.task_template.reject';
+  const permission=action==='approve'||action==='unapprove'?'marketing.task_template.approve':'marketing.task_template.reject';
   if(!hasPermission(user,permission))throw new Error("لا توجد صلاحية لمراجعة Task Template");
-  const[template]=await sql<any[]>`select *,id::text,source_id::text from marketing.task_templates where id=${templateId}::uuid`;
+  const[template]=await sql<any[]>`select *,id::text,source_id::text,file_id::text from marketing.task_templates where id=${templateId}::uuid`;
   if(!template)throw new Error("Task Template غير موجود");
+  if(action==='unapprove'){
+    if(template.status!=='approved')throw new Error("يمكن إلغاء اعتماد Task Template المعتمد فقط");
+    if(!note)throw new Error("اكتب سبب إلغاء الاعتماد");
+    await sql.begin(async tx=>{
+      await tx`insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name) values(${templateId}::uuid,'unapproved',${note},${tx.json(dbJson(template))},${tx.json({status:'not_started',fileId:null})},${user.id}::uuid,${user.fullName})`;
+      await tx`update marketing.task_templates set status='not_started',progress=0,admin_note=${note},template_data='{}'::jsonb,approved_data='{}'::jsonb,file_id=null,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${templateId}::uuid`;
+      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false`;
+      await tx`delete from marketing.task_action_progress where task_id in (select id from marketing.tasks where task_template_id=${templateId}::uuid and task_kind='execution' and is_deleted=false)`;
+    });
+    await recalculateProgress(sql,template.source_type,template.source_id);
+    return{ok:true,message:"تم إلغاء اعتماد Task Template وإعادة التاسكات إلى انتظار الرفع"};
+  }
   let status=template.status,progress=numberValue(template.progress);
   if(action==='approve'){status='approved';progress=100;}
   else if(action==='request_edit'){status='revision_requested';progress=50;}
@@ -844,7 +869,7 @@ async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
     await tx`insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name) values(${templateId}::uuid,${action},${note||null},${tx.json(dbJson(template))},${tx.json(dbJson(data))},${user.id}::uuid,${user.fullName})`;
     await tx`update marketing.task_templates set status=${status},progress=${progress},admin_note=${note||null},template_data=case when ${action} in ('edit','approve') then template_data||${tx.json(dbJson(data))} else template_data end,approved_data=case when ${action}='approve' then template_data||${tx.json(dbJson(data))} else approved_data end,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${templateId}::uuid`;
     await tx`update marketing.tasks set status=${status},progress=${progress},updated_at=now() where task_template_id=${templateId}::uuid and task_kind='task_template'`;
-    if(action==='approve')await tx`update marketing.tasks set approved_template_data=(select approved_data from marketing.task_templates where id=${templateId}::uuid),updated_at=now() where task_template_id=${templateId}::uuid and task_kind='execution'`;
+    if(action==='approve')await tx`update marketing.tasks set approved_template_data=(select approved_data from marketing.task_templates where id=${templateId}::uuid),status=case when status='required' then 'required' else status end,updated_at=now() where task_template_id=${templateId}::uuid and task_kind='execution'`;
   });
   await recalculateProgress(sql,template.source_type,template.source_id);
   return{ok:true,message:action==='approve'?"تم اعتماد التعليمات":"تم حفظ إجراء المراجعة"};

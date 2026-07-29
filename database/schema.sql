@@ -546,6 +546,12 @@ create table if not exists core.notification_user_state (
   primary key(notification_id,user_id)
 );
 create index if not exists core_notification_state_user_idx on core.notification_user_state(user_id,read_at,dismissed_at);
+create table if not exists core.user_dashboard_layouts (
+  user_id uuid primary key references core.users(id) on delete cascade,
+  operation_widget_order jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists core.notification_preferences (
   user_id uuid primary key references core.users(id) on delete cascade,
   sound_enabled boolean not null default true,

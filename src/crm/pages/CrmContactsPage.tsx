@@ -1,18 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AddressBook,
   ArrowClockwise,
+  ArrowRight,
+  Buildings,
+  Car,
+  CaretDown,
+  CaretUp,
   ChatCircleDots,
   CheckCircle,
   ClockCounterClockwise,
+  CurrencyCircleDollar,
   IdentificationCard,
   MagnifyingGlass,
   NotePencil,
   Phone,
+  Receipt,
+  Storefront,
   Trash,
   UserCircle,
+  UsersThree,
   X,
 } from "@phosphor-icons/react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentLabel, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
@@ -22,7 +32,6 @@ type ContactRow = {
   display_name?: string | null;
   primary_phone?: string | null;
   primary_phone_normalized?: string | null;
-  latest_lead_id?: string | null;
   customer_name?: string | null;
   status_label?: string | null;
   department_code?: string | null;
@@ -30,292 +39,352 @@ type ContactRow = {
   source_code?: string | null;
   source_name?: string | null;
   assigned_name?: string | null;
-  call_center_name?: string | null;
   leads_count?: number;
   requests_count?: number;
   open_requests_count?: number;
   conversations_count?: number;
+  sales_orders_count?: number;
+  sold_vehicles_count?: number;
+  total_sales_amount?: number;
+  last_sale_at?: string | null;
   last_activity_at?: string | null;
 };
 
+type SalesVehicle = {
+  id: string;
+  itemNo?: string | null;
+  vin?: string | null;
+  itemType?: string | null;
+  itemCategory?: string | null;
+  itemModel?: string | null;
+  interiorColor?: string | null;
+  exteriorColor?: string | null;
+  dealer?: string | null;
+  qty?: number;
+  unitPrice?: number;
+  itemValue?: number;
+  totalInclVat?: number;
+  operationsStatusCode?: string | null;
+  isCancelled?: boolean;
+};
+
+type SalesOrder = {
+  id: string;
+  sales_order_no: string;
+  erp_status?: string | null;
+  erp_event?: string | null;
+  erp_sales_person?: string | null;
+  order_date?: string | null;
+  delivery_date?: string | null;
+  platform_user_name?: string | null;
+  platform_department_name?: string | null;
+  platform_department_code?: string | null;
+  platform_branch_name?: string | null;
+  platform_branch_code?: string | null;
+  erp_branch?: string | null;
+  subtotal_before_tax?: number;
+  tax_value?: number;
+  total_incl_vat?: number;
+  registration_fee?: number;
+  is_cancelled?: boolean;
+  cancelled_at?: string | null;
+  cancellation_reason?: string | null;
+  vehicle_qty?: number;
+  vehicles?: SalesVehicle[];
+  received_at?: string | null;
+};
+
 type ContactProfile = {
-  contact: Record<string, any>;
-  identities: Array<Record<string, any>>;
-  leads: Array<Record<string, any>>;
-  requests: Array<Record<string, any>>;
-  conversations: Array<Record<string, any>>;
-  messages: Array<Record<string, any>>;
-  events: Array<Record<string, any>>;
-  ownership: Array<Record<string, any>>;
-  notes: Array<{ leadId: string; customerName?: string; text: string; updatedAt?: string }>;
+  contact: any;
+  identities: any[];
+  leads: any[];
+  requests: any[];
+  conversations: any[];
+  messages: any[];
+  events: any[];
+  ownership: any[];
+  notes: any[];
+  salesOrders: SalesOrder[];
+  salesSummary: {
+    ordersCount: number;
+    allOrdersCount: number;
+    cancelledOrdersCount: number;
+    soldVehiclesCount: number;
+    subtotalBeforeTax: number;
+    taxValue: number;
+    registrationFee: number;
+    totalSalesAmount: number;
+    lastSaleAt?: string | null;
+  };
   canPurge: boolean;
 };
 
-const serviceLabels: Record<string, string> = { cash: "مبيعات الكاش", finance: "مبيعات التمويل", service: "خدمة العملاء" };
+const pageSize = 50;
+const money = new Intl.NumberFormat("ar-SA", { style: "currency", currency: "SAR", maximumFractionDigits: 2 });
+const number = new Intl.NumberFormat("ar-SA");
 
-function serviceLabel(value?: string | null, departmentCode?: string | null) {
-  const key = String(value || "").trim();
-  return serviceLabels[key] || departmentLabel(departmentCode || key);
+function text(value: unknown) {
+  return String(value ?? "").trim() || "—";
 }
 
-function requestStateLabel(value?: string | null) {
-  return String(value || "") === "closed" ? "منتهي" : "مفتوح";
+function latestLead(profile: ContactProfile | null) {
+  return profile?.leads?.find((lead) => !lead.is_deleted) || profile?.leads?.[0] || null;
 }
 
-function messageDirectionLabel(message: Record<string, any>) {
-  return String(message.direction || "") === "out" ? "رسالة من الفريق" : "رسالة من العميل";
-}
-
-function profileValue(value: unknown) {
-  if (value == null || value === "") return "—";
-  if (typeof value === "boolean") return value ? "نعم" : "لا";
-  if (typeof value === "object") return JSON.stringify(value, null, 2);
-  return String(value);
+function SummaryCard({ icon: Icon, label, value, sub }: { icon: typeof AddressBook; label: string; value: string; sub?: string }) {
+  return <article className="crm-contact-summary-card"><span><Icon size={21} weight="duotone" /></span><div><small>{label}</small><strong>{value}</strong>{sub ? <p>{sub}</p> : null}</div></article>;
 }
 
 export function CrmContactsPage() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const contactId = searchParams.get("contact") || "";
   const [rows, setRows] = useState<ContactRow[]>([]);
-  const [summary, setSummary] = useState<Record<string, number>>({});
+  const [summary, setSummary] = useState<any>({});
   const [total, setTotal] = useState(0);
-  const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState("");
-  const [selectedId, setSelectedId] = useState("");
+  const [q, setQ] = useState(searchParams.get("q") || "");
+  const [appliedQ, setAppliedQ] = useState(searchParams.get("q") || "");
+  const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page") || 1)));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [profile, setProfile] = useState<ContactProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [confirmPhone, setConfirmPhone] = useState("");
   const [purging, setPurging] = useState(false);
+  const openedFromList = useRef(false);
+  const listScroll = useRef(0);
 
-  useEffect(() => { void load(); }, []);
-  useEscapeToClose(Boolean(selectedId) && !purgeOpen, closeProfile);
+  useEscapeToClose(Boolean(contactId && !purgeOpen), () => closeProfile());
   useEscapeToClose(purgeOpen, () => setPurgeOpen(false));
 
-  async function load() {
+  async function loadList() {
     setLoading(true);
-    setNotice("");
+    setError("");
     try {
-      const result = await crmFetch<{ ok: boolean; rows: ContactRow[]; total: number; summary: Record<string, number> }>(`/api/crm/contacts${queryString({ q, limit: 200 })}`);
+      const result = await crmFetch<{ rows: ContactRow[]; total: number; summary: any }>(`/api/crm/contacts${queryString({ q: appliedQ, limit: pageSize, offset: (page - 1) * pageSize })}`);
       setRows(result.rows || []);
       setTotal(Number(result.total || 0));
       setSummary(result.summary || {});
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر تحميل جهات الاتصال");
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل جهات الاتصال");
     } finally {
       setLoading(false);
     }
   }
 
-  async function openProfile(id: string) {
-    setSelectedId(id);
-    setProfile(null);
+  async function loadProfile(id: string) {
     setProfileLoading(true);
-    setNotice("");
+    setError("");
     try {
-      const result = await crmFetch<ContactProfile & { ok: boolean }>(`/api/crm/contacts?id=${encodeURIComponent(id)}`);
+      const result = await crmFetch<ContactProfile>(`/api/crm/contacts${queryString({ id })}`);
       setProfile(result);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر تحميل ملف العميل");
-      setSelectedId("");
+      setExpandedOrderId(result.salesOrders?.[0]?.id || null);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل ملف جهة الاتصال");
+      setProfile(null);
     } finally {
       setProfileLoading(false);
     }
   }
 
+  useEffect(() => { void loadList(); }, [appliedQ, page]);
+  useEffect(() => {
+    if (contactId) void loadProfile(contactId);
+    else {
+      setProfile(null);
+      window.requestAnimationFrame(() => window.scrollTo({ top: listScroll.current, behavior: "auto" }));
+    }
+  }, [contactId]);
+
+  function applySearch() {
+    const next = new URLSearchParams(searchParams);
+    const value = q.trim();
+    if (value) next.set("q", value); else next.delete("q");
+    next.set("page", "1");
+    next.delete("contact");
+    setSearchParams(next, { replace: true });
+    setAppliedQ(value);
+    setPage(1);
+  }
+
+  function changePage(nextPage: number) {
+    const safe = Math.max(1, Math.min(Math.max(1, Math.ceil(total / pageSize)), nextPage));
+    const next = new URLSearchParams(searchParams);
+    next.set("page", String(safe));
+    next.delete("contact");
+    setSearchParams(next, { replace: true });
+    setPage(safe);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function openProfile(id: string) {
+    listScroll.current = window.scrollY;
+    openedFromList.current = true;
+    const next = new URLSearchParams(searchParams);
+    next.set("contact", id);
+    setSearchParams(next, { replace: false });
+  }
+
   function closeProfile() {
-    setSelectedId("");
-    setProfile(null);
-    setPurgeOpen(false);
-    setConfirmPhone("");
+    if (!contactId) return;
+    if (openedFromList.current) {
+      openedFromList.current = false;
+      navigate(-1);
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("contact");
+    setSearchParams(next, { replace: true });
   }
 
   async function purgeContact() {
-    if (!selectedId || !confirmPhone.trim()) return;
+    if (!profile) return;
     setPurging(true);
-    setNotice("");
+    setError("");
     try {
-      const result = await crmFetch<{ ok: boolean; deleted: Record<string, number> }>("/api/crm/contacts", {
-        method: "DELETE",
-        body: JSON.stringify({ id: selectedId, confirmPhone }),
-      });
-      const deleted = result.deleted || {};
-      closeProfile();
-      setNotice(`تم حذف ملف جهة الاتصال بالكامل: ${Number(deleted.leads || 0)} عميل، ${Number(deleted.requests || 0)} طلب، ${Number(deleted.conversations || 0)} محادثة، ${Number(deleted.messages || 0)} رسالة.`);
-      await load();
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر حذف ملف جهة الاتصال");
+      await crmFetch(`/api/crm/contacts${queryString({ id: profile.contact.id })}`, { method: "DELETE", body: JSON.stringify({ id: profile.contact.id, confirmPhone }) });
+      setPurgeOpen(false);
+      setConfirmPhone("");
+      openedFromList.current = false;
+      const next = new URLSearchParams(searchParams);
+      next.delete("contact");
+      setSearchParams(next, { replace: true });
+      await loadList();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر حذف الملف");
     } finally {
       setPurging(false);
     }
   }
 
-  const currentLead = useMemo(() => profile?.leads?.find((lead) => !lead.is_deleted) || profile?.leads?.[0] || null, [profile]);
-  const latestMessages = useMemo(() => (profile?.messages || []).slice(0, 30), [profile]);
-  const customData = useMemo(() => Object.entries(currentLead?.extra_data || {}).filter(([, item]) => item != null && String(item).trim() !== ""), [currentLead]);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const lead = latestLead(profile);
+  const contactName = profile ? text(profile.contact.display_name || lead?.customer_name) : "";
 
-  return (
-    <div className="crm-page crm-contacts-page">
-      <header className="crm-page-head crm-contacts-page-head">
-        <div>
-          <span className="crm-page-kicker"><AddressBook size={18} weight="duotone" /> السجل الدائم للعملاء</span>
-          <h1>جهات الاتصال</h1>
-          <p>ملف موحد لكل رقم يجمع بيانات العميل، الطلبات، الملاحظات، التوزيع، المحادثات وسجل التغييرات.</p>
-        </div>
-        <button className="crm-secondary-button" type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث"}</button>
-      </header>
+  return <div className="crm-page crm-contacts-page-v2">
+    <header className="crm-page-header crm-contacts-header-v2">
+      <div><span className="crm-kicker">السجل الدائم للعملاء</span><h1>جهات الاتصال</h1><p>ملف موحد لكل عميل يجمع بياناته وطلبات البيع والمحادثات وسجل التغييرات بدون تكرار.</p></div>
+      <button type="button" className="crm-secondary-button" onClick={() => void loadList()} disabled={loading}><ArrowClockwise size={18} />تحديث</button>
+    </header>
 
-      <section className="crm-contacts-summary">
-        <article><span className="icon"><AddressBook size={22} /></span><div><small>إجمالي جهات الاتصال</small><strong>{Number(summary.total_contacts ?? total).toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon open"><ClockCounterClockwise size={22} /></span><div><small>لديها طلب مفتوح</small><strong>{Number(summary.open_contacts || 0).toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon done"><CheckCircle size={22} /></span><div><small>لديها طلبات منتهية</small><strong>{Number(summary.completed_contacts || 0).toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon chat"><ChatCircleDots size={22} /></span><div><small>لديها محادثات</small><strong>{Number(summary.contacts_with_conversations || 0).toLocaleString("ar-SA")}</strong></div></article>
-      </section>
+    {error ? <div className="crm-error-banner">{error}</div> : null}
 
-      <section className="crm-panel crm-contacts-toolbar">
-        <label className="crm-search-box wide"><MagnifyingGlass size={19} /><input value={q} onChange={(event) => setQ(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void load(); }} placeholder="بحث بالاسم أو رقم الجوال أو الحالة أو الملاحظات" /></label>
-        <button className="crm-primary-button" type="button" onClick={() => void load()}>بحث</button>
-        <span className="crm-contacts-result-count">النتائج <b>{total.toLocaleString("ar-SA")}</b></span>
-      </section>
+    <section className="crm-contact-overview-grid">
+      <SummaryCard icon={AddressBook} label="إجمالي جهات الاتصال" value={number.format(Number(summary.total_contacts || total || 0))} />
+      <SummaryCard icon={ClockCounterClockwise} label="لديها طلبات مفتوحة" value={number.format(Number(summary.open_contacts || 0))} />
+      <SummaryCard icon={CheckCircle} label="لديها طلبات منتهية" value={number.format(Number(summary.completed_contacts || 0))} />
+      <SummaryCard icon={ChatCircleDots} label="لديها محادثات" value={number.format(Number(summary.contacts_with_conversations || 0))} />
+    </section>
 
-      {notice ? <div className="crm-inline-notice">{notice}</div> : null}
+    <section className="crm-contact-list-shell">
+      <form className="crm-contact-search-v2" onSubmit={(event) => { event.preventDefault(); applySearch(); }}>
+        <label><MagnifyingGlass size={20} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="بحث بالاسم أو رقم الجوال أو الحالة أو رقم طلب البيع أو الملاحظات" /></label>
+        <button type="submit" className="crm-primary-button">بحث</button>
+        <span>النتائج: {number.format(total)}</span>
+      </form>
 
-      <div className="crm-contacts-grid">
-        {rows.map((row) => (
-          <button type="button" className="crm-contact-card" key={row.id} onClick={() => void openProfile(row.id)}>
-            <header>
-              <span className="crm-contact-avatar"><UserCircle size={34} weight="duotone" /></span>
-              <div><strong>{row.customer_name || row.display_name || "عميل"}</strong><small><Phone size={13} /> {row.primary_phone || row.primary_phone_normalized || "بدون رقم"}</small></div>
-              <span className={`crm-contact-request-state ${Number(row.open_requests_count || 0) ? "open" : "closed"}`}>{Number(row.open_requests_count || 0) ? "طلب مفتوح" : "لا يوجد طلب مفتوح"}</span>
-            </header>
-            <div className="crm-contact-card-main">
-              <span><b>آخر حالة</b>{row.status_label || "غير مصنف"}</span>
-              <span><b>القسم</b>{row.department_code ? departmentLabel(row.department_code) : "غير محدد"}</span>
-              <span><b>المسؤول</b>{row.assigned_name || "غير موزع"}</span>
-              <span><b>المصدر</b>{sourceLabel(row.source_code, row.source_name)}</span>
-            </div>
-            <footer>
-              <span>{Number(row.requests_count || 0)} طلب</span>
-              <span>{Number(row.conversations_count || 0)} محادثة</span>
-              <time>{formatDate(row.last_activity_at)}</time>
-            </footer>
-          </button>
-        ))}
-        {!loading && !rows.length ? <div className="crm-empty-state panel"><AddressBook size={42} weight="duotone" /><strong>لا توجد جهات اتصال مطابقة</strong><span>غيّر البحث ثم أعد المحاولة.</span></div> : null}
-        {loading ? <div className="crm-empty-state panel">جاري تحميل جهات الاتصال...</div> : null}
+      <div className="crm-table-wrap crm-contacts-table-wrap">
+        <table className="crm-table crm-contacts-table">
+          <thead><tr><th>العميل</th><th>رقم الجوال</th><th>الحالة الحالية</th><th>القسم / الفرع</th><th>المسؤول</th><th>طلبات البيع</th><th>السيارات المباعة</th><th>إجمالي المبيعات</th><th>آخر نشاط</th></tr></thead>
+          <tbody>
+            {rows.map((row) => <tr key={row.id} tabIndex={0} onClick={() => openProfile(row.id)} onKeyDown={(event) => { if (event.key === "Enter") openProfile(row.id); }}>
+              <td><div className="crm-contact-table-name"><span><UserCircle size={25} weight="duotone" /></span><div><strong>{text(row.display_name || row.customer_name)}</strong><small>{sourceLabel(row.source_code, row.source_name)}</small></div></div></td>
+              <td dir="ltr">{text(row.primary_phone || row.primary_phone_normalized)}</td>
+              <td><span className="crm-contact-status-pill">{text(row.status_label)}</span></td>
+              <td><strong>{departmentLabel(row.department_code)}</strong><small>{text(row.branch_code)}</small></td>
+              <td>{text(row.assigned_name)}</td>
+              <td><b className="crm-contact-sales-number">{number.format(Number(row.sales_orders_count || 0))}</b></td>
+              <td><b className="crm-contact-sales-number">{number.format(Number(row.sold_vehicles_count || 0))}</b></td>
+              <td><strong className="crm-contact-money">{money.format(Number(row.total_sales_amount || 0))}</strong></td>
+              <td>{formatDate(row.last_activity_at || row.last_sale_at)}</td>
+            </tr>)}
+            {!loading && !rows.length ? <tr><td colSpan={9} className="crm-empty-cell">لا توجد جهات اتصال مطابقة</td></tr> : null}
+            {loading ? <tr><td colSpan={9} className="crm-empty-cell">جاري تحميل جهات الاتصال...</td></tr> : null}
+          </tbody>
+        </table>
       </div>
 
-      {selectedId ? (
-        <div className="crm-modal-backdrop crm-contact-profile-backdrop" onMouseDown={closeProfile}>
-          <article className="crm-contact-profile" onMouseDown={(event) => event.stopPropagation()}>
-            {profileLoading || !profile ? <div className="crm-loading-panel">جاري تجهيز ملف العميل الكامل...</div> : (
-              <>
-                <header className="crm-contact-profile-head">
-                  <div className="crm-contact-profile-identity">
-                    <span className="crm-contact-profile-avatar"><IdentificationCard size={38} weight="duotone" /></span>
-                    <div><small>ملف جهة الاتصال</small><h2>{currentLead?.customer_name || profile.contact.display_name || "عميل"}</h2><p><Phone size={15} /> {profile.contact.primary_phone || profile.contact.primary_phone_normalized || "بدون رقم"}</p></div>
-                  </div>
-                  <div className="crm-contact-profile-status">
-                    <span><b>الحالة الحالية</b>{currentLead?.status_label || "غير مصنف"}</span>
-                    <span><b>القسم</b>{currentLead ? departmentLabel(currentLead.department_code) : "غير محدد"}</span>
-                    <span><b>المسؤول</b>{currentLead?.assigned_name || "غير موزع"}</span>
-                  </div>
-                  <div className="crm-contact-profile-actions">
-                    {profile.canPurge ? <button type="button" className="crm-danger-button" onClick={() => { setConfirmPhone(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}
-                    <button type="button" className="crm-icon-button" onClick={closeProfile}><X size={20} /></button>
-                  </div>
-                </header>
+      <footer className="crm-contact-pagination"><button type="button" disabled={page <= 1 || loading} onClick={() => changePage(page - 1)}>السابق</button><span>صفحة {number.format(page)} من {number.format(totalPages)}</span><button type="button" disabled={page >= totalPages || loading} onClick={() => changePage(page + 1)}>التالي</button></footer>
+    </section>
 
-                <div className="crm-contact-profile-body">
-                  <section className="crm-contact-profile-section crm-contact-overview">
-                    <header><div><h3>البيانات الحالية</h3><p>آخر بيانات محفوظة في CRM مع تفاصيل السيارة والتوزيع.</p></div><span>{currentLead?.status_label || "غير مصنف"}</span></header>
-                    <div className="crm-contact-detail-grid">
-                      <span><b>الاسم</b>{currentLead?.customer_name || profile.contact.display_name || "—"}</span>
-                      <span><b>رقم الجوال</b>{currentLead?.phone || profile.contact.primary_phone || profile.contact.primary_phone_normalized || "—"}</span>
-                      <span><b>المصدر</b>{sourceLabel(currentLead?.source_code, currentLead?.source_name)}</span>
-                      <span><b>الفرع</b>{currentLead?.branch_name || currentLead?.branch_code || "—"}</span>
-                      <span><b>السيارة</b>{currentLead?.car_name || currentLead?.car_type || "—"}</span>
-                      <span><b>الفئة</b>{currentLead?.car_category || "—"}</span>
-                      <span><b>الموديل</b>{currentLead?.car_model || "—"}</span>
-                      <span><b>اللون</b>{currentLead?.color || "—"}</span>
-                      <span><b>نوع الدفع</b>{currentLead?.payment_type || "—"}</span>
-                      <span><b>نوع التمويل</b>{currentLead?.finance_type || "—"}</span>
-                      <span><b>العمر</b>{profileValue(currentLead?.age)}</span>
-                      <span><b>الراتب</b>{profileValue(currentLead?.salary)}</span>
-                      <span><b>الالتزامات</b>{profileValue(currentLead?.obligation)}</span>
-                      <span><b>بنك الراتب</b>{currentLead?.salary_bank || "—"}</span>
-                      <span><b>المكان</b>{currentLead?.location || "—"}</span>
-                      <span><b>الحد الائتماني</b>{profileValue(currentLead?.credit_limit)}</span>
-                      <span><b>التأهيل الائتماني</b>{currentLead?.credit_qualified == null ? "—" : currentLead.credit_qualified ? "مؤهل" : "غير مؤهل"}</span>
-                      <span><b>تاريخ المتابعة</b>{formatDate(currentLead?.follow_up_at)}</span>
-                      <span><b>الحملة</b>{currentLead?.campaign_name || "—"}</span>
-                      <span><b>تاريخ الحملة</b>{formatDate(currentLead?.campaign_date)}</span>
-                      <span><b>اكتمال الملف</b>{currentLead?.completion_percent == null ? "—" : `${currentLead.completion_percent}%`}</span>
-                      <span><b>ملاحظة الحالة</b>{currentLead?.status_note || "—"}</span>
-                      <span><b>الكول سنتر</b>{currentLead?.call_center_name || "—"}</span>
-                      <span><b>دخول السيستم</b>{formatDate(currentLead?.registered_at || currentLead?.created_at)}</span>
-                      <span><b>آخر تحديث</b>{formatDate(currentLead?.updated_at)}</span>
+    {contactId ? <div className="crm-contact-profile-backdrop">
+      <article className="crm-contact-profile-v2">
+        <header className="crm-contact-profile-hero">
+          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
+          {profileLoading && !profile ? <div className="crm-contact-profile-loading">جاري تحميل ملف العميل...</div> : null}
+          {profile ? <div className="crm-contact-profile-identity">
+            <span className="crm-contact-avatar"><IdentificationCard size={34} weight="duotone" /></span>
+            <div><small>ملف جهة الاتصال</small><h2>{contactName}</h2><p><Phone size={15} /> <bdi>{text(profile.contact.primary_phone || profile.contact.primary_phone_normalized)}</bdi></p></div>
+            <div className="crm-contact-hero-badges"><span>{text(lead?.status_label)}</span><span>{departmentLabel(lead?.department_code)}</span><span>{text(lead?.branch_name || lead?.branch_code)}</span></div>
+          </div> : null}
+        </header>
+
+        {profile ? <div className="crm-contact-profile-body">
+          <section className="crm-contact-sales-summary">
+            <SummaryCard icon={Receipt} label="طلبات البيع" value={number.format(profile.salesSummary.ordersCount)} sub={`${number.format(profile.salesSummary.cancelledOrdersCount)} ملغي`} />
+            <SummaryCard icon={Car} label="إجمالي السيارات المباعة" value={number.format(profile.salesSummary.soldVehiclesCount)} />
+            <SummaryCard icon={CurrencyCircleDollar} label="إجمالي المبيعات" value={money.format(profile.salesSummary.totalSalesAmount)} sub="بدون الطلبات الملغاة" />
+            <SummaryCard icon={ClockCounterClockwise} label="آخر عملية بيع" value={formatDate(profile.salesSummary.lastSaleAt)} />
+          </section>
+
+          <section className="crm-contact-info-panel">
+            <div className="crm-contact-section-title"><div><h3>البيانات الحالية</h3><p>آخر بيانات فعالة مرتبطة بملف العميل.</p></div><IdentificationCard size={23} /></div>
+            <div className="crm-contact-info-grid">
+              <article><small>الاسم</small><strong>{contactName}</strong></article><article><small>رقم الجوال</small><strong dir="ltr">{text(profile.contact.primary_phone || profile.contact.primary_phone_normalized)}</strong></article>
+              <article><small>الحالة</small><strong>{text(lead?.status_label)}</strong></article><article><small>المصدر</small><strong>{sourceLabel(lead?.source_code, lead?.source_name)}</strong></article>
+              <article><small>المسؤول الحالي</small><strong>{text(lead?.assigned_name)}</strong></article><article><small>القسم</small><strong>{departmentLabel(lead?.department_code)}</strong></article>
+              <article><small>الفرع</small><strong>{text(lead?.branch_name || lead?.branch_code)}</strong></article><article><small>تاريخ دخول النظام</small><strong>{formatDate(profile.contact.created_at)}</strong></article>
+            </div>
+          </section>
+
+          <section className="crm-contact-sales-orders-panel">
+            <div className="crm-contact-section-title"><div><h3>طلبات البيع</h3><p>كل طلب بيع مستقل بمندوبه وفرعه وسياراته وقيمته، مع بقاء العميل سجلًا واحدًا.</p></div><span>{number.format(profile.salesOrders.length)} طلب</span></div>
+            <div className="crm-contact-sales-orders-list">
+              {profile.salesOrders.map((order) => {
+                const open = expandedOrderId === order.id;
+                return <article key={order.id} className={`crm-sales-order-card ${order.is_cancelled ? "cancelled" : ""}`}>
+                  <button type="button" className="crm-sales-order-head" onClick={() => setExpandedOrderId(open ? null : order.id)}>
+                    <div className="crm-sales-order-number"><span><Receipt size={22} weight="duotone" /></span><div><small>طلب البيع</small><strong dir="ltr">{order.sales_order_no}</strong></div></div>
+                    <div><small>التاريخ</small><strong>{formatDate(order.order_date || order.received_at)}</strong></div>
+                    <div><small>المندوب</small><strong>{text(order.platform_user_name || order.erp_sales_person)}</strong></div>
+                    <div><small>الفرع</small><strong>{text(order.platform_branch_name || order.platform_branch_code || order.erp_branch)}</strong></div>
+                    <div><small>السيارات</small><strong>{number.format(Number(order.vehicle_qty || 1))}</strong></div>
+                    <div><small>إجمالي الطلب</small><strong className="crm-contact-money">{money.format(Number(order.total_incl_vat || 0))}</strong></div>
+                    <span className={`crm-sales-order-state ${order.is_cancelled ? "cancelled" : "active"}`}>{order.is_cancelled ? "ملغي" : text(order.erp_status || "نشط")}</span>
+                    {open ? <CaretUp size={19} /> : <CaretDown size={19} />}
+                  </button>
+                  {open ? <div className="crm-sales-order-details">
+                    <div className="crm-sales-order-financials">
+                      <article><small>قبل الضريبة</small><strong>{money.format(Number(order.subtotal_before_tax || 0))}</strong></article>
+                      <article><small>الضريبة</small><strong>{money.format(Number(order.tax_value || 0))}</strong></article>
+                      <article><small>رسوم التسجيل</small><strong>{money.format(Number(order.registration_fee || 0))}</strong></article>
+                      <article><small>الإجمالي شامل الضريبة</small><strong>{money.format(Number(order.total_incl_vat || 0))}</strong></article>
                     </div>
-                    {customData.length ? <div className="crm-contact-custom-data"><h4>الحقول الإضافية المحفوظة</h4><div className="crm-contact-detail-grid">{customData.map(([key, item]) => <span key={key}><b>{key.replace(/_/g, " ")}</b><pre>{profileValue(item)}</pre></span>)}</div></div> : null}
-                  </section>
+                    <div className="crm-sales-order-meta"><span><UsersThree size={16} />{text(order.platform_department_name || order.platform_department_code)}</span><span><Storefront size={16} />{text(order.platform_branch_name || order.platform_branch_code || order.erp_branch)}</span><span><Buildings size={16} />التسليم: {formatDate(order.delivery_date)}</span></div>
+                    {order.is_cancelled ? <div className="crm-sales-order-cancel-note"><strong>تم إلغاء الطلب</strong><span>{text(order.cancellation_reason)}</span><small>{formatDate(order.cancelled_at)}</small></div> : null}
+                    <div className="crm-table-wrap crm-sales-vehicles-table"><table className="crm-table"><thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>الموديل</th><th>الألوان</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th><th>حالة العمليات</th></tr></thead><tbody>
+                      {(order.vehicles || []).map((vehicle) => <tr key={vehicle.id}><td dir="ltr"><strong>{text(vehicle.vin)}</strong></td><td>{text(vehicle.itemType || vehicle.itemCategory || vehicle.itemNo)}</td><td>{text(vehicle.itemModel)}</td><td>{[vehicle.exteriorColor, vehicle.interiorColor].filter(Boolean).join(" / ") || "—"}</td><td>{number.format(Number(vehicle.qty || 1))}</td><td>{money.format(Number(vehicle.unitPrice || 0))}</td><td>{money.format(Number(vehicle.totalInclVat || vehicle.itemValue || 0))}</td><td>{text(vehicle.operationsStatusCode)}</td></tr>)}
+                      {!order.vehicles?.length ? <tr><td colSpan={8} className="crm-empty-cell">لا توجد تفاصيل سيارات محفوظة لهذا الطلب</td></tr> : null}
+                    </tbody></table></div>
+                  </div> : null}
+                </article>;
+              })}
+              {!profile.salesOrders.length ? <div className="crm-contact-empty-section">لا توجد طلبات بيع مرتبطة بهذا العميل حتى الآن.</div> : null}
+            </div>
+          </section>
 
-                  <section className="crm-contact-profile-section">
-                    <header><div><h3>الملاحظات المسجلة</h3><p>كل الملاحظات المرتبطة بملف العميل.</p></div><NotePencil size={22} /></header>
-                    <div className="crm-contact-notes">
-                      {profile.notes.map((note, index) => <article key={`${note.leadId}-${index}`}><time>{formatDate(note.updatedAt)}</time><pre>{note.text}</pre></article>)}
-                      {!profile.notes.length ? <div className="crm-empty-state">لا توجد ملاحظات مسجلة لهذا العميل.</div> : null}
-                    </div>
-                  </section>
-
-                  <section className="crm-contact-profile-section">
-                    <header><div><h3>طلبات الخدمة</h3><p>كل دورة تعامل للعميل، سواء كانت مفتوحة أو منتهية.</p></div><span>{profile.requests.length}</span></header>
-                    <div className="crm-contact-timeline">
-                      {profile.requests.map((request) => <article key={request.id} className={request.request_state === "closed" ? "closed" : "open"}>
-                        <span className="point" />
-                        <div><header><strong>{serviceLabel(request.service_key, request.department_code)}</strong><span>{requestStateLabel(request.request_state)}</span></header><p>الحالة: {request.status_label || "عميل جديد"}</p><small>المسؤول: {request.assigned_name || "غير موزع"} • الفرع: {request.branch_name || request.branch_code || "—"}</small><time>فتح: {formatDate(request.opened_at)}{request.closed_at ? ` • إغلاق: ${formatDate(request.closed_at)}` : ""}</time></div>
-                      </article>)}
-                      {!profile.requests.length ? <div className="crm-empty-state">لا توجد طلبات خدمة مسجلة.</div> : null}
-                    </div>
-                  </section>
-
-                  <section className="crm-contact-profile-section">
-                    <header><div><h3>سجل الحالات والإجراءات</h3><p>تاريخ التغييرات، التحويلات والتوزيع.</p></div><ClockCounterClockwise size={22} /></header>
-                    <div className="crm-contact-events">
-                      {profile.events.map((event) => <article key={`event-${event.id}`}><span className="event-icon"><ClockCounterClockwise size={17} /></span><div><strong>{event.event_type === "status_change" ? `تغيير الحالة إلى ${event.new_status || "—"}` : event.note || event.event_type}</strong><p>{event.old_status && event.new_status ? `${event.old_status} ← ${event.new_status}` : event.note || ""}</p><small>{event.actor_name || "النظام"} • {formatDate(event.created_at)}</small></div></article>)}
-                      {profile.ownership.map((event) => <article key={`owner-${event.id}`}><span className="event-icon owner"><UserCircle size={17} /></span><div><strong>{event.reason || "تغيير المسؤول"}</strong><p>{event.previous_assigned_name || "غير موزع"} ← {event.new_assigned_name || "غير موزع"}</p><small>{event.actor_name || "النظام"} • {formatDate(event.created_at)}</small></div></article>)}
-                      {!profile.events.length && !profile.ownership.length ? <div className="crm-empty-state">لا يوجد سجل تغييرات.</div> : null}
-                    </div>
-                  </section>
-
-                  <section className="crm-contact-profile-section">
-                    <header><div><h3>المحادثات والرسائل الأخيرة</h3><p>ملخص القنوات وآخر 30 رسالة محفوظة.</p></div><ChatCircleDots size={22} /></header>
-                    <div className="crm-contact-conversation-chips">{profile.conversations.map((conversation) => <span key={conversation.id}>{sourceLabel(conversation.channel_code)} • {conversation.classification_state === "classified" ? "مصنفة" : "غير مصنفة"} • {formatDate(conversation.last_message_at)}</span>)}</div>
-                    <div className="crm-contact-messages">
-                      {latestMessages.map((message) => <article key={message.id} className={message.direction === "out" ? "out" : "in"}><header><strong>{messageDirectionLabel(message)}</strong><time>{formatDate(message.created_at)}</time></header><p>{message.body || message.caption || message.file_name || "مرفق"}</p><small>{message.sent_by_name || message.sender_type || sourceLabel(message.provider)}</small></article>)}
-                      {!latestMessages.length ? <div className="crm-empty-state">لا توجد رسائل محفوظة.</div> : null}
-                    </div>
-                  </section>
-
-                  <section className="crm-contact-profile-section compact">
-                    <header><div><h3>الهويات والقنوات</h3><p>كل المعرفات التي تم ربطها بنفس جهة الاتصال.</p></div><span>{profile.identities.length}</span></header>
-                    <div className="crm-contact-identities">{profile.identities.map((identity) => <article key={identity.id}><b>{sourceLabel(identity.channel_code)}</b><span>{identity.participant_id || identity.external_id}</span><small>{identity.display_name || "—"} • {formatDate(identity.updated_at)}</small></article>)}</div>
-                  </section>
-                </div>
-              </>
-            )}
-          </article>
-        </div>
-      ) : null}
-
-      {purgeOpen && profile ? (
-        <div className="crm-modal-backdrop" onMouseDown={() => setPurgeOpen(false)}>
-          <div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}>
-            <header><div><h2>حذف ملف العميل بالكامل</h2><p>سيتم حذف جهة الاتصال والعميل وطلبات الخدمة والمحادثات والرسائل نهائيًا. استخدمها فقط لمسح أرقام الاختبار.</p></div><button className="crm-icon-button" type="button" onClick={() => setPurgeOpen(false)}><X size={18} /></button></header>
-            <div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>هذا الإجراء غير قابل للتراجع</strong><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? `اكتب رقم الجوال المسجل للتأكيد: ${profile.contact.primary_phone || profile.contact.primary_phone_normalized}` : "لا يوجد رقم جوال مسجل. اكتب كلمة التأكيد الأساسية 2106"}</span></div></div>
-            <label className="crm-form-label"><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? "تأكيد رقم الجوال" : "كلمة التأكيد الأساسية"}</span><input value={confirmPhone} onChange={(event) => setConfirmPhone(event.target.value)} placeholder={profile.contact.primary_phone || profile.contact.primary_phone_normalized ? "اكتب رقم الجوال كاملًا" : "اكتب 2106"} inputMode={profile.contact.primary_phone || profile.contact.primary_phone_normalized ? "tel" : "numeric"} /></label>
-            <div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => setPurgeOpen(false)}>إلغاء</button><button type="button" className="crm-danger-button" disabled={purging || !confirmPhone.trim()} onClick={() => void purgeContact()}><Trash size={17} />{purging ? "جاري الحذف..." : "حذف الملف والطلب والمحادثات"}</button></div>
+          <div className="crm-contact-secondary-grid">
+            <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>الملاحظات</h3><p>الملاحظات المحفوظة في كل ملفات العميل.</p></div><NotePencil size={22} /></div><div className="crm-contact-timeline">{profile.notes.map((note, index) => <article key={`${note.leadId}-${index}`}><strong>{text(note.customerName)}</strong><p>{text(note.text)}</p><small>{formatDate(note.updatedAt)}</small></article>)}{!profile.notes.length ? <div className="crm-contact-empty-section">لا توجد ملاحظات.</div> : null}</div></section>
+            <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>طلبات الخدمة</h3><p>الطلبات المفتوحة والمنتهية.</p></div><ClockCounterClockwise size={22} /></div><div className="crm-contact-timeline">{profile.requests.slice(0, 20).map((request) => <article key={request.id}><strong>{text(request.status_label)}</strong><p>{departmentLabel(request.department_code)} · {text(request.assigned_name)}</p><small>{formatDate(request.opened_at)}</small></article>)}{!profile.requests.length ? <div className="crm-contact-empty-section">لا توجد طلبات خدمة.</div> : null}</div></section>
+            <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>المحادثات</h3><p>آخر المحادثات المسجلة.</p></div><ChatCircleDots size={22} /></div><div className="crm-contact-timeline">{profile.conversations.slice(0, 20).map((conversation) => <article key={conversation.id}><strong>{text(conversation.channel_code || conversation.platform_code)}</strong><p>{text(conversation.preview_text)}</p><small>{formatDate(conversation.last_message_at || conversation.updated_at)}</small></article>)}{!profile.conversations.length ? <div className="crm-contact-empty-section">لا توجد محادثات.</div> : null}</div></section>
+            <section className="crm-contact-info-panel"><div className="crm-contact-section-title"><div><h3>سجل الحركات</h3><p>أحدث تغييرات الحالة والملكية.</p></div><ClockCounterClockwise size={22} /></div><div className="crm-contact-timeline">{profile.events.slice(0, 30).map((event) => <article key={event.id}><strong>{text(event.event_type)}</strong><p>{text(event.note || `${event.old_status || "—"} ← ${event.new_status || "—"}`)}</p><small>{text(event.actor_name)} · {formatDate(event.created_at)}</small></article>)}{!profile.events.length ? <div className="crm-contact-empty-section">لا توجد حركات.</div> : null}</div></section>
           </div>
-        </div>
-      ) : null}
-    </div>
-  );
+        </div> : null}
+      </article>
+    </div> : null}
+
+    {purgeOpen && profile ? <div className="crm-modal-backdrop" onMouseDown={() => setPurgeOpen(false)}><div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>حذف ملف العميل بالكامل</h2><p>سيتم حذف جهة الاتصال والعميل وطلبات الخدمة والمحادثات والرسائل نهائيًا.</p></div><button className="crm-icon-button" type="button" onClick={() => setPurgeOpen(false)}><X size={18} /></button></header><div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>هذا الإجراء غير قابل للتراجع</strong><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? `اكتب رقم الجوال المسجل للتأكيد: ${profile.contact.primary_phone || profile.contact.primary_phone_normalized}` : "لا يوجد رقم جوال مسجل. اكتب كلمة التأكيد الأساسية 2106"}</span></div></div><label className="crm-form-label"><span>التأكيد</span><input value={confirmPhone} onChange={(event) => setConfirmPhone(event.target.value)} /></label><div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => setPurgeOpen(false)}>إلغاء</button><button type="button" className="crm-danger-button" disabled={purging || !confirmPhone.trim()} onClick={() => void purgeContact()}><Trash size={17} />{purging ? "جاري الحذف..." : "حذف الملف بالكامل"}</button></div></div></div> : null}
+  </div>;
 }

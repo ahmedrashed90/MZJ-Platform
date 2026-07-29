@@ -14,7 +14,7 @@ function safeSpreadsheetText(value: unknown) {
   return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
-const writerFields = [
+export const writerFields = [
   ["proposedName", "الاسم المقترح للكرييتيف"],
   ["goal", "الهدف"],
   ["mainMessage", "الرسالة الأساسية"],
@@ -231,20 +231,108 @@ export function downloadTaskTemplate(task: any) {
   URL.revokeObjectURL(anchor.href);
 }
 
-export async function parseTaskTemplate(file: File) {
-  const rows = await readXlsx(file);
-  if (!rows.length) throw new Error("ملف Task Template فارغ أو غير صالح");
+export type TaskTemplateInspection = {
+  isValid: boolean;
+  data: Record<string, string>;
+  rows: Array<{ key: string; label: string; value: string; writer: boolean }>;
+  errors: string[];
+  warnings: string[];
+};
 
-  const output: Record<string, string> = {};
-  for (const row of rows) {
-    const key = String(row.key || row.Key || "").trim();
-    if (!writerKeys.has(key as (typeof writerFields)[number][0])) continue;
-    output[key] = String(row["القيمة"] ?? row.value ?? row.Value ?? "").trim();
+const templateMetaFields = [
+  ["campaignName", "اسم الحملة"],
+  ["campaignCode", "رقم الحملة"],
+  ["campaignType", "نوع الحملة"],
+  ["taskNo", "رقم التاسك"],
+  ["creativeType", "نوع الكرييتيف"],
+  ["dueDate", "تاريخ التسليم"],
+  ["departmentNote", "ملاحظة القسم"],
+] as const;
+
+const requiredWriterKeys = new Set(["proposedName", "goal", "mainMessage", "hook", "mainScript", "cta"]);
+
+function normalizedTemplateValue(value: unknown) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function expectedMetaValue(task: any, key: string) {
+  const values: Record<string, unknown> = {
+    campaignName: task?.source_name,
+    campaignCode: task?.campaign_code,
+    campaignType: task?.campaign_type_name || task?.campaign_type || (task?.source_type === "agenda" ? "أجندة" : ""),
+    taskNo: task?.task_no || task?.instance_code,
+    creativeType: task?.creative_name,
+    dueDate: String(task?.template_due_on || task?.due_at || "").slice(0, 10),
+    departmentNote: task?.template_department_note || task?.note,
+  };
+  return normalizedTemplateValue(values[key]);
+}
+
+export async function inspectTaskTemplate(file: File, task?: any): Promise<TaskTemplateInspection> {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!/\.xlsx$/i.test(file.name)) errors.push("الملف يجب أن يكون بصيغة Excel .xlsx");
+  if (file.size > 15 * 1024 * 1024) errors.push("حجم ملف Task Template يجب ألا يتجاوز 15 MB");
+
+  const sourceRows = await readXlsx(file);
+  if (!sourceRows.length) return { isValid: false, data: {}, rows: [], errors: [...errors, "ملف Task Template فارغ أو غير صالح"], warnings };
+
+  const headers = Object.keys(sourceRows[0] || {}).map((value) => normalizedTemplateValue(value));
+  const requiredHeaders = ["key", "الحقل", "القيمة"];
+  for (const header of requiredHeaders) if (!headers.includes(header)) errors.push(`العمود المطلوب غير موجود: ${header}`);
+  const extraHeaders = headers.filter((header) => header && !requiredHeaders.includes(header));
+  if (extraHeaders.length) errors.push(`لا تغيّر أعمدة النموذج. الأعمدة الإضافية: ${extraHeaders.join("، ")}`);
+
+  const expectedRows = [...templateMetaFields, ...writerFields];
+  const expectedMap = new Map(expectedRows.map(([key, label]) => [key, label]));
+  const seen = new Set<string>();
+  const rows: TaskTemplateInspection["rows"] = [];
+  const data: Record<string, string> = {};
+
+  for (const rawRow of sourceRows) {
+    const key = normalizedTemplateValue(rawRow.key ?? rawRow.Key);
+    const label = normalizedTemplateValue(rawRow["الحقل"] ?? rawRow.field ?? rawRow.Field);
+    const value = String(rawRow["القيمة"] ?? rawRow.value ?? rawRow.Value ?? "").trim();
+    if (!key && !label && !value) continue;
+    if (!expectedMap.has(key as any)) {
+      errors.push(`يوجد صف غير معتمد داخل النموذج: ${key || label || "صف بدون مفتاح"}`);
+      continue;
+    }
+    if (seen.has(key)) {
+      errors.push(`الحقل مكرر داخل الملف: ${expectedMap.get(key as any)}`);
+      continue;
+    }
+    seen.add(key);
+    const expectedLabel = expectedMap.get(key as any) || "";
+    if (label !== expectedLabel) errors.push(`اسم الحقل الخاص بـ ${key} تم تغييره. الاسم المعتمد: ${expectedLabel}`);
+    const writer = writerKeys.has(key as any);
+    rows.push({ key, label: expectedLabel, value, writer });
+    if (writer) data[key] = value;
   }
 
-  if (!Object.keys(output).length) throw new Error("ارفع نفس ملف Task Template بصيغة .xlsx بدون تغيير أعمدة key والحقل والقيمة");
-  for (const [key] of writerFields) if (!(key in output)) output[key] = "";
-  return output;
+  for (const [key, label] of expectedRows) if (!seen.has(key)) errors.push(`الصف المطلوب غير موجود: ${label}`);
+  for (const [key, label] of writerFields) {
+    if (!(key in data)) data[key] = "";
+    if (requiredWriterKeys.has(key) && !normalizedTemplateValue(data[key])) errors.push(`اكتب البيانات المطلوبة في حقل: ${label}`);
+  }
+
+  if (task) {
+    for (const [key, label] of templateMetaFields) {
+      const row = rows.find((item) => item.key === key);
+      const expected = expectedMetaValue(task, key);
+      if (expected && normalizedTemplateValue(row?.value) !== expected) errors.push(`بيانات ${label} لا تطابق التاسك المعتمد. حمّل النموذج من التاسك نفسه ثم ارفعه بعد تعبئته.`);
+    }
+  }
+
+  if (!data.caption?.trim()) warnings.push("حقل Caption فارغ وسيظهر فارغًا في المراجعة.");
+  if (!data.hashtags?.trim()) warnings.push("حقل Hashtag فارغ وسيظهر فارغًا في المراجعة.");
+  return { isValid: errors.length === 0, data, rows, errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
+}
+
+export async function parseTaskTemplate(file: File, task?: any) {
+  const inspection = await inspectTaskTemplate(file, task);
+  if (!inspection.isValid) throw new Error(inspection.errors[0] || "ملف Task Template غير مطابق للنموذج المعتمد");
+  return inspection.data;
 }
 
 export function relationshipCsv(rows: Array<Record<string, unknown>>) {

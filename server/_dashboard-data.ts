@@ -24,7 +24,7 @@ function emptyData(range: { from: string; to: string }): DashboardData {
     marketing: { campaigns: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
-      inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, underDelivery: null, delivered: null, hasNotes: null },
+      inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, reservedByLocation: [], underDelivery: null, delivered: null, hasNotes: null },
       locations: locationNames.map(([key, name]) => ({ key, name, actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null })),
       approvals: { total: null, missingFinancial: null, missingAdministrative: null, completed: null, recentNotes: [] },
       shortages: { total: null, multaqa: null, hall: null, qadisiyah: null },
@@ -67,7 +67,25 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         select
           count(*)::int as total_customers,
           count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
-          count(*) filter(where status_label='تم البيع')::int as sold,
+          (
+            coalesce((
+              select sum(coalesce(vehicle_stats.quantity,1))
+              from integrations.erpnext_sales_orders so
+              join crm.leads sold_lead on sold_lead.id=so.crm_lead_id and sold_lead.is_deleted=false
+              left join lateral (
+                select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
+                from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
+              ) vehicle_stats on true
+              where coalesce(so.is_cancelled,false)=false
+                and coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+                and (
+                  ${crmAll}=true
+                  or (${crmAssigned}=true and (so.platform_user_id=${user.id}::uuid or sold_lead.call_center_assigned_to=${user.id}::uuid or sold_lead.created_by=${user.id}::uuid))
+                  or (coalesce(so.platform_branch_code,sold_lead.branch_code) in ${sql(crmBranches)} and coalesce(so.platform_department_code,sold_lead.department_code) in ${sql(crmDepartments)})
+                )
+            ),0)
+            + coalesce(sum(greatest(coalesce(sold_quantity,1),1)) filter(where status_label='تم البيع' and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=scoped_leads.id and coalesce(so.is_cancelled,false)=false)),0)
+          )::int as sold,
           count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
           count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
           count(*) filter(where department_code='customer_service')::int as customer_service,
@@ -159,10 +177,10 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         where l.is_active=true and (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
         group by l.code,l.name,l.sort_order order by l.sort_order`,
       sql<any[]>`select
-        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")})::int as actual_total,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and coalesce(l.code,'')<>'agency')::int as branch_actual_total,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and l.code='agency')::int as agency,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")})::int as available_for_sale,
-        count(*) filter(where ${operationsInventoryMetricCondition(sql, "reserved")})::int as reserved,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "reserved")} and coalesce(l.code,'')<>'agency')::int as reserved,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "delivered")})::int as delivered,
         count(*) filter(where ${operationsInventoryMetricCondition(sql, "has_notes")})::int as has_notes
@@ -245,8 +263,17 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           and (r.cancelled_at is not null or ${requestHasActiveVehicle})
           and (r.requested_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date`,
     ]);
-    data.operations.inventory = { actualTotal: asNumber(inventory?.actual_total), agency: asNumber(inventory?.agency), availableForSale: asNumber(inventory?.available_for_sale), reserved: asNumber(inventory?.reserved), underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes) };
     data.operations.locations = locations.map((item) => ({ key: item.key, name: item.name, actualTotal: asNumber(item.actual_total), underDelivery: asNumber(item.under_delivery), availableForSale: asNumber(item.available_for_sale), reserved: asNumber(item.reserved), delivered: asNumber(item.delivered), hasNotes: asNumber(item.has_notes) }));
+    const branchActualTotal = asNumber(inventory?.branch_actual_total);
+    const agencyActualTotal = asNumber(inventory?.agency);
+    data.operations.inventory = {
+      actualTotal: branchActualTotal + agencyActualTotal,
+      agency: agencyActualTotal,
+      availableForSale: asNumber(inventory?.available_for_sale),
+      reserved: asNumber(inventory?.reserved),
+      reservedByLocation: data.operations.locations.filter((item) => item.key !== "agency").map((item) => ({ key: item.key, name: item.name, value: item.reserved })),
+      underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes),
+    };
     if (!data.operations.locations.length) data.operations.locations = emptyData(range).operations.locations;
     data.operations.approvals = {
       total: asNumber(approval?.total),

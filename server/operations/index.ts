@@ -593,6 +593,7 @@ async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: Vercel
   const { page, pageSize, offset } = pageValues(request);
   const location = clean(request.query.location);
   const metric = clean(request.query.metric);
+  const branchesOnly = boolValue(request.query.branchesOnly);
   const search = clean(request.query.search);
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "l");
@@ -601,6 +602,7 @@ async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: Vercel
   const condition = operationsInventoryMetricCondition(sql, metricKey);
   const base = sql`
     (${location}='' or l.code=${location}) and ${condition}
+    and (${branchesOnly}=false or coalesce(l.code,'')<>'agency')
     and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
     and ${scope}
     and ${statusScope}

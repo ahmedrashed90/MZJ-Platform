@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
-import { downloadTaskTemplate, parseTaskTemplate } from "../templateExcel";
+import { downloadTaskTemplate, inspectTaskTemplate, type TaskTemplateInspection } from "../templateExcel";
 import { MarketingAlert, ProgressBar } from "./MarketingPage";
 
 const writerLabels: Record<string, string> = {
@@ -144,6 +144,9 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const [reviewFieldNotes, setReviewFieldNotes] = useState<Record<string, string>>({});
   const [activeReviewField, setActiveReviewField] = useState<string | null>(null);
   const [editData, setEditData] = useState<Record<string, string>>({});
+  const [templatePreview, setTemplatePreview] = useState<{ file: File; inspection: TaskTemplateInspection } | null>(null);
+  const [unapproveOpen, setUnapproveOpen] = useState(false);
+  const [unapproveReason, setUnapproveReason] = useState("");
 
   async function load() {
     if (!taskId) return;
@@ -165,7 +168,12 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     }
   }
 
-  useEffect(() => { void load(); }, [taskId]);
+  useEffect(() => {
+    setTemplatePreview(null);
+    setUnapproveOpen(false);
+    setUnapproveReason("");
+    void load();
+  }, [taskId]);
 
   async function action(body: Record<string, unknown>) {
     setLoading(true);
@@ -176,8 +184,10 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
       setMessage(result.message || "تم التنفيذ");
       await load();
       onChanged?.();
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تنفيذ الإجراء");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -189,9 +199,24 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     setError("");
     setMessage("");
     try {
-      const data = await parseTaskTemplate(file);
-      const fileId = await uploadMarketingFile({ file, category: "task-template", sourceType: payload.task.source_type, sourceId: payload.task.source_id, taskId: payload.task.id });
-      await action({ action: "upload_template", taskId: payload.task.id, fileId, templateData: data });
+      const inspection = await inspectTaskTemplate(file, payload.task);
+      setTemplatePreview({ file, inspection });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر معاينة Task Template");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function confirmTemplateUpload() {
+    if (!payload?.task || !templatePreview?.inspection.isValid) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const fileId = await uploadMarketingFile({ file: templatePreview.file, category: "task-template", sourceType: payload.task.source_type, sourceId: payload.task.source_id, taskId: payload.task.id });
+      const succeeded = await action({ action: "upload_template", taskId: payload.task.id, fileId, templateData: templatePreview.inspection.data, validationVersion: 1 });
+      if (succeeded) setTemplatePreview(null);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر رفع Task Template");
       setLoading(false);
@@ -242,17 +267,18 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     if (activeReviewField === key) setActiveReviewField(null);
   }
 
-  function reviewAction(reviewActionName: "request_edit" | "edit" | "reject" | "approve") {
+  function reviewAction(reviewActionName: "request_edit" | "edit" | "reject" | "approve" | "unapprove") {
     const feedback = serializeReviewFeedback({
       generalNote: adminNote,
       selectedFields: reviewSelectedFields,
       fieldNotes: reviewFieldNotes,
     });
+    const reviewNote = reviewActionName === "approve" ? "" : feedback;
     return action({
       action: "review_template",
       templateId: task.task_template_id,
       reviewAction: reviewActionName,
-      note: reviewActionName === "approve" ? "" : feedback,
+      note: reviewActionName === "unapprove" ? unapproveReason.trim() : reviewNote,
       data: editData,
     });
   }
@@ -300,7 +326,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <div><h3>Task Template</h3><p>{task.template_department_note || task.note || "لا توجد ملاحظات إضافية"}</p></div>
             <div className="marketing-inline-actions">
               {permissions.canDownloadTemplate ? <button type="button" className="secondary" onClick={() => downloadTaskTemplate(task)}><DownloadSimple size={18} />تحميل Task Template</button> : null}
-              {permissions.canUploadTemplate ? <label className="marketing-upload-button"><FileArrowUp size={18} />إرفاق Task Template Excel<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadTemplate(file); event.currentTarget.value = ""; }} /></label> : null}
+              {permissions.canUploadTemplate ? <label className="marketing-upload-button"><FileArrowUp size={18} />اختيار ومعاينة Task Template<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadTemplate(file); event.currentTarget.value = ""; }} /></label> : null}
               {task.template_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.template_file_id)}><DownloadSimple size={18} />تحميل الملف المرفوع</button> : null}
             </div>
           </section>
@@ -391,7 +417,8 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
                   <button type="button" className="review-save" disabled={loading} onClick={() => void reviewAction("edit")}><FloppyDisk size={19} />حفظ تعديل المراجع</button>
                   <button type="button" className="review-reject" disabled={loading} onClick={() => void reviewAction("reject")}><XCircle size={19} weight="fill" />رفض</button>
                 </> : null}
-                {permissions.canApproveTemplate ? <button type="button" className="review-approve" disabled={loading} onClick={() => void reviewAction("approve")}><CheckCircle size={20} weight="fill" />اعتماد التعليمات</button> : null}
+                {permissions.canUnapproveTemplate && task.template_status === "approved" ? <button type="button" className="review-unapprove" disabled={loading} onClick={() => { setUnapproveReason(""); setUnapproveOpen(true); }}><ArrowsClockwise size={19} />إلغاء الاعتماد وإعادة الرفع</button> : null}
+                {permissions.canApproveTemplate && task.template_status !== "approved" ? <button type="button" className="review-approve" disabled={loading} onClick={() => void reviewAction("approve")}><CheckCircle size={20} weight="fill" />اعتماد التعليمات</button> : null}
               </div>
             </div>
           </section> : null}
@@ -435,6 +462,22 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
           </section>
         </>}
       </div> : null}
+
+      {templatePreview ? <div className="marketing-template-preview-backdrop" onMouseDown={() => !loading && setTemplatePreview(null)}>
+        <section className="marketing-template-preview" onMouseDown={(event) => event.stopPropagation()}>
+          <header><div><span>معاينة قبل الرفع</span><h3>{templatePreview.file.name}</h3><p>لن يتم رفع الملف إلا بعد التأكد من مطابقته للنموذج واعتماد المعاينة.</p></div><button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}><XCircle size={20} /></button></header>
+          <div className={`marketing-template-validation-summary ${templatePreview.inspection.isValid ? "valid" : "invalid"}`}>
+            {templatePreview.inspection.isValid ? <CheckCircle size={24} weight="fill" /> : <WarningCircle size={24} weight="fill" />}
+            <div><strong>{templatePreview.inspection.isValid ? "الملف مطابق ويمكن تأكيد الرفع" : "تم رفض الملف لعدم مطابقته للنموذج"}</strong><span>{templatePreview.inspection.isValid ? "راجع البيانات التالية ثم اضغط تأكيد الرفع." : "صحح الأخطاء التالية وارفع نفس النموذج مرة أخرى."}</span></div>
+          </div>
+          {templatePreview.inspection.errors.length ? <div className="marketing-template-validation-errors">{templatePreview.inspection.errors.map((item) => <p key={item}><XCircle size={16} weight="fill" />{item}</p>)}</div> : null}
+          {templatePreview.inspection.warnings.length ? <div className="marketing-template-validation-warnings">{templatePreview.inspection.warnings.map((item) => <p key={item}><WarningCircle size={16} />{item}</p>)}</div> : null}
+          <div className="marketing-template-preview-table"><table><thead><tr><th>الحقل</th><th>البيانات</th><th>التحقق</th></tr></thead><tbody>{templatePreview.inspection.rows.filter((row) => row.writer).map((row) => <tr key={row.key}><td><strong>{row.label}</strong></td><td><p>{row.value || "—"}</p></td><td>{row.value ? <span className="ok">موجود</span> : <span className="empty">فارغ</span>}</td></tr>)}</tbody></table></div>
+          <footer><button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}>إلغاء</button><button type="button" className="primary" disabled={loading || !templatePreview.inspection.isValid} onClick={() => void confirmTemplateUpload()}><FileArrowUp size={18} />{loading ? "جاري الرفع..." : "تأكيد رفع Task Template"}</button></footer>
+        </section>
+      </div> : null}
+
+      {unapproveOpen ? <div className="marketing-template-preview-backdrop" onMouseDown={() => !loading && setUnapproveOpen(false)}><section className="marketing-unapprove-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><span>إجراء إداري</span><h3>إلغاء اعتماد Task Template</h3><p>سيعود Task Template إلى انتظار الرفع، وستتوقف التاسكات التنفيذية حتى رفع نسخة جديدة واعتمادها.</p></div></header><label><span>سبب إلغاء الاعتماد</span><textarea rows={4} value={unapproveReason} onChange={(event) => setUnapproveReason(event.target.value)} placeholder="اكتب سببًا واضحًا ليظهر في سجل المراجعات..." /></label><footer><button type="button" className="secondary" disabled={loading} onClick={() => setUnapproveOpen(false)}>تراجع</button><button type="button" className="review-unapprove" disabled={loading || !unapproveReason.trim()} onClick={async () => { const succeeded = await reviewAction("unapprove"); if (succeeded) setUnapproveOpen(false); }}><ArrowsClockwise size={18} />إلغاء الاعتماد وإعادة الرفع</button></footer></section></div> : null}
     </Modal>
   );
 }

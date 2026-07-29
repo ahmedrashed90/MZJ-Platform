@@ -5,6 +5,7 @@ export type DashboardData = {
   generatedAt: string;
   range: { from: string; to: string };
   sectionErrors?: Record<string, string>;
+  layout?: { operationWidgetOrder: string[] };
   crm: {
     totalCustomers: NullableNumber;
     openConversations: NullableNumber;
@@ -45,6 +46,7 @@ export type DashboardData = {
       agency: NullableNumber;
       availableForSale: NullableNumber;
       reserved: NullableNumber;
+      reservedByLocation: Array<{ key: string; name: string; value: NullableNumber }>;
       underDelivery: NullableNumber;
       delivered: NullableNumber;
       hasNotes: NullableNumber;
