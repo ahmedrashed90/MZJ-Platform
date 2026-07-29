@@ -19,6 +19,7 @@ import {
   operationsRequestAccessScope,
   operationsRequestHasActiveVehicle,
 } from "../_operations-query-scope.js";
+import { isOperationsInventoryMetric, operationsInventoryMetricCondition } from "../_operations-inventory-metrics.js";
 import {
   boolValue,
   clean,
@@ -596,22 +597,10 @@ async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: Vercel
   const pattern = `%${search}%`;
   const scope = accessScope(sql, user, "l");
   const statusScope = vehicleStatusScope(sql, user);
-  const condition = metric === "actual_total"
-    ? sql`v.archived_at is null and v.is_inventory_active=true and coalesce(v.status_code,'') not in ('under_delivery','delivered')`
-    : metric === "under_delivery"
-      ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery'`
-      : metric === "available_for_sale"
-        ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale'`
-        : metric === "reserved"
-          ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved'`
-          : metric === "delivered"
-            ? sql`v.status_code='delivered'`
-            : metric === "has_notes"
-              ? sql`v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true)`
-              : sql`v.archived_at is null and v.is_inventory_active=true`;
+  const metricKey = isOperationsInventoryMetric(metric) ? metric : "active_inventory";
+  const condition = operationsInventoryMetricCondition(sql, metricKey);
   const base = sql`
-    v.is_deleted=false
-    and (${location}='' or l.code=${location}) and ${condition}
+    (${location}='' or l.code=${location}) and ${condition}
     and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern})
     and ${scope}
     and ${statusScope}

@@ -4,6 +4,7 @@ import type { SessionUser } from "./_auth.js";
 import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
+import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
 
 const locationNames = [
   ["warehouse", "المستودع"],
@@ -145,12 +146,12 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
     const requestHasActiveVehicle = operationsRequestHasActiveVehicle(sql, user);
     const [locations, [inventory], [approval], [shortage], [transfer]] = await Promise.all([
       sql<any[]>`select l.code as key,l.name,
-        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(v.status_code,'') not in ('under_delivery','delivered'))::int as actual_total,
-        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery')::int as under_delivery,
-        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale')::int as available_for_sale,
-        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved')::int as reserved,
-        count(v.id) filter(where v.is_deleted=false and v.status_code='delivered')::int as delivered,
-        count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true))::int as has_notes
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")})::int as actual_total,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")})::int as available_for_sale,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "reserved")})::int as reserved,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "delivered")})::int as delivered,
+        count(v.id) filter(where ${operationsInventoryMetricCondition(sql, "has_notes")})::int as has_notes
         from operations.locations l
         left join operations.vehicles v on v.location_id=l.id
           and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})
@@ -158,13 +159,13 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         where l.is_active=true and (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
         group by l.code,l.name,l.sort_order order by l.sort_order`,
       sql<any[]>`select
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(v.status_code,'') not in ('under_delivery','delivered'))::int as actual_total,
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and l.code='agency' and coalesce(v.status_code,'') not in ('under_delivery','delivered'))::int as agency,
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale')::int as available_for_sale,
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved')::int as reserved,
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery')::int as under_delivery,
-        count(*) filter(where v.is_deleted=false and v.status_code='delivered')::int as delivered,
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true))::int as has_notes
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")})::int as actual_total,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "actual_total")} and l.code='agency')::int as agency,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "available_for_sale")})::int as available_for_sale,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "reserved")})::int as reserved,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "under_delivery")})::int as under_delivery,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "delivered")})::int as delivered,
+        count(*) filter(where ${operationsInventoryMetricCondition(sql, "has_notes")})::int as has_notes
         from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
         where (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
           and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})`,

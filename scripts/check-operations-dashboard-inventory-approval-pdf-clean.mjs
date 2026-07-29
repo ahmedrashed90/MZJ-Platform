@@ -3,6 +3,7 @@ import fs from "node:fs";
 const read = (path) => fs.readFileSync(path, "utf8");
 const dashboardData = read("server/_dashboard-data.ts");
 const operationsApi = read("server/operations/index.ts");
+const inventoryMetrics = read("server/_operations-inventory-metrics.ts");
 const dashboardPage = read("src/pages/DashboardPage.tsx");
 const dashboardModal = read("src/operations/components/DashboardOperationsModal.tsx");
 const movementHistory = read("src/operations/pages/MovementHistoryPage.tsx");
@@ -25,11 +26,11 @@ expect(
   !operationsBlock.includes("(v.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date"),
 );
 expect(
-  "Actual inventory excludes under-delivery and delivered in both cards and drilldowns",
-  dashboardData.includes("coalesce(v.status_code,'') not in ('under_delivery','delivered')")
-    && dashboardData.includes("l.code='agency' and coalesce(v.status_code,'') not in ('under_delivery','delivered')")
-    && operationsApi.includes("metric === \"actual_total\"")
-    && operationsApi.includes("coalesce(v.status_code,'') not in ('under_delivery','delivered')"),
+  "Actual inventory excludes under-delivery and delivered through one canonical card/drilldown predicate",
+  inventoryMetrics.includes("coalesce(v.status_code,'') not in ('under_delivery','delivered')")
+    && dashboardData.includes('operationsInventoryMetricCondition(sql, "actual_total")')
+    && dashboardData.includes("operationsInventoryMetricCondition(sql, \"actual_total\")} and l.code='agency'")
+    && operationsApi.includes("const condition = operationsInventoryMetricCondition(sql, metricKey)"),
 );
 expect(
   "Dashboard inventory counts use both canonical branch and vehicle-status scopes",
