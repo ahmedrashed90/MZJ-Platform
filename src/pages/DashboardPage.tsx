@@ -734,10 +734,6 @@ export function DashboardPage() {
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
               </div>
-              <div className="inventory-reserved-branches">
-                <strong>الحجز حسب الفروع</strong>
-                <div>{(operations?.inventory.reservedByLocation || []).map((item) => <button type="button" key={item.key} onClick={() => setOperationsSelection({ mode: "vehicles", locationCode: item.key, locationName: item.name, metric: "reserved", metricName: "حجز" })}><span>{item.name}</span><Value value={item.value} /></button>)}</div>
-              </div>
             </OperationCard>)}
 
             {(operations?.locations ?? [
