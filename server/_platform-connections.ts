@@ -182,7 +182,7 @@ function providerConfig(provider: PlatformProvider, request: VercelRequest) {
   const encryptionValue = clean(process.env.MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY || process.env.MZJ_TOKEN_ENCRYPTION_KEY);
   const encryptionConfigured = encryptionValue.length >= 32;
   const required = provider === "meta"
-    ? [["META_APP_ID", process.env.META_APP_ID], ["META_APP_SECRET", process.env.META_APP_SECRET]]
+    ? [["META_APP_ID", process.env.META_APP_ID], ["META_APP_SECRET", process.env.META_APP_SECRET], ["META_CONFIG_ID", process.env.META_CONFIG_ID]]
     : provider === "tiktok"
       ? [["TIKTOK_CLIENT_KEY", process.env.TIKTOK_CLIENT_KEY], ["TIKTOK_CLIENT_SECRET", process.env.TIKTOK_CLIENT_SECRET]]
       : [["YOUTUBE_CLIENT_ID", process.env.YOUTUBE_CLIENT_ID], ["YOUTUBE_CLIENT_SECRET", process.env.YOUTUBE_CLIENT_SECRET]];
@@ -372,10 +372,10 @@ export async function startPlatformOAuth(sql: Sql, user: SessionUser, request: V
     const url = new URL(`https://www.facebook.com/${metaVersion()}/dialog/oauth`);
     url.searchParams.set("client_id", clean(process.env.META_APP_ID));
     url.searchParams.set("redirect_uri", config.redirectUri);
-    url.searchParams.set("response_type", "code");
     url.searchParams.set("state", state);
-    url.searchParams.set("scope", metaScopes().join(","));
-    url.searchParams.set("auth_type", "rerequest");
+    url.searchParams.set("config_id", clean(process.env.META_CONFIG_ID));
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("override_default_response_type", "true");
     authorizationUrl = url.toString();
   } else if (provider === "tiktok") {
     const url = new URL("https://www.tiktok.com/v2/auth/authorize/");
@@ -398,7 +398,10 @@ export async function startPlatformOAuth(sql: Sql, user: SessionUser, request: V
     url.searchParams.set("prompt", "consent select_account");
     authorizationUrl = url.toString();
   }
-  await recordEvent(sql, user, provider, "oauth_started", "success", undefined, { redirectUri: config.redirectUri });
+  await recordEvent(sql, user, provider, "oauth_started", "success", undefined, {
+    redirectUri: config.redirectUri,
+    ...(provider === "meta" ? { loginMode: "facebook-login-for-business" } : {}),
+  });
   return { ok: true, provider, authorizationUrl };
 }
 

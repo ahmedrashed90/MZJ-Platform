@@ -1,3 +1,19 @@
+# بيان التسليم — Meta Facebook Login for Business Configuration
+
+- المصدر المباشر: `MZJ-Platform-v1.19.4-Unified-Dashboard-Completed-Tasks-TaskTemplate-CLEAN(1).zip`.
+- تعديل فلو Meta الأصلي داخل `server/_platform-connections.ts` بدون Endpoint بديل أو ملف Patch أو fallback للربط القديم.
+- `META_CONFIG_ID` أصبح إعدادًا إلزاميًا، ورابط OAuth يستخدم `config_id` بدل `scope`.
+- استخدام Authorization Code Grant من الخادم مع `response_type=code` و`override_default_response_type=true`.
+- Configuration المعتمدة للتشغيل: `1516332383114076` وتُضاف في Vercel كقيمة `META_CONFIG_ID`، ولا تُثبت داخل الكود.
+- فحص ربط المنصات: 25/25 ناجح.
+- فحص API imports: ناجح.
+- فحص تركيب ملفي TypeScript المعدلين عبر Node strip-types: ناجح.
+- Build الإنتاج الكامل غير منفذ لعدم وجود `node_modules` داخل النسخة المرفوعة.
+
+راجع `docs/META-FACEBOOK-LOGIN-FOR-BUSINESS-CLEAN-FLOW-AR.md` و`test-results/META-FACEBOOK-LOGIN-FOR-BUSINESS-TEST-RESULTS.txt`.
+
+---
+
 # بيان التسليم — فصل مندوب NEXT ERP ودعم عميل بدون جوال
 
 - المصدر المباشر: `MZJ-Platform-main (12).zip`.

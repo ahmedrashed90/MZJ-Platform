@@ -38,6 +38,9 @@ expect("OAuth state is hashed, expiring and user-bound", has(files.helper, "stat
 expect("Meta reconnect draft preserves current active connection", has(files.helper, "platform_connection_drafts", "savePendingMetaSelection", "cancelPlatformConnectionDraft"));
 expect("No token is returned by public connection mapper", has(files.helper, "tokenStored:") && lacks(files.helper.slice(files.helper.indexOf("export function publicPlatformConnection"), files.helper.indexOf("function safePublicUrl")), "accessToken:"));
 expect("Provider scopes are verified", has(files.helper, "assertScopes", 'assertScopes(scopes, metaScopes()', 'assertScopes(scopes, tiktokScopes()', 'assertScopes(parseScopes(token.scope), youtubeScopes()'));
+const metaOauthBlock = files.helper.slice(files.helper.indexOf('if (provider === "meta") {'), files.helper.indexOf('} else if (provider === "tiktok")'));
+expect("Meta uses Facebook Login for Business configuration", has(metaOauthBlock, 'config_id', 'META_CONFIG_ID', 'response_type', 'override_default_response_type') && lacks(metaOauthBlock, 'searchParams.set("scope"'));
+expect("Meta configuration ID is mandatory", has(files.helper, '["META_CONFIG_ID", process.env.META_CONFIG_ID]') && has(files.env, "META_CONFIG_ID="));
 expect("Meta, TikTok and Google revocation exists", has(files.helper, "revokeMeta", "revokeTikTok", "revokeGoogle", "/me/permissions", "/v2/oauth/revoke/", "oauth2.googleapis.com/revoke"));
 expect("TikTok and YouTube refresh flow exists", has(files.helper, "refreshTikTokToken", "refreshYouTubeToken", "refresh_token"));
 expect("Meta Graph default is v25.0", has(files.helper, '"v25.0"') && has(files.marketing, '"v25.0"'));
@@ -46,7 +49,7 @@ expect("PostgreSQL schema supports four platform assets", has(files.schema, "'fa
 expect("Migration performs clean legacy cutover", has(files.migration, "reauthorization_required", "access_token_encrypted=null", "refresh_token_encrypted=null", "platform_connection_drafts"));
 expect("Legacy manual connection actions removed from backend", lacks(files.marketing, "save_connection", "disconnect_connection", "migrate_connection_env"));
 expect("Old manual token environment variables removed", lacks(files.env, "META_ACCESS_TOKEN=", "META_USER_ACCESS_TOKEN=", "META_PAGE_ACCESS_TOKEN=", "META_SYSTEM_PAGE_TOKEN="));
-expect("All OAuth environment variables are documented", has(files.env, "META_APP_ID=", "TIKTOK_CLIENT_KEY=", "YOUTUBE_CLIENT_ID=", "MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY=", "META_REDIRECT_URI=", "TIKTOK_REDIRECT_URI=", "YOUTUBE_REDIRECT_URI="));
+expect("All OAuth environment variables are documented", has(files.env, "META_APP_ID=", "META_CONFIG_ID=", "TIKTOK_CLIENT_KEY=", "YOUTUBE_CLIENT_ID=", "MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY=", "META_REDIRECT_URI=", "TIKTOK_REDIRECT_URI=", "YOUTUBE_REDIRECT_URI="));
 
 const failed = checks.filter((check) => !check.ok);
 for (const check of checks) console.log(`${check.ok ? "PASS" : "FAIL"} - ${check.name}`);

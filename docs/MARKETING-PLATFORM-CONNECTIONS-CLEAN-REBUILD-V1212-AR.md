@@ -145,6 +145,7 @@ MZJ_PLATFORM_TOKEN_ENCRYPTION_KEY=
 
 META_APP_ID=
 META_APP_SECRET=
+META_CONFIG_ID=
 META_REDIRECT_URI=https://mzj-platform.vercel.app/api/marketing/platform-connections/callback/meta
 META_GRAPH_VERSION=v25.0
 META_SCOPES=public_profile,pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish
@@ -172,8 +173,11 @@ openssl rand -base64 48
 
 ### Meta
 
+- التنفيذ يستخدم **Facebook Login for Business** فقط، وليس Facebook Login العادي.
+- أنشئ Configuration من نوع **User access token** وضع رقمها في `META_CONFIG_ID`.
+- رابط OAuth يرسل `config_id` بدل `scope`، ويستخدم Authorization Code Grant مع `response_type=code`.
 - أضف `META_REDIRECT_URI` حرفيًا ضمن Valid OAuth Redirect URIs.
-- فعّل Facebook Login والمنتجات والصلاحيات اللازمة للنشر المطلوب.
+- اضبط داخل Configuration الصلاحيات المطلوبة: `pages_show_list` و`pages_read_engagement` و`pages_manage_posts` و`instagram_basic` و`instagram_content_publish`، ويمكن أن تتضمن `business_management` إذا كانت مطلوبة لإدارة أصول الـBusiness.
 - حساب Instagram يجب أن يكون Professional ومربوطًا بصفحة Facebook.
 - أي صلاحية تحتاج مراجعة أوAdvanced Access يجب اعتمادها على تطبيق Meta قبل الاستخدام العام.
 
