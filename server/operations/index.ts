@@ -597,7 +597,7 @@ async function dashboardVehicles(sql: ReturnType<typeof getSql>, request: Vercel
   const scope = accessScope(sql, user, "l");
   const statusScope = vehicleStatusScope(sql, user);
   const condition = metric === "actual_total"
-    ? sql`v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true)`
+    ? sql`v.archived_at is null and v.is_inventory_active=true and coalesce(v.status_code,'') not in ('under_delivery','delivered')`
     : metric === "under_delivery"
       ? sql`v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery'`
       : metric === "available_for_sale"

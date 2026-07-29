@@ -38,7 +38,7 @@ const checks = [
   ["Tracking is restored as a progress button", vehicleTable.includes("operations-tracking-open") && vehicleTable.includes("tracking_progress") && vehicleTable.includes("<button")],
   ["Vehicle detail tabs remain centered and tracking opens as a button", vehicleDetail.includes("operations-tracking-detail-button") && styles.includes(".operations-detail-tabs { justify-content: center")],
   ["Movement filters use the upgraded apply action", movementPage.includes("operations-apply-filters-button") && styles.includes("operations-apply-filters-button")],
-  ["Movement history provides A3 landscape PDF export", (movementPage.includes("@page { size: 420mm 297mm") || movementPage.includes("@page{size:A3 landscape")) && movementPage.includes("تصدير PDF")],
+  ["Movement history provides A3 landscape PDF export", (movementPage.includes("@page { size: 420mm 297mm") || movementPage.includes("@page{size:A3 landscape") || movementPage.includes("@page { size: A3 landscape")) && movementPage.includes("تصدير PDF")],
   ["A3 PDF contains every requested column", pdfHeaders.every((header) => movementPage.includes(header))],
   ["A3 PDF renders present as correct and absent as wrong", movementPage.includes('class="check yes"') && movementPage.includes('class="check no"') && movementPage.includes('state === "ok"')],
   ["Movement API returns the requested vehicle, check, approval, actor, and request data", ["agent_name", "interior_color", "exterior_color", "plate_no", "batch_no", "sensor_status", "camera_status", "financial_approved", "administrative_approved", "request_no"].every((field) => operationsApi.includes(field))],

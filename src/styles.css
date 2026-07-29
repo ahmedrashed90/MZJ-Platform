@@ -284,6 +284,10 @@ button.small-metric { cursor: pointer; }
   display: flex;
   flex-direction: column;
 }
+.operation-card-clickable { cursor: pointer; transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.operation-card-clickable:hover { transform: translateY(-2px); border-color: #e3ab90; box-shadow: 0 15px 34px rgba(92, 48, 33, .10); }
+.operation-card-clickable:focus-visible { outline: 3px solid rgba(207, 91, 52, .22); outline-offset: 3px; }
+.operation-card-clickable button, .operation-card-clickable input, .operation-card-clickable select, .operation-card-clickable textarea, .operation-card-clickable a { cursor: pointer; }
 .operation-card-head {
   min-height: 51px;
   padding: 13px 16px;

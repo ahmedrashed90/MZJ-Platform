@@ -25,10 +25,11 @@ expect(
   !operationsBlock.includes("(v.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date"),
 );
 expect(
-  "Agency count uses the same exact location and actual-stock condition as its drilldown",
-  dashboardData.includes("l.code='agency' and coalesce(s.is_actual_stock,true)")
+  "Actual inventory excludes under-delivery and delivered in both cards and drilldowns",
+  dashboardData.includes("coalesce(v.status_code,'') not in ('under_delivery','delivered')")
+    && dashboardData.includes("l.code='agency' and coalesce(v.status_code,'') not in ('under_delivery','delivered')")
     && operationsApi.includes("metric === \"actual_total\"")
-    && operationsApi.includes("coalesce(s.is_actual_stock,true)"),
+    && operationsApi.includes("coalesce(v.status_code,'') not in ('under_delivery','delivered')"),
 );
 expect(
   "Dashboard inventory counts use both canonical branch and vehicle-status scopes",
@@ -49,6 +50,13 @@ expect(
     && !dashboardData.includes("(a.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date"),
 );
 expect(
+  "Approval and operations cards open from the whole card while nested metric buttons keep their own filters",
+  dashboardPage.includes("operation-card-clickable")
+    && dashboardPage.includes('closest("button, a, input, select, textarea")')
+    && dashboardPage.includes('aria-label={`عرض ${title}`}')
+    && styles.includes(".operation-card-clickable:hover"),
+);
+expect(
   "Latest financial and administrative notes are exposed on the dashboard card",
   types.includes("recentNotes: Array")
     && dashboardData.includes("financialNote")
@@ -65,8 +73,10 @@ expect(
     && styles.includes("dashboard-approval-detail-content"),
 );
 expect(
-  "Movement PDF uses a real A3 landscape page with a complete fixed-width table",
-  movementHistory.includes("@page { size: 420mm 297mm")
+  "Movement PDF uses explicit multi-page A3 landscape sheets with a complete fixed-width table",
+  movementHistory.includes("@page { size: A3 landscape")
+    && movementHistory.includes("rowsPerPage = 8")
+    && movementHistory.includes("page-break-after: always")
     && movementHistory.includes("table-layout: fixed")
     && movementHistory.includes('colspan="29"')
     && movementHistory.includes("نوع الحركة والطلب"),
@@ -79,8 +89,9 @@ expect(
     && movementHistory.includes('["الحالة", row.state_note]'),
 );
 expect(
-  "Movement PDF waits for fonts before printing and repeats table headers across pages",
+  "Movement PDF waits for fonts, preserves technical references, and prevents row splitting",
   movementHistory.includes("win.document.fonts?.ready")
+    && movementHistory.includes("المراجع التقنية الكاملة")
     && movementHistory.includes("thead { display: table-header-group; }")
     && movementHistory.includes("page-break-inside: avoid"),
 );

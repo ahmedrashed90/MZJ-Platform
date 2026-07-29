@@ -97,8 +97,7 @@ export function MovementHistoryPage() {
           .join("");
         return content || "—";
       };
-
-      const body = all.map((row) => `<tr>
+      const renderRow = (row: MovementHistoryRow) => `<tr>
         <td class="vin">${safe(row.vin)}</td>
         <td>${safe(row.car_name)}</td>
         <td class="text-cell">${safe(row.statement)}</td>
@@ -127,8 +126,8 @@ export function MovementHistoryPage() {
         <td>${approval(row.administrative_approved)}</td>
         <td class="stack-cell">${lines([["الاسم", row.performed_by_name], ["الفرع", row.performed_by_branch]])}</td>
         <td class="stack-cell">${lines([["المسؤول", row.operations_admin_name]])}</td>
-        <td class="stack-cell">${lines([["النوع", row.movement_type], ["الطلب", row.request_no || row.transfer_request_id], ["Batch", row.batch_id]])}</td>
-      </tr>`).join("");
+        <td class="stack-cell">${lines([["النوع", row.movement_type], ["الطلب", row.request_no || row.transfer_request_id]])}</td>
+      </tr>`;
 
       const filterSummary = [
         filters.search ? `بحث: ${filters.search}` : "",
@@ -142,6 +141,43 @@ export function MovementHistoryPage() {
         filters.user ? `المستخدم: ${filters.user}` : "",
       ].filter(Boolean).join(" • ") || "كل الحركات";
 
+      const rowsPerPage = 8;
+      const pages: MovementHistoryRow[][] = [];
+      for (let index = 0; index < all.length; index += rowsPerPage) pages.push(all.slice(index, index + rowsPerPage));
+      if (!pages.length) pages.push([]);
+      const generatedAt = new Date().toLocaleString("ar-SA");
+      const pageMarkup = pages.map((pageRows, pageIndex) => {
+        const technicalRows = pageRows.filter((row) => present(row.batch_id) || present(row.transfer_request_id));
+        const technicalReferences = technicalRows.length ? `<aside class="technical-references">
+          <strong>المراجع التقنية الكاملة</strong>
+          <div>${technicalRows.map((row) => `<p><b dir="ltr">${safe(row.vin)}</b>${present(row.transfer_request_id) ? `<span>معرف طلب النقل: <i dir="ltr">${safe(row.transfer_request_id)}</i></span>` : ""}${present(row.batch_id) ? `<span>Batch ID: <i dir="ltr">${safe(row.batch_id)}</i></span>` : ""}</p>`).join("")}</div>
+        </aside>` : "";
+        return `<section class="print-page">
+          <header class="print-head">
+            <div class="print-title"><h1>سجل الحركات</h1><p>${safe(filterSummary)}</p></div>
+            <div class="print-summary"><div><small>عدد الحركات</small><b>${all.length.toLocaleString("ar-SA")}</b></div><div><small>الصفحة</small><b>${(pageIndex + 1).toLocaleString("ar-SA")} / ${pages.length.toLocaleString("ar-SA")}</b></div></div>
+          </header>
+          <div class="table-frame">
+            <table>
+              <colgroup>
+                <col class="vin-col"><col class="car"><col class="statement"><col class="agent"><col class="color"><col class="color"><col class="model"><col class="plate"><col class="batch"><col class="date"><col class="location"><col class="notes"><col class="shortage"><col class="status">
+                ${Array.from({ length: 10 }, () => '<col class="check-col">').join("")}
+                <col class="approval-col"><col class="approval-col"><col class="actor"><col class="admin"><col class="movement">
+              </colgroup>
+              <thead><tr>
+                <th>رقم الهيكل<br>(VIN)</th><th>السيارة</th><th>البيان</th><th>الوكيل</th><th>اللون الداخلي</th><th>اللون الخارجي</th><th>موديل</th><th>اللوحة</th><th>اسم الدفعة</th><th>التاريخ والوقت</th>
+                <th>المكان</th><th>ملاحظات في السيارة والحركة</th><th>حجز - نواقص - تحديد مكان</th><th>الحالة</th>
+                <th>حساس</th><th>كاميرا</th><th>مكيف</th><th>مسجل</th><th>شاشة</th><th>ريموت</th><th>فرشات</th><th>طفاية</th><th>شنطة سلامة</th><th>اسبير</th>
+                <th>الموافقة المالية</th><th>الموافقة الإدارية</th><th>منفذ الحركة</th><th>إداري العمليات</th><th>نوع الحركة والطلب</th>
+              </tr></thead>
+              <tbody>${pageRows.map(renderRow).join("") || '<tr><td class="empty" colspan="29">لا توجد بيانات مطابقة للفلاتر المحددة</td></tr>'}</tbody>
+            </table>
+          </div>
+          ${technicalReferences}
+          <footer class="print-footer"><span>تاريخ إنشاء التقرير: ${safe(generatedAt)}</span><span>مجموعة محمد ذعار العجمي</span></footer>
+        </section>`;
+      }).join("");
+
       win.document.write(`<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
@@ -150,67 +186,62 @@ export function MovementHistoryPage() {
   <title>سجل الحركات</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@500;700;800;900&display=swap');
-    @page { size: 420mm 297mm; margin: 4mm; }
+    @page { size: A3 landscape; margin: 0; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; background: #fff; }
-    body { font-family: "Tajawal", Arial, sans-serif; color: #241b18; font-weight: 700; }
-    .print-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; min-height: 13mm; padding: 0 1mm 2.5mm; border-bottom: 1.2px solid #4d403b; margin-bottom: 2.5mm; break-inside: avoid; }
-    .print-head h1 { margin: 0; font-size: 15pt; line-height: 1.1; font-weight: 900; }
-    .print-head p { margin: 1.5mm 0 0; max-width: 330mm; color: #645650; font-size: 7.2pt; line-height: 1.45; }
-    .print-count { min-width: 20mm; padding: 2mm 3mm; border: 1px solid #7f6f68; border-radius: 2mm; text-align: center; }
-    .print-count small { display: block; color: #6f615b; font-size: 6.2pt; }
-    .print-count b { display: block; margin-top: .5mm; font-size: 12pt; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 6.25pt; line-height: 1.35; }
-    col.vin { width: 15mm; } col.car { width: 14mm; } col.statement { width: 30mm; } col.agent { width: 14mm; }
-    col.color { width: 11mm; } col.model { width: 8mm; } col.plate { width: 10mm; } col.batch { width: 20mm; }
-    col.date { width: 18mm; } col.location { width: 19mm; } col.notes { width: 32mm; } col.shortage { width: 30mm; }
-    col.status { width: 19mm; } col.check { width: 7mm; } col.approval { width: 9mm; } col.actor { width: 22mm; }
-    col.admin { width: 22mm; } col.movement { width: 23mm; }
+    body { font-family: "Tajawal", Tahoma, Arial, sans-serif; color: #2a1b16; font-weight: 700; }
+    .print-page { width: 420mm; min-height: 297mm; padding: 5mm; display: flex; flex-direction: column; page-break-after: always; break-after: page; background: #fff; }
+    .print-page:last-child { page-break-after: auto; break-after: auto; }
+    .print-head { display: flex; align-items: stretch; justify-content: space-between; gap: 4mm; min-height: 16mm; margin-bottom: 2.5mm; break-inside: avoid; }
+    .print-title { flex: 1; border-right: 2mm solid #8b3b2b; padding: 1.2mm 3mm 1.2mm 0; }
+    .print-title h1 { margin: 0; font-size: 16pt; line-height: 1.15; font-weight: 900; }
+    .print-title p { margin: 1.2mm 0 0; color: #6d5b54; font-size: 7.2pt; line-height: 1.45; }
+    .print-summary { display: flex; gap: 2mm; }
+    .print-summary > div { min-width: 25mm; padding: 2mm 3mm; border: .45mm solid #cdb5aa; border-radius: 2mm; background: #fff8f4; text-align: center; }
+    .print-summary small { display: block; color: #7a675f; font-size: 6.2pt; }
+    .print-summary b { display: block; margin-top: .8mm; font-size: 10pt; color: #5f261c; }
+    .table-frame { width: 100%; border: .45mm solid #775f55; border-radius: 1.5mm; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 6.65pt; line-height: 1.35; }
+    col.vin-col { width: 15mm; } col.car { width: 14mm; } col.statement { width: 32mm; } col.agent { width: 14mm; }
+    col.color { width: 11mm; } col.model { width: 9mm; } col.plate { width: 10mm; } col.batch { width: 20mm; }
+    col.date { width: 18mm; } col.location { width: 20mm; } col.notes { width: 33mm; } col.shortage { width: 30mm; }
+    col.status { width: 20mm; } col.check-col { width: 6mm; } col.approval-col { width: 10mm; } col.actor { width: 23mm; }
+    col.admin { width: 23mm; } col.movement { width: 25mm; }
     thead { display: table-header-group; }
     tr { break-inside: avoid; page-break-inside: avoid; }
-    th, td { border: .45px solid #9f9a97; padding: 1.35mm .75mm; text-align: center; vertical-align: middle; overflow-wrap: anywhere; word-break: normal; }
-    th { background: #f4f3f2; color: #201916; font-size: 6.1pt; font-weight: 900; line-height: 1.25; }
-    tbody tr:nth-child(even) { background: #fbfbfb; }
+    th, td { border: .25mm solid #b9aaa3; padding: 1.05mm .55mm; text-align: center; vertical-align: middle; overflow-wrap: anywhere; word-break: normal; }
+    th { background: #6b3024; color: #fff; font-size: 6.35pt; font-weight: 900; line-height: 1.25; }
+    tbody tr:nth-child(even) { background: #fbf7f5; }
+    tbody tr:nth-child(odd) { background: #fff; }
     .vin { direction: ltr; font-family: Arial, sans-serif; font-weight: 900; white-space: nowrap; }
     .text-cell, .notes-cell { text-align: right; }
     .date-cell { direction: rtl; white-space: normal; }
     .stack-cell { white-space: normal; }
     .stack-cell span { display: block; margin: 0 0 .45mm; }
     .stack-cell span:last-child { margin-bottom: 0; }
-    .stack-cell b { font-size: 5.65pt; color: #6c5e58; }
-    .check { display: inline-grid; place-items: center; width: 4.2mm; height: 4.2mm; margin: auto; font-family: Arial, sans-serif; font-size: 8pt; font-weight: 900; line-height: 1; }
-    .check.yes { color: #1e6d36; } .check.no { color: #9b2832; } .check.unknown { color: #8c827e; }
-    .empty { padding: 12mm; font-size: 10pt; }
+    .stack-cell b { font-size: 5.8pt; color: #725e56; }
+    .check { display: inline-grid; place-items: center; width: 4.2mm; height: 4.2mm; margin: auto; border-radius: 50%; font-family: Arial, sans-serif; font-size: 8pt; font-weight: 900; line-height: 1; }
+    .check.yes { color: #176b37; background: #eaf7ef; } .check.no { color: #a52833; background: #fdecef; } .check.unknown { color: #776d68; background: #f0eeed; }
+    .technical-references { margin-top: 2mm; padding: 1.5mm 2mm; border: .25mm solid #d5c5be; border-radius: 1.5mm; background: #fcfaf9; break-inside: avoid; }
+    .technical-references > strong { display: block; margin-bottom: 1mm; font-size: 6.2pt; color: #6b3024; }
+    .technical-references > div { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .8mm 3mm; }
+    .technical-references p { margin: 0; display: flex; align-items: baseline; gap: 1.5mm; min-width: 0; font-size: 5.4pt; line-height: 1.35; }
+    .technical-references p b { flex: 0 0 19mm; }
+    .technical-references p span { min-width: 0; overflow-wrap: anywhere; }
+    .technical-references i { font-style: normal; font-family: Arial, sans-serif; font-size: 5pt; }
+    .print-footer { margin-top: auto; padding-top: 1.5mm; display: flex; justify-content: space-between; gap: 5mm; color: #7d6e68; font-size: 5.8pt; }
+    .empty { padding: 20mm; font-size: 10pt; }
     @media print {
-      html, body { width: 100%; }
-      .print-head, th, .check, tbody tr:nth-child(even) { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      html, body { width: 420mm; }
+      .print-page, .print-head, .print-summary > div, th, .check, tbody tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
   </style>
 </head>
-<body>
-  <header class="print-head">
-    <div><h1>سجل الحركات</h1><p>${safe(filterSummary)}</p></div>
-    <div class="print-count"><small>عدد الحركات</small><b>${all.length.toLocaleString("ar-SA")}</b></div>
-  </header>
-  <table>
-    <colgroup>
-      <col class="vin"><col class="car"><col class="statement"><col class="agent"><col class="color"><col class="color"><col class="model"><col class="plate"><col class="batch"><col class="date"><col class="location"><col class="notes"><col class="shortage"><col class="status">
-      ${Array.from({ length: 10 }, () => '<col class="check">').join("")}
-      <col class="approval"><col class="approval"><col class="actor"><col class="admin"><col class="movement">
-    </colgroup>
-    <thead><tr>
-      <th>رقم الهيكل<br>(VIN)</th><th>السيارة</th><th>البيان</th><th>الوكيل</th><th>اللون الداخلي</th><th>اللون الخارجي</th><th>موديل</th><th>اللوحة</th><th>اسم الدفعة</th><th>التاريخ والوقت</th>
-      <th>المكان</th><th>ملاحظات في السيارة والحركة</th><th>حجز - نواقص - تحديد مكان</th><th>الحالة</th>
-      <th>حساس</th><th>كاميرا</th><th>مكيف</th><th>مسجل</th><th>شاشة</th><th>ريموت</th><th>فرشات</th><th>طفاية</th><th>شنطة سلامة</th><th>اسبير</th>
-      <th>الموافقة المالية</th><th>الموافقة الإدارية</th><th>منفذ الحركة</th><th>إداري العمليات</th><th>نوع الحركة والطلب</th>
-    </tr></thead>
-    <tbody>${body || '<tr><td class="empty" colspan="29">لا توجد بيانات مطابقة للفلاتر المحددة</td></tr>'}</tbody>
-  </table>
-</body>
+<body>${pageMarkup}</body>
 </html>`);
       win.document.close();
       win.focus();
-      const print = () => win.setTimeout(() => win.print(), 250);
+      const print = () => win.setTimeout(() => win.print(), 400);
       if (win.document.fonts?.ready) win.document.fonts.ready.then(print).catch(print);
       else print();
     } catch (failure) {

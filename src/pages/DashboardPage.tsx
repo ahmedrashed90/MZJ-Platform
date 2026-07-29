@@ -223,7 +223,23 @@ function OperationCard({
   className?: string;
 }) {
   return (
-    <section className={`operation-card ${className}`}>
+    <section
+      className={`operation-card operation-card-clickable ${className}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`عرض ${title}`}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button, a, input, select, textarea")) return;
+        onView();
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onView();
+        }
+      }}
+    >
       <header className="operation-card-head">
         <h3>{title}</h3>
         {badge !== undefined ? <Value value={badge} className="operation-badge" /> : null}
@@ -575,7 +591,7 @@ export function DashboardPage() {
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
               </div>
-              <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) - (مباع تم التسليم)</p>
+              <p className="operation-note">الإجمالي الفعلي = إجمالي السيارات بدون (مباع تحت التسليم) و(مباع تم التسليم)</p>
             </OperationCard>
 
             {(operations?.locations ?? [
