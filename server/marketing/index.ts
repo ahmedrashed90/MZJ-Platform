@@ -1004,7 +1004,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     left join marketing.agendas ag on r.source_type='agenda' and ag.id=r.source_id
     left join lateral(
       select x.* from marketing.tasks x
-      where x.id=r.task_id or (r.task_id is null and x.creative_id=r.creative_id and x.task_kind='execution' and x.is_deleted=false)
+      where (x.id=r.task_id and x.is_deleted=false) or (r.task_id is null and x.creative_id=r.creative_id and x.task_kind='execution' and x.is_deleted=false)
       order by case when x.id=r.task_id then 0 else 1 end,x.updated_at desc
       limit 1
     )t on true
@@ -1012,10 +1012,17 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     left join core.users u on u.id=t.assigned_to
     left join marketing.task_templates tt on tt.id=t.task_template_id
     left join marketing.files f on f.id=t.final_file_id
-    where ${unrestricted}=true
-      or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
-      or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}))
-      or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
+    where c.id is not null
+      and (
+        (r.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
+        or (r.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+      )
+      and (
+        ${unrestricted}=true
+        or t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+        or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}))
+        or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
+      )
     order by r.publish_date,r.created_at
   `;
   return{ok:true,rows};

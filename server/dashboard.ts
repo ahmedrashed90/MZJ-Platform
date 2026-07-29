@@ -28,7 +28,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if (typeof request.body === "string") {
       try { body = JSON.parse(request.body || "{}"); } catch { body = {}; }
     }
-    const layout = await saveDashboardLayout(user.id, body.operationWidgetOrder);
+    const layout = await saveDashboardLayout(user.id, body);
     response.setHeader("Cache-Control", "no-store");
     return response.status(200).json({ ok: true, layout });
   }

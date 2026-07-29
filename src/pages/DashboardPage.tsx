@@ -48,6 +48,20 @@ import { DashboardOperationsModal, type DashboardOperationsSelection } from "../
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
+const MAIN_DASHBOARD_WIDGETS = [
+  { id: "kpi:total-customers", label: "إجمالي العملاء" },
+  { id: "kpi:open-conversations", label: "المحادثات المفتوحة" },
+  { id: "kpi:no-answer", label: "لم يتم الرد" },
+  { id: "kpi:sold", label: "تم البيع" },
+  { id: "analytics:new-customers", label: "العملاء الجدد" },
+  { id: "analytics:recent-conversations", label: "آخر المحادثات" },
+  { id: "analytics:distribution", label: "توزيع العملاء حسب القسم" },
+  { id: "summary:departments", label: "ملخص الإدارات" },
+] as const;
+
+type MainDashboardWidgetId = typeof MAIN_DASHBOARD_WIDGETS[number]["id"];
+const DEFAULT_MAIN_WIDGET_ORDER = MAIN_DASHBOARD_WIDGETS.map((item) => item.id);
+
 function valueText(value: NullableNumber) {
   return value === null ? "—" : numberFormatter.format(value);
 }
@@ -317,8 +331,13 @@ export function DashboardPage() {
   const [dateOpen, setDateOpen] = useState(false);
   const [operationWidgetOrder, setOperationWidgetOrder] = useState<string[]>([]);
   const [draggedOperationWidget, setDraggedOperationWidget] = useState<string | null>(null);
+  const [mainWidgetOrder, setMainWidgetOrder] = useState<string[]>(DEFAULT_MAIN_WIDGET_ORDER);
+  const [hiddenMainWidgets, setHiddenMainWidgets] = useState<string[]>([]);
+  const [draggedMainWidget, setDraggedMainWidget] = useState<MainDashboardWidgetId | null>(null);
+  const [dashboardCustomizeOpen, setDashboardCustomizeOpen] = useState(false);
   const detailsRequestId = useRef(0);
   useEscapeToClose(dateOpen, () => setDateOpen(false));
+  useEscapeToClose(dashboardCustomizeOpen, () => setDashboardCustomizeOpen(false));
 
   useEffect(() => {
     let active = true;
@@ -334,6 +353,8 @@ export function DashboardPage() {
         if (active) {
           setData(payload);
           setOperationWidgetOrder(payload.layout?.operationWidgetOrder || []);
+          setMainWidgetOrder(payload.layout?.mainWidgetOrder || DEFAULT_MAIN_WIDGET_ORDER);
+          setHiddenMainWidgets(payload.layout?.hiddenMainWidgets || []);
         }
       })
       .catch(() => {
@@ -425,6 +446,72 @@ export function DashboardPage() {
     setOperationsSelection(null);
   }
 
+  const effectiveMainWidgetOrder = [...mainWidgetOrder, ...DEFAULT_MAIN_WIDGET_ORDER.filter((id) => !mainWidgetOrder.includes(id))] as MainDashboardWidgetId[];
+  const mainWidgetPosition = (id: MainDashboardWidgetId) => effectiveMainWidgetOrder.indexOf(id);
+  const mainWidgetVisible = (id: MainDashboardWidgetId) => !hiddenMainWidgets.includes(id);
+  const visibleMainWidgets = MAIN_DASHBOARD_WIDGETS.some((item) => mainWidgetVisible(item.id));
+
+  async function persistMainWidgetLayout(nextOrder: string[], nextHidden: string[]) {
+    const previousOrder = mainWidgetOrder;
+    const previousHidden = hiddenMainWidgets;
+    setMainWidgetOrder(nextOrder);
+    setHiddenMainWidgets(nextHidden);
+    try {
+      const response = await fetch("/api/dashboard", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mainWidgetOrder: nextOrder, hiddenMainWidgets: nextHidden }),
+      });
+      if (!response.ok) throw new Error("تعذر حفظ تخصيص كروت الداش بورد");
+    } catch {
+      setMainWidgetOrder(previousOrder);
+      setHiddenMainWidgets(previousHidden);
+    }
+  }
+
+  function setMainWidgetVisibility(id: MainDashboardWidgetId, visible: boolean) {
+    const nextHidden = visible
+      ? hiddenMainWidgets.filter((item) => item !== id)
+      : [...new Set([...hiddenMainWidgets, id])];
+    void persistMainWidgetLayout(effectiveMainWidgetOrder, nextHidden);
+  }
+
+  function resetMainWidgetLayout() {
+    void persistMainWidgetLayout(DEFAULT_MAIN_WIDGET_ORDER, []);
+  }
+
+  function dropMainWidget(targetId: MainDashboardWidgetId) {
+    if (!draggedMainWidget || draggedMainWidget === targetId) return;
+    const next = effectiveMainWidgetOrder.filter((id) => id !== draggedMainWidget);
+    const targetIndex = Math.max(0, next.indexOf(targetId));
+    next.splice(targetIndex, 0, draggedMainWidget);
+    setDraggedMainWidget(null);
+    void persistMainWidgetLayout(next, hiddenMainWidgets);
+  }
+
+  function customizableMainWidget(id: MainDashboardWidgetId, content: React.ReactNode) {
+    if (!mainWidgetVisible(id)) return null;
+    return <div
+      key={id}
+      className={`dashboard-main-widget ${draggedMainWidget === id ? "dragging" : ""}`}
+      style={{ order: mainWidgetPosition(id) }}
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
+      onDrop={(event) => { event.preventDefault(); dropMainWidget(id); }}
+    >
+      <div className="dashboard-main-widget-controls">
+        <span
+          className="dashboard-main-widget-drag"
+          title="اسحب لتغيير ترتيب الكارت"
+          draggable
+          onDragStart={(event) => { setDraggedMainWidget(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
+          onDragEnd={() => setDraggedMainWidget(null)}
+        ><DotsSixVertical size={17} weight="bold" /></span>
+        <button type="button" title="إخفاء الكارت" aria-label={`إخفاء ${MAIN_DASHBOARD_WIDGETS.find((item) => item.id === id)?.label || "الكارت"}`} onClick={() => setMainWidgetVisibility(id, false)}><X size={14} weight="bold" /></button>
+      </div>
+      {content}
+    </div>;
+  }
+
   const defaultOperationWidgetOrder = ["inventory", "location:warehouse", "location:agency", "location:hall", "location:qadisiyah", "location:multaqa", "approvals", "shortages", "transfers", "sales-tracking"];
   const effectiveOperationWidgetOrder = [...operationWidgetOrder, ...defaultOperationWidgetOrder.filter((id) => !operationWidgetOrder.includes(id))];
   const operationWidgetPosition = (id: string) => effectiveOperationWidgetOrder.indexOf(id);
@@ -473,9 +560,19 @@ export function DashboardPage() {
             <p>نظرة عامة على أداء جميع الأنظمة</p>
           </div>
           <div className="dashboard-controls">
-            <button className="icon-button" type="button" aria-label="اختيار مدة الداش بورد" onClick={() => { setDraftRange(appliedRange); setDateOpen((value) => !value); }}><SlidersHorizontal size={20} /></button>
+            <div className="dashboard-widget-settings">
+              <button className="icon-button" type="button" aria-label="تخصيص كروت الداش بورد" title="تخصيص كروت الداش بورد" onClick={() => { setDateOpen(false); setDashboardCustomizeOpen((value) => !value); }} aria-expanded={dashboardCustomizeOpen}><GearSix size={20} /></button>
+              {dashboardCustomizeOpen ? <div className="dashboard-widget-settings-popover">
+                <header><strong>تخصيص كروت الداش بورد</strong><span>أظهر أو أخفِ الكروت، واسحب أي كارت لتغيير مكانه في الداش بورد.</span></header>
+                <div className="dashboard-widget-visibility-list">
+                  {MAIN_DASHBOARD_WIDGETS.map((item) => <label key={item.id}><input type="checkbox" checked={mainWidgetVisible(item.id)} onChange={(event) => setMainWidgetVisibility(item.id, event.target.checked)} /><span>{item.label}</span></label>)}
+                </div>
+                <button type="button" className="dashboard-widget-reset" onClick={resetMainWidgetLayout}>إرجاع الشكل الافتراضي</button>
+              </div> : null}
+            </div>
+            <button className="icon-button" type="button" aria-label="اختيار مدة الداش بورد" onClick={() => { setDashboardCustomizeOpen(false); setDraftRange(appliedRange); setDateOpen((value) => !value); }}><SlidersHorizontal size={20} /></button>
             <div className="dashboard-date-filter">
-              <button className="date-button" type="button" onClick={() => { setDraftRange(appliedRange); setDateOpen((value) => !value); }} aria-expanded={dateOpen}>
+              <button className="date-button" type="button" onClick={() => { setDashboardCustomizeOpen(false); setDraftRange(appliedRange); setDateOpen((value) => !value); }} aria-expanded={dateOpen}>
                 <CalendarBlank size={19} /> {dashboardRangeLabel(appliedRange)}
               </button>
               {dateOpen ? <div className="dashboard-date-popover">
@@ -504,15 +601,13 @@ export function DashboardPage() {
           </div>
         ) : null}
 
-        <section className="kpi-grid">
-          <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />
-          <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")}  />
-          <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />
-          <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => leadStatus(lead) === "تم البيع")} />
-        </section>
+        {visibleMainWidgets ? <section className="dashboard-main-widget-grid">
+          {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />)}
+          {customizableMainWidget("kpi:open-conversations", <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")} />)}
+          {customizableMainWidget("kpi:no-answer", <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />)}
+          {customizableMainWidget("kpi:sold", <KpiCard title="تم البيع" value={crm?.sold ?? null} icon={Handbag} tone="green" onOpen={() => void openCrmList("تم البيع", "العملاء الموجودون في حالات البيع المكتملة", (lead) => leadStatus(lead) === "تم البيع")} />)}
 
-        <section className="analytics-grid">
-          <article className="panel chart-panel">
+          {customizableMainWidget("analytics:new-customers", <article className="panel chart-panel">
             <h2>العملاء الجدد</h2>
             {current?.connected && (crm?.newCustomersSeries.length ?? 0) > 0 ? (
               <>
@@ -539,9 +634,9 @@ export function DashboardPage() {
                 </div>
               </>
             ) : <EmptyChart label="العملاء الجدد" />}
-          </article>
+          </article>)}
 
-          <article className="panel conversations-panel">
+          {customizableMainWidget("analytics:recent-conversations", <article className="panel conversations-panel">
             <h2>آخر المحادثات</h2>
             {current?.connected && (crm?.recentConversations.length ?? 0) > 0 ? (
               <div className="conversation-list">
@@ -554,9 +649,9 @@ export function DashboardPage() {
                 ))}
               </div>
             ) : <EmptyChart label="آخر المحادثات" />}
-          </article>
+          </article>)}
 
-          <article className="panel distribution-panel">
+          {customizableMainWidget("analytics:distribution", <article className="panel distribution-panel">
             <h2>توزيع العملاء حسب القسم</h2>
             {pieData.length > 0 ? (
               <div className="distribution-content">
@@ -581,39 +676,39 @@ export function DashboardPage() {
                 </div>
               </div>
             ) : <EmptyChart label="توزيع العملاء حسب القسم" />}
-          </article>
-        </section>
+          </article>)}
 
-        <section className="summary-panel panel">
-          <h2>ملخص الإدارات</h2>
-          <div className="department-grid">
-            <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
-              { label: "العملاء", value: crm?.cashSales ?? null },
-              { label: "تم البيع", value: crm?.sold ?? null },
-              { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
-            ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
-            <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
-              { label: "العملاء", value: crm?.financeSales ?? null },
-              { label: "تم البيع", value: crm?.sold ?? null },
-              { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
-            ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
-            <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
-              { label: "العملاء", value: crm?.customerService ?? null },
-              { label: "تم البيع", value: crm?.sold ?? null },
-              { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
-            ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
-            <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
-              { label: "الحملات", value: marketing?.campaigns ?? null },
-              { label: "مجدولة", value: marketing?.scheduled ?? null },
-              { label: "متأخرة", value: marketing?.delayed ?? null },
-            ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
-            <DepartmentCard title="التراكينج" icon={MapPin} metrics={[
-              { label: "الطلبات", value: tracking?.requests ?? null },
-              { label: "متابعة", value: tracking?.inProgress ?? null },
-              { label: "مكتملة", value: tracking?.completed ?? null },
-            ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
-          </div>
-        </section>
+          {customizableMainWidget("summary:departments", <section className="summary-panel panel">
+            <h2>ملخص الإدارات</h2>
+            <div className="department-grid">
+              <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
+                { label: "العملاء", value: crm?.cashSales ?? null },
+                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
+              ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
+              <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
+                { label: "العملاء", value: crm?.financeSales ?? null },
+                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
+              ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
+              <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
+                { label: "العملاء", value: crm?.customerService ?? null },
+                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
+              ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
+              <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
+                { label: "الحملات", value: marketing?.campaigns ?? null },
+                { label: "مجدولة", value: marketing?.scheduled ?? null },
+                { label: "متأخرة", value: marketing?.delayed ?? null },
+              ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
+              <DepartmentCard title="التراكينج" icon={MapPin} metrics={[
+                { label: "الطلبات", value: tracking?.requests ?? null },
+                { label: "متابعة", value: tracking?.inProgress ?? null },
+                { label: "مكتملة", value: tracking?.completed ?? null },
+              ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
+            </div>
+          </section>)}
+        </section> : null}
 
         <section className="operations-dashboard-section">
           <div className="section-title-row">
