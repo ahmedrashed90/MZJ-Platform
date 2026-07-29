@@ -773,7 +773,9 @@ async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
     where so.crm_lead_id=${clean(leadId)}::uuid and coalesce(so.is_cancelled,false)=false
   `;
   const soldQuantity = Math.max(0, Number(sales?.sold_quantity || 0));
-  const salesOrders = Array.isArray(sales?.sales_orders) ? [...new Set(sales.sales_orders.map((value: unknown) => clean(value)).filter(Boolean))] : [];
+  const salesOrders: string[] = Array.isArray(sales?.sales_orders)
+    ? Array.from(new Set<string>(sales.sales_orders.map((value: unknown) => clean(value)).filter((value: string) => Boolean(value))))
+    : [];
   await sql`
     update crm.leads set
       sold_quantity=case
