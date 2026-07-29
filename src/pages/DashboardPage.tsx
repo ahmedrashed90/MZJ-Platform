@@ -62,6 +62,21 @@ const MAIN_DASHBOARD_WIDGETS = [
 type MainDashboardWidgetId = typeof MAIN_DASHBOARD_WIDGETS[number]["id"];
 const DEFAULT_MAIN_WIDGET_ORDER = MAIN_DASHBOARD_WIDGETS.map((item) => item.id);
 
+const OPERATION_DASHBOARD_WIDGET_IDS = [
+  "inventory",
+  "location:warehouse",
+  "location:agency",
+  "location:hall",
+  "location:qadisiyah",
+  "location:multaqa",
+  "approvals",
+  "shortages",
+  "transfers",
+  "sales-tracking",
+] as const;
+
+const DEFAULT_DASHBOARD_WIDGET_ORDER = [...DEFAULT_MAIN_WIDGET_ORDER, ...OPERATION_DASHBOARD_WIDGET_IDS];
+
 function valueText(value: NullableNumber) {
   return value === null ? "—" : numberFormatter.format(value);
 }
@@ -326,11 +341,9 @@ export function DashboardPage() {
   const [appliedRange, setAppliedRange] = useState(defaultDashboardRange);
   const [draftRange, setDraftRange] = useState(defaultDashboardRange);
   const [dateOpen, setDateOpen] = useState(false);
-  const [operationWidgetOrder, setOperationWidgetOrder] = useState<string[]>([]);
-  const [draggedOperationWidget, setDraggedOperationWidget] = useState<string | null>(null);
-  const [mainWidgetOrder, setMainWidgetOrder] = useState<string[]>(DEFAULT_MAIN_WIDGET_ORDER);
+  const [widgetOrder, setWidgetOrder] = useState<string[]>(DEFAULT_DASHBOARD_WIDGET_ORDER);
   const [hiddenMainWidgets, setHiddenMainWidgets] = useState<string[]>([]);
-  const [draggedMainWidget, setDraggedMainWidget] = useState<MainDashboardWidgetId | null>(null);
+  const [draggedWidget, setDraggedWidget] = useState<string | null>(null);
   const [dashboardCustomizeOpen, setDashboardCustomizeOpen] = useState(false);
   const detailsRequestId = useRef(0);
   useEscapeToClose(dateOpen, () => setDateOpen(false));
@@ -349,8 +362,10 @@ export function DashboardPage() {
       .then((payload) => {
         if (active) {
           setData(payload);
-          setOperationWidgetOrder(payload.layout?.operationWidgetOrder || []);
-          setMainWidgetOrder(payload.layout?.mainWidgetOrder || DEFAULT_MAIN_WIDGET_ORDER);
+          setWidgetOrder(payload.layout?.widgetOrder || [
+            ...(payload.layout?.mainWidgetOrder || DEFAULT_MAIN_WIDGET_ORDER),
+            ...(payload.layout?.operationWidgetOrder || OPERATION_DASHBOARD_WIDGET_IDS),
+          ]);
           setHiddenMainWidgets(payload.layout?.hiddenMainWidgets || []);
         }
       })
@@ -443,25 +458,24 @@ export function DashboardPage() {
     setOperationsSelection(null);
   }
 
-  const effectiveMainWidgetOrder = [...mainWidgetOrder, ...DEFAULT_MAIN_WIDGET_ORDER.filter((id) => !mainWidgetOrder.includes(id))] as MainDashboardWidgetId[];
-  const mainWidgetPosition = (id: MainDashboardWidgetId) => effectiveMainWidgetOrder.indexOf(id);
+  const effectiveWidgetOrder = [...widgetOrder, ...DEFAULT_DASHBOARD_WIDGET_ORDER.filter((id) => !widgetOrder.includes(id))];
+  const widgetPosition = (id: string) => effectiveWidgetOrder.indexOf(id);
   const mainWidgetVisible = (id: MainDashboardWidgetId) => !hiddenMainWidgets.includes(id);
-  const visibleMainWidgets = MAIN_DASHBOARD_WIDGETS.some((item) => mainWidgetVisible(item.id));
 
-  async function persistMainWidgetLayout(nextOrder: string[], nextHidden: string[]) {
-    const previousOrder = mainWidgetOrder;
+  async function persistDashboardLayout(nextOrder: string[], nextHidden = hiddenMainWidgets) {
+    const previousOrder = widgetOrder;
     const previousHidden = hiddenMainWidgets;
-    setMainWidgetOrder(nextOrder);
+    setWidgetOrder(nextOrder);
     setHiddenMainWidgets(nextHidden);
     try {
       const response = await fetch("/api/dashboard", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mainWidgetOrder: nextOrder, hiddenMainWidgets: nextHidden }),
+        body: JSON.stringify({ widgetOrder: nextOrder, hiddenMainWidgets: nextHidden }),
       });
-      if (!response.ok) throw new Error("تعذر حفظ تخصيص كروت الداش بورد");
+      if (!response.ok) throw new Error("تعذر حفظ ترتيب كروت الداش بورد");
     } catch {
-      setMainWidgetOrder(previousOrder);
+      setWidgetOrder(previousOrder);
       setHiddenMainWidgets(previousHidden);
     }
   }
@@ -470,87 +484,56 @@ export function DashboardPage() {
     const nextHidden = visible
       ? hiddenMainWidgets.filter((item) => item !== id)
       : [...new Set([...hiddenMainWidgets, id])];
-    void persistMainWidgetLayout(effectiveMainWidgetOrder, nextHidden);
+    void persistDashboardLayout(effectiveWidgetOrder, nextHidden);
   }
 
-  function resetMainWidgetLayout() {
-    void persistMainWidgetLayout(DEFAULT_MAIN_WIDGET_ORDER, []);
+  function resetDashboardLayout() {
+    void persistDashboardLayout(DEFAULT_DASHBOARD_WIDGET_ORDER, []);
   }
 
-  function dropMainWidget(targetId: MainDashboardWidgetId) {
-    if (!draggedMainWidget || draggedMainWidget === targetId) return;
-    const next = effectiveMainWidgetOrder.filter((id) => id !== draggedMainWidget);
+  function dropDashboardWidget(targetId: string) {
+    if (!draggedWidget || draggedWidget === targetId) return;
+    const next = effectiveWidgetOrder.filter((id) => id !== draggedWidget);
     const targetIndex = Math.max(0, next.indexOf(targetId));
-    next.splice(targetIndex, 0, draggedMainWidget);
-    setDraggedMainWidget(null);
-    void persistMainWidgetLayout(next, hiddenMainWidgets);
+    next.splice(targetIndex, 0, draggedWidget);
+    setDraggedWidget(null);
+    void persistDashboardLayout(next);
   }
 
-  function customizableMainWidget(id: MainDashboardWidgetId, content: React.ReactNode) {
-    if (!mainWidgetVisible(id)) return null;
-    const sizeClass = id.startsWith("kpi:")
-      ? "dashboard-main-widget-kpi"
-      : id === "summary:departments"
-        ? "dashboard-main-widget-summary"
-        : "dashboard-main-widget-analytics";
+  function sortableDashboardWidget(id: string, content: React.ReactNode, options: { kind: "main" | "operation"; sizeClass?: string; hideable?: boolean }) {
+    if (options.kind === "main" && !mainWidgetVisible(id as MainDashboardWidgetId)) return null;
     return <div
       key={id}
-      className={`dashboard-main-widget ${sizeClass} ${draggedMainWidget === id ? "dragging" : ""}`}
-      style={{ order: mainWidgetPosition(id) }}
+      className={`dashboard-sortable-widget dashboard-${options.kind}-widget ${options.sizeClass || ""} ${draggedWidget === id ? "dragging" : ""}`}
+      style={{ order: widgetPosition(id) }}
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-      onDrop={(event) => { event.preventDefault(); dropMainWidget(id); }}
+      onDrop={(event) => { event.preventDefault(); dropDashboardWidget(id); }}
     >
       <div className="dashboard-main-widget-controls">
         <span
           className="dashboard-main-widget-drag"
           title="اسحب لتغيير ترتيب الكارت"
           draggable
-          onDragStart={(event) => { setDraggedMainWidget(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
-          onDragEnd={() => setDraggedMainWidget(null)}
+          onDragStart={(event) => { setDraggedWidget(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
+          onDragEnd={() => setDraggedWidget(null)}
         ><DotsSixVertical size={17} weight="bold" /></span>
-        <button type="button" title="إخفاء الكارت" aria-label={`إخفاء ${MAIN_DASHBOARD_WIDGETS.find((item) => item.id === id)?.label || "الكارت"}`} onClick={() => setMainWidgetVisibility(id, false)}><X size={14} weight="bold" /></button>
+        {options.hideable ? <button type="button" title="إخفاء الكارت" aria-label={`إخفاء ${MAIN_DASHBOARD_WIDGETS.find((item) => item.id === id)?.label || "الكارت"}`} onClick={() => setMainWidgetVisibility(id as MainDashboardWidgetId, false)}><X size={14} weight="bold" /></button> : null}
       </div>
       {content}
     </div>;
   }
 
-  const defaultOperationWidgetOrder = ["inventory", "location:warehouse", "location:agency", "location:hall", "location:qadisiyah", "location:multaqa", "approvals", "shortages", "transfers", "sales-tracking"];
-  const effectiveOperationWidgetOrder = [...operationWidgetOrder, ...defaultOperationWidgetOrder.filter((id) => !operationWidgetOrder.includes(id))];
-  const operationWidgetPosition = (id: string) => effectiveOperationWidgetOrder.indexOf(id);
-
-  async function persistOperationWidgetOrder(next: string[]) {
-    setOperationWidgetOrder(next);
-    try {
-      const response = await fetch("/api/dashboard", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operationWidgetOrder: next }) });
-      if (!response.ok) throw new Error("تعذر حفظ ترتيب الكروت");
-    } catch {
-      setOperationWidgetOrder(data?.layout?.operationWidgetOrder || defaultOperationWidgetOrder);
-    }
-  }
-
-  function dropOperationWidget(targetId: string) {
-    if (!draggedOperationWidget || draggedOperationWidget === targetId) return;
-    const next = effectiveOperationWidgetOrder.filter((id) => id !== draggedOperationWidget);
-    const targetIndex = Math.max(0, next.indexOf(targetId));
-    next.splice(targetIndex, 0, draggedOperationWidget);
-    setDraggedOperationWidget(null);
-    void persistOperationWidgetOrder(next);
+  function customizableMainWidget(id: MainDashboardWidgetId, content: React.ReactNode) {
+    const sizeClass = id.startsWith("kpi:")
+      ? "dashboard-main-widget-kpi"
+      : id === "summary:departments"
+        ? "dashboard-main-widget-summary"
+        : "dashboard-main-widget-analytics";
+    return sortableDashboardWidget(id, content, { kind: "main", sizeClass, hideable: true });
   }
 
   function draggableOperationWidget(id: string, content: React.ReactNode) {
-    return <div
-      key={id}
-      className={`dashboard-operation-widget ${draggedOperationWidget === id ? "dragging" : ""}`}
-      style={{ order: operationWidgetPosition(id) }}
-      draggable
-      onDragStart={(event) => { setDraggedOperationWidget(id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", id); }}
-      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
-      onDrop={(event) => { event.preventDefault(); dropOperationWidget(id); }}
-      onDragEnd={() => setDraggedOperationWidget(null)}
-    >
-      <span className="dashboard-card-drag-handle" title="اسحب لتغيير ترتيب الكارت"><DotsSixVertical size={20} weight="bold" /></span>
-      {content}
-    </div>;
+    return sortableDashboardWidget(id, content, { kind: "operation", sizeClass: "dashboard-operation-widget" });
   }
 
   return (
@@ -569,7 +552,7 @@ export function DashboardPage() {
                 <div className="dashboard-widget-visibility-list">
                   {MAIN_DASHBOARD_WIDGETS.map((item) => <label key={item.id}><input type="checkbox" checked={mainWidgetVisible(item.id)} onChange={(event) => setMainWidgetVisibility(item.id, event.target.checked)} /><span>{item.label}</span></label>)}
                 </div>
-                <button type="button" className="dashboard-widget-reset" onClick={resetMainWidgetLayout}>إرجاع الشكل الافتراضي</button>
+                <button type="button" className="dashboard-widget-reset" onClick={resetDashboardLayout}>إرجاع الشكل الافتراضي</button>
               </div> : null}
             </div>
             <button className="icon-button" type="button" aria-label="اختيار مدة الداش بورد" onClick={() => { setDashboardCustomizeOpen(false); setDraftRange(appliedRange); setDateOpen((value) => !value); }}><SlidersHorizontal size={20} /></button>
@@ -603,7 +586,7 @@ export function DashboardPage() {
           </div>
         ) : null}
 
-        {visibleMainWidgets ? <section className="dashboard-main-widget-grid">
+        <section className="dashboard-unified-widget-grid">
           {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />)}
           {customizableMainWidget("kpi:open-conversations", <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")} />)}
           {customizableMainWidget("kpi:no-answer", <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />)}
@@ -710,18 +693,10 @@ export function DashboardPage() {
               ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
             </div>
           </section>)}
-        </section> : null}
-
-        <section className="operations-dashboard-section">
-          <div className="section-title-row">
-            <div>
-              <span className="section-kicker">سيستم العمليات</span>
-              <h2>بيانات العمليات</h2>
-            </div>
-            <div className="operation-layout-actions"><button type="button" className="secondary" onClick={() => void persistOperationWidgetOrder(defaultOperationWidgetOrder)}>إعادة الترتيب الافتراضي</button><Briefcase size={26} weight="duotone" /></div>
+          <div className="dashboard-operations-divider" style={{ order: DEFAULT_MAIN_WIDGET_ORDER.length }}>
+            <div><span className="section-kicker">سيستم العمليات</span><h2>بيانات العمليات</h2></div>
+            <Briefcase size={26} weight="duotone" />
           </div>
-
-          <div className="operations-grid operations-widget-grid reorderable-operations-grid">
             {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
@@ -829,7 +804,6 @@ export function DashboardPage() {
                 <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => void openTrackingList("طلبات مكتملة", "completed")} />
               </div>
             </OperationCard>)}
-          </div>
         </section>
       </div>
       <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />

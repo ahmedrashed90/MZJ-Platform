@@ -5,16 +5,17 @@ const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const modal = read("src/marketing/components/TaskDetailModal.tsx");
 const dashboard = read("src/marketing/pages/MarketingDashboardPage.tsx");
+const presentation = read("src/marketing/components/TaskTemplatePresentation.tsx");
 const api = read("server/marketing/index.ts");
 const css = read("src/marketing/marketing.css");
 
 const checks = [
   ["structured per-field feedback", modal.includes('kind: "task_template_review_feedback"') && modal.includes("fieldNotes") && modal.includes("selectedFields")],
   ["legacy plain notes remain readable", modal.includes('return { ...emptyFeedback, generalNote: text }')],
-  ["single click selects review field", modal.includes("onClick={() => selectReviewField(key)}")],
-  ["double click opens inline field note", modal.includes("onDoubleClick={() => openReviewField(key)}") && modal.includes("marketing-field-review-note")],
+  ["single click selects review field", presentation.includes("onClick: () => onSelectField?.(key)")],
+  ["double click opens inline field note", presentation.includes("onDoubleClick: () => onOpenField?.(key)") && presentation.includes("marketing-template-field-review-note")],
   ["browser prompt removed from template review", !modal.includes("window.prompt") && !modal.includes("prompt(")],
-  ["writer sees yellow requested fields and note", modal.includes("review-field-required") && modal.includes("هذا الحقل محدد للتعديل من المراجع")],
+  ["writer sees yellow requested fields and note", presentation.includes("review-selected") && presentation.includes("هذا الحقل مطلوب تعديله")],
   ["approval clears active feedback", modal.includes('reviewActionName === "approve" ? "" : feedback')],
   ["professional review action classes", ["review-request", "review-save", "review-reject", "review-approve"].every((name) => modal.includes(name))],
   ["sticky review command bar", css.includes(".marketing-review-command-bar") && css.includes("position: sticky")],
@@ -23,7 +24,7 @@ const checks = [
   ["required tasks grouped by department", dashboard.includes("requiredByDepartment") && dashboard.includes("marketing-dashboard-department")],
   ["readiness grouped by campaign and department", dashboard.includes("receivedBySource") && dashboard.includes("expandedReadinessDepartments")],
   ["receive action still uses canonical backend flow", dashboard.includes('action: "receive_task"') && api.includes("async function receiveTask")],
-  ["received task leaves required and enters readiness", api.includes("required: tasks.filter((task)=>!task.received_at)") && api.includes("received: tasks.filter((task)=>task.received_at)")],
+  ["received task leaves required and enters readiness", api.includes("required:tasks.filter((task)=>!task.received_at") && api.includes("received:tasks.filter((task)=>task.received_at")],
   ["dashboard task cards preserve responsible and content writer", dashboard.includes("task.assigned_name") && dashboard.includes("task.content_user_name")],
 ];
 

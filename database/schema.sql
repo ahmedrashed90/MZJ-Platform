@@ -263,9 +263,12 @@ create table if not exists marketing.tasks (
   status text not null,
   due_at timestamptz,
   completed_at timestamptz,
+  completed_by uuid references core.users(id),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table marketing.tasks add column if not exists completed_by uuid references core.users(id);
 
 create table if not exists operations.locations (
   id uuid primary key default gen_random_uuid(),
@@ -549,6 +552,9 @@ create index if not exists core_notification_state_user_idx on core.notification
 create table if not exists core.user_dashboard_layouts (
   user_id uuid primary key references core.users(id) on delete cascade,
   operation_widget_order jsonb not null default '[]'::jsonb,
+  main_widget_order jsonb not null default '[]'::jsonb,
+  dashboard_widget_order jsonb not null default '[]'::jsonb,
+  hidden_main_widgets jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now()
 );
 

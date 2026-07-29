@@ -5,7 +5,7 @@ export type DashboardData = {
   generatedAt: string;
   range: { from: string; to: string };
   sectionErrors?: Record<string, string>;
-  layout?: { operationWidgetOrder: string[]; mainWidgetOrder: string[]; hiddenMainWidgets: string[] };
+  layout?: { widgetOrder: string[]; operationWidgetOrder: string[]; mainWidgetOrder: string[]; hiddenMainWidgets: string[] };
   crm: {
     totalCustomers: NullableNumber;
     openConversations: NullableNumber;

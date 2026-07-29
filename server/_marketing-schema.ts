@@ -337,6 +337,7 @@ create table if not exists marketing.tasks (
   progress numeric(6,2) not null default 0,
   received_at timestamptz,
   completed_at timestamptz,
+  completed_by uuid references core.users(id),
   note text,
   final_file_id uuid references marketing.files(id) on delete set null,
   approved_template_data jsonb not null default '{}'::jsonb,
@@ -353,6 +354,7 @@ alter table marketing.tasks add column if not exists paired_content_user_id uuid
 alter table marketing.tasks add column if not exists status text not null default 'required';
 alter table marketing.tasks add column if not exists due_at timestamptz;
 alter table marketing.tasks add column if not exists completed_at timestamptz;
+alter table marketing.tasks add column if not exists completed_by uuid references core.users(id);
 alter table marketing.tasks add column if not exists created_at timestamptz not null default now();
 alter table marketing.tasks add column if not exists updated_at timestamptz not null default now();
 alter table marketing.tasks alter column campaign_id drop not null;

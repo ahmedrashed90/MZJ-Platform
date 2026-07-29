@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import {
   ArrowsClockwise,
   CheckCircle,
+  ClockCountdown,
   ChatCircleText,
   DownloadSimple,
   FileArrowUp,
   FloppyDisk,
-  NotePencil,
   ShieldCheck,
   WarningCircle,
   XCircle,
@@ -15,17 +15,10 @@ import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { downloadTaskTemplate, inspectTaskTemplate, type TaskTemplateInspection } from "../templateExcel";
 import { MarketingAlert, ProgressBar } from "./MarketingPage";
+import { TaskTemplatePresentation, taskTemplateFieldLabels } from "./TaskTemplatePresentation";
 
-const writerLabels: Record<string, string> = {
-  proposedName: "الاسم المقترح للكرييتيف",
-  goal: "الهدف",
-  mainMessage: "الرسالة الأساسية",
-  hook: "الهوك",
-  mainScript: "السكريبت الأساسي",
-  cta: "CTA",
-  caption: "Caption",
-  hashtags: "Hashtag",
-};
+const writerLabels = taskTemplateFieldLabels;
+
 
 type ReviewFeedback = {
   generalNote: string;
@@ -108,6 +101,8 @@ function templateStatusLabel(status: unknown) {
     revision_requested: "مطلوب تعديل",
     rejected: "مرفوض",
     approved: "معتمد",
+    ready_to_complete: "جاهز للإنهاء",
+    completed: "منتهي",
   };
   return labels[String(status || "")] || String(status || "—");
 }
@@ -121,18 +116,7 @@ function DetailItem({ label, value, wide = false }: { label: string; value: unkn
   return <article className={wide ? "wide" : ""}><small>{label}</small><strong>{String(value || "—")}</strong></article>;
 }
 
-function writerFieldClass(key: string) {
-  if (key === "mainScript") return "marketing-writer-field full script";
-  if (key === "mainMessage") return "marketing-writer-field full message";
-  return "marketing-writer-field";
-}
 
-function writerRows(key: string) {
-  if (key === "mainScript") return 12;
-  if (key === "mainMessage") return 5;
-  if (["goal", "hook", "caption", "hashtags"].includes(key)) return 4;
-  return 3;
-}
 
 export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string | null; onClose: () => void; onChanged?: () => void }) {
   const [payload, setPayload] = useState<any>(null);
@@ -286,17 +270,17 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   return (
     <Modal
       open={Boolean(taskId)}
-      title={task?.title || "تفاصيل التاسك"}
+      title={task?.task_kind === "task_template" ? "Task Template" : task?.title || "تفاصيل التاسك"}
       subtitle={task ? `${task.source_name || "—"} · ${task.department_name || "قسم المحتوى"}` : undefined}
       onClose={onClose}
-      className="marketing-task-modal marketing-task-modal-fullscreen"
+      className={`marketing-task-modal marketing-task-modal-fullscreen ${task?.task_kind === "task_template" ? "marketing-task-template-modal" : ""}`}
     >
       {loading && !task ? <div className="marketing-empty">جاري تحميل التاسك...</div> : null}
       {error ? <MarketingAlert>{error}</MarketingAlert> : null}
       {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
       {task ? <div className="marketing-task-detail">
-        <section className="marketing-task-overview">
+        {task.task_kind !== "task_template" ? <section className="marketing-task-overview">
           <div className="marketing-task-section-heading">
             <div><h3>ملخص التكليف</h3><p>كل بيانات الحملة والتكليف في مكان واحد.</p></div>
             <span className={`marketing-task-status status-${task.status || "required"}`}>{templateStatusLabel(task.status)}</span>
@@ -319,98 +303,49 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <DetailItem label="المطلوب من كاتب المحتوى" value={task.required_from_content} wide />
           </div>
           <div className="marketing-task-progress"><span>نسبة الإنجاز</span><ProgressBar value={Number(task.progress || 0)} /></div>
-        </section>
+        </section> : null}
 
         {task.task_kind === "task_template" ? <>
-          <section className="marketing-task-toolbar">
-            <div><h3>Task Template</h3><p>{task.template_department_note || task.note || "لا توجد ملاحظات إضافية"}</p></div>
-            <div className="marketing-inline-actions">
-              {permissions.canDownloadTemplate ? <button type="button" className="secondary" onClick={() => downloadTaskTemplate(task)}><DownloadSimple size={18} />تحميل Task Template</button> : null}
-              {permissions.canUploadTemplate ? <label className="marketing-upload-button"><FileArrowUp size={18} />اختيار ومعاينة Task Template<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadTemplate(file); event.currentTarget.value = ""; }} /></label> : null}
-              {task.template_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.template_file_id)}><DownloadSimple size={18} />تحميل الملف المرفوع</button> : null}
-            </div>
-          </section>
-
           {!canReview && showFeedback ? <section className="marketing-revision-feedback-panel" aria-label="ملاحظات المراجع">
             <div className="marketing-revision-feedback-heading">
               <span><ChatCircleText size={22} weight="fill" /></span>
-              <div>
-                <h3>{task.template_status === "rejected" ? "ملاحظات الرفض" : "التعديلات المطلوبة من المراجع"}</h3>
-                <p>الحقول المظللة باللون الأصفر هي الحقول المطلوب مراجعتها قبل إعادة رفع Task Template.</p>
-              </div>
+              <div><h3>{task.template_status === "rejected" ? "ملاحظات الرفض" : "التعديلات المطلوبة من المراجع"}</h3><p>الحقول المحددة داخل التصميم هي الحقول المطلوب مراجعتها قبل إعادة الرفع.</p></div>
               <b>{selectedReviewCount.toLocaleString("ar-SA")} حقل</b>
             </div>
             {adminNote ? <p className="marketing-revision-general-note">{adminNote}</p> : null}
           </section> : null}
 
-          <section className="marketing-task-section marketing-writer-section">
-            <div className="marketing-task-section-heading">
-              <div><h3>بيانات كاتب المحتوى</h3><p>{canReview ? "اضغط مرة واحدة لتحديد الحقل، واضغط مرتين لكتابة ملاحظة خاصة به." : "الحقول الطويلة مهيأة للقراءة بدون تداخل."}</p></div>
-              {canReview ? <div className="marketing-review-selection-summary"><b>{selectedReviewCount}</b><span>حقول محددة</span><small>{notedReviewCount} بملاحظات</small></div> : null}
-            </div>
-            {canReview ? <div className="marketing-review-instruction"><NotePencil size={19} /><span>اختيار الحقل لا يغيّر محتواه. اللون الأصفر يحدد فقط المكان المطلوب تعديله عند كاتب المحتوى.</span></div> : null}
-            <div className="marketing-writer-form">
-              {Object.entries(writerLabels).map(([key, label]) => {
-                const selected = reviewSelectedFields.includes(key);
-                const note = reviewFieldNotes[key] || "";
-                const noteOpen = selected && (activeReviewField === key || Boolean(note) || !canReview);
-                return <div
-                  key={key}
-                  className={`${writerFieldClass(key)} ${selected ? "review-selected" : ""} ${note ? "has-review-note" : ""}`}
-                  onClick={() => selectReviewField(key)}
-                  onDoubleClick={() => openReviewField(key)}
-                >
-                  <div className="marketing-writer-field-title">
-                    <span>{label}</span>
-                    {canReview ? selected
-                      ? <button type="button" className="review-field-clear" onClick={(event) => { event.stopPropagation(); clearReviewField(key); }}><XCircle size={16} />إلغاء التحديد</button>
-                      : <button type="button" className="review-field-select" onClick={(event) => { event.stopPropagation(); selectReviewField(key); }}><NotePencil size={16} />تحديد للمراجعة</button>
-                      : selected ? <b className="review-field-required"><WarningCircle size={16} weight="fill" />مطلوب تعديل</b> : null}
-                  </div>
-                  <textarea
-                    rows={writerRows(key)}
-                    value={editData[key] || ""}
-                    disabled={!canReview}
-                    onChange={(event) => setEditData((current) => ({ ...current, [key]: event.target.value }))}
-                    onDoubleClick={(event) => { event.stopPropagation(); openReviewField(key); }}
-                  />
-                  {noteOpen ? <div className="marketing-field-review-note" onClick={(event) => event.stopPropagation()}>
-                    <div><ChatCircleText size={18} weight="fill" /><strong>ملاحظة المراجع على {label}</strong></div>
-                    {canReview
-                      ? <textarea
-                        rows={3}
-                        value={note}
-                        autoFocus={activeReviewField === key}
-                        placeholder={`اكتب الملاحظة المطلوبة على ${label}`}
-                        onChange={(event) => setReviewFieldNotes((current) => ({ ...current, [key]: event.target.value }))}
-                      />
-                      : <p>{note || "هذا الحقل محدد للتعديل من المراجع."}</p>}
-                  </div> : null}
-                </div>;
-              })}
-            </div>
-          </section>
+          <TaskTemplatePresentation
+            task={task}
+            data={editData}
+            mode={canReview ? "review" : "readonly"}
+            statusLabel={templateStatusLabel(task.template_status)}
+            statusTone={task.template_status === "approved" ? "approved" : task.template_status === "rejected" || task.template_status === "revision_requested" ? "warning" : "review"}
+            adminNote={adminNote}
+            onAdminNoteChange={canReview ? setAdminNote : undefined}
+            selectedFields={reviewSelectedFields}
+            fieldNotes={reviewFieldNotes}
+            activeReviewField={activeReviewField}
+            onSelectField={canReview ? selectReviewField : undefined}
+            onOpenField={canReview ? openReviewField : undefined}
+            onClearField={canReview ? clearReviewField : undefined}
+            onFieldNoteChange={canReview ? (key, value) => setReviewFieldNotes((current) => ({ ...current, [key]: value })) : undefined}
+            onDataChange={canReview ? (key, value) => setEditData((current) => ({ ...current, [key]: value })) : undefined}
+            onClose={onClose}
+          />
 
           {canReview ? <section className="marketing-task-section admin marketing-review-workspace">
             <div className="marketing-task-section-heading">
-              <div><h3><ShieldCheck size={21} />مراجعة واعتماد</h3><p>راجع الحقول، أضف الملاحظات المطلوبة، ثم اختر الإجراء المناسب.</p></div>
+              <div><h3><ShieldCheck size={21} />مراجعة واعتماد</h3><p>حدد الحقول من نفس التصميم، أضف ملاحظاتك، ثم اختر الإجراء المناسب.</p></div>
               <span className={`marketing-template-review-status status-${task.template_status || "not_started"}`}>{templateStatusLabel(task.template_status)}</span>
             </div>
             <div className="marketing-review-overview">
-              <article><small>الحقول المحددة</small><strong>{selectedReviewCount.toLocaleString("ar-SA")}</strong><span>ستظهر باللون الأصفر للمستخدم</span></article>
+              <article><small>الحقول المحددة</small><strong>{selectedReviewCount.toLocaleString("ar-SA")}</strong><span>تظهر بوضوح لكاتب المحتوى</span></article>
               <article><small>ملاحظات الحقول</small><strong>{notedReviewCount.toLocaleString("ar-SA")}</strong><span>ملاحظات مرتبطة بحقول محددة</span></article>
               <article><small>حالة القالب</small><strong>{templateStatusLabel(task.template_status)}</strong><span>آخر حالة محفوظة في النظام</span></article>
             </div>
-            <label className="marketing-review-note">
-              <span>ملاحظة عامة للمراجع</span>
-              <small>تظهر أعلى الحقول المطلوبة للتعديل، ويمكن تركها فارغة عند الاكتفاء بملاحظات الحقول.</small>
-              <textarea rows={4} value={adminNote} placeholder="اكتب ملاحظة عامة مختصرة وواضحة..." onChange={(event) => setAdminNote(event.target.value)} />
-            </label>
             <div className="marketing-review-command-bar">
-              <div>
-                <strong>إجراءات المراجعة</strong>
-                <span>{selectedReviewCount ? `تم تحديد ${selectedReviewCount} حقل للمراجعة` : "لم يتم تحديد حقول للمراجعة"}</span>
-              </div>
+              <div><strong>إجراءات المراجعة</strong><span>{selectedReviewCount ? `تم تحديد ${selectedReviewCount} حقل للمراجعة` : "لم يتم تحديد حقول للمراجعة"}</span></div>
               <div className="marketing-review-actions">
                 {permissions.canRejectTemplate ? <>
                   <button type="button" className="review-request" disabled={loading} onClick={() => void reviewAction("request_edit")}><ArrowsClockwise size={19} />طلب تعديل</button>
@@ -423,26 +358,39 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             </div>
           </section> : null}
 
-          {payload.history?.length ? <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>سجل المراجعات</h3></div></div><div className="marketing-history">{payload.history.map((item: any) => {
-            const note = historyNoteText(item.note);
-            return <article key={item.id}><strong>{item.action}</strong><span>{item.actor_name || "—"}</span><small>{new Date(item.created_at).toLocaleString("ar-SA")}</small>{note ? <p>{note}</p> : null}</article>;
-          })}</div></section> : null}
+          {payload.history?.length ? <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>سجل المراجعات</h3></div></div><div className="marketing-history">{payload.history.map((item: any) => { const note = historyNoteText(item.note); return <article key={item.id}><strong>{item.action}</strong><span>{item.actor_name || "—"}</span><small>{new Date(item.created_at).toLocaleString("ar-SA")}</small>{note ? <p>{note}</p> : null}</article>; })}</div></section> : null}
+
+          <section className="marketing-template-command-bar">
+            <div><h3>إجراءات الكاتب</h3><p>تحميل النموذج أو رفع نسخة جديدة من نفس الشاشة.</p></div>
+            <div className="marketing-inline-actions">
+              {permissions.canDownloadTemplate ? <button type="button" className="secondary" onClick={() => downloadTaskTemplate(task)}><DownloadSimple size={18} />تحميل Task Template</button> : null}
+              {permissions.canUploadTemplate ? <label className="marketing-upload-button"><FileArrowUp size={18} />اختيار ومعاينة Task Template<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadTemplate(file); event.currentTarget.value = ""; }} /></label> : null}
+              {task.template_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.template_file_id)}><DownloadSimple size={18} />تحميل الملف المرفوع</button> : null}
+            </div>
+          </section>
         </> : <>
-          {task.template_status !== "approved" ? <MarketingAlert type="info"><WarningCircle size={18} />في انتظار اعتماد Task Template</MarketingAlert> : <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>بيانات Task Template المعتمدة</h3></div></div><div className="marketing-approved-data">{Object.entries(writerLabels).map(([key, label]) => <div key={key} className={key === "mainScript" ? "full script" : ""}><small>{label}</small><p>{approved[key] || "—"}</p></div>)}</div></section>}
+          {task.template_status !== "approved" ? <MarketingAlert type="info"><WarningCircle size={18} />في انتظار اعتماد Task Template</MarketingAlert> : <TaskTemplatePresentation
+            task={task}
+            data={approved}
+            mode="readonly"
+            statusLabel="تم الاعتماد"
+            statusTone="approved"
+            adminNote={task.admin_note || ""}
+          />}
 
           <section className="marketing-task-section">
             <div className="marketing-task-section-heading"><div><h3>إجراءات التكليف</h3><p>اضغط على الإجراء لتغيير حالته بدل استخدام علامات الاختيار.</p></div></div>
             <div className="marketing-action-buttons">
               {payload.actions?.length ? payload.actions.map((item: any) => {
                 const allowed = item.admin_only ? permissions.canExecuteAdminAction : permissions.canExecuteAction;
-                const disabled = loading || task.template_status !== "approved" || !allowed;
+                const disabled = loading || task.status === "completed" || task.template_status !== "approved" || !allowed;
                 return <button
                   key={item.id}
                   type="button"
                   className={`marketing-action-button ${item.completed ? "completed" : "pending"} ${item.admin_only ? "admin" : ""}`}
                   disabled={disabled}
                   aria-pressed={Boolean(item.completed)}
-                  title={!allowed ? "لا توجد صلاحية لتنفيذ هذا الإجراء" : task.template_status !== "approved" ? "في انتظار اعتماد Task Template" : item.completed ? "اضغط لإعادة الإجراء إلى غير مكتمل" : "اضغط لتسجيل الإجراء كمكتمل"}
+                  title={!allowed ? "لا توجد صلاحية لتنفيذ هذا الإجراء" : task.status === "completed" ? "التاسك منتهي" : task.template_status !== "approved" ? "في انتظار اعتماد Task Template" : item.completed ? "اضغط لإعادة الإجراء إلى غير مكتمل" : "اضغط لتسجيل الإجراء كمكتمل"}
                   onClick={() => void action({ action: "toggle_task_action", taskId: task.id, actionId: item.id, completed: !item.completed })}
                 >
                   <span className="marketing-action-icon">{item.completed ? <CheckCircle size={23} weight="fill" /> : <span />}</span>
@@ -456,23 +404,55 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
           <section className="marketing-task-section">
             <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3></div></div>
             <div className="marketing-inline-actions">
-              {permissions.canUploadFinal ? <label className={`marketing-upload-button ${task.template_status !== "approved" ? "disabled" : ""}`}><FileArrowUp size={18} />رفع الملف النهائي<input type="file" disabled={task.template_status !== "approved"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFinal(file); event.currentTarget.value = ""; }} /></label> : null}
+              {permissions.canUploadFinal ? <label className={`marketing-upload-button ${task.template_status !== "approved" || task.status === "completed" ? "disabled" : ""}`}><FileArrowUp size={18} />رفع الملف النهائي<input type="file" disabled={task.template_status !== "approved" || task.status === "completed"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFinal(file); event.currentTarget.value = ""; }} /></label> : null}
               {task.final_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.final_file_id)}><DownloadSimple size={18} />{task.final_file_name || "تحميل الملف النهائي"}</button> : null}
             </div>
           </section>
         </>}
+
+        {task.task_kind === "execution" ? <section className={`marketing-task-completion-panel ${task.status === "completed" ? "completed" : Number(task.progress || 0) >= 100 ? "ready" : "pending"}`}>
+          <div className="marketing-task-completion-copy">
+            {task.status === "completed" ? <CheckCircle size={28} weight="fill" /> : <ClockCountdown size={28} weight="duotone" />}
+            <div>
+              <h3>{task.status === "completed" ? "تم إنهاء التاسك" : Number(task.progress || 0) >= 100 ? "التاسك جاهز للإنهاء" : "إتمام التاسك"}</h3>
+              <p>{task.status === "completed"
+                ? `تم نقله إلى قائمة التاسكات المنتهية${task.completed_by_name ? ` بواسطة ${task.completed_by_name}` : ""}${task.completed_at ? ` بتاريخ ${new Date(task.completed_at).toLocaleString("ar-SA")}` : ""}.`
+                : Number(task.progress || 0) >= 100
+                  ? "وصلت نسبة الإنجاز إلى 100%. اضغط تم الانتهاء لنقل التاسك إلى القائمة المنتهية."
+                  : "سيظهر زر تم الانتهاء بعد وصول نسبة الإنجاز إلى 100%."}</p>
+            </div>
+          </div>
+          {task.status !== "completed" && Number(task.progress || 0) >= 100 ? <button
+            type="button"
+            className="marketing-complete-task-button"
+            disabled={loading || !permissions.canCompleteTask}
+            title={!permissions.canCompleteTask ? "لا توجد صلاحية لإنهاء هذا التاسك" : "نقل التاسك إلى قائمة التاسكات المنتهية"}
+            onClick={() => void action({ action: "complete_task", taskId: task.id })}
+          ><CheckCircle size={20} weight="fill" />{loading ? "جاري الإنهاء..." : "تم الانتهاء"}</button> : null}
+        </section> : null}
       </div> : null}
 
       {templatePreview ? <div className="marketing-template-preview-backdrop" onMouseDown={() => !loading && setTemplatePreview(null)}>
         <section className="marketing-template-preview" onMouseDown={(event) => event.stopPropagation()}>
           <header><div><span>معاينة قبل الرفع</span><h3>{templatePreview.file.name}</h3><p>لن يتم رفع الملف إلا بعد التأكد من مطابقته للنموذج واعتماد المعاينة.</p></div><button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}><XCircle size={20} /></button></header>
-          <div className={`marketing-template-validation-summary ${templatePreview.inspection.isValid ? "valid" : "invalid"}`}>
-            {templatePreview.inspection.isValid ? <CheckCircle size={24} weight="fill" /> : <WarningCircle size={24} weight="fill" />}
-            <div><strong>{templatePreview.inspection.isValid ? "الملف مطابق ويمكن تأكيد الرفع" : "تم رفض الملف لعدم مطابقته للنموذج"}</strong><span>{templatePreview.inspection.isValid ? "راجع البيانات التالية ثم اضغط تأكيد الرفع." : "صحح الأخطاء التالية وارفع نفس النموذج مرة أخرى."}</span></div>
+          <div className="marketing-template-preview-body">
+            <div className={`marketing-template-validation-summary ${templatePreview.inspection.isValid ? "valid" : "invalid"}`}>
+              {templatePreview.inspection.isValid ? <CheckCircle size={24} weight="fill" /> : <WarningCircle size={24} weight="fill" />}
+              <div><strong>{templatePreview.inspection.isValid ? "الملف مطابق ويمكن تأكيد الرفع" : "تم رفض الملف لعدم مطابقته للنموذج"}</strong><span>{templatePreview.inspection.isValid ? "راجع البيانات التالية ثم اضغط تأكيد الرفع." : "صحح الأخطاء التالية وارفع نفس النموذج مرة أخرى."}</span></div>
+            </div>
+            {templatePreview.inspection.errors.length ? <div className="marketing-template-validation-errors">{templatePreview.inspection.errors.map((item) => <p key={item}><XCircle size={16} weight="fill" />{item}</p>)}</div> : null}
+            {templatePreview.inspection.warnings.length ? <div className="marketing-template-validation-warnings">{templatePreview.inspection.warnings.map((item) => <p key={item}><WarningCircle size={16} />{item}</p>)}</div> : null}
+            <div className="marketing-template-preview-design">
+              <TaskTemplatePresentation
+                task={task}
+                data={templatePreview.inspection.data}
+                mode="preview"
+                statusLabel="معاينة قبل الرفع"
+                statusTone="preview"
+                adminNote={adminNote}
+              />
+            </div>
           </div>
-          {templatePreview.inspection.errors.length ? <div className="marketing-template-validation-errors">{templatePreview.inspection.errors.map((item) => <p key={item}><XCircle size={16} weight="fill" />{item}</p>)}</div> : null}
-          {templatePreview.inspection.warnings.length ? <div className="marketing-template-validation-warnings">{templatePreview.inspection.warnings.map((item) => <p key={item}><WarningCircle size={16} />{item}</p>)}</div> : null}
-          <div className="marketing-template-preview-table"><table><thead><tr><th>الحقل</th><th>البيانات</th><th>التحقق</th></tr></thead><tbody>{templatePreview.inspection.rows.filter((row) => row.writer).map((row) => <tr key={row.key}><td><strong>{row.label}</strong></td><td><p>{row.value || "—"}</p></td><td>{row.value ? <span className="ok">موجود</span> : <span className="empty">فارغ</span>}</td></tr>)}</tbody></table></div>
           <footer><button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}>إلغاء</button><button type="button" className="primary" disabled={loading || !templatePreview.inspection.isValid} onClick={() => void confirmTemplateUpload()}><FileArrowUp size={18} />{loading ? "جاري الرفع..." : "تأكيد رفع Task Template"}</button></footer>
         </section>
       </div> : null}

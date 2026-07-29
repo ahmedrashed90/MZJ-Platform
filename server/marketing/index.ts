@@ -471,9 +471,16 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
     from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
     group by coalesce(t.department_id::text,'content')
   `;
+  const [completion] = await sql<any[]>`
+    select count(*)::int as total,
+      count(*) filter(where t.status='completed' and t.completed_at is not null)::int as completed
+    from marketing.tasks t
+    where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
+  `;
   const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
-  if (sourceType === "agenda") await sql`update marketing.agendas set progress=${progress},status=case when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
-  else await sql`update marketing.campaigns set progress=${progress},status=case when ${progress}>=100 then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  const allTasksCompleted = Number(completion?.total || 0) > 0 && Number(completion?.total || 0) === Number(completion?.completed || 0);
+  if (sourceType === "agenda") await sql`update marketing.agendas set progress=${progress},status=case when ${allTasksCompleted} then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  else await sql`update marketing.campaigns set progress=${progress},status=case when ${allTasksCompleted} then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
   return progress;
 }
 
@@ -510,14 +517,15 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
       ))
     )`;
   const tasks = await sql<any[]>`
-    select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.note,
-      t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
+    select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.completed_at,t.completed_by::text,t.note,
+      done_by.full_name as completed_by_name,t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
       t.paired_content_user_id::text,cu.full_name as content_user_name,cuc.color as content_user_color,
       d.id::text as department_id,d.name as department_name,c.name as creative_name,c.instance_code,
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,tt.status as template_status,tt.approved_data,
       f.id::text as final_file_id,f.original_name as final_file_name
     from marketing.tasks t
     left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id
+    left join core.users done_by on done_by.id=t.completed_by
     left join marketing.user_colors auc on auc.user_id=t.assigned_to
     left join marketing.user_colors cuc on cuc.user_id=t.paired_content_user_id
     left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
@@ -544,7 +552,16 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     order by created_at desc
   `;
   const version = await dashboardVersion(sql);
-  return { ok:true, version, required: tasks.filter((task)=>!task.received_at), received: tasks.filter((task)=>task.received_at), entities, permissions:user.permissions.filter((code)=>code.startsWith("marketing.")) };
+  const completed = tasks.filter((task)=>task.status==='completed' && task.completed_at);
+  return {
+    ok:true,
+    version,
+    required:tasks.filter((task)=>!task.received_at && task.status!=='completed'),
+    received:tasks.filter((task)=>task.received_at && task.status!=='completed'),
+    completed,
+    entities,
+    permissions:user.permissions.filter((code)=>code.startsWith("marketing.")),
+  };
 }
 
 async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
@@ -622,8 +639,8 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,cam.campaign_date,cam.campaign_type,cam.objective,cam.required_from_content,
       coalesce(cam.publish_start,ag.publish_start) as campaign_start,coalesce(cam.publish_end,ag.publish_end) as campaign_end,
       tt.task_no,tt.status as template_status,tt.progress as template_progress,tt.due_on as template_due_on,tt.department_note as template_department_note,tt.admin_note,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,
-      ff.original_name as final_file_name
-    from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
+      ff.original_name as final_file_name,done_by.full_name as completed_by_name
+    from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join core.users done_by on done_by.id=t.completed_by left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id
     where t.id=${id}::uuid and t.is_deleted=false
@@ -650,6 +667,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
       canDownloadFile:hasPermission(user,"marketing.file.download"),
+      canCompleteTask:task.assigned_to===user.id || task.paired_content_user_id===user.id || canViewAllTasks(user),
     }
   };
 }
@@ -828,7 +846,7 @@ async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
     await sql.begin(async tx=>{
       await tx`insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name) values(${templateId}::uuid,'unapproved',${note},${tx.json(dbJson(template))},${tx.json({status:'not_started',fileId:null})},${user.id}::uuid,${user.fullName})`;
       await tx`update marketing.task_templates set status='not_started',progress=0,admin_note=${note},template_data='{}'::jsonb,approved_data='{}'::jsonb,file_id=null,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${templateId}::uuid`;
-      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false`;
+      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,completed_by=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false`;
       await tx`delete from marketing.task_action_progress where task_id in (select id from marketing.tasks where task_template_id=${templateId}::uuid and task_kind='execution' and is_deleted=false)`;
     });
     await recalculateProgress(sql,template.source_type,template.source_id);
@@ -851,8 +869,9 @@ async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
 }
 async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId),actionId=clean(body.actionId),completed=bool(body.completed);
-  const[record]=await sql<any[]>`select t.id::text,t.source_type,t.source_id::text,t.assigned_to::text,a.admin_only,tt.status as template_status from marketing.tasks t join marketing.assignment_actions a on a.id=${actionId}::uuid left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid and t.is_deleted=false`;
+  const[record]=await sql<any[]>`select t.id::text,t.source_type,t.source_id::text,t.assigned_to::text,t.status as task_status,a.admin_only,tt.status as template_status from marketing.tasks t join marketing.assignment_actions a on a.id=${actionId}::uuid left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid and t.is_deleted=false`;
   if(!record)throw new Error("الإجراء أو التاسك غير موجود");
+  if(record.task_status==='completed')throw new Error("التاسك منتهي ولا يمكن تعديل إجراءاته");
   if(record.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
   const actionPermission=record.admin_only?"marketing.assignment_action.admin":"marketing.assignment_action.execute";
   if(!hasPermission(user,actionPermission))throw new Error(record.admin_only?"هذا الإجراء يحتاج صلاحية إجراء إداري":"لا توجد صلاحية لتنفيذ إجراء التكليف");
@@ -860,10 +879,32 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   await sql`insert into marketing.task_action_progress(task_id,action_id,completed,completed_by,completed_at) values(${taskId}::uuid,${actionId}::uuid,${completed},${completed?sql`${user.id}::uuid`:null},${completed?sql`now()`:null}) on conflict(task_id,action_id) do update set completed=excluded.completed,completed_by=excluded.completed_by,completed_at=excluded.completed_at`;
   const[sum]=await sql<any[]>`select coalesce(sum(a.percentage) filter(where p.completed),0)::float as progress,count(a.id)::int as actions from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${taskId}::uuid where a.department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and a.is_active=true`;
   const progress=Math.min(100,numberValue(sum?.progress));
-  await sql`update marketing.tasks set progress=${progress},status=case when ${progress}>=100 then 'completed' when ${progress}>0 then 'in_progress' when received_at is not null then 'received' else 'required' end,completed_at=case when ${progress}>=100 then now() else null end,updated_at=now() where id=${taskId}::uuid`;
+  await sql`update marketing.tasks set progress=${progress},status=case when ${progress}>=100 then 'ready_to_complete' when ${progress}>0 then 'in_progress' when received_at is not null then 'received' else 'required' end,completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
   await recalculateProgress(sql,record.source_type,record.source_id);
   return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
 }
+async function completeTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  if(!taskId)throw new Error("رقم التاسك مطلوب");
+  const[task]=await sql<any[]>`
+    select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.status,t.progress::float,t.received_at,
+      t.assigned_to::text,t.paired_content_user_id::text
+    from marketing.tasks t
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if(!task)throw new Error("التاسك غير موجود");
+  if(task.task_kind!=='execution')throw new Error("إنهاء التاسك متاح للتاسكات التنفيذية فقط");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لإنهاء التاسك");
+  const assignedUser=task.assigned_to===user.id || task.paired_content_user_id===user.id;
+  if(!assignedUser&&!canViewAllTasks(user))throw new Error("لا توجد صلاحية لإنهاء هذا التاسك");
+  if(task.status==='completed')return{ok:true,message:"التاسك موجود بالفعل ضمن التاسكات المنتهية"};
+  if(!task.received_at)throw new Error("يجب استلام التاسك أولًا");
+  if(numberValue(task.progress)<100)throw new Error("لا يمكن إنهاء التاسك قبل وصول نسبة الإنجاز إلى 100%");
+  await sql`update marketing.tasks set status='completed',completed_at=now(),completed_by=${user.id}::uuid,updated_at=now() where id=${taskId}::uuid`;
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:"تم إنهاء التاسك ونقله إلى قائمة التاسكات المنتهية"};
+}
+
 async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId),fileId=clean(body.fileId);
   const task=await requireFinalFileUploadAccess(sql,user,taskId);
@@ -872,7 +913,7 @@ async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لاستخدام هذا الملف");
   await sql`update marketing.tasks set final_file_id=${fileId}::uuid,updated_at=now() where id=${taskId}::uuid`;
   const[count]=await sql<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and is_active=true`;
-  if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='completed',completed_at=now() where id=${taskId}::uuid`;
+  if(Number(count?.count||0)===0)await sql`update marketing.tasks set progress=100,status='ready_to_complete',completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
   await recalculateProgress(sql,task.source_type,task.source_id);
   return{ok:true,message:"تم رفع الملف النهائي"};
 }
@@ -1474,6 +1515,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='upload_template')result=await uploadTemplate(sql,body,user);
     else if(action==='review_template')result=await reviewTemplate(sql,body,user);
     else if(action==='toggle_task_action')result=await toggleTaskAction(sql,body,user);
+    else if(action==='complete_task')result=await completeTask(sql,body,user);
     else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);

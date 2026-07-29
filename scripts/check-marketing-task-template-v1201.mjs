@@ -5,6 +5,7 @@ const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const templateExcel = read("src/marketing/templateExcel.ts");
 const taskModal = read("src/marketing/components/TaskDetailModal.tsx");
+const presentation = read("src/marketing/components/TaskTemplatePresentation.tsx");
 const api = read("src/marketing/api.ts");
 const marketingApi = read("server/marketing/index.ts");
 const gateway = read("server/_api-permissions.ts");
@@ -20,7 +21,7 @@ const checks = [
   ["XLSX parser used", templateExcel.includes("readXlsx(file)")],
   ["full-screen task class", taskModal.includes("marketing-task-modal-fullscreen")],
   ["xlsx upload only", taskModal.includes('accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"')],
-  ["large main script editor", taskModal.includes('return "marketing-writer-field full script"') && css.includes("min-height: 330px")],
+  ["structured main script presentation", presentation.includes("marketing-template-scene-grid") && presentation.includes("marketing-template-script-editor") && css.includes(".marketing-template-scene-grid")],
   ["assignment actions are buttons", taskModal.includes("marketing-action-button") && !taskModal.includes('type="checkbox"')],
   ["action button styles reach the portaled modal", css.includes(".marketing-task-modal-fullscreen .marketing-action-button") && !css.includes(".marketing-page .marketing-action-button")],
   ["full viewport modal", css.includes("height: 100dvh") && css.includes("width: 100vw")],

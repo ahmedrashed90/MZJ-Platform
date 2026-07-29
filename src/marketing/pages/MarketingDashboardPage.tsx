@@ -5,10 +5,13 @@ import {
   CaretUp,
   CheckCircle,
   ClockCountdown,
+  ListChecks,
+  MagnifyingGlass,
   PaperPlaneTilt,
   Receipt,
   UserCircle,
 } from "@phosphor-icons/react";
+import { Modal } from "../../components/Modal";
 import { marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { TaskDetailModal } from "../components/TaskDetailModal";
@@ -73,13 +76,18 @@ function DashboardTaskCard({
   onReceive?: () => void;
   showReceive?: boolean;
 }) {
-  const statusLabel = templateStatusLabel(task.template_status);
+  const statusLabel = task.status === "completed"
+    ? "منتهي"
+    : task.status === "ready_to_complete"
+      ? "جاهز للإنهاء"
+      : templateStatusLabel(task.template_status);
+  const statusClass = task.status === "completed" || task.status === "ready_to_complete" ? task.status : task.template_status || "not_started";
   const progress = taskProgress(task);
   const showContentWriter = Boolean(task.content_user_name) && !sameAssignedUser(task);
 
   return <article className="marketing-dashboard-task-card">
     <div className="marketing-dashboard-task-top">
-      <span className={`marketing-dashboard-task-badge status-${task.template_status || "not_started"}`}>{statusLabel || `${taskKindLabel(task)} - ${task.department_name || "القسم"}`}</span>
+      <span className={`marketing-dashboard-task-badge status-${statusClass}`}>{statusLabel || `${taskKindLabel(task)} - ${task.department_name || "القسم"}`}</span>
       <strong>{task.creative_name || task.title || "تاسك"}</strong>
     </div>
     <p className="marketing-dashboard-task-code">{task.campaign_code || task.source_name || "—"}</p>
@@ -112,8 +120,10 @@ function DashboardTaskCard({
 }
 
 export function MarketingDashboardPage() {
-  const [data, setData] = useState<any>({ required: [], received: [], entities: [] });
+  const [data, setData] = useState<any>({ required: [], received: [], completed: [], entities: [] });
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [completedOpen, setCompletedOpen] = useState(false);
+  const [completedSearch, setCompletedSearch] = useState("");
   const [expandedRequired, setExpandedRequired] = useState<string[]>([]);
   const [expandedEntities, setExpandedEntities] = useState<string[]>([]);
   const [expandedReadinessDepartments, setExpandedReadinessDepartments] = useState<string[]>([]);
@@ -210,7 +220,26 @@ export function MarketingDashboardPage() {
     [data.entities, receivedBySource],
   );
 
-  return <MarketingPage title="الداش بورد" description="متابعة المطلوب وجاهزية الحملات والأجندات داخل سيستم التسويق.">
+  const completedTasks = useMemo(() => {
+    const query = completedSearch.trim().toLocaleLowerCase("ar");
+    const rows = Array.isArray(data.completed) ? data.completed : [];
+    if (!query) return rows;
+    return rows.filter((task: any) => [
+      task.title,
+      task.creative_name,
+      task.source_name,
+      task.campaign_code,
+      task.department_name,
+      task.assigned_name,
+      task.completed_by_name,
+    ].some((value) => String(value || "").toLocaleLowerCase("ar").includes(query)));
+  }, [data.completed, completedSearch]);
+
+  return <MarketingPage
+    title="الداش بورد"
+    description="متابعة المطلوب وجاهزية الحملات والأجندات داخل سيستم التسويق."
+    actions={<button type="button" className="marketing-completed-tasks-trigger" onClick={() => setCompletedOpen(true)}><ListChecks size={20} weight="duotone" /><span>التاسكات المنتهية</span><b>{(data.completed || []).length.toLocaleString("ar-SA")}</b></button>}
+  >
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
     {loading ? <div className="marketing-empty">جاري تحميل الداش بورد...</div> : <div className="marketing-kanban marketing-dashboard-workflow">
       <section className="marketing-kanban-column required marketing-dashboard-column">
@@ -306,6 +335,23 @@ export function MarketingDashboardPage() {
       <section className="marketing-kanban-column publishing"><header><div><PaperPlaneTilt size={23} /><h2>قسم النشر</h2></div><b>{data.entities.filter((item: any) => item.status === "publishing").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><PaperPlaneTilt size={36} weight="duotone" /><span>قسم النشر سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
       <section className="marketing-kanban-column archive"><header><div><Archive size={23} /><h2>قسم الأرشيف</h2></div><b>{data.entities.filter((item: any) => item.status === "archived").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><Archive size={36} weight="duotone" /><span>قسم الأرشيف سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
     </div>}
+    <Modal open={completedOpen} title="التاسكات المنتهية" subtitle="كل التاسكات التي تم إنهاؤها يدويًا بعد وصولها إلى 100%." onClose={() => setCompletedOpen(false)} className="marketing-completed-tasks-modal">
+      <div className="marketing-completed-tasks-content">
+        <label className="marketing-completed-tasks-search"><MagnifyingGlass size={19} /><input value={completedSearch} onChange={(event) => setCompletedSearch(event.target.value)} placeholder="بحث باسم الحملة أو التاسك أو المسؤول..." /></label>
+        <div className="marketing-completed-tasks-summary"><span>إجمالي التاسكات المنتهية</span><strong>{(data.completed || []).length.toLocaleString("ar-SA")}</strong></div>
+        <div className="marketing-completed-tasks-list">
+          {completedTasks.length ? completedTasks.map((task: any) => <button type="button" key={task.id} onClick={() => { setCompletedOpen(false); setTaskId(task.id); }}>
+            <div className="marketing-completed-task-title"><CheckCircle size={21} weight="fill" /><span><strong>{task.creative_name || task.title || "تاسك"}</strong><small>{task.source_name || task.campaign_code || "—"}</small></span></div>
+            <div className="marketing-completed-task-meta">
+              <span><small>القسم</small><strong>{task.department_name || "—"}</strong></span>
+              <span><small>المسؤول</small><strong>{task.assigned_name || "—"}</strong></span>
+              <span><small>أنهى التاسك</small><strong>{task.completed_by_name || "—"}</strong></span>
+              <span><small>تاريخ الإنهاء</small><strong>{task.completed_at ? new Date(task.completed_at).toLocaleString("ar-SA") : "—"}</strong></span>
+            </div>
+          </button>) : <div className="marketing-empty small">لا توجد تاسكات منتهية مطابقة للبحث.</div>}
+        </div>
+      </div>
+    </Modal>
     <TaskDetailModal taskId={taskId} onClose={() => setTaskId(null)} onChanged={() => void load(true)} />
   </MarketingPage>;
 }
