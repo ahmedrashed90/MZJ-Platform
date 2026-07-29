@@ -29,6 +29,11 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number) 
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
+function reportSoldQuantity(value: unknown) {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
@@ -66,20 +71,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       branch_row.name as report_branch_name,
       src.name as catalog_source_name,
       coalesce(src.report_group,'other') as source_report_group,
-      (coalesce(primary_department.code,'')='call_center') as assigned_is_call_center,
-      coalesce((
-        select sum(greatest(
-          coalesce((select count(*) from tracking.order_vehicles tov where tov.order_id=so.tracking_order_id),0),
-          coalesce((
-            select sum(greatest(coalesce(sov.qty,1),1))
-            from integrations.erpnext_sales_order_vehicles sov
-            where sov.sales_order_id=so.id and coalesce(sov.is_cancelled,false)=false
-          ),0),
-          1
-        ))
-        from integrations.erpnext_sales_orders so
-        where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
-      ),0)::int as erp_vehicle_sales_count
+      (coalesce(primary_department.code,'')='call_center') as assigned_is_call_center
     from crm.leads l
     left join lateral (
       select so.platform_user_id,so.platform_user_name,so.platform_department_code,so.platform_branch_code
@@ -197,6 +189,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     for (const lead of detailRows) {
       lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
+      lead.sold_quantity = norm(lead.status_label) === norm("تم البيع") ? reportSoldQuantity(lead.sold_quantity) : null;
       delete lead.catalog_source_name;
     }
     return response.status(200).json({ ok: true, rows: detailRows, total: Number(countRow?.count || 0), page: detailPage, pageSize: detailPageSize });
@@ -209,7 +202,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.registered_at,l.created_at,l.updated_at,
       l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
       l.assigned_is_call_center,l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
-      l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group,l.erp_vehicle_sales_count
+      l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group
     from effective_leads l
     where l.is_deleted=false
       and ${filtersSql}
@@ -218,6 +211,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   for (const lead of leads) {
     lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
+    lead.sold_quantity = norm(lead.status_label) === norm("تم البيع") ? reportSoldQuantity(lead.sold_quantity) : null;
     delete lead.catalog_source_name;
   }
 
@@ -236,12 +230,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const count = (set: Set<string>) => rows.reduce((total, lead) => total + (set.has(norm(lead.status_label)) ? 1 : 0), 0);
     const soldCount = rows.reduce((total, lead) => {
       if (!salesNum.has(norm(lead.status_label)) || lead.assigned_is_call_center === true) return total;
-      const manualQuantity = Number(lead.sold_quantity);
-      const erpQuantity = Number(lead.erp_vehicle_sales_count);
-      const quantity = Number.isFinite(manualQuantity) && manualQuantity >= 1
-        ? manualQuantity
-        : Number.isFinite(erpQuantity) && erpQuantity >= 1 ? erpQuantity : 1;
-      return total + Math.max(1, Math.floor(quantity));
+      return total + reportSoldQuantity(lead.sold_quantity);
     }, 0);
     const marketingDen = quality.marketing_denominator_mode === "statuses" ? count(marketingDenStatuses) : rows.length;
     const salesDen = quality.sales_denominator_mode === "all" ? rows.length : count(salesDenStatuses);

@@ -17,8 +17,8 @@ expect("server/operations/index.ts", "operations_admin_email", "operations admin
 expect("server/operations/index.ts", "operations_admin_name", "operations administrator explicit webhook name");
 expect("src/operations/components/MovementHistoryTable.tsx", "إداري العمليات", "operations administrator movement column");
 expect("src/operations/stateNote.ts", "replace(/^مباع\\s+تحت\\s+التسليم", "legacy archive note cleanup");
-expect("server/crm/reports.ts", "erp_vehicle_sales_count", "vehicle-aware sold metric");
-expect("server/crm/reports.ts", "tracking.order_vehicles", "tracking vehicle source of truth");
+expect("server/crm/reports.ts", "reportSoldQuantity", "canonical CRM sold quantity metric");
+expect("server/crm/reports.ts", "return total + reportSoldQuantity(lead.sold_quantity)", "CRM report totals match customer sold quantities");
 expect("server/crm/kpi.ts", "tracking.order_vehicles", "vehicle-aware KPI sales count");
 
 const soldMetric = (rows) => rows.reduce((total, lead) => {
