@@ -126,8 +126,8 @@ export function CrmReportsPage() {
     setPopupTotal(0);
   }
 
-  const salesUsers = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.some((code) => ["cash_sales", "finance_sales", "customer_service"].includes(code))), [meta]);
-  const callCenterUsers = useMemo(() => (meta?.users || []).filter((user) => user.department_codes.includes("call_center")), [meta]);
+  const salesUsers = useMemo(() => (meta?.users || []).filter((user) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(user.primary_department_code || "") || (!user.primary_department_code && user.department_codes.some((code) => ["cash_sales", "finance_sales", "wholesale", "wholesale_sales", "customer_service"].includes(code)))), [meta]);
+  const callCenterUsers = useMemo(() => (meta?.users || []).filter((user) => user.primary_department_code === "call_center" || (!user.primary_department_code && user.department_codes.includes("call_center"))), [meta]);
   const sections: ReportSection[] = [
     { title: "مصادر التسويق الرقمي", rows: data?.digitalSources || [], firstColumn: "المصدر", description: "المصادر الرقمية المصنفة من إعدادات المصدر، بما فيها حاسبة التقسيط واتصال الرقم الموحد.", countLabel: "إجمالي المصادر" },
     { title: "مصادر التسويق المباشر", rows: data?.directSources || [], firstColumn: "المصدر", description: "المصادر المباشرة المعتمدة في قاعدة البيانات بدون تصنيف نصي داخل الواجهة.", countLabel: "إجمالي المصادر" },
@@ -213,7 +213,7 @@ export function CrmReportsPage() {
             <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
           </div>
           <div className="crm-report-filter-group organization">
-            <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
+            <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="wholesale">قسم الجملة</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
             <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
           </div>
         </div>

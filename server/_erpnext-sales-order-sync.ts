@@ -50,6 +50,13 @@ function isSupportedCrmDepartment(codeValue: unknown, nameValue: unknown) {
     || identity.includes("جملة")
     || identity.includes("wholesale");
 }
+
+function allowsBranchlessCrmSales(codeValue: unknown, nameValue: unknown) {
+  const identity = `${clean(codeValue).toLowerCase()} ${clean(nameValue).toLowerCase()}`;
+  return ["wholesale", "wholesale_sales"].includes(clean(codeValue).toLowerCase())
+    || identity.includes("جملة")
+    || identity.includes("wholesale");
+}
 function paymentType(serviceKey: string) {
   if (serviceKey === "finance") return "تمويل";
   if (serviceKey === "service") return "خدمة عملاء";
@@ -107,7 +114,12 @@ async function resolvePlatformUser(erpUserId: string): Promise<{
   if (!candidate) return { status: "user_not_mapped", mapping: null, candidate: null };
   if (!clean(candidate.department_code)) return { status: "department_not_configured", mapping: null, candidate };
   if (!isSupportedCrmDepartment(candidate.department_code, candidate.department_name)) return { status: "unsupported_department", mapping: null, candidate };
-  if (!clean(candidate.branch_code)) return { status: "platform_branch_not_configured", mapping: null, candidate };
+  if (allowsBranchlessCrmSales(candidate.department_code, candidate.department_name)) {
+    candidate.branch_code = null;
+    candidate.branch_name = null;
+  } else if (!clean(candidate.branch_code)) {
+    return { status: "platform_branch_not_configured", mapping: null, candidate };
+  }
   return { status: "linked", mapping: candidate, candidate };
 }
 

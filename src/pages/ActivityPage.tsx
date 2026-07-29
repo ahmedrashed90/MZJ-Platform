@@ -7,6 +7,7 @@ import {
   MagnifyingGlass,
   Pulse,
   ShieldWarning,
+  Trash,
   UserCircle,
   UsersThree,
 } from "@phosphor-icons/react";
@@ -24,14 +25,15 @@ type ActivityRow = {
   action: string;
   entity_type: string | null;
   entity_id: string | null;
-  before_data: unknown;
-  after_data: unknown;
   ip_address: string | null;
   user_agent: string | null;
   result: string | null;
   rejection_reason: string | null;
   request_id: string | null;
   created_at: string;
+  activity_title: string;
+  activity_description: string;
+  activity_details: Array<{ label: string; value: string }>;
 };
 
 type ActivityResponse = {
@@ -42,6 +44,7 @@ type ActivityResponse = {
   pageSize: number;
   stats: { today: number; failed: number; activeUsers: number; pageViews: number };
   filters: { systems: string[]; actions: string[] };
+  canDelete: boolean;
   error?: string;
 };
 
@@ -72,7 +75,7 @@ const actionLabels: Record<string, string> = {
   vehicle_updated: "تعديل سيارة",
   vehicle_deleted: "حذف سيارة",
   operation_location_saved: "حفظ مكان سيارة",
-  operation_status_saved: "حفظ حالة سيارة",
+  operation_status_saved: "حفظ إعداد حالة سيارة",
   create_campaign: "إنشاء حملة",
   create_agenda: "إنشاء أجندة",
   receive_task: "استلام تاسك",
@@ -82,6 +85,8 @@ const actionLabels: Record<string, string> = {
   archive_entity: "أرشفة سجل",
   delete_entity: "حذف سجل",
   permission_denied: "رفض صلاحية",
+  erpnext_vehicle_status_synced: "مزامنة حالة سيارة من NEXT ERP",
+  activity_log_deleted: "مسح سجل النشاط",
 };
 
 function labelAction(value: string) {
@@ -106,15 +111,6 @@ function queryString(values: Record<string, string | number>) {
   return query.toString() ? `?${query.toString()}` : "";
 }
 
-function JsonBlock({ title, value }: { title: string; value: unknown }) {
-  if (value === null || value === undefined) return null;
-  return (
-    <section className="activity-json-block">
-      <h3>{title}</h3>
-      <pre>{JSON.stringify(value, null, 2)}</pre>
-    </section>
-  );
-}
 
 export function ActivityPage() {
   const [rows, setRows] = useState<ActivityRow[]>([]);
@@ -124,6 +120,10 @@ export function ActivityPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<ActivityRow | null>(null);
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteRange, setDeleteRange] = useState({ dateFrom: "", dateTo: "" });
   const [stats, setStats] = useState({ today: 0, failed: 0, activeUsers: 0, pageViews: 0 });
   const [available, setAvailable] = useState({ systems: [] as string[], actions: [] as string[] });
   const [filters, setFilters] = useState({ search: "", system: "", action: "", result: "", actor: "", dateFrom: "", dateTo: "" });
@@ -143,6 +143,7 @@ export function ActivityPage() {
       setTotal(Number(payload.total || 0));
       setStats(payload.stats || { today: 0, failed: 0, activeUsers: 0, pageViews: 0 });
       setAvailable(payload.filters || { systems: [], actions: [] });
+      setCanDelete(Boolean(payload.canDelete));
     } catch (failure) {
       setRows([]);
       setTotal(0);
@@ -166,11 +167,45 @@ export function ActivityPage() {
     setPage(1);
   }
 
+  async function deleteActivityRange() {
+    if (!deleteRange.dateFrom && !deleteRange.dateTo) {
+      setError("حدد تاريخ البداية أو تاريخ النهاية لمسح سجل النشاط");
+      return;
+    }
+    const rangeLabel = deleteRange.dateFrom && deleteRange.dateTo
+      ? `من ${deleteRange.dateFrom} إلى ${deleteRange.dateTo}`
+      : deleteRange.dateFrom ? `من ${deleteRange.dateFrom}` : `حتى ${deleteRange.dateTo}`;
+    if (!window.confirm(`سيتم مسح سجل النشاط ${rangeLabel}. هل تريد المتابعة؟`)) return;
+    setDeleting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/activity", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(deleteRange),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; deletedCount?: number };
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "تعذر مسح سجل النشاط");
+      setDeleteOpen(false);
+      setDeleteRange({ dateFrom: "", dateTo: "" });
+      setPage(1);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر مسح سجل النشاط");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="module-page activity-page">
       <header className="module-page-head activity-page-head">
         <div><h1>سجل النشاط</h1><p>سجل مركزي لحركة المستخدمين والإجراءات والتغييرات داخل جميع أنظمة المنصة.</p></div>
-        <button type="button" className="activity-refresh" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />تحديث السجل</button>
+        <div className="activity-head-actions">
+          {canDelete ? <button type="button" className="activity-delete" onClick={() => { setDeleteRange({ dateFrom: applied.dateFrom, dateTo: applied.dateTo }); setDeleteOpen(true); }}><Trash size={18} />مسح سجل النشاط</button> : null}
+          <button type="button" className="activity-refresh" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />تحديث السجل</button>
+        </div>
       </header>
 
       <section className="activity-stats">
@@ -230,11 +265,29 @@ export function ActivityPage() {
               <article><small>السجل</small><strong>{selected.entity_type || "—"}</strong><span>{selected.entity_id || "—"}</span></article>
               <article><small>عنوان IP</small><strong dir="ltr">{selected.ip_address || "—"}</strong><span>{selected.request_id || "—"}</span></article>
             </div>
-            <JsonBlock title="البيانات قبل الإجراء" value={selected.before_data} />
-            <JsonBlock title="البيانات بعد الإجراء" value={selected.after_data} />
+            <section className="activity-summary-card">
+              <span>النشاط الذي تم داخل السيستم</span>
+              <h3>{selected.activity_title || labelAction(selected.action)}</h3>
+              <p>{selected.activity_description || "تم تسجيل الإجراء داخل المنصة."}</p>
+            </section>
+            {selected.activity_details?.length ? <section className="activity-action-details">
+              <h3>تفاصيل النشاط</h3>
+              <div>{selected.activity_details.map((item) => <article key={`${item.label}-${item.value}`}><small>{item.label}</small><strong>{item.value}</strong></article>)}</div>
+            </section> : null}
             {selected.user_agent ? <section className="activity-user-agent"><ClockCounterClockwise size={18} /><div><strong>الجهاز والمتصفح</strong><span dir="ltr">{selected.user_agent}</span></div></section> : null}
           </div>
         ) : null}
+      </Modal>
+
+      <Modal open={deleteOpen} title="مسح سجل النشاط" subtitle="سيتم حذف السجلات الموجودة داخل المدة المحددة فقط" onClose={() => { if (!deleting) setDeleteOpen(false); }} className="activity-delete-modal">
+        <div className="activity-delete-content">
+          <div className="activity-delete-range">
+            <label><span>من تاريخ</span><input type="date" value={deleteRange.dateFrom} onChange={(event) => setDeleteRange((current) => ({ ...current, dateFrom: event.target.value }))} /></label>
+            <label><span>إلى تاريخ</span><input type="date" value={deleteRange.dateTo} onChange={(event) => setDeleteRange((current) => ({ ...current, dateTo: event.target.value }))} /></label>
+          </div>
+          <p>لن يتم حذف أي سجل خارج الفترة المحددة، وسيتم تسجيل عملية المسح نفسها داخل سجل النشاط.</p>
+          <div className="activity-delete-actions"><button type="button" className="secondary" disabled={deleting} onClick={() => setDeleteOpen(false)}>إلغاء</button><button type="button" className="danger" disabled={deleting || (!deleteRange.dateFrom && !deleteRange.dateTo)} onClick={() => void deleteActivityRange()}><Trash size={17} />{deleting ? "جاري المسح..." : "مسح السجلات المحددة"}</button></div>
+        </div>
       </Modal>
     </div>
   );

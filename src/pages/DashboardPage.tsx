@@ -279,19 +279,39 @@ function isToday(value: unknown) {
   return riyadhDateKey(value) === riyadhDateKey(new Date());
 }
 
+function defaultDashboardRange() {
+  return { from: riyadhDateKey(new Date(Date.now() - 6 * 86400000)), to: riyadhDateKey(new Date()) };
+}
+
+function dashboardRangeLabel(range: { from: string; to: string }) {
+  const defaultRange = defaultDashboardRange();
+  if (range.from === defaultRange.from && range.to === defaultRange.to) return "آخر 7 أيام";
+  return `${range.from} — ${range.to}`;
+}
+
 export function DashboardPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [operationsSelection, setOperationsSelection] = useState<DashboardOperationsSelection | null>(null);
   const [loading, setLoading] = useState(true);
+  const [appliedRange, setAppliedRange] = useState(defaultDashboardRange);
+  const [draftRange, setDraftRange] = useState(defaultDashboardRange);
+  const [dateOpen, setDateOpen] = useState(false);
   const detailsRequestId = useRef(0);
+  useEscapeToClose(dateOpen, () => setDateOpen(false));
 
   useEffect(() => {
     let active = true;
-    fetch("/api/dashboard", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((payload: DashboardData) => {
+    setLoading(true);
+    const params = new URLSearchParams(appliedRange);
+    fetch(`/api/dashboard?${params.toString()}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.error || "تعذر تحميل الداش بورد");
+        return payload as DashboardData;
+      })
+      .then((payload) => {
         if (active) setData(payload);
       })
       .catch(() => {
@@ -301,7 +321,7 @@ export function DashboardPage() {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, []);
+  }, [appliedRange.from, appliedRange.to]);
 
   const current = data;
   const pieData = useMemo(() => {
@@ -317,7 +337,10 @@ export function DashboardPage() {
 
   async function allVisibleCrmLeads() {
     const departments = ["cash", "finance", "service"] as const;
-    const results = await Promise.all(departments.map((department) => crmFetch<{ ok: boolean; leads: CrmLead[] }>(`/api/crm/dashboard?department=${department}`)));
+    const results = await Promise.all(departments.map((department) => {
+      const params = new URLSearchParams({ department, from: appliedRange.from, to: appliedRange.to, includeClosed: "1" });
+      return crmFetch<{ ok: boolean; leads: CrmLead[] }>(`/api/crm/dashboard?${params.toString()}`);
+    }));
     const unique = new Map<string, CrmLead>();
     results.flatMap((result) => result.leads || []).forEach((lead) => unique.set(lead.id, lead));
     return [...unique.values()];
@@ -341,7 +364,7 @@ export function DashboardPage() {
     const archived = status === "completed";
     setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
     try {
-      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ status, archived, limit: 2000 })}`);
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ status, archived, limit: 2000, from: appliedRange.from, to: appliedRange.to })}`);
       if (detailsRequestId.current !== requestId) return;
       setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: payload.orders || [] });
     } catch (failure) {
@@ -361,6 +384,24 @@ export function DashboardPage() {
   const marketing = current?.marketing;
   const tracking = current?.tracking;
   const operations = current?.operations;
+  const rangeInvalid = !draftRange.from || !draftRange.to || draftRange.from > draftRange.to;
+
+  function applyDashboardRange() {
+    if (rangeInvalid) return;
+    setAppliedRange({ ...draftRange });
+    setDateOpen(false);
+    setDetails(null);
+    setOperationsSelection(null);
+  }
+
+  function resetDashboardRange() {
+    const next = defaultDashboardRange();
+    setDraftRange(next);
+    setAppliedRange(next);
+    setDateOpen(false);
+    setDetails(null);
+    setOperationsSelection(null);
+  }
 
   return (
     <>
@@ -371,8 +412,21 @@ export function DashboardPage() {
             <p>نظرة عامة على أداء جميع الأنظمة</p>
           </div>
           <div className="dashboard-controls">
-            <button className="icon-button" type="button" aria-label="الفلاتر"><SlidersHorizontal size={20} /></button>
-            <button className="date-button" type="button"><CalendarBlank size={19} /> آخر 7 أيام</button>
+            <button className="icon-button" type="button" aria-label="اختيار مدة الداش بورد" onClick={() => { setDraftRange(appliedRange); setDateOpen((value) => !value); }}><SlidersHorizontal size={20} /></button>
+            <div className="dashboard-date-filter">
+              <button className="date-button" type="button" onClick={() => { setDraftRange(appliedRange); setDateOpen((value) => !value); }} aria-expanded={dateOpen}>
+                <CalendarBlank size={19} /> {dashboardRangeLabel(appliedRange)}
+              </button>
+              {dateOpen ? <div className="dashboard-date-popover">
+                <header><strong>مدة بيانات الداش بورد</strong><span>اختر تاريخ البداية والنهاية</span></header>
+                <div className="dashboard-date-fields">
+                  <label><span>من تاريخ</span><input type="date" value={draftRange.from} max={draftRange.to || undefined} onChange={(event) => setDraftRange((currentRange) => ({ ...currentRange, from: event.target.value }))} /></label>
+                  <label><span>إلى تاريخ</span><input type="date" value={draftRange.to} min={draftRange.from || undefined} onChange={(event) => setDraftRange((currentRange) => ({ ...currentRange, to: event.target.value }))} /></label>
+                </div>
+                {rangeInvalid ? <p>تأكد أن تاريخ البداية يسبق تاريخ النهاية.</p> : null}
+                <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>آخر 7 أيام</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
+              </div> : null}
+            </div>
           </div>
         </header>
 

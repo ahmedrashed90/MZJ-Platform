@@ -3,6 +3,11 @@ import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLa
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
+function validDate(value: unknown) {
+  const text = clean(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
@@ -13,6 +18,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const q = clean(request.query.q);
   const branch = clean(request.query.branch);
   const status = clean(request.query.status);
+  const requestedFrom = clean(request.query.from);
+  const requestedTo = clean(request.query.to);
+  const from = validDate(requestedFrom);
+  const to = validDate(requestedTo);
+  if ((requestedFrom && !from) || (requestedTo && !to)) return response.status(400).json({ ok: false, error: "صيغة التاريخ غير صحيحة" });
+  if (from && to && from > to) return response.status(400).json({ ok: false, error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية" });
+  const includeClosed = ["1", "true", "yes"].includes(clean(request.query.includeClosed).toLowerCase());
 
   const customerFields = await getCustomerFieldDefinitions();
 
@@ -52,14 +64,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
         or (l.department_code = any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code = any(${scope.branchCodes}::text[])))
       )
       and (
-        (${department} = 'cash' and l.department_code = 'cash_sales') or
+        (${department} = 'cash' and l.department_code in ('cash_sales','wholesale','wholesale_sales')) or
         (${department} = 'finance' and l.department_code in ('finance_sales','call_center')) or
         (${department} = 'service' and l.department_code = 'customer_service')
       )
-      and not (
-        (l.department_code in ('cash_sales','finance_sales','call_center') and l.status_label in ('تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'))
-        or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
+      and (
+        ${includeClosed}::boolean
+        or not (
+          (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label in ('تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'))
+          or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
+        )
       )
+      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})

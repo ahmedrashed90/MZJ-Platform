@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "./_db.js";
 import { requireUser } from "./_auth.js";
 import { hasPermission, logSecurityEvent } from "./_access-control.js";
+import { buildActivityDetails } from "./_activity-details.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -49,10 +50,39 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({ ok: true });
   }
 
+  const canDeleteActivity = hasPermission(user, "platform.superadmin");
+  const sql = getSql();
+
+  if (request.method === "DELETE") {
+    if (!canDeleteActivity) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لمسح سجل النشاط" });
+    const payload = bodyObject(request);
+    const dateFrom = validDate(clean(payload.dateFrom));
+    const dateTo = validDate(clean(payload.dateTo));
+    if (!dateFrom && !dateTo) return response.status(400).json({ ok: false, error: "حدد تاريخ البداية أو تاريخ النهاية لمسح السجل" });
+    if (dateFrom && dateTo && dateFrom > dateTo) return response.status(400).json({ ok: false, error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية" });
+
+    const deleted = await sql<{ id: string }[]>`
+      delete from audit.activity_log
+      where (${dateFrom}='' or created_at >= ${dateFrom || "1970-01-01"}::date)
+        and (${dateTo}='' or created_at < (${dateTo || "2999-12-31"}::date + interval '1 day'))
+      returning id::text
+    `;
+    await logSecurityEvent({
+      request,
+      user,
+      systemCode: "core",
+      pageCode: "activity",
+      permissionCode: "platform.superadmin",
+      action: "activity_log_deleted",
+      entityType: "activity_log",
+      result: "success",
+      afterData: { dateFrom: dateFrom || null, dateTo: dateTo || null, deletedCount: deleted.length },
+    });
+    return response.status(200).json({ ok: true, deletedCount: deleted.length });
+  }
+
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   if (!hasPermission(user, "platform.activity.view")) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لعرض سجل النشاط" });
-
-  const sql = getSql();
   const search = clean(request.query.search).slice(0, 160);
   const system = clean(request.query.system).slice(0, 40);
   const action = clean(request.query.action).slice(0, 100);
@@ -87,9 +117,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
         l.result,
         l.rejection_reason,
         l.request_id,
-        l.created_at
+        l.created_at,
+        ov.vin as activity_vehicle_vin,
+        ov.car_name as activity_vehicle_name,
+        ov.statement as activity_vehicle_statement,
+        ol.name as activity_location_name,
+        ovs.name as activity_current_status_name
       from audit.activity_log l
       left join core.users u on u.id=l.user_id
+      left join operations.vehicles ov on l.entity_type='vehicle' and ov.id::text=l.entity_id
+      left join operations.locations ol on ol.id=ov.location_id
+      left join operations.vehicle_statuses ovs on ovs.code=ov.status_code
       where (${search}='' or concat_ws(' ',coalesce(u.full_name,''),coalesce(l.user_email,''),coalesce(l.action,''),coalesce(l.entity_type,''),coalesce(l.entity_id,''),coalesce(l.page_code,''),coalesce(l.permission_code,'')) ilike ${like})
         and (${system}='' or l.system_code=${system})
         and (${action}='' or l.action=${action})
@@ -121,9 +159,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
     sql<{ action: string }[]>`select action from audit.activity_log where action is not null group by action order by max(created_at) desc limit 150`,
   ]);
 
+  const detailedRows = rows.map((row) => {
+    const details = buildActivityDetails(row);
+    const { before_data: _beforeData, after_data: _afterData, ...publicRow } = row;
+    return { ...publicRow, ...details };
+  });
+
   return response.status(200).json({
     ok: true,
-    rows,
+    rows: detailedRows,
     total: Number(totals[0]?.total || 0),
     stats: {
       today: Number(totals[0]?.today || 0),
@@ -137,5 +181,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     },
     page,
     pageSize,
+    canDelete: canDeleteActivity,
   });
 }

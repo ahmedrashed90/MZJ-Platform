@@ -37,6 +37,10 @@ export type CrmUserOption = {
   branch_codes: string[];
   branches: string[];
   role_codes: string[];
+  primary_department_code?: string | null;
+  primary_department_name?: string | null;
+  primary_branch_code?: string | null;
+  primary_branch_name?: string | null;
   can_receive_leads?: boolean;
 };
 

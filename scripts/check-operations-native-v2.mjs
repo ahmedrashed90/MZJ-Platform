@@ -114,7 +114,7 @@ if (/on conflict\s*\(\s*sales_order_no\s*\)/i.test(trackingIngest)) {
 }
 
 const dashboardRoute = fs.readFileSync("server/dashboard.ts", "utf8");
-if (!dashboardRoute.includes("getDashboardData(user)")) {
+if (!dashboardRoute.includes("getDashboardData(user")) {
   throw new Error("Operations V2 check failed: dashboard aggregation must apply the current user's scope");
 }
 

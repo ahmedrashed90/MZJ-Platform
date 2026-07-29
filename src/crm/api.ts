@@ -38,6 +38,8 @@ export function departmentKeyFromCode(value?: string | null) {
 }
 
 export function departmentLabel(value?: string | null) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (["wholesale", "wholesale_sales"].includes(raw) || raw.includes("جملة") || raw.includes("wholesale")) return "قسم الجملة";
   const key = departmentKeyFromCode(value);
   if (key === "finance") return "مبيعات التمويل";
   if (key === "service") return "خدمة العملاء";

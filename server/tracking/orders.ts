@@ -8,6 +8,11 @@ import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.
 import { clean, ensureVehicleStageRows, recalculateTrackingOrder } from "../_tracking-utils.js";
 import { emitTrackingNotification } from "../_notifications.js";
 
+function validDate(value: unknown) {
+  const text = clean(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+}
+
 async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<typeof requireTrackingUser>>>) {
   const access = getSystemAccess(user, "tracking");
   const unrestricted = access.dataScope === "all";
@@ -92,6 +97,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     const search = clean(request.query.search);
     const status = clean(request.query.status);
+    const requestedFrom = clean(request.query.from);
+    const requestedTo = clean(request.query.to);
+    const from = validDate(requestedFrom);
+    const to = validDate(requestedTo);
+    if ((requestedFrom && !from) || (requestedTo && !to)) return response.status(400).json({ ok: false, error: "صيغة التاريخ غير صحيحة" });
+    if (from && to && from > to) return response.status(400).json({ ok: false, error: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية" });
     const archivedOnly = ["1", "true", "yes"].includes(clean(request.query.archived).toLowerCase());
     const limit = Math.min(Math.max(Number(request.query.limit || 1000), 1), 2000);
     const pattern = `%${search}%`;
@@ -115,6 +126,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         and coalesce(o.is_archived,false)=${archivedOnly}
         and (vs.id is null or sx.id is not null)
         and (${status}='' or o.status=${status})
+        and (${from || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) >= ${from || null}::date)
+        and (${to || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) <= ${to || null}::date)
         and (
           ${search}='' or o.sales_order_no ilike ${pattern} or coalesce(o.customer_name,'') ilike ${pattern}
           or coalesce(o.customer_mobile,'') ilike ${pattern} or exists (
@@ -134,6 +147,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         count(*) filter (where coalesce(is_archived,false)=true)::int as archived
       from tracking.orders o where coalesce(is_deleted,false)=false
         and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+        and (${from || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) >= ${from || null}::date)
+        and (${to || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) <= ${to || null}::date)
     `;
     return response.status(200).json({ ok: true, orders, counts });
   }
