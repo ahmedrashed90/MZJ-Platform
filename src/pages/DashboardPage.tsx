@@ -261,9 +261,6 @@ function OperationCard({
       </header>
       <div className="operation-card-body">
         {children}
-        <div className="operation-actions">
-          <button className="view-button" type="button" onClick={onView}>عرض</button>
-        </div>
       </div>
     </section>
   );
@@ -737,7 +734,6 @@ export function DashboardPage() {
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
               </div>
-              <p className="operation-note">الإجمالي الفعلي = مخزون الفروع + الوكالة بدون (مباع تحت التسليم) و(مباع تم التسليم)</p>
               <div className="inventory-reserved-branches">
                 <strong>الحجز حسب الفروع</strong>
                 <div>{(operations?.inventory.reservedByLocation || []).map((item) => <button type="button" key={item.key} onClick={() => setOperationsSelection({ mode: "vehicles", locationCode: item.key, locationName: item.name, metric: "reserved", metricName: "حجز" })}><span>{item.name}</span><Value value={item.value} /></button>)}</div>
@@ -830,7 +826,6 @@ export function DashboardPage() {
             ])}>
               <div className="tracking-search-line">
                 <div><FileMagnifyingGlass size={19} /><span>بحث في طلبات التتبع</span></div>
-                <button type="button" onClick={() => open("جميع طلبات التتبع", [{ label: "الإجمالي", value: operations?.salesTracking.total ?? null }])}>عرض الكل</button>
               </div>
               <div className="operation-metrics-grid three-columns">
                 <OperationMetric label="طلبات لم تبدأ" value={operations?.salesTracking.notStarted ?? null} onOpen={() => void openTrackingList("طلبات لم تبدأ", "not_started")} />
