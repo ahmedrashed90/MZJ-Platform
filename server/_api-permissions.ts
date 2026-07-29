@@ -121,8 +121,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     attach_final_file: "marketing.task.final_file.upload",
     save_publish_prep: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload",
     archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
-    create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", save_connection: "marketing.connections.manage",
-    disconnect_connection: "marketing.connections.manage", migrate_connection_env: "marketing.connections.manage", create_raw_folders: "marketing.campaign.create",
+    create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
     save_user_colors: "settings.marketing.manage",
@@ -174,6 +173,8 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
   if (route.startsWith("crm/")) return crmRequirement(route, request);
   if (route === "operations") return operationsRequirement(request);
   if (route === "marketing") return marketingRequirement(request);
+  if (route === "marketing/platform-connections") return req(request.method === "GET" ? "marketing.platforms.view" : "marketing.connections.manage", "marketing", "platforms", request.method === "GET" ? "view" : "manage");
+  if (route.startsWith("marketing/platform-connections/callback/")) return null;
   if (route.startsWith("tracking/")) return trackingRequirement(route, request);
   return null;
 }

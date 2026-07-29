@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import crypto from "node:crypto";
 import { getSql } from "../_db.js";
 import { requireUser, requestIp, type SessionUser } from "../_auth.js";
 import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
@@ -10,6 +9,7 @@ import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
+import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -128,31 +128,6 @@ function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "mark
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
 function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
 function sourceTable(sourceType: string) { return sourceType === "agenda" ? "marketing.agendas" : "marketing.campaigns"; }
-function tokenKey() {
-  return crypto.createHash("sha256").update(clean(process.env.MZJ_TOKEN_ENCRYPTION_KEY || process.env.SESSION_SECRET || process.env.MZJ_SETUP_KEY || "mzj-platform-local-development-key")).digest();
-}
-function encryptToken(value: unknown) {
-  const text = clean(value); if (!text) return null;
-  const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv("aes-256-gcm", tokenKey(), iv);
-  const encrypted = Buffer.concat([cipher.update(text, "utf8"), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString("base64url");
-}
-function decryptToken(value: unknown) {
-  const text = clean(value); if (!text) return "";
-  const data = Buffer.from(text, "base64url"); const iv = data.subarray(0, 12); const tag = data.subarray(12, 28);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", tokenKey(), iv); decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data.subarray(28)), decipher.final()]).toString("utf8");
-}
-function publicConnection(row: any) {
-  return {
-    platform: row.platform, connected: Boolean(row.connected), status: row.status, state: row.state, source: row.source,
-    accountId: row.account_id || "", accountName: row.account_name || "", pageId: row.page_id || "", pageName: row.page_name || "",
-    igUserId: row.ig_user_id || "", username: row.username || "", pages: row.pages || [],
-    hasToken: Boolean(row.access_token_encrypted || row.user_access_token_encrypted || row.page_access_token_encrypted),
-    tokenStored: Boolean(row.access_token_encrypted || row.user_access_token_encrypted || row.page_access_token_encrypted),
-    connectedAtIso: row.connected_at || null, updatedAtIso: row.updated_at || null,
-  };
-}
 async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: string, entityType: string, entityId: string | null, afterData?: unknown, beforeData?: unknown, ip?: string | null) {
   await sql`insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data,ip_address) values (${user.id}::uuid,'marketing',${action},${entityType},${entityId},${beforeData ? sql.json(dbJson(beforeData)) : null},${afterData ? sql.json(dbJson(afterData)) : null},${ip || null})`;
 }
@@ -253,7 +228,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     sql<any[]>`select id::text,name,active,source,created_at from marketing.funnels where active=true order by created_at`,
   ]);
   const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
-  return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
+  return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicPlatformConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
 }
 
 async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
@@ -1044,7 +1019,7 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   return{ok:true,message:"تم حفظ تجهيز النشر"};
 }
 
-async function graphRequest(path:string,method:"GET"|"POST",token:string,params:Record<string,any>={}){const version=clean(process.env.META_GRAPH_VERSION)||"v20.0";const url=new URL(`https://graph.facebook.com/${version}${path}`);const body=new URLSearchParams();for(const[key,value]of Object.entries(params)){if(value===undefined||value===null||value==='')continue;const text=typeof value==='object'?JSON.stringify(value):String(value);if(method==='GET')url.searchParams.set(key,text);else body.set(key,text);}if(method==='GET')url.searchParams.set('access_token',token);else body.set('access_token',token);const response=await fetch(url.toString(),{method,body:method==='POST'?body:undefined});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.error)throw new Error(payload.error?.message||`Meta API error ${response.status}`);return payload;}
+async function graphRequest(path:string,method:"GET"|"POST",token:string,params:Record<string,any>={}){const version=clean(process.env.META_GRAPH_VERSION)||"v25.0";const url=new URL(`https://graph.facebook.com/${version}${path}`);const body=new URLSearchParams();for(const[key,value]of Object.entries(params)){if(value===undefined||value===null||value==='')continue;const text=typeof value==='object'?JSON.stringify(value):String(value);if(method==='GET')url.searchParams.set(key,text);else body.set(key,text);}if(method==='GET')url.searchParams.set('access_token',token);else body.set('access_token',token);const response=await fetch(url.toString(),{method,body:method==='POST'?body:undefined});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.error)throw new Error(payload.error?.message||`Meta API error ${response.status}`);return payload;}
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
 function normalizePostType(value:unknown){const text=clean(value).toLowerCase();if(text.includes('story')||text.includes('ستوري'))return'story';if(text.includes('reel')||text.includes('short')||text.includes('ريل'))return'reel';if(text.includes('photo')||text.includes('image')||text.includes('بوست صور')||text.includes('صورة'))return'photo_post';return text;}
 async function uploadFacebookStoryVideo(uploadUrl:string,token:string,mediaUrl:string){const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});const payload=await response.json().catch(()=>({}));if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو Story على Facebook (${response.status})`);return payload;}
@@ -1056,7 +1031,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   const mediaUrl=createDownloadUrl(file.storage_key,3600),caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
   let result:any;
   if(schedule.platform_code==='facebook'){
-    const pageId=clean(conn.page_id),token=decryptToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
+    const pageId=clean(conn.page_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
     if(postType==='story'){
       if(looksVideo(file)){
@@ -1076,7 +1051,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
     }else if(looksVideo(file))result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:mediaUrl,description:caption});
     else result=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,caption,published:true});
   }else if(schedule.platform_code==='instagram'){
-    const igId=clean(conn.ig_user_id||conn.account_id),token=decryptToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
+    const igId=clean(conn.ig_user_id||conn.account_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!igId||!token)throw new Error("بيانات Instagram غير مكتملة");
     const params:any={caption};
     if(postType==='story'){
@@ -1454,11 +1429,6 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%' and exists(select 1 from core.user_system_departments du where du.user_id=u.id and du.system_code='marketing') order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
-async function platformConnections(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select * from marketing.platform_connections order by platform`;return{ok:true,connections:rows.map(publicConnection)};}
-async function saveConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.connections.manage"))throw new Error("لا توجد صلاحية لإدارة ربط المنصات");const platform=clean(body.platform).toLowerCase();if(!['facebook','instagram'].includes(platform))throw new Error("المنصة غير مدعومة");const connected=body.connected===undefined?true:bool(body.connected);await sql`insert into marketing.platform_connections(platform,connected,status,state,source,account_id,account_name,page_id,page_name,ig_user_id,username,pages,access_token_encrypted,user_access_token_encrypted,page_access_token_encrypted,connected_at,updated_at,updated_by) values(${platform},${connected},${connected?'connected':'disconnected'},${connected?'ready':'idle'},'postgresql-manual-migration',${clean(body.accountId)||null},${clean(body.accountName)||null},${clean(body.pageId)||null},${clean(body.pageName)||null},${clean(body.igUserId)||null},${clean(body.username)||null},${sql.json(dbJson(arrayValue(body.pages)))},${clean(body.accessToken)?encryptToken(body.accessToken):null},${clean(body.userAccessToken)?encryptToken(body.userAccessToken):null},${clean(body.pageAccessToken)?encryptToken(body.pageAccessToken):null},${connected?sql`now()`:null},now(),${user.id}::uuid) on conflict(platform) do update set connected=excluded.connected,status=excluded.status,state=excluded.state,source=excluded.source,account_id=excluded.account_id,account_name=excluded.account_name,page_id=excluded.page_id,page_name=excluded.page_name,ig_user_id=excluded.ig_user_id,username=excluded.username,pages=excluded.pages,access_token_encrypted=coalesce(excluded.access_token_encrypted,marketing.platform_connections.access_token_encrypted),user_access_token_encrypted=coalesce(excluded.user_access_token_encrypted,marketing.platform_connections.user_access_token_encrypted),page_access_token_encrypted=coalesce(excluded.page_access_token_encrypted,marketing.platform_connections.page_access_token_encrypted),connected_at=coalesce(excluded.connected_at,marketing.platform_connections.connected_at),updated_at=now(),updated_by=excluded.updated_by`;return{ok:true,message:"تم حفظ ربط المنصة داخل PostgreSQL"};}
-async function disconnectConnection(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"marketing.connections.manage"))throw new Error("لا توجد صلاحية لإدارة ربط المنصات");const platform=clean(body.platform);await sql`update marketing.platform_connections set connected=false,status='disconnected',state='idle',access_token_encrypted=null,user_access_token_encrypted=null,page_access_token_encrypted=null,updated_at=now(),updated_by=${user.id}::uuid where platform=${platform}`;return{ok:true,message:"تم فصل الربط"};}
-async function migrateConnectionEnv(sql:ReturnType<typeof getSql>,user:SessionUser){if(!hasPermission(user,"marketing.connections.manage"))throw new Error("لا توجد صلاحية لإدارة ربط المنصات");const userToken=clean(process.env.META_USER_ACCESS_TOKEN||process.env.META_ACCESS_TOKEN),pageToken=clean(process.env.META_PAGE_ACCESS_TOKEN||process.env.META_SYSTEM_PAGE_TOKEN),pageId=clean(process.env.META_DEFAULT_PAGE_ID||process.env.META_PAGE_ID),pageName=clean(process.env.META_PAGE_NAME),igId=clean(process.env.META_IG_USER_ID),username=clean(process.env.META_IG_USERNAME);if(!userToken&&!pageToken)throw new Error("لا توجد توكنات Meta حالية في متغيرات البيئة");await saveConnection(sql,{platform:'facebook',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:pageId,accountName:pageName,pageId,pageName},user);if(igId)await saveConnection(sql,{platform:'instagram',connected:true,userAccessToken:userToken,accessToken:userToken,pageAccessToken:pageToken,accountId:igId,accountName:username,igUserId:igId,username,pageId,pageName},user);return{ok:true,message:"تم نقل التوكنات الحالية إلى PostgreSQL"};}
-
 async function createRawFolders(body:any){const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';const token=clean(process.env.MZJ_RAW_API_TOKEN);if(!token)throw new Error("MZJ_RAW_API_TOKEN غير مضبوط");const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token},body:JSON.stringify(body.payload||body)});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.ok===false)throw new Error(payload.message||"تعذر إنشاء فولدرات الخام");return payload;}
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -1484,7 +1454,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
-      if(resource==='platform_connections')return response.status(200).json(await platformConnections(sql));
       if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id),user));
       if(resource==='campaign_code'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,message:'لا توجد صلاحية لإنشاء حملة'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
       return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
@@ -1518,9 +1487,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
     else if(action==='complete_photo_request')result=await completePhotographyRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
-    else if(action==='save_connection')result=await saveConnection(sql,body,user);
-    else if(action==='disconnect_connection')result=await disconnectConnection(sql,body,user);
-    else if(action==='migrate_connection_env')result=await migrateConnectionEnv(sql,user);
     else if(action==='create_raw_folders')result=await createRawFolders(body);
     else throw new Error("الإجراء غير مدعوم");
     await audit(sql,user,action,'marketing',clean(result?.id||body.id)||null,result,undefined,requestIp(request)).catch(()=>undefined);

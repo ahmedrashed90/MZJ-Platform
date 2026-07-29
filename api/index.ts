@@ -44,6 +44,7 @@ import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-
 import erpNextVehicleStatusIntegrationHandler from "../server/integrations/erpnext-vehicle-status.js";
 import operationsHandler from "../server/operations/index.js";
 import marketingHandler from "../server/marketing/index.js";
+import platformConnectionsHandler from "../server/marketing/platform-connections.js";
 import activityHandler from "../server/activity.js";
 import notificationsHandler from "../server/notifications.js";
 import notificationSettingsHandler from "../server/notification-settings.js";
@@ -52,6 +53,13 @@ import { getSessionUser } from "../server/_auth.js";
 import type { PermissionUser } from "../server/_access-control.js";
 
 type ApiHandler = (request: VercelRequest, response: VercelResponse) => unknown | Promise<unknown>;
+
+function platformConnectionCallback(provider: "meta" | "tiktok" | "youtube"): ApiHandler {
+  return (request, response) => {
+    request.query.provider = provider;
+    return platformConnectionsHandler(request, response);
+  };
+}
 
 const routes = new Map<string, ApiHandler>([
   ["dashboard", dashboardHandler],
@@ -94,6 +102,10 @@ const routes = new Map<string, ApiHandler>([
   ["integrations/erpnext/serial-no-status", erpNextVehicleStatusIntegrationHandler],
   ["operations", operationsHandler],
   ["marketing", marketingHandler],
+  ["marketing/platform-connections", platformConnectionsHandler],
+  ["marketing/platform-connections/callback/meta", platformConnectionCallback("meta")],
+  ["marketing/platform-connections/callback/tiktok", platformConnectionCallback("tiktok")],
+  ["marketing/platform-connections/callback/youtube", platformConnectionCallback("youtube")],
   ["activity", activityHandler],
   ["notifications", notificationsHandler],
   ["notification-settings", notificationSettingsHandler],
