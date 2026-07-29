@@ -491,9 +491,14 @@ export function DashboardPage() {
 
   function customizableMainWidget(id: MainDashboardWidgetId, content: React.ReactNode) {
     if (!mainWidgetVisible(id)) return null;
+    const sizeClass = id.startsWith("kpi:")
+      ? "dashboard-main-widget-kpi"
+      : id === "summary:departments"
+        ? "dashboard-main-widget-summary"
+        : "dashboard-main-widget-analytics";
     return <div
       key={id}
-      className={`dashboard-main-widget ${draggedMainWidget === id ? "dragging" : ""}`}
+      className={`dashboard-main-widget ${sizeClass} ${draggedMainWidget === id ? "dragging" : ""}`}
       style={{ order: mainWidgetPosition(id) }}
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => { event.preventDefault(); dropMainWidget(id); }}
