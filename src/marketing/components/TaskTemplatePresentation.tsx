@@ -32,6 +32,12 @@ type TaskTemplatePresentationProps = {
   mode?: TemplateMode;
   statusLabel?: string;
   statusTone?: "approved" | "review" | "preview" | "warning";
+  previewValidation?: {
+    fileName: string;
+    isValid: boolean;
+    errors: string[];
+    warnings: string[];
+  };
   adminNote?: string;
   onAdminNoteChange?: (value: string) => void;
   selectedFields?: string[];
@@ -138,6 +144,7 @@ export function TaskTemplatePresentation({
   mode = "readonly",
   statusLabel,
   statusTone = "review",
+  previewValidation,
   adminNote = "",
   onAdminNoteChange,
   selectedFields = [],
@@ -214,6 +221,24 @@ export function TaskTemplatePresentation({
       <div className="marketing-template-hero-title"><h2>Task Template</h2><p>تفاصيل التاسك من الهيكل</p></div>
       {onClose ? <button type="button" className="marketing-template-close" aria-label="إغلاق" onClick={onClose}><XCircle size={22} /></button> : null}
     </header>
+
+    {previewValidation ? <section className={`marketing-template-preview-status ${previewValidation.isValid ? "valid" : "invalid"}`} aria-label="نتيجة فحص Task Template">
+      <div className="marketing-template-preview-file">
+        <ClipboardText size={22} weight="fill" />
+        <span><small>الملف المختار للرفع</small><strong>{previewValidation.fileName}</strong></span>
+      </div>
+      <div className="marketing-template-preview-result">
+        {previewValidation.isValid ? <CheckCircle size={24} weight="fill" /> : <XCircle size={24} weight="fill" />}
+        <span>
+          <strong>{previewValidation.isValid ? "الملف مطابق ويمكن تأكيد الرفع" : "تم رفض الملف لعدم مطابقته للنموذج"}</strong>
+          <small>{previewValidation.isValid ? "هذه هي نفس طريقة العرض النهائية بعد الحفظ والاعتماد." : "صحح الأخطاء الموضحة ثم ارفع الملف مرة أخرى."}</small>
+        </span>
+      </div>
+      {previewValidation.errors.length || previewValidation.warnings.length ? <div className="marketing-template-preview-feedback">
+        {previewValidation.errors.map((item) => <p className="error" key={`error-${item}`}><XCircle size={15} weight="fill" />{item}</p>)}
+        {previewValidation.warnings.map((item) => <p className="warning" key={`warning-${item}`}><ChatCircleText size={15} weight="fill" />{item}</p>)}
+      </div> : null}
+    </section> : null}
 
     <section className="marketing-template-block">
       <h3>بيانات أساسية</h3>

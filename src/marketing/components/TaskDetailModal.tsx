@@ -433,27 +433,28 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
       </div> : null}
 
       {templatePreview ? <div className="marketing-template-preview-backdrop" onMouseDown={() => !loading && setTemplatePreview(null)}>
-        <section className="marketing-template-preview" onMouseDown={(event) => event.stopPropagation()}>
-          <header><div><span>معاينة قبل الرفع</span><h3>{templatePreview.file.name}</h3><p>لن يتم رفع الملف إلا بعد التأكد من مطابقته للنموذج واعتماد المعاينة.</p></div><button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}><XCircle size={20} /></button></header>
-          <div className="marketing-template-preview-body">
-            <div className={`marketing-template-validation-summary ${templatePreview.inspection.isValid ? "valid" : "invalid"}`}>
-              {templatePreview.inspection.isValid ? <CheckCircle size={24} weight="fill" /> : <WarningCircle size={24} weight="fill" />}
-              <div><strong>{templatePreview.inspection.isValid ? "الملف مطابق ويمكن تأكيد الرفع" : "تم رفض الملف لعدم مطابقته للنموذج"}</strong><span>{templatePreview.inspection.isValid ? "راجع البيانات التالية ثم اضغط تأكيد الرفع." : "صحح الأخطاء التالية وارفع نفس النموذج مرة أخرى."}</span></div>
-            </div>
-            {templatePreview.inspection.errors.length ? <div className="marketing-template-validation-errors">{templatePreview.inspection.errors.map((item) => <p key={item}><XCircle size={16} weight="fill" />{item}</p>)}</div> : null}
-            {templatePreview.inspection.warnings.length ? <div className="marketing-template-validation-warnings">{templatePreview.inspection.warnings.map((item) => <p key={item}><WarningCircle size={16} />{item}</p>)}</div> : null}
-            <div className="marketing-template-preview-design">
-              <TaskTemplatePresentation
-                task={task}
-                data={templatePreview.inspection.data}
-                mode="preview"
-                statusLabel="معاينة قبل الرفع"
-                statusTone="preview"
-                adminNote={adminNote}
-              />
-            </div>
+        <section className="marketing-template-preview" onMouseDown={(event) => event.stopPropagation()} aria-label="معاينة Task Template قبل الرفع">
+          <div className="marketing-template-preview-canvas">
+            <TaskTemplatePresentation
+              task={task}
+              data={templatePreview.inspection.data}
+              mode="preview"
+              statusLabel="معاينة قبل الرفع"
+              statusTone={templatePreview.inspection.isValid ? "preview" : "warning"}
+              previewValidation={{
+                fileName: templatePreview.file.name,
+                isValid: templatePreview.inspection.isValid,
+                errors: templatePreview.inspection.errors,
+                warnings: templatePreview.inspection.warnings,
+              }}
+              adminNote={adminNote}
+              onClose={() => !loading && setTemplatePreview(null)}
+            />
           </div>
-          <footer><button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}>إلغاء</button><button type="button" className="primary" disabled={loading || !templatePreview.inspection.isValid} onClick={() => void confirmTemplateUpload()}><FileArrowUp size={18} />{loading ? "جاري الرفع..." : "تأكيد رفع Task Template"}</button></footer>
+          <footer className="marketing-template-preview-actions">
+            <button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}>إلغاء والعودة للرفع</button>
+            <button type="button" className="primary" disabled={loading || !templatePreview.inspection.isValid} onClick={() => void confirmTemplateUpload()}><FileArrowUp size={18} />{loading ? "جاري الرفع..." : "تأكيد رفع Task Template"}</button>
+          </footer>
         </section>
       </div> : null}
 

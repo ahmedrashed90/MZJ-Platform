@@ -516,6 +516,20 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
         or exists(select 1 from marketing.agendas x where t.source_type='agenda' and x.id=t.source_id and x.created_by=${user.id}::uuid)
       ))
     )`;
+  const liveSourceFilter = sql`(
+    (t.source_type='campaign' and exists(
+      select 1 from marketing.campaigns source_campaign
+      where source_campaign.id=t.source_id
+        and source_campaign.is_deleted=false
+        and source_campaign.archived_at is null
+    ))
+    or
+    (t.source_type='agenda' and exists(
+      select 1 from marketing.agendas source_agenda
+      where source_agenda.id=t.source_id
+        and source_agenda.archived_at is null
+    ))
+  )`;
   const tasks = await sql<any[]>`
     select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.completed_at,t.completed_by::text,t.note,
       done_by.full_name as completed_by_name,t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
@@ -532,7 +546,7 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files f on f.id=t.final_file_id
-    where t.is_deleted=false and ${taskFilter}
+    where t.is_deleted=false and ${liveSourceFilter} and ${taskFilter}
     order by t.received_at nulls first,t.due_at nulls last,t.created_at
   `;
   const entities = await sql<any[]>`
