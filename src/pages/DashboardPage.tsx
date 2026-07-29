@@ -629,6 +629,15 @@ export function DashboardPage() {
                   onOpen={() => setOperationsSelection({ mode: "approvals", filter: "completed", title: "السيارات مكتملة الموافقات" })}
                 />
               </div>
+              <div className="dashboard-approval-notes-preview">
+                <strong>آخر ملاحظات الموافقات</strong>
+                {(operations?.approvals.recentNotes || []).length ? (operations?.approvals.recentNotes || []).map((note) => (
+                  <button key={note.id} type="button" onClick={() => setOperationsSelection({ mode: "approvals", filter: "", title: "كل سيارات الموافقات المالية والإدارية" })}>
+                    <span><b dir="ltr">{note.vin || "—"}</b><small>{note.carName || "—"}</small></span>
+                    <p>{note.financialNote ? `مالي: ${note.financialNote}` : ""}{note.financialNote && note.administrativeNote ? " · " : ""}{note.administrativeNote ? `إداري: ${note.administrativeNote}` : ""}</p>
+                  </button>
+                )) : <span className="dashboard-approval-notes-empty">لا توجد ملاحظات مسجلة حاليًا</span>}
+              </div>
             </OperationCard>
 
             <OperationCard title="نواقص السيارات" badge={operations?.shortages.total ?? null} onView={() => setOperationsSelection({ mode: "shortages", locationCode: "", locationName: "كل الفروع" })}>

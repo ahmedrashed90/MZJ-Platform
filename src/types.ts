@@ -64,6 +64,14 @@ export type DashboardData = {
       missingFinancial: NullableNumber;
       missingAdministrative: NullableNumber;
       completed: NullableNumber;
+      recentNotes: Array<{
+        id: string;
+        vin: string;
+        carName: string;
+        financialNote: string;
+        administrativeNote: string;
+        updatedAt: string;
+      }>;
     };
     shortages: {
       total: NullableNumber;

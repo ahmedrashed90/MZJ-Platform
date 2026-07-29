@@ -25,7 +25,7 @@ function emptyData(range: { from: string; to: string }): DashboardData {
     operations: {
       inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, underDelivery: null, delivered: null, hasNotes: null },
       locations: locationNames.map(([key, name]) => ({ key, name, actualTotal: null, underDelivery: null, availableForSale: null, reserved: null, delivered: null, hasNotes: null })),
-      approvals: { total: null, missingFinancial: null, missingAdministrative: null, completed: null },
+      approvals: { total: null, missingFinancial: null, missingAdministrative: null, completed: null, recentNotes: [] },
       shortages: { total: null, multaqa: null, hall: null, qadisiyah: null },
       transfers: { total: null, transferTotal: null, photographyTotal: null, requestReceived: null, vehicleReceived: null, vehicleSent: null, completed: null },
       salesTracking: { total: null, notStarted: null, inProgress: null, completed: null },
@@ -135,6 +135,8 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
     const operationsAccess = getSystemAccess(user, "operations");
     const globalOperationsAccess = operationsAccess.dataScope === "all";
     const operationBranches = operationsAccess.branchCodes.length ? operationsAccess.branchCodes : ["__none__"];
+    const operationStatusUnrestricted = !operationsAccess.vehicleStatusCodes?.length;
+    const operationStatusCodes = operationsAccess.vehicleStatusCodes?.length ? operationsAccess.vehicleStatusCodes : ["__none__"];
     const canSeeMultaqa = globalOperationsAccess || operationBranches.includes("multaqa");
     const canSeeHall = globalOperationsAccess || operationBranches.includes("hall");
     const canSeeQadisiyah = globalOperationsAccess || operationBranches.includes("qadisiyah");
@@ -149,24 +151,54 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
         count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved')::int as reserved,
         count(v.id) filter(where v.is_deleted=false and v.status_code='delivered')::int as delivered,
         count(v.id) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true))::int as has_notes
-        from operations.locations l left join operations.vehicles v on v.location_id=l.id and (v.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date left join operations.vehicle_statuses s on s.code=v.status_code
-        where l.is_active=true and (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})
+        from operations.locations l
+        left join operations.vehicles v on v.location_id=l.id
+          and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})
+        left join operations.vehicle_statuses s on s.code=v.status_code
+        where l.is_active=true and (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
         group by l.code,l.name,l.sort_order order by l.sort_order`,
       sql<any[]>`select
         count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and coalesce(s.is_actual_stock,true))::int as actual_total,
-        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and l.is_agency=true)::int as agency,
+        count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and l.code='agency' and coalesce(s.is_actual_stock,true))::int as agency,
         count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='available_for_sale')::int as available_for_sale,
         count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='reserved')::int as reserved,
         count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and v.status_code='under_delivery')::int as under_delivery,
         count(*) filter(where v.is_deleted=false and v.status_code='delivered')::int as delivered,
         count(*) filter(where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true and (v.status_code='has_notes' or v.has_notes=true))::int as has_notes
         from operations.vehicles v left join operations.locations l on l.id=v.location_id left join operations.vehicle_statuses s on s.code=v.status_code
-        where (${globalOperationsAccess}=true or coalesce(l.branch_code,l.code) in ${sql(operationBranches)})
-          and (v.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date`,
-      sql<any[]>`select count(*)::int as total,count(*) filter(where a.financial_approved=false)::int as missing_financial,count(*) filter(where a.administrative_approved=false)::int as missing_administrative,count(*) filter(where a.financial_approved=true and a.administrative_approved=true)::int as completed
-        from operations.vehicle_approvals a join operations.vehicles v on v.id=a.vehicle_id left join operations.locations l on l.id=v.location_id
-        where ${approvalVisibilityScope}
-          and (a.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date`,
+        where (${globalOperationsAccess}=true or l.code in ${sql(operationBranches)} or l.branch_code in ${sql(operationBranches)})
+          and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})`,
+      sql<any[]>`with visible_approvals as (
+          select a.id::text,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,a.updated_at,
+            v.vin,coalesce(nullif(trim(v.car_name),''),'—') as car_name
+          from operations.vehicle_approvals a
+          join operations.vehicles v on v.id=a.vehicle_id
+          left join operations.locations l on l.id=v.location_id
+          where ${approvalVisibilityScope}
+        )
+        select
+          count(*)::int as total,
+          count(*) filter(where financial_approved=false)::int as missing_financial,
+          count(*) filter(where administrative_approved=false)::int as missing_administrative,
+          count(*) filter(where financial_approved=true and administrative_approved=true)::int as completed,
+          coalesce((
+            select json_agg(json_build_object(
+              'id',note_row.id,
+              'vin',note_row.vin,
+              'carName',note_row.car_name,
+              'financialNote',coalesce(note_row.financial_note,''),
+              'administrativeNote',coalesce(note_row.administrative_note,''),
+              'updatedAt',note_row.updated_at
+            ) order by note_row.updated_at desc)
+            from (
+              select * from visible_approvals
+              where nullif(trim(coalesce(financial_note,'')),'') is not null
+                 or nullif(trim(coalesce(administrative_note,'')),'') is not null
+              order by updated_at desc
+              limit 3
+            ) note_row
+          ),'[]'::json) as recent_notes
+        from visible_approvals`,
       sql<any[]>`with combinations as (
           select
             coalesce(nullif(trim(v.car_name),''),'—') as car_name,
@@ -182,7 +214,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           join operations.locations l on l.id=v.location_id
           where v.is_deleted=false and v.archived_at is null and v.is_inventory_active=true
             and v.status_code in ('available_for_sale','reserved','has_notes')
-            and (v.updated_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
+            and (${operationStatusUnrestricted}=true or v.status_code in ${sql(operationStatusCodes)})
             and l.code in ('warehouse','hall','multaqa','qadisiyah')
             and regexp_replace(coalesce(v.statement,''), '[[:space:]]+', '', 'g') !~* '(حساس|كاميرا|شاشة|مسجل|ريموت|فرشات|طفاية|شنطةسلامة|اسبير|إسبير)'
           group by coalesce(nullif(trim(v.car_name),''),'—'),coalesce(nullif(trim(v.statement),''),'—'),coalesce(nullif(trim(v.model_year),''),'—'),coalesce(nullif(trim(v.exterior_color),''),'—'),coalesce(nullif(trim(v.interior_color),''),'—')
@@ -215,7 +247,20 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
     data.operations.inventory = { actualTotal: asNumber(inventory?.actual_total), agency: asNumber(inventory?.agency), availableForSale: asNumber(inventory?.available_for_sale), reserved: asNumber(inventory?.reserved), underDelivery: asNumber(inventory?.under_delivery), delivered: asNumber(inventory?.delivered), hasNotes: asNumber(inventory?.has_notes) };
     data.operations.locations = locations.map((item) => ({ key: item.key, name: item.name, actualTotal: asNumber(item.actual_total), underDelivery: asNumber(item.under_delivery), availableForSale: asNumber(item.available_for_sale), reserved: asNumber(item.reserved), delivered: asNumber(item.delivered), hasNotes: asNumber(item.has_notes) }));
     if (!data.operations.locations.length) data.operations.locations = emptyData(range).operations.locations;
-    data.operations.approvals = { total: asNumber(approval?.total), missingFinancial: asNumber(approval?.missing_financial), missingAdministrative: asNumber(approval?.missing_administrative), completed: asNumber(approval?.completed) };
+    data.operations.approvals = {
+      total: asNumber(approval?.total),
+      missingFinancial: asNumber(approval?.missing_financial),
+      missingAdministrative: asNumber(approval?.missing_administrative),
+      completed: asNumber(approval?.completed),
+      recentNotes: (Array.isArray(approval?.recent_notes) ? approval.recent_notes : []).map((item: any) => ({
+        id: String(item?.id || ""),
+        vin: String(item?.vin || ""),
+        carName: String(item?.carName || "—"),
+        financialNote: String(item?.financialNote || ""),
+        administrativeNote: String(item?.administrativeNote || ""),
+        updatedAt: String(item?.updatedAt || ""),
+      })),
+    };
     data.operations.shortages = { total: asNumber(shortage?.total), multaqa: asNumber(shortage?.multaqa), hall: asNumber(shortage?.hall), qadisiyah: asNumber(shortage?.qadisiyah) };
     data.operations.transfers = { total: asNumber(transfer?.total), transferTotal: asNumber(transfer?.transfer_total), photographyTotal: asNumber(transfer?.photography_total), requestReceived: asNumber(transfer?.request_received), vehicleReceived: asNumber(transfer?.vehicle_received), vehicleSent: asNumber(transfer?.vehicle_sent), completed: asNumber(transfer?.completed) };
   } catch (error) { data.sectionErrors!.operations = errorText(error); console.error("Dashboard operations query failed", error); }

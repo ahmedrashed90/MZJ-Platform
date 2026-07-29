@@ -567,15 +567,22 @@ async function listApprovals(sql: ReturnType<typeof getSql>, request: VercelRequ
   const rows = await sql<any[]>`
     select a.id::text,a.vehicle_id::text,a.cycle_no,a.financial_approved,a.administrative_approved,a.financial_note,a.administrative_note,
       a.financial_approved_by_name,a.administrative_approved_by_name,a.financial_approved_at,a.administrative_approved_at,a.pending_delivery,a.updated_at,
-      v.vin,v.car_name,v.statement,v.model_year,v.status_code,l.code as location_code,l.name as location_name,
-      dl.name as pending_destination_name
+      v.vin,v.car_name,v.statement,v.agent_name,v.model_year,v.interior_color,v.exterior_color,v.plate_no,v.batch_no,
+      v.notes,v.state_note,v.shortage_note,v.status_code,coalesce(s.name,v.status_code) as status_name,
+      l.code as location_code,l.name as location_name,dl.name as pending_destination_name
     from operations.vehicle_approvals a
     join operations.vehicles v on v.id=a.vehicle_id
     left join operations.locations l on l.id=v.location_id
+    left join operations.vehicle_statuses s on s.code=v.status_code
     left join operations.locations dl on dl.id=nullif(a.pending_delivery->>'destinationLocationId','')::uuid
     where ${visibilityScope}
       and (${filter}='' or (${filter}='missing_financial' and a.financial_approved=false) or (${filter}='missing_administrative' and a.administrative_approved=false) or (${filter}='completed' and a.financial_approved=true and a.administrative_approved=true))
-      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern})
+      and (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern}
+        or coalesce(v.statement,'') ilike ${pattern} or coalesce(v.model_year,'') ilike ${pattern}
+        or coalesce(l.name,'') ilike ${pattern} or coalesce(a.financial_note,'') ilike ${pattern}
+        or coalesce(a.administrative_note,'') ilike ${pattern}
+        or coalesce(a.financial_approved_by_name,'') ilike ${pattern}
+        or coalesce(a.administrative_approved_by_name,'') ilike ${pattern})
     order by a.updated_at desc
   `;
   return { ok: true, rows };

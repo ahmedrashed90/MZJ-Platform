@@ -5210,3 +5210,48 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .activity-head-actions { width: 100%; }
   .activity-head-actions > button { flex: 1; }
 }
+
+
+/* Operations dashboard current-stock consistency and full approval notes */
+.dashboard-approval-notes-preview { display:grid; gap:6px; margin-top:10px; padding-top:9px; border-top:1px solid var(--line); }
+.dashboard-approval-notes-preview > strong { color:#5f453d; font-size:10px; }
+.dashboard-approval-notes-preview > button { min-width:0; display:grid; grid-template-columns:minmax(92px,.6fr) minmax(0,1.4fr); align-items:start; gap:7px; padding:7px 8px; border:1px solid #eadbd4; border-radius:10px; background:#fffaf7; color:inherit; text-align:right; cursor:pointer; }
+.dashboard-approval-notes-preview > button:hover { border-color:#d9b4a5; background:#fff5ef; }
+.dashboard-approval-notes-preview > button span { min-width:0; display:grid; gap:2px; }
+.dashboard-approval-notes-preview > button b { font-size:9px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dashboard-approval-notes-preview > button small { color:var(--muted); font-size:8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dashboard-approval-notes-preview > button p { margin:0; color:#674a41; font-size:9px; line-height:1.55; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.dashboard-approval-notes-empty { min-height:36px; display:grid; place-items:center; border:1px dashed #ddcbc3; border-radius:9px; color:var(--muted); font-size:9px; background:#fffdfb; }
+.dashboard-approvals-modal .mzj-modal-body { min-height:0; }
+.dashboard-approvals-modal .dashboard-approvals-results { min-height:0; grid-template-rows:auto minmax(0,1fr); }
+.dashboard-approvals-modal .operations-resizable-table-shell { min-height:0; }
+.dashboard-approvals-modal .operations-resizable-table-shell .operations-table-scroll { max-height:none; height:calc(100vh - 292px); }
+.dashboard-approvals-table { width:max(100%,2100px); }
+.dashboard-approvals-table th,.dashboard-approvals-table td { white-space:normal; vertical-align:top; line-height:1.55; overflow-wrap:anywhere; }
+.dashboard-approval-cell { display:grid; justify-items:start; gap:4px; }
+.dashboard-approval-cell small,.dashboard-approval-cell time { color:var(--muted); font-size:9px; }
+.dashboard-approval-note-cell { display:block; min-width:190px; white-space:pre-wrap; line-height:1.65; }
+.dashboard-approval-detail-modal { width:min(1180px,calc(100vw - 30px)); }
+.dashboard-approval-detail-content { display:grid; gap:14px; }
+.dashboard-approval-detail-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
+.dashboard-approval-detail-summary > div { min-width:0; display:grid; gap:4px; padding:11px; border:1px solid var(--line); border-radius:11px; background:#fcfaf9; }
+.dashboard-approval-detail-summary small { color:var(--muted); font-size:10px; }
+.dashboard-approval-detail-summary strong { overflow-wrap:anywhere; }
+.dashboard-approval-detail-cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.dashboard-approval-detail-cards > article { min-width:0; display:grid; gap:12px; padding:15px; border:1px solid var(--line); border-radius:14px; background:#fff; }
+.dashboard-approval-detail-cards header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.dashboard-approval-detail-cards dl { margin:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.dashboard-approval-detail-cards dl > div { display:grid; gap:3px; padding:9px; border-radius:9px; background:#faf7f5; }
+.dashboard-approval-detail-cards dt { color:var(--muted); font-size:9px; }
+.dashboard-approval-detail-cards dd { margin:0; font-weight:800; overflow-wrap:anywhere; }
+.dashboard-approval-detail-note { display:grid; gap:6px; }
+.dashboard-approval-detail-note span { color:var(--muted); font-size:10px; font-weight:800; }
+.dashboard-approval-detail-note p { min-height:88px; margin:0; padding:12px; border:1px solid #eadbd4; border-radius:10px; background:#fffaf7; white-space:pre-wrap; line-height:1.8; overflow-wrap:anywhere; }
+.dashboard-approval-detail-footer { padding:10px 12px; border-radius:10px; background:#f5efec; color:var(--muted); font-size:10px; }
+@media (max-width:820px) { .dashboard-approval-detail-summary,.dashboard-approval-detail-cards { grid-template-columns:1fr; } }
+
+.dashboard-approval-vehicle-notes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
+.dashboard-approval-vehicle-notes article { min-width:0; display:grid; gap:6px; padding:11px; border:1px solid var(--line); border-radius:11px; background:#fffdfb; }
+.dashboard-approval-vehicle-notes span { color:var(--muted); font-size:10px; font-weight:800; }
+.dashboard-approval-vehicle-notes p { margin:0; min-height:52px; white-space:pre-wrap; line-height:1.7; overflow-wrap:anywhere; }
+@media (max-width:820px) { .dashboard-approval-vehicle-notes { grid-template-columns:1fr; } }

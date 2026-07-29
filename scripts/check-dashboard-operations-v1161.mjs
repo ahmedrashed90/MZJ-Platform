@@ -16,10 +16,10 @@ const styles = read("src/styles.css");
 
 const shortageFields = ["car_name", "statement", "model_year", "exterior_color", "interior_color"];
 const pdfHeaders = [
-  "رقم الهيكل (VIN)", "السيارة", "البيان", "الوكيل", "اللون الداخلي", "اللون الخارجي", "موديل", "اللوحة",
-  "اسم الدفعة بالتاريخ", "التاريخ", "المكان السابق", "المكان الحالي", "ملاحظات في السيارة", "حجز - نواقص - تحديد مكان",
-  "الحالة السابقة", "الحالة الحالية", "حساس", "كاميرا", "مكيف", "مسجل", "شاشة", "ريموت", "فرشات", "طفاية",
-  "شنطة سلامة", "اسبير", "الموافقة المالية", "الموافقة الإدارية", "منفذ الحركة", "رقم الطلب",
+  "رقم الهيكل", "السيارة", "البيان", "الوكيل", "اللون الداخلي", "اللون الخارجي", "موديل", "اللوحة",
+  "اسم الدفعة", "التاريخ والوقت", "المكان", "ملاحظات في السيارة والحركة", "حجز - نواقص - تحديد مكان",
+  "الحالة", "حساس", "كاميرا", "مكيف", "مسجل", "شاشة", "ريموت", "فرشات", "طفاية",
+  "شنطة سلامة", "اسبير", "الموافقة المالية", "الموافقة الإدارية", "منفذ الحركة", "إداري العمليات", "نوع الحركة والطلب",
 ];
 
 const checks = [
@@ -38,9 +38,9 @@ const checks = [
   ["Tracking is restored as a progress button", vehicleTable.includes("operations-tracking-open") && vehicleTable.includes("tracking_progress") && vehicleTable.includes("<button")],
   ["Vehicle detail tabs remain centered and tracking opens as a button", vehicleDetail.includes("operations-tracking-detail-button") && styles.includes(".operations-detail-tabs { justify-content: center")],
   ["Movement filters use the upgraded apply action", movementPage.includes("operations-apply-filters-button") && styles.includes("operations-apply-filters-button")],
-  ["Movement history provides A3 landscape PDF export", movementPage.includes("@page{size:A3 landscape") && movementPage.includes("تصدير PDF A3")],
+  ["Movement history provides A3 landscape PDF export", (movementPage.includes("@page { size: 420mm 297mm") || movementPage.includes("@page{size:A3 landscape")) && movementPage.includes("تصدير PDF")],
   ["A3 PDF contains every requested column", pdfHeaders.every((header) => movementPage.includes(header))],
-  ["A3 PDF renders present as correct and absent as wrong", movementPage.includes("mark yes") && movementPage.includes("mark no") && movementPage.includes('=== "ok"')],
+  ["A3 PDF renders present as correct and absent as wrong", movementPage.includes('class="check yes"') && movementPage.includes('class="check no"') && movementPage.includes('state === "ok"')],
   ["Movement API returns the requested vehicle, check, approval, actor, and request data", ["agent_name", "interior_color", "exterior_color", "plate_no", "batch_no", "sensor_status", "camera_status", "financial_approved", "administrative_approved", "request_no"].every((field) => operationsApi.includes(field))],
 ];
 

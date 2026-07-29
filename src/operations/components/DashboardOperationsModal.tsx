@@ -78,14 +78,40 @@ type ShortageRow = {
 type ApprovalVehicle = {
   id: string;
   vehicle_id: string;
+  cycle_no: number;
   vin: string;
   car_name?: string | null;
   statement?: string | null;
+  agent_name?: string | null;
   model_year?: string | null;
+  interior_color?: string | null;
+  exterior_color?: string | null;
+  plate_no?: string | null;
+  batch_no?: string | null;
+  notes?: string | null;
+  state_note?: string | null;
+  shortage_note?: string | null;
+  location_code?: string | null;
   location_name?: string | null;
+  status_code?: string | null;
+  status_name?: string | null;
+  pending_destination_name?: string | null;
   financial_approved: boolean;
   administrative_approved: boolean;
+  financial_note?: string | null;
+  administrative_note?: string | null;
+  financial_approved_by_name?: string | null;
+  administrative_approved_by_name?: string | null;
+  financial_approved_at?: string | null;
+  administrative_approved_at?: string | null;
+  updated_at?: string | null;
 };
+
+function formatApprovalDate(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA") : "—";
+}
 
 function DashboardApprovalBadge({ approved }: { approved: boolean }) {
   return (
@@ -101,6 +127,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
   const [rows, setRows] = useState<Vehicle[]>([]);
   const [requestRows, setRequestRows] = useState<RequestRow[]>([]);
   const [approvalRows, setApprovalRows] = useState<ApprovalVehicle[]>([]);
+  const [selectedApproval, setSelectedApproval] = useState<ApprovalVehicle | null>(null);
   const [shortageRows, setShortageRows] = useState<ShortageRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -163,6 +190,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     setSearch("");
     setPage(1);
     setDetail(null);
+    setSelectedApproval(null);
     setRows([]);
     setRequestRows([]);
     setApprovalRows([]);
@@ -207,18 +235,18 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     {
       key: "vin",
       label: "رقم الهيكل",
-      width: 150,
-      min: 125,
-      max: 230,
+      width: 155,
+      min: 130,
+      max: 240,
       value: (row) => row.vin,
       render: (row) => <strong dir="ltr">{row.vin}</strong>,
     },
     {
       key: "vehicle",
       label: "السيارة والبيان",
-      width: 290,
-      min: 210,
-      max: 430,
+      width: 300,
+      min: 220,
+      max: 460,
       value: (row) => `${row.car_name || ""} ${row.statement || ""}`,
       render: (row) => <div className="operations-cell-stack"><strong>{row.car_name || "—"}</strong><small>{row.statement || "بدون بيان"}</small></div>,
     },
@@ -233,30 +261,65 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     },
     {
       key: "location",
-      label: "المكان الحالي",
-      width: 145,
-      min: 120,
-      max: 220,
-      value: (row) => row.location_name,
-      render: (row) => <span className="operations-location-cell"><MapPin size={16} />{row.location_name || "—"}</span>,
+      label: "المكان والحالة",
+      width: 175,
+      min: 145,
+      max: 270,
+      value: (row) => `${row.location_name || ""} ${row.status_name || row.status_code || ""}`,
+      render: (row) => <div className="operations-cell-stack"><strong className="operations-location-cell"><MapPin size={16} />{row.location_name || "—"}</strong><small>{row.status_name || row.status_code || "—"}</small>{row.pending_destination_name ? <small>الوجهة: {row.pending_destination_name}</small> : null}</div>,
     },
     {
       key: "financial",
       label: "الموافقة المالية",
-      width: 160,
-      min: 140,
-      max: 210,
-      value: (row) => row.financial_approved ? "مكتملة" : "ناقصة",
-      render: (row) => <DashboardApprovalBadge approved={row.financial_approved} />,
+      width: 180,
+      min: 150,
+      max: 240,
+      value: (row) => `${row.financial_approved ? "مكتملة" : "ناقصة"} ${row.financial_note || ""}`,
+      render: (row) => <div className="dashboard-approval-cell"><DashboardApprovalBadge approved={row.financial_approved} /><small>{row.financial_approved_by_name || "بدون منفذ"}</small><time>{formatApprovalDate(row.financial_approved_at)}</time></div>,
+    },
+    {
+      key: "financialNote",
+      label: "الملاحظة المالية",
+      width: 270,
+      min: 200,
+      max: 480,
+      value: (row) => row.financial_note,
+      render: (row) => <span className="dashboard-approval-note-cell">{row.financial_note || "بدون ملاحظة"}</span>,
     },
     {
       key: "administrative",
       label: "الموافقة الإدارية",
-      width: 160,
-      min: 140,
-      max: 210,
-      value: (row) => row.administrative_approved ? "مكتملة" : "ناقصة",
-      render: (row) => <DashboardApprovalBadge approved={row.administrative_approved} />,
+      width: 180,
+      min: 150,
+      max: 240,
+      value: (row) => `${row.administrative_approved ? "مكتملة" : "ناقصة"} ${row.administrative_note || ""}`,
+      render: (row) => <div className="dashboard-approval-cell"><DashboardApprovalBadge approved={row.administrative_approved} /><small>{row.administrative_approved_by_name || "بدون منفذ"}</small><time>{formatApprovalDate(row.administrative_approved_at)}</time></div>,
+    },
+    {
+      key: "administrativeNote",
+      label: "الملاحظة الإدارية",
+      width: 270,
+      min: 200,
+      max: 480,
+      value: (row) => row.administrative_note,
+      render: (row) => <span className="dashboard-approval-note-cell">{row.administrative_note || "بدون ملاحظة"}</span>,
+    },
+    {
+      key: "updated",
+      label: "آخر تحديث",
+      width: 165,
+      min: 135,
+      max: 230,
+      value: (row) => formatApprovalDate(row.updated_at),
+      render: (row) => formatApprovalDate(row.updated_at),
+    },
+    {
+      key: "action",
+      label: "التفاصيل",
+      width: 120,
+      min: 105,
+      max: 160,
+      render: (row) => <button type="button" className="operations-table-action" onClick={() => setSelectedApproval(row)}>عرض كامل</button>,
     },
   ], []);
 
@@ -281,7 +344,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         title={title}
         subtitle={`عدد النتائج: ${total.toLocaleString("ar-SA")}`}
         onClose={onClose}
-        className={`wide dashboard-operations-modal ${selection?.mode === "vehicles" || selection?.mode === "shortages" ? "dashboard-operations-modal-fullscreen" : ""} ${selection?.mode === "approvals" ? "dashboard-approvals-modal" : ""}`.trim()}
+        className={`wide dashboard-operations-modal ${selection?.mode === "vehicles" || selection?.mode === "shortages" || selection?.mode === "approvals" ? "dashboard-operations-modal-fullscreen" : ""} ${selection?.mode === "approvals" ? "dashboard-approvals-modal" : ""}`.trim()}
       >
         <div className="dashboard-operations-toolbar">
           {selection?.mode === "requests" ? (
@@ -366,7 +429,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
               rowKey={(row) => row.id}
               storageKey="mzj.dashboard.approvals.columns.v1149"
               emptyText={loading ? "جاري تحميل السيارات..." : "لا توجد سيارات في هذه الحالة"}
-              minTableWidth={1000}
+              minTableWidth={2100}
               tableClassName="dashboard-approvals-table"
             />
           </div>
@@ -401,6 +464,53 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
             </article>
           ))}
         </div>
+      </Modal>
+
+      <Modal
+        open={Boolean(selectedApproval)}
+        level={1}
+        title={selectedApproval ? `تفاصيل موافقات السيارة ${selectedApproval.vin}` : "تفاصيل الموافقات"}
+        subtitle={selectedApproval ? `${selectedApproval.car_name || "—"} · ${selectedApproval.statement || "—"}` : undefined}
+        onClose={() => setSelectedApproval(null)}
+        className="wide dashboard-approval-detail-modal"
+      >
+        {selectedApproval ? (
+          <div className="dashboard-approval-detail-content">
+            <section className="dashboard-approval-detail-summary">
+              <div><small>رقم الهيكل</small><strong dir="ltr">{selectedApproval.vin}</strong></div>
+              <div><small>السيارة</small><strong>{selectedApproval.car_name || "—"}</strong></div>
+              <div><small>البيان</small><strong>{selectedApproval.statement || "—"}</strong></div>
+              <div><small>الوكيل</small><strong>{selectedApproval.agent_name || "—"}</strong></div>
+              <div><small>الموديل</small><strong>{selectedApproval.model_year || "—"}</strong></div>
+              <div><small>اللون الداخلي</small><strong>{selectedApproval.interior_color || "—"}</strong></div>
+              <div><small>اللون الخارجي</small><strong>{selectedApproval.exterior_color || "—"}</strong></div>
+              <div><small>اللوحة</small><strong>{selectedApproval.plate_no || "—"}</strong></div>
+              <div><small>اسم الدفعة</small><strong>{selectedApproval.batch_no || "—"}</strong></div>
+              <div><small>المكان الحالي</small><strong>{selectedApproval.location_name || "—"}</strong></div>
+              <div><small>الحالة</small><strong>{selectedApproval.status_name || selectedApproval.status_code || "—"}</strong></div>
+              <div><small>الوجهة المنتظرة</small><strong>{selectedApproval.pending_destination_name || "—"}</strong></div>
+              <div><small>دورة الموافقات</small><strong>{selectedApproval.cycle_no || 1}</strong></div>
+            </section>
+            <section className="dashboard-approval-vehicle-notes">
+              <article><span>ملاحظات السيارة</span><p>{selectedApproval.notes || "لا توجد ملاحظات"}</p></article>
+              <article><span>ملاحظات الحالة</span><p>{selectedApproval.state_note || "لا توجد ملاحظات حالة"}</p></article>
+              <article><span>حجز - نواقص - تحديد مكان</span><p>{selectedApproval.shortage_note || "لا توجد ملاحظات حجز أو نواقص"}</p></article>
+            </section>
+            <section className="dashboard-approval-detail-cards">
+              <article>
+                <header><strong>الموافقة المالية</strong><DashboardApprovalBadge approved={selectedApproval.financial_approved} /></header>
+                <dl><div><dt>المسؤول</dt><dd>{selectedApproval.financial_approved_by_name || "—"}</dd></div><div><dt>التاريخ</dt><dd>{formatApprovalDate(selectedApproval.financial_approved_at)}</dd></div></dl>
+                <div className="dashboard-approval-detail-note"><span>الملاحظة المالية</span><p>{selectedApproval.financial_note || "لا توجد ملاحظة مالية"}</p></div>
+              </article>
+              <article>
+                <header><strong>الموافقة الإدارية</strong><DashboardApprovalBadge approved={selectedApproval.administrative_approved} /></header>
+                <dl><div><dt>المسؤول</dt><dd>{selectedApproval.administrative_approved_by_name || "—"}</dd></div><div><dt>التاريخ</dt><dd>{formatApprovalDate(selectedApproval.administrative_approved_at)}</dd></div></dl>
+                <div className="dashboard-approval-detail-note"><span>الملاحظة الإدارية</span><p>{selectedApproval.administrative_note || "لا توجد ملاحظة إدارية"}</p></div>
+              </article>
+            </section>
+            <footer className="dashboard-approval-detail-footer">آخر تحديث: {formatApprovalDate(selectedApproval.updated_at)}</footer>
+          </div>
+        ) : null}
       </Modal>
     </>
   );
