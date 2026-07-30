@@ -11,7 +11,7 @@ import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStor
 import { emitMarketingNotification } from "../_notifications.js";
 import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
-import { backfillPublishedPosts, engagementData, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
+import { backfillPublishedPosts, engagementData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -2057,7 +2057,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
-    else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.connections.manage'))throw new Error('لا توجد صلاحية لتفعيل استقبال التعليقات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
+    else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.connections.manage'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
+    else if(action==='manage_engagement_item'){
+      if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لإدارة تفاعل النشر');
+      if(clean(body.operation)==='delete_customer'&&!hasPermission(user,'crm.customer.delete'))throw new Error('لا توجد صلاحية لمسح عميل CRM');
+      result=await manageEngagementItem(sql,body,user);
+    }
     else if(action==='save_result_file')result=await saveResultFile(sql,body,user);
     else if(action==='save_links')result=await saveLinks(sql,body,user);
     else if(action==='archive_entity')result=await archiveEntity(sql,body,user);

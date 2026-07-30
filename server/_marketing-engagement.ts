@@ -3,6 +3,7 @@ import { ensureCrmSchema } from "./_crm-schema.js";
 import { ensureMarketingSchema } from "./_marketing-schema.js";
 import { classifyConversationService, ensureContactIdentity } from "./_crm-lifecycle.js";
 import { decryptPlatformToken } from "./_platform-connections.js";
+import type { SessionUser } from "./_auth.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function asObject(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
@@ -135,6 +136,62 @@ export async function backfillPublishedPosts(sql: ReturnType<typeof getSql>) {
   return created;
 }
 
+async function cleanupLegacyTestEngagementRows(sql: ReturnType<typeof getSql>) {
+  await sql.begin(async tx => {
+    const [claimed] = await tx<any[]>`
+      insert into marketing.data_migrations(migration_key,details)
+      values('20260730_remove_test_engagement_rows',${tx.json({ scope: 'engagement_page', match: 'source_name=test' } as any)})
+      on conflict(migration_key) do nothing
+      returning migration_key
+    `;
+    if (!claimed) return;
+    await tx`
+      update marketing.published_posts pp
+      set is_deleted=true,deleted_at=coalesce(deleted_at,now()),updated_at=now()
+      where exists(
+        select 1 from marketing.campaigns c
+        where pp.source_type='campaign' and c.id=pp.source_id and lower(btrim(c.name))='test'
+      ) or exists(
+        select 1 from marketing.agendas a
+        where pp.source_type='agenda' and a.id=pp.source_id and lower(btrim(a.name))='test'
+      )
+    `;
+  });
+}
+
+async function repairStoredEngagementSources(sql: ReturnType<typeof getSql>) {
+  await sql.begin(async tx => {
+    const [claimed] = await tx<any[]>`
+      insert into marketing.data_migrations(migration_key,details)
+      values('20260730_repair_engagement_crm_sources',${tx.json({ scope: 'crm_leads', source: 'published_post_platform' } as any)})
+      on conflict(migration_key) do nothing
+      returning migration_key
+    `;
+    if (!claimed) return;
+    await tx`
+      with latest_platform as (
+        select distinct on(pe.crm_lead_id) pe.crm_lead_id,pp.platform
+        from marketing.post_engagements pe
+        join marketing.published_posts pp on pp.id=pe.published_post_id
+        where pe.crm_lead_id is not null and pe.processing_status='created' and pe.is_deleted=false and pp.is_deleted=false
+        order by pe.crm_lead_id,coalesce(pe.engaged_at,pe.created_at) desc
+      )
+      update crm.leads l
+      set source_code=case when latest_platform.platform='instagram' then 'instagram_post' else 'facebook_post' end,
+        source_name=case when latest_platform.platform='instagram' then 'بوست انستجرام' else 'بوست فيس بوك' end,
+        platform_code=latest_platform.platform,
+        updated_at=now()
+      from latest_platform
+      where l.id=latest_platform.crm_lead_id
+        and (
+          l.source_code is distinct from case when latest_platform.platform='instagram' then 'instagram_post' else 'facebook_post' end
+          or l.source_name is distinct from case when latest_platform.platform='instagram' then 'بوست انستجرام' else 'بوست فيس بوك' end
+          or l.platform_code is distinct from latest_platform.platform
+        )
+    `;
+  });
+}
+
 async function platformConnection(sql: ReturnType<typeof getSql>, platform: string) {
   const [connection] = await sql<any[]>`select * from marketing.platform_connections where platform=${platform} and connected=true limit 1`;
   if (!connection) throw new Error(`ربط ${platform === 'facebook' ? 'Facebook' : 'Instagram'} غير متاح`);
@@ -204,9 +261,11 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
 
 export async function refreshEngagementMetrics(sql: ReturnType<typeof getSql>, ids: string[] = []) {
   await backfillPublishedPosts(sql);
+  await cleanupLegacyTestEngagementRows(sql);
+  await repairStoredEngagementSources(sql);
   const rows = ids.length
-    ? await sql<any[]>`select *,id::text from marketing.published_posts where id=any(${ids}::uuid[]) order by published_at desc`
-    : await sql<any[]>`select *,id::text from marketing.published_posts order by published_at desc`;
+    ? await sql<any[]>`select *,id::text from marketing.published_posts where id=any(${ids}::uuid[]) and is_deleted=false order by published_at desc`
+    : await sql<any[]>`select *,id::text from marketing.published_posts where is_deleted=false order by published_at desc`;
   const results = [];
   for (const row of rows) results.push(await refreshOne(sql, row));
   return { ok: true, results, updated: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length };
@@ -215,8 +274,11 @@ export async function refreshEngagementMetrics(sql: ReturnType<typeof getSql>, i
 export async function engagementData(sql: ReturnType<typeof getSql>) {
   await ensureCrmSchema();
   await backfillPublishedPosts(sql);
+  await cleanupLegacyTestEngagementRows(sql);
+  await repairStoredEngagementSources(sql);
   const rows = await sql<any[]>`
     select pp.*,pp.id::text,pp.schedule_id::text,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
+      pp.archived_by::text,pp.deleted_by::text,
       coalesce(campaign.name,agenda.name,'—') as source_name,
       coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name,
       coalesce(t.title,'—') as task_name,
@@ -227,24 +289,28 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     left join marketing.creatives cr on cr.id=pp.creative_id
     left join marketing.tasks t on t.id=pp.task_id
     left join core.users u on u.id=t.assigned_to
+    where pp.is_deleted=false
     order by pp.published_at desc
   `;
-  const comments = await sql<any[]>`
-    select pc.*,pc.id::text,pc.published_post_id::text,pc.crm_lead_id::text,
-      pp.platform,coalesce(campaign.name,agenda.name,'—') as campaign_name,
+  const engagements = await sql<any[]>`
+    select pe.*,pe.id::text,pe.published_post_id::text,pe.crm_lead_id::text,pe.archived_by::text,pe.deleted_by::text,
+      pp.platform,pp.archived_at as post_archived_at,coalesce(campaign.name,agenda.name,'—') as campaign_name,
       coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name,
-      l.customer_name,l.branch_code,l.status_label,l.source_name as crm_source_name,
+      l.customer_name,l.branch_code,l.status_label,l.source_name as crm_source_name,l.is_deleted as crm_is_deleted,
       sales.full_name as assigned_name
-    from marketing.post_comments pc
-    join marketing.published_posts pp on pp.id=pc.published_post_id
+    from marketing.post_engagements pe
+    join marketing.published_posts pp on pp.id=pe.published_post_id
     left join marketing.campaigns campaign on pp.source_type='campaign' and campaign.id=pp.source_id
     left join marketing.agendas agenda on pp.source_type='agenda' and agenda.id=pp.source_id
     left join marketing.creatives cr on cr.id=pp.creative_id
-    left join crm.leads l on l.id=pc.crm_lead_id
+    left join crm.leads l on l.id=pe.crm_lead_id
     left join core.users sales on sales.id=l.assigned_to
-    order by coalesce(pc.commented_at,pc.created_at) desc limit 200
+    where pe.is_deleted=false and pp.is_deleted=false
+    order by coalesce(pe.engaged_at,pe.created_at) desc limit 500
   `;
-  const summary = rows.reduce((total: any, row: any) => ({
+  const activeRows = rows.filter((row: any) => !row.archived_at);
+  const activeEngagements = engagements.filter((row: any) => !row.archived_at && !row.post_archived_at);
+  const summary = activeRows.reduce((total: any, row: any) => ({
     posts: total.posts + 1,
     likes: total.likes + numberValue(row.likes_count),
     comments: total.comments + numberValue(row.comments_count),
@@ -253,7 +319,14 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     views: total.views + numberValue(row.views_count),
     reach: total.reach + numberValue(row.reach_count),
   }), { posts: 0, likes: 0, comments: 0, shares: 0, saves: 0, views: 0, reach: 0 });
-  const crmLeads = new Set(comments.map((row: any) => clean(row.crm_lead_id)).filter(Boolean)).size;
+  const engagementSummary = activeEngagements.reduce((total: any, row: any) => {
+    total.engagements += 1;
+    if (row.engagement_type === 'comment') total.commentEvents += 1;
+    if (row.engagement_type === 'like') total.likeEvents += 1;
+    if (row.engagement_type === 'share') total.shareEvents += 1;
+    return total;
+  }, { engagements: 0, commentEvents: 0, likeEvents: 0, shareEvents: 0 });
+  const crmLeads = new Set(activeEngagements.map((row: any) => clean(row.crm_lead_id)).filter(Boolean)).size;
   const connections = await sql<any[]>`select platform,metadata from marketing.platform_connections where platform in ('facebook','instagram') order by platform`;
   const subscriptionResults = connections.flatMap((row: any) => {
     const stored = asObject(asObject(row.metadata).engagementWebhookSubscription);
@@ -263,7 +336,11 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
   });
   const callbackBase = clean(process.env.MZJ_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : ''));
   return {
-    ok: true, rows, comments, summary: { ...summary, crmLeads },
+    ok: true,
+    rows,
+    engagements,
+    comments: engagements.filter((row: any) => row.engagement_type === 'comment'),
+    summary: { ...summary, ...engagementSummary, crmLeads },
     webhook: {
       callbackUrl: callbackBase ? `${callbackBase.replace(/\/$/,'')}/api/integrations/meta/engagement-webhook` : '/api/integrations/meta/engagement-webhook',
       verifyTokenConfigured: Boolean(clean(process.env.META_WEBHOOK_VERIFY_TOKEN)),
@@ -310,6 +387,54 @@ async function subscribeTarget(target: SubscriptionTarget) {
   }
 }
 
+async function verifyInstagramFacebookLoginSubscription(linked: any, grantedScopes: string[]) {
+  const accountId = clean(linked.connection.ig_user_id || linked.connection.account_id);
+  const pageId = clean(linked.connection.page_id);
+  const requiredScopes = ['instagram_basic', 'instagram_manage_comments', 'pages_read_engagement', 'pages_manage_metadata'];
+  const missing = missingScopes(grantedScopes, requiredScopes);
+  const base = {
+    platform: 'instagram' as const,
+    field: 'comments' as const,
+    accountId,
+    accountName: clean(linked.connection.account_name || linked.connection.username),
+    host: 'facebook' as const,
+    endpoint: `/${pageId}/subscribed_apps`,
+    linkedPageId: pageId,
+    activationMode: 'facebook_page_subscription',
+    grantedScopes,
+    requiredScopes,
+    missingScopes: missing,
+  };
+  if (!accountId) return { ...base, ok: false, error: 'Instagram Account ID غير موجود', errorDetails: {} };
+  if (!pageId) return { ...base, ok: false, error: 'صفحة Facebook المرتبطة بحساب Instagram غير موجودة', errorDetails: {} };
+  if (missing.length) return { ...base, ok: false, error: `التوكن الحالي لا يحتوي الصلاحيات المطلوبة: ${missing.join(', ')}`, errorDetails: {} };
+  try {
+    // Facebook Login for Business installs the app on the linked Page. We only verify that existing
+    // Page subscription here; no Facebook subscription field or Facebook flow is changed by Instagram.
+    const verification = await graphRequest(`/${encodeURIComponent(pageId)}/subscribed_apps`, 'GET', linked.token, {}, 'facebook');
+    const fields = subscriptionFields(verification);
+    if (!fields.includes('feed')) {
+      return {
+        ...base,
+        ok: false,
+        verification,
+        subscribedFields: fields,
+        error: 'اشتراك صفحة Facebook الحالي لا يحتوي الحقل feed المطلوب لتوصيل أحداث الحساب المرتبط. فعّل Facebook كما كان ثم تأكد من تفعيل comments داخل Webhooks > Instagram في Meta App.',
+        errorDetails: {},
+      };
+    }
+    return {
+      ...base,
+      ok: true,
+      verification,
+      subscribedFields: fields,
+      note: 'تم التحقق من تثبيت التطبيق على الصفحة المرتبطة. استقبال comments يعتمد على تفعيل حقل Instagram داخل Meta App.',
+    };
+  } catch (error: any) {
+    return { ...base, ok: false, ...subscriptionFailure(error) };
+  }
+}
+
 export async function subscribeMetaEngagementWebhooks(sql: ReturnType<typeof getSql>) {
   const results: any[] = [];
   for (const platform of ['facebook','instagram'] as const) {
@@ -322,6 +447,10 @@ export async function subscribeMetaEngagementWebhooks(sql: ReturnType<typeof get
         : clean(linked.connection.ig_user_id || linked.connection.account_id);
       if (!accountId) throw new Error(isFacebook ? 'Page ID الخاص بـFacebook غير موجود' : 'Instagram Account ID غير موجود');
       const instagramLogin = !isFacebook && grantedScopes.some((scope) => scope.startsWith('instagram_business_'));
+      if (!isFacebook && !instagramLogin) {
+        results.push(await verifyInstagramFacebookLoginSubscription(linked, grantedScopes));
+        continue;
+      }
       results.push(await subscribeTarget({
         platform,
         field: isFacebook ? 'feed' : 'comments',
@@ -330,7 +459,7 @@ export async function subscribeMetaEngagementWebhooks(sql: ReturnType<typeof get
         host: instagramLogin ? 'instagram' : 'facebook',
         token: linked.token,
         grantedScopes,
-        requiredScopes: isFacebook ? ['pages_manage_metadata'] : [instagramLogin ? 'instagram_business_manage_comments' : 'instagram_manage_comments'],
+        requiredScopes: isFacebook ? ['pages_manage_metadata'] : ['instagram_business_manage_comments'],
       }));
     } catch (error: any) {
       results.push({ platform, field: platform === 'facebook' ? 'feed' : 'comments', ok: false, ...subscriptionFailure(error) });
@@ -353,37 +482,84 @@ export async function subscribeMetaEngagementWebhooks(sql: ReturnType<typeof get
   };
 }
 
-type NormalizedComment = {
-  platform: 'facebook' | 'instagram'; accountId: string; postIds: string[]; commentId: string;
-  commenterId: string; commenterName: string; text: string; commentedAt: string; raw: any;
+type EngagementType = 'comment' | 'like' | 'share';
+
+type NormalizedEngagement = {
+  platform: 'facebook' | 'instagram';
+  engagementType: EngagementType;
+  accountId: string;
+  postIds: string[];
+  eventId: string;
+  actorId: string;
+  actorName: string;
+  text: string;
+  engagedAt: string;
+  raw: any;
 };
 
-function normalizeWebhook(payload: any): NormalizedComment[] {
-  const output: NormalizedComment[] = [];
+function engagementPreview(item: NormalizedEngagement) {
+  if (item.engagementType === 'comment') return item.text || 'تعليق على منشور';
+  if (item.engagementType === 'like') return 'تفاعل بالإعجاب على منشور';
+  return 'مشاركة منشور';
+}
+
+function normalizedChanges(entry: any) {
+  const changes = asArray(entry?.changes);
+  if (changes.length) return changes;
+  const field = clean(entry?.field);
+  return field ? [{ field, value: entry?.value }] : [];
+}
+
+function normalizeWebhook(payload: any): NormalizedEngagement[] {
+  const output: NormalizedEngagement[] = [];
   const object = clean(payload?.object).toLowerCase();
   for (const entry of asArray(payload?.entry)) {
     const accountId = clean(entry?.id);
-    for (const change of asArray(entry?.changes)) {
+    for (const change of normalizedChanges(entry)) {
       const value = asObject(change?.value);
-      if (object === 'page' && clean(change?.field) === 'feed' && clean(value?.item) === 'comment' && clean(value?.verb) === 'add') {
-        const from = asObject(value?.from);
-        const commentId = clean(value?.comment_id || value?.id);
-        const commenterId = clean(from?.id);
-        if (commentId && commenterId) output.push({
-          platform: 'facebook', accountId, postIds: [clean(value?.post_id), clean(value?.parent_id)].filter(Boolean), commentId,
-          commenterId, commenterName: clean(from?.name) || 'عميل Facebook', text: clean(value?.message),
-          commentedAt: value?.created_time ? new Date(numberValue(value.created_time) * 1000).toISOString() : new Date(numberValue(entry?.time) * 1000 || Date.now()).toISOString(), raw: change,
-        });
+      const field = clean(change?.field);
+      if (object === 'page' && field === 'feed' && clean(value?.verb) === 'add') {
+        const item = clean(value?.item);
+        const from = asObject(value?.from || value?.actor);
+        const actorId = clean(from?.id);
+        const actorName = clean(from?.name) || 'عميل Facebook';
+        const postIds = [clean(value?.post_id), clean(value?.parent_id)].filter(Boolean);
+        const timestamp = value?.created_time
+          ? new Date(numberValue(value.created_time) * 1000).toISOString()
+          : new Date(numberValue(entry?.time) * 1000 || Date.now()).toISOString();
+        if (item === 'comment') {
+          const eventId = clean(value?.comment_id || value?.id);
+          if (eventId && actorId) output.push({
+            platform: 'facebook', engagementType: 'comment', accountId, postIds, eventId, actorId, actorName,
+            text: clean(value?.message), engagedAt: timestamp, raw: change,
+          });
+        }
+        if (item === 'reaction') {
+          const eventId = clean(value?.reaction_id || value?.id) || `${postIds[0] || 'post'}:${actorId}:${clean(value?.reaction_type) || 'like'}`;
+          if (eventId && actorId) output.push({
+            platform: 'facebook', engagementType: 'like', accountId, postIds, eventId, actorId, actorName,
+            text: clean(value?.reaction_type) || 'LIKE', engagedAt: timestamp, raw: change,
+          });
+        }
+        if (item === 'share') {
+          const eventId = clean(value?.share_id || value?.id) || `${postIds[0] || 'post'}:${actorId}:share`;
+          if (eventId && actorId) output.push({
+            platform: 'facebook', engagementType: 'share', accountId, postIds, eventId, actorId, actorName,
+            text: '', engagedAt: timestamp, raw: change,
+          });
+        }
       }
-      if (object === 'instagram' && clean(change?.field) === 'comments') {
+      if (object === 'instagram' && field === 'comments') {
         const from = asObject(value?.from);
         const media = asObject(value?.media);
-        const commentId = clean(value?.id || value?.comment_id);
-        const commenterId = clean(from?.id);
-        if (commentId && commenterId) output.push({
-          platform: 'instagram', accountId, postIds: [clean(media?.id), clean(value?.media_id)].filter(Boolean), commentId,
-          commenterId, commenterName: clean(from?.username || from?.name) || 'عميل Instagram', text: clean(value?.text || value?.message),
-          commentedAt: new Date(numberValue(entry?.time) * 1000 || Date.now()).toISOString(), raw: change,
+        const eventId = clean(value?.id || value?.comment_id);
+        const actorId = clean(from?.id || from?.ig_scoped_id || from?.username);
+        if (eventId && actorId) output.push({
+          platform: 'instagram', engagementType: 'comment', accountId,
+          postIds: [clean(media?.id), clean(value?.media_id)].filter(Boolean),
+          eventId, actorId, actorName: clean(from?.username || from?.name) || 'عميل Instagram',
+          text: clean(value?.text || value?.message),
+          engagedAt: new Date(numberValue(entry?.time) * 1000 || Date.now()).toISOString(), raw: change,
         });
       }
     }
@@ -391,37 +567,39 @@ function normalizeWebhook(payload: any): NormalizedComment[] {
   return output;
 }
 
-async function findPublishedPost(sql: ReturnType<typeof getSql>, comment: NormalizedComment) {
-  const candidates = [...new Set(comment.postIds.map(clean).filter(Boolean))];
+async function findPublishedPost(sql: ReturnType<typeof getSql>, item: NormalizedEngagement) {
+  const candidates = [...new Set(item.postIds.map(clean).filter(Boolean))];
   if (!candidates.length) return null;
   const [post] = await sql<any[]>`
     select *,id::text,source_id::text,creative_id::text,task_id::text from marketing.published_posts
-    where platform=${comment.platform} and account_id=${comment.accountId}
+    where platform=${item.platform} and account_id=${item.accountId} and is_deleted=false
       and (provider_post_id=any(${candidates}::text[]) or coalesce(provider_media_id,'')=any(${candidates}::text[]))
     order by published_at desc limit 1
   `;
   return post || null;
 }
 
-async function createCrmLeadFromComment(sql: ReturnType<typeof getSql>, post: any, comment: NormalizedComment) {
-  const sourceCode = comment.platform === 'facebook' ? 'facebook_post' : 'instagram_post';
-  const sourceName = comment.platform === 'facebook' ? 'بوست فيس بوك' : 'بوست انستجرام';
+async function createCrmLeadFromEngagement(sql: ReturnType<typeof getSql>, post: any, item: NormalizedEngagement) {
+  const sourceCode = item.platform === 'facebook' ? 'facebook_post' : 'instagram_post';
+  const sourceName = item.platform === 'facebook' ? 'بوست فيس بوك' : 'بوست انستجرام';
+  const preview = engagementPreview(item);
   const { contact } = await ensureContactIdentity({
-    channelCode: comment.platform,
-    externalId: comment.commenterId,
-    participantId: comment.commenterId,
-    pageId: comment.accountId,
-    displayName: comment.commenterName,
-    metadata: { origin: 'post_comment', sourceCode, providerPostId: post.provider_post_id },
+    channelCode: item.platform,
+    externalId: item.actorId,
+    participantId: item.actorId,
+    pageId: item.accountId,
+    displayName: item.actorName,
+    metadata: { origin: 'post_engagement', engagementType: item.engagementType, sourceCode, providerPostId: post.provider_post_id },
   });
-  const legacyId = `post-comment:${comment.platform}:${comment.accountId}:${comment.commenterId}`;
+  // Keep the original stable key so existing comment-created conversations are reused rather than duplicated.
+  const legacyId = `post-comment:${item.platform}:${item.accountId}:${item.actorId}`;
   const [conversation] = await sql<any[]>`
     insert into crm.conversations(
       legacy_id,contact_id,channel_code,customer_name,participant_id,status,preview_text,unread_count,last_message_at,
       provider,page_id,classification_state,last_customer_message_at,metadata
     ) values(
-      ${legacyId},${contact.id}::uuid,${comment.platform},${comment.commenterName},${comment.commenterId},'open',${comment.text || 'تعليق على منشور'},1,${comment.commentedAt}::timestamptz,
-      'meta',${comment.accountId},'new',${comment.commentedAt}::timestamptz,${sql.json({ origin: 'post_comment', sourceCode, publishedPostId: post.id, providerPostId: post.provider_post_id } as any)}
+      ${legacyId},${contact.id}::uuid,${item.platform},${item.actorName},${item.actorId},'open',${preview},1,${item.engagedAt}::timestamptz,
+      'meta',${item.accountId},'new',${item.engagedAt}::timestamptz,${sql.json({ origin: 'post_engagement', engagementType: item.engagementType, sourceCode, publishedPostId: post.id, providerPostId: post.provider_post_id } as any)}
     ) on conflict(legacy_id) do update set
       contact_id=excluded.contact_id,customer_name=coalesce(nullif(excluded.customer_name,''),crm.conversations.customer_name),
       preview_text=coalesce(nullif(excluded.preview_text,''),crm.conversations.preview_text),unread_count=greatest(crm.conversations.unread_count,1),
@@ -431,8 +609,8 @@ async function createCrmLeadFromComment(sql: ReturnType<typeof getSql>, post: an
     returning *,id::text,contact_id::text,lead_id::text,service_request_id::text
   `;
   const classification = await classifyConversationService({
-    conversationId: conversation.id, serviceKey: 'cash', sourceCode, classificationMethod: 'meta_post_comment',
-    eventKey: `${comment.platform}:${comment.commentId}`, skipAutomaticTemplate: true, assignPrimary: true, assignCallCenter: false,
+    conversationId: conversation.id, serviceKey: 'cash', sourceCode, classificationMethod: 'meta_post_engagement',
+    eventKey: `${item.platform}:${item.engagementType}:${item.eventId}`, skipAutomaticTemplate: true, assignPrimary: true, assignCallCenter: false,
   });
   const [source] = post.source_type === 'agenda'
     ? await sql<any[]>`select name from marketing.agendas where id=${post.source_id}::uuid`
@@ -440,10 +618,10 @@ async function createCrmLeadFromComment(sql: ReturnType<typeof getSql>, post: an
   const leadId = clean(classification.leadId || classification.request?.lead_id);
   if (!leadId) throw new Error('تعذر تحديد عميل CRM بعد التوزيع');
   await sql`
-    update crm.leads set source_code=${sourceCode},source_name=${sourceName},platform_code=${comment.platform},campaign_name=${clean(source?.name) || null},
+    update crm.leads set source_code=${sourceCode},source_name=${sourceName},platform_code=${item.platform},campaign_name=${clean(source?.name) || null},
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
-        socialComment: true, publishedPostId: post.id, providerPostId: post.provider_post_id,
-        latestCommentId: comment.commentId, latestCommentText: comment.text,
+        socialEngagement: true, engagementType: item.engagementType, publishedPostId: post.id, providerPostId: post.provider_post_id,
+        latestEngagementId: item.eventId, latestEngagementText: item.text,
       } as any)}::jsonb,updated_at=now()
     where id=${leadId}::uuid
   `;
@@ -453,29 +631,82 @@ async function createCrmLeadFromComment(sql: ReturnType<typeof getSql>, post: an
 export async function processMetaEngagementWebhook(payload: any) {
   await Promise.all([ensureMarketingSchema(), ensureCrmSchema()]);
   const sql = getSql();
-  const comments = normalizeWebhook(payload);
+  const engagements = normalizeWebhook(payload);
   const results: any[] = [];
-  for (const comment of comments) {
-    let commentRow: any = null;
+  for (const item of engagements) {
+    let eventRow: any = null;
     try {
-      const post = await findPublishedPost(sql, comment);
-      if (!post) { results.push({ commentId: comment.commentId, status: 'ignored', reason: 'post_not_published_by_platform' }); continue; }
-      if (comment.commenterId === comment.accountId) { results.push({ commentId: comment.commentId, status: 'ignored', reason: 'own_account_comment' }); continue; }
+      const post = await findPublishedPost(sql, item);
+      if (!post) { results.push({ eventId: item.eventId, status: 'ignored', reason: 'post_not_published_by_platform' }); continue; }
+      if (item.actorId === item.accountId) { results.push({ eventId: item.eventId, status: 'ignored', reason: 'own_account_engagement' }); continue; }
       const [inserted] = await sql<any[]>`
-        insert into marketing.post_comments(published_post_id,platform,provider_comment_id,provider_post_id,account_id,commenter_id,commenter_name,comment_text,commented_at,raw_payload)
-        values(${post.id}::uuid,${comment.platform},${comment.commentId},${comment.postIds[0] || post.provider_post_id},${comment.accountId},${comment.commenterId},${comment.commenterName},${comment.text || null},${comment.commentedAt}::timestamptz,${sql.json(comment.raw as any)})
-        on conflict(platform,provider_comment_id) do nothing returning *,id::text
+        insert into marketing.post_engagements(
+          published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,engaged_at,raw_payload
+        ) values(
+          ${post.id}::uuid,${item.platform},${item.engagementType},${item.eventId},${item.postIds[0] || post.provider_post_id},${item.accountId},
+          ${item.actorId},${item.actorName},${item.text || null},${item.engagedAt}::timestamptz,${sql.json(item.raw as any)}
+        ) on conflict(platform,engagement_type,provider_event_id) do nothing returning *,id::text
       `;
-      if (!inserted) { results.push({ commentId: comment.commentId, status: 'duplicate' }); continue; }
-      commentRow = inserted;
-      const lead = await createCrmLeadFromComment(sql, post, comment);
-      await sql`update marketing.post_comments set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now() where id=${inserted.id}::uuid`;
-      results.push({ commentId: comment.commentId, status: lead.reused ? 'reused' : 'created', leadId: lead.leadId });
+      if (!inserted) { results.push({ eventId: item.eventId, status: 'duplicate' }); continue; }
+      eventRow = inserted;
+      const lead = await createCrmLeadFromEngagement(sql, post, item);
+      await sql`update marketing.post_engagements set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now() where id=${inserted.id}::uuid`;
+      results.push({ eventId: item.eventId, engagementType: item.engagementType, status: lead.reused ? 'reused' : 'created', leadId: lead.leadId });
     } catch (error: any) {
-      const message = clean(error?.message) || 'تعذر تحويل التعليق إلى CRM';
-      if (commentRow?.id) await sql`update marketing.post_comments set processing_status='failed',processing_error=${message},updated_at=now() where id=${commentRow.id}::uuid`;
-      results.push({ commentId: comment.commentId, status: 'failed', error: message });
+      const message = clean(error?.message) || 'تعذر تحويل التفاعل إلى CRM';
+      if (eventRow?.id) await sql`update marketing.post_engagements set processing_status='failed',processing_error=${message},updated_at=now() where id=${eventRow.id}::uuid`;
+      results.push({ eventId: item.eventId, engagementType: item.engagementType, status: 'failed', error: message });
     }
   }
-  return { ok: true, received: comments.length, results };
+  return { ok: true, received: engagements.length, results };
 }
+
+export async function manageEngagementItem(sql: ReturnType<typeof getSql>, body: any, user: SessionUser) {
+  const entity = clean(body.entity);
+  const operation = clean(body.operation);
+  const id = clean(body.id);
+  if (!id || !['post','engagement'].includes(entity) || !['archive','restore','delete','delete_customer'].includes(operation)) {
+    throw new Error('إجراء تفاعل النشر غير صالح');
+  }
+  if (entity === 'post') {
+    if (operation === 'delete_customer') throw new Error('هذا الإجراء متاح للتفاعلات المرتبطة بعميل فقط');
+    const [row] = await sql<any[]>`select id::text from marketing.published_posts where id=${id}::uuid and is_deleted=false`;
+    if (!row) throw new Error('المنشور غير موجود');
+    if (operation === 'archive') {
+      await sql`update marketing.published_posts set archived_at=now(),archived_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+      return { ok: true, message: 'تمت أرشفة المنشور' };
+    }
+    if (operation === 'restore') {
+      await sql`update marketing.published_posts set archived_at=null,archived_by=null,updated_at=now() where id=${id}::uuid`;
+      return { ok: true, message: 'تمت استعادة المنشور' };
+    }
+    await sql`update marketing.published_posts set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+    return { ok: true, message: 'تم مسح المنشور من تفاعل النشر' };
+  }
+
+  const [row] = await sql<any[]>`
+    select id::text,crm_lead_id::text,processing_status from marketing.post_engagements where id=${id}::uuid and is_deleted=false
+  `;
+  if (!row) throw new Error('التفاعل غير موجود');
+  if (operation === 'archive') {
+    await sql`update marketing.post_engagements set archived_at=now(),archived_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+    return { ok: true, message: 'تمت أرشفة التفاعل' };
+  }
+  if (operation === 'restore') {
+    await sql`update marketing.post_engagements set archived_at=null,archived_by=null,updated_at=now() where id=${id}::uuid`;
+    return { ok: true, message: 'تمت استعادة التفاعل' };
+  }
+  if (operation === 'delete_customer') {
+    const leadId = clean(row.crm_lead_id);
+    if (!leadId) throw new Error('لا يوجد عميل CRM مرتبط بهذا التفاعل');
+    if (clean(row.processing_status) !== 'created') throw new Error('هذا العميل كان موجودًا مسبقًا في CRM؛ يمكن مسح التفاعل فقط دون مسح العميل');
+    await sql.begin(async tx => {
+      await tx`update crm.leads set is_deleted=true,deleted_by=${user.id}::uuid,deleted_at=now(),updated_at=now() where id=${leadId}::uuid and is_deleted=false`;
+      await tx`update marketing.post_engagements set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now() where crm_lead_id=${leadId}::uuid and is_deleted=false`;
+    });
+    return { ok: true, message: 'تم مسح العميل الذي أُنشئ من التفاعل وسجل تفاعلاته' };
+  }
+  await sql`update marketing.post_engagements set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now() where id=${id}::uuid`;
+  return { ok: true, message: 'تم مسح التفاعل من السجل' };
+}
+

@@ -921,6 +921,12 @@ create table if not exists marketing.published_posts (
 create index if not exists marketing_published_posts_provider_idx on marketing.published_posts(platform,account_id,provider_post_id);
 create index if not exists marketing_published_posts_media_idx on marketing.published_posts(platform,provider_media_id) where provider_media_id is not null;
 create index if not exists marketing_published_posts_source_idx on marketing.published_posts(source_type,source_id,published_at desc);
+alter table marketing.published_posts add column if not exists archived_at timestamptz;
+alter table marketing.published_posts add column if not exists archived_by uuid references core.users(id);
+alter table marketing.published_posts add column if not exists is_deleted boolean not null default false;
+alter table marketing.published_posts add column if not exists deleted_at timestamptz;
+alter table marketing.published_posts add column if not exists deleted_by uuid references core.users(id);
+create index if not exists marketing_published_posts_active_idx on marketing.published_posts(published_at desc) where is_deleted=false;
 
 create table if not exists marketing.post_comments (
   id uuid primary key default gen_random_uuid(),
@@ -944,6 +950,51 @@ create table if not exists marketing.post_comments (
 create index if not exists marketing_post_comments_post_idx on marketing.post_comments(published_post_id,commented_at desc,created_at desc);
 create index if not exists marketing_post_comments_commenter_idx on marketing.post_comments(platform,account_id,commenter_id);
 create index if not exists marketing_post_comments_lead_idx on marketing.post_comments(crm_lead_id) where crm_lead_id is not null;
+
+create table if not exists marketing.post_engagements (
+  id uuid primary key default gen_random_uuid(),
+  published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
+  platform text not null check(platform in ('facebook','instagram')),
+  engagement_type text not null check(engagement_type in ('comment','like','share')),
+  provider_event_id text not null,
+  provider_post_id text,
+  account_id text not null,
+  actor_id text not null,
+  actor_name text,
+  event_text text,
+  engaged_at timestamptz,
+  crm_lead_id uuid,
+  processing_status text not null default 'pending' check(processing_status in ('pending','created','reused','ignored','failed')),
+  processing_error text,
+  raw_payload jsonb not null default '{}'::jsonb,
+  archived_at timestamptz,
+  archived_by uuid references core.users(id),
+  is_deleted boolean not null default false,
+  deleted_at timestamptz,
+  deleted_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(platform,engagement_type,provider_event_id)
+);
+create index if not exists marketing_post_engagements_post_idx on marketing.post_engagements(published_post_id,engaged_at desc,created_at desc) where is_deleted=false;
+create index if not exists marketing_post_engagements_actor_idx on marketing.post_engagements(platform,account_id,actor_id) where is_deleted=false;
+create index if not exists marketing_post_engagements_lead_idx on marketing.post_engagements(crm_lead_id) where crm_lead_id is not null and is_deleted=false;
+create index if not exists marketing_post_engagements_type_idx on marketing.post_engagements(engagement_type,engaged_at desc) where is_deleted=false;
+
+insert into marketing.post_engagements(
+  id,published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,
+  engaged_at,crm_lead_id,processing_status,processing_error,raw_payload,created_at,updated_at
+)
+select pc.id,pc.published_post_id,pc.platform,'comment',pc.provider_comment_id,pc.provider_post_id,pc.account_id,pc.commenter_id,
+  pc.commenter_name,pc.comment_text,pc.commented_at,pc.crm_lead_id,pc.processing_status,pc.processing_error,pc.raw_payload,pc.created_at,pc.updated_at
+from marketing.post_comments pc
+on conflict(platform,engagement_type,provider_event_id) do nothing;
+
+create table if not exists marketing.data_migrations (
+  migration_key text primary key,
+  applied_at timestamptz not null default now(),
+  details jsonb not null default '{}'::jsonb
+);
 
 create table if not exists marketing.engagement_snapshots (
   id bigserial primary key,
