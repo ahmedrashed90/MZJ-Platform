@@ -452,8 +452,14 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             />
           </div>
           <footer className="marketing-template-preview-actions">
-            <button type="button" className="secondary" disabled={loading} onClick={() => setTemplatePreview(null)}>إلغاء والعودة للرفع</button>
-            <button type="button" className="primary" disabled={loading || !templatePreview.inspection.isValid} onClick={() => void confirmTemplateUpload()}><FileArrowUp size={18} />{loading ? "جاري الرفع..." : "تأكيد رفع Task Template"}</button>
+            <div className="marketing-template-preview-action-copy">
+              <strong>راجع التصميم كاملًا قبل تأكيد الرفع</strong>
+              <small>المعاينة الحالية هي نفس طريقة العرض التي ستظهر بعد الحفظ والاعتماد.</small>
+            </div>
+            <div className="marketing-template-preview-action-buttons">
+              <button type="button" className="marketing-template-preview-cancel" disabled={loading} onClick={() => setTemplatePreview(null)}><XCircle size={20} />إلغاء واختيار ملف آخر</button>
+              <button type="button" className="marketing-template-preview-confirm" disabled={loading || !templatePreview.inspection.isValid} onClick={() => void confirmTemplateUpload()}><FileArrowUp size={20} weight="fill" />{loading ? "جاري رفع الملف..." : "تأكيد رفع Task Template"}</button>
+            </div>
           </footer>
         </section>
       </div> : null}

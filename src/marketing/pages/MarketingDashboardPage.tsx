@@ -127,6 +127,7 @@ export function MarketingDashboardPage() {
   const [expandedRequired, setExpandedRequired] = useState<string[]>([]);
   const [expandedEntities, setExpandedEntities] = useState<string[]>([]);
   const [expandedReadinessDepartments, setExpandedReadinessDepartments] = useState<string[]>([]);
+  const [movingEntityKey, setMovingEntityKey] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const versionRef = useRef("");
@@ -191,6 +192,23 @@ export function MarketingDashboardPage() {
     }
   }
 
+  async function moveToPublishing(entity: any) {
+    const entityKey = `${entity.source_type}:${entity.id}`;
+    setMovingEntityKey(entityKey);
+    setError("");
+    try {
+      await marketingFetch("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "move_to_publishing", sourceType: entity.source_type, sourceId: entity.id }),
+      });
+      await load(true);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر نقل الحملة أو الأجندة إلى قسم النشر");
+    } finally {
+      setMovingEntityKey("");
+    }
+  }
+
   function toggleList(setter: Dispatch<SetStateAction<string[]>>, key: string) {
     setter((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   }
@@ -216,9 +234,19 @@ export function MarketingDashboardPage() {
   }, [data.received]);
 
   const readinessEntities = useMemo(
-    () => (data.entities || []).filter((item: any) => receivedBySource.has(`${item.source_type}:${item.id}`)),
+    () => (data.entities || []).filter((item: any) => item.status !== "publishing" && item.status !== "archived" && receivedBySource.has(`${item.source_type}:${item.id}`)),
     [data.entities, receivedBySource],
   );
+
+  const publishingEntities = useMemo(
+    () => (data.entities || []).filter((item: any) => item.status === "publishing"),
+    [data.entities],
+  );
+
+  const canMoveToPublishing = useMemo(() => {
+    const permissions = new Set<string>(Array.isArray(data.permissions) ? data.permissions : []);
+    return permissions.has("marketing.publish_prep.manage") || permissions.has("marketing.campaign.edit") || permissions.has("marketing.agenda.edit");
+  }, [data.permissions]);
 
   const completedTasks = useMemo(() => {
     const query = completedSearch.trim().toLocaleLowerCase("ar");
@@ -303,6 +331,12 @@ export function MarketingDashboardPage() {
                 {entityOpen ? <CaretUp size={17} /> : <CaretDown size={17} />}
               </button>
               <ProgressBar value={entity.progress} />
+              {Number(entity.progress || 0) >= 100 && entity.status === "ready_publish" ? <div className="marketing-dashboard-publish-transfer">
+                <div><CheckCircle size={20} weight="fill" /><span><strong>اكتملت الحملة أو الأجندة بنسبة 100%</strong><small>انتهت كل التاسكات التنفيذية وأصبح الملف جاهزًا لقسم النشر.</small></span></div>
+                <button type="button" disabled={!canMoveToPublishing || movingEntityKey === entityKey} onClick={() => void moveToPublishing(entity)} title={!canMoveToPublishing ? "لا توجد صلاحية للنقل إلى قسم النشر" : "نقل إلى قسم النشر"}>
+                  <PaperPlaneTilt size={18} weight="fill" />{movingEntityKey === entityKey ? "جاري النقل..." : "نقل إلى قسم النشر"}
+                </button>
+              </div> : null}
 
               {entityOpen ? <div className="marketing-dashboard-readiness-departments">
                 {Array.from(departments.entries()).map(([departmentKey, group]) => {
@@ -332,7 +366,7 @@ export function MarketingDashboardPage() {
         </div>
       </section>
 
-      <section className="marketing-kanban-column publishing"><header><div><PaperPlaneTilt size={23} /><h2>قسم النشر</h2></div><b>{data.entities.filter((item: any) => item.status === "publishing").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><PaperPlaneTilt size={36} weight="duotone" /><span>قسم النشر سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
+      <section className="marketing-kanban-column publishing marketing-dashboard-column"><header><div><PaperPlaneTilt size={23} /><div><h2>قسم النشر</h2><p>الحملات والأجندات التي تم نقلها بعد اكتمالها بنسبة 100%.</p></div></div><b>{publishingEntities.length}</b></header><div className="marketing-kanban-body">{publishingEntities.length ? <div className="marketing-dashboard-publishing-list">{publishingEntities.map((entity: any) => <article key={`${entity.source_type}:${entity.id}`} className="marketing-dashboard-publishing-card"><div className="marketing-dashboard-publishing-icon"><PaperPlaneTilt size={22} weight="duotone" /></div><div><strong>{entity.name}</strong><small>{entity.code || (entity.source_type === "agenda" ? "أجندة" : "حملة")}</small></div><span>{entity.source_type === "agenda" ? "أجندة" : "حملة"}</span><b dir="ltr">{formatProgress(entity.progress)}</b><div className="marketing-dashboard-publishing-dates"><small>بداية النشر: {String(entity.publish_start || "—").slice(0,10)}</small><small>نهاية النشر: {String(entity.publish_end || "—").slice(0,10)}</small></div></article>)}</div> : <div className="marketing-empty small"><PaperPlaneTilt size={36} weight="duotone" /><span>لا توجد حملات أو أجندات منقولة إلى قسم النشر.</span></div>}</div></section>
       <section className="marketing-kanban-column archive"><header><div><Archive size={23} /><h2>قسم الأرشيف</h2></div><b>{data.entities.filter((item: any) => item.status === "archived").length}</b></header><div className="marketing-kanban-body"><div className="marketing-empty small"><Archive size={36} weight="duotone" /><span>قسم الأرشيف سيتم تجهيزه في المرحلة اللاحقة.</span></div></div></section>
     </div>}
     <Modal open={completedOpen} title="التاسكات المنتهية" subtitle="كل التاسكات التي تم إنهاؤها يدويًا بعد وصولها إلى 100%." onClose={() => setCompletedOpen(false)} className="marketing-completed-tasks-modal">

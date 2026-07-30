@@ -13,6 +13,37 @@ type Budget = { id: string; funnelId: string; creativeTempId: string; adsCount: 
 type Schedule = { id: string; date: string; creativeTempId: string; platforms: Array<{ platformId: string; postTypeIds: string[] }> };
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+function validateCreativeTaskFlow(creative: CreativeDraft, meta: MarketingMeta) {
+  const creativeType = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId);
+  const creativeName = creativeType?.name || "الكرييتيف";
+  if (!creative.creativeTypeId) return "اختر نوع الكرييتيف";
+  if (!creative.contentAssignments.length) return `اختر يوزر قسم المحتوى داخل ${creativeName}`;
+  if (creativeType?.primary_department_id && !creative.primaryAssignments.length) {
+    return `اختر يوزر القسم الأساسي ${creativeType.primary_department_name || ""} داخل ${creativeName}`;
+  }
+  const executionAssignments = [
+    ...creative.primaryAssignments,
+    ...creative.optionalAssignments.flatMap((group) => group.assignments),
+  ];
+  if (!executionAssignments.length) return `اختر يوزرًا تنفيذيًا واحدًا على الأقل داخل ${creativeName}`;
+  const selectedContentUsers = new Set(creative.contentAssignments.map((assignment) => assignment.userId));
+  const normalizedLinks = (assignment: (typeof executionAssignments)[number]) => {
+    const validLinks = assignment.contentUserIds.filter((id) => selectedContentUsers.has(id));
+    return validLinks.length ? validLinks : selectedContentUsers.size === 1 ? Array.from(selectedContentUsers) : [];
+  };
+  if (executionAssignments.some((assignment) => !normalizedLinks(assignment).length)) {
+    return `اربط كل يوزر تنفيذي بكاتب المحتوى داخل ${creativeName}`;
+  }
+  const linkedContentUsers = new Set(executionAssignments.flatMap(normalizedLinks));
+  const unpairedTemplate = creative.contentAssignments.find((assignment) => !linkedContentUsers.has(assignment.userId));
+  if (unpairedTemplate) {
+    const contentUser = meta.users.find((item) => item.id === unpairedTemplate.userId);
+    const contentUserName = contentUser?.full_name || contentUser?.fullName || "كاتب المحتوى";
+    return `اربط Task Template الخاص بـ ${contentUserName} بتاسك تنفيذي داخل ${creativeName}`;
+  }
+  return "";
+}
+
 export function CreateCampaignPage() {
   const [meta, setMeta] = useState<MarketingMeta>(emptyMeta);
   const [step, setStep] = useState(0);
@@ -53,7 +84,13 @@ export function CreateCampaignPage() {
 
   function validateCurrent() {
     if (step === 0 && (!form.campaignTypeId || !form.campaignCode || !form.name || !form.publishStart || !form.publishEnd)) return "أكمل بيانات الحملة الأساسية";
-    if (step === 1 && (!creatives.length || creatives.some((item) => !item.creativeTypeId || !item.contentAssignments.length))) return "أكمل الكرييتيف وقسم المحتوى";
+    if (step === 1) {
+      if (!creatives.length) return "أضف كرييتيف واحدًا على الأقل";
+      for (const creative of creatives) {
+        const issue = validateCreativeTaskFlow(creative, meta);
+        if (issue) return issue;
+      }
+    }
     return "";
   }
   function next() { const issue = validateCurrent(); if (issue) { setError(issue); return; } setError(""); setStep((current) => Math.min(4, current + 1)); }
@@ -85,7 +122,7 @@ export function CreateCampaignPage() {
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}{message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
     <section className="panel marketing-wizard-panel">
       {step === 0 ? <div className="marketing-form-grid"><label><span>تاريخ الحملة</span><input type="date" value={form.campaignDate} readOnly /></label><label><span>بداية النشر</span><input type="date" value={form.publishStart} onChange={(event) => setForm({ ...form, publishStart: event.target.value })} /></label><label><span>نهاية النشر</span><input type="date" value={form.publishEnd} min={form.publishStart} onChange={(event) => setForm({ ...form, publishEnd: event.target.value })} /></label><label><span>نوع الحملة</span><select value={form.campaignTypeId} onChange={(event) => void campaignTypeChanged(event.target.value)}><option value="">اختر نوع الحملة</option>{meta.campaignTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>كود الحملة</span><input value={form.campaignCode} readOnly /></label><label><span>اسم الحملة</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="full"><span>هدف الحملة</span><textarea rows={3} value={form.objective} onChange={(event) => setForm({ ...form, objective: event.target.value })} /></label><label className="full"><span>المطلوب من كاتب المحتوى</span><textarea rows={4} value={form.requiredFromContent} onChange={(event) => setForm({ ...form, requiredFromContent: event.target.value })} /></label></div> : null}
-      {step === 1 ? <div className="marketing-creatives-list">{creatives.map((creative, index) => <CreativeEditor key={creative.tempId} value={creative} meta={meta} onChange={(value) => updateCreative(index, value)} onDelete={() => setCreatives((current) => current.filter((_, itemIndex) => itemIndex !== index))} />)}<button type="button" className="marketing-add-block" onClick={() => setCreatives((current) => [...current, newCreativeDraft()])}><Plus size={18} />إضافة كرييتيف</button></div> : null}
+      {step === 1 ? <div className="marketing-creatives-list">{creatives.map((creative, index) => <CreativeEditor key={creative.tempId} value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary onChange={(value) => updateCreative(index, value)} onDelete={() => setCreatives((current) => current.filter((_, itemIndex) => itemIndex !== index))} />)}<button type="button" className="marketing-add-block" onClick={() => setCreatives((current) => [...current, newCreativeDraft()])}><Plus size={18} />إضافة كرييتيف</button></div> : null}
       {step === 2 ? <div className="marketing-budget-list marketing-campaign-budget-step">
         <div className="marketing-campaign-step-head">
           <div className="marketing-campaign-step-icon"><CurrencyCircleDollar size={25} weight="duotone" /></div>

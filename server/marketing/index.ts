@@ -293,18 +293,32 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
       values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'content',${input.contentDepartmentId ? tx`${input.contentDepartmentId}::uuid` : null},${contentUserId}::uuid,${contentUserId}::uuid,${template.id}::uuid,'task_template',${`Task Template - ${input.creativeName}`},'required',${isoDate(content.dueOn)},0,${clean(content.note)||null})
     `;
   }
+  if (!templates.size) throw new Error(`اختر كاتب محتوى واحدًا على الأقل داخل ${input.creativeName}`);
+
+  const contentUserIds = Array.from(templates.keys());
   const groups = [
     { departmentId: clean(input.primaryDepartmentId), assignments: input.primaryAssignments },
     ...arrayValue(input.optionalAssignments).map((group: any) => ({ departmentId: clean(group.departmentId), assignments: arrayValue(group.assignments) })),
   ];
+  const linkedTemplateUsers = new Set<string>();
   let taskIndex = 0;
   for (const group of groups) {
     if (!group.departmentId) continue;
     for (const assignment of arrayValue(group.assignments)) {
       const assignedTo = clean(assignment.userId); if (!assignedTo) continue;
-      for (const contentUserId of arrayValue<string>(assignment.contentUserIds).map(clean).filter(Boolean)) {
+      const explicitLinks = arrayValue<string>(assignment.contentUserIds)
+        .map(clean)
+        .filter((contentUserId) => Boolean(contentUserId) && templates.has(contentUserId));
+      const linkedContentUserIds = explicitLinks.length
+        ? Array.from(new Set(explicitLinks))
+        : contentUserIds.length === 1
+          ? [contentUserIds[0]]
+          : [];
+
+      for (const contentUserId of linkedContentUserIds) {
         const templateId = templates.get(contentUserId); if (!templateId) continue;
         taskIndex += 1;
+        linkedTemplateUsers.add(contentUserId);
         const [task] = await tx<any[]>`
           insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note)
           values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'execution',${group.departmentId}::uuid,${assignedTo}::uuid,${contentUserId}::uuid,${templateId}::uuid,'execution',${`${input.creativeName} - تنفيذ ${taskIndex}`},'required',${isoDate(assignment.dueOn)},0,${clean(assignment.note)||null})
@@ -314,6 +328,10 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
       }
     }
   }
+
+  if (!taskIndex) throw new Error(`اختر يوزرًا تنفيذيًا واربطه بكاتب المحتوى داخل ${input.creativeName}`);
+  const unlinkedContentUser = contentUserIds.find((contentUserId) => !linkedTemplateUsers.has(contentUserId));
+  if (unlinkedContentUser) throw new Error(`يجب ربط كل Task Template بتاسك تنفيذي داخل ${input.creativeName}`);
 }
 
 async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
@@ -473,15 +491,66 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
   `;
   const [completion] = await sql<any[]>`
     select count(*)::int as total,
-      count(*) filter(where t.status='completed' and t.completed_at is not null)::int as completed
+      count(*) filter(where
+        (t.task_kind='task_template' and t.progress>=100 and t.status='approved')
+        or
+        (t.task_kind='execution' and t.progress>=100 and t.status='completed' and t.completed_at is not null)
+      )::int as ready
     from marketing.tasks t
     where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
   `;
   const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
-  const allTasksCompleted = Number(completion?.total || 0) > 0 && Number(completion?.total || 0) === Number(completion?.completed || 0);
-  if (sourceType === "agenda") await sql`update marketing.agendas set progress=${progress},status=case when ${allTasksCompleted} then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
-  else await sql`update marketing.campaigns set progress=${progress},status=case when ${allTasksCompleted} then 'ready_publish' else status end,updated_at=now() where id=${sourceId}::uuid`;
+  const readyForPublishing = Number(completion?.total || 0) > 0 && Number(completion?.total || 0) === Number(completion?.ready || 0);
+  if (sourceType === "agenda") await sql`
+    update marketing.agendas
+    set progress=${progress},
+      status=case
+        when status in ('publishing','archived') then status
+        when ${readyForPublishing} then 'ready_publish'
+        when status='ready_publish' then 'required'
+        else status
+      end,
+      updated_at=now()
+    where id=${sourceId}::uuid
+  `;
+  else await sql`
+    update marketing.campaigns
+    set progress=${progress},
+      status=case
+        when status in ('publishing','archived') then status
+        when ${readyForPublishing} then 'ready_publish'
+        when status='ready_publish' then 'required'
+        else status
+      end,
+      updated_at=now()
+    where id=${sourceId}::uuid
+  `;
   return progress;
+}
+
+async function moveEntityToPublishing(sql: ReturnType<typeof getSql>, body: any, user: SessionUser) {
+  const sourceType = clean(body.sourceType);
+  const sourceId = clean(body.sourceId);
+  if (!['campaign','agenda'].includes(sourceType) || !sourceId) throw new Error("بيانات الحملة أو الأجندة غير مكتملة");
+  const canMove = hasPermission(user,"marketing.publish_prep.manage")
+    || (sourceType === 'campaign' && hasPermission(user,"marketing.campaign.edit"))
+    || (sourceType === 'agenda' && hasPermission(user,"marketing.agenda.edit"));
+  if (!canMove) throw new Error("لا توجد صلاحية لنقل الحملة أو الأجندة إلى قسم النشر");
+  await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
+  await recalculateProgress(sql,sourceType,sourceId);
+
+  const [entity] = sourceType === 'campaign'
+    ? await sql<any[]>`select id::text,name,status,progress::float from marketing.campaigns where id=${sourceId}::uuid and is_deleted=false and archived_at is null`
+    : await sql<any[]>`select id::text,name,status,progress::float from marketing.agendas where id=${sourceId}::uuid and archived_at is null`;
+  if (!entity) throw new Error("الحملة أو الأجندة غير موجودة");
+  if (entity.status === 'publishing') return { ok:true, id:sourceId, message:"الحملة أو الأجندة موجودة بالفعل في قسم النشر" };
+  if (numberValue(entity.progress) < 100 || entity.status !== 'ready_publish') {
+    throw new Error("لا يمكن النقل إلى قسم النشر قبل اكتمال Task Template وإنهاء كل التاسكات التنفيذية بنسبة 100%");
+  }
+
+  if (sourceType === 'campaign') await sql`update marketing.campaigns set status='publishing',updated_at=now() where id=${sourceId}::uuid`;
+  else await sql`update marketing.agendas set status='publishing',updated_at=now() where id=${sourceId}::uuid`;
+  return { ok:true, id:sourceId, message:`تم نقل ${sourceType === 'campaign' ? 'الحملة' : 'الأجندة'} إلى قسم النشر` };
 }
 
 async function dashboardVersion(sql: ReturnType<typeof getSql>) {
@@ -1530,6 +1599,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='review_template')result=await reviewTemplate(sql,body,user);
     else if(action==='toggle_task_action')result=await toggleTaskAction(sql,body,user);
     else if(action==='complete_task')result=await completeTask(sql,body,user);
+    else if(action==='move_to_publishing')result=await moveEntityToPublishing(sql,body,user);
     else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
