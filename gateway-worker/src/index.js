@@ -26,11 +26,36 @@ export default {
         service: "mzj-integration-gateway",
         inbound: [...INBOUND_ROUTES.keys()],
         outbound: [...OUTBOUND_ROUTES.keys()],
+        zoho: [
+          "POST /zoho/upload-part",
+          "POST /zoho/upload-finalize",
+          "POST /zoho/upload",
+          "GET /zoho/media/:fileId",
+        ],
       });
     }
 
     if (request.method === "GET" && url.pathname === "/webhooks/facebook") {
       return verifyFacebookWebhook(url, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/zoho/upload-part") {
+      return handleZohoUploadPart(request, env, url);
+    }
+
+    if (request.method === "POST" && url.pathname === "/zoho/upload-finalize") {
+      return handleZohoUploadFinalize(env, url);
+    }
+
+    // Kept for small-file compatibility. The platform UI uses the chunked routes
+    // above so 200-300 MB files do not depend on the Cloudflare plan body limit.
+    if (["POST", "PUT"].includes(request.method) && url.pathname === "/zoho/upload") {
+      return handleZohoUpload(request, env, url);
+    }
+
+    const zohoMediaMatch = url.pathname.match(/^\/zoho\/media\/([^/]+)$/);
+    if (request.method === "GET" && zohoMediaMatch) {
+      return handleZohoMedia(request, env, url, decodeURIComponent(zohoMediaMatch[1]));
     }
 
     const inboundSource = INBOUND_ROUTES.get(url.pathname);
@@ -52,6 +77,256 @@ export default {
     return json({ ok: false, error: "Not found" }, 404);
   },
 };
+
+function positiveInteger(value, maximum = 10000) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : 0;
+}
+
+function zohoStagingBucket(env) {
+  const bucket = env.ZOHO_UPLOAD_STAGING;
+  if (!bucket) throw new Error("ZOHO_UPLOAD_STAGING R2 binding is not configured");
+  return bucket;
+}
+
+function stagingPartKey(uploadId, partNumber) {
+  const safeUploadId = String(uploadId || "").replace(/[^a-zA-Z0-9._-]/g, "");
+  if (!safeUploadId) throw new Error("Zoho upload ID is invalid");
+  return `zoho-upload-staging/${safeUploadId}/${String(partNumber).padStart(6, "0")}.part`;
+}
+
+async function handleZohoUploadPart(request, env, url) {
+  const ticket = String(url.searchParams.get("ticket") || "").trim();
+  const partNumber = positiveInteger(url.searchParams.get("partNumber"));
+  const totalParts = positiveInteger(url.searchParams.get("totalParts"));
+  if (!ticket || !partNumber || !totalParts || partNumber > totalParts) {
+    return json({ ok: false, error: "Upload ticket and valid part numbers are required" }, 400);
+  }
+  if (!request.body) return json({ ok: false, error: "Upload part body is required" }, 400);
+
+  try {
+    const prepared = await platformGatewayRequest(env, `/integrations/zoho/upload-ticket?ticket=${encodeURIComponent(ticket)}`);
+    if (!prepared.ok) return json({ ok: false, error: prepared.error || "Upload ticket could not be prepared" }, prepared.status || 502);
+    const bucket = zohoStagingBucket(env);
+    const key = stagingPartKey(prepared.data.uploadId, partNumber);
+    const stored = await bucket.put(key, request.body, {
+      httpMetadata: { contentType: "application/octet-stream" },
+      customMetadata: {
+        uploadId: String(prepared.data.uploadId || ""),
+        fileId: String(prepared.data.fileId || ""),
+        partNumber: String(partNumber),
+        totalParts: String(totalParts),
+      },
+    });
+    return json({ ok: true, partNumber, totalParts, size: Number(stored?.size || 0) });
+  } catch (failure) {
+    return json({ ok: false, error: failure instanceof Error ? failure.message : "Failed to stage upload part" }, 502);
+  }
+}
+
+function concatenatedR2Stream(bucket, keys) {
+  let keyIndex = 0;
+  let currentReader = null;
+  return new ReadableStream({
+    async pull(controller) {
+      while (true) {
+        if (!currentReader) {
+          if (keyIndex >= keys.length) {
+            controller.close();
+            return;
+          }
+          const object = await bucket.get(keys[keyIndex]);
+          if (!object?.body) throw new Error(`Upload part ${keyIndex + 1} is missing`);
+          currentReader = object.body.getReader();
+        }
+        const chunk = await currentReader.read();
+        if (chunk.done) {
+          currentReader = null;
+          keyIndex += 1;
+          continue;
+        }
+        controller.enqueue(chunk.value);
+        return;
+      }
+    },
+    async cancel(reason) {
+      if (currentReader) await currentReader.cancel(reason);
+    },
+  });
+}
+
+async function reportZohoUploadCompletion(env, ticket, uploadResponse, uploadResult) {
+  const completionPayload = uploadResponse.ok
+    ? { ticket, result: uploadResult }
+    : { ticket, result: uploadResult, error: providerError(uploadResult, uploadResponse.status) };
+  return platformGatewayRequest(env, "/integrations/zoho/upload-complete", {
+    method: "POST",
+    body: completionPayload,
+  });
+}
+
+async function reportZohoTransportFailure(env, ticket, failure) {
+  const message = failure instanceof Error ? failure.message : String(failure || "Zoho upload transport failed");
+  return platformGatewayRequest(env, "/integrations/zoho/upload-complete", {
+    method: "POST",
+    body: { ticket, error: message },
+  });
+}
+
+async function handleZohoUploadFinalize(env, url) {
+  const ticket = String(url.searchParams.get("ticket") || "").trim();
+  const totalParts = positiveInteger(url.searchParams.get("totalParts"));
+  if (!ticket || !totalParts) return json({ ok: false, error: "Upload ticket and total parts are required" }, 400);
+
+  let keys = [];
+  let bucket;
+  try {
+    const prepared = await platformGatewayRequest(env, `/integrations/zoho/upload-ticket?ticket=${encodeURIComponent(ticket)}`);
+    if (!prepared.ok) return json({ ok: false, error: prepared.error || "Upload ticket could not be prepared" }, prepared.status || 502);
+    bucket = zohoStagingBucket(env);
+    keys = Array.from({ length: totalParts }, (_, index) => stagingPartKey(prepared.data.uploadId, index + 1));
+
+    let stagedSize = 0;
+    for (let index = 0; index < keys.length; index += 1) {
+      const part = await bucket.head(keys[index]);
+      if (!part) return json({ ok: false, error: `Upload part ${index + 1} is missing` }, 409);
+      stagedSize += Number(part.size || 0);
+    }
+    const expectedSize = Number(prepared.data.fileSize || 0);
+    if (expectedSize > 0 && stagedSize !== expectedSize) {
+      return json({ ok: false, error: `Staged file size mismatch (${stagedSize}/${expectedSize})` }, 409);
+    }
+
+    const uploadResponse = await fetch(prepared.data.uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Zoho-oauthtoken ${prepared.data.accessToken}`,
+        Accept: "application/vnd.api+json",
+        "content-type": "application/octet-stream",
+        "content-length": String(stagedSize),
+        "x-filename": encodeURIComponent(String(prepared.data.fileName || "upload.bin")),
+        "x-parent_id": String(prepared.data.parentFolderId || ""),
+        "upload-id": String(prepared.data.uploadId || crypto.randomUUID()),
+        "x-override-name-exist": "false",
+        "x-streammode": "1",
+      },
+      body: concatenatedR2Stream(bucket, keys),
+    });
+    const uploadText = await uploadResponse.text();
+    const uploadResult = parseJson(uploadText);
+    const completed = await reportZohoUploadCompletion(env, ticket, uploadResponse, uploadResult);
+    if (!uploadResponse.ok || !completed.ok) {
+      return json({
+        ok: false,
+        error: completed.error || providerError(uploadResult, uploadResponse.status),
+        zohoStatus: uploadResponse.status,
+      }, completed.status || uploadResponse.status || 502);
+    }
+    return json({ ok: true, ...completed.data }, 200);
+  } catch (failure) {
+    await reportZohoTransportFailure(env, ticket, failure).catch(() => null);
+    return json({ ok: false, error: failure instanceof Error ? failure.message : "Zoho upload failed" }, 502);
+  } finally {
+    if (bucket && keys.length) await Promise.allSettled(keys.map((key) => bucket.delete(key)));
+  }
+}
+
+async function handleZohoUpload(request, env, url) {
+  const ticket = String(url.searchParams.get("ticket") || "").trim();
+  if (!ticket) return json({ ok: false, error: "Upload ticket is required" }, 400);
+
+  try {
+    const prepared = await platformGatewayRequest(env, `/integrations/zoho/upload-ticket?ticket=${encodeURIComponent(ticket)}`);
+    if (!prepared.ok) return json({ ok: false, error: prepared.error || "Upload ticket could not be prepared" }, prepared.status || 502);
+
+    const fileName = String(prepared.data.fileName || "upload.bin");
+    const mimeType = String(prepared.data.mimeType || request.headers.get("content-type") || "application/octet-stream");
+    const uploadResponse = await fetch(prepared.data.uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Zoho-oauthtoken ${prepared.data.accessToken}`,
+        Accept: "application/vnd.api+json",
+        "content-type": mimeType,
+        "x-filename": encodeURIComponent(fileName),
+        "x-parent_id": String(prepared.data.parentFolderId || ""),
+        "upload-id": String(prepared.data.uploadId || crypto.randomUUID()),
+        "x-override-name-exist": "false",
+        "x-streammode": "1",
+      },
+      body: request.body,
+    });
+
+    const uploadText = await uploadResponse.text();
+    const uploadResult = parseJson(uploadText);
+    const completed = await reportZohoUploadCompletion(env, ticket, uploadResponse, uploadResult);
+    if (!uploadResponse.ok || !completed.ok) {
+      return json({
+        ok: false,
+        error: completed.error || providerError(uploadResult, uploadResponse.status),
+        zohoStatus: uploadResponse.status,
+      }, completed.status || uploadResponse.status || 502);
+    }
+    return json({ ok: true, ...completed.data }, 200);
+  } catch (failure) {
+    await reportZohoTransportFailure(env, ticket, failure).catch(() => null);
+    return json({ ok: false, error: failure instanceof Error ? failure.message : "Zoho upload failed" }, 502);
+  }
+}
+
+async function handleZohoMedia(_request, env, url, fileId) {
+  const ticket = String(url.searchParams.get("ticket") || "").trim();
+  if (!ticket || !fileId) return json({ ok: false, error: "Media ticket and file ID are required" }, 400);
+
+  const prepared = await platformGatewayRequest(
+    env,
+    `/integrations/zoho/media-ticket?fileId=${encodeURIComponent(fileId)}&ticket=${encodeURIComponent(ticket)}`,
+  );
+  if (!prepared.ok) return json({ ok: false, error: prepared.error || "Media ticket is invalid" }, prepared.status || 404);
+
+  const upstream = await fetch(prepared.data.downloadUrl, {
+    headers: {
+      Authorization: `Zoho-oauthtoken ${prepared.data.accessToken}`,
+      Accept: "*/*",
+    },
+  });
+  if (!upstream.ok || !upstream.body) {
+    return json({ ok: false, error: `Zoho media download failed (${upstream.status})` }, upstream.status || 502);
+  }
+
+  const headers = new Headers(corsHeaders());
+  headers.set("content-type", upstream.headers.get("content-type") || prepared.data.mimeType || "application/octet-stream");
+  const length = upstream.headers.get("content-length");
+  if (length) headers.set("content-length", length);
+  headers.set("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(prepared.data.fileName || "media")}`);
+  headers.set("cache-control", "private, no-store");
+  return new Response(upstream.body, { status: 200, headers });
+}
+
+async function platformGatewayRequest(env, path, options = {}) {
+  const base = String(env.PLATFORM_API_BASE_URL || "").replace(/\/$/, "");
+  if (!base) return { ok: false, status: 503, error: "PLATFORM_API_BASE_URL is not configured", data: {} };
+  if (!env.GATEWAY_SECRET) return { ok: false, status: 503, error: "GATEWAY_SECRET is not configured", data: {} };
+  const response = await fetch(`${base}${path}`, {
+    method: options.method || "GET",
+    headers: {
+      "x-mzj-gateway-secret": env.GATEWAY_SECRET,
+      ...(options.body ? { "content-type": "application/json" } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const text = await response.text();
+  const data = parseJson(text);
+  return {
+    ok: response.ok && data?.ok !== false,
+    status: response.status,
+    error: response.ok ? String(data?.error || "") : String(data?.error || data?.message || `Platform API ${response.status}`),
+    data,
+  };
+}
+
+function providerError(payload, status) {
+  return String(payload?.errors?.[0]?.detail || payload?.error?.message || payload?.message || payload?.error || `Zoho upload failed (${status})`);
+}
 
 async function handleInbound(request, env, routeSource) {
   const rawBody = await request.text();
@@ -294,7 +569,7 @@ function sleep(milliseconds) {
 function corsHeaders() {
   return {
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
     "access-control-allow-headers": "content-type,authorization,x-webhook-secret,x-hub-signature-256,x-mzj-gateway-secret",
   };
 }

@@ -1,0 +1,27 @@
+MZJ Platform - Zoho WorkDrive Final Upload + RAW Folders
+Source base: MZJ-Platform-v1.19.4-PublishPrep-Execution-Tasks-ReadyPublish-FIX-CLEAN(2).zip
+
+STATIC ACCEPTANCE
+- New Zoho/RAW acceptance script: PASS 18/18
+- Existing repository static acceptance scripts: PASS 50/50
+
+SYNTAX / TRANSPILE
+- gateway-worker/src/index.js node syntax check: PASS
+- TypeScript syntax transpile for changed TS/TSX files: PASS 9/9
+
+SCOPE GUARDS
+- Campaign creation flow changed: NO
+- Agenda creation flow changed: NO
+- Final upload button visibility/timing condition changed: NO
+- Final upload supports campaign and agenda execution tasks: PASS
+- Multiple ordered images supported as one media group: PASS
+- Video/reel restricted to one file: PASS
+- Publish Prep blocks incomplete publishing data: PASS
+- RAW API token compatibility implemented: PASS
+
+NOT EXECUTED IN THIS ENVIRONMENT
+- Full tsc -b: ATTEMPTED/BLOCKED because project dependencies and type packages are not installed in the execution environment (for example React and react-router-dom).
+- Vite production build: NOT RUN because the same project dependencies are unavailable and package download is unavailable in the execution environment.
+- Live Zoho OAuth and real file upload: NOT RUN because Client ID/Secret and deployed callback/worker are not available in this environment.
+- Live RAW server request: NOT RUN because production network credentials/services were not invoked from the source-review environment.
+- Live social-platform publication: NOT RUN because production platform connections were not used.

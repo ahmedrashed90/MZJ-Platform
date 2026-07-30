@@ -818,6 +818,86 @@ begin
 end
 $marketing_department_membership_migration$;
 
+
+
+-- Zoho WorkDrive publishing storage. The connection is system-wide and tokens are encrypted.
+create table if not exists marketing.zoho_workdrive_connection (
+  id smallint primary key default 1 check(id = 1),
+  status text not null default 'disconnected',
+  account_email text,
+  accounts_domain text not null default 'https://accounts.zoho.sa',
+  api_domain text not null default 'https://www.zohoapis.sa',
+  upload_domain text not null default 'https://files.zoho.sa',
+  root_folder_id text,
+  scopes jsonb not null default '[]'::jsonb,
+  access_token_encrypted text,
+  refresh_token_encrypted text,
+  token_expires_at timestamptz,
+  last_verified_at timestamptz,
+  last_error text,
+  connected_by uuid references core.users(id),
+  connected_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists marketing.zoho_oauth_states (
+  state_hash text primary key,
+  user_id uuid not null references core.users(id) on delete cascade,
+  redirect_uri text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists marketing_zoho_oauth_states_expiry_idx on marketing.zoho_oauth_states(expires_at);
+
+create table if not exists marketing.final_media_groups (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid not null references marketing.tasks(id) on delete cascade,
+  media_kind text not null check(media_kind in ('image','carousel','video')),
+  file_count integer not null default 0,
+  status text not null default 'uploading',
+  is_active boolean not null default true,
+  created_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists marketing_final_media_groups_task_idx on marketing.final_media_groups(task_id,is_active,created_at desc);
+
+alter table marketing.tasks add column if not exists final_media_group_id uuid references marketing.final_media_groups(id) on delete set null;
+alter table marketing.files add column if not exists storage_provider text not null default 'r2';
+alter table marketing.files add column if not exists external_id text;
+alter table marketing.files add column if not exists external_parent_id text;
+alter table marketing.files add column if not exists external_url text;
+alter table marketing.files add column if not exists final_media_group_id uuid references marketing.final_media_groups(id) on delete set null;
+alter table marketing.files add column if not exists order_index integer not null default 0;
+alter table marketing.files add column if not exists upload_error text;
+create index if not exists marketing_files_final_group_idx on marketing.files(final_media_group_id,order_index) where final_media_group_id is not null;
+
+create table if not exists marketing.zoho_upload_tickets (
+  ticket_hash text primary key,
+  file_id uuid not null references marketing.files(id) on delete cascade,
+  final_media_group_id uuid not null references marketing.final_media_groups(id) on delete cascade,
+  task_id uuid not null references marketing.tasks(id) on delete cascade,
+  file_name text not null,
+  mime_type text,
+  file_size bigint,
+  parent_folder_id text not null,
+  upload_id text not null,
+  status text not null default 'prepared',
+  expires_at timestamptz not null,
+  created_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing.zoho_upload_tickets(expires_at,status);
+
+create table if not exists marketing.zoho_media_tickets (
+  ticket_hash text primary key,
+  file_id uuid not null references marketing.files(id) on delete cascade,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists marketing_zoho_media_tickets_expiry_idx on marketing.zoho_media_tickets(expires_at);
+
 create table if not exists marketing.schema_state (
   id smallint primary key default 1 check(id = 1),
   version integer not null,

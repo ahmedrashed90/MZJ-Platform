@@ -10,6 +10,7 @@ import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
 import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
+import { createOpaqueTicket, createZohoMediaUrl, getZohoRuntime, ticketHash, zohoUploadGatewayUrl } from "../_zoho-workdrive.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -126,6 +127,14 @@ async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user
 }
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
+function zohoFinalFileName(originalName: unknown, sourceType: unknown, sourceId: unknown, taskId: unknown, groupId: unknown, orderIndex: number) {
+  const raw=(clean(originalName)||`file-${orderIndex+1}`).replace(/[\/\\\u0000-\u001f]/g,"-");
+  const dot=raw.lastIndexOf(".");
+  const extension=dot>0&&dot<raw.length-1?raw.slice(dot).slice(0,24):"";
+  const stem=(extension?raw.slice(0,dot):raw).trim()||`file-${orderIndex+1}`;
+  const prefix=`${clean(sourceType)==='agenda'?'agenda':'campaign'}-${clean(sourceId).slice(0,8)}-${clean(taskId).slice(0,8)}-${clean(groupId).slice(0,8)}-${String(orderIndex+1).padStart(2,'0')}-`;
+  return `${prefix}${stem.slice(0,Math.max(20,180-prefix.length-extension.length))}${extension}`;
+}
 function isoDate(value: unknown) { const text = clean(value); return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null; }
 function sourceTable(sourceType: string) { return sourceType === "agenda" ? "marketing.agendas" : "marketing.campaigns"; }
 async function audit(sql: ReturnType<typeof getSql>, user: SessionUser, action: string, entityType: string, entityId: string | null, afterData?: unknown, beforeData?: unknown, ip?: string | null) {
@@ -752,10 +761,16 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,cam.campaign_date,cam.campaign_type,cam.objective,cam.required_from_content,
       coalesce(cam.publish_start,ag.publish_start) as campaign_start,coalesce(cam.publish_end,ag.publish_end) as campaign_end,
       tt.task_no,tt.status as template_status,tt.progress as template_progress,tt.due_on as template_due_on,tt.department_note as template_department_note,tt.admin_note,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,
-      ff.original_name as final_file_name,done_by.full_name as completed_by_name
+      coalesce(fm.primary_name,ff.original_name) as final_file_name,coalesce(fm.file_count,case when ff.id is null then 0 else 1 end)::int as final_file_count,coalesce(fm.files,'[]'::jsonb) as final_files,done_by.full_name as completed_by_name
     from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join core.users done_by on done_by.id=t.completed_by left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id
+    left join lateral (
+      select count(*)::int as file_count,min(f.original_name) filter(where f.order_index=0) as primary_name,
+        jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mimeType',f.mime_type,'size',f.file_size,'orderIndex',f.order_index) order by f.order_index,f.created_at) as files
+      from marketing.files f
+      where t.final_media_group_id is not null and f.final_media_group_id=t.final_media_group_id and f.status='ready'
+    ) fm on true
     where t.id=${id}::uuid and t.is_deleted=false
   `;
   if (!task) throw new Error("التاسك غير موجود");
@@ -1031,6 +1046,94 @@ async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   return{ok:true,message:"تم رفع الملف النهائي"};
 }
 
+
+async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  const task=await requireFinalFileUploadAccess(sql,user,taskId);
+  const requested=arrayValue<any>(body.files).map((item,index)=>({
+    name:clean(item?.name)||`file-${index+1}`,
+    mimeType:clean(item?.mimeType)||"application/octet-stream",
+    size:Math.max(0,numberValue(item?.size)),
+    orderIndex:index,
+  }));
+  if(!requested.length)throw new Error("اختر الملف النهائي أولًا");
+  if(requested.length>30)throw new Error("الحد الأقصى 30 صورة داخل مجموعة النشر الواحدة");
+  const isVideo=(item:any)=>item.mimeType.startsWith('video/')||/\.(mp4|mov|m4v|webm)$/i.test(item.name);
+  const isImage=(item:any)=>item.mimeType.startsWith('image/')||/\.(jpe?g|png|webp|gif|heic|heif)$/i.test(item.name);
+  if(requested.some((item)=>!isVideo(item)&&!isImage(item)))throw new Error("الملف النهائي يجب أن يكون صورة أو فيديو");
+  const videoCount=requested.filter(isVideo).length;
+  if(videoCount&&requested.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. الصور يمكن رفعها ككاروسيل مرتب");
+  if(requested.some((item)=>item.size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
+  if(requested.some((item)=>item.size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
+  const mediaKind=videoCount?'video':requested.length>1?'carousel':'image';
+  const runtime=await getZohoRuntime(sql);
+  const gateway=zohoUploadGatewayUrl();
+  const uploads:any[]=[];
+  await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
+  const group=await sql.begin(async tx=>{
+    await tx`update marketing.final_media_groups set is_active=false,updated_at=now() where task_id=${taskId}::uuid and is_active=true`;
+    const[groupRow]=await tx<any[]>`
+      insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
+      values(${taskId}::uuid,${mediaKind},${requested.length},'uploading',true,${user.id}::uuid)
+      returning id::text
+    `;
+    for(const item of requested){
+      const[file]=await tx<any[]>`
+        insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider,final_media_group_id,order_index)
+        values(${`zoho:${groupRow.id}:${globalThis.crypto.randomUUID()}`},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'zoho',${groupRow.id}::uuid,${item.orderIndex})
+        returning id::text
+      `;
+      const ticket=createOpaqueTicket(),uploadId=`mzj-${globalThis.crypto.randomUUID()}`;
+      const zohoFileName=zohoFinalFileName(item.name,task.source_type,task.source_id,taskId,groupRow.id,item.orderIndex);
+      await tx`
+        insert into marketing.zoho_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,file_name,mime_type,file_size,parent_folder_id,upload_id,status,expires_at,created_by)
+        values(${ticketHash(ticket)},${file.id}::uuid,${groupRow.id}::uuid,${taskId}::uuid,${zohoFileName},${item.mimeType},${item.size},${runtime.rootFolderId},${uploadId},'prepared',now()+interval '2 hours',${user.id}::uuid)
+      `;
+      uploads.push({
+        fileId:file.id,
+        orderIndex:item.orderIndex,
+        fileName:item.name,
+        mimeType:item.mimeType,
+        fileSize:item.size,
+        uploadUrl:`${gateway}/zoho/upload?ticket=${encodeURIComponent(ticket)}`,
+        partUploadUrl:`${gateway}/zoho/upload-part?ticket=${encodeURIComponent(ticket)}`,
+        finalizeUrl:`${gateway}/zoho/upload-finalize?ticket=${encodeURIComponent(ticket)}`,
+      });
+    }
+    return groupRow;
+  });
+  return{ok:true,groupId:group.id,mediaKind,uploads};
+}
+
+async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),groupId=clean(body.groupId);
+  const task=await requireFinalFileUploadAccess(sql,user,taskId);
+  const[group]=await sql<any[]>`
+    select g.*,g.id::text,g.task_id::text
+    from marketing.final_media_groups g
+    where g.id=${groupId}::uuid and g.task_id=${taskId}::uuid
+  `;
+  if(!group)throw new Error("مجموعة الملف النهائي غير موجودة");
+  const files=await sql<any[]>`
+    select id::text,original_name,mime_type,file_size,order_index,status,external_id
+    from marketing.files
+    where final_media_group_id=${groupId}::uuid
+    order by order_index,created_at,id
+  `;
+  if(!files.length||files.some((file:any)=>file.status!=='ready'||!clean(file.external_id)))throw new Error("لم يكتمل رفع كل الملفات إلى Zoho WorkDrive");
+  if(files.length!==Number(group.file_count||0))throw new Error("عدد الملفات المرفوعة لا يطابق مجموعة النشر");
+  const firstFileId=clean(files[0]?.id);
+  await sql.begin(async tx=>{
+    await tx`update marketing.final_media_groups set is_active=false,updated_at=now() where task_id=${taskId}::uuid and id<>${groupId}::uuid`;
+    await tx`update marketing.final_media_groups set is_active=true,status='ready',updated_at=now() where id=${groupId}::uuid`;
+    await tx`update marketing.tasks set final_media_group_id=${groupId}::uuid,final_file_id=${firstFileId}::uuid,updated_at=now() where id=${taskId}::uuid`;
+    const[count]=await tx<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and is_active=true`;
+    if(Number(count?.count||0)===0)await tx`update marketing.tasks set progress=100,status='ready_to_complete',completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
+  });
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:files.length>1?`تم رفع ${files.length} صور نهائية بالترتيب على Zoho WorkDrive`:`تم رفع الملف النهائي على Zoho WorkDrive`,groupId,files};
+}
+
 async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
   const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;
@@ -1063,7 +1166,20 @@ async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:Session
   if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
 }
-async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;if(!file)throw new Error("الملف غير موجود");if(!hasPermission(user,"marketing.file.view_others")){const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;if(!allowed)throw new Error("الملف خارج نطاق بياناتك");}return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size}};}
+async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
+  const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;
+  if(!file)throw new Error("الملف غير موجود");
+  if(!hasPermission(user,"marketing.file.view_others")){
+    const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;
+    if(!allowed)throw new Error("الملف خارج نطاق بياناتك");
+  }
+  if(clean(file.storage_provider)==='zoho'){
+    if(!clean(file.external_id))throw new Error("معرف ملف Zoho غير موجود");
+    return{ok:true,url:await createZohoMediaUrl(sql,file.id,30),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'zoho'}};
+  }
+  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
+  return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'r2'}};
+}
 
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user),createdByMe=access.dataScope==='created_by_me';
@@ -1099,7 +1215,10 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(cam.name,ag.name) as source_name,
       t.progress::float,
       t.final_file_id::text,
-      f.original_name as final_file_name,
+      t.final_media_group_id::text,
+      coalesce(fm.primary_name,f.original_name) as final_file_name,
+      coalesce(fm.file_count,case when f.id is null then 0 else 1 end)::int as final_file_count,
+      coalesce(fm.files,'[]'::jsonb) as final_files,
       t.department_id::text,
       d.name as department_name,
       u.full_name as assigned_name
@@ -1140,6 +1259,12 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     left join core.users u on u.id=t.assigned_to
     left join marketing.task_templates tt on tt.id=t.task_template_id
     left join marketing.files f on f.id=t.final_file_id
+    left join lateral (
+      select count(*)::int as file_count,min(gf.original_name) filter(where gf.order_index=0) as primary_name,
+        jsonb_agg(jsonb_build_object('id',gf.id::text,'name',gf.original_name,'mimeType',gf.mime_type,'size',gf.file_size,'orderIndex',gf.order_index) order by gf.order_index,gf.created_at) as files
+      from marketing.files gf
+      where t.final_media_group_id is not null and gf.final_media_group_id=t.final_media_group_id and gf.status='ready'
+    ) fm on true
     where t.task_kind='execution'
       and t.is_deleted=false
       and (
@@ -1177,7 +1302,12 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   if(!executionTask)throw new Error("التاسك التنفيذي المرتبط غير موجود في قسم النشر");
   await assertMarketingEntityAccess(sql,user,clean(executionTask.source_type),clean(executionTask.source_id));
   if(!publishDate)throw new Error("تاريخ النشر مطلوب");
-  const combinations=platforms.flatMap((platform:any)=>arrayValue<string>(platform.postTypeIds).map((postTypeId)=>({platformId:clean(platform.platformId),postTypeId:clean(postTypeId)}))).filter((item:any)=>item.platformId&&item.postTypeId);
+  const normalizedPlatforms=platforms.map((platform:any)=>({
+    platformId:clean(platform?.platformId),
+    postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
+  })).filter((platform:any)=>platform.platformId);
+  if(normalizedPlatforms.some((platform:any)=>!platform.postTypeIds.length))throw new Error("حدد نوع نشر لكل منصة مختارة");
+  const combinations=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId})));
   if(!combinations.length){const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);if(platformId&&postTypeId)combinations.push({platformId,postTypeId});}
   if(!combinations.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
@@ -1193,12 +1323,43 @@ async function graphRequest(path:string,method:"GET"|"POST",token:string,params:
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
 function normalizePostType(value:unknown){const text=clean(value).toLowerCase();if(text.includes('story')||text.includes('ستوري'))return'story';if(text.includes('reel')||text.includes('short')||text.includes('ريل'))return'reel';if(text.includes('photo')||text.includes('image')||text.includes('بوست صور')||text.includes('صورة'))return'photo_post';return text;}
 async function uploadFacebookStoryVideo(uploadUrl:string,token:string,mediaUrl:string){const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});const payload=await response.json().catch(()=>({}));if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو Story على Facebook (${response.status})`);return payload;}
+async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule:any){
+  if(clean(schedule.final_media_group_id)){
+    const[group]=await sql<any[]>`select file_count,status from marketing.final_media_groups where id=${schedule.final_media_group_id}::uuid`;
+    const files=await sql<any[]>`
+      select * from marketing.files
+      where final_media_group_id=${schedule.final_media_group_id}::uuid and status='ready'
+      order by order_index,created_at,id
+    `;
+    if(!group||group.status!=='ready'||files.length!==Number(group.file_count||0))throw new Error("لم يكتمل رفع كل ملفات النشر إلى Zoho WorkDrive");
+    if(files.length)return files;
+  }
+  if(!clean(schedule.final_file_id))return[];
+  const[file]=await sql<any[]>`select * from marketing.files where id=${schedule.final_file_id}::uuid and status='ready'`;
+  return file?[file]:[];
+}
+async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
+  if(clean(file.storage_provider)==='zoho')return createZohoMediaUrl(sql,clean(file.id),120);
+  if(!clean(file.storage_key))throw new Error(`مسار الملف النهائي ${clean(file.original_name)||''} غير موجود`);
+  return createDownloadUrl(file.storage_key,7200);
+}
 async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,user:SessionUser){
+  if(!clean(schedule.publish_date))throw new Error("ميعاد النشر غير موجود");
+  if(!clean(schedule.platform_code))throw new Error("منصة النشر غير محددة");
+  if(!clean(schedule.post_type_name))throw new Error(`نوع النشر غير محدد لمنصة ${schedule.platform_name||schedule.platform_code}`);
+  if(!clean(schedule.caption))throw new Error("الكابشن غير موجود");
+  if(!clean(schedule.hashtags))throw new Error("الهاشتاج غير موجود");
   const[conn]=await sql<any[]>`select * from marketing.platform_connections where platform=${schedule.platform_code}`;
   if(!conn||!conn.connected)throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
-  const[file]=await sql<any[]>`select * from marketing.files where id=${schedule.final_file_id}::uuid and status='ready'`;
-  if(!file)throw new Error("الملف النهائي غير موجود");
-  const mediaUrl=createDownloadUrl(file.storage_key,3600),caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
+  const files=await finalMediaFilesForSchedule(sql,schedule);
+  if(!files.length)throw new Error("الملف النهائي غير موجود");
+  const videos=files.filter(looksVideo);
+  if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
+  const mediaUrls=[];
+  for(const file of files)mediaUrls.push(await finalMediaDeliveryUrl(sql,file));
+  const file=files[0],mediaUrl=mediaUrls[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
+  const multipleImages=files.length>1;
+  if(multipleImages&&(postType==='story'||postType==='reel'))throw new Error("نوع النشر المحدد لا يقبل مجموعة صور. اختر Carousel أو منشور صور");
   let result:any;
   if(schedule.platform_code==='facebook'){
     const pageId=clean(conn.page_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
@@ -1219,22 +1380,44 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
         result={upload:photo,publish};
       }
     }else if(looksVideo(file))result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:mediaUrl,description:caption});
-    else result=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,caption,published:true});
+    else if(multipleImages){
+      const uploads=[];
+      for(const url of mediaUrls)uploads.push(await graphRequest(`/${pageId}/photos`,'POST',token,{url,published:false}));
+      const mediaIds=uploads.map((item:any)=>clean(item.id||item.photo_id)).filter(Boolean);
+      if(mediaIds.length!==mediaUrls.length)throw new Error("تعذر تجهيز كل صور المنشور على Facebook");
+      const publish=await graphRequest(`/${pageId}/feed`,'POST',token,{message:caption,attached_media:mediaIds.map((media_fbid:string)=>({media_fbid}))});
+      result={uploads,publish};
+    }else result=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,caption,published:true});
   }else if(schedule.platform_code==='instagram'){
     const igId=clean(conn.ig_user_id||conn.account_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!igId||!token)throw new Error("بيانات Instagram غير مكتملة");
-    const params:any={caption};
-    if(postType==='story'){
-      params.media_type='STORIES';
-      if(looksVideo(file))params.video_url=mediaUrl;else params.image_url=mediaUrl;
-    }else if(looksVideo(file)||postType==='reel'){
-      params.video_url=mediaUrl;params.media_type='REELS';params.share_to_feed=true;
-    }else params.image_url=mediaUrl;
-    const container=await graphRequest(`/${igId}/media`,'POST',token,params);
-    const creationId=container.id||container.creation_id;
-    if(!creationId)throw new Error("تعذر إنشاء ملف النشر على Instagram");
-    const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
-    result={create:container,publish};
+    if(multipleImages){
+      const children=[];
+      for(const url of mediaUrls){
+        const child=await graphRequest(`/${igId}/media`,'POST',token,{image_url:url,is_carousel_item:true});
+        const childId=clean(child.id||child.creation_id);
+        if(!childId)throw new Error("تعذر تجهيز إحدى صور Carousel على Instagram");
+        children.push(childId);
+      }
+      const container=await graphRequest(`/${igId}/media`,'POST',token,{media_type:'CAROUSEL',children:children.join(','),caption});
+      const creationId=container.id||container.creation_id;
+      if(!creationId)throw new Error("تعذر إنشاء Carousel على Instagram");
+      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
+      result={children,create:container,publish};
+    }else{
+      const params:any={caption};
+      if(postType==='story'){
+        params.media_type='STORIES';
+        if(looksVideo(file))params.video_url=mediaUrl;else params.image_url=mediaUrl;
+      }else if(looksVideo(file)||postType==='reel'){
+        params.video_url=mediaUrl;params.media_type='REELS';params.share_to_feed=true;
+      }else params.image_url=mediaUrl;
+      const container=await graphRequest(`/${igId}/media`,'POST',token,params);
+      const creationId=container.id||container.creation_id;
+      if(!creationId)throw new Error("تعذر إنشاء ملف النشر على Instagram");
+      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
+      result={create:container,publish};
+    }
   }else throw new Error("المنصة غير مدعومة");
   await sql.begin(async tx=>{
     await tx`update marketing.publish_schedule set status='published',published_at=now(),publish_result=${tx.json(dbJson(result))},updated_at=now() where id=${schedule.id}::uuid`;
@@ -1249,14 +1432,16 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
   const results=[];
   for(const id of ids){
     const[schedule]=await sql<any[]>`
-      select s.*,s.id::text,p.code as platform_code,p.name as platform_name,pt.name as post_type_name,coalesce(direct_task.final_file_id,fallback_task.final_file_id)::text as final_file_id
+      select s.*,s.id::text,p.code as platform_code,p.name as platform_name,pt.name as post_type_name,
+        coalesce(direct_task.final_file_id,fallback_task.final_file_id)::text as final_file_id,
+        coalesce(direct_task.final_media_group_id,fallback_task.final_media_group_id)::text as final_media_group_id
       from marketing.publish_schedule s
       join marketing.platforms p on p.id=s.platform_id
       left join marketing.platform_post_types pt on pt.id=s.post_type_id
       left join marketing.tasks direct_task on direct_task.id=s.task_id
       left join lateral(
-        select x.final_file_id from marketing.tasks x
-        where s.task_id is null and x.creative_id=s.creative_id and x.task_kind='execution' and x.final_file_id is not null and x.is_deleted=false
+        select x.final_file_id,x.final_media_group_id from marketing.tasks x
+        where s.task_id is null and x.creative_id=s.creative_id and x.task_kind='execution' and (x.final_file_id is not null or x.final_media_group_id is not null) and x.is_deleted=false
         order by x.updated_at desc limit 1
       )fallback_task on true
       where s.id=${id}::uuid
@@ -1599,7 +1784,28 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%' and exists(select 1 from core.user_system_departments du where du.user_id=u.id and du.system_code='marketing') order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
-async function createRawFolders(body:any){const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';const token=clean(process.env.MZJ_RAW_API_TOKEN);if(!token)throw new Error("MZJ_RAW_API_TOKEN غير مضبوط");const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token},body:JSON.stringify(body.payload||body)});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.ok===false)throw new Error(payload.message||"تعذر إنشاء فولدرات الخام");return payload;}
+function rawApiToken(){
+  const configured=clean(process.env.MZJ_RAW_API_TOKEN||process.env.MZJ_RAW_SECRET||process.env.RAW_API_TOKEN);
+  if(configured)return configured;
+  if(clean(process.env.MZJ_RAW_ALLOW_LEGACY_TOKEN).toLowerCase()==='false')return'';
+  return'MZJ_RAW_SECRET_2026_CHANGE_ME';
+}
+async function createRawFolders(body:any){
+  const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';
+  const token=rawApiToken();
+  if(!token)throw new Error("بيانات ربط سيرفر فولدرات الخام غير مكتملة");
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),30000);
+  try{
+    const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token,authorization:`Bearer ${token}`},body:JSON.stringify(body.payload||body),signal:controller.signal});
+    const payload=await response.json().catch(()=>({}));
+    if(!response.ok||payload.ok===false)throw new Error(payload.message||payload.error||`تعذر إنشاء فولدرات الخام (${response.status})`);
+    return payload;
+  }catch(error:any){
+    if(error?.name==='AbortError')throw new Error("انتهت مهلة الاتصال بسيرفر فولدرات الخام");
+    throw error;
+  }finally{clearTimeout(timeout);}
+}
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   response.setHeader("Cache-Control", "no-store");
@@ -1647,6 +1853,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='complete_task')result=await completeTask(sql,body,user);
     else if(action==='move_to_publishing')result=await moveEntityToPublishing(sql,body,user);
     else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);
+    else if(action==='prepare_final_upload')result=await prepareFinalUpload(sql,body,user);
+    else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);

@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   SpinnerGap,
   TiktokLogo,
+  UploadSimple,
   WarningCircle,
   YoutubeLogo,
 } from "@phosphor-icons/react";
@@ -73,6 +74,17 @@ type ConnectionEvent = {
   details: Record<string, unknown>;
 };
 type ConnectionsPayload = { ok: true; canManage: boolean; providers: ProviderConnection[]; events: ConnectionEvent[] };
+type ZohoConnectionStatus = {
+  configured: boolean;
+  connected: boolean;
+  status: string;
+  accountEmail: string;
+  rootFolderId: string;
+  apiDomain: string;
+  uploadDomain: string;
+  lastVerifiedAt?: string | null;
+  lastError: string;
+};
 
 const providerLabels: Record<ProviderCode, string> = { meta: "Meta", tiktok: "TikTok", youtube: "YouTube" };
 const actionLabels: Record<string, string> = {
@@ -108,15 +120,22 @@ function providerIcon(provider: ProviderCode, size = 28) {
 
 export function PlatformConnectionsPage() {
   const [payload, setPayload] = useState<ConnectionsPayload | null>(null);
+  const [zoho, setZoho] = useState<ZohoConnectionStatus | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState<ProviderCode | "page" | "all" | "">("all");
+  const [loading, setLoading] = useState<ProviderCode | "page" | "zoho" | "all" | "">("all");
   const [selectedPageId, setSelectedPageId] = useState("");
 
   const load = useCallback(async () => {
     try {
       const result = await marketingFetch<ConnectionsPayload>("/api/marketing/platform-connections");
       setPayload(result);
+      if (result.canManage) {
+        try {
+          const zohoStatus = await marketingFetch<{ ok: true } & ZohoConnectionStatus>("/api/integrations/zoho/status");
+          setZoho(zohoStatus);
+        } catch { setZoho(null); }
+      } else setZoho(null);
       const meta = result.providers.find((item) => item.provider === "meta");
       setSelectedPageId((current) => current || (meta?.requiresSelection && meta.availablePages.length === 1 ? meta.availablePages[0].id : ""));
     } catch (failure) {
@@ -129,9 +148,9 @@ export function PlatformConnectionsPage() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     const onOAuthMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.data?.type !== "mzj-platform-connection") return;
+      if (event.origin !== window.location.origin || !["mzj-platform-connection", "mzj-zoho-connection"].includes(String(event.data?.type || ""))) return;
       const status = String(event.data.status || "");
-      const text = String(event.data.message || "تم تحديث ربط المنصة");
+      const text = String(event.data.message || "تم تحديث الربط");
       if (status === "error") { setMessage(""); setError(text); } else { setError(""); setMessage(text); }
       setLoading("");
       void load();
@@ -142,6 +161,18 @@ export function PlatformConnectionsPage() {
 
   const providers = payload?.providers || [];
   const meta = useMemo(() => providers.find((item) => item.provider === "meta"), [providers]);
+
+  function connectZoho() {
+    setError(""); setMessage(""); setLoading("zoho");
+    const popup = window.open("/api/integrations/zoho/start", "mzj-oauth-zoho", "popup=yes,width=720,height=780,menubar=no,toolbar=no,location=yes,resizable=yes,scrollbars=yes");
+    if (!popup) { setLoading(""); setError("المتصفح منع نافذة ربط Zoho. اسمح بالنوافذ المنبثقة ثم أعد المحاولة."); return; }
+    const closeWatcher = window.setInterval(() => {
+      if (!popup.closed) return;
+      window.clearInterval(closeWatcher);
+      setLoading((current) => current === "zoho" ? "" : current);
+      void load();
+    }, 500);
+  }
 
   async function connect(provider: ProviderCode) {
     setError(""); setMessage(""); setLoading(provider);
@@ -252,6 +283,25 @@ export function PlatformConnectionsPage() {
         <div><CheckCircle size={23} weight="duotone" /><span><strong>OAuth رسمي</strong><small>ربط وإعادة ربط من مزود المنصة</small></span></div>
         <div><LinkBreak size={23} weight="duotone" /><span><strong>فصل حقيقي</strong><small>Revoke ثم حذف التوكنات من PostgreSQL</small></span></div>
       </section>
+
+      {payload?.canManage ? <section className="marketing-connections-grid marketing-connections-grid-rebuilt">
+        <article className={`marketing-connection-card rebuilt ${zoho?.connected ? "connected" : zoho?.configured ? "disconnected" : "warning"}`}>
+          <header className="marketing-connection-card-head">
+            <div className="marketing-provider-logo"><UploadSimple size={28} weight="duotone" /></div>
+            <div className="marketing-provider-title"><h2>Zoho WorkDrive</h2><span className={`marketing-connection-status ${zoho?.connected ? "connected" : "disconnected"}`}>{zoho?.connected ? <CheckCircle size={15} weight="fill" /> : <WarningCircle size={15} weight="fill" />}{zoho?.connected ? "متصل" : zoho?.configured ? "غير متصل" : "الإعداد غير مكتمل"}</span></div>
+          </header>
+          {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho وGateway</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_UPLOAD_GATEWAY_URL</p></div></div> : null}
+          <div className="marketing-connection-data rebuilt-data">
+            <div><small>حساب النشر</small><strong>{zoho?.accountEmail || "marketing@mzjcars.com"}</strong></div>
+            <div><small>مركز البيانات</small><strong>Zoho السعودية</strong></div>
+            <div><small>آخر تحقق</small><strong>{formatDate(zoho?.lastVerifiedAt)}</strong></div>
+            <div><small>فولدر النشر</small><strong dir="ltr">{zoho?.rootFolderId || "—"}</strong></div>
+          </div>
+          {zoho?.lastError ? <p className="marketing-connection-error"><WarningCircle size={16} />{zoho.lastError}</p> : null}
+          <footer className="marketing-connection-actions"><button type="button" className="primary" onClick={connectZoho} disabled={loading === "zoho" || !zoho?.configured}>{loading === "zoho" ? <SpinnerGap className="marketing-spin" size={17} /> : <LinkSimple size={17} />}{zoho?.connected ? "إعادة ربط Zoho" : "ربط Zoho"}</button></footer>
+          <div className="marketing-callback-row"><span>Callback URL</span><code dir="ltr">https://mzj-platform.vercel.app/api/integrations/zoho/callback</code><button type="button" className="secondary compact-button" onClick={() => void copyRedirect("https://mzj-platform.vercel.app/api/integrations/zoho/callback")} title="نسخ"><Copy size={15} /></button></div>
+        </article>
+      </section> : null}
 
       <div className="marketing-connections-grid marketing-connections-grid-rebuilt">
         {providers.map((provider) => {

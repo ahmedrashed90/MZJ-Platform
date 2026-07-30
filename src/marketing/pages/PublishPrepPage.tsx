@@ -53,12 +53,12 @@ export function PublishPrepPage() {
   function missing(row: any) {
     const values: string[] = [];
     const platforms = rowPlatforms(row);
-    if (!row.final_file_id) values.push("الملف النهائي");
+    if (!row.final_file_id && !Number(row.final_file_count || 0)) values.push("الملف النهائي");
     if (!String(row.caption || "").trim()) values.push("الكابشن");
     if (!String(row.hashtags || "").trim()) values.push("الهاشتاج");
     if (!row.publish_date) values.push("تاريخ النشر");
     if (!platforms.length) values.push("المنصة");
-    if (!platforms.some((platform: any) => Array.isArray(platform.postTypeIds) && platform.postTypeIds.length)) values.push("نوع النشر");
+    else if (platforms.some((platform: any) => !Array.isArray(platform.postTypeIds) || !platform.postTypeIds.length)) values.push("نوع النشر لكل منصة");
     return values;
   }
 
@@ -83,7 +83,7 @@ export function PublishPrepPage() {
     ready: rows.filter((row) => readiness(row) === "جاهز للنشر").length,
     waiting: rows.filter((row) => readiness(row) === "بانتظار التاريخ").length,
     missing: rows.filter((row) => readiness(row) === "ناقص").length,
-    files: rows.filter((row) => row.final_file_id).length,
+    files: rows.filter((row) => row.final_file_id || Number(row.final_file_count || 0) > 0).length,
   }), [rows]);
 
   async function save() {
@@ -169,7 +169,7 @@ export function PublishPrepPage() {
             <div><small>القسم</small><strong>{row.department_name || "—"}</strong></div>
             <div><small>المسؤول</small><strong>{row.assigned_name || "—"}</strong></div>
             <div><small>تاريخ النشر</small><strong>{marketingDate(row.publish_date)}</strong></div>
-            <div><small>الملف النهائي</small><strong>{row.final_file_name || "غير مرفوع"}</strong></div>
+            <div><small>الملف النهائي</small><strong>{Number(row.final_file_count || 0) > 1 ? `${Number(row.final_file_count).toLocaleString("ar-SA")} صور مرتبة` : row.final_file_name || "غير مرفوع"}</strong></div>
           </div>
           <div className="marketing-publish-platforms">{rowPlatforms(row).length ? rowPlatforms(row).map((platform: any) => {
             const platformName = meta?.platforms.find((item) => item.id === platform.platformId)?.name || platform.platformName || "منصة";

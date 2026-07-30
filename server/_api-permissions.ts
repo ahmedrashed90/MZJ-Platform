@@ -118,7 +118,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   const map: Record<string, string> = {
     create_campaign: "marketing.campaign.create", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access", complete_task: "system.marketing.access",
-    attach_final_file: "marketing.task.final_file.upload",
+    attach_final_file: "marketing.task.final_file.upload", prepare_final_upload: "marketing.task.final_file.upload", attach_final_media_group: "marketing.task.final_file.upload",
     move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload",
     archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
     create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",

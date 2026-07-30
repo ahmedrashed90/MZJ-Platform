@@ -12,7 +12,7 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
-import { downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
+import { downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile, uploadMarketingFinalFiles } from "../api";
 import { downloadTaskTemplate, inspectTaskTemplate, type TaskTemplateInspection } from "../templateExcel";
 import { MarketingAlert, ProgressBar } from "./MarketingPage";
 import { TaskTemplatePresentation, taskTemplateFieldLabels } from "./TaskTemplatePresentation";
@@ -207,16 +207,25 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     }
   }
 
-  async function uploadFinal(file: File) {
-    if (!payload?.task) return;
+  async function uploadFinal(files: File[]) {
+    if (!payload?.task || !files.length) return;
     setLoading(true);
     setError("");
     setMessage("");
     try {
-      const fileId = await uploadMarketingFile({ file, category: "final-file", sourceType: payload.task.source_type, sourceId: payload.task.source_id, taskId: payload.task.id });
-      await action({ action: "attach_final_file", taskId: payload.task.id, fileId });
+      const result = await uploadMarketingFinalFiles({
+        files,
+        sourceType: payload.task.source_type,
+        sourceId: payload.task.source_id,
+        taskId: payload.task.id,
+        onProgress: (completed, total, fileName, detail) => setMessage(completed >= total ? "جاري ربط الملفات بالتاسك..." : `جاري رفع ${fileName} إلى Zoho — ملف ${completed + 1} من ${total}${detail ? ` — ${detail}` : ""}`),
+      });
+      setMessage(result.message);
+      await load();
+      onChanged?.();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر رفع الملف النهائي");
+    } finally {
       setLoading(false);
     }
   }
@@ -404,8 +413,10 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
           <section className="marketing-task-section">
             <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3></div></div>
             <div className="marketing-inline-actions">
-              {permissions.canUploadFinal ? <label className={`marketing-upload-button ${task.template_status !== "approved" || task.status === "completed" ? "disabled" : ""}`}><FileArrowUp size={18} />رفع الملف النهائي<input type="file" disabled={task.template_status !== "approved" || task.status === "completed"} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFinal(file); event.currentTarget.value = ""; }} /></label> : null}
-              {task.final_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.final_file_id)}><DownloadSimple size={18} />{task.final_file_name || "تحميل الملف النهائي"}</button> : null}
+              {permissions.canUploadFinal ? <label className={`marketing-upload-button ${task.template_status !== "approved" || task.status === "completed" ? "disabled" : ""}`}><FileArrowUp size={18} />رفع الملف النهائي<input type="file" accept="image/*,video/*" multiple disabled={task.template_status !== "approved" || task.status === "completed"} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFinal(files); event.currentTarget.value = ""; }} /></label> : null}
+              {Array.isArray(task.final_files) && task.final_files.length && permissions.canDownloadFile
+                ? task.final_files.map((file: any, index: number) => <button key={file.id || index} type="button" className="secondary" onClick={() => void downloadMarketingFile(file.id)}><DownloadSimple size={18} />{task.final_files.length > 1 ? `${index + 1}. ${file.name}` : file.name || "تحميل الملف النهائي"}</button>)
+                : task.final_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.final_file_id)}><DownloadSimple size={18} />{task.final_file_name || "تحميل الملف النهائي"}</button> : null}
             </div>
           </section>
         </>}

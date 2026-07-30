@@ -42,6 +42,7 @@ import trackingSettingsHandler from "../server/tracking/settings.js";
 import trackingIntegrationHandler from "../server/integrations/tracking-orders.js";
 import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-sales-order.js";
 import erpNextVehicleStatusIntegrationHandler from "../server/integrations/erpnext-vehicle-status.js";
+import zohoIntegrationHandler from "../server/integrations/zoho.js";
 import operationsHandler from "../server/operations/index.js";
 import marketingHandler from "../server/marketing/index.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
@@ -146,6 +147,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (route === "integrations/erpnext/serial-no-status") {
     return erpNextVehicleStatusIntegrationHandler(request, response);
+  }
+
+  if (route.startsWith("integrations/zoho/")) {
+    request.query.zohoAction = route.slice("integrations/zoho/".length).split("/")[0];
+    return zohoIntegrationHandler(request, response);
   }
 
   if (route.startsWith("integrations/")) {

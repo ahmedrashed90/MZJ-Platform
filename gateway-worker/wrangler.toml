@@ -3,6 +3,11 @@ main = "src/index.js"
 compatibility_date = "2026-07-01"
 
 [vars]
-PLATFORM_API_BASE_URL = "https://YOUR-PLATFORM-DOMAIN/api"
+PLATFORM_API_BASE_URL = "https://mzj-platform.vercel.app/api"
 
 # Add GATEWAY_SECRET with: wrangler secret put GATEWAY_SECRET
+
+# اربط Bucket مؤقت للرفع المجزأ من Cloudflare Dashboard أو ألغِ التعليق بعد إنشاء الـBucket:
+# [[r2_buckets]]
+# binding = "ZOHO_UPLOAD_STAGING"
+# bucket_name = "mzj-zoho-upload-staging"
