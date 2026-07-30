@@ -11,7 +11,7 @@ import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStor
 import { emitMarketingNotification } from "../_notifications.js";
 import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
-import { backfillPublishedPosts, engagementData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
+import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -728,7 +728,7 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
     ? await sql<any[]>`select 'agenda' as source_type,a.*,a.id::text,a.result_file_id::text from marketing.agendas a where a.id=${id}::uuid`
     : await sql<any[]>`select 'campaign' as source_type,c.*,c.id::text,c.campaign_type_id::text,c.result_file_id::text,ct.name as campaign_type_name from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where c.id=${id}::uuid and c.is_deleted=false`;
   if (!entity) throw new Error("السجل غير موجود");
-  const [creatives,tasks,budgets,schedule,reviewHistory,files] = await Promise.all([
+  const [creatives,tasks,budgets,schedule,reviewHistory,files,engagementResultsPayload] = await Promise.all([
     sql<any[]>`select c.*,c.id::text,c.campaign_id::text,c.agenda_id::text,c.creative_type_id::text,c.primary_department_id::text,ct.name as creative_type_name,d.name as primary_department_name from marketing.creatives c left join marketing.creative_types ct on ct.id=c.creative_type_id left join marketing.departments d on d.id=c.primary_department_id where (${sourceType}='campaign' and c.campaign_id=${id}::uuid) or (${sourceType}='agenda' and c.agenda_id=${id}::uuid) order by c.created_at`,
     sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false order by d.name,u.full_name`,
     sourceType === "campaign" ? sql<any[]>`
@@ -751,8 +751,9 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
     sql<any[]>`select s.*,s.id::text,s.platform_id::text,s.post_type_id::text,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id where s.source_type=${sourceType} and s.source_id=${id}::uuid order by s.publish_date,p.name,pt.name`,
     sql<any[]>`select h.*,h.id::text,h.task_template_id::text from marketing.task_review_history h join marketing.task_templates tt on tt.id=h.task_template_id where tt.source_type=${sourceType} and tt.source_id=${id}::uuid order by h.created_at desc`,
     sql<any[]>`select f.*,f.id::text from marketing.files f where f.source_type=${sourceType} and f.source_id=${id}::uuid order by f.created_at desc`,
+    engagementResultsData(sql,{ sourceType, sourceId:id, source:entity }),
   ]);
-  return { ok:true,entity,creatives,tasks,budgets,schedule,reviewHistory,files };
+  return { ok:true,entity,creatives,tasks,budgets,schedule,reviewHistory,files,engagementResults:engagementResultsPayload.groups[0] || null };
 }
 
 async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: SessionUser) {

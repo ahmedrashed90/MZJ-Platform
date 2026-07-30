@@ -3,6 +3,7 @@ import { Archive, ArrowSquareOut, CalendarBlank, DownloadSimple, Eye, FileArrowU
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
+import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
 
@@ -107,6 +108,7 @@ export function MarketingDatabasePage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [links, setLinks] = useState<Array<{ platform: string; url: string }>>([]);
+  const [detailView, setDetailView] = useState<"data" | "results">("data");
   const canEditLinks = selected?.source_type === "agenda" ? canEditAgendaLinks : canEditCampaignLinks;
   const scheduleRows = useMemo(() => buildScheduleRows(detail?.schedule), [detail]);
   const finalProductFiles = useMemo(() => {
@@ -135,6 +137,7 @@ export function MarketingDatabasePage() {
 
   async function open(row: any) {
     setSelected(row);
+    setDetailView("data");
     setLoading(true);
     setError("");
     try {
@@ -151,6 +154,7 @@ export function MarketingDatabasePage() {
   function closeDetail() {
     setSelected(null);
     setDetail(null);
+    setDetailView("data");
   }
 
   useEffect(() => {
@@ -307,6 +311,12 @@ export function MarketingDatabasePage() {
             </div>
           </div>
 
+          <div className="marketing-database-view-tabs" role="tablist" aria-label="أقسام بيانات الحملة أو الأجندة">
+            <button type="button" className={detailView === "data" ? "active" : ""} onClick={() => setDetailView("data")}>بيانات الحملة / الأجندة</button>
+            <button type="button" className={detailView === "results" ? "active" : ""} onClick={() => setDetailView("results")}>نتائج النشر والتفاعل</button>
+          </div>
+
+          {detailView === "data" ? <>
           <section className="marketing-task-section marketing-database-section">
             <h3>بيانات الحملة كاملة</h3>
             <div className="marketing-detail-grid marketing-database-summary-grid">
@@ -419,6 +429,13 @@ export function MarketingDatabasePage() {
             <p>لا يمكن أرشفة الحملة قبل رفع ملف نتائج الحملة وإضافة روابط الحملة.</p>
             <button type="button" className="secondary" onClick={() => void action("archive_entity", selected)}><Archive size={17} />أرشيف</button>
           </section> : null}
+          </> : <section className="marketing-task-section marketing-database-section marketing-database-results-section">
+            <div className="marketing-database-results-actions">
+              <div><h3>نتائج النشر والتفاعل</h3><p>Facebook وInstagram حاليًا، مع تجهيز TikTok وSnapchat للربط اللاحق من نفس مصدر النتائج.</p></div>
+              <a className="secondary-button" href={`/marketing/engagement?view=${selected?.source_type === "agenda" ? "agendas" : "campaigns"}&sourceType=${selected?.source_type || "campaign"}&sourceId=${selected?.id || ""}`}><ArrowSquareOut size={17} />فتح في صفحة تفاعل النشر</a>
+            </div>
+            <EngagementResultDetail result={detail.engagementResults} />
+          </section>}
         </div> : null}
       </Modal>
     </MarketingPage>

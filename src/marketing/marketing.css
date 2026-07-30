@@ -3841,3 +3841,409 @@
     direction: rtl;
   }
 }
+
+/* Campaign and agenda publishing results */
+.marketing-engagement-view-tabs,
+.marketing-database-view-tabs {
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid #e3d7d3;
+  border-radius: 14px;
+  background: #f8f3f1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.marketing-engagement-view-tabs button,
+.marketing-database-view-tabs button {
+  min-height: 39px;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #806d67;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.marketing-engagement-view-tabs button.active,
+.marketing-database-view-tabs button.active {
+  background: #fff;
+  color: #65392f;
+  box-shadow: 0 3px 12px rgba(70, 36, 29, .1);
+}
+
+.marketing-database-view-tabs {
+  position: sticky;
+  z-index: 9;
+  top: 84px;
+  margin-bottom: 2px;
+  background: rgba(248, 243, 241, .96);
+  backdrop-filter: blur(8px);
+}
+
+.marketing-result-list-wrap,
+.marketing-result-table-wrap {
+  width: 100%;
+  overflow: auto;
+}
+
+.marketing-result-list-table,
+.marketing-result-posts-table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: collapse;
+}
+
+.marketing-result-list-table th,
+.marketing-result-list-table td,
+.marketing-result-posts-table th,
+.marketing-result-posts-table td {
+  padding: 13px 14px;
+  border-bottom: 1px solid #f0e8e5;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.marketing-result-list-table th,
+.marketing-result-posts-table th {
+  background: #fcf9f8;
+  color: #76635f;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.marketing-result-list-table td,
+.marketing-result-posts-table td {
+  color: #51372f;
+  font-size: 12px;
+}
+
+.marketing-result-list-table td b,
+.marketing-result-list-table td small,
+.marketing-result-posts-table td b,
+.marketing-result-posts-table td small {
+  display: block;
+}
+
+.marketing-result-list-table td small,
+.marketing-result-posts-table td small {
+  margin-top: 4px;
+  color: #8f7b75;
+  font-size: 9px;
+}
+
+.marketing-result-list-table tbody tr:hover,
+.marketing-result-posts-table tbody tr:hover {
+  background: #fffaf8;
+}
+
+.marketing-result-platform-chip {
+  min-width: 76px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.marketing-result-platform-chip.facebook,
+.marketing-result-platform-mark.facebook { background: #eaf2ff; color: #1769c2; }
+.marketing-result-platform-chip.instagram,
+.marketing-result-platform-mark.instagram { background: #fff0f6; color: #bd2e6b; }
+.marketing-result-platform-chip.tiktok,
+.marketing-result-platform-mark.tiktok { background: #f0f0f2; color: #25252a; }
+.marketing-result-platform-chip.snapchat,
+.marketing-result-platform-mark.snapchat { background: #fff8c7; color: #6b5b00; }
+
+.mzj-modal-card.marketing-result-modal {
+  width: min(1380px, calc(100vw - 34px));
+  max-height: calc(100vh - 34px);
+}
+
+.marketing-result-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.marketing-result-heading {
+  padding: 17px 18px;
+  border: 1px solid #e9ddda;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #fff, #fbf5f3);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.marketing-result-heading > div:first-child { min-width: 0; }
+.marketing-result-heading span { color: #8b6d65; font-size: 10px; font-weight: 900; }
+.marketing-result-heading h3 { margin: 4px 0; color: #462920; font-size: 21px; }
+.marketing-result-heading p { margin: 0; color: #88756f; font-size: 11px; }
+.marketing-result-heading > div:last-child { flex: 0 0 auto; display: grid; gap: 4px; text-align: left; }
+.marketing-result-heading > div:last-child small { color: #94817b; font-size: 9px; }
+.marketing-result-heading > div:last-child strong { color: #52332b; font-size: 11px; }
+
+.marketing-result-tabs {
+  padding: 4px;
+  border: 1px solid #e5d9d5;
+  border-radius: 13px;
+  background: #f8f3f1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.marketing-result-tabs button {
+  min-height: 36px;
+  padding: 6px 13px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #816d67;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.marketing-result-tabs button.active {
+  background: #fff;
+  color: #64392f;
+  box-shadow: 0 2px 9px rgba(70, 36, 29, .1);
+}
+
+.marketing-result-overview,
+.marketing-result-platform-section,
+.marketing-result-crm-section {
+  display: grid;
+  gap: 15px;
+}
+
+.marketing-result-kpis {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.marketing-result-kpis article {
+  min-height: 96px;
+  padding: 13px;
+  border: 1px solid #eadfdb;
+  border-radius: 14px;
+  background: #fff;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 9px;
+  align-items: center;
+}
+
+.marketing-result-kpis article svg { grid-row: 1 / 3; color: #754238; }
+.marketing-result-kpis article span { color: #83706a; font-size: 9px; font-weight: 800; }
+.marketing-result-kpis article strong { color: #43271f; font-size: 19px; }
+.marketing-result-kpis article small { grid-column: 2; color: #917f79; font-size: 8px; }
+
+.marketing-result-platform-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.marketing-result-platform-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e8ddda;
+  border-radius: 15px;
+  background: #fff;
+  cursor: pointer;
+  text-align: right;
+  font: inherit;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+
+.marketing-result-platform-card:hover {
+  transform: translateY(-2px);
+  border-color: #cdb8b1;
+  box-shadow: 0 9px 24px rgba(67, 34, 27, .08);
+}
+
+.marketing-result-platform-card header,
+.marketing-result-platform-heading > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.marketing-result-platform-mark {
+  width: 39px;
+  height: 39px;
+  flex: 0 0 39px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 1000;
+}
+
+.marketing-result-platform-card header div { min-width: 0; display: grid; gap: 3px; }
+.marketing-result-platform-card header strong { color: #452820; font-size: 12px; }
+.marketing-result-platform-card header small { color: #8d7972; font-size: 9px; }
+.marketing-result-platform-card > div:last-child { margin-top: 13px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.marketing-result-platform-card > div:last-child span { padding: 7px; border-radius: 9px; background: #faf6f4; color: #826f69; font-size: 8px; display: grid; gap: 3px; }
+.marketing-result-platform-card > div:last-child b { color: #4b2e27; font-size: 11px; }
+
+.marketing-result-best-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.marketing-result-best-grid article {
+  padding: 15px 17px;
+  border: 1px solid #eaded9;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #fffaf0, #fff);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.marketing-result-best-grid article svg { flex: 0 0 auto; color: #a67a22; }
+.marketing-result-best-grid article div { min-width: 0; display: grid; gap: 3px; }
+.marketing-result-best-grid small { color: #8c756c; font-size: 9px; font-weight: 900; }
+.marketing-result-best-grid strong { color: #4d3028; font-size: 12px; overflow-wrap: anywhere; }
+.marketing-result-best-grid span { color: #927e77; font-size: 9px; }
+
+.marketing-result-section {
+  overflow: hidden;
+  border: 1px solid #e7dbd7;
+  border-radius: 15px;
+  background: #fff;
+}
+
+.marketing-result-section-title {
+  padding: 14px 17px;
+  border-bottom: 1px solid #eee4e1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.marketing-result-section-title h4 { margin: 0 0 4px; color: #492c25; }
+.marketing-result-section-title p { margin: 0; color: #8b7771; font-size: 10px; }
+.marketing-result-section-title > strong { padding: 7px 10px; border-radius: 9px; background: #f6eeeb; color: #704238; font-size: 10px; }
+
+.marketing-result-platform-heading {
+  padding: 14px 16px;
+  border: 1px solid #e8dcd8;
+  border-radius: 14px;
+  background: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.marketing-result-platform-heading h4 { margin: 0 0 3px; color: #492c25; }
+.marketing-result-platform-heading p { margin: 0; color: #8a7670; font-size: 9px; }
+
+.marketing-result-platform-empty {
+  min-height: 210px;
+  padding: 28px;
+  border: 1px dashed #d9c8c2;
+  border-radius: 16px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: right;
+}
+
+.marketing-result-platform-empty h4 { margin: 0 0 5px; color: #4a2d25; }
+.marketing-result-platform-empty p { max-width: 600px; margin: 0; color: #87736d; line-height: 1.8; font-size: 11px; }
+
+.marketing-result-crm-kpis {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.marketing-result-crm-kpis article {
+  min-height: 91px;
+  padding: 14px;
+  border: 1px solid #e7dcd8;
+  border-radius: 14px;
+  background: #fff;
+  display: grid;
+  align-content: center;
+  gap: 7px;
+}
+
+.marketing-result-crm-kpis span { color: #826e68; font-size: 9px; font-weight: 800; }
+.marketing-result-crm-kpis strong { color: #462a22; font-size: 21px; }
+
+.marketing-result-note {
+  padding: 13px 15px;
+  border: 1px solid #d8e9de;
+  border-radius: 13px;
+  background: #f3fbf6;
+}
+
+.marketing-result-note strong { color: #286744; font-size: 11px; }
+.marketing-result-note p { margin: 5px 0 0; color: #577565; font-size: 10px; line-height: 1.7; }
+
+.marketing-database-results-section { padding: 0; overflow: hidden; }
+.marketing-database-results-section .marketing-result-detail { padding: 0 16px 18px; }
+.marketing-database-results-actions {
+  padding: 16px 18px;
+  border-bottom: 1px solid #eee3df;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+}
+.marketing-database-results-actions h3 { margin: 0 0 5px; }
+.marketing-database-results-actions p { margin: 0; color: #88756f; font-size: 10px; }
+.marketing-database-results-actions .secondary-button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; text-decoration: none; }
+
+@media (max-width: 1280px) {
+  .marketing-result-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .marketing-result-crm-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .marketing-engagement-view-tabs,
+  .marketing-database-view-tabs { width: 100%; overflow-x: auto; }
+  .marketing-engagement-view-tabs button,
+  .marketing-database-view-tabs button { flex: 1 0 auto; }
+  .marketing-database-view-tabs { position: static; }
+  .marketing-result-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .marketing-result-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .marketing-result-best-grid { grid-template-columns: 1fr; }
+  .marketing-result-heading,
+  .marketing-result-platform-heading,
+  .marketing-database-results-actions { align-items: stretch; flex-direction: column; }
+  .marketing-result-heading > div:last-child { text-align: right; }
+  .marketing-database-results-actions .secondary-button { justify-content: center; }
+}
+
+@media (max-width: 560px) {
+  .marketing-result-platform-grid,
+  .marketing-result-kpis,
+  .marketing-result-crm-kpis { grid-template-columns: 1fr; }
+  .marketing-result-platform-card > div:last-child { grid-template-columns: 1fr; }
+  .marketing-result-heading h3 { font-size: 17px; }
+  .marketing-result-platform-empty { padding: 20px; align-items: flex-start; flex-direction: column; }
+}

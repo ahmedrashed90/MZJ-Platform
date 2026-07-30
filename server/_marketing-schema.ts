@@ -898,7 +898,7 @@ create table if not exists marketing.published_posts (
   source_id uuid not null,
   creative_id uuid references marketing.creatives(id) on delete set null,
   task_id uuid references marketing.tasks(id) on delete set null,
-  platform text not null check(platform in ('facebook','instagram')),
+  platform text not null check(platform in ('facebook','instagram','tiktok','snapchat')),
   account_id text not null,
   provider_post_id text not null,
   provider_media_id text,
@@ -927,11 +927,13 @@ alter table marketing.published_posts add column if not exists is_deleted boolea
 alter table marketing.published_posts add column if not exists deleted_at timestamptz;
 alter table marketing.published_posts add column if not exists deleted_by uuid references core.users(id);
 create index if not exists marketing_published_posts_active_idx on marketing.published_posts(published_at desc) where is_deleted=false;
+alter table marketing.published_posts drop constraint if exists published_posts_platform_check;
+alter table marketing.published_posts add constraint published_posts_platform_check check(platform in ('facebook','instagram','tiktok','snapchat'));
 
 create table if not exists marketing.post_comments (
   id uuid primary key default gen_random_uuid(),
   published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
-  platform text not null check(platform in ('facebook','instagram')),
+  platform text not null check(platform in ('facebook','instagram','tiktok','snapchat')),
   provider_comment_id text not null,
   provider_post_id text,
   account_id text not null,
@@ -950,11 +952,13 @@ create table if not exists marketing.post_comments (
 create index if not exists marketing_post_comments_post_idx on marketing.post_comments(published_post_id,commented_at desc,created_at desc);
 create index if not exists marketing_post_comments_commenter_idx on marketing.post_comments(platform,account_id,commenter_id);
 create index if not exists marketing_post_comments_lead_idx on marketing.post_comments(crm_lead_id) where crm_lead_id is not null;
+alter table marketing.post_comments drop constraint if exists post_comments_platform_check;
+alter table marketing.post_comments add constraint post_comments_platform_check check(platform in ('facebook','instagram','tiktok','snapchat'));
 
 create table if not exists marketing.post_engagements (
   id uuid primary key default gen_random_uuid(),
   published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
-  platform text not null check(platform in ('facebook','instagram')),
+  platform text not null check(platform in ('facebook','instagram','tiktok','snapchat')),
   engagement_type text not null check(engagement_type in ('comment','like','share')),
   provider_event_id text not null,
   provider_post_id text,
@@ -980,6 +984,8 @@ create index if not exists marketing_post_engagements_post_idx on marketing.post
 create index if not exists marketing_post_engagements_actor_idx on marketing.post_engagements(platform,account_id,actor_id) where is_deleted=false;
 create index if not exists marketing_post_engagements_lead_idx on marketing.post_engagements(crm_lead_id) where crm_lead_id is not null and is_deleted=false;
 create index if not exists marketing_post_engagements_type_idx on marketing.post_engagements(engagement_type,engaged_at desc) where is_deleted=false;
+alter table marketing.post_engagements drop constraint if exists post_engagements_platform_check;
+alter table marketing.post_engagements add constraint post_engagements_platform_check check(platform in ('facebook','instagram','tiktok','snapchat'));
 
 insert into marketing.post_engagements(
   id,published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,
