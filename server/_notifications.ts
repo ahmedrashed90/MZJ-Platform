@@ -96,6 +96,15 @@ const INVENTORY_STATUS_LABELS: Record<string, string> = {
   reserved: "حجز",
   available_for_sale: "متاح للبيع",
 };
+const SOCIAL_PLATFORM_LABELS: Record<string, string> = {
+  facebook: "فيسبوك",
+  instagram: "إنستجرام",
+};
+const SOCIAL_ENGAGEMENT_LABELS: Record<string, string> = {
+  comment: "تعليق",
+  like: "إعجاب",
+  share: "مشاركة",
+};
 
 function cleanOptional(value: unknown) {
   const normalized = clean(value);
@@ -153,6 +162,38 @@ function approvalStateLabel(value: unknown) {
 function crmSourceLabel(value: unknown) {
   const normalized = clean(value).toLowerCase();
   return CRM_SOURCE_LABELS[normalized] || cleanOptional(value);
+}
+
+function socialPlatformLabel(value: unknown) {
+  const normalized = clean(value).toLowerCase();
+  return SOCIAL_PLATFORM_LABELS[normalized] || cleanOptional(value) || "منصة اجتماعية";
+}
+
+function socialEngagementLabel(value: unknown) {
+  const normalized = clean(value).toLowerCase();
+  return SOCIAL_ENGAGEMENT_LABELS[normalized] || cleanOptional(value) || "تفاعل";
+}
+
+function notificationDateTime(value: unknown) {
+  const normalized = clean(value);
+  if (!normalized) return "";
+  const date = new Date(normalized);
+  if (!Number.isFinite(date.getTime())) return normalized;
+  return new Intl.DateTimeFormat("ar-SA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Riyadh",
+  }).format(date);
+}
+
+function providerPostIdFromPublishResult(platform: unknown, input: unknown) {
+  const result = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, any> : {};
+  const publish = result.publish && typeof result.publish === "object" && !Array.isArray(result.publish) ? result.publish as Record<string, any> : {};
+  const uploads = Array.isArray(result.uploads) ? result.uploads : [];
+  if (clean(platform).toLowerCase() === "facebook") {
+    return clean(result.post_id || publish.post_id || publish.id || result.id || uploads[0]?.id);
+  }
+  return clean(publish.id || result.id);
 }
 
 
@@ -454,6 +495,81 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
   const sql = getSql();
   const id = clean(result?.id || body?.id || body?.sourceId || body?.taskId || body?.templateId);
   const actor = { actorId: user.id, actorName: user.fullName };
+  if (action === "publish_now") {
+    const successfulRows = Array.isArray(result?.results)
+      ? result.results.filter((item: any) => item?.ok && validUuid(clean(item?.id)))
+      : [];
+    for (const publishedResult of successfulRows) {
+      const scheduleId = clean(publishedResult.id);
+      const [publishRef] = await sql<any[]>`
+        select s.id::text as schedule_id,s.source_type,s.source_id::text,s.creative_id::text,s.task_id::text,
+          s.caption,s.hashtags,s.published_at,s.publish_result,
+          p.code as platform_code,p.name as platform_name,pt.name as post_type_name,
+          pp.id::text as published_post_id,pp.provider_post_id,pp.provider_media_id,pp.permalink,pp.published_at as registered_published_at,
+          coalesce(campaign.name,agenda.name,'—') as source_name,
+          coalesce(campaign.campaign_code,agenda.month_key,'') as source_code,
+          coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name,
+          coalesce(t.title,'—') as task_name,t.assigned_to::text,t.paired_content_user_id::text,
+          assigned.full_name as assigned_name,paired.full_name as paired_content_name
+        from marketing.publish_schedule s
+        join marketing.platforms p on p.id=s.platform_id
+        left join marketing.platform_post_types pt on pt.id=s.post_type_id
+        left join marketing.published_posts pp on pp.schedule_id=s.id and pp.is_deleted=false
+        left join marketing.campaigns campaign on s.source_type='campaign' and campaign.id=s.source_id
+        left join marketing.agendas agenda on s.source_type='agenda' and agenda.id=s.source_id
+        left join marketing.creatives cr on cr.id=s.creative_id
+        left join marketing.tasks t on t.id=s.task_id
+        left join core.users assigned on assigned.id=t.assigned_to
+        left join core.users paired on paired.id=t.paired_content_user_id
+        where s.id=${scheduleId}::uuid
+        limit 1
+      `;
+      if (!publishRef) continue;
+      const platformCode = clean(publishRef.platform_code || publishedResult.platform);
+      const providerPostId = clean(publishRef.provider_post_id)
+        || providerPostIdFromPublishResult(platformCode, publishedResult.result);
+      const sourceLabel = clean(publishRef.source_type) === "agenda" ? "الأجندة" : "الحملة";
+      await createNotification({
+        systemCode: "marketing",
+        eventType: "post_published_engagement",
+        title: `تم النشر بنجاح على ${clean(publishRef.platform_name) || socialPlatformLabel(platformCode)}`,
+        body: joinDetails([
+          detailLine(sourceLabel, publishRef.source_name),
+          detailLine("كود السجل", publishRef.source_code),
+          detailLine("الكرييتيف", publishRef.creative_name),
+          detailLine("التكليف", publishRef.task_name),
+          detailLine("المسؤول عن التكليف", publishRef.assigned_name),
+          detailLine("كاتب المحتوى المرتبط", publishRef.paired_content_name),
+          detailLine("المنصة", clean(publishRef.platform_name) || socialPlatformLabel(platformCode)),
+          detailLine("نوع النشر", publishRef.post_type_name || publishedResult.postTypeName),
+          detailLine("معرف المنشور على المنصة", providerPostId),
+          detailLine("رابط المنشور", publishRef.permalink),
+          detailLine("وقت النشر", notificationDateTime(publishRef.registered_published_at || publishRef.published_at)),
+          detailLine("الكابشن", publishRef.caption),
+          detailLine("الهاشتاج", publishRef.hashtags),
+          detailLine("حالة النشر", "تم النشر بنجاح"),
+          detailLine("بواسطة", user.fullName),
+        ]),
+        entityType: "published_post",
+        entityId: clean(publishRef.published_post_id || scheduleId),
+        actionUrl: "/marketing/engagement",
+        audienceUserIds: [publishRef.assigned_to, publishRef.paired_content_user_id],
+        severity: "success",
+        ...actor,
+        metadata: {
+          responsibleName: user.fullName,
+          platform: platformCode,
+          scheduleId,
+          providerPostId,
+          sourceType: clean(publishRef.source_type),
+          sourceName: clean(publishRef.source_name),
+          creativeName: clean(publishRef.creative_name),
+        },
+        dedupeKey: notificationDedupe("marketing-post-published", scheduleId, providerPostId || publishRef.published_at),
+      });
+    }
+    return;
+  }
   if (action === "create_campaign" || action === "create_agenda") {
     const sourceType = action === "create_agenda" ? "agenda" : "campaign";
     const sourceLabel = sourceType === "agenda" ? "الأجندة" : "الحملة";
@@ -504,14 +620,13 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
     }
     return;
   }
-  if (["receive_task", "upload_template", "review_template", "toggle_task_action", "attach_final_file", "publish_now", "archive_entity"].includes(action)) {
+  if (["receive_task", "upload_template", "review_template", "toggle_task_action", "attach_final_file", "archive_entity"].includes(action)) {
     const map: Record<string, [string, string, NotificationSeverity]> = {
       receive_task: ["task_received", "تم استلام التكليف", "success"],
       upload_template: ["task_template_uploaded", "تم رفع Task Template", "info"],
       review_template: ["task_template_reviewed", clean(result?.message) || "تم تنفيذ إجراء المراجعة والاعتماد", "info"],
       toggle_task_action: ["assignment_action_updated", body?.completed === false ? "تم التراجع عن إجراء التكليف" : "تم تنفيذ إجراء من إجراءات التكليف", "success"],
       attach_final_file: ["final_file_uploaded", "تم رفع الملف النهائي", "success"],
-      publish_now: ["published", "تم تنفيذ النشر", "success"],
       archive_entity: ["entity_archived", "تمت أرشفة السجل", "warning"],
     };
     const [eventType, title, severity] = map[action];
@@ -577,6 +692,100 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
       });
     }
   }
+}
+
+export type SocialEngagementLeadNotificationInput = {
+  eventKey: string;
+  leadId: string;
+  publishedPostId: string;
+  platform: "facebook" | "instagram";
+  engagementType: "comment" | "like" | "share";
+  actorId: string;
+  actorName: string;
+  eventText?: string | null;
+  engagedAt?: string | null;
+};
+
+export async function emitSocialEngagementLeadNotification(input: SocialEngagementLeadNotificationInput) {
+  const leadId = clean(input.leadId);
+  const publishedPostId = clean(input.publishedPostId);
+  if (!validUuid(leadId) || !validUuid(publishedPostId)) return null;
+  const sql = getSql();
+  const [row] = await sql<any[]>`
+    select l.id::text as lead_id,l.customer_name,l.status_label,l.branch_code,l.department_code,l.source_code,l.source_name,
+      l.assigned_to::text,l.call_center_assigned_to::text,
+      sales.full_name as assigned_name,call_center.full_name as call_center_name,
+      pp.id::text as published_post_id,pp.provider_post_id,pp.provider_media_id,pp.permalink,pp.post_type_name,pp.published_at,
+      pp.source_type,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
+      coalesce(campaign.name,agenda.name,'—') as source_record_name,
+      coalesce(campaign.campaign_code,agenda.month_key,'') as source_record_code,
+      coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name,
+      coalesce(t.title,'—') as task_name
+    from crm.leads l
+    join marketing.published_posts pp on pp.id=${publishedPostId}::uuid and pp.is_deleted=false
+    left join core.users sales on sales.id=l.assigned_to
+    left join core.users call_center on call_center.id=l.call_center_assigned_to
+    left join marketing.campaigns campaign on pp.source_type='campaign' and campaign.id=pp.source_id
+    left join marketing.agendas agenda on pp.source_type='agenda' and agenda.id=pp.source_id
+    left join marketing.creatives cr on cr.id=pp.creative_id
+    left join marketing.tasks t on t.id=pp.task_id
+    where l.id=${leadId}::uuid and l.is_deleted=false
+    limit 1
+  `;
+  if (!row) return null;
+  const platformLabel = socialPlatformLabel(input.platform);
+  const engagementLabel = socialEngagementLabel(input.engagementType);
+  const integrationName = `تكامل تفاعل النشر - ${platformLabel}`;
+  const sourceLabel = clean(row.source_type) === "agenda" ? "الأجندة" : "الحملة";
+  return createNotification({
+    systemCode: "crm",
+    eventType: "lead_created_from_post_engagement",
+    title: `دخل عميل جديد إلى CRM من ${engagementLabel} على ${platformLabel}`,
+    body: joinDetails([
+      detailLine("العميل", row.customer_name || input.actorName),
+      detailLine("اسم الحساب المتفاعل", input.actorName),
+      detailLine("معرف الحساب", input.actorId),
+      detailLine("المنصة", platformLabel),
+      detailLine("نوع التفاعل", engagementLabel),
+      detailLine("نص التفاعل", input.eventText),
+      detailLine("وقت التفاعل", notificationDateTime(input.engagedAt)),
+      detailLine(sourceLabel, row.source_record_name),
+      detailLine("كود السجل", row.source_record_code),
+      detailLine("الكرييتيف", row.creative_name),
+      detailLine("التكليف", row.task_name),
+      detailLine("نوع النشر", row.post_type_name),
+      detailLine("معرف المنشور على المنصة", row.provider_post_id || row.provider_media_id),
+      detailLine("رابط المنشور", row.permalink),
+      detailLine("وقت نشر المنشور", notificationDateTime(row.published_at)),
+      detailLine("مصدر العميل", row.source_name || row.source_code),
+      detailLine("حالة العميل", row.status_label),
+      detailLine("الفرع", row.branch_code),
+      detailLine("القسم", row.department_code),
+      detailLine("المندوب", row.assigned_name),
+      detailLine("الكول سنتر", row.call_center_name),
+      detailLine("نتيجة الإدخال", "تم إنشاء عميل جديد وتوزيعه داخل CRM"),
+      detailLine("بواسطة", integrationName),
+    ]),
+    entityType: "lead",
+    entityId: leadId,
+    actionUrl: `/crm?lead=${encodeURIComponent(leadId)}`,
+    severity: "success",
+    actorName: integrationName,
+    audienceUserIds: [row.assigned_to, row.call_center_assigned_to],
+    branchCodes: [row.branch_code],
+    departmentCodes: [row.department_code],
+    metadata: {
+      responsibleName: integrationName,
+      platform: input.platform,
+      engagementType: input.engagementType,
+      actorId: input.actorId,
+      actorName: input.actorName,
+      publishedPostId,
+      providerPostId: clean(row.provider_post_id || row.provider_media_id),
+      sourceName: integrationName,
+    },
+    dedupeKey: notificationDedupe("crm-post-engagement-lead", input.platform, input.engagementType, input.eventKey, leadId),
+  });
 }
 
 export type VehicleInventoryStatusNotificationInput = {

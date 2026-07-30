@@ -4,6 +4,7 @@ import { ensureMarketingSchema } from "./_marketing-schema.js";
 import { classifyConversationService, ensureContactIdentity } from "./_crm-lifecycle.js";
 import { decryptPlatformToken } from "./_platform-connections.js";
 import type { SessionUser } from "./_auth.js";
+import { emitSocialEngagementLeadNotification } from "./_notifications.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function asObject(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
@@ -651,6 +652,23 @@ export async function processMetaEngagementWebhook(payload: any) {
       eventRow = inserted;
       const lead = await createCrmLeadFromEngagement(sql, post, item);
       await sql`update marketing.post_engagements set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now() where id=${inserted.id}::uuid`;
+      if (!lead.reused) {
+        await emitSocialEngagementLeadNotification({
+          eventKey: item.eventId,
+          leadId: lead.leadId,
+          publishedPostId: post.id,
+          platform: item.platform,
+          engagementType: item.engagementType,
+          actorId: item.actorId,
+          actorName: item.actorName,
+          eventText: item.text,
+          engagedAt: item.engagedAt,
+        }).catch((notificationError) => console.error("Post engagement CRM notification failed", {
+          eventId: item.eventId,
+          leadId: lead.leadId,
+          notificationError,
+        }));
+      }
       results.push({ eventId: item.eventId, engagementType: item.engagementType, status: lead.reused ? 'reused' : 'created', leadId: lead.leadId });
     } catch (error: any) {
       const message = clean(error?.message) || 'تعذر تحويل التفاعل إلى CRM';
