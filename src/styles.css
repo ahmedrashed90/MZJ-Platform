@@ -3128,6 +3128,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-contact-identities b,.crm-contact-identities span,.crm-contact-identities small { display:block; }
 .crm-contact-identities span { margin:5px 0; font-size:10px; overflow-wrap:anywhere; }
 .crm-contact-identities small { color:var(--muted); font-size:8px; }
+.crm-contact-purge-backdrop { z-index:210; }
 .crm-contact-purge-modal { width:min(620px,95vw); }
 .crm-contact-purge-warning { display:flex; gap:12px; align-items:center; padding:13px; margin-bottom:13px; border:1px solid #efbfc3; border-radius:12px; color:#9c2029; background:#fff4f5; }
 .crm-contact-purge-warning strong,.crm-contact-purge-warning span { display:block; }
