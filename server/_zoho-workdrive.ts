@@ -15,6 +15,7 @@ const ZOHO_SCOPES = [
   "WorkDrive.files.READ",
   "WorkDrive.users.READ",
   "ZohoFiles.files.CREATE",
+  "ZohoFiles.files.READ",
 ];
 
 function clean(value: unknown) { return String(value ?? "").trim(); }

@@ -1476,13 +1476,23 @@ async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
   if(!clean(file.storage_key))throw new Error(`مسار الملف النهائي ${clean(file.original_name)||''} غير موجود`);
   return createDownloadUrl(file.storage_key,7200);
 }
+function detectImageMime(bytes:Uint8Array){
+  if(bytes.length>=8&&bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47&&bytes[4]===0x0d&&bytes[5]===0x0a&&bytes[6]===0x1a&&bytes[7]===0x0a)return'image/png';
+  if(bytes.length>=3&&bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff)return'image/jpeg';
+  if(bytes.length>=6&&String.fromCharCode(...bytes.slice(0,6)) in {'GIF87a':1,'GIF89a':1})return'image/gif';
+  if(bytes.length>=12&&String.fromCharCode(...bytes.slice(0,4))==='RIFF'&&String.fromCharCode(...bytes.slice(8,12))==='WEBP')return'image/webp';
+  return'';
+}
 async function finalMediaBinary(sql:ReturnType<typeof getSql>,file:any){
   if(clean(file.storage_provider)!=='zoho')throw new Error(`النشر المباشر للملف ${clean(file.original_name)||''} غير مدعوم من مزود التخزين الحالي`);
   const externalId=clean(file.external_id);
   if(!externalId)throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
   const runtime=await getZohoRuntime(sql);
-  const response=await fetch(`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`,{
-    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`},
+  const info=await getZohoFileInfo(sql,externalId);
+  const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
+  const response=await fetch(downloadUrl,{
+    redirect:'follow',
+    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
   });
   if(!response.ok){
     const message=clean(await response.text().catch(()=>''));
@@ -1490,14 +1500,18 @@ async function finalMediaBinary(sql:ReturnType<typeof getSql>,file:any){
   }
   const contentType=clean(response.headers.get('content-type')).split(';')[0].trim().toLowerCase();
   if(contentType.includes('application/json')||contentType.includes('text/html')){
-    throw new Error(`Zoho لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}`);
+    throw new Error(`Zoho لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}. أعد ربط Zoho بعد قبول صلاحية تنزيل الملفات`);
   }
   const arrayBuffer=await response.arrayBuffer();
   const bytes=new Uint8Array(arrayBuffer);
   if(!bytes.byteLength)throw new Error(`ملف Zoho ${clean(file.original_name)||''} فارغ`);
+  const detectedMimeType=detectImageMime(bytes);
+  if(!detectedMimeType){
+    const signature=Array.from(bytes.slice(0,12)).map(value=>value.toString(16).padStart(2,'0')).join(' ');
+    throw new Error(`محتوى ملف Zoho ${clean(file.original_name)||''} ليس صورة فعلية صالحة للنشر (نوع الاستجابة: ${contentType||'غير معروف'}، بصمة البداية: ${signature||'فارغة'})`);
+  }
   const storedMimeType=clean(file.mime_type).toLowerCase();
-  const mimeType=contentType.startsWith('image/')?contentType:storedMimeType;
-  if(!mimeType.startsWith('image/'))throw new Error(`الملف ${clean(file.original_name)||''} ليس صورة صالحة للنشر`);
+  const mimeType=contentType.startsWith('image/')?contentType:(detectedMimeType||storedMimeType);
   return{bytes,mimeType,fileName:clean(file.original_name)||`image-${externalId}`};
 }
 async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,user:SessionUser){
