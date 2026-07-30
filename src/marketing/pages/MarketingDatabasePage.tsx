@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, CalendarBlank, DownloadSimple, Eye, FileArrowUp, FilePdf, FileXls, FolderOpen, LinkSimple, Trash, WarningCircle } from "@phosphor-icons/react";
+import { Archive, ArrowSquareOut, CalendarBlank, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FileXls, FolderOpen, LinkSimple, Trash, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
@@ -23,6 +23,20 @@ function downloadExcel(fileName: string, sheetName: string, headers: string[], r
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+
+function formatFileSize(value: unknown) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "حجم غير معروف";
+  if (size < 1024) return `${size.toLocaleString("ar-SA")} بايت`;
+  if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 ** 3) return `${(size / 1024 ** 2).toFixed(1)} MB`;
+  return `${(size / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function isVideoFile(file: any) {
+  return /video|mp4|mov|webm/i.test(`${file?.mime_type || ""} ${file?.original_name || ""}`);
 }
 
 type ScheduleDisplayRow = {
@@ -95,6 +109,16 @@ export function MarketingDatabasePage() {
   const [links, setLinks] = useState<Array<{ platform: string; url: string }>>([]);
   const canEditLinks = selected?.source_type === "agenda" ? canEditAgendaLinks : canEditCampaignLinks;
   const scheduleRows = useMemo(() => buildScheduleRows(detail?.schedule), [detail]);
+  const finalProductFiles = useMemo(() => {
+    const tasks = Array.isArray(detail?.tasks) ? detail.tasks : [];
+    const files = Array.isArray(detail?.files) ? detail.files : [];
+    const activeFileIds = new Set(tasks.map((task: any) => String(task.final_file_id || "")).filter(Boolean));
+    const activeGroupIds = new Set(tasks.map((task: any) => String(task.final_media_group_id || "")).filter(Boolean));
+    return files
+      .filter((file: any) => file.category === "final-file" && file.status === "ready")
+      .filter((file: any) => activeFileIds.has(String(file.id || "")) || activeGroupIds.has(String(file.final_media_group_id || "")))
+      .sort((a: any, b: any) => Number(a.order_index || 0) - Number(b.order_index || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  }, [detail]);
 
   async function load() {
     setLoading(true);
@@ -316,10 +340,19 @@ export function MarketingDatabasePage() {
           </section>
 
           <section className="marketing-task-section marketing-database-section" id="marketing-product-files">
-            <h3>عرض ملفات المنتجات</h3>
-            <div className="marketing-files-list">
-              {canDownloadFiles ? detail.files.filter((file: any) => file.category === "final-file").map((file: any) => <button key={file.id} type="button" onClick={() => void downloadMarketingFile(file.id)}><DownloadSimple size={17} />{file.original_name}</button>) : null}
-              {!detail.files.some((file: any) => file.category === "final-file") ? <div className="marketing-database-empty">لا توجد ملفات نهائية مرفوعة لهذه الحملة.</div> : null}
+            <div className="marketing-database-section-heading"><div><h3>عرض ملفات المنتجات</h3><p>يعرض الملفات النهائية المعتمدة حاليًا فقط، بدون محاولات الرفع القديمة أو الملغاة.</p></div><strong>{finalProductFiles.length.toLocaleString("ar-SA")} ملف</strong></div>
+            <div className="marketing-product-files-list">
+              {canDownloadFiles ? finalProductFiles.map((file: any, index: number) => {
+                const task = detail.tasks.find((item: any) => String(item.id) === String(file.task_id));
+                const FileIcon = isVideoFile(file) ? FileVideo : FileImage;
+                return <article key={file.id} className="marketing-product-file-row">
+                  <span className="marketing-product-file-icon"><FileIcon size={24} weight="duotone" /></span>
+                  <div className="marketing-product-file-info"><strong>{file.original_name || `ملف نهائي ${index + 1}`}</strong><small>{[task?.creative_name, task?.assigned_name, formatFileSize(file.file_size)].filter(Boolean).join(" • ")}</small></div>
+                  <span className="marketing-product-file-order">{Number(file.order_index || 0) + 1}</span>
+                  <button type="button" className="marketing-product-file-open" onClick={() => void downloadMarketingFile(file.id)}><ArrowSquareOut size={18} />فتح الملف</button>
+                </article>;
+              }) : null}
+              {!finalProductFiles.length ? <div className="marketing-database-empty">لا توجد ملفات نهائية معتمدة لهذه الحملة.</div> : null}
             </div>
           </section>
 

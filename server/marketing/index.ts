@@ -1300,6 +1300,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(aggregate_data.schedule_ids,array[]::text[]) as schedule_ids,
       aggregate_data.platform_name,
       aggregate_data.post_type_name,
+      coalesce(error_data.publish_errors,'[]'::jsonb) as publish_errors,
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
       c.name as creative_name,
       c.instance_code,
@@ -1346,6 +1347,25 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
         group by ps.platform_id
       ) grouped
     ) platform_data on true
+    left join lateral (
+      select coalesce(jsonb_agg(jsonb_build_object(
+        'scheduleId',latest.schedule_id,
+        'platformName',latest.platform_name,
+        'postTypeName',latest.post_type_name,
+        'error',latest.error
+      ) order by latest.platform_name,latest.post_type_name),'[]'::jsonb) as publish_errors
+      from (
+        select distinct on (pl.schedule_id)
+          pl.schedule_id::text as schedule_id,pl.status,pl.error,p.name as platform_name,pt.name as post_type_name,pl.created_at
+        from marketing.publish_logs pl
+        join marketing.publish_schedule eps on eps.id=pl.schedule_id
+        left join marketing.platforms p on p.id=eps.platform_id
+        left join marketing.platform_post_types pt on pt.id=eps.post_type_id
+        where schedule_row.group_id is not null and eps.group_id=schedule_row.group_id
+        order by pl.schedule_id,pl.created_at desc,pl.id desc
+      ) latest
+      where latest.status='failed' and nullif(latest.error,'') is not null
+    ) error_data on true
     left join marketing.departments d on d.id=t.department_id
     left join core.users u on u.id=t.assigned_to
     left join marketing.task_templates tt on tt.id=t.task_template_id
@@ -1543,9 +1563,19 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
       )fallback_task on true
       where s.id=${id}::uuid
     `;
-    if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود"});continue;}
-    try{await assertMarketingEntityAccess(sql,user,clean(schedule.source_type),clean(schedule.source_id));const result=await publishScheduleItem(sql,schedule,user);results.push({id,ok:true,result});}
-    catch(error:any){await sql`insert into marketing.publish_logs(schedule_id,platform,status,error,published_by) values(${id}::uuid,${schedule.platform_code||''},'failed',${clean(error?.message)},${user.id}::uuid)`;results.push({id,ok:false,error:clean(error?.message)});}
+    if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود",platformName:"منصة غير معروفة",postTypeName:""});continue;}
+    try{
+      await assertMarketingEntityAccess(sql,user,clean(schedule.source_type),clean(schedule.source_id));
+      const result=await publishScheduleItem(sql,schedule,user);
+      results.push({id,ok:true,result,platform:schedule.platform_code,platformName:schedule.platform_name,postTypeName:schedule.post_type_name});
+    }catch(error:any){
+      const errorMessage=clean(error?.message)||"تعذر تنفيذ النشر بدون تفاصيل إضافية";
+      await sql.begin(async tx=>{
+        await tx`update marketing.publish_schedule set status='failed',publish_result=${tx.json(dbJson({error:errorMessage,failedAt:new Date().toISOString()}))},updated_at=now() where id=${id}::uuid`;
+        await tx`insert into marketing.publish_logs(schedule_id,platform,status,error,published_by) values(${id}::uuid,${schedule.platform_code||''},'failed',${errorMessage},${user.id}::uuid)`;
+      });
+      results.push({id,ok:false,error:errorMessage,platform:schedule.platform_code,platformName:schedule.platform_name,postTypeName:schedule.post_type_name});
+    }
   }
   return{ok:true,results,message:"تم تنفيذ طلب النشر"};
 }

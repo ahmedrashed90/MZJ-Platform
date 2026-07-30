@@ -1201,6 +1201,16 @@
 .marketing-color-list input { width: 42px; height: 34px; padding: 2px; }
 .marketing-history article { padding: 10px; border-bottom: 1px solid var(--line); }
 .marketing-files-list { display: grid; gap: 8px; }
+.marketing-product-files-list { display: grid; gap: 8px; }
+.marketing-product-file-row { display: grid; grid-template-columns: 44px minmax(0,1fr) 36px auto; gap: 11px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: #fffdfc; }
+.marketing-product-file-row:hover { border-color: #d9b6a7; background: #fff; box-shadow: 0 7px 18px rgba(81,44,34,.045); }
+.marketing-product-file-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; color: var(--brand); background: #fff0ea; }
+.marketing-product-file-info { min-width: 0; display: grid; gap: 4px; }
+.marketing-product-file-info strong { overflow-wrap: anywhere; }
+.marketing-product-file-info small { color: var(--muted); font-size: 11px; }
+.marketing-product-file-order { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; color: #6d4338; background: #f7ece7; font-weight: 900; }
+.marketing-product-file-open { min-width: 122px; color: #fff; background: var(--brand); border-color: var(--brand); }
+.marketing-product-file-open:hover { background: var(--brand-2); border-color: var(--brand-2); }
 .marketing-report-note { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fffaf7; color: var(--muted); }
 .danger-text { color: #b93d3d; }
 .muted { color: var(--muted); }
@@ -2201,45 +2211,66 @@
 .marketing-publish-overview small { color: var(--muted); font-weight: 800; }
 .marketing-publish-overview strong { font-size: 24px; }
 .marketing-publish-overview article.ready > span { color: #287348; background: #effaf3; }
-.marketing-publish-overview article.waiting > span { color: #a46a27; background: #fff8e9; }
+.marketing-publish-overview article.failed > span,
 .marketing-publish-overview article.missing > span { color: #b94545; background: #fff0ef; }
 .marketing-publish-toolbar { display: grid; grid-template-columns: minmax(260px,1.7fr) repeat(3,minmax(150px,1fr)) auto; gap: 9px; padding: 12px; }
 .marketing-publish-toolbar input,
 .marketing-publish-toolbar select { min-height: 42px; border: 1px solid var(--line-strong); border-radius: 11px; padding: 8px 10px; font: inherit; background: #fff; }
 .marketing-publish-search { display: flex !important; grid-template-columns: auto 1fr !important; align-items: center; gap: 8px !important; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 11px; background: #fff; }
 .marketing-publish-search input { min-height: 40px; padding: 0; border: 0; box-shadow: none !important; }
-.marketing-publish-board { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
-.marketing-publish-card-v2 { position: relative; padding: 15px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: 0 9px 25px rgba(81,44,34,.05); display: grid; gap: 12px; overflow: hidden; }
-.marketing-publish-card-v2::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: #c99a54; }
-.marketing-publish-card-v2.ready::before { background: #51a36c; }
-.marketing-publish-card-v2.missing::before { background: #c85757; }
-.marketing-publish-card-v2.published::before { background: #5686b5; }
-.marketing-publish-card-v2.selected { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(127,53,40,.08),0 12px 28px rgba(81,44,34,.08); }
-.marketing-publish-card-v2 > header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-.marketing-publish-card-title { display: grid; gap: 4px; }
+.marketing-publish-results { padding: 14px; display: grid; gap: 11px; }
+.marketing-publish-results > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.marketing-publish-results h3 { margin: 0 0 4px; }
+.marketing-publish-results p { margin: 0; color: var(--muted); }
+.marketing-publish-results > div { display: grid; gap: 8px; }
+.marketing-publish-results article { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 9px; align-items: flex-start; padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+.marketing-publish-results article.success { color: #257044; border-color: #bfe3ca; background: #f1fbf4; }
+.marketing-publish-results article.failed { color: #a73939; border-color: #efc3c0; background: #fff4f3; }
+.marketing-publish-results article p { margin-top: 3px; color: inherit; line-height: 1.65; overflow-wrap: anywhere; }
+.marketing-publish-list { display: grid; gap: 9px; }
+.marketing-publish-list-row { position: relative; display: grid; grid-template-columns: minmax(190px,1.05fr) minmax(250px,1.35fr) minmax(230px,1.2fr) minmax(150px,.8fr) minmax(220px,1.25fr) auto; gap: 12px; align-items: center; padding: 13px 14px 13px 18px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 5px 16px rgba(81,44,34,.035); overflow: hidden; }
+.marketing-publish-list-row::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: 0; width: 5px; background: #c99a54; }
+.marketing-publish-list-row.ready::before { background: #51a36c; }
+.marketing-publish-list-row.failed::before,
+.marketing-publish-list-row.missing::before { background: #c85757; }
+.marketing-publish-list-row.published::before { background: #5686b5; }
+.marketing-publish-list-row.selected { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(127,53,40,.08); }
+.marketing-publish-list-heading { min-width: 0; display: grid; gap: 4px; }
 .marketing-publish-card-statuses { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .marketing-publish-task-kind { width: max-content; padding: 5px 9px; border-radius: 999px; color: #6f392e; background: #fff0ea; font-size: 10px; font-weight: 900; }
-.marketing-publish-card-title h3 { margin: 0; font-size: 17px; }
-.marketing-publish-card-title p { margin: 0; color: var(--muted); font-size: 12px; }
+.marketing-publish-list-heading h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.marketing-publish-list-heading p { margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .marketing-publish-status { width: max-content; padding: 5px 9px; border-radius: 999px; color: #8b5b20; background: #fff5df; font-size: 10px; font-weight: 900; }
 .marketing-publish-status.ready { color: #257044; background: #eaf8ef; }
+.marketing-publish-status.failed,
 .marketing-publish-status.missing { color: #ac3d3d; background: #fff0ef; }
 .marketing-publish-status.published { color: #356a9b; background: #eef6ff; }
-.marketing-select-task-v2 { display: flex !important; grid-template-columns: auto auto !important; align-items: center; gap: 7px !important; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fffaf8; }
-.marketing-publish-card-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
-.marketing-publish-card-grid > div { min-height: 55px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: #fdfbf9; display: grid; gap: 4px; }
-.marketing-publish-card-grid small { color: var(--muted); font-size: 10px; font-weight: 800; }
-.marketing-publish-card-grid strong { overflow-wrap: anywhere; }
-.marketing-publish-platforms { display: flex; flex-wrap: wrap; gap: 7px; }
-.marketing-publish-platforms > div { padding: 7px 9px; border-radius: 10px; background: #fff2ec; border: 1px solid #eed7cd; display: grid; gap: 2px; }
+.marketing-publish-list-meta { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; min-width: 0; }
+.marketing-publish-list-meta > div { min-width: 0; display: grid; gap: 3px; padding-inline-end: 7px; border-inline-end: 1px solid #f0e5df; }
+.marketing-publish-list-meta > div:last-child { border-inline-end: 0; }
+.marketing-publish-list-meta small,
+.marketing-publish-file-cell > small { color: var(--muted); font-size: 10px; font-weight: 800; }
+.marketing-publish-list-meta strong { overflow-wrap: anywhere; font-size: 12px; }
+.marketing-publish-file-cell { min-width: 0; display: grid; gap: 6px; }
+.marketing-publish-file-links { display: grid; gap: 5px; }
+.marketing-publish-file-links button { width: 100%; min-height: 33px; justify-content: flex-start; padding: 6px 8px; color: var(--brand); background: #fff8f5; border: 1px solid #ecd6cc; border-radius: 8px; font-size: 11px; overflow: hidden; }
+.marketing-publish-file-links button:hover { background: #fff0ea; border-color: #d9ad99; }
+.marketing-publish-platforms { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.marketing-publish-platforms > div { padding: 7px 9px; border-radius: 9px; background: #fff2ec; border: 1px solid #eed7cd; display: grid; gap: 2px; }
 .marketing-publish-platforms strong { font-size: 11px; }
 .marketing-publish-platforms span { color: var(--muted); font-size: 10px; }
 .marketing-publish-no-platform { color: var(--muted); font-size: 11px; }
+.marketing-publish-list-readiness { min-width: 0; display: grid; gap: 7px; }
+.marketing-publish-list-readiness .marketing-progress { min-width: 150px; }
 .marketing-publish-missing-list { display: flex; gap: 8px; align-items: flex-start; color: #b24242; }
 .marketing-publish-missing-list > div { display: flex; flex-wrap: wrap; gap: 5px; }
 .marketing-publish-missing-list span { padding: 4px 7px; border-radius: 999px; background: #fff0ef; border: 1px solid #f0c5c1; font-size: 10px; font-weight: 800; }
-.marketing-publish-complete { display: flex; align-items: center; gap: 7px; color: #257044; font-weight: 800; }
-.marketing-publish-card-v2 > footer { display: flex; justify-content: flex-end; padding-top: 2px; }
+.marketing-publish-complete { display: flex; align-items: center; gap: 7px; color: #257044; font-size: 11px; font-weight: 800; }
+.marketing-publish-row-errors { display: grid; gap: 5px; }
+.marketing-publish-row-errors p { margin: 0; padding: 7px 8px; border-radius: 8px; color: #a73939; background: #fff1f0; font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+.marketing-publish-list-actions { display: grid; gap: 7px; min-width: 112px; }
+.marketing-publish-list-actions button { width: 100%; }
+.marketing-select-task-v2 { display: flex !important; grid-template-columns: auto auto !important; justify-content: center; align-items: center; gap: 7px !important; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fffaf8; }
 .mzj-modal-card.marketing-publish-edit-modal { width: min(1320px,96vw); max-height: 94vh; border-radius: 19px; }
 .marketing-publish-edit-modal .mzj-modal-body { padding: 0; background: #f7f4f2; }
 .marketing-publish-edit-workspace { padding: 16px; display: grid; gap: 14px; }
@@ -2443,12 +2474,13 @@
   .marketing-publish-overview { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .marketing-publish-toolbar { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-publish-search { grid-column: 1/-1; }
+  .marketing-publish-list-row { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .marketing-publish-list-actions { grid-template-columns: repeat(3,minmax(0,1fr)); grid-column: 1/-1; }
   .marketing-monitor-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-monitor-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
   .marketing-package-settings-grid,
-  .marketing-publish-board,
   .marketing-monitor-layout { grid-template-columns: 1fr; }
   .marketing-package-setting-form { grid-template-columns: 1fr 100px; }
   .marketing-package-setting-form button { width: 100%; }
@@ -2468,7 +2500,6 @@
   .marketing-budget-platform-details,
   .marketing-publish-overview,
   .marketing-publish-toolbar,
-  .marketing-publish-card-grid,
   .marketing-publish-edit-summary,
   .marketing-publish-platform-editor,
   .marketing-monitor-kpis,
@@ -2477,8 +2508,15 @@
   .marketing-agenda-editor-layout { grid-template-columns: 1fr; overflow-y: auto; }
   .marketing-agenda-add-panel { border-inline-start: 0; border-bottom: 1px solid var(--line); overflow: visible; }
   .marketing-agenda-editor-main { overflow: visible; }
-  .marketing-database-section-heading,
-  .marketing-publish-card-v2 > header { flex-direction: column; }
+  .marketing-database-section-heading { flex-direction: column; }
+  .marketing-publish-list-row { grid-template-columns: 1fr; align-items: stretch; }
+  .marketing-publish-list-meta { grid-template-columns: 1fr; }
+  .marketing-publish-list-meta > div { border-inline-end: 0; padding-inline-end: 0; }
+  .marketing-publish-list-actions { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .marketing-select-task-v2 { grid-column: 1/-1; }
+  .marketing-product-file-row { grid-template-columns: 42px minmax(0,1fr); }
+  .marketing-product-file-order { grid-column: 1; grid-row: 2; }
+  .marketing-product-file-open { grid-column: 2; width: 100%; }
   .marketing-monitor-bars article { grid-template-columns: 1fr; gap: 7px; }
   .marketing-monitor-bars article > b { text-align: right; }
   .marketing-monitor-entities article { grid-template-columns: 1fr; }
