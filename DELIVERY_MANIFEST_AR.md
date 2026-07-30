@@ -341,3 +341,9 @@
 - تعذر إكمال سلسلة `npm run typecheck` بسبب عدم وجود حزمة `typescript` داخل `node_modules` في السورس المرفوع؛ تم استخدام TypeScript 5.8.3 المتاح في البيئة لفحص صياغة الملفات المعدلة.
 
 راجع: `docs/OPERATIONS-DASHBOARD-CARD-ACTUAL-TOTAL-PDF-V2-AR.md`.
+
+## V1219 — اشتراك تعليقات Meta بالتفصيل
+- تعديل خدمة الاشتراك الأصلية مباشرة للتحقق من `feed` و`comments` بعد التنفيذ.
+- عرض نتيجة Facebook وInstagram كل منصة بشكل مستقل مع رسالة Meta وCode وTrace ID.
+- حفظ آخر نتيجة اشتراك وإظهارها بعد تحديث الصفحة.
+- لا يوجد SQL يدوي ولا تغيير في منطق النشر أو CRM.

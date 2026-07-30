@@ -1,15 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowClockwise, ChatCircleDots, FacebookLogo, InstagramLogo, LinkSimple, ThumbsUp, UsersThree } from "@phosphor-icons/react";
+import { ArrowClockwise, ChatCircleDots, CheckCircle, FacebookLogo, InstagramLogo, LinkSimple, ThumbsUp, UsersThree, XCircle } from "@phosphor-icons/react";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 
+type SubscriptionResult = {
+  platform: "facebook" | "instagram";
+  field?: string;
+  ok: boolean;
+  accountId?: string;
+  accountName?: string;
+  host?: string;
+  endpoint?: string;
+  subscribedFields?: string[];
+  grantedScopes?: string[];
+  requiredScopes?: string[];
+  missingScopes?: string[];
+  error?: string;
+  errorDetails?: { status?: number | null; type?: string; code?: number | null; subcode?: number | null; traceId?: string; host?: string; path?: string };
+};
+
 type Payload = {
   rows: any[];
   comments: any[];
   summary: { posts: number; likes: number; comments: number; shares: number; saves: number; views: number; reach: number; crmLeads: number };
-  webhook: { callbackUrl: string; verifyTokenConfigured: boolean };
+  webhook: { callbackUrl: string; verifyTokenConfigured: boolean; subscriptionResults?: SubscriptionResult[] };
 };
 
 function count(value: unknown) { return Number(value || 0).toLocaleString("ar-SA"); }
@@ -21,6 +37,7 @@ export function EngagementPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [subscriptionResults, setSubscriptionResults] = useState<SubscriptionResult[]>([]);
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
   const canRefresh = hasPermission(user, "marketing.publish.now");
@@ -28,7 +45,11 @@ export function EngagementPage() {
 
   async function load() {
     setLoading(true); setError("");
-    try { setData(await marketingFetch<Payload>(`/api/marketing${marketingQuery({ resource: "engagement" })}`)); }
+    try {
+      const payload = await marketingFetch<Payload>(`/api/marketing${marketingQuery({ resource: "engagement" })}`);
+      setData(payload);
+      if (!subscriptionResults.length && payload.webhook.subscriptionResults?.length) setSubscriptionResults(payload.webhook.subscriptionResults);
+    }
     catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تحميل تفاعل النشر"); }
     finally { setLoading(false); }
   }
@@ -50,12 +71,11 @@ export function EngagementPage() {
   }
 
   async function subscribe() {
-    setLoading(true); setError(""); setMessage("");
+    setLoading(true); setError(""); setMessage(""); setSubscriptionResults([]);
     try {
-      const result = await marketingFetch<{ message: string; results: any[] }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "subscribe_engagement_webhooks" }) });
-      const failed = (result.results || []).filter((item) => !item.ok);
-      setMessage(failed.length ? `${result.message}: ${failed.map((item) => `${platformLabel(item.platform)} — ${item.error}`).join(" | ")}` : result.message);
-      await load();
+      const result = await marketingFetch<{ message: string; subscriptionOk: boolean; results: SubscriptionResult[] }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "subscribe_engagement_webhooks" }) });
+      setSubscriptionResults(Array.isArray(result.results) ? result.results : []);
+      if (result.subscriptionOk) setMessage(result.message); else setError(result.message);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر تفعيل استقبال التعليقات"); }
     finally { setLoading(false); }
   }
@@ -69,6 +89,24 @@ export function EngagementPage() {
     </div>}>
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
     {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
+    {subscriptionResults.length ? <section className="panel marketing-subscription-results">
+      <header><div><h3>نتيجة اشتراك استقبال التعليقات</h3><p>نتيجة مستقلة لكل منصة، مع رسالة Meta الأصلية وبيانات التحقق.</p></div></header>
+      <div>{subscriptionResults.map((item) => <article key={item.platform} className={item.ok ? "success" : "failed"}>
+        <span>{item.ok ? <CheckCircle size={24} weight="fill" /> : <XCircle size={24} weight="fill" />}</span>
+        <div><header><strong>{platformLabel(item.platform)} — {item.field || (item.platform === "facebook" ? "feed" : "comments")}</strong><b>{item.ok ? "تم الاشتراك والتحقق" : "فشل الاشتراك"}</b></header>
+          <p>{item.ok ? `الحقل موجود ضمن الاشتراكات الفعلية${item.accountName ? ` للحساب ${item.accountName}` : ""}.` : item.error || "لم ترجع Meta سببًا واضحًا"}</p>
+          <dl>
+            {item.accountId ? <><dt>معرف الحساب</dt><dd>{item.accountId}</dd></> : null}
+            {item.host ? <><dt>المسار</dt><dd>{item.host === "instagram" ? "graph.instagram.com" : "graph.facebook.com"}{item.endpoint || ""}</dd></> : null}
+            {item.subscribedFields?.length ? <><dt>الحقول المفعلة</dt><dd>{item.subscribedFields.join(", ")}</dd></> : null}
+            {item.missingScopes?.length ? <><dt>صلاحيات ناقصة في التوكن</dt><dd>{item.missingScopes.join(", ")}</dd></> : null}
+            {item.errorDetails?.code ? <><dt>Meta Error Code</dt><dd>{item.errorDetails.code}{item.errorDetails.subcode ? ` / ${item.errorDetails.subcode}` : ""}</dd></> : null}
+            {item.errorDetails?.type ? <><dt>نوع الخطأ</dt><dd>{item.errorDetails.type}</dd></> : null}
+            {item.errorDetails?.traceId ? <><dt>Trace ID</dt><dd>{item.errorDetails.traceId}</dd></> : null}
+          </dl>
+        </div>
+      </article>)}</div>
+    </section> : null}
     {data && !data.webhook.verifyTokenConfigured ? <MarketingAlert type="info">أضف META_WEBHOOK_VERIFY_TOKEN في Vercel قبل ربط Callback التعليقات.</MarketingAlert> : null}
 
     <section className="marketing-engagement-stats">

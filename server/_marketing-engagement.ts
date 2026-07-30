@@ -10,8 +10,16 @@ function asArray<T = any>(value: unknown): T[] { return Array.isArray(value) ? v
 function numberValue(value: unknown) { const number = Number(value); return Number.isFinite(number) ? number : 0; }
 function graphVersion() { return clean(process.env.META_GRAPH_VERSION) || "v25.0"; }
 
-async function graphRequest(path: string, method: "GET" | "POST", token: string, params: Record<string, any> = {}) {
-  const url = new URL(`https://graph.facebook.com/${graphVersion()}${path.startsWith("/") ? path : `/${path}`}`);
+type MetaGraphHost = "facebook" | "instagram";
+type MetaGraphFailure = Error & { meta?: Record<string, any> };
+
+function metaGraphOrigin(host: MetaGraphHost) {
+  return host === "instagram" ? "https://graph.instagram.com" : "https://graph.facebook.com";
+}
+
+async function graphRequest(path: string, method: "GET" | "POST", token: string, params: Record<string, any> = {}, host: MetaGraphHost = "facebook") {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const url = new URL(`${metaGraphOrigin(host)}/${graphVersion()}${normalizedPath}`);
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
@@ -21,8 +29,53 @@ async function graphRequest(path: string, method: "GET" | "POST", token: string,
   if (method === "GET") url.searchParams.set("access_token", token); else body.set("access_token", token);
   const response = await fetch(url, { method, headers: method === "POST" ? { "content-type": "application/x-www-form-urlencoded" } : undefined, body: method === "POST" ? body : undefined });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || payload?.error) throw new Error(clean(payload?.error?.error_user_msg || payload?.error?.message || payload?.message) || `Meta API error (${response.status})`);
+  if (!response.ok || payload?.error) {
+    const metaError = asObject(payload?.error);
+    const message = clean(metaError.error_user_msg || metaError.message || payload?.message) || `Meta API error (${response.status})`;
+    const failure = new Error(message) as MetaGraphFailure;
+    failure.meta = {
+      host,
+      path: normalizedPath,
+      status: response.status,
+      type: clean(metaError.type),
+      code: numberValue(metaError.code) || null,
+      subcode: numberValue(metaError.error_subcode) || null,
+      traceId: clean(metaError.fbtrace_id),
+    };
+    throw failure;
+  }
   return payload;
+}
+
+function connectionScopes(connection: any) {
+  return asArray(connection?.scopes).map(clean).filter(Boolean);
+}
+
+function missingScopes(granted: string[], required: string[]) {
+  return required.filter((scope) => !granted.includes(scope));
+}
+
+function subscriptionFields(payload: any) {
+  const appId = clean(process.env.META_APP_ID);
+  const rows = asArray(payload?.data);
+  const row = rows.find((item: any) => appId && clean(item?.id) === appId) || rows[0];
+  return asArray(row?.subscribed_fields).map(clean).filter(Boolean);
+}
+
+function subscriptionFailure(error: any) {
+  const details = asObject((error as MetaGraphFailure)?.meta);
+  return {
+    error: clean(error?.message) || "تعذر تنفيذ اشتراك Meta",
+    errorDetails: {
+      status: numberValue(details.status) || null,
+      type: clean(details.type),
+      code: numberValue(details.code) || null,
+      subcode: numberValue(details.subcode) || null,
+      traceId: clean(details.traceId),
+      host: clean(details.host),
+      path: clean(details.path),
+    },
+  };
 }
 
 function publishedIds(platform: string, resultInput: unknown) {
@@ -201,37 +254,103 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     reach: total.reach + numberValue(row.reach_count),
   }), { posts: 0, likes: 0, comments: 0, shares: 0, saves: 0, views: 0, reach: 0 });
   const crmLeads = new Set(comments.map((row: any) => clean(row.crm_lead_id)).filter(Boolean)).size;
+  const connections = await sql<any[]>`select platform,metadata from marketing.platform_connections where platform in ('facebook','instagram') order by platform`;
+  const subscriptionResults = connections.flatMap((row: any) => {
+    const stored = asObject(asObject(row.metadata).engagementWebhookSubscription);
+    const direct = asObject(stored.result);
+    if (clean(direct.platform)) return [direct];
+    return asArray(stored.results).filter((item: any) => clean(item?.platform) === clean(row.platform));
+  });
   const callbackBase = clean(process.env.MZJ_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : ''));
   return {
     ok: true, rows, comments, summary: { ...summary, crmLeads },
     webhook: {
       callbackUrl: callbackBase ? `${callbackBase.replace(/\/$/,'')}/api/integrations/meta/engagement-webhook` : '/api/integrations/meta/engagement-webhook',
       verifyTokenConfigured: Boolean(clean(process.env.META_WEBHOOK_VERIFY_TOKEN)),
+      subscriptionResults,
     },
   };
 }
 
+type SubscriptionTarget = {
+  platform: 'facebook' | 'instagram';
+  field: 'feed' | 'comments';
+  accountId: string;
+  accountName: string;
+  host: MetaGraphHost;
+  token: string;
+  grantedScopes: string[];
+  requiredScopes: string[];
+};
+
+async function subscribeTarget(target: SubscriptionTarget) {
+  const missing = missingScopes(target.grantedScopes, target.requiredScopes);
+  const base = {
+    platform: target.platform,
+    field: target.field,
+    accountId: target.accountId,
+    accountName: target.accountName,
+    host: target.host,
+    endpoint: `/${target.accountId}/subscribed_apps`,
+    grantedScopes: target.grantedScopes,
+    requiredScopes: target.requiredScopes,
+    missingScopes: missing,
+  };
+  if (missing.length) return { ...base, ok: false, error: `التوكن الحالي لا يحتوي الصلاحيات المطلوبة: ${missing.join(', ')}`, errorDetails: {} };
+  try {
+    const result = await graphRequest(`/${encodeURIComponent(target.accountId)}/subscribed_apps`, 'POST', target.token, { subscribed_fields: target.field }, target.host);
+    const verification = await graphRequest(`/${encodeURIComponent(target.accountId)}/subscribed_apps`, 'GET', target.token, {}, target.host);
+    const fields = subscriptionFields(verification);
+    if (!fields.includes(target.field)) {
+      return { ...base, ok: false, result, verification, subscribedFields: fields, error: `Meta استقبلت طلب الاشتراك لكن الحقل ${target.field} لم يظهر ضمن الاشتراكات الفعلية`, errorDetails: {} };
+    }
+    return { ...base, ok: true, result, verification, subscribedFields: fields };
+  } catch (error: any) {
+    return { ...base, ok: false, ...subscriptionFailure(error) };
+  }
+}
+
 export async function subscribeMetaEngagementWebhooks(sql: ReturnType<typeof getSql>) {
   const results: any[] = [];
-  const facebook = await platformConnection(sql, 'facebook');
-  const pageId = clean(facebook.connection.page_id || facebook.connection.account_id);
-  if (!pageId) throw new Error('Page ID الخاص بـFacebook غير موجود');
-  try {
-    const result = await graphRequest(`/${encodeURIComponent(pageId)}/subscribed_apps`, 'POST', facebook.token, { subscribed_fields: 'feed' });
-    results.push({ platform: 'facebook', ok: true, result });
-  } catch (error: any) { results.push({ platform: 'facebook', ok: false, error: clean(error?.message) }); }
-  try {
-    const instagram = await platformConnection(sql, 'instagram');
-    const igId = clean(instagram.connection.ig_user_id || instagram.connection.account_id);
-    if (!igId) throw new Error('Instagram Account ID غير موجود');
-    const result = await graphRequest(`/${encodeURIComponent(igId)}/subscribed_apps`, 'POST', instagram.token, { subscribed_fields: 'comments' });
-    results.push({ platform: 'instagram', ok: true, result });
-  } catch (error: any) { results.push({ platform: 'instagram', ok: false, error: clean(error?.message) }); }
-  await sql`
-    update marketing.platform_connections set metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ engagementWebhookSubscription: { results, updatedAt: new Date().toISOString() } } as any)}::jsonb,updated_at=now()
-    where platform in ('facebook','instagram')
-  `;
-  return { ok: results.every(item => item.ok), results, message: results.every(item => item.ok) ? 'تم تفعيل استقبال تعليقات Facebook وInstagram' : 'تم تنفيذ الاشتراك مع وجود أخطاء ظاهرة بالتفصيل' };
+  for (const platform of ['facebook','instagram'] as const) {
+    try {
+      const linked = await platformConnection(sql, platform);
+      const grantedScopes = connectionScopes(linked.connection);
+      const isFacebook = platform === 'facebook';
+      const accountId = isFacebook
+        ? clean(linked.connection.page_id || linked.connection.account_id)
+        : clean(linked.connection.ig_user_id || linked.connection.account_id);
+      if (!accountId) throw new Error(isFacebook ? 'Page ID الخاص بـFacebook غير موجود' : 'Instagram Account ID غير موجود');
+      const instagramLogin = !isFacebook && grantedScopes.some((scope) => scope.startsWith('instagram_business_'));
+      results.push(await subscribeTarget({
+        platform,
+        field: isFacebook ? 'feed' : 'comments',
+        accountId,
+        accountName: clean(linked.connection.page_name || linked.connection.account_name || linked.connection.username),
+        host: instagramLogin ? 'instagram' : 'facebook',
+        token: linked.token,
+        grantedScopes,
+        requiredScopes: isFacebook ? ['pages_manage_metadata'] : [instagramLogin ? 'instagram_business_manage_comments' : 'instagram_manage_comments'],
+      }));
+    } catch (error: any) {
+      results.push({ platform, field: platform === 'facebook' ? 'feed' : 'comments', ok: false, ...subscriptionFailure(error) });
+    }
+  }
+  const updatedAt = new Date().toISOString();
+  for (const item of results) {
+    await sql`
+      update marketing.platform_connections
+      set metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ engagementWebhookSubscription: { result: item, updatedAt } } as any)}::jsonb,updated_at=now()
+      where platform=${item.platform}
+    `;
+  }
+  const subscriptionOk = results.every((item) => item.ok);
+  return {
+    ok: true,
+    subscriptionOk,
+    results,
+    message: subscriptionOk ? 'تم تفعيل استقبال تعليقات Facebook وInstagram والتحقق من الاشتراكات' : 'تعذر تفعيل استقبال التعليقات على منصة أو أكثر؛ راجع التفاصيل أدناه',
+  };
 }
 
 type NormalizedComment = {
