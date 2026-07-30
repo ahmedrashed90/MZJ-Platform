@@ -262,15 +262,39 @@ async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
   `;
 }
 
+async function allocateCampaignCode(tx: any, campaignTypeId: string, requestedCode?: string | null) {
+  const [type] = await tx<any[]>`select * from marketing.campaign_types where id=${campaignTypeId}::uuid and is_active=true for update`;
+  if (!type) throw new Error("نوع الحملة غير موجود");
+
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const base = `${safeCode(type.code_prefix || type.short_code)}-${year}-${month}-`;
+  const requested = clean(requestedCode);
+
+  if (requested && requested.startsWith(base)) {
+    const [duplicate] = await tx<any[]>`select 1 from marketing.campaigns where campaign_code=${requested} limit 1`;
+    if (!duplicate) {
+      const requestedSequence = Number(requested.slice(base.length));
+      if (Number.isInteger(requestedSequence) && requestedSequence > Number(type.sequence_value || 0)) {
+        await tx`update marketing.campaign_types set sequence_value=${requestedSequence},updated_at=now() where id=${campaignTypeId}::uuid`;
+      }
+      return requested;
+    }
+  }
+
+  const [existing] = await tx<any[]>`
+    select coalesce(max((substring(campaign_code from '([0-9]+)$'))::int),0)::int as max_sequence
+    from marketing.campaigns
+    where campaign_code like ${`${base}%`}
+  `;
+  const sequence = Math.max(Number(type.sequence_value || 0), Number(existing?.max_sequence || 0)) + 1;
+  await tx`update marketing.campaign_types set sequence_value=${sequence},updated_at=now() where id=${campaignTypeId}::uuid`;
+  return `${base}${String(sequence).padStart(3, "0")}`;
+}
+
 async function nextCampaignCode(sql: ReturnType<typeof getSql>, campaignTypeId: string) {
-  return sql.begin(async (tx) => {
-    const [type] = await tx<any[]>`select * from marketing.campaign_types where id=${campaignTypeId}::uuid and is_active=true for update`;
-    if (!type) throw new Error("نوع الحملة غير موجود");
-    const sequence = Number(type.sequence_value || 0) + 1;
-    await tx`update marketing.campaign_types set sequence_value=${sequence},updated_at=now() where id=${campaignTypeId}::uuid`;
-    const now = new Date(); const year = now.getUTCFullYear(); const month = String(now.getUTCMonth() + 1).padStart(2, "0");
-    return `${safeCode(type.code_prefix || type.short_code)}-${year}-${month}-${String(sequence).padStart(3, "0")}`;
-  });
+  return sql.begin(async (tx) => allocateCampaignCode(tx, campaignTypeId));
 }
 
 function contentDepartmentId(meta: { contentDepartmentId?: string; departments: any[] }) { return clean(meta.contentDepartmentId || meta.departments.find((item) => item.is_content)?.id); }
@@ -337,16 +361,21 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
 async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
   const campaignTypeId = clean(body.campaignTypeId); const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd);
   if (!campaignTypeId || !name || !start || !end) throw new Error("بيانات الحملة الأساسية غير مكتملة");
-  const code = clean(body.campaignCode) || await nextCampaignCode(sql, campaignTypeId);
   const meta = await marketingMeta(sql, user); const contentId = contentDepartmentId(meta);
   return sql.begin(async (tx) => {
-    const [campaign] = await tx<any[]>`
-      insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
-      select ${code},${name},ct.id,ct.name,${clean(body.objective)||null},'required',${isoDate(body.campaignDate)||new Date().toISOString().slice(0,10)},${start},${end},${start}::date,${end}::date,${clean(body.requiredFromContent)||null},${tx.json(dbJson(body))},0,${user.id}::uuid
-      from marketing.campaign_types ct where ct.id=${campaignTypeId}::uuid
-      returning id::text,campaign_code,name
-    `;
-    if (!campaign) throw new Error("نوع الحملة غير صحيح");
+    let code = await allocateCampaignCode(tx, campaignTypeId, clean(body.campaignCode));
+    let campaign: any = null;
+    for (let attempt = 0; attempt < 3 && !campaign; attempt += 1) {
+      [campaign] = await tx<any[]>`
+        insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
+        select ${code},${name},ct.id,ct.name,${clean(body.objective)||null},'required',${isoDate(body.campaignDate)||new Date().toISOString().slice(0,10)},${start},${end},${start}::date,${end}::date,${clean(body.requiredFromContent)||null},${tx.json(dbJson({ ...body, campaignCode: code }))},0,${user.id}::uuid
+        from marketing.campaign_types ct where ct.id=${campaignTypeId}::uuid and ct.is_active=true
+        on conflict(campaign_code) do nothing
+        returning id::text,campaign_code,name
+      `;
+      if (!campaign) code = await allocateCampaignCode(tx, campaignTypeId);
+    }
+    if (!campaign) throw new Error("تعذر إنشاء كود حملة فريد. أعد المحاولة مرة أخرى");
     const creativeMap = new Map<string, string>();
     let creativeIndex = 0;
     for (const rawCreative of arrayValue(body.creatives)) {
