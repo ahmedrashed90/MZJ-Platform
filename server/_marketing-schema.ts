@@ -890,6 +890,76 @@ create table if not exists marketing.zoho_upload_tickets (
 );
 create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing.zoho_upload_tickets(expires_at,status);
 
+
+create table if not exists marketing.published_posts (
+  id uuid primary key default gen_random_uuid(),
+  schedule_id uuid not null unique references marketing.publish_schedule(id) on delete cascade,
+  source_type text not null check(source_type in ('campaign','agenda')),
+  source_id uuid not null,
+  creative_id uuid references marketing.creatives(id) on delete set null,
+  task_id uuid references marketing.tasks(id) on delete set null,
+  platform text not null check(platform in ('facebook','instagram')),
+  account_id text not null,
+  provider_post_id text not null,
+  provider_media_id text,
+  permalink text,
+  post_type_name text,
+  published_at timestamptz not null default now(),
+  likes_count bigint not null default 0,
+  comments_count bigint not null default 0,
+  shares_count bigint not null default 0,
+  saves_count bigint not null default 0,
+  views_count bigint not null default 0,
+  reach_count bigint not null default 0,
+  last_synced_at timestamptz,
+  sync_status text not null default 'pending' check(sync_status in ('pending','synced','failed')),
+  sync_error text,
+  raw_metrics jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists marketing_published_posts_provider_idx on marketing.published_posts(platform,account_id,provider_post_id);
+create index if not exists marketing_published_posts_media_idx on marketing.published_posts(platform,provider_media_id) where provider_media_id is not null;
+create index if not exists marketing_published_posts_source_idx on marketing.published_posts(source_type,source_id,published_at desc);
+
+create table if not exists marketing.post_comments (
+  id uuid primary key default gen_random_uuid(),
+  published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
+  platform text not null check(platform in ('facebook','instagram')),
+  provider_comment_id text not null,
+  provider_post_id text,
+  account_id text not null,
+  commenter_id text not null,
+  commenter_name text,
+  comment_text text,
+  commented_at timestamptz,
+  crm_lead_id uuid,
+  processing_status text not null default 'pending' check(processing_status in ('pending','created','reused','ignored','failed')),
+  processing_error text,
+  raw_payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(platform,provider_comment_id)
+);
+create index if not exists marketing_post_comments_post_idx on marketing.post_comments(published_post_id,commented_at desc,created_at desc);
+create index if not exists marketing_post_comments_commenter_idx on marketing.post_comments(platform,account_id,commenter_id);
+create index if not exists marketing_post_comments_lead_idx on marketing.post_comments(crm_lead_id) where crm_lead_id is not null;
+
+create table if not exists marketing.engagement_snapshots (
+  id bigserial primary key,
+  published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
+  snapshot_date date not null default current_date,
+  likes_count bigint not null default 0,
+  comments_count bigint not null default 0,
+  shares_count bigint not null default 0,
+  saves_count bigint not null default 0,
+  views_count bigint not null default 0,
+  reach_count bigint not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(published_post_id,snapshot_date)
+);
+
 create table if not exists marketing.schema_state (
   id smallint primary key default 1 check(id = 1),
   version integer not null,

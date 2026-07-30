@@ -407,7 +407,9 @@ on conflict (code) do update set name=excluded.name,sort_order=excluded.sort_ord
 
 insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group) values
 ('facebook','فيسبوك',10,true,array['crm','marketing'],'facebook',true,'digital'),
+('facebook_post','بوست فيس بوك',15,true,array['crm','marketing'],'facebook',true,'digital'),
 ('instagram','إنستجرام',20,true,array['crm','marketing'],'instagram',true,'digital'),
+('instagram_post','بوست انستجرام',25,true,array['crm','marketing'],'instagram',true,'digital'),
 ('tiktok','تيك توك',30,true,array['crm','marketing'],'tiktok',true,'digital'),
 ('snapchat','سناب شات',40,true,array['crm','marketing'],'whatsapp',false,'digital'),
 ('whatsapp','واتساب',50,true,array['crm','marketing'],'whatsapp',true,'digital'),

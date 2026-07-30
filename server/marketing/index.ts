@@ -11,6 +11,7 @@ import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStor
 import { emitMarketingNotification } from "../_notifications.js";
 import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
+import { backfillPublishedPosts, engagementData, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -1605,6 +1606,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
     await tx`update marketing.publish_schedule set status='published',published_at=now(),publish_result=${tx.json(dbJson(result))},updated_at=now() where id=${schedule.id}::uuid`;
     await tx`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by) values(${schedule.id}::uuid,${schedule.platform_code},'published',${tx.json(dbJson(result))},${user.id}::uuid)`;
   });
+  await recordPublishedPost(sql,schedule,result).catch((error)=>console.error('Failed to register published post for engagement',error));
   return result;
 }
 async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -2016,6 +2018,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='packages')return response.status(200).json({ok:true,rows:await sql<any[]>`select p.*,p.id::text,p.category_id::text,p.sales_type_id::text,coalesce(c.name,p.category) as category_name,coalesce(s.name,p.sales_type,'—') as sales_type_name from marketing.packages p left join marketing.package_categories c on c.id=p.category_id left join marketing.package_sales_types s on s.id=p.sales_type_id where p.is_active=true order by coalesce(c.sort_order,999),coalesce(s.sort_order,999),p.name`});
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
+      if(resource==='engagement'){if(!hasPermission(user,'marketing.publish_prep.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});return response.status(200).json(await engagementData(sql));}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));
@@ -2053,6 +2056,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
+    else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
+    else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.connections.manage'))throw new Error('لا توجد صلاحية لتفعيل استقبال التعليقات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
     else if(action==='save_result_file')result=await saveResultFile(sql,body,user);
     else if(action==='save_links')result=await saveLinks(sql,body,user);
     else if(action==='archive_entity')result=await archiveEntity(sql,body,user);

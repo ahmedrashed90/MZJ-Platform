@@ -6,6 +6,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/integrations/meta/engagement-webhook",
+      "destination": "/api/meta-engagement-webhook"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/index"
     },
@@ -16,6 +20,9 @@
   ],
   "functions": {
     "api/index.ts": {
+      "maxDuration": 120
+    },
+    "api/meta-engagement-webhook.ts": {
       "maxDuration": 120
     }
   }

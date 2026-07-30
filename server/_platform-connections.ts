@@ -349,7 +349,11 @@ export async function listPlatformConnections(sql: Sql, user: SessionUser, reque
 
 function metaVersion() { return clean(process.env.META_GRAPH_VERSION) || "v25.0"; }
 function metaScopes() {
-  return parseScopes(process.env.META_SCOPES || "public_profile,pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish");
+  const required = [
+    "public_profile","pages_show_list","pages_read_engagement","pages_read_user_content","pages_manage_posts","pages_manage_metadata",
+    "instagram_basic","instagram_content_publish","instagram_manage_comments","instagram_manage_insights",
+  ];
+  return [...new Set([...parseScopes(process.env.META_SCOPES || ""), ...required])];
 }
 function tiktokScopes() { return parseScopes(process.env.TIKTOK_SCOPES || "user.info.basic,video.upload,video.publish"); }
 function youtubeScopes() {

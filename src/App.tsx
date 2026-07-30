@@ -38,6 +38,7 @@ const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingData
 const PackagesPage = lazy(() => import("./marketing/pages/PackagesPage").then((module) => ({ default: module.PackagesPage })));
 const PlatformConnectionsPage = lazy(() => import("./marketing/pages/PlatformConnectionsPage").then((module) => ({ default: module.PlatformConnectionsPage })));
 const PublishPrepPage = lazy(() => import("./marketing/pages/PublishPrepPage").then((module) => ({ default: module.PublishPrepPage })));
+const EngagementPage = lazy(() => import("./marketing/pages/EngagementPage").then((module) => ({ default: module.EngagementPage })));
 const MonitoringPage = lazy(() => import("./marketing/pages/MonitoringPage").then((module) => ({ default: module.MonitoringPage })));
 const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
@@ -111,6 +112,7 @@ function PlatformRoutes() {
             <Route path="packages" element={<PermissionGuard permission="marketing.packages.view"><PackagesPage /></PermissionGuard>} />
             <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><PlatformConnectionsPage /></PermissionGuard>} />
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
+            <Route path="engagement" element={<PermissionGuard permission="marketing.publish_prep.view"><EngagementPage /></PermissionGuard>} />
             <Route path="monitoring" element={<PermissionGuard permission="marketing.monitoring.view"><MonitoringPage /></PermissionGuard>} />
             <Route path="calendar" element={<PermissionGuard permission="marketing.calendar.view"><MarketingCalendarPage /></PermissionGuard>} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
