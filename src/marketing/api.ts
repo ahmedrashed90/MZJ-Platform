@@ -78,6 +78,7 @@ export type MarketingFinalUploadCancellation = {
   cancelled: boolean;
   groupId: string;
   currentRequest: XMLHttpRequest | null;
+  currentReader: FileReader | null;
   cancel: () => void;
 };
 
@@ -86,8 +87,10 @@ export function createMarketingFinalUploadCancellation(): MarketingFinalUploadCa
     cancelled: false,
     groupId: "",
     currentRequest: null,
+    currentReader: null,
     cancel() {
       control.cancelled = true;
+      control.currentReader?.abort();
       control.currentRequest?.abort();
     },
   };
@@ -106,71 +109,86 @@ function parseUploadResponse(xhr: XMLHttpRequest) {
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
-function uploadFileDirectlyToZoho(input: {
+function fileToDataUrl(input: { file: File; cancellation: MarketingFinalUploadCancellation }) {
+  return new Promise<string>((resolve, reject) => {
+    if (input.cancellation.cancelled) return reject(uploadCancelledError());
+    const reader = new FileReader();
+    input.cancellation.currentReader = reader;
+    reader.onerror = () => reject(new Error("تعذر قراءة الملف المحدد"));
+    reader.onabort = () => reject(uploadCancelledError());
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(input.file);
+  }).finally(() => {
+    input.cancellation.currentReader = null;
+  });
+}
+
+function uploadFileThroughPlatform(input: {
   file: File;
   fileIndex: number;
   fileCount: number;
-  uploadMode: "multipart" | "stream";
-  uploadId: string;
-  storedFileName: string;
-  accessToken: string;
-  apiDomain: string;
-  uploadDomain: string;
-  parentFolderId: string;
+  ticket: string;
   cancellation: MarketingFinalUploadCancellation;
   onProgress?: (progress: MarketingFinalUploadProgress) => void;
 }) {
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
+  return new Promise<Record<string, unknown>>(async (resolve, reject) => {
     if (input.cancellation.cancelled) return reject(uploadCancelledError());
+    let dataUrl = "";
+    try {
+      input.onProgress?.({
+        fileIndex: input.fileIndex,
+        fileCount: input.fileCount,
+        fileName: input.file.name,
+        loaded: 0,
+        total: input.file.size,
+        percent: 0,
+        speedBytesPerSecond: 0,
+        etaSeconds: null,
+        status: "pending",
+        detail: "جاري تجهيز الملف للرفع",
+      });
+      dataUrl = await fileToDataUrl({ file: input.file, cancellation: input.cancellation });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    if (input.cancellation.cancelled) return reject(uploadCancelledError());
+
     const xhr = new XMLHttpRequest();
     input.cancellation.currentRequest = xhr;
     const startedAt = performance.now();
-    const uploadUrl = input.uploadMode === "stream"
-      ? `${input.uploadDomain.replace(/\/+$/, "")}/workdrive-api/v1/stream/upload`
-      : `${input.apiDomain.replace(/\/+$/, "")}/workdrive/api/v1/upload`;
-
-    xhr.open("POST", uploadUrl, true);
+    xhr.open("POST", "/api/marketing", true);
+    xhr.withCredentials = true;
     xhr.timeout = 0;
-    xhr.setRequestHeader("Authorization", `Zoho-oauthtoken ${input.accessToken}`);
-    xhr.setRequestHeader("Accept", "application/vnd.api+json");
-    if (input.uploadMode === "stream") {
-      xhr.setRequestHeader("Content-Type", input.file.type || "application/octet-stream");
-      xhr.setRequestHeader("x-filename", encodeURIComponent(input.storedFileName));
-      xhr.setRequestHeader("x-parent_id", input.parentFolderId);
-      xhr.setRequestHeader("upload-id", input.uploadId);
-      xhr.setRequestHeader("x-streammode", "1");
-      xhr.setRequestHeader("x-override-name-exist", "false");
-    }
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.setRequestHeader("Accept", "application/json");
 
     xhr.upload.onprogress = (event) => {
-      const total = event.lengthComputable && event.total > 0 ? event.total : input.file.size;
-      const loaded = Math.min(event.loaded, total);
+      const ratio = event.lengthComputable && event.total > 0 ? Math.min(1, event.loaded / event.total) : 0;
+      const loaded = Math.round(input.file.size * ratio);
       const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.2);
       const speedBytesPerSecond = loaded / elapsedSeconds;
-      const remaining = Math.max(0, total - loaded);
+      const remaining = Math.max(0, input.file.size - loaded);
       input.onProgress?.({
         fileIndex: input.fileIndex,
         fileCount: input.fileCount,
         fileName: input.file.name,
         loaded,
-        total,
-        percent: total ? Math.min(100, Math.round((loaded / total) * 100)) : 0,
+        total: input.file.size,
+        percent: Math.min(100, Math.round(ratio * 100)),
         speedBytesPerSecond,
         etaSeconds: speedBytesPerSecond > 0 ? Math.ceil(remaining / speedBytesPerSecond) : null,
         status: "uploading",
       });
     };
 
-    xhr.onerror = () => reject(new Error("تعذر الاتصال المباشر بـZoho WorkDrive. تأكد من ربط الحساب والسماح بالرفع من دومين المنصة"));
+    xhr.onerror = () => reject(new Error("تعذر رفع الملف إلى Zoho WorkDrive عبر المنصة"));
     xhr.ontimeout = () => reject(new Error("انتهت مهلة رفع الملف إلى Zoho WorkDrive"));
     xhr.onabort = () => reject(uploadCancelledError());
     xhr.onload = () => {
-      const payload = parseUploadResponse(xhr);
-      if (xhr.status < 200 || xhr.status >= 300) {
-        const errorPayload = payload as any;
-        const first = Array.isArray(errorPayload.errors) ? errorPayload.errors[0] : null;
-        const message = first?.title || first?.detail || errorPayload.message || errorPayload.error || `تعذر رفع الملف إلى Zoho (${xhr.status})`;
-        reject(new Error(String(message)));
+      const payload = parseUploadResponse(xhr) as any;
+      if (xhr.status < 200 || xhr.status >= 300 || payload.ok === false) {
+        reject(new Error(String(payload.error || payload.message || `تعذر رفع الملف إلى Zoho (${xhr.status})`)));
         return;
       }
       input.onProgress?.({
@@ -182,36 +200,23 @@ function uploadFileDirectlyToZoho(input: {
         percent: 100,
         speedBytesPerSecond: input.file.size / Math.max((performance.now() - startedAt) / 1000, 0.2),
         etaSeconds: 0,
-        status: "verifying",
-        detail: "جاري التحقق من الملف داخل Zoho",
+        status: "completed",
+        detail: "تم الرفع إلى Zoho WorkDrive",
       });
       resolve(payload);
     };
 
-    if (input.uploadMode === "stream") {
-      xhr.send(input.file);
-    } else {
-      const form = new FormData();
-      form.append("filename", input.storedFileName);
-      form.append("parent_id", input.parentFolderId);
-      form.append("override-name-exist", "false");
-      form.append("content", input.file, input.storedFileName);
-      xhr.send(form);
-    }
+    xhr.send(JSON.stringify({
+      action: "upload_final_file_proxy",
+      ticket: input.ticket,
+      fileName: input.file.name,
+      mimeType: input.file.type || "application/octet-stream",
+      fileSize: input.file.size,
+      fileData: dataUrl,
+    }));
+  }).finally(() => {
+    input.cancellation.currentRequest = null;
   });
-}
-
-async function waitForZohoConfirmation(input: { ticket: string; result: unknown; cancellation: MarketingFinalUploadCancellation }) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    if (input.cancellation.cancelled) throw uploadCancelledError();
-    const confirmation = await marketingFetch<{ pending?: boolean; fileId?: string; resourceId?: string }>("/api/marketing", {
-      method: "POST",
-      body: JSON.stringify({ action: "confirm_final_upload", ticket: input.ticket, result: input.result }),
-    });
-    if (!confirmation.pending) return confirmation;
-    await new Promise((resolve) => window.setTimeout(resolve, 2000));
-  }
-  throw new Error("استغرق Zoho وقتًا أطول من المتوقع في تأكيد الملف. حاول التحقق مرة أخرى");
 }
 
 export async function uploadMarketingFinalFiles(input: {
@@ -227,12 +232,6 @@ export async function uploadMarketingFinalFiles(input: {
   const prepared = await marketingFetch<{
     groupId: string;
     mediaKind: "image" | "carousel" | "video";
-    directUpload: {
-      accessToken: string;
-      apiDomain: string;
-      uploadDomain: string;
-      parentFolderId: string;
-    };
     uploads: Array<{
       ticket: string;
       fileId: string;
@@ -241,8 +240,6 @@ export async function uploadMarketingFinalFiles(input: {
       fileName: string;
       mimeType: string;
       fileSize: number;
-      uploadMode: "multipart" | "stream";
-      uploadId: string;
     }>;
   }>("/api/marketing", {
     method: "POST",
@@ -273,32 +270,13 @@ export async function uploadMarketingFinalFiles(input: {
         etaSeconds: null,
         status: "uploading",
       });
-      const result = await uploadFileDirectlyToZoho({
+      await uploadFileThroughPlatform({
         file,
         fileIndex: index,
         fileCount: prepared.uploads.length,
-        uploadMode: upload.uploadMode,
-        uploadId: upload.uploadId,
-        storedFileName: upload.fileName,
-        accessToken: prepared.directUpload.accessToken,
-        apiDomain: prepared.directUpload.apiDomain,
-        uploadDomain: prepared.directUpload.uploadDomain,
-        parentFolderId: prepared.directUpload.parentFolderId,
+        ticket: upload.ticket,
         cancellation,
         onProgress: input.onProgress,
-      });
-      await waitForZohoConfirmation({ ticket: upload.ticket, result, cancellation });
-      input.onProgress?.({
-        fileIndex: index,
-        fileCount: prepared.uploads.length,
-        fileName: file.name,
-        loaded: file.size,
-        total: file.size,
-        percent: 100,
-        speedBytesPerSecond: 0,
-        etaSeconds: 0,
-        status: "completed",
-        detail: "تم الرفع والتحقق",
       });
     }
 

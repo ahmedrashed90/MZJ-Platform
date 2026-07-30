@@ -272,7 +272,7 @@ export function PlatformConnectionsPage() {
   return (
     <MarketingPage
       title="ربط المنصات"
-      description="ربط رسمي عبر OAuth. أسرار التطبيق وRefresh Token تُحفظ مشفرة داخل PostgreSQL، ويُستخدم Access Token مؤقت عند بدء الرفع المباشر إلى Zoho."
+      description="ربط رسمي عبر OAuth. أسرار التطبيق وRefresh Token تُحفظ مشفرة داخل PostgreSQL، والمنصة هي التي ترفع الملفات إلى Zoho WorkDrive."
       actions={<button type="button" className="secondary" onClick={() => { setLoading("all"); void load(); }} disabled={loading === "all"}>{loading === "all" ? <SpinnerGap className="marketing-spin" size={17} /> : <ArrowClockwise size={17} />}تحديث الحالة</button>}
     >
       {error ? <MarketingAlert>{error}</MarketingAlert> : null}
@@ -280,7 +280,7 @@ export function PlatformConnectionsPage() {
 
       <section className="marketing-connections-summary" aria-label="ملخص حماية الربط">
         <div><ShieldCheck size={23} weight="duotone" /><span><strong>الأسرار خادمية</strong><small>Client Secret وRefresh Token لا يغادران الخادم</small></span></div>
-        <div><CheckCircle size={23} weight="duotone" /><span><strong>رفع مباشر</strong><small>الملف ينتقل من المتصفح إلى Zoho دون المرور على Worker أو R2</small></span></div>
+        <div><CheckCircle size={23} weight="duotone" /><span><strong>رفع من المنصة</strong><small>الملف يرفع عبر API المنصة إلى Zoho WorkDrive دون Worker أو R2</small></span></div>
         <div><LinkBreak size={23} weight="duotone" /><span><strong>فصل حقيقي</strong><small>Revoke ثم حذف التوكنات من PostgreSQL</small></span></div>
       </section>
 

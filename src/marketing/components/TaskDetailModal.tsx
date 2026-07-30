@@ -501,7 +501,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
           </section>
 
           <section className="marketing-task-section marketing-final-upload-section">
-            <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3><p>يرفع مباشرة من جهازك إلى Zoho WorkDrive، بدون المرور على Worker أو R2.</p></div></div>
+            <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3><p>يرفع من داخل المنصة إلى Zoho WorkDrive بنفس مسار الرفع المعتمد، مع عرض النسبة والسرعة وإمكانية الإلغاء.</p></div></div>
             <div className="marketing-final-upload-shell">
               {permissions.canUploadFinal ? <label
                 className={`marketing-final-upload-dropzone ${task.template_status !== "approved" || task.status === "completed" || finalUpload?.active ? "disabled" : ""}`}

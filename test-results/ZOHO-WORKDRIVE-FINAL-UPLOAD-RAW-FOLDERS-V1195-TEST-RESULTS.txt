@@ -1,23 +1,25 @@
-MZJ Platform - Direct Zoho Final Upload + RAW Folders
+Zoho WorkDrive final upload - platform proxy clean rebuild
 Date: 2026-07-30
 
-STATIC ACCEPTANCE
-- Direct upload acceptance checks: PASS 22/22
-- Existing project static regression scripts: PASS
-- Modified TypeScript/TSX syntax transpilation: PASS 8/8
-- Old Zoho Worker/R2 final-upload route references in live source: NONE
-- Gateway Worker JavaScript syntax: PASS
-- Direct upload UI markers (dropzone/progress/speed/ETA/cancel): PASS
-- Existing final-upload visibility condition retained: PASS
-- Campaign and agenda source linkage retained: PASS
-- Ordered carousel file records retained: PASS
-- RAW integration compatibility retained: PASS
+Verified source behavior:
+PASS - Browser no longer calls Zoho upload endpoints directly.
+PASS - Browser sends final files to /api/marketing using action upload_final_file_proxy.
+PASS - Platform server refreshes the stored Zoho OAuth token and uploads to WorkDrive.
+PASS - Access Token is not returned to the browser in the upload preparation response.
+PASS - Upload progress, speed, ETA and cancellation remain in task details.
+PASS - Ordered multiple-image groups remain supported.
+PASS - Campaign and agenda execution tasks use the same final upload flow.
+PASS - Existing final-file button condition remains unchanged.
+PASS - Cloudflare Worker and R2 are not used by final-file upload.
+PASS - Zoho OAuth start/callback/status routes remain intact.
+PASS - RAW folder compatibility remains intact.
 
-BUILD LIMITATION
-- Full dependency install, project TypeScript typecheck and Vite production build could not be run in this isolated environment because registry network access was unavailable and node_modules was not included in the uploaded ZIP.
-- Live Zoho OAuth/direct browser upload was not run because deployed credentials and the production browser origin are required.
+Executed checks:
+- scripts/check-zoho-final-upload-raw-folders-v1195.mjs: 22/22 passed
+- scripts/check-api-imports.mjs: passed
+- scripts/check-marketing-platform-connections-rebuild-v1212.mjs: 25/25 passed
+- scripts/check-marketing-dashboard-completion-publish-layout-v1214.mjs: 12/12 passed
+- TypeScript transpile diagnostics for 5 modified TS/TSX files: passed
 
-REQUIRED LIVE ACCEPTANCE
-- Reconnect Zoho after deployment and accept WorkDrive.users.READ.
-- Test one image, multiple ordered images, a video, cancel during upload, and an agenda task.
-- Confirm browser-to-Zoho CORS behavior from https://mzj-platform.vercel.app.
+Production note:
+Actual Zoho upload must be verified after Vercel redeploy with the connected marketing@mzjcars.com account.
