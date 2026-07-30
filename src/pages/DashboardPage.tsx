@@ -45,6 +45,7 @@ import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/ap
 import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
 import type { DashboardData, NullableNumber } from "../types";
 import { DashboardOperationsModal, type DashboardOperationsSelection } from "../operations/components/DashboardOperationsModal";
+import { useAuth } from "../auth/AuthContext";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 
@@ -76,6 +77,53 @@ const OPERATION_DASHBOARD_WIDGET_IDS = [
 ] as const;
 
 const DEFAULT_DASHBOARD_WIDGET_ORDER = [...DEFAULT_MAIN_WIDGET_ORDER, ...OPERATION_DASHBOARD_WIDGET_IDS];
+
+const DASHBOARD_LAYOUT_STORAGE_VERSION = "v3";
+type StoredDashboardLayout = { widgetOrder: string[]; hiddenMainWidgets: string[]; updatedAt: number };
+
+function normalizeDashboardWidgetOrder(value: unknown) {
+  const allowed = new Set<string>(DEFAULT_DASHBOARD_WIDGET_ORDER);
+  const next: string[] = [];
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const id = String(item || "").trim();
+      if (allowed.has(id) && !next.includes(id)) next.push(id);
+    }
+  }
+  for (const id of DEFAULT_DASHBOARD_WIDGET_ORDER) if (!next.includes(id)) next.push(id);
+  return next;
+}
+
+function normalizeHiddenDashboardWidgets(value: unknown) {
+  const allowed = new Set<string>(DEFAULT_MAIN_WIDGET_ORDER);
+  return Array.isArray(value)
+    ? Array.from(new Set(value.map((item) => String(item || "").trim()).filter((id) => allowed.has(id))))
+    : [];
+}
+
+function dashboardLayoutStorageKey(userId: string) {
+  return `mzj-dashboard-layout:${DASHBOARD_LAYOUT_STORAGE_VERSION}:${userId}`;
+}
+
+function readStoredDashboardLayout(userId: string): StoredDashboardLayout | null {
+  if (!userId || typeof window === "undefined") return null;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(dashboardLayoutStorageKey(userId)) || "null");
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      widgetOrder: normalizeDashboardWidgetOrder(parsed.widgetOrder),
+      hiddenMainWidgets: normalizeHiddenDashboardWidgets(parsed.hiddenMainWidgets),
+      updatedAt: Number(parsed.updatedAt || 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDashboardLayout(userId: string, layout: StoredDashboardLayout) {
+  if (!userId || typeof window === "undefined") return;
+  try { window.localStorage.setItem(dashboardLayoutStorageKey(userId), JSON.stringify(layout)); } catch { /* PostgreSQL remains the primary store. */ }
+}
 
 function valueText(value: NullableNumber) {
   return value === null ? "—" : numberFormatter.format(value);
@@ -334,6 +382,7 @@ function dashboardRangeLabel(range: { from: string; to: string }) {
 
 export function DashboardPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [operationsSelection, setOperationsSelection] = useState<DashboardOperationsSelection | null>(null);
@@ -346,28 +395,44 @@ export function DashboardPage() {
   const [draggedWidget, setDraggedWidget] = useState<string | null>(null);
   const [dashboardCustomizeOpen, setDashboardCustomizeOpen] = useState(false);
   const detailsRequestId = useRef(0);
+  const layoutMutationRef = useRef(0);
+  const layoutSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   useEscapeToClose(dateOpen, () => setDateOpen(false));
   useEscapeToClose(dashboardCustomizeOpen, () => setDashboardCustomizeOpen(false));
 
   useEffect(() => {
     let active = true;
+    const layoutRevisionAtRequest = layoutMutationRef.current;
     setLoading(true);
     const params = new URLSearchParams(appliedRange);
-    fetch(`/api/dashboard?${params.toString()}`, { cache: "no-store" })
+    fetch(`/api/dashboard?${params.toString()}`, { cache: "no-store", credentials: "include" })
       .then(async (response) => {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload?.error || "تعذر تحميل الداش بورد");
         return payload as DashboardData;
       })
       .then((payload) => {
-        if (active) {
-          setData(payload);
-          setWidgetOrder(payload.layout?.widgetOrder || [
-            ...(payload.layout?.mainWidgetOrder || DEFAULT_MAIN_WIDGET_ORDER),
-            ...(payload.layout?.operationWidgetOrder || OPERATION_DASHBOARD_WIDGET_IDS),
-          ]);
-          setHiddenMainWidgets(payload.layout?.hiddenMainWidgets || []);
-        }
+        if (!active) return;
+        setData(payload);
+        if (layoutMutationRef.current !== layoutRevisionAtRequest) return;
+        const serverOrder = normalizeDashboardWidgetOrder(payload.layout?.widgetOrder || [
+          ...(payload.layout?.mainWidgetOrder || DEFAULT_MAIN_WIDGET_ORDER),
+          ...(payload.layout?.operationWidgetOrder || OPERATION_DASHBOARD_WIDGET_IDS),
+        ]);
+        const serverHidden = normalizeHiddenDashboardWidgets(payload.layout?.hiddenMainWidgets);
+        const serverUpdatedAt = Date.parse(String(payload.layout?.updatedAt || "")) || 0;
+        const stored = readStoredDashboardLayout(user?.id || "");
+        const useStored = Boolean(stored && stored.updatedAt > serverUpdatedAt);
+        const selectedOrder = useStored && stored ? stored.widgetOrder : serverOrder;
+        const selectedHidden = useStored && stored ? stored.hiddenMainWidgets : serverHidden;
+        setWidgetOrder(selectedOrder);
+        setHiddenMainWidgets(selectedHidden);
+        writeStoredDashboardLayout(user?.id || "", {
+          widgetOrder: selectedOrder,
+          hiddenMainWidgets: selectedHidden,
+          updatedAt: useStored && stored ? stored.updatedAt : serverUpdatedAt,
+        });
+        if (useStored) void persistDashboardLayout(selectedOrder, selectedHidden);
       })
       .catch(() => {
         if (active) setData(null);
@@ -376,7 +441,7 @@ export function DashboardPage() {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [appliedRange.from, appliedRange.to]);
+  }, [appliedRange.from, appliedRange.to, user?.id]);
 
   const current = data;
   const pieData = useMemo(() => {
@@ -463,21 +528,35 @@ export function DashboardPage() {
   const mainWidgetVisible = (id: MainDashboardWidgetId) => !hiddenMainWidgets.includes(id);
 
   async function persistDashboardLayout(nextOrder: string[], nextHidden = hiddenMainWidgets) {
-    const previousOrder = widgetOrder;
-    const previousHidden = hiddenMainWidgets;
-    setWidgetOrder(nextOrder);
-    setHiddenMainWidgets(nextHidden);
-    try {
+    const normalizedOrder = normalizeDashboardWidgetOrder(nextOrder);
+    const normalizedHidden = normalizeHiddenDashboardWidgets(nextHidden);
+    const mutationId = ++layoutMutationRef.current;
+    const localUpdatedAt = Date.now();
+    setWidgetOrder(normalizedOrder);
+    setHiddenMainWidgets(normalizedHidden);
+    writeStoredDashboardLayout(user?.id || "", { widgetOrder: normalizedOrder, hiddenMainWidgets: normalizedHidden, updatedAt: localUpdatedAt });
+
+    const save = async () => {
       const response = await fetch("/api/dashboard", {
         method: "PUT",
+        cache: "no-store",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ widgetOrder: nextOrder, hiddenMainWidgets: nextHidden }),
+        body: JSON.stringify({ widgetOrder: normalizedOrder, hiddenMainWidgets: normalizedHidden }),
       });
-      if (!response.ok) throw new Error("تعذر حفظ ترتيب كروت الداش بورد");
-    } catch {
-      setWidgetOrder(previousOrder);
-      setHiddenMainWidgets(previousHidden);
-    }
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || "تعذر حفظ ترتيب كروت الداش بورد");
+      if (layoutMutationRef.current !== mutationId) return;
+      const savedOrder = normalizeDashboardWidgetOrder(payload?.layout?.widgetOrder || normalizedOrder);
+      const savedHidden = normalizeHiddenDashboardWidgets(payload?.layout?.hiddenMainWidgets || normalizedHidden);
+      const savedUpdatedAt = Date.parse(String(payload?.layout?.updatedAt || "")) || localUpdatedAt;
+      setWidgetOrder(savedOrder);
+      setHiddenMainWidgets(savedHidden);
+      writeStoredDashboardLayout(user?.id || "", { widgetOrder: savedOrder, hiddenMainWidgets: savedHidden, updatedAt: savedUpdatedAt });
+    };
+
+    layoutSaveQueueRef.current = layoutSaveQueueRef.current.catch(() => undefined).then(save).catch(() => undefined);
+    await layoutSaveQueueRef.current;
   }
 
   function setMainWidgetVisibility(id: MainDashboardWidgetId, visible: boolean) {

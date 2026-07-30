@@ -1975,6 +1975,18 @@
   font-size: 10px;
   font-weight: 900;
 }
+.marketing-dashboard-task-actions .marketing-dashboard-complete-task {
+  border: 1px solid #237047;
+  color: #fff;
+  background: linear-gradient(135deg,#33885a,#226b45);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 7px 17px rgba(34,107,69,.16);
+}
+.marketing-dashboard-task-actions .marketing-dashboard-complete-task:hover { transform: translateY(-1px); box-shadow: 0 9px 20px rgba(34,107,69,.2); }
+.marketing-dashboard-task-actions .marketing-dashboard-complete-task:disabled { opacity: .6; cursor: wait; transform: none; }
 
 .marketing-dashboard-entity { padding: 7px; gap: 6px; }
 .marketing-dashboard-entity.open { border-color: #ddc7bd; box-shadow: 0 7px 18px rgba(81,44,34,.05); }
@@ -2205,6 +2217,8 @@
 .marketing-publish-card-v2.selected { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(127,53,40,.08),0 12px 28px rgba(81,44,34,.08); }
 .marketing-publish-card-v2 > header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .marketing-publish-card-title { display: grid; gap: 4px; }
+.marketing-publish-card-statuses { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.marketing-publish-task-kind { width: max-content; padding: 5px 9px; border-radius: 999px; color: #6f392e; background: #fff0ea; font-size: 10px; font-weight: 900; }
 .marketing-publish-card-title h3 { margin: 0; font-size: 17px; }
 .marketing-publish-card-title p { margin: 0; color: var(--muted); font-size: 12px; }
 .marketing-publish-status { width: max-content; padding: 5px 9px; border-radius: 999px; color: #8b5b20; background: #fff5df; font-size: 10px; font-weight: 900; }
@@ -2701,7 +2715,6 @@
 .marketing-task-completion-copy > div { min-width: 0; display: grid; gap: 4px; }
 .marketing-task-completion-copy h3 { margin: 0; color: inherit; font-size: 16px; }
 .marketing-task-completion-copy p { margin: 0; color: #77665f; line-height: 1.7; font-size: 11px; }
-.marketing-complete-task-button { min-height: 43px; padding: 9px 17px; border: 1px solid #237047 !important; border-radius: 11px; color: #fff !important; background: linear-gradient(135deg,#33885a,#226b45) !important; display: inline-flex; align-items: center; justify-content: center; gap: 7px; white-space: nowrap; font: inherit; font-weight: 900; box-shadow: 0 8px 20px rgba(34,107,69,.18); }
 .marketing-template-preview-backdrop { position: fixed; inset: 0; z-index: 1200; padding: 0; display: grid; place-items: stretch; background: rgba(37,25,21,.68); backdrop-filter: blur(5px); }
 .marketing-template-preview {
   width: 100vw;
@@ -2831,8 +2844,7 @@
   .marketing-template-command-bar,
   .marketing-task-completion-panel { align-items: stretch; flex-direction: column; }
   .marketing-template-command-bar .marketing-inline-actions { justify-content: stretch; }
-  .marketing-template-command-bar .marketing-inline-actions > *,
-  .marketing-complete-task-button { width: 100%; }
+  .marketing-template-command-bar .marketing-inline-actions > * { width: 100%; }
   .marketing-completed-tasks-content { grid-template-columns: 1fr; }
   .marketing-completed-tasks-summary { min-width: 0; }
   .marketing-completed-tasks-list > button { grid-template-columns: 1fr; }

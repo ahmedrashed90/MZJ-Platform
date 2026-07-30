@@ -93,7 +93,7 @@ export function PublishPrepPage() {
     try {
       const result = await marketingFetch<{ message: string }>("/api/marketing", {
         method: "POST",
-        body: JSON.stringify({ action: "save_publish_prep", id: editing.id, platforms: editing.platforms || [], publishDate: String(editing.publish_date || "").slice(0, 10), caption: editing.caption, hashtags: editing.hashtags }),
+        body: JSON.stringify({ action: "save_publish_prep", id: editing.id, taskId: editing.task_id || "", platforms: editing.platforms || [], publishDate: String(editing.publish_date || "").slice(0, 10), caption: editing.caption, hashtags: editing.hashtags }),
       });
       setMessage(result.message);
       setEditing(null);
@@ -135,7 +135,7 @@ export function PublishPrepPage() {
     setEditing({ ...row, publish_date: String(row.publish_date || "").slice(0, 10), platforms: rowPlatforms(row).map((platform: any) => ({ platformId: platform.platformId, postTypeIds: [...(platform.postTypeIds || [])] })) });
   }
 
-  return <MarketingPage title="تجهيز النشر" description="مراجعة جاهزية الملفات والمنصات والنصوص والتاريخ قبل النشر الفعلي.">
+  return <MarketingPage title="تجهيز النشر" description="التاسكات التنفيذية فقط: راجع الملف والمنصات والنصوص والتاريخ قبل النشر الفعلي.">
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
     {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
@@ -162,7 +162,7 @@ export function PublishPrepPage() {
         const selected = selectedIds.includes(row.id);
         return <article key={row.id} className={`marketing-publish-card-v2 ${statusClass(ready)} ${selected ? "selected" : ""}`}>
           <header>
-            <div className="marketing-publish-card-title"><span className={`marketing-publish-status ${statusClass(ready)}`}>{ready}</span><h3>{row.creative_name || "كرييتيف"}</h3><p>{row.source_name || "—"}</p></div>
+            <div className="marketing-publish-card-title"><div className="marketing-publish-card-statuses"><span className="marketing-publish-task-kind">تاسك تنفيذي</span><span className={`marketing-publish-status ${statusClass(ready)}`}>{ready}</span></div><h3>{row.creative_name || "كرييتيف"}</h3><p>{row.source_name || "—"}</p></div>
             {canPublishNow ? <label className="marketing-select-task-v2"><input type="checkbox" checked={selected} disabled={ready !== "جاهز للنشر"} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, row.id] : current.filter((id) => id !== row.id))} /><span>تحديد للنشر</span></label> : null}
           </header>
           <div className="marketing-publish-card-grid">

@@ -418,17 +418,10 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
               <p>{task.status === "completed"
                 ? `تم نقله إلى قائمة التاسكات المنتهية${task.completed_by_name ? ` بواسطة ${task.completed_by_name}` : ""}${task.completed_at ? ` بتاريخ ${new Date(task.completed_at).toLocaleString("ar-SA")}` : ""}.`
                 : Number(task.progress || 0) >= 100
-                  ? "وصلت نسبة الإنجاز إلى 100%. اضغط تم الانتهاء لنقل التاسك إلى القائمة المنتهية."
-                  : "سيظهر زر تم الانتهاء بعد وصول نسبة الإنجاز إلى 100%."}</p>
+                  ? "وصلت نسبة الإنجاز إلى 100%. استخدم زر تم الانتهاء الموجود على كارت التاسك في الداش بورد."
+                  : "سيظهر زر تم الانتهاء على كارت التاسك في الداش بورد بعد وصول نسبة الإنجاز إلى 100%."}</p>
             </div>
           </div>
-          {task.status !== "completed" && Number(task.progress || 0) >= 100 ? <button
-            type="button"
-            className="marketing-complete-task-button"
-            disabled={loading || !permissions.canCompleteTask}
-            title={!permissions.canCompleteTask ? "لا توجد صلاحية لإنهاء هذا التاسك" : "نقل التاسك إلى قائمة التاسكات المنتهية"}
-            onClick={() => void action({ action: "complete_task", taskId: task.id })}
-          ><CheckCircle size={20} weight="fill" />{loading ? "جاري الإنهاء..." : "تم الانتهاء"}</button> : null}
         </section> : null}
       </div> : null}
 

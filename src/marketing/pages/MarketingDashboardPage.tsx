@@ -69,12 +69,16 @@ function DashboardTaskCard({
   task,
   onOpen,
   onReceive,
+  onComplete,
   showReceive = false,
+  completing = false,
 }: {
   task: any;
   onOpen: () => void;
   onReceive?: () => void;
+  onComplete?: () => void;
   showReceive?: boolean;
+  completing?: boolean;
 }) {
   const statusLabel = task.status === "completed"
     ? "منتهي"
@@ -115,6 +119,12 @@ function DashboardTaskCard({
     <div className="marketing-dashboard-task-actions">
       <button type="button" className="secondary" onClick={onOpen}>تفاصيل</button>
       {showReceive && onReceive ? <button type="button" className="primary" onClick={onReceive}><CheckCircle size={17} />تم الاستلام</button> : null}
+      {task.task_kind === "execution" && task.status !== "completed" && Boolean(task.received_at) && task.can_complete_task !== false && progress >= 100 && onComplete ? <button
+        type="button"
+        className="marketing-dashboard-complete-task"
+        disabled={completing}
+        onClick={onComplete}
+      ><CheckCircle size={18} weight="fill" />{completing ? "جاري الإنهاء..." : "تم الانتهاء"}</button> : null}
     </div>
   </article>;
 }
@@ -128,6 +138,7 @@ export function MarketingDashboardPage() {
   const [expandedEntities, setExpandedEntities] = useState<string[]>([]);
   const [expandedReadinessDepartments, setExpandedReadinessDepartments] = useState<string[]>([]);
   const [movingEntityKey, setMovingEntityKey] = useState("");
+  const [completingTaskId, setCompletingTaskId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const versionRef = useRef("");
@@ -206,6 +217,24 @@ export function MarketingDashboardPage() {
       setError(failure instanceof Error ? failure.message : "تعذر نقل الحملة أو الأجندة إلى قسم النشر");
     } finally {
       setMovingEntityKey("");
+    }
+  }
+
+  async function completeTask(task: any) {
+    if (!task?.id || task.task_kind !== "execution" || task.status === "completed" || taskProgress(task) < 100) return;
+    setCompletingTaskId(task.id);
+    setError("");
+    try {
+      await marketingFetch("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "complete_task", taskId: task.id }),
+      });
+      if (taskId === task.id) setTaskId(null);
+      await load(true);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر إنهاء التاسك");
+    } finally {
+      setCompletingTaskId("");
     }
   }
 
@@ -292,6 +321,8 @@ export function MarketingDashboardPage() {
                   task={task}
                   onOpen={() => setTaskId(task.id)}
                   onReceive={() => void receive(task.id)}
+                  onComplete={() => void completeTask(task)}
+                  completing={completingTaskId === task.id}
                   showReceive
                 />)}
               </div> : null}
@@ -356,7 +387,13 @@ export function MarketingDashboardPage() {
                       </div>
                     </button>
                     {open ? <div className="marketing-dashboard-department-tasks">
-                      {group.tasks.map((task: any) => <DashboardTaskCard key={task.id} task={task} onOpen={() => setTaskId(task.id)} />)}
+                      {group.tasks.map((task: any) => <DashboardTaskCard
+                        key={task.id}
+                        task={task}
+                        onOpen={() => setTaskId(task.id)}
+                        onComplete={() => void completeTask(task)}
+                        completing={completingTaskId === task.id}
+                      />)}
                     </div> : null}
                   </section>;
                 })}

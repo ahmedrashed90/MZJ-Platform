@@ -105,8 +105,8 @@ function rowWidgetOrder(row: { dashboard_widget_order?: unknown; main_widget_ord
 export async function getDashboardLayout(userId: string) {
   await ensureDashboardLayoutSchema();
   const sql = getSql();
-  const [row] = await sql<{ operation_widget_order: unknown; main_widget_order: unknown; dashboard_widget_order: unknown; hidden_main_widgets: unknown }[]>`
-    select operation_widget_order,main_widget_order,dashboard_widget_order,hidden_main_widgets
+  const [row] = await sql<{ operation_widget_order: unknown; main_widget_order: unknown; dashboard_widget_order: unknown; hidden_main_widgets: unknown; updated_at: string }[]>`
+    select operation_widget_order,main_widget_order,dashboard_widget_order,hidden_main_widgets,updated_at::text
     from core.user_dashboard_layouts
     where user_id=${userId}::uuid
   `;
@@ -115,6 +115,7 @@ export async function getDashboardLayout(userId: string) {
     widgetOrder,
     ...splitOrder(widgetOrder),
     hiddenMainWidgets: cleanHidden(row?.hidden_main_widgets),
+    updatedAt: String(row?.updated_at || ""),
   };
 }
 
@@ -148,7 +149,7 @@ export async function saveDashboardLayout(userId: string, value: unknown) {
     ? cleanHidden(input.hiddenMainWidgets)
     : cleanHidden(current?.hidden_main_widgets);
 
-  await sql`
+  const [saved] = await sql<{ updated_at: string }[]>`
     insert into core.user_dashboard_layouts(user_id,operation_widget_order,main_widget_order,dashboard_widget_order,hidden_main_widgets,updated_at)
     values(${userId}::uuid,${sql.json(operationWidgetOrder)},${sql.json(mainWidgetOrder)},${sql.json(widgetOrder)},${sql.json(hiddenMainWidgets)},now())
     on conflict(user_id) do update set
@@ -157,6 +158,7 @@ export async function saveDashboardLayout(userId: string, value: unknown) {
       dashboard_widget_order=excluded.dashboard_widget_order,
       hidden_main_widgets=excluded.hidden_main_widgets,
       updated_at=now()
+    returning updated_at::text
   `;
-  return { widgetOrder, operationWidgetOrder, mainWidgetOrder, hiddenMainWidgets };
+  return { widgetOrder, operationWidgetOrder, mainWidgetOrder, hiddenMainWidgets, updatedAt: String(saved?.updated_at || "") };
 }
