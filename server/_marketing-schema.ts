@@ -890,14 +890,6 @@ create table if not exists marketing.zoho_upload_tickets (
 );
 create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing.zoho_upload_tickets(expires_at,status);
 
-create table if not exists marketing.zoho_media_tickets (
-  ticket_hash text primary key,
-  file_id uuid not null references marketing.files(id) on delete cascade,
-  expires_at timestamptz not null,
-  created_at timestamptz not null default now()
-);
-create index if not exists marketing_zoho_media_tickets_expiry_idx on marketing.zoho_media_tickets(expires_at);
-
 create table if not exists marketing.schema_state (
   id smallint primary key default 1 check(id = 1),
   version integer not null,

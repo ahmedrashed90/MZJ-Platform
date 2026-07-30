@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -12,7 +12,7 @@ import {
   XCircle,
 } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
-import { downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile, uploadMarketingFinalFiles } from "../api";
+import { createMarketingFinalUploadCancellation, downloadMarketingFile, marketingFetch, marketingQuery, uploadMarketingFile, uploadMarketingFinalFiles, type MarketingFinalUploadProgress } from "../api";
 import { downloadTaskTemplate, inspectTaskTemplate, type TaskTemplateInspection } from "../templateExcel";
 import { MarketingAlert, ProgressBar } from "./MarketingPage";
 import { TaskTemplatePresentation, taskTemplateFieldLabels } from "./TaskTemplatePresentation";
@@ -117,6 +117,40 @@ function DetailItem({ label, value, wide = false }: { label: string; value: unkn
 }
 
 
+type FinalUploadFileView = {
+  name: string;
+  size: number;
+  loaded: number;
+  percent: number;
+  speedBytesPerSecond: number;
+  etaSeconds: number | null;
+  status: MarketingFinalUploadProgress["status"];
+  detail?: string;
+};
+
+type FinalUploadView = {
+  active: boolean;
+  files: FinalUploadFileView[];
+};
+
+function formatUploadBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 MB";
+  const units = ["B", "KB", "MB", "GB"];
+  let amount = value;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+function formatUploadEta(seconds: number | null) {
+  if (seconds === null || !Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${Math.max(0, Math.ceil(seconds))} ثانية`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = Math.ceil(seconds % 60);
+  return `${minutes} د ${remaining} ث`;
+}
+
+
 
 export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string | null; onClose: () => void; onChanged?: () => void }) {
   const [payload, setPayload] = useState<any>(null);
@@ -131,6 +165,8 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const [templatePreview, setTemplatePreview] = useState<{ file: File; inspection: TaskTemplateInspection } | null>(null);
   const [unapproveOpen, setUnapproveOpen] = useState(false);
   const [unapproveReason, setUnapproveReason] = useState("");
+  const [finalUpload, setFinalUpload] = useState<FinalUploadView | null>(null);
+  const finalUploadControlRef = useRef<ReturnType<typeof createMarketingFinalUploadCancellation> | null>(null);
 
   async function load() {
     if (!taskId) return;
@@ -153,11 +189,16 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   }
 
   useEffect(() => {
+    finalUploadControlRef.current?.cancel();
+    finalUploadControlRef.current = null;
+    setFinalUpload(null);
     setTemplatePreview(null);
     setUnapproveOpen(false);
     setUnapproveReason("");
     void load();
   }, [taskId]);
+
+  useEffect(() => () => finalUploadControlRef.current?.cancel(), []);
 
   async function action(body: Record<string, unknown>) {
     setLoading(true);
@@ -209,6 +250,20 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
 
   async function uploadFinal(files: File[]) {
     if (!payload?.task || !files.length) return;
+    const control = createMarketingFinalUploadCancellation();
+    finalUploadControlRef.current = control;
+    setFinalUpload({
+      active: true,
+      files: files.map((file) => ({
+        name: file.name,
+        size: file.size,
+        loaded: 0,
+        percent: 0,
+        speedBytesPerSecond: 0,
+        etaSeconds: null,
+        status: "pending",
+      })),
+    });
     setLoading(true);
     setError("");
     setMessage("");
@@ -218,16 +273,47 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
         sourceType: payload.task.source_type,
         sourceId: payload.task.source_id,
         taskId: payload.task.id,
-        onProgress: (completed, total, fileName, detail) => setMessage(completed >= total ? "جاري ربط الملفات بالتاسك..." : `جاري رفع ${fileName} إلى Zoho — ملف ${completed + 1} من ${total}${detail ? ` — ${detail}` : ""}`),
+        cancellation: control,
+        onProgress: (progress) => {
+          setFinalUpload((current) => {
+            if (!current) return current;
+            return {
+              active: progress.status !== "completed" || current.files.some((item, index) => index !== progress.fileIndex && item.status !== "completed"),
+              files: current.files.map((item, index) => index === progress.fileIndex ? {
+                ...item,
+                loaded: progress.loaded,
+                percent: progress.percent,
+                speedBytesPerSecond: progress.speedBytesPerSecond,
+                etaSeconds: progress.etaSeconds,
+                status: progress.status,
+                detail: progress.detail,
+              } : item),
+            };
+          });
+        },
       });
+      setFinalUpload((current) => current ? { ...current, active: false, files: current.files.map((item) => ({ ...item, loaded: item.size, percent: 100, speedBytesPerSecond: 0, etaSeconds: 0, status: "completed", detail: "تم الرفع والتحقق" })) } : current);
       setMessage(result.message);
       await load();
       onChanged?.();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر رفع الملف النهائي");
+      const cancelled = failure instanceof Error && failure.name === "UploadCancelledError";
+      setFinalUpload((current) => current ? {
+        ...current,
+        active: false,
+        files: current.files.map((item) => item.status === "uploading" || item.status === "verifying" || item.status === "pending" ? { ...item, status: cancelled ? "cancelled" : "error", speedBytesPerSecond: 0, etaSeconds: null, detail: cancelled ? "تم الإلغاء" : "تعذر الرفع" } : item),
+      } : current);
+      if (cancelled) setMessage("تم إلغاء رفع الملف النهائي");
+      else setError(failure instanceof Error ? failure.message : "تعذر رفع الملف النهائي");
     } finally {
+      finalUploadControlRef.current = null;
       setLoading(false);
     }
+  }
+
+  function cancelFinalUpload() {
+    finalUploadControlRef.current?.cancel();
+    setMessage("جاري إلغاء رفع الملف النهائي...");
   }
 
   const task = payload?.task;
@@ -238,6 +324,10 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const selectedReviewCount = reviewSelectedFields.length;
   const notedReviewCount = Object.values(reviewFieldNotes).filter((note: string) => note.trim()).length;
   const showFeedback = canViewFeedback && task?.template_status !== "approved" && (Boolean(adminNote.trim()) || selectedReviewCount > 0);
+  const finalUploadTotalBytes = finalUpload?.files.reduce((sum, item) => sum + item.size, 0) || 0;
+  const finalUploadLoadedBytes = finalUpload?.files.reduce((sum, item) => sum + Math.min(item.loaded, item.size), 0) || 0;
+  const finalUploadPercent = finalUploadTotalBytes ? Math.round((finalUploadLoadedBytes / finalUploadTotalBytes) * 100) : 0;
+  const activeFinalUploadFile = finalUpload?.files.find((item) => item.status === "uploading" || item.status === "verifying") || null;
 
   function selectReviewField(key: string) {
     if (!canReview) return;
@@ -410,13 +500,50 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             </div>
           </section>
 
-          <section className="marketing-task-section">
-            <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3></div></div>
-            <div className="marketing-inline-actions">
-              {permissions.canUploadFinal ? <label className={`marketing-upload-button ${task.template_status !== "approved" || task.status === "completed" ? "disabled" : ""}`}><FileArrowUp size={18} />رفع الملف النهائي<input type="file" accept="image/*,video/*" multiple disabled={task.template_status !== "approved" || task.status === "completed"} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFinal(files); event.currentTarget.value = ""; }} /></label> : null}
-              {Array.isArray(task.final_files) && task.final_files.length && permissions.canDownloadFile
-                ? task.final_files.map((file: any, index: number) => <button key={file.id || index} type="button" className="secondary" onClick={() => void downloadMarketingFile(file.id)}><DownloadSimple size={18} />{task.final_files.length > 1 ? `${index + 1}. ${file.name}` : file.name || "تحميل الملف النهائي"}</button>)
-                : task.final_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.final_file_id)}><DownloadSimple size={18} />{task.final_file_name || "تحميل الملف النهائي"}</button> : null}
+          <section className="marketing-task-section marketing-final-upload-section">
+            <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3><p>يرفع مباشرة من جهازك إلى Zoho WorkDrive، بدون المرور على Worker أو R2.</p></div></div>
+            <div className="marketing-final-upload-shell">
+              {permissions.canUploadFinal ? <label
+                className={`marketing-final-upload-dropzone ${task.template_status !== "approved" || task.status === "completed" || finalUpload?.active ? "disabled" : ""}`}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (task.template_status !== "approved" || task.status === "completed" || finalUpload?.active) return;
+                  const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
+                  if (files.length) void uploadFinal(files);
+                }}
+              >
+                <span className="marketing-final-upload-icon"><FileArrowUp size={28} weight="duotone" /></span>
+                <span><strong>{finalUpload?.active ? "جاري رفع الملف النهائي" : "اسحب الملفات هنا أو اضغط للاختيار"}</strong><small>فيديو أو ريل واحد، أو صورة واحدة، أو عدة صور بالترتيب</small></span>
+                <input type="file" accept="image/*,video/*" multiple disabled={task.template_status !== "approved" || task.status === "completed" || Boolean(finalUpload?.active)} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFinal(files); event.currentTarget.value = ""; }} />
+              </label> : null}
+
+              {finalUpload ? <div className={`marketing-final-upload-progress ${finalUpload.active ? "active" : "finished"}`}>
+                <header>
+                  <div><strong>رفع الملفات إلى Zoho</strong><small>{finalUpload.files.filter((item) => item.status === "completed").length} من {finalUpload.files.length} ملف</small></div>
+                  <b>{finalUploadPercent}%</b>
+                </header>
+                <div className="marketing-final-upload-overall"><span style={{ width: `${finalUploadPercent}%` }} /></div>
+                <div className="marketing-final-upload-files">
+                  {finalUpload.files.map((item, index) => <article key={`${item.name}-${index}`} className={`status-${item.status}`}>
+                    <div className="marketing-final-upload-file-head"><span><b>{index + 1}</b><strong>{item.name}</strong></span><em>{item.status === "completed" ? "تم الرفع" : item.status === "verifying" ? "جاري التحقق" : item.status === "cancelled" ? "تم الإلغاء" : item.status === "error" ? "فشل" : item.status === "uploading" ? "جاري الرفع" : "في الانتظار"}</em></div>
+                    <div className="marketing-final-upload-file-bar"><span style={{ width: `${item.percent}%` }} /></div>
+                    <div className="marketing-final-upload-file-meta">
+                      <span>{formatUploadBytes(item.loaded)} من {formatUploadBytes(item.size)}</span>
+                      <span>السرعة: {item.speedBytesPerSecond > 0 ? `${formatUploadBytes(item.speedBytesPerSecond)}/ث` : "—"}</span>
+                      <span>المتبقي: {formatUploadEta(item.etaSeconds)}</span>
+                      <span>{item.detail || `${item.percent}%`}</span>
+                    </div>
+                  </article>)}
+                </div>
+                {finalUpload.active ? <footer><div><strong>{activeFinalUploadFile?.name || "جاري تجهيز الرفع"}</strong><small>{activeFinalUploadFile ? `${formatUploadBytes(activeFinalUploadFile.loaded)} من ${formatUploadBytes(activeFinalUploadFile.size)}` : "يرجى الانتظار"}</small></div><button type="button" className="marketing-final-upload-cancel" onClick={cancelFinalUpload}><XCircle size={18} weight="fill" />إلغاء الرفع</button></footer> : null}
+              </div> : null}
+
+              <div className="marketing-inline-actions marketing-final-files-actions">
+                {Array.isArray(task.final_files) && task.final_files.length && permissions.canDownloadFile
+                  ? task.final_files.map((file: any, index: number) => <button key={file.id || index} type="button" className="secondary" onClick={() => void downloadMarketingFile(file.id)}><DownloadSimple size={18} />{task.final_files.length > 1 ? `${index + 1}. ${file.name}` : file.name || "فتح الملف النهائي"}</button>)
+                  : task.final_file_id && permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.final_file_id)}><DownloadSimple size={18} />{task.final_file_name || "فتح الملف النهائي"}</button> : null}
+              </div>
             </div>
           </section>
         </>}

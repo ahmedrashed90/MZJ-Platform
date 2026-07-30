@@ -272,15 +272,15 @@ export function PlatformConnectionsPage() {
   return (
     <MarketingPage
       title="ربط المنصات"
-      description="ربط رسمي وآمن عبر OAuth. التوكنات تُحفظ مشفرة داخل PostgreSQL ولا تظهر في المتصفح."
+      description="ربط رسمي عبر OAuth. أسرار التطبيق وRefresh Token تُحفظ مشفرة داخل PostgreSQL، ويُستخدم Access Token مؤقت عند بدء الرفع المباشر إلى Zoho."
       actions={<button type="button" className="secondary" onClick={() => { setLoading("all"); void load(); }} disabled={loading === "all"}>{loading === "all" ? <SpinnerGap className="marketing-spin" size={17} /> : <ArrowClockwise size={17} />}تحديث الحالة</button>}
     >
       {error ? <MarketingAlert>{error}</MarketingAlert> : null}
       {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
       <section className="marketing-connections-summary" aria-label="ملخص حماية الربط">
-        <div><ShieldCheck size={23} weight="duotone" /><span><strong>تشفير خادمي</strong><small>لا يتم إرسال أي Token إلى الواجهة</small></span></div>
-        <div><CheckCircle size={23} weight="duotone" /><span><strong>OAuth رسمي</strong><small>ربط وإعادة ربط من مزود المنصة</small></span></div>
+        <div><ShieldCheck size={23} weight="duotone" /><span><strong>الأسرار خادمية</strong><small>Client Secret وRefresh Token لا يغادران الخادم</small></span></div>
+        <div><CheckCircle size={23} weight="duotone" /><span><strong>رفع مباشر</strong><small>الملف ينتقل من المتصفح إلى Zoho دون المرور على Worker أو R2</small></span></div>
         <div><LinkBreak size={23} weight="duotone" /><span><strong>فصل حقيقي</strong><small>Revoke ثم حذف التوكنات من PostgreSQL</small></span></div>
       </section>
 
@@ -290,7 +290,7 @@ export function PlatformConnectionsPage() {
             <div className="marketing-provider-logo"><UploadSimple size={28} weight="duotone" /></div>
             <div className="marketing-provider-title"><h2>Zoho WorkDrive</h2><span className={`marketing-connection-status ${zoho?.connected ? "connected" : "disconnected"}`}>{zoho?.connected ? <CheckCircle size={15} weight="fill" /> : <WarningCircle size={15} weight="fill" />}{zoho?.connected ? "متصل" : zoho?.configured ? "غير متصل" : "الإعداد غير مكتمل"}</span></div>
           </header>
-          {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho وGateway</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_UPLOAD_GATEWAY_URL</p></div></div> : null}
+          {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_PUBLISH_ROOT_FOLDER_ID</p></div></div> : null}
           <div className="marketing-connection-data rebuilt-data">
             <div><small>حساب النشر</small><strong>{zoho?.accountEmail || "marketing@mzjcars.com"}</strong></div>
             <div><small>مركز البيانات</small><strong>Zoho السعودية</strong></div>

@@ -10,7 +10,7 @@ import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
 import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
-import { createOpaqueTicket, createZohoMediaUrl, getZohoRuntime, ticketHash, zohoUploadGatewayUrl } from "../_zoho-workdrive.js";
+import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, getZohoUploadProgress, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -1067,14 +1067,12 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
   if(requested.some((item)=>item.size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
   const mediaKind=videoCount?'video':requested.length>1?'carousel':'image';
   const runtime=await getZohoRuntime(sql);
-  const gateway=zohoUploadGatewayUrl();
   const uploads:any[]=[];
   await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
   const group=await sql.begin(async tx=>{
-    await tx`update marketing.final_media_groups set is_active=false,updated_at=now() where task_id=${taskId}::uuid and is_active=true`;
     const[groupRow]=await tx<any[]>`
       insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
-      values(${taskId}::uuid,${mediaKind},${requested.length},'uploading',true,${user.id}::uuid)
+      values(${taskId}::uuid,${mediaKind},${requested.length},'uploading',false,${user.id}::uuid)
       returning id::text
     `;
     for(const item of requested){
@@ -1085,24 +1083,115 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
       `;
       const ticket=createOpaqueTicket(),uploadId=`mzj-${globalThis.crypto.randomUUID()}`;
       const zohoFileName=zohoFinalFileName(item.name,task.source_type,task.source_id,taskId,groupRow.id,item.orderIndex);
+      const uploadMode=item.size>250*1024*1024?'stream':'multipart';
       await tx`
         insert into marketing.zoho_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,file_name,mime_type,file_size,parent_folder_id,upload_id,status,expires_at,created_by)
         values(${ticketHash(ticket)},${file.id}::uuid,${groupRow.id}::uuid,${taskId}::uuid,${zohoFileName},${item.mimeType},${item.size},${runtime.rootFolderId},${uploadId},'prepared',now()+interval '2 hours',${user.id}::uuid)
       `;
       uploads.push({
+        ticket,
         fileId:file.id,
         orderIndex:item.orderIndex,
-        fileName:item.name,
+        originalFileName:item.name,
+        fileName:zohoFileName,
         mimeType:item.mimeType,
         fileSize:item.size,
-        uploadUrl:`${gateway}/zoho/upload?ticket=${encodeURIComponent(ticket)}`,
-        partUploadUrl:`${gateway}/zoho/upload-part?ticket=${encodeURIComponent(ticket)}`,
-        finalizeUrl:`${gateway}/zoho/upload-finalize?ticket=${encodeURIComponent(ticket)}`,
+        uploadMode,
+        uploadId,
       });
     }
     return groupRow;
   });
-  return{ok:true,groupId:group.id,mediaKind,uploads};
+  return{
+    ok:true,
+    groupId:group.id,
+    mediaKind,
+    directUpload:{
+      accessToken:runtime.accessToken,
+      apiDomain:runtime.apiDomain,
+      uploadDomain:runtime.uploadDomain,
+      parentFolderId:runtime.rootFolderId,
+    },
+    uploads,
+  };
+}
+
+function zohoProgressCode(payload:any){
+  const audit=payload&&typeof payload==='object'&&payload.AUDIT_INFO&&typeof payload.AUDIT_INFO==='object'?payload.AUDIT_INFO:{};
+  return clean(audit.statusCode||payload?.statusCode||payload?.status);
+}
+
+async function confirmFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const ticket=clean(body.ticket);
+  if(!ticket)throw new Error("بيانات تأكيد رفع Zoho غير مكتملة");
+  const[row]=await sql<any[]>`
+    select z.*,z.file_id::text,z.final_media_group_id::text,z.task_id::text,z.created_by::text
+    from marketing.zoho_upload_tickets z
+    where z.ticket_hash=${ticketHash(ticket)} and z.expires_at>now() and z.status in ('prepared','uploading')
+  `;
+  if(!row)throw new Error("جلسة رفع الملف منتهية أو غير صالحة");
+  await requireFinalFileUploadAccess(sql,user,row.task_id);
+  if(row.created_by!==user.id&&!canViewAllTasks(user))throw new Error("جلسة الرفع لا تخص هذا المستخدم");
+  const explicitError=clean(body.error);
+  let uploadResult=body.result;
+  let parsed=parseZohoUploadResult(uploadResult);
+  if(!explicitError&&!parsed.resourceId&&Number(row.file_size||0)>250*1024*1024){
+    const progress=await getZohoUploadProgress(sql,clean(row.upload_id));
+    const code=zohoProgressCode(progress);
+    if(code==='D9217'||!code)return{ok:true,pending:true,statusCode:code||'D9217'};
+    if(code!=='D201'){
+      const errors:Record<string,string>={D9200:'حدث خطأ غير معروف أثناء الرفع إلى Zoho',D9201:'الملف فارغ',D9211:'مساحة Zoho WorkDrive ممتلئة',D9214:'فولدر Zoho غير صالح',D9219:'حساب Zoho لا يملك صلاحية الرفع',D9102:'الرفع لم يكتمل أو تم إلغاؤه'};
+      uploadResult=progress;
+      parsed=parseZohoUploadResult(progress);
+      if(!parsed.resourceId)body.error=errors[code]||`فشل رفع Zoho (${code})`;
+    }else{
+      uploadResult=progress;
+      parsed=parseZohoUploadResult(progress);
+    }
+  }
+  const failure=explicitError||clean(body.error);
+  if(failure||!parsed.resourceId){
+    const message=failure||"Zoho لم يرجع معرف الملف بعد اكتمال الرفع";
+    await sql.begin(async tx=>{
+      await tx`update marketing.zoho_upload_tickets set status='failed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
+      await tx`update marketing.files set status='failed',upload_error=${message},updated_at=now() where id=${row.file_id}::uuid`;
+      await tx`update marketing.final_media_groups set status='failed',updated_at=now() where id=${row.final_media_group_id}::uuid`;
+    });
+    throw new Error(message);
+  }
+  let fileInfo:any={};
+  try{fileInfo=await getZohoFileInfo(sql,parsed.resourceId);}catch{fileInfo={};}
+  const externalUrl=clean(fileInfo.permalink||parsed.permalink)||null;
+  const finalName=clean(fileInfo.fileName||parsed.fileName||row.file_name);
+  await sql.begin(async tx=>{
+    await tx`
+      update marketing.files
+      set status='ready',storage_provider='zoho',external_id=${parsed.resourceId},external_parent_id=${clean(fileInfo.parentId||parsed.parentId||row.parent_folder_id)},external_url=${externalUrl},original_name=${finalName||row.file_name},upload_error=null,updated_at=now()
+      where id=${row.file_id}::uuid
+    `;
+    await tx`update marketing.zoho_upload_tickets set status='completed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
+    const[counts]=await tx<any[]>`
+      select count(*)::int as total,count(*) filter(where status='ready')::int as ready
+      from marketing.files where final_media_group_id=${row.final_media_group_id}::uuid
+    `;
+    if(Number(counts?.total||0)>0&&Number(counts?.total||0)===Number(counts?.ready||0))await tx`update marketing.final_media_groups set status='ready',updated_at=now() where id=${row.final_media_group_id}::uuid`;
+  });
+  return{ok:true,pending:false,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:parsed.resourceId,fileName:finalName};
+}
+
+async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const groupId=clean(body.groupId);
+  if(!groupId)throw new Error("مجموعة الرفع غير محددة");
+  const[group]=await sql<any[]>`select id::text,task_id::text,created_by::text,status from marketing.final_media_groups where id=${groupId}::uuid`;
+  if(!group)throw new Error("مجموعة الرفع غير موجودة");
+  await requireFinalFileUploadAccess(sql,user,group.task_id);
+  if(group.created_by!==user.id&&!canViewAllTasks(user))throw new Error("لا توجد صلاحية لإلغاء هذه العملية");
+  await sql.begin(async tx=>{
+    await tx`update marketing.zoho_upload_tickets set status='cancelled',completed_at=now() where final_media_group_id=${groupId}::uuid and status in ('prepared','uploading')`;
+    await tx`update marketing.files set status='cancelled',upload_error='تم إلغاء الرفع بواسطة المستخدم',updated_at=now() where final_media_group_id=${groupId}::uuid and status='uploading'`;
+    await tx`update marketing.final_media_groups set status='cancelled',is_active=false,updated_at=now() where id=${groupId}::uuid`;
+  });
+  return{ok:true,message:"تم إلغاء رفع الملف النهائي"};
 }
 
 async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -1175,7 +1264,10 @@ async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:Session
   }
   if(clean(file.storage_provider)==='zoho'){
     if(!clean(file.external_id))throw new Error("معرف ملف Zoho غير موجود");
-    return{ok:true,url:await createZohoMediaUrl(sql,file.id,30),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'zoho'}};
+    const info=await getZohoFileInfo(sql,clean(file.external_id));
+    const url=clean(info.permalink||file.external_url||info.downloadUrl);
+    if(!url)throw new Error("Zoho لم يرجع رابط فتح للملف");
+    return{ok:true,url,file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'zoho'}};
   }
   if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
   return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'r2'}};
@@ -1339,7 +1431,13 @@ async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule
   return file?[file]:[];
 }
 async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
-  if(clean(file.storage_provider)==='zoho')return createZohoMediaUrl(sql,clean(file.id),120);
+  if(clean(file.storage_provider)==='zoho'){
+    if(!clean(file.external_id))throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
+    const info=await getZohoFileInfo(sql,clean(file.external_id));
+    const url=clean(info.downloadUrl||info.permalink||file.external_url);
+    if(!url)throw new Error(`تعذر تجهيز رابط ملف Zoho ${clean(file.original_name)||''}`);
+    return url;
+  }
   if(!clean(file.storage_key))throw new Error(`مسار الملف النهائي ${clean(file.original_name)||''} غير موجود`);
   return createDownloadUrl(file.storage_key,7200);
 }
@@ -1854,6 +1952,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='move_to_publishing')result=await moveEntityToPublishing(sql,body,user);
     else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);
     else if(action==='prepare_final_upload')result=await prepareFinalUpload(sql,body,user);
+    else if(action==='confirm_final_upload')result=await confirmFinalUpload(sql,body,user);
+    else if(action==='cancel_final_upload')result=await cancelFinalUpload(sql,body,user);
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);

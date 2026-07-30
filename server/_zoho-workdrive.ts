@@ -10,24 +10,18 @@ const DEFAULT_ACCOUNTS_DOMAIN = "https://accounts.zoho.sa";
 const DEFAULT_API_DOMAIN = "https://www.zohoapis.sa";
 const DEFAULT_UPLOAD_DOMAIN = "https://files.zoho.sa";
 const DEFAULT_ROOT_FOLDER_ID = "efosi67f34a771f13446c8d01545192eb1829";
-const ZOHO_SCOPES = ["WorkDrive.files.CREATE", "WorkDrive.files.READ", "ZohoFiles.files.CREATE"];
+const ZOHO_SCOPES = [
+  "WorkDrive.files.CREATE",
+  "WorkDrive.files.READ",
+  "WorkDrive.users.READ",
+  "ZohoFiles.files.CREATE",
+];
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function object(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
 function sha256(value: string) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function randomToken(bytes = 32) { return crypto.randomBytes(bytes).toString("base64url"); }
 function normalizeDomain(value: unknown, fallback: string) { return (clean(value) || fallback).replace(/\/+$/, ""); }
-function safeEqual(left: unknown, right: unknown) {
-  const a = Buffer.from(clean(left));
-  const b = Buffer.from(clean(right));
-  return Boolean(a.length && a.length === b.length && crypto.timingSafeEqual(a, b));
-}
-
-export function zohoGatewayAuthorized(request: VercelRequest) {
-  const expected = clean(process.env.MZJ_GATEWAY_SECRET);
-  const provided = clean(request.headers["x-mzj-gateway-secret"]);
-  return Boolean(expected && safeEqual(provided, expected));
-}
 
 function publicOrigin(request: VercelRequest) {
   const configured = clean(process.env.MZJ_PUBLIC_BASE_URL);
@@ -50,8 +44,7 @@ function zohoStaticConfig() {
   const apiDomain = normalizeDomain(process.env.ZOHO_API_DOMAIN, DEFAULT_API_DOMAIN);
   const uploadDomain = normalizeDomain(process.env.ZOHO_UPLOAD_DOMAIN, DEFAULT_UPLOAD_DOMAIN);
   const rootFolderId = clean(process.env.ZOHO_PUBLISH_ROOT_FOLDER_ID || process.env.ZOHO_WORKDRIVE_FOLDER_ID) || DEFAULT_ROOT_FOLDER_ID;
-  const gatewayUrl = normalizeDomain(process.env.ZOHO_UPLOAD_GATEWAY_URL || process.env.MZJ_INTEGRATION_GATEWAY_URL, "");
-  return { clientId, clientSecret, accountsDomain, apiDomain, uploadDomain, rootFolderId, gatewayUrl };
+  return { clientId, clientSecret, accountsDomain, apiDomain, uploadDomain, rootFolderId };
 }
 
 function requireOAuthConfig() {
@@ -59,12 +52,6 @@ function requireOAuthConfig() {
   const missing = [!config.clientId && "ZOHO_CLIENT_ID", !config.clientSecret && "ZOHO_CLIENT_SECRET"].filter(Boolean);
   if (missing.length) throw new Error(`إعداد Zoho غير مكتمل: ${missing.join("، ")}`);
   return config;
-}
-
-export function zohoUploadGatewayUrl() {
-  const { gatewayUrl } = zohoStaticConfig();
-  if (!gatewayUrl) throw new Error("ZOHO_UPLOAD_GATEWAY_URL غير مضبوط في Vercel");
-  return gatewayUrl;
 }
 
 export async function createZohoAuthorizationUrl(sql: Sql, user: SessionUser, request: VercelRequest) {
@@ -119,16 +106,24 @@ export async function completeZohoAuthorization(sql: Sql, input: { code: string;
   if (!refreshToken && !existingRefresh) throw new Error("Zoho لم يرجع Refresh Token. أعد الربط مع الموافقة الكاملة");
   const accessExpires = Number(payload.expires_in_sec || payload.expires_in || 3600);
   const apiDomain = normalizeDomain(payload.api_domain, config.apiDomain);
-  const folderResponse=await fetch(`${apiDomain}/workdrive/api/v1/files/${encodeURIComponent(config.rootFolderId)}`,{headers:{Authorization:`Zoho-oauthtoken ${clean(payload.access_token)}`,Accept:"application/vnd.api+json"}});
-  const folderPayload=object(await folderResponse.json().catch(()=>({})));
-  if(!folderResponse.ok||folderPayload.errors)throw new Error("تم تسجيل الدخول إلى Zoho لكن الحساب لا يستطيع الوصول إلى فولدر MZJ PUBLISH المحدد");
+  const accessToken = clean(payload.access_token);
+  const folderResponse = await fetch(`${apiDomain}/workdrive/api/v1/files/${encodeURIComponent(config.rootFolderId)}`, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, Accept: "application/vnd.api+json" },
+  });
+  const folderPayload = object(await folderResponse.json().catch(() => ({})));
+  if (!folderResponse.ok || folderPayload.errors) throw new Error("تم تسجيل الدخول إلى Zoho لكن الحساب لا يستطيع الوصول إلى فولدر MZJ PUBLISH المحدد");
+  const userResponse = await fetch(`${apiDomain}/workdrive/api/v1/users/me`, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, Accept: "application/vnd.api+json" },
+  });
+  const userPayload = object(await userResponse.json().catch(() => ({})));
+  if (!userResponse.ok || userPayload.errors) throw new Error("تم ربط الفولدر لكن تعذر قراءة هوية مستخدم Zoho. أعد الربط بعد قبول كل الصلاحيات");
   await sql`
     insert into marketing.zoho_workdrive_connection(
       id,status,account_email,accounts_domain,api_domain,upload_domain,root_folder_id,scopes,
       access_token_encrypted,refresh_token_encrypted,token_expires_at,last_verified_at,last_error,connected_by,connected_at,updated_at
     ) values(
       1,'connected',${clean(process.env.ZOHO_ACCOUNT_EMAIL)||'marketing@mzjcars.com'},${config.accountsDomain},${apiDomain},${config.uploadDomain},${config.rootFolderId},${sql.json(ZOHO_SCOPES)},
-      ${encryptPlatformToken(payload.access_token)},${refreshToken ? encryptPlatformToken(refreshToken) : existingRefresh},now()+make_interval(secs=>${Math.max(60,Math.floor(accessExpires))}),now(),null,${stateRow.user_id}::uuid,now(),now()
+      ${encryptPlatformToken(accessToken)},${refreshToken ? encryptPlatformToken(refreshToken) : existingRefresh},now()+make_interval(secs=>${Math.max(60,Math.floor(accessExpires))}),now(),null,${stateRow.user_id}::uuid,now(),now()
     )
     on conflict(id) do update set
       status='connected',account_email=excluded.account_email,accounts_domain=excluded.accounts_domain,api_domain=excluded.api_domain,
@@ -145,7 +140,7 @@ export async function getZohoConnectionStatus(sql: Sql) {
   const [row] = await sql<any[]>`select * from marketing.zoho_workdrive_connection where id=1`;
   const config = zohoStaticConfig();
   return {
-    configured: Boolean(config.clientId && config.clientSecret && config.rootFolderId && config.gatewayUrl),
+    configured: Boolean(config.clientId && config.clientSecret && config.rootFolderId),
     connected: Boolean(row?.status === "connected" && row?.refresh_token_encrypted),
     status: clean(row?.status) || "disconnected",
     accountEmail: clean(row?.account_email) || clean(process.env.ZOHO_ACCOUNT_EMAIL) || "marketing@mzjcars.com",
@@ -198,29 +193,40 @@ export async function getZohoRuntime(sql: Sql) {
   const [row] = await sql<any[]>`select * from marketing.zoho_workdrive_connection where id=1`;
   const config = zohoStaticConfig();
   if (!row?.refresh_token_encrypted) throw new Error("Zoho WorkDrive غير مربوط");
+  const accessToken = await getZohoAccessToken(sql);
+  const apiDomain = normalizeDomain(row.api_domain, config.apiDomain);
+  const userResponse = await fetch(`${apiDomain}/workdrive/api/v1/users/me`, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}`, Accept: "application/vnd.api+json" },
+  });
+  const userPayload = object(await userResponse.json().catch(() => ({})));
+  const userData = object(userPayload.data);
+  const userAttributes = object(userData.attributes);
+  const userId = clean(userAttributes.zuid || userAttributes.zid || userData.id);
+  if (!userResponse.ok || !userId) throw new Error("تعذر قراءة هوية حساب Zoho المتصل. أعد ربط Zoho من صفحة ربط المنصات");
   return {
-    accessToken: await getZohoAccessToken(sql),
-    apiDomain: normalizeDomain(row.api_domain, config.apiDomain),
+    accessToken,
+    apiDomain,
     uploadDomain: normalizeDomain(row.upload_domain, config.uploadDomain),
     rootFolderId: clean(row.root_folder_id) || config.rootFolderId,
+    userId,
   };
 }
 
 export function createOpaqueTicket() { return randomToken(36); }
 export function ticketHash(ticket: string) { return sha256(ticket); }
 
-export async function createZohoMediaUrl(sql: Sql, fileId: string, expiresMinutes = 120) {
-  const gateway = zohoUploadGatewayUrl();
-  const ticket = createOpaqueTicket();
-  await sql`delete from marketing.zoho_media_tickets where expires_at<now()`;
-  await sql`
-    insert into marketing.zoho_media_tickets(ticket_hash,file_id,expires_at)
-    values(${ticketHash(ticket)},${fileId}::uuid,now()+make_interval(mins=>${Math.max(1,Math.floor(expiresMinutes))}))
-  `;
-  return `${gateway}/zoho/media/${encodeURIComponent(fileId)}?ticket=${encodeURIComponent(ticket)}`;
+export async function getZohoUploadProgress(sql: Sql, uploadId: string) {
+  const runtime = await getZohoRuntime(sql);
+  const progressId = `upload_${runtime.userId}_${clean(uploadId)}`;
+  const response = await fetch(`${runtime.apiDomain}/workdrive/uploadprogress?uploadid=${encodeURIComponent(progressId)}`, {
+    headers: { Authorization: `Zoho-oauthtoken ${runtime.accessToken}`, Accept: "application/vnd.api+json" },
+  });
+  const payload = object(await response.json().catch(() => ({})));
+  if (!response.ok) throw new Error(clean(payload.message || payload.error) || `تعذر التحقق من حالة رفع Zoho (${response.status})`);
+  return payload;
 }
 
-export async function getZohoFileDownload(sql: Sql, externalId: string) {
+export async function getZohoFileInfo(sql: Sql, externalId: string) {
   const runtime = await getZohoRuntime(sql);
   const response = await fetch(`${runtime.apiDomain}/workdrive/api/v1/files/${encodeURIComponent(externalId)}`, {
     headers: { Authorization: `Zoho-oauthtoken ${runtime.accessToken}`, Accept: "application/vnd.api+json" },
@@ -230,11 +236,16 @@ export async function getZohoFileDownload(sql: Sql, externalId: string) {
     const first = Array.isArray(payload.errors) ? payload.errors[0] : payload.error;
     throw new Error(clean(first?.title || first?.detail || first) || `تعذر قراءة ملف Zoho (${response.status})`);
   }
+  const parsed = parseZohoUploadResult(payload);
   const data = object(payload.data);
   const attributes = object(data.attributes);
-  const downloadUrl = clean(attributes.download_url || payload.download_url);
-  if (!downloadUrl) throw new Error("Zoho لم يرجع رابط تنزيل للملف");
-  return { accessToken: runtime.accessToken, downloadUrl, fileName: clean(attributes.name), mimeType: clean(attributes.mime_type) };
+  return {
+    ...parsed,
+    resourceId: parsed.resourceId || clean(data.id),
+    fileName: parsed.fileName || clean(attributes.name),
+    permalink: parsed.permalink || clean(attributes.permalink),
+    downloadUrl: clean(attributes.download_url),
+  };
 }
 
 export function parseZohoUploadResult(payload: unknown) {
@@ -244,11 +255,13 @@ export function parseZohoUploadResult(payload: unknown) {
   const fileInfoRaw = clean(attributes.file_info || attributes["File INFO"] || attributes.File_INFO);
   let fileInfo: Record<string, any> = {};
   try { fileInfo = fileInfoRaw ? object(JSON.parse(fileInfoRaw)) : {}; } catch { fileInfo = {}; }
-  const audit = object(object(fileInfo.AUDIT_INFO).resource);
+  const auditInfo = object(root.AUDIT_INFO || fileInfo.AUDIT_INFO);
+  const auditResource = object(auditInfo.resource);
   return {
-    resourceId: clean(attributes.resource_id || data.id || root.resource_id || root.id || fileInfo.RESOURCE_ID),
-    parentId: clean(attributes.parent_id || fileInfo.PARENT_ID),
-    fileName: clean(attributes.file_name || attributes.filename || audit.name),
-    permalink: clean(attributes.permalink || attributes.web_url || attributes.open_url || fileInfo.PERMALINK || root.permalink),
+    resourceId: clean(attributes.resource_id || data.id || root.resource_id || root.RESOURCE_ID || root.id || fileInfo.RESOURCE_ID),
+    parentId: clean(attributes.parent_id || root.PARENT_ID || fileInfo.PARENT_ID),
+    fileName: clean(attributes.file_name || attributes.filename || attributes.FileName || attributes.name || auditResource.name),
+    permalink: clean(attributes.permalink || attributes.Permalink || attributes.web_url || attributes.open_url || fileInfo.PERMALINK || root.permalink),
+    statusCode: clean(auditInfo.statusCode || root.statusCode || root.status),
   };
 }

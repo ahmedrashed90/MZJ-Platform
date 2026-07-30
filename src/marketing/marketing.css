@@ -2869,3 +2869,65 @@
 .marketing-task-template-modal > .mzj-modal-header { display: none; }
 .marketing-task-template-modal > .mzj-modal-body { height: 100dvh; }
 .marketing-template-close { position: absolute; inset-inline-end: 0; top: 0; width: 38px; height: 38px; min-height: 38px !important; padding: 0 !important; border: 1px solid #e1cfc6 !important; border-radius: 11px !important; color: #754438 !important; background: #fff !important; display: grid !important; place-items: center; }
+
+/* Direct Zoho final-file upload inside execution task details. */
+.marketing-final-upload-section { gap: 12px; }
+.marketing-final-upload-shell { display: grid; gap: 12px; }
+.marketing-final-upload-dropzone {
+  position: relative;
+  min-height: 118px;
+  padding: 18px;
+  border: 1.5px dashed #bf8f7e;
+  border-radius: 16px;
+  background: linear-gradient(145deg,#fffdfc,#fbf4f1);
+  color: #60362c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.marketing-final-upload-dropzone:hover { border-color: #7f4335; background: #fff9f6; transform: translateY(-1px); }
+.marketing-final-upload-dropzone.disabled { opacity: .58; cursor: not-allowed; transform: none; }
+.marketing-final-upload-dropzone input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: inherit; }
+.marketing-final-upload-dropzone > span:not(.marketing-final-upload-icon) { display: grid; gap: 5px; pointer-events: none; }
+.marketing-final-upload-dropzone strong { font-size: 14px; }
+.marketing-final-upload-dropzone small { color: #89736c; font-size: 10px; font-weight: 800; line-height: 1.65; }
+.marketing-final-upload-icon { width: 48px; height: 48px; border-radius: 14px; color: #fff; background: linear-gradient(135deg,#8b4b3d,#673126); display: grid; place-items: center; box-shadow: 0 9px 22px rgba(103,49,38,.2); pointer-events: none; }
+.marketing-final-upload-progress { padding: 13px; border: 1px solid #e1cfc7; border-radius: 15px; background: #fff; display: grid; gap: 11px; }
+.marketing-final-upload-progress > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.marketing-final-upload-progress > header > div { min-width: 0; display: grid; gap: 3px; }
+.marketing-final-upload-progress > header strong { color: #4b2c24; font-size: 13px; }
+.marketing-final-upload-progress > header small { color: #8b7770; font-size: 10px; font-weight: 800; }
+.marketing-final-upload-progress > header > b { min-width: 52px; color: #6d3429; font-size: 20px; text-align: left; }
+.marketing-final-upload-overall,
+.marketing-final-upload-file-bar { height: 8px; overflow: hidden; border-radius: 999px; background: #eee4df; }
+.marketing-final-upload-overall > span,
+.marketing-final-upload-file-bar > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#7c3d31,#b76d57); transition: width .18s linear; }
+.marketing-final-upload-files { max-height: 300px; overflow: auto; display: grid; gap: 8px; scrollbar-width: thin; }
+.marketing-final-upload-files article { padding: 10px; border: 1px solid #eaded8; border-radius: 12px; background: #fffaf8; display: grid; gap: 8px; }
+.marketing-final-upload-files article.status-completed { border-color: #bcdcc7; background: #f3fbf6; }
+.marketing-final-upload-files article.status-error { border-color: #e6b9b5; background: #fff4f3; }
+.marketing-final-upload-files article.status-cancelled { opacity: .72; }
+.marketing-final-upload-file-head { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.marketing-final-upload-file-head > span { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.marketing-final-upload-file-head b { flex: 0 0 auto; width: 25px; height: 25px; border-radius: 8px; color: #fff; background: #704034; display: grid; place-items: center; font-size: 10px; }
+.marketing-final-upload-file-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #472b24; font-size: 11px; }
+.marketing-final-upload-file-head em { flex: 0 0 auto; color: #7c655e; font-size: 9px; font-style: normal; font-weight: 900; }
+.marketing-final-upload-files article.status-completed .marketing-final-upload-file-head em { color: #257148; }
+.marketing-final-upload-files article.status-error .marketing-final-upload-file-head em { color: #a33a32; }
+.marketing-final-upload-file-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; color: #82716a; font-size: 9px; font-weight: 800; }
+.marketing-final-upload-progress > footer { padding-top: 2px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.marketing-final-upload-progress > footer > div { min-width: 0; display: grid; gap: 3px; }
+.marketing-final-upload-progress > footer strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #4e3028; font-size: 11px; }
+.marketing-final-upload-progress > footer small { color: #8a7770; font-size: 9px; font-weight: 800; }
+.marketing-final-upload-cancel { min-height: 37px !important; padding: 7px 11px !important; border: 1px solid #e1b5b1 !important; border-radius: 10px !important; color: #9b332d !important; background: #fff3f1 !important; display: inline-flex !important; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: 10px; font-weight: 900; }
+.marketing-final-files-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 620px) {
+  .marketing-final-upload-dropzone { min-height: 108px; padding: 14px; flex-direction: column; }
+  .marketing-final-upload-progress > footer { align-items: stretch; flex-direction: column; }
+  .marketing-final-upload-cancel { width: 100%; }
+}
