@@ -1127,7 +1127,9 @@ async function uploadFinalFileProxy(sql:ReturnType<typeof getSql>,body:any,user:
   if(expectedSize&&Math.abs(buffer.length-expectedSize)>Math.max(1024,Math.ceil(expectedSize*0.01)))throw new Error("حجم الملف المرفوع لا يطابق الملف المحدد");
 
   const runtime=await getZohoRuntime(sql);
-  const blob=new Blob([buffer],{type:clean(row.mime_type)||clean(body.mimeType)||'application/octet-stream'});
+  const uploadBytes=new Uint8Array(buffer.byteLength);
+  uploadBytes.set(buffer);
+  const blob=new Blob([uploadBytes],{type:clean(row.mime_type)||clean(body.mimeType)||'application/octet-stream'});
   const form=new FormData();
   form.append('filename',clean(row.file_name)||clean(body.fileName)||'file');
   form.append('override-name-exist','false');
