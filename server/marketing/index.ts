@@ -1431,6 +1431,22 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
 }
 
 async function graphRequest(path:string,method:"GET"|"POST",token:string,params:Record<string,any>={}){const version=clean(process.env.META_GRAPH_VERSION)||"v25.0";const url=new URL(`https://graph.facebook.com/${version}${path}`);const body=new URLSearchParams();for(const[key,value]of Object.entries(params)){if(value===undefined||value===null||value==='')continue;const text=typeof value==='object'?JSON.stringify(value):String(value);if(method==='GET')url.searchParams.set(key,text);else body.set(key,text);}if(method==='GET')url.searchParams.set('access_token',token);else body.set('access_token',token);const response=await fetch(url.toString(),{method,body:method==='POST'?body:undefined});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.error)throw new Error(payload.error?.message||`Meta API error ${response.status}`);return payload;}
+async function graphFileRequest(path:string,token:string,file:{bytes:Uint8Array;mimeType:string;fileName:string},params:Record<string,any>={}){
+  const version=clean(process.env.META_GRAPH_VERSION)||"v25.0";
+  const form=new FormData();
+  for(const[key,value]of Object.entries(params)){
+    if(value===undefined||value===null||value==='')continue;
+    form.append(key,typeof value==='object'?JSON.stringify(value):String(value));
+  }
+  form.append('access_token',token);
+  const ownedBytes=new Uint8Array(file.bytes.byteLength);
+  ownedBytes.set(file.bytes);
+  form.append('source',new Blob([ownedBytes],{type:file.mimeType||'application/octet-stream'}),file.fileName||'media');
+  const response=await fetch(`https://graph.facebook.com/${version}${path}`,{method:'POST',body:form});
+  const payload=await response.json().catch(()=>({}));
+  if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`Meta API error ${response.status}`);
+  return payload;
+}
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
 function normalizePostType(value:unknown){const text=clean(value).toLowerCase();if(text.includes('story')||text.includes('ستوري'))return'story';if(text.includes('reel')||text.includes('short')||text.includes('ريل'))return'reel';if(text.includes('photo')||text.includes('image')||text.includes('بوست صور')||text.includes('صورة'))return'photo_post';return text;}
 async function uploadFacebookStoryVideo(uploadUrl:string,token:string,mediaUrl:string){const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});const payload=await response.json().catch(()=>({}));if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو Story على Facebook (${response.status})`);return payload;}
@@ -1460,6 +1476,30 @@ async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
   if(!clean(file.storage_key))throw new Error(`مسار الملف النهائي ${clean(file.original_name)||''} غير موجود`);
   return createDownloadUrl(file.storage_key,7200);
 }
+async function finalMediaBinary(sql:ReturnType<typeof getSql>,file:any){
+  if(clean(file.storage_provider)!=='zoho')throw new Error(`النشر المباشر للملف ${clean(file.original_name)||''} غير مدعوم من مزود التخزين الحالي`);
+  const externalId=clean(file.external_id);
+  if(!externalId)throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
+  const runtime=await getZohoRuntime(sql);
+  const response=await fetch(`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`,{
+    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`},
+  });
+  if(!response.ok){
+    const message=clean(await response.text().catch(()=>''));
+    throw new Error(message||`تعذر تنزيل ملف Zoho ${clean(file.original_name)||''} (${response.status})`);
+  }
+  const contentType=clean(response.headers.get('content-type')).split(';')[0].trim().toLowerCase();
+  if(contentType.includes('application/json')||contentType.includes('text/html')){
+    throw new Error(`Zoho لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}`);
+  }
+  const arrayBuffer=await response.arrayBuffer();
+  const bytes=new Uint8Array(arrayBuffer);
+  if(!bytes.byteLength)throw new Error(`ملف Zoho ${clean(file.original_name)||''} فارغ`);
+  const storedMimeType=clean(file.mime_type).toLowerCase();
+  const mimeType=contentType.startsWith('image/')?contentType:storedMimeType;
+  if(!mimeType.startsWith('image/'))throw new Error(`الملف ${clean(file.original_name)||''} ليس صورة صالحة للنشر`);
+  return{bytes,mimeType,fileName:clean(file.original_name)||`image-${externalId}`};
+}
 async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,user:SessionUser){
   if(!clean(schedule.publish_date))throw new Error("ميعاد النشر غير موجود");
   if(!clean(schedule.platform_code))throw new Error("منصة النشر غير محددة");
@@ -1472,9 +1512,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   if(!files.length)throw new Error("الملف النهائي غير موجود");
   const videos=files.filter(looksVideo);
   if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
-  const mediaUrls=[];
-  for(const file of files)mediaUrls.push(await finalMediaDeliveryUrl(sql,file));
-  const file=files[0],mediaUrl=mediaUrls[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
+  const file=files[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
   const multipleImages=files.length>1;
   if(multipleImages&&(postType==='story'||postType==='reel'))throw new Error("نوع النشر المحدد لا يقبل مجموعة صور. اختر Carousel أو منشور صور");
   let result:any;
@@ -1483,6 +1521,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
     if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
     if(postType==='story'){
       if(looksVideo(file)){
+        const mediaUrl=await finalMediaDeliveryUrl(sql,file);
         const start=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'start'});
         const videoId=start.video_id||start.id,uploadUrl=start.upload_url||start.uploadUrl;
         if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع فيديو Story على Facebook");
@@ -1490,24 +1529,36 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
         const finish=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'finish',video_id:videoId});
         result={start,upload,publish:finish};
       }else{
-        const photo=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,published:false});
+        const binary=await finalMediaBinary(sql,file);
+        const photo=await graphFileRequest(`/${pageId}/photos`,token,binary,{published:false});
         const photoId=photo.id||photo.photo_id;
         if(!photoId)throw new Error("تعذر رفع صورة Story على Facebook");
         const publish=await graphRequest(`/${pageId}/photo_stories`,'POST',token,{photo_id:photoId});
         result={upload:photo,publish};
       }
-    }else if(looksVideo(file))result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:mediaUrl,description:caption});
-    else if(multipleImages){
+    }else if(looksVideo(file)){
+      const mediaUrl=await finalMediaDeliveryUrl(sql,file);
+      result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:mediaUrl,description:caption});
+    }else if(multipleImages){
       const uploads=[];
-      for(const url of mediaUrls)uploads.push(await graphRequest(`/${pageId}/photos`,'POST',token,{url,published:false}));
+      for(const imageFile of files){
+        const binary=await finalMediaBinary(sql,imageFile);
+        uploads.push(await graphFileRequest(`/${pageId}/photos`,token,binary,{published:false}));
+      }
       const mediaIds=uploads.map((item:any)=>clean(item.id||item.photo_id)).filter(Boolean);
-      if(mediaIds.length!==mediaUrls.length)throw new Error("تعذر تجهيز كل صور المنشور على Facebook");
+      if(mediaIds.length!==files.length)throw new Error("تعذر تجهيز كل صور المنشور على Facebook");
       const publish=await graphRequest(`/${pageId}/feed`,'POST',token,{message:caption,attached_media:mediaIds.map((media_fbid:string)=>({media_fbid}))});
       result={uploads,publish};
-    }else result=await graphRequest(`/${pageId}/photos`,'POST',token,{url:mediaUrl,caption,published:true});
+    }else{
+      const binary=await finalMediaBinary(sql,file);
+      result=await graphFileRequest(`/${pageId}/photos`,token,binary,{caption,published:true});
+    }
   }else if(schedule.platform_code==='instagram'){
     const igId=clean(conn.ig_user_id||conn.account_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!igId||!token)throw new Error("بيانات Instagram غير مكتملة");
+    const mediaUrls=[];
+    for(const mediaFile of files)mediaUrls.push(await finalMediaDeliveryUrl(sql,mediaFile));
+    const mediaUrl=mediaUrls[0];
     if(multipleImages){
       const children=[];
       for(const url of mediaUrls){
