@@ -152,6 +152,7 @@ export function CrmContactsPage() {
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [purgeOpen, setPurgeOpen] = useState(false);
   const [confirmPhone, setConfirmPhone] = useState("");
+  const [purgeError, setPurgeError] = useState("");
   const [purging, setPurging] = useState(false);
   const openedFromList = useRef(false);
   const listScroll = useRef(0);
@@ -241,19 +242,27 @@ export function CrmContactsPage() {
 
   async function purgeContact() {
     if (!profile) return;
+    const confirmation = confirmPhone.trim();
     setPurging(true);
     setError("");
+    setPurgeError("");
     try {
-      await crmFetch(`/api/crm/contacts${queryString({ id: profile.contact.id })}`, { method: "DELETE", body: JSON.stringify({ id: profile.contact.id, confirmPhone }) });
+      await crmFetch(`/api/crm/contacts${queryString({ id: profile.contact.id })}`, {
+        method: "DELETE",
+        headers: { "x-mzj-contact-purge-confirmation": confirmation },
+        body: JSON.stringify({ id: profile.contact.id, confirmPhone: confirmation }),
+      });
       setPurgeOpen(false);
       setConfirmPhone("");
+      setPurgeError("");
+      setProfile(null);
       openedFromList.current = false;
       const next = new URLSearchParams(searchParams);
       next.delete("contact");
       setSearchParams(next, { replace: true });
       await loadList();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر حذف الملف");
+      setPurgeError(failure instanceof Error ? failure.message : "تعذر حذف الملف");
     } finally {
       setPurging(false);
     }
@@ -312,7 +321,7 @@ export function CrmContactsPage() {
     {contactId ? <div className="crm-contact-profile-backdrop">
       <article className="crm-contact-profile-v2">
         <header className="crm-contact-profile-hero">
-          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
+          <div className="crm-contact-profile-actions"><button type="button" className="crm-contact-back-button" onClick={closeProfile}><ArrowRight size={19} />الرجوع إلى العملاء</button>{profile?.canPurge ? <button type="button" className="crm-danger-button ghost" onClick={() => { setConfirmPhone(""); setPurgeError(""); setPurgeOpen(true); }}><Trash size={17} />حذف الملف بالكامل</button> : null}</div>
           {profileLoading && !profile ? <div className="crm-contact-profile-loading">جاري تحميل ملف العميل...</div> : null}
           {profile ? <div className="crm-contact-profile-identity">
             <span className="crm-contact-avatar"><IdentificationCard size={34} weight="duotone" /></span>
@@ -385,6 +394,6 @@ export function CrmContactsPage() {
       </article>
     </div> : null}
 
-    {purgeOpen && profile ? <div className="crm-modal-backdrop" onMouseDown={() => setPurgeOpen(false)}><div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>حذف ملف العميل بالكامل</h2><p>سيتم حذف جهة الاتصال والعميل وطلبات الخدمة والمحادثات والرسائل نهائيًا.</p></div><button className="crm-icon-button" type="button" onClick={() => setPurgeOpen(false)}><X size={18} /></button></header><div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>هذا الإجراء غير قابل للتراجع</strong><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? `اكتب رقم الجوال المسجل للتأكيد: ${profile.contact.primary_phone || profile.contact.primary_phone_normalized}` : "لا يوجد رقم جوال مسجل. اكتب كلمة التأكيد الأساسية 2106"}</span></div></div><label className="crm-form-label"><span>التأكيد</span><input value={confirmPhone} onChange={(event) => setConfirmPhone(event.target.value)} /></label><div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => setPurgeOpen(false)}>إلغاء</button><button type="button" className="crm-danger-button" disabled={purging || !confirmPhone.trim()} onClick={() => void purgeContact()}><Trash size={17} />{purging ? "جاري الحذف..." : "حذف الملف بالكامل"}</button></div></div></div> : null}
+    {purgeOpen && profile ? <div className="crm-modal-backdrop" onMouseDown={() => { setPurgeOpen(false); setPurgeError(""); }}><div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>حذف ملف العميل بالكامل</h2><p>سيتم حذف جهة الاتصال والعميل وطلبات الخدمة والمحادثات والرسائل نهائيًا.</p></div><button className="crm-icon-button" type="button" onClick={() => { setPurgeOpen(false); setPurgeError(""); }}><X size={18} /></button></header><div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>هذا الإجراء غير قابل للتراجع</strong><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? `اكتب رقم الجوال المسجل للتأكيد: ${profile.contact.primary_phone || profile.contact.primary_phone_normalized}` : "لا يوجد رقم جوال مسجل. اكتب كلمة التأكيد الأساسية 2106"}</span></div></div>{purgeError ? <div className="crm-alert error">{purgeError}</div> : null}<label className="crm-form-label"><span>التأكيد</span><input value={confirmPhone} onChange={(event) => { setConfirmPhone(event.target.value); if (purgeError) setPurgeError(""); }} /></label><div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setPurgeOpen(false); setPurgeError(""); }}>إلغاء</button><button type="button" className="crm-danger-button" disabled={purging || !confirmPhone.trim()} onClick={() => void purgeContact()}><Trash size={17} />{purging ? "جاري الحذف..." : "حذف الملف بالكامل"}</button></div></div></div> : null}
   </div>;
 }

@@ -18,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
+import { Modal } from "../../components/Modal";
 import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 
@@ -111,6 +112,8 @@ export function EngagementPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [subscriptionResults, setSubscriptionResults] = useState<SubscriptionResult[]>([]);
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false);
+  const [webhookOpen, setWebhookOpen] = useState(false);
   const [platform, setPlatform] = useState("");
   const [search, setSearch] = useState("");
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
@@ -181,6 +184,7 @@ export function EngagementPage() {
         body: JSON.stringify({ action: "subscribe_engagement_webhooks" }),
       });
       setSubscriptionResults(Array.isArray(result.results) ? result.results : []);
+      setSubscriptionOpen(true);
       if (result.subscriptionOk) setMessage(result.message); else setError(result.message);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تفعيل استقبال التفاعلات");
@@ -224,6 +228,8 @@ export function EngagementPage() {
     description="متابعة المنشورات والتفاعلات وتحويل الحسابات المتاحة تلقائيًا إلى عملاء CRM بالمصدر الصحيح."
     actions={<div className="marketing-engagement-actions">
       {canManageWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التفاعلات</button> : null}
+      {data ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التفاعلات</button> : null}
+      {data ? <button type="button" className="secondary-button" onClick={() => setWebhookOpen(true)}><LinkSimple size={18} /> رابط Webhook</button> : null}
       {canRefresh ? <button type="button" className="primary-button" disabled={loading} onClick={refresh}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> تحديث الأرقام الآن</button> : null}
     </div>}
   >
@@ -231,28 +237,6 @@ export function EngagementPage() {
       {error ? <MarketingAlert>{error}</MarketingAlert> : null}
       {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
-      {subscriptionResults.length ? <section className="panel marketing-subscription-results">
-        <header><div><h3>حالة استقبال التفاعلات من Meta</h3><p>نتيجة مستقلة لكل منصة مع بيانات التحقق دون تغيير مسار Facebook العامل.</p></div></header>
-        <div>{subscriptionResults.map((item: SubscriptionResult) => <article key={item.platform} className={item.ok ? "success" : "failed"}>
-          <span>{item.ok ? <CheckCircle size={24} weight="fill" /> : <XCircle size={24} weight="fill" />}</span>
-          <div>
-            <header><strong>{platformLabel(item.platform)} — {item.field || (item.platform === "facebook" ? "feed" : "comments")}</strong><b>{item.ok ? "جاهز" : "يحتاج مراجعة"}</b></header>
-            <p>{item.ok ? item.note || `تم التحقق من الاشتراك${item.accountName ? ` للحساب ${item.accountName}` : ""}.` : item.error || "لم ترجع Meta سببًا واضحًا"}</p>
-            <dl>
-              {item.accountId ? <><dt>معرف الحساب</dt><dd>{item.accountId}</dd></> : null}
-              {item.linkedPageId ? <><dt>الصفحة المرتبطة</dt><dd>{item.linkedPageId}</dd></> : null}
-              {item.host ? <><dt>مسار التحقق</dt><dd>{item.host === "instagram" ? "graph.instagram.com" : "graph.facebook.com"}{item.endpoint || ""}</dd></> : null}
-              {item.subscribedFields?.length ? <><dt>الحقول المفعلة</dt><dd>{item.subscribedFields.join(", ")}</dd></> : null}
-              {item.missingScopes?.length ? <><dt>صلاحيات ناقصة</dt><dd>{item.missingScopes.join(", ")}</dd></> : null}
-              {item.errorDetails?.code ? <><dt>Meta Error Code</dt><dd>{item.errorDetails.code}{item.errorDetails.subcode ? ` / ${item.errorDetails.subcode}` : ""}</dd></> : null}
-              {item.errorDetails?.type ? <><dt>نوع الخطأ</dt><dd>{item.errorDetails.type}</dd></> : null}
-              {item.errorDetails?.traceId ? <><dt>Trace ID</dt><dd>{item.errorDetails.traceId}</dd></> : null}
-            </dl>
-          </div>
-        </article>)}</div>
-      </section> : null}
-
-      {data && !data.webhook.verifyTokenConfigured ? <MarketingAlert type="info">أضف META_WEBHOOK_VERIFY_TOKEN في Vercel قبل ربط Callback التفاعلات.</MarketingAlert> : null}
 
       <section className="marketing-engagement-stats">
         <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>منشورات السيستم فقط</small></article>
@@ -260,12 +244,6 @@ export function EngagementPage() {
         <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{count(summary.comments)}</strong><small>{count(summary.commentEvents)} تعليق وصل للسيستم</small></article>
         <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{count(summary.shares)}</strong><small>{count(summary.shareEvents)} مشاركة بهوية متاحة</small></article>
         <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{count(summary.crmLeads)}</strong><small>من {count(summary.engagements)} تفاعل مسجل</small></article>
-      </section>
-
-      <section className="panel marketing-engagement-control-panel">
-        <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف، العميل أو نص التعليق" /></div>
-        <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select></label>
-        <div className="marketing-engagement-filter-note"><strong>جاهزة للفلاتر القادمة</strong><small>البحث والمنصة والحالة ونوع التفاعل تعمل على نفس البيانات الحالية.</small></div>
       </section>
 
       <section className="panel marketing-engagement-panel marketing-posts-panel">
@@ -277,6 +255,11 @@ export function EngagementPage() {
             <button type="button" className={postStatus === "all" ? "active" : ""} onClick={() => setPostStatus("all")}>الكل</button>
           </div>
         </header>
+        <div className="marketing-engagement-control-panel">
+          <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف، العميل أو نص التعليق" /></div>
+          <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select></label>
+          <div className="marketing-engagement-filter-note"><strong>جاهزة للفلاتر القادمة</strong><small>البحث والمنصة والحالة ونوع التفاعل تعمل على نفس البيانات الحالية.</small></div>
+        </div>
         <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>الحملة / الأجندة</th><th>الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
           {rows.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
             <td><span className={`marketing-platform-chip ${row.platform}`}>{row.platform === "facebook" ? <FacebookLogo size={17} weight="fill" /> : <InstagramLogo size={17} weight="fill" />}{platformLabel(row.platform)}</span></td>
@@ -332,7 +315,48 @@ export function EngagementPage() {
         </div>
       </section>
 
-      {data ? <section className="panel marketing-webhook-card"><h3>رابط Webhook</h3><code>{callbackUrl}</code><p>ضع الرابط في Meta App، واستخدم نفس قيمة META_WEBHOOK_VERIFY_TOKEN. استقبال Instagram يتطلب تفعيل حقل comments داخل Webhooks الخاص بـInstagram.</p></section> : null}
     </div>
+
+    <Modal
+      open={subscriptionOpen}
+      title="حالة استقبال التفاعلات من Meta"
+      subtitle="نتيجة مستقلة لكل منصة مع بيانات التحقق دون تغيير مسار Facebook العامل."
+      onClose={() => setSubscriptionOpen(false)}
+      className="marketing-engagement-status-modal"
+    >
+      <section className="marketing-subscription-results marketing-subscription-results-modal">
+        {subscriptionResults.length ? <div>{subscriptionResults.map((item: SubscriptionResult) => <article key={item.platform} className={item.ok ? "success" : "failed"}>
+          <span>{item.ok ? <CheckCircle size={24} weight="fill" /> : <XCircle size={24} weight="fill" />}</span>
+          <div>
+            <header><strong>{platformLabel(item.platform)} — {item.field || (item.platform === "facebook" ? "feed" : "comments")}</strong><b>{item.ok ? "جاهز" : "يحتاج مراجعة"}</b></header>
+            <p>{item.ok ? item.note || `تم التحقق من الاشتراك${item.accountName ? ` للحساب ${item.accountName}` : ""}.` : item.error || "لم ترجع Meta سببًا واضحًا"}</p>
+            <dl>
+              {item.accountId ? <><dt>معرف الحساب</dt><dd>{item.accountId}</dd></> : null}
+              {item.linkedPageId ? <><dt>الصفحة المرتبطة</dt><dd>{item.linkedPageId}</dd></> : null}
+              {item.host ? <><dt>مسار التحقق</dt><dd>{item.host === "instagram" ? "graph.instagram.com" : "graph.facebook.com"}{item.endpoint || ""}</dd></> : null}
+              {item.subscribedFields?.length ? <><dt>الحقول المفعلة</dt><dd>{item.subscribedFields.join(", ")}</dd></> : null}
+              {item.missingScopes?.length ? <><dt>صلاحيات ناقصة</dt><dd>{item.missingScopes.join(", ")}</dd></> : null}
+              {item.errorDetails?.code ? <><dt>Meta Error Code</dt><dd>{item.errorDetails.code}{item.errorDetails.subcode ? ` / ${item.errorDetails.subcode}` : ""}</dd></> : null}
+              {item.errorDetails?.type ? <><dt>نوع الخطأ</dt><dd>{item.errorDetails.type}</dd></> : null}
+              {item.errorDetails?.traceId ? <><dt>Trace ID</dt><dd>{item.errorDetails.traceId}</dd></> : null}
+            </dl>
+          </div>
+        </article>)}</div> : <div className="empty-cell">لم يتم تشغيل التحقق من اشتراكات Meta بعد.</div>}
+      </section>
+    </Modal>
+
+    <Modal
+      open={webhookOpen}
+      title="رابط Webhook"
+      subtitle="بيانات ربط استقبال التفاعلات من Meta."
+      onClose={() => setWebhookOpen(false)}
+      className="marketing-webhook-modal"
+    >
+      <div className="marketing-webhook-card marketing-webhook-modal-content">
+        {data && !data.webhook.verifyTokenConfigured ? <MarketingAlert type="info">أضف META_WEBHOOK_VERIFY_TOKEN في Vercel قبل ربط Callback التفاعلات.</MarketingAlert> : null}
+        <code>{callbackUrl}</code>
+        <p>ضع الرابط في Meta App، واستخدم نفس قيمة META_WEBHOOK_VERIFY_TOKEN. استقبال Instagram يتطلب تفعيل حقل comments داخل Webhooks الخاص بـInstagram.</p>
+      </div>
+    </Modal>
   </MarketingPage>;
 }

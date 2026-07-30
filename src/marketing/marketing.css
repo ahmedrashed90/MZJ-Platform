@@ -3046,6 +3046,8 @@
 
 .marketing-engagement-control-panel {
   padding: 14px 16px;
+  border-bottom: 1px solid #eee2df;
+  background: #fff;
   display: grid;
   grid-template-columns: minmax(280px, 1.7fr) minmax(170px, .55fr) minmax(220px, .8fr);
   gap: 12px;
@@ -3574,6 +3576,19 @@
   margin-top: 0;
   padding: 18px 20px;
   border-style: dashed;
+}
+
+.marketing-engagement-status-modal {
+  width: min(1180px, 100%);
+}
+
+.marketing-webhook-modal {
+  width: min(760px, 100%);
+}
+
+.marketing-webhook-modal-content {
+  display: grid;
+  gap: 10px;
 }
 
 .marketing-webhook-card code {
