@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Children, isValidElement, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
-  Briefcase,
   CalendarBlank,
   Car,
   ChartLineUp,
@@ -123,6 +122,21 @@ function readStoredDashboardLayout(userId: string): StoredDashboardLayout | null
 function writeStoredDashboardLayout(userId: string, layout: StoredDashboardLayout) {
   if (!userId || typeof window === "undefined") return;
   try { window.localStorage.setItem(dashboardLayoutStorageKey(userId), JSON.stringify(layout)); } catch { /* PostgreSQL remains the primary store. */ }
+}
+
+function sameStringArray(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function DashboardUnifiedGrid({ order, children }: { order: string[]; children: React.ReactNode }) {
+  const positions = new Map(order.map((id, index) => [id, index]));
+  const sortedChildren = Children.toArray(children).sort((left, right) => {
+    if (!isValidElement(left) || !isValidElement(right)) return 0;
+    const leftId = String((left.props as Record<string, unknown>)["data-widget-id"] || "");
+    const rightId = String((right.props as Record<string, unknown>)["data-widget-id"] || "");
+    return (positions.get(leftId) ?? Number.MAX_SAFE_INTEGER) - (positions.get(rightId) ?? Number.MAX_SAFE_INTEGER);
+  });
+  return <section className="dashboard-unified-widget-grid">{sortedChildren}</section>;
 }
 
 function valueText(value: NullableNumber) {
@@ -422,17 +436,21 @@ export function DashboardPage() {
         const serverHidden = normalizeHiddenDashboardWidgets(payload.layout?.hiddenMainWidgets);
         const serverUpdatedAt = Date.parse(String(payload.layout?.updatedAt || "")) || 0;
         const stored = readStoredDashboardLayout(user?.id || "");
-        const useStored = Boolean(stored && stored.updatedAt > serverUpdatedAt);
-        const selectedOrder = useStored && stored ? stored.widgetOrder : serverOrder;
-        const selectedHidden = useStored && stored ? stored.hiddenMainWidgets : serverHidden;
+        // The browser copy is the immediate source of truth for this user. This keeps the
+        // exact chosen order stable across refreshes even while PostgreSQL synchronization
+        // is still completing or a prior request returned out of order.
+        const selectedOrder = stored ? stored.widgetOrder : serverOrder;
+        const selectedHidden = stored ? stored.hiddenMainWidgets : serverHidden;
         setWidgetOrder(selectedOrder);
         setHiddenMainWidgets(selectedHidden);
         writeStoredDashboardLayout(user?.id || "", {
           widgetOrder: selectedOrder,
           hiddenMainWidgets: selectedHidden,
-          updatedAt: useStored && stored ? stored.updatedAt : serverUpdatedAt,
+          updatedAt: stored?.updatedAt || serverUpdatedAt || Date.now(),
         });
-        if (useStored) void persistDashboardLayout(selectedOrder, selectedHidden);
+        if (stored && (!sameStringArray(stored.widgetOrder, serverOrder) || !sameStringArray(stored.hiddenMainWidgets, serverHidden))) {
+          void persistDashboardLayout(stored.widgetOrder, stored.hiddenMainWidgets);
+        }
       })
       .catch(() => {
         if (active) setData(null);
@@ -524,7 +542,6 @@ export function DashboardPage() {
   }
 
   const effectiveWidgetOrder = [...widgetOrder, ...DEFAULT_DASHBOARD_WIDGET_ORDER.filter((id) => !widgetOrder.includes(id))];
-  const widgetPosition = (id: string) => effectiveWidgetOrder.indexOf(id);
   const mainWidgetVisible = (id: MainDashboardWidgetId) => !hiddenMainWidgets.includes(id);
 
   async function persistDashboardLayout(nextOrder: string[], nextHidden = hiddenMainWidgets) {
@@ -584,7 +601,7 @@ export function DashboardPage() {
     return <div
       key={id}
       className={`dashboard-sortable-widget dashboard-${options.kind}-widget ${options.sizeClass || ""} ${draggedWidget === id ? "dragging" : ""}`}
-      style={{ order: widgetPosition(id) }}
+      data-widget-id={id}
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => { event.preventDefault(); dropDashboardWidget(id); }}
     >
@@ -665,7 +682,7 @@ export function DashboardPage() {
           </div>
         ) : null}
 
-        <section className="dashboard-unified-widget-grid">
+        <DashboardUnifiedGrid order={effectiveWidgetOrder}>
           {customizableMainWidget("kpi:total-customers", <KpiCard title="إجمالي العملاء" value={crm?.totalCustomers ?? null} icon={Users} tone="brown" onOpen={() => void openCrmList("إجمالي العملاء", "اضغط على اسم أي عميل لفتح ملفه ومحادثته", () => true)} />)}
           {customizableMainWidget("kpi:open-conversations", <KpiCard title="المحادثات المفتوحة" value={crm?.openConversations ?? null} icon={PhoneCall} tone="purple" onOpen={() => void openCrmList("المحادثات المفتوحة", "العملاء الذين لديهم محادثة مفتوحة", (lead) => lead.conversation_status === "open")} />)}
           {customizableMainWidget("kpi:no-answer", <KpiCard title="لم يتم الرد" value={crm?.noAnswerCustomers ?? null} icon={UsersThree} tone="orange" onOpen={() => void openCrmList("لم يتم الرد", "العملاء الموجودون في حالة لم يتم الرد", (lead) => leadStatus(lead) === "لم يتم الرد")} />)}
@@ -772,10 +789,6 @@ export function DashboardPage() {
               ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
             </div>
           </section>)}
-          <div className="dashboard-operations-divider" style={{ order: DEFAULT_MAIN_WIDGET_ORDER.length }}>
-            <div><span className="section-kicker">سيستم العمليات</span><h2>بيانات العمليات</h2></div>
-            <Briefcase size={26} weight="duotone" />
-          </div>
             {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
@@ -883,7 +896,7 @@ export function DashboardPage() {
                 <OperationMetric label="طلبات مكتملة" value={operations?.salesTracking.completed ?? null} onOpen={() => void openTrackingList("طلبات مكتملة", "completed")} />
               </div>
             </OperationCard>)}
-        </section>
+        </DashboardUnifiedGrid>
       </div>
       <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />
       <DashboardOperationsModal selection={operationsSelection} onClose={() => setOperationsSelection(null)} />

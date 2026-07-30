@@ -1039,32 +1039,29 @@ async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:Session
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user),createdByMe=access.dataScope==='created_by_me';
   const rows=await sql<any[]>`
-    with representatives as (
-      select distinct on (group_id) *
-      from marketing.publish_schedule
-      order by group_id,created_at,id
-    )
     select
-      r.group_id::text as id,
-      r.group_id::text,
-      r.source_type,
-      r.source_id::text,
-      r.creative_id::text,
+      coalesce(schedule_row.group_id::text,t.id::text) as id,
+      schedule_row.group_id::text,
+      t.source_type,
+      t.source_id::text,
+      t.creative_id::text,
       t.id::text as task_id,
       t.task_kind,
-      r.publish_date,
+      t.status as task_status,
+      t.completed_at,
+      schedule_row.publish_date,
       coalesce(
-        nullif(r.caption,''),
+        nullif(schedule_row.caption,''),
         nullif(t.approved_template_data->>'caption',''),
         case when tt.status='approved' then nullif(tt.approved_data->>'caption','') end
       ) as caption,
       coalesce(
-        nullif(r.hashtags,''),
+        nullif(schedule_row.hashtags,''),
         nullif(t.approved_template_data->>'hashtags',''),
         case when tt.status='approved' then nullif(tt.approved_data->>'hashtags','') end
       ) as hashtags,
-      aggregate_data.status,
-      aggregate_data.schedule_ids,
+      coalesce(aggregate_data.status,'waiting') as status,
+      coalesce(aggregate_data.schedule_ids,array[]::text[]) as schedule_ids,
       aggregate_data.platform_name,
       aggregate_data.post_type_name,
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
@@ -1077,7 +1074,17 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       t.department_id::text,
       d.name as department_name,
       u.full_name as assigned_name
-    from representatives r
+    from marketing.tasks t
+    join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    left join lateral (
+      select ps.group_id,ps.publish_date,ps.caption,ps.hashtags,ps.created_at
+      from marketing.publish_schedule ps
+      where ps.task_id=t.id
+      order by ps.updated_at desc,ps.created_at desc,ps.id desc
+      limit 1
+    ) schedule_row on true
     left join lateral (
       select
         array_agg(ps.id::text order by ps.created_at,ps.id) as schedule_ids,
@@ -1087,7 +1094,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       from marketing.publish_schedule ps
       left join marketing.platforms p on p.id=ps.platform_id
       left join marketing.platform_post_types pt on pt.id=ps.post_type_id
-      where ps.group_id=r.group_id
+      where schedule_row.group_id is not null and ps.group_id=schedule_row.group_id
     ) aggregate_data on true
     left join lateral (
       select jsonb_agg(jsonb_build_object('platformId',grouped.platform_id,'postTypeIds',grouped.post_type_ids) order by grouped.platform_name) as platforms
@@ -1096,36 +1103,19 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
         from marketing.publish_schedule ps
         left join marketing.platforms p on p.id=ps.platform_id
         left join marketing.platform_post_types pt on pt.id=ps.post_type_id
-        where ps.group_id=r.group_id
+        where schedule_row.group_id is not null and ps.group_id=schedule_row.group_id
         group by ps.platform_id
       ) grouped
     ) platform_data on true
-    left join marketing.creatives c on c.id=r.creative_id
-    left join marketing.campaigns cam on r.source_type='campaign' and cam.id=r.source_id
-    left join marketing.agendas ag on r.source_type='agenda' and ag.id=r.source_id
-    left join lateral(
-      select x.* from marketing.tasks x
-      where x.task_kind='execution'
-        and x.is_deleted=false
-        and x.creative_id=r.creative_id
-        and (
-          x.id=r.task_id
-          or r.task_id is null
-          or x.task_template_id=(select scheduled.task_template_id from marketing.tasks scheduled where scheduled.id=r.task_id)
-        )
-      order by case when x.id=r.task_id then 0 else 1 end,x.updated_at desc
-      limit 1
-    )t on true
     left join marketing.departments d on d.id=t.department_id
     left join core.users u on u.id=t.assigned_to
     left join marketing.task_templates tt on tt.id=t.task_template_id
     left join marketing.files f on f.id=t.final_file_id
-    where c.id is not null
-      and t.id is not null
-      and t.task_kind='execution'
+    where t.task_kind='execution'
+      and t.is_deleted=false
       and (
-        (r.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
-        or (r.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null and cam.status='publishing')
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null and ag.status='publishing')
       )
       and (
         ${unrestricted}=true
@@ -1133,33 +1123,39 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
         or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)}))
         or (${createdByMe}=true and (cam.created_by=${user.id}::uuid or ag.created_by=${user.id}::uuid))
       )
-    order by r.publish_date,r.created_at
+    order by coalesce(schedule_row.publish_date,t.due_at::date,cam.publish_start,ag.publish_start),t.created_at,t.id
   `;
   return{ok:true,rows};
 }
 async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
   const id=clean(body.id),requestedTaskId=clean(body.taskId),publishDate=isoDate(body.publishDate),platforms=arrayValue(body.platforms);
-  const[current]=await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by created_at limit 1`;
-  if(!current)throw new Error("تاسك تجهيز النشر غير موجود");
+  const[current]=id?await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by updated_at desc,created_at desc limit 1`:[];
+  const taskId=requestedTaskId||clean(current?.task_id);
+  if(!taskId)throw new Error("التاسك التنفيذي المرتبط غير موجود");
   const[executionTask]=await sql<any[]>`
-    select id::text,source_type,source_id::text,creative_id::text
-    from marketing.tasks
-    where task_kind='execution' and is_deleted=false
-      and creative_id=${current.creative_id}::uuid
-      and (${requestedTaskId}::text='' or id=${requestedTaskId || current.task_id}::uuid)
-    order by case when id=${requestedTaskId || current.task_id}::uuid then 0 else 1 end,updated_at desc
+    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text
+    from marketing.tasks t
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    where t.id=${taskId}::uuid and t.task_kind='execution' and t.is_deleted=false
+      and (
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null and cam.status='publishing')
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null and ag.status='publishing')
+      )
     limit 1
   `;
-  if(!executionTask)throw new Error("التاسك التنفيذي المرتبط غير موجود");
+  if(!executionTask)throw new Error("التاسك التنفيذي المرتبط غير موجود في قسم النشر");
   await assertMarketingEntityAccess(sql,user,clean(executionTask.source_type),clean(executionTask.source_id));
   if(!publishDate)throw new Error("تاريخ النشر مطلوب");
   const combinations=platforms.flatMap((platform:any)=>arrayValue<string>(platform.postTypeIds).map((postTypeId)=>({platformId:clean(platform.platformId),postTypeId:clean(postTypeId)}))).filter((item:any)=>item.platformId&&item.postTypeId);
   if(!combinations.length){const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);if(platformId&&postTypeId)combinations.push({platformId,postTypeId});}
   if(!combinations.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+  const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
+  if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
   await sql.begin(async tx=>{
-    await tx`delete from marketing.publish_schedule where group_id=${current.group_id}`;
-    for(const item of combinations)await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,status) values(${current.group_id},${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},'waiting')`;
+    await tx`delete from marketing.publish_schedule where group_id=${groupId}::uuid`;
+    for(const item of combinations)await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},'waiting')`;
   });
   return{ok:true,message:"تم حفظ تجهيز النشر"};
 }
