@@ -41,6 +41,13 @@ function reportCount(value: unknown) {
   return Number.isFinite(number) ? number.toLocaleString("ar-SA") : "0";
 }
 
+function budgetIncludesCreative(item: any, creativeId: unknown) {
+  const target = String(creativeId || "");
+  if (!target) return false;
+  const linkedIds = Array.isArray(item?.creative_ids) ? item.creative_ids.map((id: unknown) => String(id || "")) : [];
+  return linkedIds.includes(target) || String(item?.creative_id || "") === target;
+}
+
 
 function formatFileSize(value: unknown) {
   const size = Number(value || 0);
@@ -293,12 +300,12 @@ export function MarketingDatabasePage() {
       const templateCount = creativeTasks.filter((task: any) => task.task_kind === "task_template").length;
       const executionCount = creativeTasks.filter((task: any) => task.task_kind === "execution").length;
       const scheduleCount = schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id || "")).length;
-      const budgetTotal = budgets.filter((item: any) => String(item.creative_id || "") === String(creative.id || "")).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+      const budgetTotal = budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
       return `<tr><td>${index + 1}</td><td>${escapePrintHtml(creative.instance_code || "—")}</td><td>${escapePrintHtml(creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف")}</td><td>${escapePrintHtml(creative.primary_department_name || "—")}</td><td>${reportCount(creative.quantity || 1)}</td><td>${reportCount(templateCount)}</td><td>${reportCount(executionCount)}</td><td>${reportCount(scheduleCount)}</td>${selected.source_type === "campaign" ? `<td>${Number(budgetTotal).toLocaleString("ar-SA")} ر.س</td>` : ""}</tr>`;
     }).join("");
     const taskRows = tasks.map((task: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(taskKindLabel(task))}</td><td>${escapePrintHtml(task.creative_name || "—")}</td><td>${escapePrintHtml(task.assigned_name || "—")}</td><td>${escapePrintHtml(task.department_name || "قسم المحتوى")}</td><td>${escapePrintHtml(reportStatus(task.status))}</td><td>${Number(task.progress || 0).toLocaleString("ar-SA")}%</td><td>${escapePrintHtml(marketingDate(task.due_at))}</td><td>${escapePrintHtml(task.note || task.title || "—")}</td><td>${escapePrintHtml(task.template_status ? reportStatus(task.template_status) : "—")}</td><td>${escapePrintHtml(task.final_file_name || "—")}</td></tr>`).join("");
     const scheduleRowsHtml = schedule.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingDate(item.publish_date))}</td><td>${escapePrintHtml(item.creative_name || item.instance_code || "—")}</td><td>${escapePrintHtml(item.platform_name || "—")}</td><td>${escapePrintHtml(item.post_type_name || "—")}</td><td>${escapePrintHtml(reportStatus(item.status))}</td></tr>`).join("");
-    const budgetRows = budgets.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(item.creative_name || "—")}</td><td>${escapePrintHtml(item.funnel_name || "—")}</td><td>${reportCount(item.ads_count)}</td><td>${escapePrintHtml(item.content_goal || "—")}</td><td>${escapePrintHtml(item.expected_goal || "—")}</td><td>${Number(item.total || 0).toLocaleString("ar-SA")} ر.س</td></tr>`).join("");
+    const budgetRows = budgets.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(item.creative_names || item.creative_name || "—")}</td><td>${escapePrintHtml(item.funnel_name || "—")}</td><td>${reportCount(item.ads_count)}</td><td>${escapePrintHtml(item.content_goal || "—")}</td><td>${escapePrintHtml(item.expected_goal || "—")}</td><td>${Number(item.total || 0).toLocaleString("ar-SA")} ر.س</td></tr>`).join("");
     const fileRows = finalProductFiles.map((file: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(file.original_name || file.name || "—")}</td><td>${escapePrintHtml(file.mime_type || "—")}</td><td>${escapePrintHtml(formatFileSize(file.size || file.file_size))}</td><td>${escapePrintHtml(file.uploaded_by_name || file.created_by_name || "—")}</td><td>${escapePrintHtml(marketingDate(file.created_at, true))}</td></tr>`).join("");
     const linkRows = links.map((link, index) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingResultPlatformLabel(link.platform))}</td><td class="url">${escapePrintHtml(link.url || "—")}</td></tr>`).join("");
     const resultSummary = engagement?.summary;
@@ -429,7 +436,7 @@ export function MarketingDatabasePage() {
                 <td><button type="button" className="table-action" onClick={() => void open(row)}><Eye size={17} />عرض البيانات</button></td>
                 <td><div className="marketing-row-actions">
                   {(row.source_type === "agenda" ? canDeleteAgenda : canDeleteCampaign) ? <button type="button" title="مسح" onClick={() => void action("delete_entity", row)}><Trash size={16} /></button> : null}
-                  {canArchive ? <button type="button" title="أرشيف" onClick={() => void action("archive_entity", row)}><Archive size={16} /></button> : null}
+                  {canArchive ? <button type="button" className="marketing-row-archive-button" title="أرشفة السجل" aria-label="أرشفة السجل" onClick={() => void action("archive_entity", row)}><Archive size={17} weight="duotone" /></button> : null}
                 </div></td>
               </tr>)}
               {!loading && !filtered.length ? <tr><td colSpan={10}><div className="marketing-empty small">لا توجد بيانات.</div></td></tr> : null}
@@ -484,7 +491,10 @@ export function MarketingDatabasePage() {
           <section className="marketing-task-section marketing-database-section marketing-entity-creatives-section">
             <div className="marketing-database-section-heading">
               <div><h3>كرييتيفات {selected?.source_type === "agenda" ? "الأجندة" : "الحملة"}</h3><p>كل كرييتيف مرتبط بـ Task Template والتاسك التنفيذي والميزانية وجدول النشر حسب نوع السجل.</p></div>
-              {canEditCreatives ? <button type="button" className="primary" onClick={() => setCreativeManager({ open: true, row: null })}><Plus size={18} />إضافة كرييتيف</button> : null}
+              {canEditCreatives ? <button type="button" className="marketing-add-creative-button" onClick={() => setCreativeManager({ open: true, row: null })}>
+                <span className="marketing-add-creative-button-icon"><Plus size={20} weight="bold" /></span>
+                <span className="marketing-add-creative-button-copy"><strong>إضافة كرييتيف</strong><small>Task Template + تاسك تنفيذي</small></span>
+              </button> : null}
             </div>
             {detail.creatives.length ? <div className="marketing-table-wrap marketing-entity-creatives-table-wrap">
               <table className="marketing-entity-creatives-table">
@@ -496,7 +506,7 @@ export function MarketingDatabasePage() {
                   const approvedTemplates = templateTasks.filter((task: any) => ["approved", "completed"].includes(String(task.template_status || task.status || "").toLowerCase())).length;
                   const completedExecution = executionTasks.filter((task: any) => Number(task.progress || 0) >= 100).length;
                   const scheduleCount = new Set(detail.schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id)).map((item: any) => `${String(item.publish_date || "").slice(0, 10)}-${item.group_id || item.id}`)).size;
-                  const budgetTotal = detail.budgets.filter((item: any) => String(item.creative_id || "") === String(creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+                  const budgetTotal = detail.budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
                   return <tr key={creative.id}>
                     <td className="marketing-creative-index">{index + 1}</td>
                     <td><span className="marketing-creative-code">{creative.instance_code || `#${index + 1}`}</span></td>
@@ -563,7 +573,7 @@ export function MarketingDatabasePage() {
               <div className="marketing-database-section-heading"><div><h3>عرض الميزانية</h3><p>تفاصيل كل بند حسب الـFunnel والكرييتيف والأهداف والمنصات.</p></div><strong>{detail.budgets.reduce((sum: number, item: any) => sum + Number(item.total || 0), 0).toLocaleString("ar-SA")} ر.س</strong></div>
               {detail.budgets.length ? <div className="marketing-budget-detail-list">
                 {detail.budgets.map((item: any, index: number) => <article key={item.id} className="marketing-budget-detail-card">
-                  <header><div><span>بند الميزانية {index + 1}</span><h4>{item.creative_name || "كرييتيف غير محدد"}</h4></div><strong>{Number(item.total || 0).toLocaleString("ar-SA")} ر.س</strong></header>
+                  <header><div><span>بند الميزانية {index + 1}</span><h4>{item.creative_names || item.creative_name || "كرييتيف غير محدد"}</h4></div><strong>{Number(item.total || 0).toLocaleString("ar-SA")} ر.س</strong></header>
                   <div className="marketing-budget-detail-meta"><div><small>Funnel</small><b>{item.funnel_name || "—"}</b></div><div><small>عدد الإعلانات</small><b>{Number(item.ads_count || 0).toLocaleString("ar-SA")}</b></div><div><small>هدف المحتوى</small><b>{item.content_goal || "—"}</b></div><div><small>الهدف المتوقع</small><b>{item.expected_goal || "—"}</b></div></div>
                   <div className="marketing-budget-platform-details">{Array.isArray(item.platform_details) && item.platform_details.length ? item.platform_details.map((part: any, partIndex: number) => <div key={`${item.id}-${part.platformId || partIndex}`}><span>{part.platformName || "منصة"}</span><strong>{Number(part.amount || 0).toLocaleString("ar-SA")} ر.س</strong></div>) : <p>لم يتم توزيع مبلغ على منصات.</p>}</div>
                 </article>)}
@@ -602,10 +612,16 @@ export function MarketingDatabasePage() {
             </section>
           </div>
 
-          {canArchive ? <section className="marketing-task-section marketing-database-section warning">
-            <h3><WarningCircle size={20} />الأرشفة</h3>
-            <p>لا يمكن أرشفة الحملة قبل رفع ملف نتائج الحملة وإضافة روابط الحملة.</p>
-            <button type="button" className="secondary" onClick={() => void action("archive_entity", selected)}><Archive size={17} />أرشيف</button>
+          {canArchive ? <section className="marketing-archive-panel">
+            <div className="marketing-archive-panel-icon"><Archive size={27} weight="duotone" /></div>
+            <div className="marketing-archive-panel-copy">
+              <span>إغلاق دورة العمل</span>
+              <h3>أرشفة {selected?.source_type === "agenda" ? "الأجندة" : "الحملة"}</h3>
+              <p><WarningCircle size={16} />تتاح الأرشفة بعد رفع ملف النتائج وإضافة رابط نشر واحد على الأقل.</p>
+            </div>
+            <button type="button" className="marketing-archive-button" onClick={() => void action("archive_entity", selected)}>
+              <Archive size={19} weight="bold" /><span><strong>أرشفة السجل</strong><small>نقل السجل إلى الأرشيف</small></span>
+            </button>
           </section> : null}
           </> : <section className="marketing-task-section marketing-database-section marketing-database-results-section">
             <div className="marketing-database-results-actions">

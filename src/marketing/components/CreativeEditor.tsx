@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Car, MagnifyingGlass, MinusCircle, Plus, Trash } from "@phosphor-icons/react";
+import { Car, CheckCircle, GlobeSimple, MagnifyingGlass, MinusCircle, Plus, Trash } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import type {
   CreativeDraft,
@@ -513,32 +513,50 @@ export function CreativeEditor({
 
       {showPlatforms ? (
         <section className="marketing-assignment-section marketing-platform-assignment">
-          <h3>المنصات وأنواع النشر</h3>
-          <div className="marketing-platform-select">
+          <header className="marketing-platform-assignment-head">
+            <span><GlobeSimple size={22} weight="duotone" /></span>
+            <div>
+              <h3>المنصات وأنواع النشر</h3>
+              <p>اختر المنصات المطلوبة، ثم حدد نوع أو أكثر من أنواع النشر لكل منصة.</p>
+            </div>
+            <b>{value.platforms.length.toLocaleString("ar-SA")} منصة محددة</b>
+          </header>
+          <div className="marketing-platform-choice-grid">
             {meta.platforms.map((platform) => {
               const selected = value.platforms.find((item) => item.platformId === platform.id);
+              const platformPostTypes = meta.postTypes.filter((item) => item.platform_id === platform.id);
               return (
-                <div key={platform.id}>
-                  <label className="platform-head">
-                    <input type="checkbox" checked={Boolean(selected)} onChange={() => togglePlatform(platform.id)} />
-                    <strong>{platform.name}</strong>
-                  </label>
+                <article key={platform.id} className={`marketing-platform-choice-card${selected ? " selected" : ""}`}>
+                  <button type="button" className="marketing-platform-choice-head" aria-pressed={Boolean(selected)} onClick={() => togglePlatform(platform.id)}>
+                    <span className="marketing-platform-choice-icon">{selected ? <CheckCircle size={21} weight="fill" /> : <GlobeSimple size={21} weight="duotone" />}</span>
+                    <span className="marketing-platform-choice-copy">
+                      <strong>{platform.name}</strong>
+                      <small>{platformPostTypes.length.toLocaleString("ar-SA")} نوع نشر متاح</small>
+                    </span>
+                    <span className="marketing-platform-choice-state">{selected ? "محددة" : "اختيار"}</span>
+                  </button>
                   {selected ? (
-                    <div className="marketing-chip-picker">
-                      {meta.postTypes.filter((item) => item.platform_id === platform.id).map((postType) => (
-                        <button
-                          type="button"
-                          key={postType.id}
-                          className={selected.postTypeIds.includes(postType.id) ? "selected" : ""}
-                          onClick={() => togglePostType(platform.id, postType.id)}
-                        >
-                          {postType.name}
-                          {postType.width && postType.height ? <small>{postType.width}×{postType.height}</small> : null}
-                        </button>
-                      ))}
+                    <div className="marketing-platform-post-types">
+                      <div className="marketing-platform-post-types-head"><span>أنواع النشر</span><small>{selected.postTypeIds.length.toLocaleString("ar-SA")} محدد</small></div>
+                      {platformPostTypes.length ? <div className="marketing-platform-post-type-grid">
+                        {platformPostTypes.map((postType) => {
+                          const active = selected.postTypeIds.includes(postType.id);
+                          return <button
+                            type="button"
+                            key={postType.id}
+                            className={active ? "selected" : ""}
+                            aria-pressed={active}
+                            onClick={() => togglePostType(platform.id, postType.id)}
+                          >
+                            <span>{active ? <CheckCircle size={16} weight="fill" /> : null}</span>
+                            <strong>{postType.name}</strong>
+                            {postType.width && postType.height ? <small>{postType.width} × {postType.height}</small> : <small>مقاس مرن</small>}
+                          </button>;
+                        })}
+                      </div> : <p className="marketing-platform-post-types-empty">لا توجد أنواع نشر مضافة لهذه المنصة في الإعدادات.</p>}
                     </div>
                   ) : null}
-                </div>
+                </article>
               );
             })}
           </div>

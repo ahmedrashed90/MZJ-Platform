@@ -10,14 +10,14 @@ const checks = [
   ["PDF includes entity data tasks and results", database.includes("بيانات ${escapePrintHtml(entityKind)} والتاسكات وجدول النشر ونتائج النشر والتفاعل") && database.includes("<h2>التاسكات</h2>") && database.includes("نتائج النشر والتفاعل")],
   ["campaign budget is included in PDF", database.includes("<h2>الميزانية</h2>") && database.includes("budgetRows")],
   ["creatives use compact table", database.includes("marketing-entity-creatives-table") && !database.includes("marketing-entity-creative-card")],
-  ["real xlsx MIME and extension", xlsx.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") && xlsx.includes(' + ".xlsx"')],
+  ["real xlsx MIME and extension", xlsx.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") && xlsx.includes('}.xlsx`')],
   ["xlsx is RTL with frozen header", xlsx.includes('rightToLeft="1"') && xlsx.includes('topLeftCell="A6"') && xlsx.includes("<autoFilter")],
-  ["spreadsheet values are formula-safe", xlsx.includes("safeSpreadsheetText") && xlsx.includes("/^[=+\\-@]/")],
+  ["spreadsheet values are formula-safe", xlsx.includes("safeSpreadsheetText") && (xlsx.includes("/^\\s*[=+\\-@]/") || xlsx.includes("/^[=+\\-@]/"))],
   ["schedule export uses xlsx writer", database.includes('sheetName: "جدول النشر"') && database.includes("downloadMarketingReportXlsx")],
   ["review export includes task details", database.includes('sheetName: "مراجعة التاسكات"') && database.includes("كاتب المحتوى المرتبط") && database.includes("حالة Task Template")],
-  ["creative editor has professional hero", manager.includes("marketing-entity-creative-hero") && manager.includes("marketing-entity-creative-hero-stats")],
+  ["creative editor has professional hero", manager.includes("marketing-entity-workspace") && manager.includes("marketing-entity-side-stats")],
   ["creative editor actions are in modal footer", manager.includes("marketing-entity-creative-footer-bar") && manager.includes('className="marketing-entity-action save"')],
-  ["responsive compact table and modal styling", css.includes(".marketing-entity-creatives-table") && css.includes(".marketing-entity-creative-hero") && css.includes("@media (max-width: 620px)")],
+  ["responsive compact table and modal styling", css.includes(".marketing-entity-creatives-table") && css.includes(".marketing-entity-workspace") && css.includes("@media (max-width: 640px)")],
 ];
 
 let passed = 0;

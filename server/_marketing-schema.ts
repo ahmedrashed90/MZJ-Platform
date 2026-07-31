@@ -413,6 +413,17 @@ create table if not exists marketing.budget_items (
   created_at timestamptz not null default now()
 );
 
+create table if not exists marketing.budget_item_creatives (
+  budget_item_id uuid not null references marketing.budget_items(id) on delete cascade,
+  creative_id uuid not null references marketing.creatives(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key(budget_item_id,creative_id)
+);
+create index if not exists marketing_budget_item_creatives_creative_idx on marketing.budget_item_creatives(creative_id,budget_item_id);
+insert into marketing.budget_item_creatives(budget_item_id,creative_id)
+select id,creative_id from marketing.budget_items where creative_id is not null
+on conflict do nothing;
+
 create table if not exists marketing.publish_schedule (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null default gen_random_uuid(),

@@ -409,18 +409,53 @@ async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<strin
       await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent) });
     }
     for (const budget of arrayValue(body.budgets)) {
-      const creativeId = creativeMap.get(clean(budget.creativeTempId)) || null;
-      const amounts = arrayValue(budget.platformAmounts); const total = amounts.reduce((sum, item: any) => sum + numberValue(item.amount), 0);
-      await tx`insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total) values (${campaign.id}::uuid,${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},${creativeId ? tx`${creativeId}::uuid` : null},${Math.max(1,numberValue(budget.adsCount,1))},${clean(budget.contentGoal)||null},${clean(budget.expectedGoal)||null},${tx.json(dbJson(amounts))},${total})`;
+      const requestedCreativeIds = arrayValue<string>(budget.creativeTempIds).length
+        ? arrayValue<string>(budget.creativeTempIds)
+        : [clean(budget.creativeTempId)].filter(Boolean);
+      const creativeIds = [...new Set(requestedCreativeIds.flatMap((tempId) => {
+        const creativeId = creativeMap.get(clean(tempId));
+        return creativeId ? [creativeId] : [];
+      }))];
+      if (!creativeIds.length) continue;
+      const amounts = arrayValue(budget.platformAmounts)
+        .map((item: any) => ({ platformId: clean(item.platformId), amount: Math.max(0, numberValue(item.amount)) }))
+        .filter((item: any) => item.platformId);
+      const total = amounts.reduce((sum, item: any) => sum + item.amount, 0);
+      const [budgetItem] = await tx<any[]>`
+        insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
+        values(
+          ${campaign.id}::uuid,
+          ${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},
+          ${creativeIds.length === 1 ? tx`${creativeIds[0]}::uuid` : null},
+          ${Math.max(1,numberValue(budget.adsCount,1))},
+          ${clean(budget.contentGoal)||null},
+          ${clean(budget.expectedGoal)||null},
+          ${tx.json(dbJson(amounts))},
+          ${total}
+        ) returning id::text
+      `;
+      for (const creativeId of creativeIds) {
+        await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${budgetItem.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
+      }
     }
     for (const item of arrayValue(body.schedule)) {
-      const creativeId = creativeMap.get(clean(item.creativeTempId)); if (!creativeId || !isoDate(item.date)) continue;
-      const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creativeId}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
-      const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
-      for (const scheduleTask of scheduleTasks) {
-        const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
-        for (const platform of arrayValue(item.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
-          await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'campaign',${campaign.id}::uuid,${creativeId}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${isoDate(item.date)},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
+      const requestedCreativeIds = arrayValue<string>(item.creativeTempIds).length
+        ? arrayValue<string>(item.creativeTempIds)
+        : [clean(item.creativeTempId)].filter(Boolean);
+      const creativeIds = [...new Set(requestedCreativeIds.flatMap((tempId) => {
+        const creativeId = creativeMap.get(clean(tempId));
+        return creativeId ? [creativeId] : [];
+      }))];
+      const publishDate = isoDate(item.date);
+      if (!creativeIds.length || !publishDate) continue;
+      for (const creativeId of creativeIds) {
+        const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creativeId}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
+        const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
+        for (const scheduleTask of scheduleTasks) {
+          const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
+          for (const platform of arrayValue(item.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
+            await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'campaign',${campaign.id}::uuid,${creativeId}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${publishDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
+          }
         }
       }
     }
@@ -556,13 +591,24 @@ function creativeTaskFlowSnapshot(value: any) {
 }
 
 async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: string, budgets: EntityCreativeBudgetInput[]) {
-  await tx`delete from marketing.budget_items where campaign_id=${campaignId}::uuid and creative_id=${creativeId}::uuid`;
+  const affected = await tx<any[]>`
+    select distinct b.id::text
+    from marketing.budget_items b
+    left join marketing.budget_item_creatives bic on bic.budget_item_id=b.id
+    where b.campaign_id=${campaignId}::uuid and (bic.creative_id=${creativeId}::uuid or b.creative_id=${creativeId}::uuid)
+  `;
+  await tx`delete from marketing.budget_item_creatives where creative_id=${creativeId}::uuid and budget_item_id in (select id from marketing.budget_items where campaign_id=${campaignId}::uuid)`;
+  for (const item of affected) {
+    const [remaining] = await tx<any[]>`select creative_id::text from marketing.budget_item_creatives where budget_item_id=${item.id}::uuid order by created_at limit 1`;
+    if (!remaining) await tx`delete from marketing.budget_items where id=${item.id}::uuid`;
+    else await tx`update marketing.budget_items set creative_id=${remaining.creative_id}::uuid where id=${item.id}::uuid`;
+  }
   for (const budget of arrayValue<EntityCreativeBudgetInput>(budgets)) {
     const amounts = arrayValue(budget.platformAmounts)
       .map((item) => ({ platformId: clean(item.platformId), amount: Math.max(0, numberValue(item.amount)) }))
       .filter((item) => item.platformId);
     const total = amounts.reduce((sum, item) => sum + item.amount, 0);
-    await tx`
+    const [created] = await tx<any[]>`
       insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
       values(
         ${campaignId}::uuid,
@@ -573,8 +619,9 @@ async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: s
         ${clean(budget.expectedGoal) || null},
         ${tx.json(dbJson(amounts))},
         ${total}
-      )
+      ) returning id::text
     `;
+    await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${created.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
   }
 }
 
@@ -1027,6 +1074,18 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
     sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false order by d.name,u.full_name`,
     sourceType === "campaign" ? sql<any[]>`
       select b.*,b.id::text,b.funnel_id::text,b.creative_id::text,f.name as funnel_name,c.name as creative_name,
+        coalesce((
+          select jsonb_agg(link.creative_id::text order by linked_creative.instance_code,linked_creative.name)
+          from marketing.budget_item_creatives link
+          join marketing.creatives linked_creative on linked_creative.id=link.creative_id
+          where link.budget_item_id=b.id
+        ),case when b.creative_id is null then '[]'::jsonb else jsonb_build_array(b.creative_id::text) end) as creative_ids,
+        coalesce((
+          select string_agg(linked_creative.name, '، ' order by linked_creative.instance_code,linked_creative.name)
+          from marketing.budget_item_creatives link
+          join marketing.creatives linked_creative on linked_creative.id=link.creative_id
+          where link.budget_item_id=b.id
+        ),c.name,'—') as creative_names,
         coalesce((
           select jsonb_agg(jsonb_build_object(
             'platformId',part.value->>'platformId',
