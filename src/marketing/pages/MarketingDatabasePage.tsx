@@ -66,6 +66,21 @@ type ScheduleDisplayRow = {
   sourceIndex: number;
 };
 
+type MarketingTaskReviewExportRow = Record<string, string | number> & {
+  "م": number;
+  "نوع التاسك": string;
+  "الكرييتيف": string;
+  "المسؤول": string;
+  "كاتب المحتوى المرتبط": string;
+  "القسم": string;
+  "الحالة": string;
+  "التقدم": string;
+  "تاريخ التسليم": string;
+  "حالة Task Template": string;
+  "المطلوب": string;
+  "الملف النهائي": string;
+};
+
 function buildScheduleRows(schedule: any[] | undefined): ScheduleDisplayRow[] {
   const rows: ScheduleDisplayRow[] = (Array.isArray(schedule) ? schedule : [])
     .map((item, sourceIndex) => ({
@@ -345,20 +360,22 @@ export function MarketingDatabasePage() {
     if (!selected || !detail) return;
     const entityKind = selected.source_type === "agenda" ? "الأجندة" : "الحملة";
     const code = detail.entity.campaign_code || detail.entity.month_key || selected.code || "—";
-    const rows = (Array.isArray(detail.tasks) ? detail.tasks : []).map((task: any, index: number) => ({
-      "م": index + 1,
-      "نوع التاسك": taskKindLabel(task),
-      "الكرييتيف": task.creative_name || "—",
-      "المسؤول": task.assigned_name || "—",
-      "كاتب المحتوى المرتبط": task.content_user_name || "—",
-      "القسم": task.department_name || "قسم المحتوى",
-      "الحالة": reportStatus(task.status),
-      "التقدم": `${Number(task.progress || 0).toLocaleString("ar-SA")}%`,
-      "تاريخ التسليم": marketingDate(task.due_at),
-      "حالة Task Template": task.template_status ? reportStatus(task.template_status) : "—",
-      "المطلوب": task.note || task.title || "—",
-      "الملف النهائي": task.final_file_name || "—",
-    }));
+    const rows: MarketingTaskReviewExportRow[] = (Array.isArray(detail.tasks) ? detail.tasks : []).map(
+      (task: any, index: number): MarketingTaskReviewExportRow => ({
+        "م": index + 1,
+        "نوع التاسك": taskKindLabel(task),
+        "الكرييتيف": task.creative_name || "—",
+        "المسؤول": task.assigned_name || "—",
+        "كاتب المحتوى المرتبط": task.content_user_name || "—",
+        "القسم": task.department_name || "قسم المحتوى",
+        "الحالة": reportStatus(task.status),
+        "التقدم": `${Number(task.progress || 0).toLocaleString("ar-SA")}%`,
+        "تاريخ التسليم": marketingDate(task.due_at),
+        "حالة Task Template": task.template_status ? reportStatus(task.template_status) : "—",
+        "المطلوب": task.note || task.title || "—",
+        "الملف النهائي": task.final_file_name || "—",
+      }),
+    );
     downloadMarketingReportXlsx({
       filename: `${safeMarketingReportFilename(selected.name || "مراجعة")}-مراجعة-التاسكات.xlsx`,
       sheetName: "مراجعة التاسكات",
