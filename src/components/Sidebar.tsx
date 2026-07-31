@@ -38,13 +38,13 @@ export function Sidebar() {
     <div className="sidebar-account" aria-label="الحساب">
       <div className="account-avatar" aria-hidden="true">{fullName.slice(0, 1)}</div>
       <div className="account-details">
-        <div className="account-copy">
-          <strong title={fullName}>{fullName}</strong>
-          <span title={roleText}>{roleText}</span>
-        </div>
-        <div className="account-actions" aria-label="إجراءات الحساب">
+        <div className="account-row account-primary">
+          <strong className="account-name" title={fullName}>{fullName}</strong>
           <NotificationBell />
-          <button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={18} /></button>
+        </div>
+        <div className="account-row account-secondary">
+          <span className="account-role" title={roleText}>{roleText}</span>
+          <button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={17} /></button>
         </div>
       </div>
     </div>
