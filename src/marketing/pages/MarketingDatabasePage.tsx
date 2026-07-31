@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowSquareOut, CalendarBlank, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FileXls, FolderOpen, LinkSimple, Trash, WarningCircle } from "@phosphor-icons/react";
+import { Archive, ArrowSquareOut, CalendarBlank, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FileXls, FolderOpen, LinkSimple, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
+import { EntityCreativeManager } from "../components/EntityCreativeManager";
+import type { MarketingMeta } from "../types";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
+
+const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], contentDepartmentId: "", actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
 
 function excelXml(value: unknown) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -100,6 +104,8 @@ export function MarketingDatabasePage() {
   const canEditCampaignLinks = hasPermission(user, "marketing.campaign.edit");
   const canEditAgendaLinks = hasPermission(user, "marketing.agenda.edit");
   const canDownloadFiles = hasPermission(user, "marketing.file.download");
+  const [meta, setMeta] = useState<MarketingMeta>(emptyMeta);
+  const [creativeManager, setCreativeManager] = useState<{ open: boolean; row: any | null }>({ open: false, row: null });
   const [rows, setRows] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [detail, setDetail] = useState<any>(null);
@@ -110,6 +116,7 @@ export function MarketingDatabasePage() {
   const [links, setLinks] = useState<Array<{ platform: string; url: string }>>([]);
   const [detailView, setDetailView] = useState<"data" | "results">("data");
   const canEditLinks = selected?.source_type === "agenda" ? canEditAgendaLinks : canEditCampaignLinks;
+  const canEditCreatives = selected?.source_type === "agenda" ? canEditAgendaLinks : canEditCampaignLinks;
   const scheduleRows = useMemo(() => buildScheduleRows(detail?.schedule), [detail]);
   const finalProductFiles = useMemo(() => {
     const tasks = Array.isArray(detail?.tasks) ? detail.tasks : [];
@@ -159,6 +166,7 @@ export function MarketingDatabasePage() {
 
   useEffect(() => {
     void load();
+    marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`).then(setMeta).catch(() => undefined);
   }, []);
 
   const filtered = useMemo(
@@ -214,6 +222,12 @@ export function MarketingDatabasePage() {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تنفيذ الإجراء");
     }
+  }
+
+  async function creativeSaved(savedMessage: string) {
+    setMessage(savedMessage);
+    if (selected) await open(selected);
+    await load();
   }
 
   function printDetail() {
@@ -336,6 +350,31 @@ export function MarketingDatabasePage() {
             <ProgressBar value={Number(detail.entity.progress || 0)} />
           </section>
 
+          <section className="marketing-task-section marketing-database-section marketing-entity-creatives-section">
+            <div className="marketing-database-section-heading">
+              <div><h3>كرييتيفات {selected?.source_type === "agenda" ? "الأجندة" : "الحملة"}</h3><p>كل كرييتيف مرتبط بـ Task Template والتاسك التنفيذي والميزانية وجدول النشر حسب نوع السجل.</p></div>
+              {canEditCreatives ? <button type="button" className="primary" onClick={() => setCreativeManager({ open: true, row: null })}><Plus size={18} />إضافة كرييتيف</button> : null}
+            </div>
+            <div className="marketing-entity-creatives-grid">
+              {detail.creatives.map((creative: any, index: number) => {
+                const creativeTasks = detail.tasks.filter((task: any) => String(task.creative_id || "") === String(creative.id));
+                const templateCount = creativeTasks.filter((task: any) => task.task_kind === "task_template").length;
+                const executionCount = creativeTasks.filter((task: any) => task.task_kind === "execution").length;
+                const scheduleCount = new Set(detail.schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id)).map((item: any) => `${String(item.publish_date || "").slice(0, 10)}-${item.group_id || item.id}`)).size;
+                const budgetTotal = detail.budgets.filter((item: any) => String(item.creative_id || "") === String(creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+                return <article key={creative.id} className="marketing-entity-creative-card">
+                  <header><span>{creative.instance_code || `#${index + 1}`}</span><strong>{creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف"}</strong>{canEditCreatives ? <button type="button" onClick={() => setCreativeManager({ open: true, row: creative })}><PencilSimple size={17} />تعديل</button> : null}</header>
+                  <div><small>العدد</small><b>{Number(creative.quantity || 1).toLocaleString("ar-SA")}</b></div>
+                  <div><small>Task Template</small><b>{templateCount.toLocaleString("ar-SA")}</b></div>
+                  <div><small>تاسك تنفيذي</small><b>{executionCount.toLocaleString("ar-SA")}</b></div>
+                  <div><small>مواعيد النشر</small><b>{scheduleCount.toLocaleString("ar-SA")}</b></div>
+                  {selected?.source_type === "campaign" ? <div><small>الميزانية</small><b>{budgetTotal.toLocaleString("ar-SA")} ر.س</b></div> : null}
+                </article>;
+              })}
+              {!detail.creatives.length ? <div className="marketing-database-empty compact">لا توجد كرييتيفات داخل هذا السجل.</div> : null}
+            </div>
+          </section>
+
           <section className="marketing-task-section marketing-database-section">
             <h3>التاسكات التنفيذية واليوزرات</h3>
             <div className="marketing-table-wrap marketing-database-table">
@@ -438,6 +477,16 @@ export function MarketingDatabasePage() {
           </section>}
         </div> : null}
       </Modal>
+
+      {selected && detail ? <EntityCreativeManager
+        open={creativeManager.open}
+        source={selected}
+        detail={detail}
+        meta={meta}
+        creativeRow={creativeManager.row}
+        onClose={() => setCreativeManager({ open: false, row: null })}
+        onSaved={creativeSaved}
+      /> : null}
     </MarketingPage>
   );
 }

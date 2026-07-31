@@ -528,6 +528,294 @@ async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string,
   });
 }
 
+
+type EntityCreativeScheduleInput = {
+  id?: string;
+  date?: string;
+  platforms?: Array<{ platformId?: string; postTypeIds?: string[] }>;
+};
+
+type EntityCreativeBudgetInput = {
+  id?: string;
+  funnelId?: string;
+  adsCount?: number;
+  contentGoal?: string;
+  expectedGoal?: string;
+  platformAmounts?: Array<{ platformId?: string; amount?: number }>;
+};
+
+function creativeTaskFlowSnapshot(value: any) {
+  return JSON.stringify(dbJson({
+    creativeTypeId: clean(value?.creativeTypeId || value?.creative_type_id),
+    quantity: Math.max(1, numberValue(value?.quantity, 1)),
+    cars: arrayValue(value?.cars),
+    contentAssignments: arrayValue(value?.contentAssignments ?? value?.content_assignments),
+    primaryAssignments: arrayValue(value?.primaryAssignments ?? value?.primary_assignments),
+    optionalAssignments: arrayValue(value?.optionalAssignments ?? value?.optional_assignments),
+  }));
+}
+
+async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: string, budgets: EntityCreativeBudgetInput[]) {
+  await tx`delete from marketing.budget_items where campaign_id=${campaignId}::uuid and creative_id=${creativeId}::uuid`;
+  for (const budget of arrayValue<EntityCreativeBudgetInput>(budgets)) {
+    const amounts = arrayValue(budget.platformAmounts)
+      .map((item) => ({ platformId: clean(item.platformId), amount: Math.max(0, numberValue(item.amount)) }))
+      .filter((item) => item.platformId);
+    const total = amounts.reduce((sum, item) => sum + item.amount, 0);
+    await tx`
+      insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
+      values(
+        ${campaignId}::uuid,
+        ${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},
+        ${creativeId}::uuid,
+        ${Math.max(1, numberValue(budget.adsCount, 1))},
+        ${clean(budget.contentGoal) || null},
+        ${clean(budget.expectedGoal) || null},
+        ${tx.json(dbJson(amounts))},
+        ${total}
+      )
+    `;
+  }
+}
+
+async function replaceCreativeSchedule(tx: any, input: {
+  sourceType: "campaign" | "agenda";
+  sourceId: string;
+  creativeId: string;
+  start: string;
+  end: string;
+  schedule: EntityCreativeScheduleInput[];
+}) {
+  await tx`delete from marketing.publish_schedule where source_type=${input.sourceType} and source_id=${input.sourceId}::uuid and creative_id=${input.creativeId}::uuid`;
+  const executionTasks = await tx<any[]>`
+    select id::text from marketing.tasks
+    where creative_id=${input.creativeId}::uuid and task_kind='execution' and is_deleted=false
+    order by created_at
+  `;
+  const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
+  let firstDate = "";
+  for (const item of arrayValue<EntityCreativeScheduleInput>(input.schedule)) {
+    const publishDate = isoDate(item.date);
+    if (!publishDate) continue;
+    if (publishDate < input.start || publishDate > input.end) throw new Error("تاريخ النشر خارج فترة الحملة أو الأجندة");
+    if (!firstDate) firstDate = publishDate;
+    const platforms = arrayValue(item.platforms)
+      .map((platform) => ({
+        platformId: clean(platform.platformId),
+        postTypeIds: [...new Set(arrayValue<string>(platform.postTypeIds).map(clean).filter(Boolean))],
+      }))
+      .filter((platform) => platform.platformId && platform.postTypeIds.length);
+    for (const scheduleTask of scheduleTasks) {
+      const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
+      for (const platform of platforms) {
+        for (const postTypeId of platform.postTypeIds) {
+          await tx`
+            insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id)
+            values(
+              ${scheduleGroup.id}::uuid,
+              ${input.sourceType},
+              ${input.sourceId}::uuid,
+              ${input.creativeId}::uuid,
+              ${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},
+              ${publishDate},
+              ${platform.platformId}::uuid,
+              ${postTypeId}::uuid
+            )
+          `;
+        }
+      }
+    }
+  }
+  await tx`update marketing.creatives set schedule_day=${firstDate || null},updated_at=now() where id=${input.creativeId}::uuid`;
+}
+
+async function promoteCreativeRevisionForReview(tx: any, creativeId: string, previousTemplates: any[], user: SessionUser) {
+  if (!previousTemplates.length) return;
+  const currentTemplates = await tx<any[]>`
+    select id::text,content_user_id::text from marketing.task_templates
+    where creative_id=${creativeId}::uuid
+    order by created_at desc
+  `;
+  const latestByUser = new Map<string, any>();
+  for (const item of currentTemplates) if (!latestByUser.has(item.content_user_id)) latestByUser.set(item.content_user_id, item);
+  const promotedUsers = new Set<string>();
+  for (const previous of previousTemplates) {
+    if (previous.status !== 'approved' || promotedUsers.has(previous.content_user_id)) continue;
+    promotedUsers.add(previous.content_user_id);
+    const current = latestByUser.get(previous.content_user_id);
+    if (!current || current.id === previous.id) continue;
+    await tx`
+      update marketing.task_templates
+      set status='under_review',progress=50,file_id=${previous.file_id ? tx`${previous.file_id}::uuid` : null},
+          template_data=${tx.json(dbJson(previous.template_data || {}))},
+          approved_data=${tx.json(dbJson(previous.approved_data || {}))},
+          admin_note='تم تعديل بيانات الكرييتيف ويحتاج إعادة اعتماد',updated_at=now()
+      where id=${current.id}::uuid
+    `;
+    await tx`update marketing.tasks set status='under_review',progress=50,updated_at=now() where task_template_id=${current.id}::uuid and task_kind='task_template' and is_deleted=false`;
+    await tx`
+      insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name)
+      values(
+        ${current.id}::uuid,
+        'creative_revision',
+        'تم إنشاء مراجعة جديدة بعد تعديل بيانات الكرييتيف',
+        ${tx.json(dbJson(previous.approved_data || previous.template_data || {}))},
+        ${tx.json(dbJson(previous.template_data || {}))},
+        ${user.id}::uuid,
+        ${user.fullName}
+      )
+    `;
+  }
+}
+
+async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const sourceType = clean(body.sourceType) as "campaign" | "agenda";
+  const sourceId = clean(body.sourceId);
+  const creativeId = clean(body.creativeId);
+  const rawCreative = body.creative || {};
+  if (!['campaign','agenda'].includes(sourceType) || !sourceId) throw new Error("بيانات الحملة أو الأجندة غير صحيحة");
+  const permission = sourceType === 'campaign' ? 'marketing.campaign.edit' : 'marketing.agenda.edit';
+  if (!hasPermission(user, permission)) throw new Error("لا توجد صلاحية لتعديل الكرييتيفات");
+  await assertMarketingEntityAccess(sql, user, sourceType, sourceId);
+  const creativeTypeId = clean(rawCreative.creativeTypeId);
+  if (!creativeTypeId) throw new Error("اختر نوع الكرييتيف");
+  const budgetInputs = arrayValue<EntityCreativeBudgetInput>(body.budgets);
+  const scheduleInputs = arrayValue<EntityCreativeScheduleInput>(body.schedule);
+  if (sourceType === 'campaign' && !budgetInputs.length) throw new Error("أضف ميزانية للكرييتيف");
+  if (sourceType === 'campaign' && budgetInputs.some((item) => !arrayValue(item.platformAmounts).some((part) => clean(part.platformId)))) {
+    throw new Error("حدد منصة واحدة على الأقل لكل بند ميزانية");
+  }
+  if (!scheduleInputs.length) throw new Error("أضف موعد نشر واحدًا على الأقل للكرييتيف");
+  if (scheduleInputs.some((item) => !isoDate(item.date) || !arrayValue(item.platforms).some((platform) => clean(platform.platformId) && arrayValue<string>(platform.postTypeIds).some((id) => clean(id))))) {
+    throw new Error("أكمل تاريخ ومنصة ونوع النشر لكل موعد");
+  }
+  const meta = await marketingMeta(sql, user);
+  const contentId = contentDepartmentId(meta);
+  const contentAssignments = arrayValue(rawCreative.contentAssignments);
+  const primaryAssignments = arrayValue(rawCreative.primaryAssignments);
+  const optionalAssignments = arrayValue(rawCreative.optionalAssignments);
+  if (!contentAssignments.length) throw new Error("اختر يوزر قسم المحتوى");
+  if (![...primaryAssignments, ...optionalAssignments.flatMap((group: any) => arrayValue(group.assignments))].length) throw new Error("اختر يوزرًا تنفيذيًا واحدًا على الأقل");
+
+  return sql.begin(async (tx) => {
+    const [entity] = sourceType === 'campaign'
+      ? await tx<any[]>`select id::text,name,campaign_code as code,publish_start::text,publish_end::text,required_from_content from marketing.campaigns where id=${sourceId}::uuid and is_deleted=false for update`
+      : await tx<any[]>`select id::text,name,month_key as code,publish_start::text,publish_end::text,''::text as required_from_content from marketing.agendas where id=${sourceId}::uuid for update`;
+    if (!entity) throw new Error(sourceType === 'campaign' ? "الحملة غير موجودة" : "الأجندة غير موجودة");
+    const [creativeType] = await tx<any[]>`
+      select c.*,d.name as department_name
+      from marketing.creative_types c
+      left join marketing.departments d on d.id=c.primary_department_id
+      where c.id=${creativeTypeId}::uuid and c.is_active=true
+    `;
+    if (!creativeType) throw new Error("نوع الكرييتيف غير موجود");
+
+    const saveSingle = async (existingId: string | null) => {
+      let targetId = existingId || '';
+      let taskFlowChanged = true;
+      let previousTemplates: any[] = [];
+      let creativeIndex = 1;
+      if (existingId) {
+        const [existing] = await tx<any[]>`
+          select *,id::text,creative_type_id::text
+          from marketing.creatives
+          where id=${existingId}::uuid
+            and ((${sourceType}='campaign' and campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and agenda_id=${sourceId}::uuid))
+          for update
+        `;
+        if (!existing) throw new Error("الكرييتيف غير موجود داخل السجل المحدد");
+        const [published] = await tx<any[]>`select 1 from marketing.publish_schedule where creative_id=${existingId}::uuid and status='published' limit 1`;
+        if (published) throw new Error("لا يمكن تعديل كرييتيف تم نشره");
+        taskFlowChanged = creativeTaskFlowSnapshot(existing) !== creativeTaskFlowSnapshot(rawCreative);
+        if (taskFlowChanged) {
+          const [started] = await tx<any[]>`
+            select 1 from marketing.tasks
+            where creative_id=${existingId}::uuid and task_kind='execution' and is_deleted=false
+              and (received_at is not null or progress>0 or status in ('in_progress','ready_to_complete','completed'))
+            limit 1
+          `;
+          if (started) throw new Error("بدأ تنفيذ هذا الكرييتيف؛ يمكن تعديل الميزانية وجدول النشر فقط دون تغيير بيانات التكليف");
+          previousTemplates = await tx<any[]>`
+            select distinct on (content_user_id) *,id::text,content_user_id::text,file_id::text
+            from marketing.task_templates
+            where creative_id=${existingId}::uuid
+            order by content_user_id,created_at desc,id desc
+          `;
+          await tx`update marketing.tasks set is_deleted=true,updated_at=now() where creative_id=${existingId}::uuid and is_deleted=false`;
+        }
+        await tx`
+          update marketing.creatives set
+            creative_type=${creativeType.name},creative_type_id=${creativeTypeId}::uuid,
+            quantity=${Math.max(1, numberValue(rawCreative.quantity, 1))},
+            status=case when ${taskFlowChanged} then 'required' else status end,name=${creativeType.name},
+            primary_department_id=${creativeType.primary_department_id},cars=${tx.json(dbJson(arrayValue(rawCreative.cars)))},
+            content_assignments=${tx.json(dbJson(contentAssignments))},primary_assignments=${tx.json(dbJson(primaryAssignments))},
+            optional_assignments=${tx.json(dbJson(optionalAssignments))},platform_assignments=${tx.json(dbJson(arrayValue(rawCreative.platforms)))},
+            notes=${tx.json(dbJson(rawCreative.notes || {}))},updated_at=now()
+          where id=${existingId}::uuid
+        `;
+        const [sequence] = await tx<any[]>`select count(*)::int + 1000 as value from marketing.task_templates where source_type=${sourceType} and source_id=${sourceId}::uuid`;
+        creativeIndex = Number(sequence?.value || 1001);
+      } else {
+        const [sequence] = await tx<any[]>`select count(*)::int + 1 as value from marketing.creatives where (${sourceType}='campaign' and campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and agenda_id=${sourceId}::uuid)`;
+        creativeIndex = Number(sequence?.value || 1);
+        const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,'0')}`;
+        const [created] = await tx<any[]>`
+          insert into marketing.creatives(campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
+          values(
+            ${sourceType === 'campaign' ? tx`${sourceId}::uuid` : null},
+            ${sourceType === 'agenda' ? tx`${sourceId}::uuid` : null},
+            ${creativeType.name},${creativeTypeId}::uuid,${sourceType === 'agenda' ? 1 : Math.max(1, numberValue(rawCreative.quantity, 1))},
+            'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},
+            ${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},
+            ${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}
+          ) returning id::text
+        `;
+        targetId = created.id;
+      }
+
+      if (!existingId || taskFlowChanged) {
+        await createTasksForCreative(tx, {
+          sourceType,sourceId,
+          campaignId: sourceType === 'campaign' ? sourceId : null,
+          agendaId: sourceType === 'agenda' ? sourceId : null,
+          sourceCode: entity.code || entity.name,
+          sourceName: entity.name,
+          creativeId: targetId,
+          creativeIndex,
+          creativeName: creativeType.name,
+          creativeType: creativeType.name,
+          contentDepartmentId: contentId,
+          contentAssignments,
+          primaryDepartmentId: clean(creativeType.primary_department_id),
+          primaryAssignments,
+          optionalAssignments,
+          requiredFromContent: clean(entity.required_from_content),
+        });
+        if (existingId) await promoteCreativeRevisionForReview(tx, targetId, previousTemplates, user);
+      }
+
+      if (sourceType === 'campaign') await replaceCreativeBudgets(tx, sourceId, targetId, budgetInputs);
+      await replaceCreativeSchedule(tx, {
+        sourceType,sourceId,creativeId:targetId,start:entity.publish_start,end:entity.publish_end,
+        schedule:scheduleInputs,
+      });
+      return targetId;
+    };
+
+    const quantity = Math.max(1, numberValue(rawCreative.quantity, 1));
+    const ids: string[] = [];
+    if (!creativeId && sourceType === 'agenda' && quantity > 1) {
+      for (let index = 0; index < quantity; index += 1) ids.push(await saveSingle(null));
+    } else {
+      ids.push(await saveSingle(creativeId || null));
+    }
+    await recalculateProgress(tx, sourceType, sourceId);
+    await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name },undefined,undefined);
+    return { ok:true,id:sourceId,creativeIds:ids,message:creativeId ? "تم تعديل الكرييتيف وإنشاء مراجعة التكليف عند الحاجة" : "تمت إضافة الكرييتيف والتاسكات المرتبطة" };
+  });
+}
+
 async function recalculateProgress(sql: any, sourceType: string, sourceId: string) {
   const rows = await sql<any[]>`
     select coalesce(t.department_id::text,'content') as department_id,avg(t.progress)::float as progress
@@ -2056,7 +2344,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
     if(request.method==='GET'){
-      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create'))?await loadOperationsCars(sql):[]});
+      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create')||hasPermission(user,'marketing.campaign.edit')||hasPermission(user,'marketing.agenda.edit'))?await loadOperationsCars(sql):[]});
       if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
       if(resource==='dashboard_version')return response.status(200).json({ok:true,version:await dashboardVersion(sql)});
       if(resource==='database')return response.status(200).json(await databaseRows(sql,user));
@@ -2081,6 +2369,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const body=bodyObject(request),action=clean(body.action); let result:any;
     if(action==='create_campaign')result=await createCampaign(sql,body,user);
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
+    else if(action==='save_entity_creative')result=await saveEntityCreative(sql,body,user);
     else if(action==='save_department')result=await saveDepartment(sql,body,user);
     else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body);
     else if(action==='save_creative_type')result=await saveCreativeType(sql,body);
