@@ -4494,6 +4494,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .unified-settings-picker-head strong { color: #593b33; font-size: 14px; }
 .unified-settings-picker-head span { color: var(--muted); font-size: 9px; }
 .unified-settings-picker-head b { padding: 6px 10px; border-radius: 999px; background: #fff2eb; color: #8a4936; font-size: 9px; }
+.unified-settings-picker-search { width: min(360px, 100%); min-height: 42px; margin-inline-start: auto; box-shadow: none; }
 .unified-settings-section-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -5322,7 +5323,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-contact-summary-card strong { color:var(--ink); font-size:20px; font-weight:950; }
 .crm-contact-summary-card p { margin:0; color:var(--muted); font-size:10px; }
 .crm-contact-list-shell { overflow:hidden; border:1px solid var(--line); border-radius:18px; background:#fff; box-shadow:0 12px 34px rgba(71,38,29,.045); }
-.crm-contact-search-v2 { display:grid; grid-template-columns:minmax(260px,1fr) auto auto; align-items:center; gap:9px; padding:13px; border-bottom:1px solid var(--line); background:#fffaf7; }
+.crm-contact-search-v2 { display:grid; grid-template-columns:minmax(260px,1fr) auto auto auto; align-items:center; gap:9px; padding:13px; border-bottom:1px solid var(--line); background:#fffaf7; }
 .crm-contact-search-v2 label { min-height:44px; display:flex; align-items:center; gap:9px; padding:0 13px; border:1px solid var(--line); border-radius:12px; background:#fff; color:var(--muted); }
 .crm-contact-search-v2 input { width:100%; border:0; outline:0; background:transparent; font:inherit; }
 .crm-contact-search-v2>span { color:var(--muted); font-size:12px; font-weight:900; }

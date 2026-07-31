@@ -27,7 +27,7 @@ const sectionDefinitions: SectionDefinition[] = [
   { key: "notifications", label: "إعدادات الإشعارات", description: "الصوت والكارت المؤقت ومدة الظهور وتنبيهات الأنظمة", keywords: "الإشعارات الجرس الصوت الكارت البادج التنبيه", icon: Bell, permissions: [], personal: true },
   { key: "operations", label: "إعدادات العمليات", description: "حالات السيارات والمواقع ومسارات العمل", keywords: "العمليات السيارات المواقع", icon: Wrench, permissions: ["settings.operations.view", "settings.operations.manage"] },
   { key: "tracking", label: "إعدادات التتبع", description: "المراحل والرسائل وإعدادات التراكينج", keywords: "التتبع التراكينج المراحل الرسائل", icon: Path, permissions: ["settings.tracking.view", "settings.tracking.manage"] },
-  { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage"] },
+  { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage", "marketing.platforms.view"] },
   { key: "crm", label: "إعدادات CRM", description: "مسارات العملاء والأتمتة والتوزيع والتقارير", keywords: "CRM العملاء الأتمتة التوزيع السرعة الكفاءة", icon: GearSix, permissions: ["settings.crm.view", "settings.crm.manage"] },
 ];
 
@@ -62,21 +62,13 @@ export function SettingsPage() {
 
   return (
     <div className="module-page settings-page unified-settings-page">
-      <header className="unified-settings-hero">
-        <div className="unified-settings-hero-copy">
-          <span className="unified-settings-eyebrow">مركز إدارة المنصة</span>
-          <h1>الإعدادات</h1>
-          <p>اختر النظام المطلوب ثم عدّل إعداداته من مساحة واضحة وموحدة بدون التنقل بين صفحات متفرقة.</p>
-        </div>
-        <label className="unified-settings-search">
-          <MagnifyingGlass size={19} />
-          <input value={navigationSearch} onChange={(event) => setNavigationSearch(event.target.value)} placeholder="ابحث عن إعداد أو نظام" />
-        </label>
-      </header>
-
       <section className="unified-settings-picker">
         <header className="unified-settings-picker-head">
           <div><strong>أقسام الإعدادات</strong><span>اختر القسم المطلوب لفتح أدواته كاملة.</span></div>
+          <label className="unified-settings-search unified-settings-picker-search">
+            <MagnifyingGlass size={18} />
+            <input value={navigationSearch} onChange={(event) => setNavigationSearch(event.target.value)} placeholder="ابحث عن إعداد أو نظام" />
+          </label>
           <b>{available.length.toLocaleString("ar-SA")} أقسام متاحة</b>
         </header>
         <nav className="unified-settings-section-grid" aria-label="أقسام الإعدادات">

@@ -273,11 +273,6 @@ export function CrmContactsPage() {
   const contactName = profile ? text(profile.contact.display_name || lead?.customer_name) : "";
 
   return <div className="crm-page crm-contacts-page-v2">
-    <header className="crm-page-header crm-contacts-header-v2">
-      <div><span className="crm-kicker">السجل الدائم للعملاء</span><h1>جهات الاتصال</h1><p>ملف موحد لكل عميل يجمع بياناته وطلبات البيع والمحادثات وسجل التغييرات بدون تكرار.</p></div>
-      <button type="button" className="crm-secondary-button" onClick={() => void loadList()} disabled={loading}><ArrowClockwise size={18} />تحديث</button>
-    </header>
-
     {error ? <div className="crm-error-banner">{error}</div> : null}
 
     <section className="crm-contact-overview-grid">
@@ -291,6 +286,7 @@ export function CrmContactsPage() {
       <form className="crm-contact-search-v2" onSubmit={(event) => { event.preventDefault(); applySearch(); }}>
         <label><MagnifyingGlass size={20} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="بحث بالاسم أو رقم الجوال أو الحالة أو رقم طلب البيع أو الملاحظات" /></label>
         <button type="submit" className="crm-primary-button">بحث</button>
+        <button type="button" className="crm-secondary-button" onClick={() => void loadList()} disabled={loading}><ArrowClockwise size={18} />تحديث</button>
         <span>النتائج: {number.format(total)}</span>
       </form>
 

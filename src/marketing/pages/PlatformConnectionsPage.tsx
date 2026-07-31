@@ -118,7 +118,7 @@ function providerIcon(provider: ProviderCode, size = 28) {
   return <span className="marketing-meta-icons"><FacebookLogo size={size} weight="fill" /><InstagramLogo size={size} weight="fill" /></span>;
 }
 
-export function PlatformConnectionsPage() {
+export function PlatformConnectionsPage({ embedded = false }: { embedded?: boolean }) {
   const [payload, setPayload] = useState<ConnectionsPayload | null>(null);
   const [zoho, setZoho] = useState<ZohoConnectionStatus | null>(null);
   const [error, setError] = useState("");
@@ -269,7 +269,7 @@ export function PlatformConnectionsPage() {
     catch { setError("تعذر نسخ الرابط"); }
   }
 
-  return (
+  const page = (
     <MarketingPage
       title="ربط المنصات"
       description="ربط رسمي عبر OAuth. أسرار التطبيق وRefresh Token تُحفظ مشفرة داخل PostgreSQL، والمنصة هي التي ترفع الملفات إلى Zoho WorkDrive."
@@ -284,26 +284,26 @@ export function PlatformConnectionsPage() {
         <div><LinkBreak size={23} weight="duotone" /><span><strong>فصل حقيقي</strong><small>Revoke ثم حذف التوكنات من PostgreSQL</small></span></div>
       </section>
 
-      {payload?.canManage ? <section className="marketing-connections-grid marketing-connections-grid-rebuilt">
-        <article className={`marketing-connection-card rebuilt ${zoho?.connected ? "connected" : zoho?.configured ? "disconnected" : "warning"}`}>
-          <header className="marketing-connection-card-head">
-            <div className="marketing-provider-logo"><UploadSimple size={28} weight="duotone" /></div>
-            <div className="marketing-provider-title"><h2>Zoho WorkDrive</h2><span className={`marketing-connection-status ${zoho?.connected ? "connected" : "disconnected"}`}>{zoho?.connected ? <CheckCircle size={15} weight="fill" /> : <WarningCircle size={15} weight="fill" />}{zoho?.connected ? "متصل" : zoho?.configured ? "غير متصل" : "الإعداد غير مكتمل"}</span></div>
-          </header>
-          {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_PUBLISH_ROOT_FOLDER_ID</p></div></div> : null}
-          <div className="marketing-connection-data rebuilt-data">
-            <div><small>حساب النشر</small><strong>{zoho?.accountEmail || "marketing@mzjcars.com"}</strong></div>
-            <div><small>مركز البيانات</small><strong>Zoho السعودية</strong></div>
-            <div><small>آخر تحقق</small><strong>{formatDate(zoho?.lastVerifiedAt)}</strong></div>
-            <div><small>فولدر النشر</small><strong dir="ltr">{zoho?.rootFolderId || "—"}</strong></div>
-          </div>
-          {zoho?.lastError ? <p className="marketing-connection-error"><WarningCircle size={16} />{zoho.lastError}</p> : null}
-          <footer className="marketing-connection-actions"><button type="button" className="primary" onClick={connectZoho} disabled={loading === "zoho" || !zoho?.configured}>{loading === "zoho" ? <SpinnerGap className="marketing-spin" size={17} /> : <LinkSimple size={17} />}{zoho?.connected ? "إعادة ربط Zoho" : "ربط Zoho"}</button></footer>
-          <div className="marketing-callback-row"><span>Callback URL</span><code dir="ltr">https://mzj-platform.vercel.app/api/integrations/zoho/callback</code><button type="button" className="secondary compact-button" onClick={() => void copyRedirect("https://mzj-platform.vercel.app/api/integrations/zoho/callback")} title="نسخ"><Copy size={15} /></button></div>
-        </article>
-      </section> : null}
-
       <div className="marketing-connections-grid marketing-connections-grid-rebuilt">
+        {payload?.canManage ? (
+          <article className={`marketing-connection-card rebuilt ${zoho?.connected ? "connected" : zoho?.configured ? "disconnected" : "warning"}`}>
+            <header className="marketing-connection-card-head">
+              <div className="marketing-provider-logo"><UploadSimple size={28} weight="duotone" /></div>
+              <div className="marketing-provider-title"><h2>Zoho WorkDrive</h2><span className={`marketing-connection-status ${zoho?.connected ? "connected" : "disconnected"}`}>{zoho?.connected ? <CheckCircle size={15} weight="fill" /> : <WarningCircle size={15} weight="fill" />}{zoho?.connected ? "متصل" : zoho?.configured ? "غير متصل" : "الإعداد غير مكتمل"}</span></div>
+            </header>
+            {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_PUBLISH_ROOT_FOLDER_ID</p></div></div> : null}
+            <div className="marketing-connection-data rebuilt-data">
+              <div><small>حساب النشر</small><strong>{zoho?.accountEmail || "marketing@mzjcars.com"}</strong></div>
+              <div><small>مركز البيانات</small><strong>Zoho السعودية</strong></div>
+              <div><small>آخر تحقق</small><strong>{formatDate(zoho?.lastVerifiedAt)}</strong></div>
+              <div><small>فولدر النشر</small><strong dir="ltr">{zoho?.rootFolderId || "—"}</strong></div>
+            </div>
+            {zoho?.lastError ? <p className="marketing-connection-error"><WarningCircle size={16} />{zoho.lastError}</p> : null}
+            <footer className="marketing-connection-actions"><button type="button" className="primary" onClick={connectZoho} disabled={loading === "zoho" || !zoho?.configured}>{loading === "zoho" ? <SpinnerGap className="marketing-spin" size={17} /> : <LinkSimple size={17} />}{zoho?.connected ? "إعادة ربط Zoho" : "ربط Zoho"}</button></footer>
+            <div className="marketing-callback-row"><span>Callback URL</span><code dir="ltr">https://mzj-platform.vercel.app/api/integrations/zoho/callback</code><button type="button" className="secondary compact-button" onClick={() => void copyRedirect("https://mzj-platform.vercel.app/api/integrations/zoho/callback")} title="نسخ"><Copy size={15} /></button></div>
+          </article>
+        ) : null}
+
         {providers.map((provider) => {
           const busy = loading === provider.provider;
           const metaFacebook = provider.provider === "meta" ? provider.assets.facebook : null;
@@ -373,4 +373,6 @@ export function PlatformConnectionsPage() {
       </section>
     </MarketingPage>
   );
+
+  return embedded ? <div className="marketing-platform-connections-embedded">{page}</div> : page;
 }

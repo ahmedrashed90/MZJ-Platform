@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { FloppyDisk, Package, Palette, PencilSimple, Plus, Trash, UsersThree, WarningCircle } from "@phosphor-icons/react";
+import { FloppyDisk, LinkSimple, Package, Palette, PencilSimple, Plus, Trash, UsersThree, WarningCircle } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../systemAccess";
 import { marketingFetch } from "../api";
 import { DepartmentsPage } from "../pages/DepartmentsPage";
+import { PlatformConnectionsPage } from "../pages/PlatformConnectionsPage";
 import "../marketing.css";
 
-type MarketingSettingsTab = "departments" | "colors" | "packages";
+type MarketingSettingsTab = "departments" | "colors" | "packages" | "platforms";
 type UserColorRow = { id: string; full_name: string; email?: string | null; color: string };
 type LookupRow = { id: string; name: string; sort_order: number };
 
@@ -13,6 +16,12 @@ type PackageSettingsPayload = {
   categories: LookupRow[];
   salesTypes: LookupRow[];
 };
+
+function resolveMarketingSettingsTab(value: string | null, canViewSettings: boolean, canViewConnections: boolean): MarketingSettingsTab {
+  if (canViewSettings && (value === "departments" || value === "colors" || value === "packages")) return value;
+  if (value === "platforms" && canViewConnections) return "platforms";
+  return canViewSettings ? "departments" : "platforms";
+}
 
 function LookupManager({
   title,
@@ -103,10 +112,12 @@ function LookupManager({
 }
 
 export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolean }) {
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const initialTab: MarketingSettingsTab = requestedTab === "colors" || requestedTab === "packages" ? requestedTab : "departments";
-  const [tab, setTab] = useState<MarketingSettingsTab>(initialTab);
+  const canViewMarketingSettings = hasPermission(user, "settings.marketing.view") || hasPermission(user, "settings.marketing.manage");
+  const canViewConnections = hasPermission(user, "marketing.platforms.view");
+  const [tab, setTab] = useState<MarketingSettingsTab>(() => resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections));
   const [rows, setRows] = useState<UserColorRow[]>([]);
   const [packageSettings, setPackageSettings] = useState<PackageSettingsPayload>({ categories: [], salesTypes: [] });
   const [error, setError] = useState("");
@@ -114,8 +125,8 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setTab(requestedTab === "colors" || requestedTab === "packages" ? requestedTab : "departments");
-  }, [requestedTab]);
+    setTab(resolveMarketingSettingsTab(requestedTab, canViewMarketingSettings, canViewConnections));
+  }, [requestedTab, canViewMarketingSettings, canViewConnections]);
 
   async function loadColors() {
     setError("");
@@ -171,17 +182,20 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
       <section className="panel marketing-settings-panel marketing-settings-header">
         <div className="settings-card-title"><div><h2>إعدادات سيستم التسويق</h2></div></div>
         <nav className="marketing-settings-tabs" aria-label="إعدادات سيستم التسويق">
-          <button type="button" className={tab === "departments" ? "active" : ""} onClick={() => chooseTab("departments")}><UsersThree size={18} weight="duotone" />الأقسام</button>
-          <button type="button" className={tab === "colors" ? "active" : ""} onClick={() => chooseTab("colors")}><Palette size={18} weight="duotone" />تعيين لون لكل مسؤول</button>
-          <button type="button" className={tab === "packages" ? "active" : ""} onClick={() => chooseTab("packages")}><Package size={18} weight="duotone" />إعدادات الباقات</button>
+          {canViewMarketingSettings ? <button type="button" className={tab === "departments" ? "active" : ""} onClick={() => chooseTab("departments")}><UsersThree size={18} weight="duotone" />الأقسام</button> : null}
+          {canViewMarketingSettings ? <button type="button" className={tab === "colors" ? "active" : ""} onClick={() => chooseTab("colors")}><Palette size={18} weight="duotone" />تعيين لون لكل مسؤول</button> : null}
+          {canViewMarketingSettings ? <button type="button" className={tab === "packages" ? "active" : ""} onClick={() => chooseTab("packages")}><Package size={18} weight="duotone" />إعدادات الباقات</button> : null}
+          {canViewConnections ? <button type="button" className={tab === "platforms" ? "active" : ""} onClick={() => chooseTab("platforms")}><LinkSimple size={18} weight="duotone" />ربط المنصات</button> : null}
         </nav>
       </section>
 
-      {readOnly ? <div className="connection-banner"><WarningCircle size={18} /><span>صلاحية مشاهدة فقط؛ تعديل إعدادات التسويق يحتاج صلاحية الإدارة.</span></div> : null}
-      {error ? <div className="connection-banner"><WarningCircle size={18} />{error}</div> : null}
-      {message ? <div className="success-banner">{message}</div> : null}
+      {tab !== "platforms" && readOnly ? <div className="connection-banner"><WarningCircle size={18} /><span>صلاحية مشاهدة فقط؛ تعديل إعدادات التسويق يحتاج صلاحية الإدارة.</span></div> : null}
+      {tab !== "platforms" && error ? <div className="connection-banner"><WarningCircle size={18} />{error}</div> : null}
+      {tab !== "platforms" && message ? <div className="success-banner">{message}</div> : null}
 
-      <fieldset className="settings-readonly-fieldset" disabled={readOnly}>
+      {tab === "platforms" ? <PlatformConnectionsPage embedded /> : null}
+
+      {tab !== "platforms" ? <fieldset className="settings-readonly-fieldset" disabled={readOnly}>
         {tab === "departments" ? <DepartmentsPage embedded /> : null}
 
         {tab === "colors" ? (
@@ -208,7 +222,7 @@ export function MarketingSettingsPanel({ readOnly = false }: { readOnly?: boolea
             </div>
           </section>
         ) : null}
-      </fieldset>
+      </fieldset> : null}
     </div>
   );
 }

@@ -44,6 +44,8 @@
 }
 .marketing-content { min-width: 0; }
 .marketing-page { width: 100%; display: grid; gap: 16px; }
+.marketing-platform-connections-embedded { min-width: 0; }
+.marketing-platform-connections-embedded .marketing-page-head { min-height: 0; padding: 2px 0 0; }
 .marketing-page-head {
   min-height: 74px;
   display: flex;
@@ -1008,8 +1010,8 @@
 .marketing-connections-summary small { font-size: 11px; color: var(--muted); line-height: 1.55; }
 
 .marketing-connections-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
-.marketing-connections-grid-rebuilt { grid-template-columns: repeat(3,minmax(0,1fr)); align-items: start; }
-.marketing-connection-card.rebuilt { min-width: 0; padding: 0; overflow: hidden; box-shadow: 0 12px 30px rgba(81,44,34,.06); }
+.marketing-connections-grid-rebuilt { grid-template-columns: repeat(4,minmax(0,1fr)); align-items: stretch; }
+.marketing-connection-card.rebuilt { min-width: 0; height: 100%; padding: 0; overflow: hidden; box-shadow: 0 12px 30px rgba(81,44,34,.06); display: flex; flex-direction: column; }
 .marketing-connection-card.rebuilt.connected { border-color: #bfe4ca; }
 .marketing-connection-card.rebuilt.warning { border-color: #edcf9f; }
 .marketing-connection-card.rebuilt.action { border-color: #d9b9ef; }
@@ -1086,7 +1088,7 @@
 .marketing-connection-scopes code { max-width: 100%; padding: 4px 6px; border-radius: 6px; color: #67463b; background: #f8efeb; font-size: 9px; overflow-wrap: anywhere; }
 .marketing-connection-error { margin: 0 14px 14px; padding: 9px 10px; border: 1px solid #f1cbc6; border-radius: 10px; color: #a33f38; background: #fff4f2; display: flex; align-items: flex-start; gap: 7px; font-size: 10px; line-height: 1.6; }
 .marketing-connection-error svg { flex: 0 0 auto; margin-top: 1px; }
-.marketing-connection-actions { padding: 13px 14px; border-top: 1px solid var(--line); display: flex; gap: 7px; flex-wrap: wrap; }
+.marketing-connection-actions { margin-top: auto; padding: 13px 14px; border-top: 1px solid var(--line); display: flex; gap: 7px; flex-wrap: wrap; }
 .marketing-connection-actions button { min-height: 36px; padding: 8px 10px; flex: 1 1 auto; font-size: 11px; }
 .marketing-callback-row { padding: 10px 14px; border-top: 1px solid var(--line); background: #faf8f7; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 7px; }
 .marketing-callback-row > span { color: var(--muted); font-size: 9px; font-weight: 900; }
@@ -2548,15 +2550,13 @@
   .marketing-cars-picker-toolbar,
   .marketing-cars-picker-dialog .marketing-cars-grid { grid-template-columns: 1fr; }
 }
-@media (max-width: 1120px) {
+@media (max-width: 1250px) {
   .marketing-connections-grid-rebuilt { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .marketing-connections-grid-rebuilt > article:last-child { grid-column: 1 / -1; }
 }
 @media (max-width: 760px) {
   .marketing-connections-summary,
   .marketing-connections-grid-rebuilt,
   .marketing-meta-page-grid { grid-template-columns: 1fr; }
-  .marketing-connections-grid-rebuilt > article:last-child { grid-column: auto; }
   .marketing-callback-row { grid-template-columns: 1fr auto; }
   .marketing-callback-row > span { grid-column: 1 / -1; }
   .marketing-meta-page-selector > header,
