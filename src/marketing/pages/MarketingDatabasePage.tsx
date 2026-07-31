@@ -5,29 +5,40 @@ import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, u
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { EntityCreativeManager } from "../components/EntityCreativeManager";
+import { marketingResultPlatformLabel } from "../engagementResults";
+import { downloadMarketingReportXlsx, safeMarketingReportFilename } from "../reportXlsx";
 import type { MarketingMeta } from "../types";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
 
 const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], contentDepartmentId: "", actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
 
-function excelXml(value: unknown) {
-  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+function escapePrintHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
-function downloadExcel(fileName: string, sheetName: string, headers: string[], rows: unknown[][]) {
-  const rowXml = [headers, ...rows]
-    .map((row) => `<Row>${row.map((value) => `<Cell><Data ss:Type="String">${excelXml(value)}</Data></Cell>`).join("")}</Row>`)
-    .join("");
-  const content = `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="${excelXml(sheetName)}"><Table>${rowXml}</Table></Worksheet></Workbook>`;
-  const url = URL.createObjectURL(new Blob([content], { type: "application/vnd.ms-excel;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+function taskKindLabel(task: any) {
+  return task?.task_kind === "task_template" ? "Task Template" : "تاسك تنفيذي";
+}
+
+function reportStatus(value: unknown) {
+  const status = String(value || "").toLowerCase();
+  if (status === "completed" || status === "done" || status === "approved" || status === "published") return "مكتمل";
+  if (status === "in_progress" || status === "working") return "جاري التنفيذ";
+  if (status === "rejected") return "مرفوض";
+  if (status === "changes_requested" || status === "needs_changes") return "مطلوب تعديل";
+  if (status === "waiting" || status === "pending" || status === "under_review") return "بانتظار التنفيذ";
+  return String(value || "—");
+}
+
+function reportCount(value: unknown) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString("ar-SA") : "0";
 }
 
 
@@ -231,41 +242,144 @@ export function MarketingDatabasePage() {
   }
 
   function printDetail() {
-    window.print();
+    if (!selected || !detail) return;
+    const popup = window.open("", "_blank", "width=1400,height=900");
+    if (!popup) {
+      setError("اسمح بفتح النافذة المنبثقة لتصدير PDF ثم أعد المحاولة");
+      return;
+    }
+
+    const entityKind = selected.source_type === "agenda" ? "الأجندة" : "الحملة";
+    const entityCode = detail.entity.campaign_code || detail.entity.month_key || selected.code || "—";
+    const creatives = Array.isArray(detail.creatives) ? detail.creatives : [];
+    const tasks = Array.isArray(detail.tasks) ? detail.tasks : [];
+    const budgets = Array.isArray(detail.budgets) ? detail.budgets : [];
+    const schedule = Array.isArray(detail.schedule) ? detail.schedule : [];
+    const engagement = detail.engagementResults;
+    const info = [
+      ["الاسم", detail.entity.name || selected.name],
+      ["الكود", entityCode],
+      ["النوع", detail.entity.campaign_type_name || detail.entity.campaign_type || "أجندة"],
+      ["الهدف", detail.entity.objective || "—"],
+      ["تاريخ السجل", marketingDate(detail.entity.campaign_date || detail.entity.created_at)],
+      ["بداية النشر", marketingDate(detail.entity.publish_start)],
+      ["نهاية النشر", marketingDate(detail.entity.publish_end)],
+      ["المطلوب من المحتوى", detail.entity.required_from_content || "—"],
+      ["عدد الكرييتيفات", reportCount(creatives.length)],
+      ["عدد التاسكات", reportCount(tasks.length)],
+      ["التاسكات المكتملة", reportCount(tasks.filter((task: any) => Number(task.progress || 0) >= 100).length)],
+      ["الملفات النهائية", reportCount(finalProductFiles.length)],
+      ["روابط النشر", reportCount(links.length)],
+      ["ملف النتائج", detail.entity.result_file_id ? "مرفق" : "غير مرفق"],
+      ["نسبة التقدم", `${Number(detail.entity.progress || 0).toLocaleString("ar-SA")}%`],
+    ];
+    const creativeRows = creatives.map((creative: any, index: number) => {
+      const creativeTasks = tasks.filter((task: any) => String(task.creative_id || "") === String(creative.id || ""));
+      const templateCount = creativeTasks.filter((task: any) => task.task_kind === "task_template").length;
+      const executionCount = creativeTasks.filter((task: any) => task.task_kind === "execution").length;
+      const scheduleCount = schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id || "")).length;
+      const budgetTotal = budgets.filter((item: any) => String(item.creative_id || "") === String(creative.id || "")).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+      return `<tr><td>${index + 1}</td><td>${escapePrintHtml(creative.instance_code || "—")}</td><td>${escapePrintHtml(creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف")}</td><td>${escapePrintHtml(creative.primary_department_name || "—")}</td><td>${reportCount(creative.quantity || 1)}</td><td>${reportCount(templateCount)}</td><td>${reportCount(executionCount)}</td><td>${reportCount(scheduleCount)}</td>${selected.source_type === "campaign" ? `<td>${Number(budgetTotal).toLocaleString("ar-SA")} ر.س</td>` : ""}</tr>`;
+    }).join("");
+    const taskRows = tasks.map((task: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(taskKindLabel(task))}</td><td>${escapePrintHtml(task.creative_name || "—")}</td><td>${escapePrintHtml(task.assigned_name || "—")}</td><td>${escapePrintHtml(task.department_name || "قسم المحتوى")}</td><td>${escapePrintHtml(reportStatus(task.status))}</td><td>${Number(task.progress || 0).toLocaleString("ar-SA")}%</td><td>${escapePrintHtml(marketingDate(task.due_at))}</td><td>${escapePrintHtml(task.note || task.title || "—")}</td><td>${escapePrintHtml(task.template_status ? reportStatus(task.template_status) : "—")}</td><td>${escapePrintHtml(task.final_file_name || "—")}</td></tr>`).join("");
+    const scheduleRowsHtml = schedule.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingDate(item.publish_date))}</td><td>${escapePrintHtml(item.creative_name || item.instance_code || "—")}</td><td>${escapePrintHtml(item.platform_name || "—")}</td><td>${escapePrintHtml(item.post_type_name || "—")}</td><td>${escapePrintHtml(reportStatus(item.status))}</td></tr>`).join("");
+    const budgetRows = budgets.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(item.creative_name || "—")}</td><td>${escapePrintHtml(item.funnel_name || "—")}</td><td>${reportCount(item.ads_count)}</td><td>${escapePrintHtml(item.content_goal || "—")}</td><td>${escapePrintHtml(item.expected_goal || "—")}</td><td>${Number(item.total || 0).toLocaleString("ar-SA")} ر.س</td></tr>`).join("");
+    const fileRows = finalProductFiles.map((file: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(file.original_name || file.name || "—")}</td><td>${escapePrintHtml(file.mime_type || "—")}</td><td>${escapePrintHtml(formatFileSize(file.size || file.file_size))}</td><td>${escapePrintHtml(file.uploaded_by_name || file.created_by_name || "—")}</td><td>${escapePrintHtml(marketingDate(file.created_at, true))}</td></tr>`).join("");
+    const linkRows = links.map((link, index) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingResultPlatformLabel(link.platform))}</td><td class="url">${escapePrintHtml(link.url || "—")}</td></tr>`).join("");
+    const resultSummary = engagement?.summary;
+    const resultCards = resultSummary ? [
+      ["المنشورات", resultSummary.posts], ["المشاهدات", resultSummary.views], ["الإعجابات", resultSummary.likes],
+      ["التعليقات", resultSummary.comments], ["المشاركات", resultSummary.shares], ["عملاء CRM", resultSummary.crmLeads],
+      ["تم البيع", resultSummary.soldLeads], ["عدد المباع", resultSummary.soldQuantity],
+    ].map(([label, value]) => `<article><span>${escapePrintHtml(label)}</span><strong>${reportCount(value)}</strong></article>`).join("") : "";
+    const postRows = Array.isArray(engagement?.posts) ? engagement.posts.map((post: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingResultPlatformLabel(post.platform))}</td><td>${escapePrintHtml(post.creativeName || "—")}</td><td>${escapePrintHtml(post.postTypeName || "—")}</td><td>${escapePrintHtml(marketingDate(post.publishedAt, true))}</td><td>${reportCount(post.views)}</td><td>${reportCount(post.likes)}</td><td>${reportCount(post.comments)}</td><td>${reportCount(post.shares)}</td><td>${reportCount(post.crmLeads)}</td><td>${reportCount(post.soldLeads)}</td></tr>`).join("") : "";
+
+    popup.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير ${escapePrintHtml(entityKind)} - ${escapePrintHtml(detail.entity.name || selected.name)}</title><style>
+      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{margin:0;color:#38231d;background:#fff;font-family:Tajawal,Arial,sans-serif;font-size:10px;line-height:1.55}.report{display:grid;gap:14px}.report-header{padding:18px 20px;border-radius:16px;color:#fff;background:linear-gradient(135deg,#7a3b2e,#b85b3f);display:flex;justify-content:space-between;align-items:flex-end;gap:20px}.report-header h1{margin:0 0 5px;font-size:24px}.report-header p{margin:0;color:#f9ddd3}.report-header .code{min-width:180px;padding:10px 13px;border:1px solid rgba(255,255,255,.28);border-radius:11px;background:rgba(255,255,255,.12);text-align:center;font-weight:900;font-size:14px}.section{break-inside:auto;border:1px solid #e7d7d0;border-radius:14px;overflow:hidden;background:#fff}.section-title{padding:11px 14px;border-bottom:1px solid #eadbd5;background:#faf5f2;display:flex;justify-content:space-between;align-items:center}.section-title h2{margin:0;font-size:15px}.section-title span{color:#866c64}.info-grid{padding:12px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.info-grid article,.kpis article{padding:9px 10px;border:1px solid #eaded9;border-radius:10px;background:#fffdfc;display:grid;gap:4px}.info-grid span,.kpis span{color:#816b64;font-size:9px;font-weight:800}.info-grid strong{font-size:11px;overflow-wrap:anywhere}.kpis{padding:12px;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:8px}.kpis strong{font-size:17px;color:#7a3b2e}table{width:100%;border-collapse:collapse;page-break-inside:auto}thead{display:table-header-group}tr{page-break-inside:avoid}th,td{padding:7px 8px;border:1px solid #e5d8d2;text-align:right;vertical-align:top;overflow-wrap:anywhere}th{color:#fff;background:#7a3b2e;font-size:9px}td.url{direction:ltr;text-align:left;font-family:Arial,sans-serif;font-size:8px}tbody tr:nth-child(even) td{background:#fcf8f6}.empty{padding:18px;text-align:center;color:#89756e}.report-footer{padding-top:8px;border-top:1px solid #eaded9;color:#8b756e;display:flex;justify-content:space-between}.page-break{break-before:page}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.section{box-shadow:none}}
+    </style></head><body><main class="report"><header class="report-header"><div><h1>تقرير ${escapePrintHtml(entityKind)}: ${escapePrintHtml(detail.entity.name || selected.name)}</h1><p>بيانات ${escapePrintHtml(entityKind)} والتاسكات وجدول النشر ونتائج النشر والتفاعل</p></div><div class="code">${escapePrintHtml(entityCode)}</div></header>
+      <section class="section"><div class="section-title"><h2>بيانات ${escapePrintHtml(entityKind)}</h2><span>${escapePrintHtml(marketingDate(detail.entity.created_at, true))}</span></div><div class="info-grid">${info.map(([label, value]) => `<article><span>${escapePrintHtml(label)}</span><strong>${escapePrintHtml(value)}</strong></article>`).join("")}</div></section>
+      <section class="section"><div class="section-title"><h2>الكرييتيفات</h2><span>${reportCount(creatives.length)} كرييتيف</span></div><table><thead><tr><th>م</th><th>الكود</th><th>الكرييتيف</th><th>القسم الأساسي</th><th>العدد</th><th>Task Template</th><th>تاسك تنفيذي</th><th>مواعيد النشر</th>${selected.source_type === "campaign" ? "<th>الميزانية</th>" : ""}</tr></thead><tbody>${creativeRows || `<tr><td colspan="${selected.source_type === "campaign" ? 9 : 8}" class="empty">لا توجد كرييتيفات</td></tr>`}</tbody></table></section>
+      <section class="section"><div class="section-title"><h2>التاسكات</h2><span>${reportCount(tasks.length)} تاسك</span></div><table><thead><tr><th>م</th><th>نوع التاسك</th><th>الكرييتيف</th><th>المسؤول</th><th>القسم</th><th>الحالة</th><th>التقدم</th><th>التاريخ المطلوب</th><th>المطلوب</th><th>حالة الاعتماد</th><th>الملف النهائي</th></tr></thead><tbody>${taskRows || '<tr><td colspan="11" class="empty">لا توجد تاسكات</td></tr>'}</tbody></table></section>
+      <section class="section"><div class="section-title"><h2>جدول النشر</h2><span>${reportCount(schedule.length)} صف</span></div><table><thead><tr><th>م</th><th>التاريخ</th><th>الكرييتيف</th><th>المنصة</th><th>نوع النشر</th><th>الحالة</th></tr></thead><tbody>${scheduleRowsHtml || '<tr><td colspan="6" class="empty">لا يوجد جدول نشر</td></tr>'}</tbody></table></section>
+      ${selected.source_type === "campaign" ? `<section class="section"><div class="section-title"><h2>الميزانية</h2><span>${Number(budgets.reduce((sum: number, item: any) => sum + Number(item.total || 0), 0)).toLocaleString("ar-SA")} ر.س</span></div><table><thead><tr><th>م</th><th>الكرييتيف</th><th>Funnel</th><th>عدد الإعلانات</th><th>هدف المحتوى</th><th>الهدف المتوقع</th><th>الإجمالي</th></tr></thead><tbody>${budgetRows || '<tr><td colspan="7" class="empty">لا توجد ميزانية</td></tr>'}</tbody></table></section>` : ""}
+      <section class="section"><div class="section-title"><h2>الملفات النهائية</h2><span>${reportCount(finalProductFiles.length)} ملف</span></div><table><thead><tr><th>م</th><th>اسم الملف</th><th>النوع</th><th>الحجم</th><th>تم الرفع بواسطة</th><th>تاريخ الرفع</th></tr></thead><tbody>${fileRows || '<tr><td colspan="6" class="empty">لا توجد ملفات نهائية معتمدة</td></tr>'}</tbody></table></section>
+      <section class="section"><div class="section-title"><h2>روابط النشر</h2><span>${reportCount(links.length)} رابط</span></div><table><thead><tr><th>م</th><th>المنصة</th><th>الرابط</th></tr></thead><tbody>${linkRows || '<tr><td colspan="3" class="empty">لا توجد روابط نشر</td></tr>'}</tbody></table></section>
+      <section class="section page-break"><div class="section-title"><h2>نتائج النشر والتفاعل</h2><span>${engagement ? `آخر مزامنة: ${escapePrintHtml(marketingDate(resultSummary?.lastSyncedAt, true))}` : "لا توجد نتائج"}</span></div>${engagement ? `<div class="kpis">${resultCards}</div><table><thead><tr><th>م</th><th>المنصة</th><th>الكرييتيف</th><th>نوع النشر</th><th>تاريخ النشر</th><th>مشاهدات</th><th>إعجابات</th><th>تعليقات</th><th>مشاركات</th><th>عملاء CRM</th><th>تم البيع</th></tr></thead><tbody>${postRows || '<tr><td colspan="11" class="empty">لا توجد منشورات</td></tr>'}</tbody></table>` : '<div class="empty">لا توجد بيانات نتائج لهذه الحملة أو الأجندة.</div>'}</section>
+      <footer class="report-footer"><span>MZJ Platform</span><span>تاريخ التصدير: ${escapePrintHtml(new Date().toLocaleString("ar-SA"))}</span></footer></main><script>window.onload=()=>setTimeout(()=>window.print(),350)<\/script></body></html>`);
+    popup.document.close();
+    try { popup.opener = null; } catch { /* browser may block opener changes */ }
   }
 
   function exportSchedule() {
-    if (!detail) return;
-    downloadExcel(
-      `${selected?.name || "جدول النشر"}-جدول النشر.xls`,
-      "جدول النشر",
-      ["اليوم", "الكرييتيف", "المنصة", "نوع النشر", "الحالة"],
-      detail.schedule.map((item: any) => [
-        marketingDate(item.publish_date),
-        item.creative_name || item.instance_code || "—",
-        item.platform_name || "—",
-        item.post_type_name || "—",
-        item.status || "—",
-      ]),
-    );
+    if (!selected || !detail) return;
+    const entityKind = selected.source_type === "agenda" ? "الأجندة" : "الحملة";
+    const code = detail.entity.campaign_code || detail.entity.month_key || selected.code || "—";
+    const rows = (Array.isArray(detail.schedule) ? detail.schedule : []).map((item: any, index: number) => ({
+      "م": index + 1,
+      "التاريخ": marketingDate(item.publish_date),
+      "الكرييتيف": item.creative_name || item.instance_code || "—",
+      "كود الكرييتيف": item.instance_code || "—",
+      "المنصة": item.platform_name || "—",
+      "نوع النشر": item.post_type_name || "—",
+      "الحالة": reportStatus(item.status),
+    }));
+    downloadMarketingReportXlsx({
+      filename: `${safeMarketingReportFilename(selected.name || "جدول النشر")}-جدول-النشر.xlsx`,
+      sheetName: "جدول النشر",
+      title: `جدول نشر ${entityKind}: ${selected.name}`,
+      subtitle: `الكود: ${code} | الفترة: ${marketingDate(detail.entity.publish_start)} إلى ${marketingDate(detail.entity.publish_end)} | عدد الصفوف: ${rows.length.toLocaleString("ar-SA")}`,
+      columns: [
+        { key: "م", label: "م", width: 8, align: "center" },
+        { key: "التاريخ", label: "التاريخ", width: 17, align: "center" },
+        { key: "الكرييتيف", label: "الكرييتيف", width: 28 },
+        { key: "كود الكرييتيف", label: "كود الكرييتيف", width: 20, align: "center" },
+        { key: "المنصة", label: "المنصة", width: 18, align: "center" },
+        { key: "نوع النشر", label: "نوع النشر", width: 24 },
+        { key: "الحالة", label: "الحالة", width: 18, align: "center" },
+      ],
+      rows,
+    });
   }
 
   function exportReview() {
-    if (!detail) return;
-    downloadExcel(
-      `${selected?.name || "مراجعة"}-مراجعة.xls`,
-      "مراجعة",
-      ["الكرييتيف", "اليوزر", "القسم", "الحالة", "التقدم", "التاريخ المطلوب", "مختصر المطلوب"],
-      detail.tasks.map((task: any) => [
-        task.creative_name || "—",
-        task.assigned_name || "—",
-        task.department_name || "قسم المحتوى",
-        task.status || "—",
-        `${Number(task.progress || 0)}%`,
-        marketingDate(task.due_at),
-        task.note || task.title || "—",
-      ]),
-    );
+    if (!selected || !detail) return;
+    const entityKind = selected.source_type === "agenda" ? "الأجندة" : "الحملة";
+    const code = detail.entity.campaign_code || detail.entity.month_key || selected.code || "—";
+    const rows = (Array.isArray(detail.tasks) ? detail.tasks : []).map((task: any, index: number) => ({
+      "م": index + 1,
+      "نوع التاسك": taskKindLabel(task),
+      "الكرييتيف": task.creative_name || "—",
+      "المسؤول": task.assigned_name || "—",
+      "كاتب المحتوى المرتبط": task.content_user_name || "—",
+      "القسم": task.department_name || "قسم المحتوى",
+      "الحالة": reportStatus(task.status),
+      "التقدم": `${Number(task.progress || 0).toLocaleString("ar-SA")}%`,
+      "تاريخ التسليم": marketingDate(task.due_at),
+      "حالة Task Template": task.template_status ? reportStatus(task.template_status) : "—",
+      "المطلوب": task.note || task.title || "—",
+      "الملف النهائي": task.final_file_name || "—",
+    }));
+    downloadMarketingReportXlsx({
+      filename: `${safeMarketingReportFilename(selected.name || "مراجعة")}-مراجعة-التاسكات.xlsx`,
+      sheetName: "مراجعة التاسكات",
+      title: `مراجعة ${entityKind}: ${selected.name}`,
+      subtitle: `الكود: ${code} | إجمالي التاسكات: ${rows.length.toLocaleString("ar-SA")} | المكتمل: ${rows.filter((row) => row["الحالة"] === "مكتمل").length.toLocaleString("ar-SA")}`,
+      columns: [
+        { key: "م", label: "م", width: 7, align: "center" },
+        { key: "نوع التاسك", label: "نوع التاسك", width: 18, align: "center" },
+        { key: "الكرييتيف", label: "الكرييتيف", width: 24 },
+        { key: "المسؤول", label: "المسؤول", width: 23 },
+        { key: "كاتب المحتوى المرتبط", label: "كاتب المحتوى المرتبط", width: 25 },
+        { key: "القسم", label: "القسم", width: 20 },
+        { key: "الحالة", label: "الحالة", width: 18, align: "center" },
+        { key: "التقدم", label: "التقدم", width: 13, align: "center" },
+        { key: "تاريخ التسليم", label: "تاريخ التسليم", width: 17, align: "center" },
+        { key: "حالة Task Template", label: "حالة Task Template", width: 21, align: "center" },
+        { key: "المطلوب", label: "المطلوب", width: 42 },
+        { key: "الملف النهائي", label: "الملف النهائي", width: 30 },
+      ],
+      rows,
+    });
   }
 
   function showProductFiles() {
@@ -309,7 +423,7 @@ export function MarketingDatabasePage() {
 
       <Modal
         open={Boolean(selected)}
-        title={selected ? `عرض بيانات الحملة — ${selected.name}` : "عرض بيانات الحملة"}
+        title={selected ? `عرض بيانات ${selected.source_type === "agenda" ? "الأجندة" : "الحملة"} — ${selected.name}` : "عرض البيانات"}
         subtitle={selected?.code || undefined}
         onClose={closeDetail}
         className="marketing-database-modal marketing-database-modal-fullscreen"
@@ -319,7 +433,7 @@ export function MarketingDatabasePage() {
           <div className="marketing-database-toolbar">
             <div className="marketing-detail-actions-top">
               <button type="button" className="marketing-detail-command files" onClick={showProductFiles}><FolderOpen size={19} weight="duotone" /><span><strong>عرض ملفات المنتجات</strong><small>الملفات النهائية المرفوعة</small></span></button>
-              <button type="button" className="marketing-detail-command pdf" onClick={printDetail}><FilePdf size={19} weight="duotone" /><span><strong>تصدير PDF</strong><small>تقرير بيانات الحملة</small></span></button>
+              <button type="button" className="marketing-detail-command pdf" onClick={printDetail}><FilePdf size={19} weight="duotone" /><span><strong>تصدير PDF كامل</strong><small>البيانات والتاسكات والنتائج</small></span></button>
               <button type="button" className="marketing-detail-command schedule" onClick={exportSchedule}><CalendarBlank size={19} weight="duotone" /><span><strong>تصدير جدول النشر</strong><small>ملف Excel منظم</small></span></button>
               <button type="button" className="marketing-detail-command excel" onClick={exportReview}><FileXls size={19} weight="duotone" /><span><strong>تصدير مراجعة Excel</strong><small>التاسكات وحالة التنفيذ</small></span></button>
             </div>
@@ -332,15 +446,15 @@ export function MarketingDatabasePage() {
 
           {detailView === "data" ? <>
           <section className="marketing-task-section marketing-database-section">
-            <h3>بيانات الحملة كاملة</h3>
+            <h3>بيانات {selected?.source_type === "agenda" ? "الأجندة" : "الحملة"} كاملة</h3>
             <div className="marketing-detail-grid marketing-database-summary-grid">
               <div><small>التاريخ</small><strong>{marketingDate(detail.entity.campaign_date || detail.entity.created_at)}</strong></div>
-              <div><small>تاريخ بداية الحملة</small><strong>{marketingDate(detail.entity.publish_start)}</strong></div>
-              <div><small>تاريخ نهاية الحملة</small><strong>{marketingDate(detail.entity.publish_end)}</strong></div>
-              <div><small>نوع الحملة</small><strong>{detail.entity.campaign_type_name || detail.entity.campaign_type || "أجندة"}</strong></div>
-              <div><small>كود الحملة</small><strong>{detail.entity.campaign_code || detail.entity.month_key}</strong></div>
-              <div><small>اسم الحملة</small><strong>{detail.entity.name}</strong></div>
-              <div><small>هدف الحملة</small><strong>{detail.entity.objective || "—"}</strong></div>
+              <div><small>تاريخ بداية النشر</small><strong>{marketingDate(detail.entity.publish_start)}</strong></div>
+              <div><small>تاريخ نهاية النشر</small><strong>{marketingDate(detail.entity.publish_end)}</strong></div>
+              <div><small>نوع السجل</small><strong>{detail.entity.campaign_type_name || detail.entity.campaign_type || "أجندة"}</strong></div>
+              <div><small>كود السجل</small><strong>{detail.entity.campaign_code || detail.entity.month_key}</strong></div>
+              <div><small>اسم السجل</small><strong>{detail.entity.name}</strong></div>
+              <div><small>الهدف</small><strong>{detail.entity.objective || "—"}</strong></div>
               <div><small>المطلوب من كاتب المحتوى</small><strong>{detail.entity.required_from_content || "—"}</strong></div>
               <div><small>عدد التاسكات</small><strong>{detail.tasks.length}</strong></div>
               <div><small>عدد التاسكات المكتملة</small><strong>{detail.tasks.filter((task: any) => Number(task.progress) >= 100).length}</strong></div>
@@ -355,24 +469,32 @@ export function MarketingDatabasePage() {
               <div><h3>كرييتيفات {selected?.source_type === "agenda" ? "الأجندة" : "الحملة"}</h3><p>كل كرييتيف مرتبط بـ Task Template والتاسك التنفيذي والميزانية وجدول النشر حسب نوع السجل.</p></div>
               {canEditCreatives ? <button type="button" className="primary" onClick={() => setCreativeManager({ open: true, row: null })}><Plus size={18} />إضافة كرييتيف</button> : null}
             </div>
-            <div className="marketing-entity-creatives-grid">
-              {detail.creatives.map((creative: any, index: number) => {
-                const creativeTasks = detail.tasks.filter((task: any) => String(task.creative_id || "") === String(creative.id));
-                const templateCount = creativeTasks.filter((task: any) => task.task_kind === "task_template").length;
-                const executionCount = creativeTasks.filter((task: any) => task.task_kind === "execution").length;
-                const scheduleCount = new Set(detail.schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id)).map((item: any) => `${String(item.publish_date || "").slice(0, 10)}-${item.group_id || item.id}`)).size;
-                const budgetTotal = detail.budgets.filter((item: any) => String(item.creative_id || "") === String(creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
-                return <article key={creative.id} className="marketing-entity-creative-card">
-                  <header><span>{creative.instance_code || `#${index + 1}`}</span><strong>{creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف"}</strong>{canEditCreatives ? <button type="button" onClick={() => setCreativeManager({ open: true, row: creative })}><PencilSimple size={17} />تعديل</button> : null}</header>
-                  <div><small>العدد</small><b>{Number(creative.quantity || 1).toLocaleString("ar-SA")}</b></div>
-                  <div><small>Task Template</small><b>{templateCount.toLocaleString("ar-SA")}</b></div>
-                  <div><small>تاسك تنفيذي</small><b>{executionCount.toLocaleString("ar-SA")}</b></div>
-                  <div><small>مواعيد النشر</small><b>{scheduleCount.toLocaleString("ar-SA")}</b></div>
-                  {selected?.source_type === "campaign" ? <div><small>الميزانية</small><b>{budgetTotal.toLocaleString("ar-SA")} ر.س</b></div> : null}
-                </article>;
-              })}
-              {!detail.creatives.length ? <div className="marketing-database-empty compact">لا توجد كرييتيفات داخل هذا السجل.</div> : null}
-            </div>
+            {detail.creatives.length ? <div className="marketing-table-wrap marketing-entity-creatives-table-wrap">
+              <table className="marketing-entity-creatives-table">
+                <thead><tr><th>م</th><th>كود الكرييتيف</th><th>الكرييتيف</th><th>القسم الأساسي</th><th>العدد</th><th>Task Template</th><th>التاسكات التنفيذية</th><th>مواعيد النشر</th>{selected?.source_type === "campaign" ? <th>الميزانية</th> : null}<th>الإجراء</th></tr></thead>
+                <tbody>{detail.creatives.map((creative: any, index: number) => {
+                  const creativeTasks = detail.tasks.filter((task: any) => String(task.creative_id || "") === String(creative.id));
+                  const templateTasks = creativeTasks.filter((task: any) => task.task_kind === "task_template");
+                  const executionTasks = creativeTasks.filter((task: any) => task.task_kind === "execution");
+                  const approvedTemplates = templateTasks.filter((task: any) => ["approved", "completed"].includes(String(task.template_status || task.status || "").toLowerCase())).length;
+                  const completedExecution = executionTasks.filter((task: any) => Number(task.progress || 0) >= 100).length;
+                  const scheduleCount = new Set(detail.schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id)).map((item: any) => `${String(item.publish_date || "").slice(0, 10)}-${item.group_id || item.id}`)).size;
+                  const budgetTotal = detail.budgets.filter((item: any) => String(item.creative_id || "") === String(creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+                  return <tr key={creative.id}>
+                    <td className="marketing-creative-index">{index + 1}</td>
+                    <td><span className="marketing-creative-code">{creative.instance_code || `#${index + 1}`}</span></td>
+                    <td><div className="marketing-creative-name-cell"><strong>{creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف"}</strong><small>{creative.notes?.label || "مرتبط بنفس الحملة أو الأجندة"}</small></div></td>
+                    <td>{creative.primary_department_name || "—"}</td>
+                    <td><strong>{Number(creative.quantity || 1).toLocaleString("ar-SA")}</strong></td>
+                    <td><div className="marketing-creative-counter"><strong>{templateTasks.length.toLocaleString("ar-SA")}</strong><small>{approvedTemplates.toLocaleString("ar-SA")} معتمد</small></div></td>
+                    <td><div className="marketing-creative-counter"><strong>{executionTasks.length.toLocaleString("ar-SA")}</strong><small>{completedExecution.toLocaleString("ar-SA")} مكتمل</small></div></td>
+                    <td><strong>{scheduleCount.toLocaleString("ar-SA")}</strong></td>
+                    {selected?.source_type === "campaign" ? <td><strong>{budgetTotal.toLocaleString("ar-SA")} ر.س</strong></td> : null}
+                    <td>{canEditCreatives ? <button type="button" className="marketing-creative-edit-button" onClick={() => setCreativeManager({ open: true, row: creative })}><PencilSimple size={17} />تعديل الكرييتيف</button> : <span className="marketing-readonly-label">عرض فقط</span>}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div> : <div className="marketing-database-empty compact">لا توجد كرييتيفات داخل هذا السجل.</div>}
           </section>
 
           <section className="marketing-task-section marketing-database-section">

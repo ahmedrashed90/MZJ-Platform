@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarBlank, CheckCircle, CurrencyCircleDollar, Plus, Trash } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight, CalendarBlank, CheckCircle, CurrencyCircleDollar, FloppyDisk, PencilSimple, Plus, PlusCircle, Trash, X } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { marketingFetch } from "../api";
 import { CreativeEditor, newCreativeDraft } from "./CreativeEditor";
@@ -195,16 +195,31 @@ export function EntityCreativeManager({
     setSchedule((current) => [...current, { id: uid(), date: sourceType === "agenda" ? publishStart : publishStart, platforms: [] }]);
   }
 
+  const executionCount = creative.primaryAssignments.length + creative.optionalAssignments.reduce((sum, group) => sum + group.assignments.length, 0);
+
   return <Modal
     open={open}
-    title={`${editing ? "تعديل" : "إضافة"} كرييتيف — ${source?.name || ""}`}
+    title={`${editing ? "تعديل" : "إضافة"} كرييتيف`}
     subtitle={sourceType === "campaign" ? "الكرييتيف ثم الميزانية ثم جدول النشر" : "الكرييتيف ثم اليوم وجدول النشر"}
     onClose={() => !busy && onClose()}
     className="marketing-entity-creative-modal"
     level={2}
+    footer={<div className="marketing-entity-creative-footer-bar">
+      <button type="button" className="marketing-entity-action cancel" disabled={busy} onClick={onClose}><X size={18} />إلغاء</button>
+      <div>
+        {step > 0 ? <button type="button" className="marketing-entity-action secondary" disabled={busy} onClick={() => setStep((current) => current - 1)}><ArrowRight size={18} />السابق</button> : null}
+        {step < steps.length - 1 ? <button type="button" className="marketing-entity-action primary" disabled={busy} onClick={next}>التالي<ArrowLeft size={18} /></button> : <button type="button" className="marketing-entity-action save" disabled={busy} onClick={() => void save()}><FloppyDisk size={18} />{busy ? "جاري الحفظ..." : editing ? "حفظ تعديل الكرييتيف" : "إضافة الكرييتيف"}</button>}
+      </div>
+    </div>}
   >
-    <div className={`marketing-wizard-steps ${steps.length === 3 ? "three" : "marketing-four-steps"}`}>
-      {steps.map((label, index) => <button type="button" key={label} className={index === step ? "active" : index < step ? "done" : ""} onClick={() => index <= step && setStep(index)}><span>{index + 1}</span><b>{label}</b></button>)}
+    <section className="marketing-entity-creative-hero">
+      <span className="marketing-entity-creative-hero-icon">{editing ? <PencilSimple size={24} weight="duotone" /> : <PlusCircle size={24} weight="duotone" />}</span>
+      <div><small>{editing ? "تعديل كرييتيف قائم" : "إضافة كرييتيف جديد"}</small><h3>{creativeName}</h3><p>{source?.name || "الحملة أو الأجندة"} · {sourceType === "campaign" ? "حملة" : "أجندة"}</p></div>
+      <div className="marketing-entity-creative-hero-stats"><span><small>العدد</small><strong>{creative.quantity}</strong></span><span><small>Task Template</small><strong>{creative.contentAssignments.length}</strong></span><span><small>تنفيذي</small><strong>{executionCount}</strong></span></div>
+    </section>
+
+    <div className={`marketing-wizard-steps marketing-entity-creative-steps ${steps.length === 3 ? "three" : "marketing-four-steps"}`}>
+      {steps.map((label, index) => <button type="button" key={label} className={index === step ? "active" : index < step ? "done" : ""} aria-current={index === step ? "step" : undefined} onClick={() => index <= step && setStep(index)}><span>{index + 1}</span><div><small>الخطوة {index + 1}</small><b>{label}</b></div></button>)}
     </div>
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
 
@@ -213,8 +228,8 @@ export function EntityCreativeManager({
 
       {sourceType === "campaign" && step === 1 ? <div className="marketing-budget-list marketing-campaign-budget-step">
         <div className="marketing-campaign-step-head"><div className="marketing-campaign-step-icon"><CurrencyCircleDollar size={25} weight="duotone" /></div><div><h2>ميزانية الكرييتيف</h2><p>تُضاف أو تُحدّث داخل ميزانية نفس الحملة فقط.</p></div></div>
-        {budgets.map((budget, index) => <article key={budget.id} className="marketing-budget-card">
-          <header className="marketing-budget-card-head"><div><span>بند الميزانية</span><strong>{index + 1}</strong></div><button type="button" className="marketing-card-delete" onClick={() => setBudgets((current) => current.filter((item) => item.id !== budget.id))}><Trash size={18} /></button></header>
+        {budgets.length ? budgets.map((budget, index) => <article key={budget.id} className="marketing-budget-card">
+          <header className="marketing-budget-card-head"><div><span>بند الميزانية</span><strong>{index + 1}</strong></div><button type="button" className="marketing-card-delete" aria-label={`حذف بند الميزانية ${index + 1}`} onClick={() => setBudgets((current) => current.filter((item) => item.id !== budget.id))}><Trash size={18} /></button></header>
           <div className="marketing-budget-fields marketing-entity-budget-fields">
             <label><span>Funnel</span><select value={budget.funnelId} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, funnelId: event.target.value } : item))}><option value="">اختر Funnel</option>{meta.funnels.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
             <label><span>الكرييتيف</span><input value={creativeName} readOnly /></label>
@@ -224,7 +239,7 @@ export function EntityCreativeManager({
           </div>
           <div className="marketing-budget-platforms">{meta.platforms.map((platform) => { const selected = budget.platformAmounts.find((item) => item.platformId === platform.id); return <section key={platform.id} className={selected ? "selected" : ""}><label className="marketing-budget-platform-head"><input type="checkbox" checked={Boolean(selected)} onChange={() => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, platformAmounts: selected ? item.platformAmounts.filter((part) => part.platformId !== platform.id) : [...item.platformAmounts, { platformId: platform.id, amount: 0 }] } : item))} /><strong>{platform.name}</strong></label><input type="number" min={0} disabled={!selected} value={selected?.amount ?? ""} placeholder={`قيمة ${platform.name}`} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, platformAmounts: item.platformAmounts.map((part) => part.platformId === platform.id ? { ...part, amount: Number(event.target.value) || 0 } : part) } : item))} /></section>; })}</div>
           <footer className="marketing-budget-card-total"><span>إجمالي البند</span><strong>{budget.platformAmounts.reduce((sum, item) => sum + Number(item.amount || 0), 0).toLocaleString("ar-SA")} ر.س</strong></footer>
-        </article>)}
+        </article>) : <div className="marketing-entity-empty-state"><CurrencyCircleDollar size={30} weight="duotone" /><strong>لا توجد بنود ميزانية</strong><span>أضف بندًا وحدد المنصات والقيمة المخصصة لكل منصة.</span></div>}
         <button type="button" className="marketing-add-block marketing-add-budget" onClick={addBudget}><Plus size={18} />إضافة بند ميزانية</button>
         <div className="marketing-total-budget"><span>إجمالي ميزانية الكرييتيف</span><strong>{totalBudget.toLocaleString("ar-SA")} ر.س</strong></div>
       </div> : null}
@@ -234,23 +249,21 @@ export function EntityCreativeManager({
         <div className="marketing-schedule-workspace">
           <aside className="marketing-schedule-period"><span>الفترة المتاحة</span><div><small>من</small><strong>{publishStart || "—"}</strong></div><div><small>إلى</small><strong>{publishEnd || "—"}</strong></div><div className="marketing-schedule-period-count"><small>المواعيد</small><strong>{schedule.length}</strong></div></aside>
           <div className="marketing-schedule-days">
-            {schedule.map((item, index) => <article key={item.id} className="marketing-schedule-card">
-              <header className="marketing-schedule-card-head"><div><span>موعد {index + 1}</span><strong>{item.date || "لم يتم تحديد اليوم"}</strong><small>{item.platforms.reduce((sum, platform) => sum + platform.postTypeIds.length, 0)} نوع نشر</small></div><button type="button" className="marketing-card-delete" onClick={() => setSchedule((current) => current.filter((part) => part.id !== item.id))}><Trash size={18} /></button></header>
+            {schedule.length ? schedule.map((item, index) => <article key={item.id} className="marketing-schedule-card">
+              <header className="marketing-schedule-card-head"><div><span>موعد {index + 1}</span><strong>{item.date || "لم يتم تحديد اليوم"}</strong><small>{item.platforms.reduce((sum, platform) => sum + platform.postTypeIds.length, 0)} نوع نشر</small></div><button type="button" className="marketing-card-delete" aria-label={`حذف موعد النشر ${index + 1}`} onClick={() => setSchedule((current) => current.filter((part) => part.id !== item.id))}><Trash size={18} /></button></header>
               <div className="marketing-schedule-fields"><label><span>اليوم</span><input type="date" min={publishStart} max={publishEnd} value={item.date} onChange={(event) => setSchedule((current) => current.map((part) => part.id === item.id ? { ...part, date: event.target.value } : part))} /></label><label><span>الكرييتيف</span><input value={creativeName} readOnly /></label></div>
               <div className="marketing-schedule-platforms">{meta.platforms.map((platform) => { const selected = item.platforms.find((part) => part.platformId === platform.id); return <section key={platform.id} className={selected ? "selected" : ""}><label className="marketing-schedule-platform-head"><input type="checkbox" checked={Boolean(selected)} onChange={() => setSchedule((current) => current.map((part) => part.id === item.id ? { ...part, platforms: selected ? part.platforms.filter((value) => value.platformId !== platform.id) : [...part.platforms, { platformId: platform.id, postTypeIds: [] }] } : part))} /><strong>{platform.name}</strong></label>{selected ? <div className="marketing-chip-picker">{meta.postTypes.filter((post) => post.platform_id === platform.id).map((post) => <button type="button" key={post.id} className={selected.postTypeIds.includes(post.id) ? "selected" : ""} onClick={() => setSchedule((current) => current.map((part) => part.id === item.id ? { ...part, platforms: part.platforms.map((value) => value.platformId === platform.id ? { ...value, postTypeIds: value.postTypeIds.includes(post.id) ? value.postTypeIds.filter((id) => id !== post.id) : [...value.postTypeIds, post.id] } : value) } : part))}>{post.name}</button>)}</div> : <div className="marketing-schedule-platform-placeholder">اختر المنصة لعرض أنواع النشر</div>}</section>; })}</div>
-            </article>)}
+            </article>) : <div className="marketing-entity-empty-state"><CalendarBlank size={30} weight="duotone" /><strong>لا توجد مواعيد نشر</strong><span>أضف موعدًا وحدد اليوم والمنصة ونوع النشر.</span></div>}
             <button type="button" className="marketing-add-block marketing-add-schedule" onClick={addSchedule}><Plus size={18} />إضافة موعد نشر</button>
           </div>
         </div>
       </div> : null}
 
       {step === steps.length - 1 ? <div className="marketing-review marketing-entity-creative-review">
-        <div className="marketing-review-grid"><article><small>الإجراء</small><strong>{editing ? "تعديل كرييتيف" : "إضافة كرييتيف"}</strong></article><article><small>الكرييتيف</small><strong>{creativeName}</strong></article><article><small>العدد</small><strong>{creative.quantity}</strong></article><article><small>Task Templates</small><strong>{creative.contentAssignments.length}</strong></article><article><small>التاسكات التنفيذية</small><strong>{creative.primaryAssignments.length + creative.optionalAssignments.reduce((sum, group) => sum + group.assignments.length, 0)}</strong></article>{sourceType === "campaign" ? <article><small>إجمالي الميزانية</small><strong>{totalBudget.toLocaleString("ar-SA")} ر.س</strong></article> : null}<article><small>مواعيد النشر</small><strong>{schedule.length}</strong></article></div>
+        <div className="marketing-entity-review-heading"><span><CheckCircle size={24} weight="duotone" /></span><div><h2>مراجعة بيانات الكرييتيف</h2><p>راجع التكليف والميزانية وجدول النشر قبل الحفظ.</p></div></div>
+        <div className="marketing-review-grid"><article><small>الإجراء</small><strong>{editing ? "تعديل كرييتيف" : "إضافة كرييتيف"}</strong></article><article><small>الكرييتيف</small><strong>{creativeName}</strong></article><article><small>العدد</small><strong>{creative.quantity}</strong></article><article><small>Task Templates</small><strong>{creative.contentAssignments.length}</strong></article><article><small>التاسكات التنفيذية</small><strong>{executionCount}</strong></article>{sourceType === "campaign" ? <article><small>إجمالي الميزانية</small><strong>{totalBudget.toLocaleString("ar-SA")} ر.س</strong></article> : null}<article><small>مواعيد النشر</small><strong>{schedule.length}</strong></article></div>
         {editing ? <MarketingAlert type="info">عند تغيير بيانات التكليف بعد اعتماد Task Template، تُنشأ مراجعة جديدة ويظل التاسك التنفيذي متوقفًا حتى إعادة الاعتماد.</MarketingAlert> : null}
-        <button type="button" className="primary marketing-entity-creative-save" disabled={busy} onClick={() => void save()}><CheckCircle size={18} />{busy ? "جاري الحفظ..." : editing ? "حفظ تعديل الكرييتيف" : "إضافة الكرييتيف"}</button>
       </div> : null}
     </section>
-
-    <footer className="marketing-wizard-footer marketing-entity-creative-footer">{step > 0 ? <button type="button" className="secondary" disabled={busy} onClick={() => setStep((current) => current - 1)}>السابق</button> : <span />}{step < steps.length - 1 ? <button type="button" className="primary" disabled={busy} onClick={next}>التالي</button> : null}</footer>
   </Modal>;
 }

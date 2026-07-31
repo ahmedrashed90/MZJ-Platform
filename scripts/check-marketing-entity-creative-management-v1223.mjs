@@ -33,7 +33,7 @@ const checks = [
   ["schedule required", manager.includes("أكمل جدول النشر قبل الحفظ")],
   ["revision notice", manager.includes("يظل التاسك التنفيذي متوقفًا حتى إعادة الاعتماد")],
   ["responsive modal styling", css.includes("marketing-entity-creative-modal")],
-  ["creative cards styling", css.includes("marketing-entity-creatives-grid")],
+  ["creative table styling", css.includes("marketing-entity-creatives-table") && database.includes("marketing-entity-creatives-table")],
 ];
 
 let failed = 0;
