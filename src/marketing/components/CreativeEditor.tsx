@@ -79,9 +79,11 @@ function UserPicker({
                 type="button"
                 key={user.id}
                 className={selected ? "selected" : ""}
+                aria-pressed={selected}
                 onClick={() => onToggle(user.id)}
               >
-                {displayUserName(user)}
+                <span>{displayUserName(user)}</span>
+                {selected ? <CheckCircle size={17} weight="fill" aria-hidden="true" /> : null}
               </button>
             );
           })}

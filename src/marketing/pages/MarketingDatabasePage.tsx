@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowSquareOut, CalendarBlank, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FileXls, FolderOpen, LinkSimple, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { Archive, ArrowSquareOut, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FolderOpen, LinkSimple, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { EntityCreativeManager } from "../components/EntityCreativeManager";
 import { marketingResultPlatformLabel } from "../engagementResults";
-import { downloadMarketingReportXlsx, safeMarketingReportFilename } from "../reportXlsx";
 import type { MarketingMeta } from "../types";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
@@ -71,21 +70,6 @@ type ScheduleDisplayRow = {
   showDay: boolean;
   showPlatform: boolean;
   sourceIndex: number;
-};
-
-type MarketingTaskReviewExportRow = Record<string, string | number> & {
-  "م": number;
-  "نوع التاسك": string;
-  "الكرييتيف": string;
-  "المسؤول": string;
-  "كاتب المحتوى المرتبط": string;
-  "القسم": string;
-  "الحالة": string;
-  "التقدم": string;
-  "تاريخ التسليم": string;
-  "حالة Task Template": string;
-  "المطلوب": string;
-  "الملف النهائي": string;
 };
 
 function buildScheduleRows(schedule: any[] | undefined): ScheduleDisplayRow[] {
@@ -332,79 +316,7 @@ export function MarketingDatabasePage() {
     try { popup.opener = null; } catch { /* browser may block opener changes */ }
   }
 
-  function exportSchedule() {
-    if (!selected || !detail) return;
-    const entityKind = selected.source_type === "agenda" ? "الأجندة" : "الحملة";
-    const code = detail.entity.campaign_code || detail.entity.month_key || selected.code || "—";
-    const rows = (Array.isArray(detail.schedule) ? detail.schedule : []).map((item: any, index: number) => ({
-      "م": index + 1,
-      "التاريخ": marketingDate(item.publish_date),
-      "الكرييتيف": item.creative_name || item.instance_code || "—",
-      "كود الكرييتيف": item.instance_code || "—",
-      "المنصة": item.platform_name || "—",
-      "نوع النشر": item.post_type_name || "—",
-      "الحالة": reportStatus(item.status),
-    }));
-    downloadMarketingReportXlsx({
-      filename: `${safeMarketingReportFilename(selected.name || "جدول النشر")}-جدول-النشر.xlsx`,
-      sheetName: "جدول النشر",
-      title: `جدول نشر ${entityKind}: ${selected.name}`,
-      subtitle: `الكود: ${code} | الفترة: ${marketingDate(detail.entity.publish_start)} إلى ${marketingDate(detail.entity.publish_end)} | عدد الصفوف: ${rows.length.toLocaleString("ar-SA")}`,
-      columns: [
-        { key: "م", label: "م", width: 8, align: "center" },
-        { key: "التاريخ", label: "التاريخ", width: 17, align: "center" },
-        { key: "الكرييتيف", label: "الكرييتيف", width: 28 },
-        { key: "كود الكرييتيف", label: "كود الكرييتيف", width: 20, align: "center" },
-        { key: "المنصة", label: "المنصة", width: 18, align: "center" },
-        { key: "نوع النشر", label: "نوع النشر", width: 24 },
-        { key: "الحالة", label: "الحالة", width: 18, align: "center" },
-      ],
-      rows,
-    });
-  }
 
-  function exportReview() {
-    if (!selected || !detail) return;
-    const entityKind = selected.source_type === "agenda" ? "الأجندة" : "الحملة";
-    const code = detail.entity.campaign_code || detail.entity.month_key || selected.code || "—";
-    const rows: MarketingTaskReviewExportRow[] = (Array.isArray(detail.tasks) ? detail.tasks : []).map(
-      (task: any, index: number): MarketingTaskReviewExportRow => ({
-        "م": index + 1,
-        "نوع التاسك": taskKindLabel(task),
-        "الكرييتيف": task.creative_name || "—",
-        "المسؤول": task.assigned_name || "—",
-        "كاتب المحتوى المرتبط": task.content_user_name || "—",
-        "القسم": task.department_name || "قسم المحتوى",
-        "الحالة": reportStatus(task.status),
-        "التقدم": `${Number(task.progress || 0).toLocaleString("ar-SA")}%`,
-        "تاريخ التسليم": marketingDate(task.due_at),
-        "حالة Task Template": task.template_status ? reportStatus(task.template_status) : "—",
-        "المطلوب": task.note || task.title || "—",
-        "الملف النهائي": task.final_file_name || "—",
-      }),
-    );
-    downloadMarketingReportXlsx({
-      filename: `${safeMarketingReportFilename(selected.name || "مراجعة")}-مراجعة-التاسكات.xlsx`,
-      sheetName: "مراجعة التاسكات",
-      title: `مراجعة ${entityKind}: ${selected.name}`,
-      subtitle: `الكود: ${code} | إجمالي التاسكات: ${rows.length.toLocaleString("ar-SA")} | المكتمل: ${rows.filter((row) => row["الحالة"] === "مكتمل").length.toLocaleString("ar-SA")}`,
-      columns: [
-        { key: "م", label: "م", width: 7, align: "center" },
-        { key: "نوع التاسك", label: "نوع التاسك", width: 18, align: "center" },
-        { key: "الكرييتيف", label: "الكرييتيف", width: 24 },
-        { key: "المسؤول", label: "المسؤول", width: 23 },
-        { key: "كاتب المحتوى المرتبط", label: "كاتب المحتوى المرتبط", width: 25 },
-        { key: "القسم", label: "القسم", width: 20 },
-        { key: "الحالة", label: "الحالة", width: 18, align: "center" },
-        { key: "التقدم", label: "التقدم", width: 13, align: "center" },
-        { key: "تاريخ التسليم", label: "تاريخ التسليم", width: 17, align: "center" },
-        { key: "حالة Task Template", label: "حالة Task Template", width: 21, align: "center" },
-        { key: "المطلوب", label: "المطلوب", width: 42 },
-        { key: "الملف النهائي", label: "الملف النهائي", width: 30 },
-      ],
-      rows,
-    });
-  }
 
   function showProductFiles() {
     document.getElementById("marketing-product-files")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -458,8 +370,6 @@ export function MarketingDatabasePage() {
             <div className="marketing-detail-actions-top">
               <button type="button" className="marketing-detail-command files" onClick={showProductFiles}><FolderOpen size={19} weight="duotone" /><span><strong>عرض ملفات المنتجات</strong><small>الملفات النهائية المرفوعة</small></span></button>
               <button type="button" className="marketing-detail-command pdf" onClick={printDetail}><FilePdf size={19} weight="duotone" /><span><strong>تصدير PDF كامل</strong><small>البيانات والتاسكات والنتائج</small></span></button>
-              <button type="button" className="marketing-detail-command schedule" onClick={exportSchedule}><CalendarBlank size={19} weight="duotone" /><span><strong>تصدير جدول النشر</strong><small>ملف Excel منظم</small></span></button>
-              <button type="button" className="marketing-detail-command excel" onClick={exportReview}><FileXls size={19} weight="duotone" /><span><strong>تصدير مراجعة Excel</strong><small>التاسكات وحالة التنفيذ</small></span></button>
             </div>
           </div>
 

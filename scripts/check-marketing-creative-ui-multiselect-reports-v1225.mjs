@@ -21,10 +21,11 @@ const checks = [
   ["agenda platform chooser is professional", editor.includes("marketing-platform-choice-grid") && editor.includes("marketing-platform-post-type-grid")],
   ["database add creative action is redesigned", database.includes("marketing-add-creative-button-copy")],
   ["archive actions are redesigned", database.includes("marketing-archive-panel") && database.includes("marketing-row-archive-button")],
-  ["creative editor uses two-panel workspace", manager.includes("marketing-entity-side-panel") && manager.includes("marketing-entity-main-panel")],
+  ["creative editor uses clean two-panel workspace", manager.includes("marketing-entity-side-panel") && manager.includes("marketing-entity-main-panel") && css.includes("background: #f8fafb")],
+  ["selected users are visibly confirmed", editor.includes("aria-pressed={selected}") && editor.includes("<CheckCircle") && css.includes("button.selected")],
   ["xlsx builder is reusable and sanitizes invalid XML", report.includes("buildMarketingReportXlsxBytes") && report.includes("\\u0000-\\u0008")],
   ["xlsx package contains properties and worksheet dimension", report.includes("docProps/core.xml") && report.includes("<dimension ref=")],
-  ["schedule and review exports send real rows", database.includes("function exportSchedule") && database.includes("function exportReview") && database.includes("rows," )],
+  ["broken schedule and review Excel actions are removed", !database.includes("function exportSchedule") && !database.includes("function exportReview") && !database.includes("تصدير مراجعة Excel")],
   ["responsive styles cover all new controls", css.includes(".marketing-creative-multi-options") && css.includes(".marketing-platform-choice-card") && css.includes(".marketing-archive-panel")],
 ];
 
