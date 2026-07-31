@@ -74,18 +74,43 @@ a { color: inherit; text-decoration: none; }
 }
 .nav-separator { height: 1px; background: var(--line); margin: 14px 0; }
 .sidebar-account {
-  min-height: 66px;
+  min-height: 94px;
   border-top: 1px solid var(--line);
   padding: 14px 2px 0;
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 36px 33px;
+  grid-template-columns: 40px minmax(0, 1fr);
   gap: 10px;
-  align-items: center;
+  align-items: start;
 }
-.account-avatar { width: 40px; height: 40px; border-radius: 50%; background: #f5e6df; display: grid; place-items: center; }
-.account-copy { display: grid; min-width: 0; }
+.account-avatar {
+  width: 40px;
+  height: 40px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: #f5e6df;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+}
+.account-details { min-width: 0; display: grid; gap: 9px; }
+.account-copy { min-width: 0; display: grid; gap: 3px; }
+.account-copy strong,
+.account-copy span {
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
 .account-copy strong { font-size: 14px; font-weight: 800; }
-.account-copy span { color: var(--muted); font-size: 12px; font-weight: 700; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.account-copy span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  direction: rtl;
+}
 
 .page-shell {
   min-height: 100vh;
@@ -422,6 +447,8 @@ button.small-metric { cursor: pointer; }
   .brand-block span, .nav-separator { display: none; }
   .sidebar-account { position: absolute; top: 13px; left: 13px; min-height: auto; padding: 0; border: 0; display: flex; }
   .sidebar-account .account-avatar, .sidebar-account .account-copy, .sidebar-account .logout-button { display: none; }
+  .sidebar-account .account-details { display: block; }
+  .sidebar-account .account-actions { display: flex; }
   .sidebar-nav { overflow-x: auto; }
   .nav-group { display: flex; gap: 6px; min-width: max-content; }
   .nav-link { min-width: 112px; min-height: 42px; justify-content: center; padding: 0 10px; }
