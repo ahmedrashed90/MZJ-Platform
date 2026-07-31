@@ -29,7 +29,7 @@ check('package save requires real category and sales IDs', api.includes('categor
 check('marketing settings contains package settings tab', settings.includes('إعدادات الباقات') && settings.includes('تصنيفات الباقات') && settings.includes('أنواع المبيعات'));
 check('package form selects category and sales from settings', packages.includes('categoryId') && packages.includes('salesTypeId') && packages.includes('package_settings'));
 check('package PDF exports package cards only', packages.includes('باقات MZJ') && packages.includes('window.print()') && !packages.includes('onClick={() => window.print()}'));
-check('database export commands use professional command components', database.includes('marketing-detail-command') && database.includes('تصدير مراجعة Excel'));
+check('database keeps the professional PDF command and removes broken Excel exports', database.includes('marketing-detail-command') && database.includes('تصدير PDF كامل') && !database.includes('تصدير جدول النشر') && !database.includes('تصدير مراجعة Excel'));
 check('budget display includes goals, ads and named platform amounts', database.includes('marketing-budget-detail-card') && database.includes('هدف المحتوى') && database.includes('platformName'));
 check('publish preparation uses redesigned list and full editor', publishPrep.includes('marketing-publish-list') && publishPrep.includes('marketing-publish-list-row') && publishPrep.includes('marketing-publish-edit-modal'));
 check('monitoring page is rebuilt with operational KPI layout', monitoring.includes('marketing-monitor-hero') && monitoring.includes('marketing-monitor-kpis') && monitoring.includes('marketing-monitor-delayed'));
