@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
+  Baby,
+  Bell,
+  ChartBar,
+  Code,
+  Copyright,
+  Eye,
+  Globe,
+  ListBullets,
+  PlayCircle,
+  Tag,
+  TextAlignRight,
   CheckCircle,
   ClockCounterClockwise,
   Copy,
@@ -443,7 +454,7 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
       <Modal
         open={youtubeSettingsOpen}
         title="إعدادات نشر YouTube"
-        subtitle="إعدادات افتراضية تُطبّق تلقائيًا داخل تجهيز النشر ويمكن تعديلها لكل فيديو."
+        subtitle="حدّد القيم الافتراضية التي ستظهر تلقائيًا عند تجهيز فيديو جديد."
         onClose={() => !youtubeSettingsLoading && setYoutubeSettingsOpen(false)}
         className="marketing-youtube-settings-modal"
         footer={<>
@@ -452,32 +463,111 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
         </>}
       >
         <div className="marketing-youtube-settings-form">
-          <section>
-            <header><h3>الظهور والتصنيف</h3><p>القيم الافتراضية عند تجهيز أي فيديو جديد.</p></header>
-            <div className="marketing-form-grid">
-              <label><span>حالة الظهور الافتراضية</span><select value={youtubeSettings.privacyStatus} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, privacyStatus: event.target.value as YouTubePublishSettings["privacyStatus"] })}><option value="unlisted">غير مدرج — بالرابط فقط</option><option value="private">خاص</option><option value="public">عام</option></select></label>
-              <label><span>تصنيف الفيديو</span><select value={youtubeSettings.categoryId} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, categoryId: event.target.value })}>{youtubeCategories.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-              <label><span>اللغة الافتراضية</span><input dir="ltr" value={youtubeSettings.defaultLanguage} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultLanguage: event.target.value })} placeholder="ar" /></label>
-              <label><span>قائمة التشغيل الافتراضية</span><select value={youtubeSettings.defaultPlaylistId} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultPlaylistId: event.target.value })}><option value="">بدون قائمة تشغيل</option>{youtubePlaylists.map((item) => <option key={item.id} value={item.id}>{item.title}{item.privacyStatus ? ` — ${item.privacyStatus}` : ""}</option>)}</select></label>
-              <label><span>الترخيص الافتراضي</span><select value={youtubeSettings.license} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, license: event.target.value as YouTubePublishSettings["license"] })}><option value="youtube">ترخيص YouTube القياسي</option><option value="creativeCommon">Creative Commons</option></select></label>
-              <label><span>المحتوى مخصص للأطفال</span><select value={youtubeSettings.madeForKids ? "true" : "false"} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, madeForKids: event.target.value === "true" })}><option value="false">لا</option><option value="true">نعم</option></select></label>
+          <div className="marketing-youtube-settings-hero">
+            <span className="marketing-youtube-settings-hero-icon"><YoutubeLogo size={32} weight="fill" /></span>
+            <div>
+              <strong>الإعدادات الافتراضية للقناة</strong>
+              <p>تُستخدم هذه القيم تلقائيًا داخل تجهيز النشر، مع إمكانية تعديلها بشكل مستقل لكل فيديو.</p>
+            </div>
+            <span className="marketing-youtube-settings-badge">تُطبّق تلقائيًا</span>
+          </div>
+
+          <section className="marketing-youtube-settings-section">
+            <header className="marketing-youtube-settings-section-head">
+              <span><Eye size={21} weight="duotone" /></span>
+              <div><h3>الظهور وبيانات الفيديو</h3><p>حدّد طريقة ظهور الفيديو وتصنيفه والبيانات الأساسية المستخدمة عند التجهيز.</p></div>
+            </header>
+
+            <div className="marketing-youtube-field marketing-youtube-field-full">
+              <span className="marketing-youtube-field-label"><Globe size={17} />حالة الظهور الافتراضية</span>
+              <div className="marketing-youtube-privacy-options">
+                <label className={youtubeSettings.privacyStatus === "unlisted" ? "selected" : ""}>
+                  <input type="radio" name="youtube-default-privacy" value="unlisted" checked={youtubeSettings.privacyStatus === "unlisted"} onChange={() => setYoutubeSettings({ ...youtubeSettings, privacyStatus: "unlisted" })} />
+                  <span><Eye size={20} /><strong>غير مدرج</strong><small>يظهر فقط لمن لديه الرابط</small></span>
+                </label>
+                <label className={youtubeSettings.privacyStatus === "private" ? "selected" : ""}>
+                  <input type="radio" name="youtube-default-privacy" value="private" checked={youtubeSettings.privacyStatus === "private"} onChange={() => setYoutubeSettings({ ...youtubeSettings, privacyStatus: "private" })} />
+                  <span><ShieldCheck size={20} /><strong>خاص</strong><small>لا يظهر إلا للحساب المالك</small></span>
+                </label>
+                <label className={youtubeSettings.privacyStatus === "public" ? "selected" : ""}>
+                  <input type="radio" name="youtube-default-privacy" value="public" checked={youtubeSettings.privacyStatus === "public"} onChange={() => setYoutubeSettings({ ...youtubeSettings, privacyStatus: "public" })} />
+                  <span><YoutubeLogo size={20} /><strong>عام</strong><small>متاح للجميع على YouTube</small></span>
+                </label>
+              </div>
+            </div>
+
+            <div className="marketing-youtube-settings-grid">
+              <label className="marketing-youtube-field">
+                <span className="marketing-youtube-field-label"><ListBullets size={17} />تصنيف الفيديو</span>
+                <select value={youtubeSettings.categoryId} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, categoryId: event.target.value })}>{youtubeCategories.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
+                <small>التصنيف الافتراضي الذي يرسله النظام إلى YouTube.</small>
+              </label>
+              <label className="marketing-youtube-field">
+                <span className="marketing-youtube-field-label"><PlayCircle size={17} />قائمة التشغيل الافتراضية</span>
+                <select value={youtubeSettings.defaultPlaylistId} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultPlaylistId: event.target.value })}><option value="">بدون قائمة تشغيل</option>{youtubePlaylists.map((item) => <option key={item.id} value={item.id}>{item.title}{item.privacyStatus ? ` — ${item.privacyStatus}` : ""}</option>)}</select>
+                <small>يمكن ترك الفيديو بدون قائمة تشغيل وتحديدها لاحقًا.</small>
+              </label>
+              <label className="marketing-youtube-field">
+                <span className="marketing-youtube-field-label"><Globe size={17} />اللغة الافتراضية</span>
+                <input dir="ltr" value={youtubeSettings.defaultLanguage} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultLanguage: event.target.value })} placeholder="ar" />
+                <small>رمز اللغة مثل ar أو en.</small>
+              </label>
+              <label className="marketing-youtube-field">
+                <span className="marketing-youtube-field-label"><Copyright size={17} />الترخيص الافتراضي</span>
+                <select value={youtubeSettings.license} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, license: event.target.value as YouTubePublishSettings["license"] })}><option value="youtube">ترخيص YouTube القياسي</option><option value="creativeCommon">Creative Commons</option></select>
+                <small>نوع الترخيص المستخدم عند رفع الفيديو.</small>
+              </label>
+              <label className="marketing-youtube-field marketing-youtube-field-full">
+                <span className="marketing-youtube-field-label"><Baby size={17} />هل المحتوى مخصص للأطفال؟</span>
+                <select value={youtubeSettings.madeForKids ? "true" : "false"} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, madeForKids: event.target.value === "true" })}><option value="false">لا، المحتوى غير مخصص للأطفال</option><option value="true">نعم، المحتوى مخصص للأطفال</option></select>
+                <small>هذا الاختيار يؤثر على بعض خصائص الفيديو والتفاعل وفق سياسات YouTube.</small>
+              </label>
             </div>
           </section>
 
-          <section>
-            <header><h3>خيارات النشر الافتراضية</h3><p>يمكن تجاوزها داخل تاسك تجهيز النشر قبل الرفع.</p></header>
+          <section className="marketing-youtube-settings-section">
+            <header className="marketing-youtube-settings-section-head">
+              <span><Bell size={21} weight="duotone" /></span>
+              <div><h3>خيارات النشر الافتراضية</h3><p>فعّل الخيارات التي تريد تطبيقها تلقائيًا، ويمكن تغييرها من تاسك تجهيز النشر.</p></div>
+            </header>
             <div className="marketing-youtube-toggle-grid">
-              <label><input type="checkbox" checked={youtubeSettings.notifySubscribers} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, notifySubscribers: event.target.checked })} /><span><strong>إشعار المشتركين</strong><small>إرسال إشعار عند نشر الفيديو.</small></span></label>
-              <label><input type="checkbox" checked={youtubeSettings.embeddable} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, embeddable: event.target.checked })} /><span><strong>السماح بالتضمين</strong><small>السماح بعرض الفيديو خارج YouTube.</small></span></label>
-              <label><input type="checkbox" checked={youtubeSettings.publicStatsViewable} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, publicStatsViewable: event.target.checked })} /><span><strong>إظهار الإحصاءات العامة</strong><small>إظهار أرقام المشاهدة والتفاعل للمشاهدين.</small></span></label>
+              <label className={youtubeSettings.notifySubscribers ? "active" : ""}>
+                <input type="checkbox" checked={youtubeSettings.notifySubscribers} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, notifySubscribers: event.target.checked })} />
+                <span className="marketing-youtube-toggle-icon"><Bell size={20} /></span>
+                <span className="marketing-youtube-toggle-copy"><strong>إشعار المشتركين</strong><small>إرسال إشعار للمشتركين عند نشر الفيديو.</small></span>
+                <span className="marketing-youtube-switch" aria-hidden="true"><i /></span>
+              </label>
+              <label className={youtubeSettings.embeddable ? "active" : ""}>
+                <input type="checkbox" checked={youtubeSettings.embeddable} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, embeddable: event.target.checked })} />
+                <span className="marketing-youtube-toggle-icon"><Code size={20} /></span>
+                <span className="marketing-youtube-toggle-copy"><strong>السماح بالتضمين</strong><small>السماح بعرض الفيديو داخل المواقع الخارجية.</small></span>
+                <span className="marketing-youtube-switch" aria-hidden="true"><i /></span>
+              </label>
+              <label className={youtubeSettings.publicStatsViewable ? "active" : ""}>
+                <input type="checkbox" checked={youtubeSettings.publicStatsViewable} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, publicStatsViewable: event.target.checked })} />
+                <span className="marketing-youtube-toggle-icon"><ChartBar size={20} /></span>
+                <span className="marketing-youtube-toggle-copy"><strong>إظهار الإحصاءات العامة</strong><small>إظهار أرقام المشاهدة والتفاعل للمشاهدين.</small></span>
+                <span className="marketing-youtube-switch" aria-hidden="true"><i /></span>
+              </label>
             </div>
           </section>
 
-          <section>
-            <header><h3>النصوص الافتراضية</h3><p>تُملأ تلقائيًا ويمكن تعديلها لكل فيديو.</p></header>
-            <div className="marketing-form-grid">
-              <label className="full"><span>كلمات مفتاحية افتراضية</span><textarea rows={3} value={youtubeSettings.defaultTags.join("، ")} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultTags: event.target.value.split(/[،,\n]+/).map((item) => item.trim()).filter(Boolean) })} placeholder="MZJ، سيارات، عروض" /></label>
-              <label className="full"><span>قالب وصف ثابت</span><textarea rows={5} value={youtubeSettings.descriptionTemplate} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, descriptionTemplate: event.target.value })} placeholder="نص ثابت يضاف أسفل وصف الفيديو" /></label>
+          <section className="marketing-youtube-settings-section">
+            <header className="marketing-youtube-settings-section-head">
+              <span><TextAlignRight size={21} weight="duotone" /></span>
+              <div><h3>النصوص الافتراضية</h3><p>أضف الكلمات والوصف الثابت ليتم إدراجهما تلقائيًا عند تجهيز الفيديو.</p></div>
+            </header>
+            <div className="marketing-youtube-copy-grid">
+              <label className="marketing-youtube-field">
+                <span className="marketing-youtube-field-label"><Tag size={17} />الكلمات المفتاحية الافتراضية</span>
+                <textarea rows={6} value={youtubeSettings.defaultTags.join("، ")} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultTags: event.target.value.split(/[،,\n]+/).map((item) => item.trim()).filter(Boolean) })} placeholder="MZJ، سيارات، عروض" />
+                <small>افصل بين الكلمات بفاصلة عربية أو إنجليزية.</small>
+              </label>
+              <label className="marketing-youtube-field">
+                <span className="marketing-youtube-field-label"><TextAlignRight size={17} />قالب الوصف الثابت</span>
+                <textarea rows={6} value={youtubeSettings.descriptionTemplate} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, descriptionTemplate: event.target.value })} placeholder="اكتب النص الثابت الذي يضاف أسفل وصف الفيديو" />
+                <small>يُضاف هذا النص أسفل وصف كل فيديو ويمكن تعديله قبل النشر.</small>
+              </label>
             </div>
           </section>
         </div>
