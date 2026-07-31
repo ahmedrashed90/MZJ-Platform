@@ -9,7 +9,13 @@ import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
-import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
+import {
+  decryptPlatformToken,
+  getYouTubePublishSettings,
+  loadYouTubePublishOptions,
+  publicPlatformConnection,
+} from "../_platform-connections.js";
+import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
@@ -1301,6 +1307,12 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(aggregate_data.status,'waiting') as status,
       coalesce(aggregate_data.schedule_ids,array[]::text[]) as schedule_ids,
       aggregate_data.platform_name,
+      coalesce(youtube_data.youtube_options,'{}'::jsonb) as youtube_options,
+      coalesce(
+        nullif(t.approved_template_data->>'proposedName',''),
+        case when tt.status='approved' then nullif(tt.approved_data->>'proposedName','') end,
+        c.name
+      ) as youtube_title_seed,
       aggregate_data.post_type_name,
       coalesce(error_data.publish_errors,'[]'::jsonb) as publish_errors,
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
@@ -1350,6 +1362,14 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       ) grouped
     ) platform_data on true
     left join lateral (
+      select ps.publish_options->'youtube' as youtube_options
+      from marketing.publish_schedule ps
+      join marketing.platforms yp on yp.id=ps.platform_id and lower(yp.code)='youtube'
+      where schedule_row.group_id is not null and ps.group_id=schedule_row.group_id
+      order by ps.updated_at desc,ps.created_at desc,ps.id desc
+      limit 1
+    ) youtube_data on true
+    left join lateral (
       select coalesce(jsonb_agg(jsonb_build_object(
         'scheduleId',latest.schedule_id,
         'platformName',latest.platform_name,
@@ -1392,7 +1412,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       )
     order by coalesce(schedule_row.publish_date,t.due_at::date,cam.publish_start,ag.publish_start),t.created_at,t.id
   `;
-  return{ok:true,rows};
+  return{ok:true,rows,youtubeDefaults:await getYouTubePublishSettings(sql)};
 }
 async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
@@ -1420,14 +1440,40 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
   })).filter((platform:any)=>platform.platformId);
   if(normalizedPlatforms.some((platform:any)=>!platform.postTypeIds.length))throw new Error("حدد نوع نشر لكل منصة مختارة");
-  const combinations=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId})));
-  if(!combinations.length){const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);if(platformId&&postTypeId)combinations.push({platformId,postTypeId});}
+  const requestedPlatformIds=[...new Set(normalizedPlatforms.map((platform:any)=>platform.platformId))];
+  const platformRows=requestedPlatformIds.length?await sql<any[]>`select id::text,lower(code) as code from marketing.platforms where id in ${sql(requestedPlatformIds)} and is_active=true`:[];
+  const platformCodeById=new Map(platformRows.map((platform:any)=>[clean(platform.id),clean(platform.code)]));
+  if(platformRows.length!==requestedPlatformIds.length)throw new Error("إحدى منصات النشر غير موجودة أو غير مفعلة");
+  const combinations=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId,platformCode:platformCodeById.get(platform.platformId)||""})));
+  if(!combinations.length){
+    const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);
+    if(platformId&&postTypeId){
+      const[legacyPlatform]=await sql<any[]>`select id::text,lower(code) as code from marketing.platforms where id=${platformId}::uuid and is_active=true`;
+      if(legacyPlatform)combinations.push({platformId,postTypeId,platformCode:clean(legacyPlatform.code)});
+    }
+  }
   if(!combinations.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+  const youtubeSelected=combinations.some((item:any)=>item.platformCode==='youtube');
+  const youtubeDefaults=await getYouTubePublishSettings(sql);
+  const youtubeOptions=normalizeYouTubePublishOptions(body.youtubeOptions,youtubeDefaults,{
+    title:clean(body.youtubeTitle)||clean(body.caption),
+    description:[clean(body.caption),clean(body.hashtags)].filter(Boolean).join("\n\n"),
+  });
+  if(youtubeSelected){
+    if(!youtubeOptions.title)throw new Error("عنوان فيديو YouTube مطلوب");
+    if([...youtubeOptions.title].length>100)throw new Error("عنوان YouTube يجب ألا يتجاوز 100 حرف");
+    if(Buffer.byteLength(youtubeOptions.description,'utf8')>5000)throw new Error("وصف YouTube يجب ألا يتجاوز 5000 بايت");
+    if(youtubeOptions.tags.join(',').length>500)throw new Error("كلمات YouTube المفتاحية تتجاوز 500 حرف");
+    if(!youtubeOptions.categoryId)throw new Error("تصنيف فيديو YouTube مطلوب");
+  }
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
   await sql.begin(async tx=>{
     await tx`delete from marketing.publish_schedule where group_id=${groupId}::uuid`;
-    for(const item of combinations)await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},'waiting')`;
+    for(const item of combinations){
+      const publishOptions=item.platformCode==='youtube'?{youtube:youtubeOptions}:{};
+      await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,publish_options,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},${tx.json(dbJson(publishOptions))},'waiting')`;
+    }
   });
   return{ok:true,message:"تم حفظ تجهيز النشر"};
 }
@@ -2019,6 +2065,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='packages')return response.status(200).json({ok:true,rows:await sql<any[]>`select p.*,p.id::text,p.category_id::text,p.sales_type_id::text,coalesce(c.name,p.category) as category_name,coalesce(s.name,p.sales_type,'—') as sales_type_name from marketing.packages p left join marketing.package_categories c on c.id=p.category_id left join marketing.package_sales_types s on s.id=p.sales_type_id where p.is_active=true order by coalesce(c.sort_order,999),coalesce(s.sort_order,999),p.name`});
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
+      if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
       if(resource==='engagement'){if(!hasPermission(user,'marketing.publish_prep.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});return response.status(200).json(await engagementData(sql));}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));

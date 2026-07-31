@@ -9,6 +9,8 @@ import {
   completePlatformOAuth,
   disconnectPlatformConnection,
   listPlatformConnections,
+  loadYouTubePublishOptions,
+  saveYouTubePublishSettings,
   selectMetaPage,
   startPlatformOAuth,
   validatePlatformConnection,
@@ -72,6 +74,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (action === "cancel_oauth_draft") return response.status(200).json(await cancelPlatformConnectionDraft(sql, user, body.provider));
     if (action === "validate") return response.status(200).json(await validatePlatformConnection(sql, user, request, body.provider));
     if (action === "disconnect") return response.status(200).json(await disconnectPlatformConnection(sql, user, body.provider));
+    if (action === "youtube_publish_options") return response.status(200).json(await loadYouTubePublishOptions(sql));
+    if (action === "save_youtube_publish_settings") return response.status(200).json(await saveYouTubePublishSettings(sql, user, body.settings));
     return response.status(400).json({ ok: false, error: "الإجراء غير مدعوم" });
   } catch (error: any) {
     console.error("Platform connections API failed", error);
