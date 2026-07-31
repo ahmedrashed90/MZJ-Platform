@@ -3,6 +3,7 @@ import fs from "node:fs";
 const server = fs.readFileSync("server/marketing/index.ts", "utf8");
 const database = fs.readFileSync("src/marketing/pages/MarketingDatabasePage.tsx", "utf8");
 const manager = fs.readFileSync("src/marketing/components/EntityCreativeManager.tsx", "utf8");
+const editor = fs.readFileSync("src/marketing/components/CreativeEditor.tsx", "utf8");
 const css = fs.readFileSync("src/marketing/marketing.css", "utf8");
 
 const checks = [
@@ -32,6 +33,7 @@ const checks = [
   ["budget required for campaign", manager.includes("أكمل ميزانية الكرييتيف قبل الحفظ")],
   ["schedule required", manager.includes("أكمل جدول النشر قبل الحفظ")],
   ["revision notice", manager.includes("يظل التاسك التنفيذي متوقفًا حتى إعادة الاعتماد")],
+  ["car selector modal stays above creative editor", manager.includes("carsModalLevel={3}") && editor.includes("level={carsModalLevel}")],
   ["responsive modal styling", css.includes("marketing-entity-creative-modal")],
   ["creative table styling", css.includes("marketing-entity-creatives-table") && database.includes("marketing-entity-creatives-table")],
 ];

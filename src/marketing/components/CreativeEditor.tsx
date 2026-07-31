@@ -104,6 +104,7 @@ export function CreativeEditor({
   onDelete,
   showPlatforms = false,
   carsModal = false,
+  carsModalLevel = 1,
   autoLinkSingleContentUser = false,
   showTaskFlowSummary = false,
 }: {
@@ -113,6 +114,7 @@ export function CreativeEditor({
   onDelete: () => void;
   showPlatforms?: boolean;
   carsModal?: boolean;
+  carsModalLevel?: number;
   autoLinkSingleContentUser?: boolean;
   showTaskFlowSummary?: boolean;
 }) {
@@ -564,7 +566,7 @@ export function CreativeEditor({
           </div>
         </section>
       ) : null}
-      {carsModal ? <Modal open={carsOpen} title="اختيار سيارات الكرييتيف" subtitle={creativeType?.name || "الكرييتيف"} onClose={() => setCarsOpen(false)} className="marketing-cars-modal" footer={<button type="button" className="primary" onClick={() => setCarsOpen(false)}>تأكيد الاختيار</button>}>{carPickerContent}</Modal> : null}
+      {carsModal ? <Modal open={carsOpen} title="اختيار سيارات الكرييتيف" subtitle={creativeType?.name || "الكرييتيف"} onClose={() => setCarsOpen(false)} className="marketing-cars-modal" level={carsModalLevel} footer={<button type="button" className="primary" onClick={() => setCarsOpen(false)}>تأكيد الاختيار</button>}>{carPickerContent}</Modal> : null}
     </article>
   );
 }

@@ -258,7 +258,7 @@ export function EntityCreativeManager({
         {error ? <MarketingAlert>{error}</MarketingAlert> : null}
 
         <section className="marketing-entity-creative-body">
-          {step === 0 ? <div className="marketing-entity-creative-editor"><CreativeEditor value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary carsModal onChange={setCreative} onDelete={() => undefined} /></div> : null}
+          {step === 0 ? <div className="marketing-entity-creative-editor"><CreativeEditor value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary carsModal carsModalLevel={3} onChange={setCreative} onDelete={() => undefined} /></div> : null}
 
           {sourceType === "campaign" && step === 1 ? <div className="marketing-budget-list marketing-campaign-budget-step">
             <div className="marketing-campaign-step-head"><div className="marketing-campaign-step-icon"><CurrencyCircleDollar size={25} weight="duotone" /></div><div><h2>ميزانية الكرييتيف</h2><p>تُضاف أو تُحدّث داخل ميزانية نفس الحملة فقط.</p></div></div>
