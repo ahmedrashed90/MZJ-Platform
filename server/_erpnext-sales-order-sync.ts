@@ -757,7 +757,7 @@ async function linkOperationsVehicles(input: {
   };
 }
 
-async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
+export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
   if (!clean(leadId)) return;
   const sql = getSql();
   const [sales] = await sql<any[]>`
@@ -796,18 +796,23 @@ async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
 
 export async function cancelErpNextSalesOrder(input: {
   normalized: NormalizedErpNextSalesOrder;
+  mode?: "full" | "crm_only";
+  reason?: string;
+  actor?: { id?: string | null; name?: string | null; role?: string | null };
 }) {
+  const crmOnly = input.mode === "crm_only";
   await ensureCrmSchema();
-  await ensureOperationsSchema();
-  await ensureTrackingSchema();
+  if (!crmOnly) {
+    await ensureOperationsSchema();
+    await ensureTrackingSchema();
+  }
   await ensureErpNextUserMappingSchema();
   await ensureErpNextSalesOrderSchema();
 
   const { normalized } = input;
   const sql = getSql();
   const warnings: LinkWarning[] = [];
-  const cancellationReason = `تم إلغاء طلب البيع ${normalized.orderNo} من NEXT ERP`;
-  const actorName = "NEXT ERP Integration";
+  const cancellationReason = clean(input.reason) || `تم إلغاء طلب البيع ${normalized.orderNo} من NEXT ERP`;
 
   const result = await sql.begin(async (tx: any) => {
     let [order] = await tx<any[]>`
@@ -858,6 +863,10 @@ export async function cancelErpNextSalesOrder(input: {
       };
     }
 
+    const actorId = clean(input.actor?.id) || order.platform_user_id || null;
+    const actorName = clean(input.actor?.name) || "NEXT ERP Integration";
+    const actorRole = clean(input.actor?.role) || "NEXT ERP";
+
     [order] = await tx<any[]>`
       update integrations.erpnext_sales_orders set
         erp_status=coalesce(nullif(${normalized.erpStatus},''),'Cancelled'),erp_event=${normalized.erpEvent||"sales_order.cancelled"},
@@ -866,7 +875,7 @@ export async function cancelErpNextSalesOrder(input: {
       returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
     `;
 
-    const trackingRows = await tx<any[]>`
+    const trackingRows = crmOnly ? [] : await tx<any[]>`
       update tracking.orders set
         is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},cancellation_source='next_erp',updated_at=now()
       where coalesce(is_deleted,false)=false and (
@@ -877,7 +886,7 @@ export async function cancelErpNextSalesOrder(input: {
       returning id::text
     `;
 
-    const salesVehicles = await tx<any[]>`
+    const salesVehicles = crmOnly ? [] : await tx<any[]>`
       select sov.*,sov.id::text,sov.operations_vehicle_id::text,sov.tracking_vehicle_id::text
       from integrations.erpnext_sales_order_vehicles sov
       where sov.sales_order_id=${order.id}::uuid
@@ -950,7 +959,7 @@ export async function cancelErpNextSalesOrder(input: {
             approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data
           ) values(
             ${closedApproval.id}::uuid,${vehicle.id}::uuid,${closedApproval.cycle_no},'all','cancelled',${cancellationReason},
-            ${order.platform_user_id||null}::uuid,${actorName},'NEXT ERP',${tx.json(beforeApproval)},${tx.json(closedApproval)}
+            ${actorId}::uuid,${actorName},${actorRole},${tx.json(beforeApproval)},${tx.json(closedApproval)}
           )
         `;
       }
@@ -973,7 +982,7 @@ export async function cancelErpNextSalesOrder(input: {
         const locationId = vehicle.location_id || null;
         await tx`
           update operations.vehicles set
-            status_code='available_for_sale',state_note=${cancellationReason},updated_by=${order.platform_user_id||null}::uuid,
+            status_code='available_for_sale',state_note=${cancellationReason},updated_by=${actorId}::uuid,
             updated_by_name=${actorName},updated_at=now(),version=version+1
           where id=${vehicle.id}::uuid
         `;
@@ -983,14 +992,14 @@ export async function cancelErpNextSalesOrder(input: {
             state_note,performed_by_name,performed_by_role,performed_by_branch,before_data,after_data
           ) values(
             ${vehicle.id}::uuid,${locationId}::uuid,${locationId}::uuid,${oldStatus},'available_for_sale',${cancellationReason},
-            ${order.platform_user_id||null}::uuid,'erpnext_sale_cancelled',${cancellationReason},${actorName},'NEXT ERP',${order.platform_branch_name||order.platform_branch_code||null},
+            ${actorId}::uuid,'erpnext_sale_cancelled',${cancellationReason},${actorName},${actorRole},${order.platform_branch_name||order.platform_branch_code||null},
             ${tx.json({ statusCode: oldStatus, locationId, salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key })},
             ${tx.json({ statusCode: "available_for_sale", locationId, salesOrderNo: null, cancelledSalesOrderNo: order.sales_order_no })}
           )
         `;
         await tx`
           insert into operations.vehicle_status_notes(vehicle_id,status_code,note,created_by,created_by_name)
-          values(${vehicle.id}::uuid,'available_for_sale',${cancellationReason},${order.platform_user_id||null}::uuid,${actorName})
+          values(${vehicle.id}::uuid,'available_for_sale',${cancellationReason},${actorId}::uuid,${actorName})
         `;
         returnedToAvailable += 1;
       } else {
@@ -1048,7 +1057,7 @@ export async function cancelErpNextSalesOrder(input: {
               branch_code=${clean(previous.branchCode)||lead.branch_code||null},service_key=${clean(previous.serviceKey)||lead.service_key||null},
               payment_type=${clean(previous.paymentType)||lead.payment_type||null},assigned_to=${clean(previous.assignedTo)||null}::uuid,
               responsible_name_snapshot=${clean(previous.responsibleName)||null},current_request_id=${previousRequestId||null}::uuid,
-              extra_data=${tx.json(extraData)},updated_by=${order.platform_user_id||null}::uuid,updated_at=now()
+              extra_data=${tx.json(extraData)},updated_by=${actorId}::uuid,updated_at=now()
             where id=${lead.id}::uuid
           `;
           if (previousRequestId && previous.request && typeof previous.request === "object") {
@@ -1070,7 +1079,7 @@ export async function cancelErpNextSalesOrder(input: {
           nextStatus = "عميل جديد";
           await tx`
             update crm.leads set status_code=null,status_label='عميل جديد',current_request_id=null,extra_data=${tx.json(extraData)},
-              updated_by=${order.platform_user_id||null}::uuid,updated_at=now()
+              updated_by=${actorId}::uuid,updated_at=now()
             where id=${lead.id}::uuid
           `;
           crm = { status: "created_lead_reopened", leadId: lead.id, restored: true };
@@ -1086,7 +1095,7 @@ export async function cancelErpNextSalesOrder(input: {
           ) values(
             ${lead.id}::uuid,'erpnext_sales_order_cancelled',${clean(lead.status_label)||null},${nextStatus||clean(lead.status_label)||null},
             ${clean(lead.department_code)||null},${clean(lead.department_code)||null},${clean(lead.branch_code)||null},${clean(lead.branch_code)||null},
-            ${order.platform_user_id||null}::uuid,${actorName},'NEXT ERP',${cancellationReason},
+            ${actorId}::uuid,${actorName},${actorRole},${cancellationReason},
             ${tx.json({ salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key, crmStatus: crm.status })},now()
           )
         `;
@@ -1095,7 +1104,9 @@ export async function cancelErpNextSalesOrder(input: {
 
     await tx`
       update integrations.erpnext_sales_orders set
-        crm_link_status=${crm.status},operations_link_status='cancelled',warnings=${tx.json(uniqueWarnings(warnings))},updated_at=now()
+        crm_link_status=${crm.status},
+        operations_link_status=case when ${crmOnly}::boolean then operations_link_status else 'cancelled' end,
+        warnings=${tx.json(uniqueWarnings(warnings))},updated_at=now()
       where id=${order.id}::uuid
     `;
 

@@ -5408,6 +5408,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-sales-order-state { padding:6px 9px; border-radius:999px; font-size:10px; font-weight:950; white-space:nowrap; }
 .crm-sales-order-state.active { background:#e5f8ec; color:#08743b; }
 .crm-sales-order-state.cancelled { background:#ffe7e7; color:#b42323; }
+.crm-sales-order-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:7px; padding:0 13px 11px; }
+.crm-primary-button.compact,.crm-secondary-button.compact,.crm-danger-button.compact { min-height:32px; padding:0 10px; border-radius:9px; font-size:10px; }
 .crm-sales-order-details { display:grid; gap:12px; padding:14px; border-top:1px solid #eee1db; background:#fffaf7; }
 .crm-sales-order-financials { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
 .crm-sales-order-financials article { display:grid; gap:5px; padding:11px; border:1px solid #eadbd4; border-radius:11px; background:#fff; }
@@ -5418,6 +5420,14 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-sales-order-cancel-note { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #efc8c5; border-radius:11px; background:#fff0f0; color:#a52929; }
 .crm-sales-order-cancel-note span { flex:1; }
 .crm-sales-vehicles-table { border:1px solid #eadbd4; border-radius:12px; background:#fff; }
+.crm-sales-order-edit-modal { width:min(920px,96vw); }
+.crm-sales-order-edit-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.crm-sales-order-edit-vehicles { display:grid; gap:10px; margin-top:16px; padding-top:14px; border-top:1px solid #eadfd9; }
+.crm-sales-order-edit-vehicles>div h3 { margin:0; color:var(--ink); font-size:15px; }
+.crm-sales-order-edit-vehicles>div p { margin:4px 0 0; color:var(--muted); font-size:10px; }
+.crm-sales-order-edit-vehicles>article { display:grid; gap:10px; padding:12px; border:1px solid #eadbd4; border-radius:12px; background:#fffaf7; }
+.crm-sales-order-edit-vehicles>article>strong { color:var(--ink); font-size:12px; overflow-wrap:anywhere; }
+.crm-sales-order-vehicle-edit-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; }
 .crm-contact-secondary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .crm-contact-timeline { display:grid; gap:8px; max-height:420px; overflow:auto; }
 .crm-contact-timeline article { padding:11px 12px; border:1px solid #eee1db; border-radius:11px; background:#fffaf7; }
@@ -5425,8 +5435,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-contact-timeline p { margin:6px 0; color:#65463d; line-height:1.7; white-space:pre-wrap; }
 .crm-contact-timeline small { color:var(--muted); font-size:9px; }
 .crm-contact-empty-section,.crm-contact-profile-loading { padding:22px; text-align:center; color:var(--muted); }
-@media(max-width:1100px){.crm-contact-overview-grid,.crm-contact-sales-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-contact-info-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-sales-order-head{grid-template-columns:minmax(170px,1.2fr) repeat(2,minmax(110px,.8fr)) auto auto}.crm-sales-order-head>div:nth-of-type(4),.crm-sales-order-head>div:nth-of-type(5),.crm-sales-order-head>div:nth-of-type(6){display:none}.crm-contact-secondary-grid{grid-template-columns:1fr}}
-@media(max-width:700px){.crm-contact-overview-grid,.crm-contact-sales-summary,.crm-contact-info-grid,.crm-sales-order-financials{grid-template-columns:1fr}.crm-contact-search-v2{grid-template-columns:1fr}.crm-contact-search-v2>span{text-align:center}.crm-contact-profile-hero{padding:12px}.crm-contact-profile-identity{grid-template-columns:auto 1fr}.crm-contact-hero-badges{grid-column:1/-1;justify-content:flex-start}.crm-contact-profile-body{width:calc(100% - 18px)}.crm-sales-order-head{grid-template-columns:1fr auto auto}.crm-sales-order-head>div:not(:first-child){display:none}.crm-contact-profile-identity h2{font-size:20px}}
+@media(max-width:1100px){.crm-contact-overview-grid,.crm-contact-sales-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-contact-info-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-sales-order-head{grid-template-columns:minmax(170px,1.2fr) repeat(2,minmax(110px,.8fr)) auto auto}.crm-sales-order-head>div:nth-of-type(4),.crm-sales-order-head>div:nth-of-type(5),.crm-sales-order-head>div:nth-of-type(6){display:none}.crm-sales-order-edit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-sales-order-vehicle-edit-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-contact-secondary-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.crm-contact-overview-grid,.crm-contact-sales-summary,.crm-contact-info-grid,.crm-sales-order-financials,.crm-sales-order-edit-grid,.crm-sales-order-vehicle-edit-grid{grid-template-columns:1fr}.crm-contact-search-v2{grid-template-columns:1fr}.crm-contact-search-v2>span{text-align:center}.crm-contact-profile-hero{padding:12px}.crm-contact-profile-identity{grid-template-columns:auto 1fr}.crm-contact-hero-badges{grid-column:1/-1;justify-content:flex-start}.crm-contact-profile-body{width:calc(100% - 18px)}.crm-sales-order-head{grid-template-columns:1fr auto auto}.crm-sales-order-head>div:not(:first-child){display:none}.crm-sales-order-actions{justify-content:stretch}.crm-sales-order-actions button{flex:1}.crm-contact-profile-identity h2{font-size:20px}}
 
 /* Unified dashboard widget canvas: CRM and Operations cards share one sortable grid. */
 .dashboard-unified-widget-grid {
