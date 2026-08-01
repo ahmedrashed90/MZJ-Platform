@@ -12,7 +12,7 @@ function asArray<T = any>(value: unknown): T[] { return Array.isArray(value) ? v
 function numberValue(value: unknown) { const number = Number(value); return Number.isFinite(number) ? number : 0; }
 function graphVersion() { return clean(process.env.META_GRAPH_VERSION) || "v25.0"; }
 
-const RESULT_PLATFORMS = ["facebook", "instagram", "tiktok", "snapchat"] as const;
+const RESULT_PLATFORMS = ["facebook", "instagram", "tiktok", "snapchat", "youtube"] as const;
 
 type ResultPlatform = typeof RESULT_PLATFORMS[number];
 
@@ -190,7 +190,7 @@ export async function engagementResultsData(
   const connections = await sql<any[]>`
     select platform,connected,status,state,last_verified_at
     from marketing.platform_connections
-    where platform in ('facebook','instagram','tiktok')
+    where platform in ('facebook','instagram','tiktok','youtube')
   `;
   const connectionMap = new Map(connections.map((row: any) => [clean(row.platform), row]));
   const eventsByPost = new Map<string, any[]>();
@@ -311,7 +311,7 @@ export async function engagementResultsData(
         platform,
         connected: Boolean(connection?.connected),
         connectionStatus: clean(connection?.status || connection?.state),
-        dataStatus: platformPosts.length ? "available" : (platform === "tiktok" || platform === "snapchat" ? "pending_integration" : "waiting_posts"),
+        dataStatus: platformPosts.length ? "available" : (platform === "tiktok" || platform === "snapchat" || platform === "youtube" ? "pending_integration" : "waiting_posts"),
         syncStatus,
         lastSyncedAt,
         ...finalizeResultMetricBucket(bucket),

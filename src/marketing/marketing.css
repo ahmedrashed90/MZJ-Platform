@@ -3952,6 +3952,8 @@
 .marketing-result-platform-mark.tiktok { background: #f0f0f2; color: #25252a; }
 .marketing-result-platform-chip.snapchat,
 .marketing-result-platform-mark.snapchat { background: #fff8c7; color: #6b5b00; }
+.marketing-result-platform-chip.youtube,
+.marketing-result-platform-mark.youtube { background: #fff0f0; color: #c62828; }
 
 .mzj-modal-card.marketing-result-modal {
   width: min(1380px, calc(100vw - 34px));

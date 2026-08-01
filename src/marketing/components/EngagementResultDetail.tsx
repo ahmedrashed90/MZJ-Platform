@@ -11,7 +11,6 @@ import {
 } from "@phosphor-icons/react";
 import { marketingDate } from "../api";
 import {
-  MARKETING_RESULT_PLATFORMS,
   marketingResultCount,
   marketingResultPercent,
   marketingResultPlatformLabel,
@@ -26,7 +25,10 @@ type ResultTab = "overview" | MarketingResultPlatform | "crm";
 type Props = {
   result: EngagementResultGroup | null | undefined;
   initialTab?: ResultTab;
+  platforms?: readonly MarketingResultPlatform[];
 };
+
+const DEFAULT_RESULT_PLATFORMS: readonly MarketingResultPlatform[] = ["facebook", "instagram", "tiktok", "snapchat"];
 
 function syncLabel(status: string) {
   if (status === "synced") return "محدث";
@@ -38,6 +40,7 @@ function syncLabel(status: string) {
 function platformEmptyMessage(platform: MarketingResultPlatform) {
   if (platform === "tiktok") return "نتائج TikTok مجهزة داخل التقرير، وهي الآن في انتظار ربط نتائج TikTok وستظهر هنا تلقائيًا بعد اكتمال الربط.";
   if (platform === "snapchat") return "نتائج Snapchat مجهزة داخل التقرير، وهي الآن في انتظار ربط نتائج Snapchat وستظهر هنا تلقائيًا بعد اكتمال الربط.";
+  if (platform === "youtube") return "نتائج YouTube مجهزة داخل التقرير، وستظهر هنا تلقائيًا عند توفر فيديوهات منشورة وبيانات التفاعل.";
   return `لا توجد منشورات منشورة من السيستم على ${marketingResultPlatformLabel(platform)} لهذه الحملة أو الأجندة.`;
 }
 
@@ -92,13 +95,26 @@ function PlatformSection({ platform, posts }: { platform: EngagementPlatformResu
   </div>;
 }
 
-export function EngagementResultDetail({ result, initialTab = "overview" }: Props) {
+export function EngagementResultDetail({ result, initialTab = "overview", platforms = DEFAULT_RESULT_PLATFORMS }: Props) {
   const [tab, setTab] = useState<ResultTab>(initialTab);
   useEffect(() => { setTab(initialTab); }, [initialTab, result?.sourceId]);
 
+  const displayedPlatforms = useMemo(
+    () => platforms.map((platform) => result?.platforms.find((item) => item.platform === platform) || ({
+      platform,
+      connected: false,
+      connectionStatus: "",
+      dataStatus: "pending_integration",
+      syncStatus: "waiting",
+      posts: 0, likes: 0, comments: 0, shares: 0, saves: 0, views: 0, reach: 0, engagements: 0,
+      identifiedEngagements: 0, commentEvents: 0, likeEvents: 0, shareEvents: 0, identifiedAccounts: 0,
+      crmLeads: 0, soldLeads: 0, soldQuantity: 0, crmConversionRate: 0, salesConversionRate: 0, lastSyncedAt: null,
+    } as EngagementPlatformResult)),
+    [platforms, result],
+  );
   const selectedPlatform = useMemo(
-    () => result?.platforms.find((item) => item.platform === tab),
-    [result, tab],
+    () => displayedPlatforms.find((item) => item.platform === tab),
+    [displayedPlatforms, tab],
   );
   const selectedPosts = useMemo(
     () => result?.posts.filter((item) => item.platform === tab) || [],
@@ -115,14 +131,14 @@ export function EngagementResultDetail({ result, initialTab = "overview" }: Prop
 
     <div className="marketing-result-tabs" role="tablist" aria-label="أقسام نتائج النشر والتفاعل">
       <button type="button" className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}>نظرة عامة</button>
-      {MARKETING_RESULT_PLATFORMS.map((platform) => <button type="button" key={platform} className={tab === platform ? `active ${platform}` : platform} onClick={() => setTab(platform)}>{marketingResultPlatformLabel(platform)}</button>)}
+      {platforms.map((platform) => <button type="button" key={platform} className={tab === platform ? `active ${platform}` : platform} onClick={() => setTab(platform)}>{marketingResultPlatformLabel(platform)}</button>)}
       <button type="button" className={tab === "crm" ? "active" : ""} onClick={() => setTab("crm")}>عملاء CRM والمبيعات</button>
     </div>
 
     {tab === "overview" ? <div className="marketing-result-overview">
       <ResultKpis metrics={result.summary} />
       <div className="marketing-result-platform-grid">
-        {result.platforms.map((platform) => <button type="button" key={platform.platform} className={`marketing-result-platform-card ${platform.platform}`} onClick={() => setTab(platform.platform)}>
+        {displayedPlatforms.map((platform) => <button type="button" key={platform.platform} className={`marketing-result-platform-card ${platform.platform}`} onClick={() => setTab(platform.platform)}>
           <header><span className={`marketing-result-platform-mark ${platform.platform}`}>{marketingResultPlatformLabel(platform.platform).slice(0, 2)}</span><div><strong>{marketingResultPlatformLabel(platform.platform)}</strong><small>{platform.posts ? `${marketingResultCount(platform.posts)} منشور` : platform.dataStatus === "pending_integration" ? "في انتظار ربط النتائج" : "لا توجد منشورات"}</small></div></header>
           <div><span>التفاعلات <b>{marketingResultCount(platform.engagements)}</b></span><span>عملاء CRM <b>{marketingResultCount(platform.crmLeads)}</b></span><span>تم البيع <b>{marketingResultCount(platform.soldLeads)}</b></span></div>
         </button>)}

@@ -1,4 +1,4 @@
-export const MARKETING_RESULT_PLATFORMS = ["facebook", "instagram", "tiktok", "snapchat"] as const;
+export const MARKETING_RESULT_PLATFORMS = ["facebook", "instagram", "tiktok", "snapchat", "youtube"] as const;
 
 export type MarketingResultPlatform = typeof MARKETING_RESULT_PLATFORMS[number];
 
@@ -83,6 +83,7 @@ export function marketingResultPlatformLabel(platform: string) {
   if (platform === "instagram") return "Instagram";
   if (platform === "tiktok") return "TikTok";
   if (platform === "snapchat") return "Snapchat";
+  if (platform === "youtube") return "YouTube";
   return platform || "منصة";
 }
 
@@ -91,6 +92,7 @@ export function marketingResultSourceLabel(platform: string) {
   if (platform === "instagram") return "بوست انستجرام";
   if (platform === "tiktok") return "بوست تيك توك";
   if (platform === "snapchat") return "بوست سناب شات";
+  if (platform === "youtube") return "فيديو يوتيوب";
   return "بوست منصة اجتماعية";
 }
 
