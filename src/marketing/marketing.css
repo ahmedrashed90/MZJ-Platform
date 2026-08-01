@@ -2719,6 +2719,7 @@
 .marketing-template-scene-grid > article > small { color: #9b8279; font-size: 10px; font-weight: 900; }
 .marketing-template-scene-grid > article > p { margin: 0; color: #5b4943; font-size: 10px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
 .marketing-template-scenes-empty { min-height: 108px; border: 1px dashed #dfcfc7; border-radius: 12px; display: grid; place-items: center; color: #8d7b74; background: #fffdfc; }
+.marketing-template-scenes-empty.has-script { place-items: start stretch; padding: 14px; color: #5b4943; line-height: 1.9; text-align: right; white-space: pre-wrap; overflow-wrap: anywhere; }
 .marketing-template-script-editor { padding-top: 4px; }
 .marketing-template-command-bar {
   min-width: 0;
