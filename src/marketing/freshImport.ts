@@ -242,7 +242,10 @@ function resolveDepartment(name: string | undefined, role: string | undefined, m
 
 function platformAliasGroup(value: string) {
   const target = normalized(value);
-  const entry = Object.entries(platformAliases).find(([, aliases]) => aliases.map(normalized).includes(target));
+  const entry = Object.entries(platformAliases).find(([key, aliases]) => {
+    const values = [key, ...aliases].map(normalized).filter(Boolean);
+    return values.some((alias) => target === alias || target.includes(alias) || alias.includes(target));
+  });
   return entry?.[0] || target;
 }
 
