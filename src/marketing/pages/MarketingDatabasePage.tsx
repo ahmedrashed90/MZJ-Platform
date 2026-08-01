@@ -47,6 +47,38 @@ function budgetIncludesCreative(item: any, creativeId: unknown) {
   return linkedIds.includes(target) || String(item?.creative_id || "") === target;
 }
 
+function budgetCreativeIds(item: any) {
+  const linkedIds = Array.isArray(item?.creative_ids)
+    ? item.creative_ids.map((id: unknown) => String(id || "")).filter(Boolean)
+    : [];
+  const legacyId = String(item?.creative_id || "");
+  return Array.from(new Set(linkedIds.length ? linkedIds : legacyId ? [legacyId] : []));
+}
+
+function budgetPlatformDetails(item: any) {
+  if (Array.isArray(item?.platform_details)) return item.platform_details;
+  if (Array.isArray(item?.platform_amounts)) return item.platform_amounts;
+  return [];
+}
+
+function budgetPerCreativeTotal(item: any) {
+  const platforms = budgetPlatformDetails(item);
+  if (platforms.length) return platforms.reduce((sum: number, part: any) => sum + Number(part?.amount || 0), 0);
+  return Number(item?.total || 0);
+}
+
+function budgetCalculatedTotal(item: any) {
+  return budgetPerCreativeTotal(item) * Math.max(1, budgetCreativeIds(item).length);
+}
+
+type BudgetDisplayRow = {
+  key: string;
+  funnel: string;
+  creative: string;
+  platform: string;
+  amount: number;
+};
+
 
 function formatFileSize(value: unknown) {
   const size = Number(value || 0);
@@ -220,6 +252,37 @@ export function MarketingDatabasePage() {
       .filter((file: any) => activeFileIds.has(String(file.id || "")) || activeGroupIds.has(String(file.final_media_group_id || "")))
       .sort((a: any, b: any) => Number(a.order_index || 0) - Number(b.order_index || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
   }, [detail]);
+  const budgetDisplayRows = useMemo<BudgetDisplayRow[]>(() => {
+    const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
+    const creatives = Array.isArray(detail?.creatives) ? detail.creatives : [];
+    return budgetItems.flatMap((item: any, budgetIndex: number) => {
+      const ids = budgetCreativeIds(item);
+      const fallbackNames = String(item?.creative_names || item?.creative_name || "")
+        .split(/\s*،\s*/g)
+        .map((name) => name.trim())
+        .filter(Boolean);
+      const creativeEntries = ids.length
+        ? ids.map((id, index) => {
+            const creative = creatives.find((row: any) => String(row?.id || "") === id);
+            return { id, name: creative?.name || creative?.creative_type_name || creative?.creative_type || fallbackNames[index] || "كرييتيف" };
+          })
+        : (fallbackNames.length ? fallbackNames.map((name, index) => ({ id: `legacy-${budgetIndex}-${index}`, name })) : [{ id: `budget-${budgetIndex}`, name: "كرييتيف غير محدد" }]);
+      const platforms = budgetPlatformDetails(item);
+      return creativeEntries.flatMap((creative) => platforms.map((part: any, platformIndex: number) => ({
+        key: `${item?.id || budgetIndex}-${creative.id}-${part?.platformId || platformIndex}`,
+        funnel: item?.funnel_name || "—",
+        creative: creative.name,
+        platform: part?.platformName || part?.platform_name || "منصة",
+        amount: Number(part?.amount || 0),
+      })));
+    });
+  }, [detail]);
+  const budgetFunnelTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const row of budgetDisplayRows) totals.set(row.funnel, (totals.get(row.funnel) || 0) + row.amount);
+    return Array.from(totals.entries()).map(([funnel, total]) => ({ funnel, total }));
+  }, [budgetDisplayRows]);
+  const budgetGrandTotal = useMemo(() => budgetDisplayRows.reduce((sum, row) => sum + row.amount, 0), [budgetDisplayRows]);
 
   async function load() {
     setLoading(true);
@@ -359,12 +422,12 @@ export function MarketingDatabasePage() {
       const templateCount = creativeTasks.filter((task: any) => task.task_kind === "task_template").length;
       const executionCount = creativeTasks.filter((task: any) => task.task_kind === "execution").length;
       const scheduleCount = schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id || "")).length;
-      const budgetTotal = budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+      const budgetTotal = budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + budgetPerCreativeTotal(item), 0);
       return `<tr><td>${index + 1}</td><td>${escapePrintHtml(creative.instance_code || "—")}</td><td>${escapePrintHtml(creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف")}</td><td>${escapePrintHtml(creative.primary_department_name || "—")}</td><td>${reportCount(creative.quantity || 1)}</td><td>${reportCount(templateCount)}</td><td>${reportCount(executionCount)}</td><td>${reportCount(scheduleCount)}</td>${selected.source_type === "campaign" ? `<td>${Number(budgetTotal).toLocaleString("ar-SA")} ر.س</td>` : ""}</tr>`;
     }).join("");
     const taskRows = tasks.map((task: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(taskKindLabel(task))}</td><td>${escapePrintHtml(task.creative_name || "—")}</td><td>${escapePrintHtml(task.assigned_name || "—")}</td><td>${escapePrintHtml(task.department_name || "قسم المحتوى")}</td><td>${escapePrintHtml(reportStatus(task.status))}</td><td>${Number(task.progress || 0).toLocaleString("ar-SA")}%</td><td>${escapePrintHtml(marketingDate(task.due_at))}</td><td>${escapePrintHtml(task.note || task.title || "—")}</td><td>${escapePrintHtml(task.template_status ? reportStatus(task.template_status) : "—")}</td><td>${escapePrintHtml(task.final_file_name || "—")}</td></tr>`).join("");
     const scheduleRowsHtml = schedule.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingDate(item.publish_date))}</td><td>${escapePrintHtml(item.creative_name || item.instance_code || "—")}</td><td>${escapePrintHtml(item.platform_name || "—")}</td><td>${escapePrintHtml(item.post_type_name || "—")}</td><td>${escapePrintHtml(reportStatus(item.status))}</td></tr>`).join("");
-    const budgetRows = budgets.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(item.creative_names || item.creative_name || "—")}</td><td>${escapePrintHtml(item.funnel_name || "—")}</td><td>${reportCount(item.ads_count)}</td><td>${escapePrintHtml(item.content_goal || "—")}</td><td>${escapePrintHtml(item.expected_goal || "—")}</td><td>${Number(item.total || 0).toLocaleString("ar-SA")} ر.س</td></tr>`).join("");
+    const budgetRows = budgets.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(item.creative_names || item.creative_name || "—")}</td><td>${escapePrintHtml(item.funnel_name || "—")}</td><td>${reportCount(item.ads_count)}</td><td>${escapePrintHtml(item.content_goal || "—")}</td><td>${escapePrintHtml(item.expected_goal || "—")}</td><td>${budgetCalculatedTotal(item).toLocaleString("ar-SA")} ر.س</td></tr>`).join("");
     const fileRows = finalProductFiles.map((file: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(file.original_name || file.name || "—")}</td><td>${escapePrintHtml(file.mime_type || "—")}</td><td>${escapePrintHtml(formatFileSize(file.size || file.file_size))}</td><td>${escapePrintHtml(file.uploaded_by_name || file.created_by_name || "—")}</td><td>${escapePrintHtml(marketingDate(file.created_at, true))}</td></tr>`).join("");
     const linkRows = links.map((link, index) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingResultPlatformLabel(link.platform))}</td><td class="url">${escapePrintHtml(link.url || "—")}</td></tr>`).join("");
     const resultSummary = engagement?.summary;
@@ -382,7 +445,7 @@ export function MarketingDatabasePage() {
       <section class="section"><div class="section-title"><h2>الكرييتيفات</h2><span>${reportCount(creatives.length)} كرييتيف</span></div><table><thead><tr><th>م</th><th>الكود</th><th>الكرييتيف</th><th>القسم الأساسي</th><th>العدد</th><th>Task Template</th><th>تاسك تنفيذي</th><th>مواعيد النشر</th>${selected.source_type === "campaign" ? "<th>الميزانية</th>" : ""}</tr></thead><tbody>${creativeRows || `<tr><td colspan="${selected.source_type === "campaign" ? 9 : 8}" class="empty">لا توجد كرييتيفات</td></tr>`}</tbody></table></section>
       <section class="section"><div class="section-title"><h2>التاسكات</h2><span>${reportCount(tasks.length)} تاسك</span></div><table><thead><tr><th>م</th><th>نوع التاسك</th><th>الكرييتيف</th><th>المسؤول</th><th>القسم</th><th>الحالة</th><th>التقدم</th><th>التاريخ المطلوب</th><th>المطلوب</th><th>حالة الاعتماد</th><th>الملف النهائي</th></tr></thead><tbody>${taskRows || '<tr><td colspan="11" class="empty">لا توجد تاسكات</td></tr>'}</tbody></table></section>
       <section class="section"><div class="section-title"><h2>جدول النشر</h2><span>${reportCount(schedule.length)} صف</span></div><table><thead><tr><th>م</th><th>التاريخ</th><th>الكرييتيف</th><th>المنصة</th><th>نوع النشر</th><th>الحالة</th></tr></thead><tbody>${scheduleRowsHtml || '<tr><td colspan="6" class="empty">لا يوجد جدول نشر</td></tr>'}</tbody></table></section>
-      ${selected.source_type === "campaign" ? `<section class="section"><div class="section-title"><h2>الميزانية</h2><span>${Number(budgets.reduce((sum: number, item: any) => sum + Number(item.total || 0), 0)).toLocaleString("ar-SA")} ر.س</span></div><table><thead><tr><th>م</th><th>الكرييتيف</th><th>Funnel</th><th>عدد الإعلانات</th><th>هدف المحتوى</th><th>الهدف المتوقع</th><th>الإجمالي</th></tr></thead><tbody>${budgetRows || '<tr><td colspan="7" class="empty">لا توجد ميزانية</td></tr>'}</tbody></table></section>` : ""}
+      ${selected.source_type === "campaign" ? `<section class="section"><div class="section-title"><h2>الميزانية</h2><span>${budgets.reduce((sum: number, item: any) => sum + budgetCalculatedTotal(item), 0).toLocaleString("ar-SA")} ر.س</span></div><table><thead><tr><th>م</th><th>الكرييتيف</th><th>Funnel</th><th>عدد الإعلانات</th><th>هدف المحتوى</th><th>الهدف المتوقع</th><th>الإجمالي</th></tr></thead><tbody>${budgetRows || '<tr><td colspan="7" class="empty">لا توجد ميزانية</td></tr>'}</tbody></table></section>` : ""}
       <section class="section"><div class="section-title"><h2>الملفات النهائية</h2><span>${reportCount(finalProductFiles.length)} ملف</span></div><table><thead><tr><th>م</th><th>اسم الملف</th><th>النوع</th><th>الحجم</th><th>تم الرفع بواسطة</th><th>تاريخ الرفع</th></tr></thead><tbody>${fileRows || '<tr><td colspan="6" class="empty">لا توجد ملفات نهائية معتمدة</td></tr>'}</tbody></table></section>
       <section class="section"><div class="section-title"><h2>روابط النشر</h2><span>${reportCount(links.length)} رابط</span></div><table><thead><tr><th>م</th><th>المنصة</th><th>الرابط</th></tr></thead><tbody>${linkRows || '<tr><td colspan="3" class="empty">لا توجد روابط نشر</td></tr>'}</tbody></table></section>
       <section class="section page-break"><div class="section-title"><h2>نتائج النشر والتفاعل</h2><span>${engagement ? `آخر مزامنة: ${escapePrintHtml(marketingDate(resultSummary?.lastSyncedAt, true))}` : "لا توجد نتائج"}</span></div>${engagement ? `<div class="kpis">${resultCards}</div><table><thead><tr><th>م</th><th>المنصة</th><th>الكرييتيف</th><th>نوع النشر</th><th>تاريخ النشر</th><th>مشاهدات</th><th>إعجابات</th><th>تعليقات</th><th>مشاركات</th><th>عملاء CRM</th><th>تم البيع</th></tr></thead><tbody>${postRows || '<tr><td colspan="11" class="empty">لا توجد منشورات</td></tr>'}</tbody></table>` : '<div class="empty">لا توجد بيانات نتائج لهذه الحملة أو الأجندة.</div>'}</section>
@@ -491,7 +554,7 @@ export function MarketingDatabasePage() {
                   const approvedTemplates = templateTasks.filter((task: any) => ["approved", "completed"].includes(String(task.template_status || task.status || "").toLowerCase())).length;
                   const completedExecution = executionTasks.filter((task: any) => Number(task.progress || 0) >= 100).length;
                   const scheduleCount = new Set(detail.schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id)).map((item: any) => `${String(item.publish_date || "").slice(0, 10)}-${item.group_id || item.id}`)).size;
-                  const budgetTotal = detail.budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + Number(item.total || 0), 0);
+                  const budgetTotal = detail.budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + budgetPerCreativeTotal(item), 0);
                   return <tr key={creative.id}>
                     <td className="marketing-creative-index">{index + 1}</td>
                     <td><span className="marketing-creative-code">{creative.instance_code || `#${index + 1}`}</span></td>
@@ -555,13 +618,18 @@ export function MarketingDatabasePage() {
             </section>
 
             {selected?.source_type === "campaign" ? <section className="marketing-task-section marketing-database-section marketing-budget-detail-section">
-              <div className="marketing-database-section-heading"><div><h3>عرض الميزانية</h3><p>تفاصيل كل بند حسب الـFunnel والكرييتيف والأهداف والمنصات.</p></div><strong>{detail.budgets.reduce((sum: number, item: any) => sum + Number(item.total || 0), 0).toLocaleString("ar-SA")} ر.س</strong></div>
-              {detail.budgets.length ? <div className="marketing-budget-detail-list">
-                {detail.budgets.map((item: any, index: number) => <article key={item.id} className="marketing-budget-detail-card">
-                  <header><div><span>بند الميزانية {index + 1}</span><h4>{item.creative_names || item.creative_name || "كرييتيف غير محدد"}</h4></div><strong>{Number(item.total || 0).toLocaleString("ar-SA")} ر.س</strong></header>
-                  <div className="marketing-budget-detail-meta"><div><small>Funnel</small><b>{item.funnel_name || "—"}</b></div><div><small>عدد الإعلانات</small><b>{Number(item.ads_count || 0).toLocaleString("ar-SA")}</b></div><div><small>هدف المحتوى</small><b>{item.content_goal || "—"}</b></div><div><small>الهدف المتوقع</small><b>{item.expected_goal || "—"}</b></div></div>
-                  <div className="marketing-budget-platform-details">{Array.isArray(item.platform_details) && item.platform_details.length ? item.platform_details.map((part: any, partIndex: number) => <div key={`${item.id}-${part.platformId || partIndex}`}><span>{part.platformName || "منصة"}</span><strong>{Number(part.amount || 0).toLocaleString("ar-SA")} ر.س</strong></div>) : <p>لم يتم توزيع مبلغ على منصات.</p>}</div>
-                </article>)}
+              <div className="marketing-database-section-heading"><div><h3>عرض الميزانية</h3></div><strong>{budgetGrandTotal.toLocaleString("ar-SA")} ر.س</strong></div>
+              {budgetDisplayRows.length ? <div className="marketing-table-wrap marketing-budget-display-table">
+                <table>
+                  <thead><tr><th>Funnel</th><th>الكرييتيف</th><th>المنصة</th><th>قيمة المنصة</th></tr></thead>
+                  <tbody>
+                    {budgetDisplayRows.map((row) => <tr key={row.key}><td>{row.funnel}</td><td>{row.creative}</td><td>{row.platform}</td><td><strong>{row.amount.toLocaleString("ar-SA")} ر.س</strong></td></tr>)}
+                  </tbody>
+                  <tfoot>
+                    {budgetFunnelTotals.map((item) => <tr key={item.funnel} className="marketing-budget-funnel-total"><td colSpan={3}>إجمالي {item.funnel}</td><td>{item.total.toLocaleString("ar-SA")} ر.س</td></tr>)}
+                    <tr className="marketing-budget-grand-total"><td colSpan={3}>إجمالي الميزانية كاملة</td><td>{budgetGrandTotal.toLocaleString("ar-SA")} ر.س</td></tr>
+                  </tfoot>
+                </table>
               </div> : <div className="marketing-database-empty">لا توجد ميزانية.</div>}
             </section> : null}
           </div>

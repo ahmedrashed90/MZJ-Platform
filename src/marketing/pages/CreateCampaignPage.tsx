@@ -75,8 +75,12 @@ export function CreateCampaignPage() {
   const creativePickerItems = useMemo(() => creatives.map((creative, index) => ({ id: creative.tempId, name: creativeName(creative.tempId), code: `كرييتيف ${index + 1}` })), [creatives, meta.creativeTypes]);
   function creativeNames(tempIds: string[]) { return tempIds.map(creativeName).filter((name) => name !== "—").join("، ") || "—"; }
   function platformName(id: string) { return meta.platforms.find((item) => item.id === id)?.name || "—"; }
-  const totalBudget = useMemo(() => budgets.reduce((sum, item) => sum + item.platformAmounts.reduce((part, platform) => part + Number(platform.amount || 0), 0), 0), [budgets]);
-  function budgetTotal(item: Budget) { return item.platformAmounts.reduce((sum, platform) => sum + Number(platform.amount || 0), 0); }
+  function budgetTotal(item: Budget) {
+    const platformTotal = item.platformAmounts.reduce((sum, platform) => sum + Number(platform.amount || 0), 0);
+    const creativeCount = Math.max(1, new Set(item.creativeTempIds.filter(Boolean)).size);
+    return platformTotal * creativeCount;
+  }
+  const totalBudget = useMemo(() => budgets.reduce((sum, item) => sum + budgetTotal(item), 0), [budgets]);
   function schedulePostCount(item: Schedule) { return item.platforms.reduce((sum, platform) => sum + platform.postTypeIds.length, 0); }
   function scheduleDateLabel(date: string) {
     if (!date) return "لم يتم تحديد اليوم";
