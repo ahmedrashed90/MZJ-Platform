@@ -5139,3 +5139,34 @@
   .marketing-wizard-steps.marketing-four-steps { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 
+
+/* Fresh campaign and agenda import */
+.marketing-fresh-import-modal { width: min(900px,94vw); }
+.marketing-fresh-import-content { display:grid; gap:16px; }
+.marketing-fresh-import-file {
+  min-height:150px;
+  border:1px dashed #d8a58e;
+  border-radius:16px;
+  background:#fffaf7;
+  display:grid;
+  place-items:center;
+  align-content:center;
+  gap:7px;
+  padding:22px;
+  color:#81503f;
+  text-align:center;
+  cursor:pointer;
+}
+.marketing-fresh-import-file:hover { border-color:#bc6f50; background:#fff6f1; }
+.marketing-fresh-import-file strong { font-size:15px; }
+.marketing-fresh-import-file span { color:var(--muted); font-size:12px; font-weight:700; }
+.marketing-fresh-import-file input { display:none; }
+.marketing-fresh-import-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.marketing-fresh-import-summary article { border:1px solid var(--line); border-radius:13px; padding:12px; background:#fff; display:grid; gap:4px; }
+.marketing-fresh-import-summary span { color:var(--muted); font-size:11px; font-weight:800; }
+.marketing-fresh-import-summary strong { color:#7d4332; font-size:20px; }
+.marketing-fresh-import-errors { border:1px solid #efc8c2; border-radius:13px; background:#fff5f3; color:#963f37; padding:13px; }
+.marketing-fresh-import-errors header { display:flex; align-items:center; gap:8px; }
+.marketing-fresh-import-errors ul { margin:10px 0 0; padding-inline-start:22px; max-height:250px; overflow:auto; }
+.marketing-fresh-import-errors li { margin:6px 0; font-size:12px; font-weight:700; }
+@media (max-width:720px) { .marketing-fresh-import-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }

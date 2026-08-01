@@ -5,6 +5,7 @@ import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, u
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
 import { EntityCreativeManager } from "../components/EntityCreativeManager";
+import { FreshMarketingImportModal } from "../components/FreshMarketingImportModal";
 import { marketingResultPlatformLabel } from "../engagementResults";
 import type { MarketingMeta } from "../types";
 import { useAuth } from "../../auth/AuthContext";
@@ -228,8 +229,10 @@ export function MarketingDatabasePage() {
   const canEditCampaignLinks = hasPermission(user, "marketing.campaign.edit");
   const canEditAgendaLinks = hasPermission(user, "marketing.agenda.edit");
   const canDownloadFiles = hasPermission(user, "marketing.file.download");
+  const canFreshImport = hasPermission(user, "marketing.campaign.create") && hasPermission(user, "marketing.agenda.create");
   const [meta, setMeta] = useState<MarketingMeta>(emptyMeta);
   const [creativeManager, setCreativeManager] = useState<{ open: boolean; row: any | null }>({ open: false, row: null });
+  const [freshImportOpen, setFreshImportOpen] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [detail, setDetail] = useState<any>(null);
@@ -464,7 +467,12 @@ export function MarketingDatabasePage() {
     <MarketingPage
       title="قاعدة البيانات"
       description="الحملات والأجندات وملفات النتائج وروابط الحملة والأرشفة."
-      actions={<input className="marketing-search" placeholder="بحث" value={search} onChange={(event) => setSearch(event.target.value)} />}
+      actions={(
+        <>
+          {canFreshImport ? <button type="button" className="marketing-secondary" onClick={() => setFreshImportOpen(true)}><FileArrowUp size={18} /> نقل حملة وأجندة</button> : null}
+          <input className="marketing-search" placeholder="بحث" value={search} onChange={(event) => setSearch(event.target.value)} />
+        </>
+      )}
     >
       {error ? <MarketingAlert>{error}</MarketingAlert> : null}
       {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
@@ -685,6 +693,16 @@ export function MarketingDatabasePage() {
           </section>}
         </div> : null}
       </Modal>
+
+      <FreshMarketingImportModal
+        open={freshImportOpen}
+        meta={meta}
+        onClose={() => setFreshImportOpen(false)}
+        onImported={async (importMessage) => {
+          setMessage(importMessage);
+          await load();
+        }}
+      />
 
       {selected && detail ? <EntityCreativeManager
         open={creativeManager.open}
