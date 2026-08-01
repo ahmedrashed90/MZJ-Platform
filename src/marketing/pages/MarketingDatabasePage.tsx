@@ -72,8 +72,83 @@ type ScheduleDisplayRow = {
   sourceIndex: number;
 };
 
-function buildScheduleRows(schedule: any[] | undefined): ScheduleDisplayRow[] {
-  const rows: ScheduleDisplayRow[] = (Array.isArray(schedule) ? schedule : [])
+function marketingPayload(value: unknown): Record<string, any> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function scheduleFromCreationPayload(
+  payloadValue: unknown,
+  sourceType: unknown,
+  meta: MarketingMeta,
+): any[] {
+  const payload = marketingPayload(payloadValue);
+  const platformName = (id: unknown) => meta.platforms.find((item) => item.id === String(id || ""))?.name || "—";
+  const postTypeName = (id: unknown) => meta.postTypes.find((item) => item.id === String(id || ""))?.name || "—";
+  const rows: any[] = [];
+
+  const appendPlatforms = (date: unknown, platformsValue: unknown, keyPrefix: string) => {
+    const publishDate = String(date || "").slice(0, 10);
+    if (!publishDate || !Array.isArray(platformsValue)) return;
+    platformsValue.forEach((platform: any, platformIndex: number) => {
+      const platformId = String(platform?.platformId || platform?.platform_id || "");
+      const postTypeIds = Array.isArray(platform?.postTypeIds)
+        ? platform.postTypeIds
+        : Array.isArray(platform?.post_type_ids)
+          ? platform.post_type_ids
+          : [];
+      postTypeIds.forEach((postTypeId: unknown, postTypeIndex: number) => {
+        const normalizedPostTypeId = String(postTypeId || "");
+        if (!platformId || !normalizedPostTypeId) return;
+        rows.push({
+          id: `payload-${keyPrefix}-${platformIndex}-${postTypeIndex}`,
+          publish_date: publishDate,
+          platform_id: platformId,
+          post_type_id: normalizedPostTypeId,
+          platform_name: platformName(platformId),
+          post_type_name: postTypeName(normalizedPostTypeId),
+        });
+      });
+    });
+  };
+
+  if (String(sourceType || "") === "agenda") {
+    const days = Array.isArray(payload.days) ? payload.days : [];
+    days.forEach((day: any, dayIndex: number) => {
+      const creatives = Array.isArray(day?.creatives) ? day.creatives : [];
+      creatives.forEach((creative: any, creativeIndex: number) => {
+        appendPlatforms(day?.date, creative?.platforms, `agenda-${dayIndex}-${creativeIndex}`);
+      });
+    });
+  } else {
+    const schedule = Array.isArray(payload.schedule) ? payload.schedule : [];
+    schedule.forEach((item: any, itemIndex: number) => {
+      appendPlatforms(item?.date, item?.platforms, `campaign-${itemIndex}`);
+    });
+  }
+
+  return rows;
+}
+
+function buildScheduleRows(
+  schedule: any[] | undefined,
+  payloadValue: unknown,
+  sourceType: unknown,
+  meta: MarketingMeta,
+): ScheduleDisplayRow[] {
+  const persistedSchedule = Array.isArray(schedule) ? schedule : [];
+  const sourceSchedule = persistedSchedule.length
+    ? persistedSchedule
+    : scheduleFromCreationPayload(payloadValue, sourceType, meta);
+  const rows: ScheduleDisplayRow[] = sourceSchedule
     .map((item, sourceIndex) => ({
       item,
       day: marketingDate(item.publish_date),
@@ -134,7 +209,7 @@ export function MarketingDatabasePage() {
   const [detailView, setDetailView] = useState<"data" | "results">("data");
   const canEditLinks = selected?.source_type === "agenda" ? canEditAgendaLinks : canEditCampaignLinks;
   const canEditCreatives = selected?.source_type === "agenda" ? canEditAgendaLinks : canEditCampaignLinks;
-  const scheduleRows = useMemo(() => buildScheduleRows(detail?.schedule), [detail]);
+  const scheduleRows = useMemo(() => buildScheduleRows(detail?.schedule, detail?.entity?.payload, detail?.entity?.source_type, meta), [detail, meta]);
   const finalProductFiles = useMemo(() => {
     const tasks = Array.isArray(detail?.tasks) ? detail.tasks : [];
     const files = Array.isArray(detail?.files) ? detail.files : [];
