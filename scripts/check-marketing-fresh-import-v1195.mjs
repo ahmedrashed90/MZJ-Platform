@@ -55,10 +55,12 @@ const checks = [
   ["database page exposes fresh import", page.includes("FreshMarketingImportModal") && page.includes("نقل حملة وأجندة")],
   ["modal explicitly starts tasks from zero", modal.includes("كل التاسكات ستبدأ من الصفر") && modal.includes("import_fresh_marketing_bundle")],
   ["resolver maps current-system references", resolver.includes("resolveFreshMarketingImport") && resolver.includes("resolveUser") && resolver.includes("resolveCar") && resolver.includes("resolvePostType")],
+  ["legacy emails are replaced through explicit user mappings", resolver.includes("FreshImportUserMapping") && resolver.includes("targetEmail") && resolver.includes("legacyEmail") && !resolver.includes("if (email) user =")],
   ["resolver blocks unresolved task links", resolver.includes("يوجد Task Template غير مربوط بتاسك تنفيذي")],
   ["fresh import styling exists", css.includes(".marketing-fresh-import-modal") && css.includes(".marketing-fresh-import-summary")],
   ["bundle format and version are correct", bundle.format === "mzj-marketing-fresh-import" && bundle.version === 1 && Boolean(bundle.migrationKey)],
   ["bundle has expected entities", bundle.campaigns?.length === 1 && bundle.agendas?.length === 1 && campaign?.creatives?.length === 7 && agendaCreatives.length === 13],
+  ["bundle includes the four confirmed new-system user mappings", bundle.userMappings?.length === 4 && ["abdullah.kh@mzj-platform.com", "mahmoud@mzj-platform.com", "belal@mzj-platform.com", "nagy@mzj-platform.com"].every((email) => bundle.userMappings.some((item) => item.targetEmail === email))],
   ["bundle carries setup only", findForbidden(bundle).length === 0],
   ["every Task Template has an execution link", allContentLinked],
 ];

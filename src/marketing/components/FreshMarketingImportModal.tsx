@@ -111,7 +111,7 @@ export function FreshMarketingImportModal({
         <label className="marketing-fresh-import-file">
           <FileArrowUp size={28} />
           <strong>{fileName || "اختر ملف النقل JSON"}</strong>
-          <span>الملف يحتوي على بيانات الحملة والأجندة والكرييتيفات والتوزيع والمواعيد فقط.</span>
+          <span>الملف يحتوي على بيانات الإنشاء وخريطة ربط اليوزرات بالنظام الجديد فقط.</span>
           <input type="file" accept="application/json,.json" onChange={(event) => void selectFile(event.target.files?.[0])} />
         </label>
 
@@ -130,7 +130,7 @@ export function FreshMarketingImportModal({
               </div>
             ) : (
               <MarketingAlert type="success">
-                تمت مطابقة اليوزرات والأقسام والكرييتيفات والمنصات والسيارات، والملف جاهز للإنشاء.
+                تمت مطابقة اليوزرات بالبريد الجديد والاسم العربي، مع الأقسام والكرييتيفات والمنصات والسيارات، والملف جاهز للإنشاء.
               </MarketingAlert>
             )}
           </>

@@ -474,7 +474,6 @@ async function createCampaignInTransaction(
 }
 
 async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
-  if (!hasPermission(user, "marketing.campaign.create")) throw new Error("لا توجد صلاحية لإنشاء حملة");
   const meta = await marketingMeta(sql, user);
   const contentId = contentDepartmentId(meta);
   return sql.begin((tx) => createCampaignInTransaction(tx, body, user, contentId));
@@ -577,7 +576,6 @@ async function createAgendaInTransaction(tx: any, body: Record<string, any>, use
 }
 
 async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
-  if (!hasPermission(user, "marketing.agenda.create")) throw new Error("لا توجد صلاحية لإنشاء أجندة");
   const meta = await marketingMeta(sql, user);
   const contentId = contentDepartmentId(meta);
   return sql.begin((tx) => createAgendaInTransaction(tx, body, user, contentId));

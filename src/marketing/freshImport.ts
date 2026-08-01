@@ -8,6 +8,14 @@ import type {
   StockCar,
 } from "./types";
 
+export type FreshImportUserMapping = {
+  legacyId?: string;
+  legacyEmail?: string;
+  legacyName?: string;
+  targetEmail?: string;
+  targetName?: string;
+};
+
 export type FreshImportReference = {
   email?: string;
   name?: string;
@@ -54,6 +62,7 @@ export type FreshMarketingImportBundle = {
   version: number;
   migrationKey: string;
   createdFrom?: Record<string, unknown>;
+  userMappings?: FreshImportUserMapping[];
   campaigns?: Array<{
     legacyId?: string;
     legacyCode?: string;
@@ -153,13 +162,54 @@ function matchOne<T>(items: T[], predicate: (item: T) => boolean) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-function resolveUser(reference: FreshImportReference, meta: MarketingMeta, errors: string[], context: string) {
-  const email = normalized(reference.email);
-  const name = normalized(reference.name);
-  let user: MarketingUser | null = null;
-  if (email) user = matchOne(meta.users, (item) => normalized(item.email) === email);
-  if (!user && name) user = matchOne(meta.users, (item) => normalized(item.full_name || item.fullName) === name);
-  if (!user) errors.push(`${context}: اليوزر غير موجود (${reference.email || reference.name || reference.legacyId || "بدون اسم"})`);
+function resolveUser(
+  reference: FreshImportReference,
+  mappings: FreshImportUserMapping[],
+  meta: MarketingMeta,
+  errors: string[],
+  context: string,
+) {
+  const legacyId = normalized(reference.legacyId);
+  const legacyEmail = normalized(reference.email);
+  const legacyName = normalized(reference.name);
+  const matchingMappings = mappings.filter((mapping) => {
+    if (mapping.legacyId && legacyId && normalized(mapping.legacyId) === legacyId) return true;
+    if (mapping.legacyEmail && legacyEmail && normalized(mapping.legacyEmail) === legacyEmail) return true;
+    return Boolean(mapping.legacyName && legacyName && normalized(mapping.legacyName) === legacyName);
+  });
+
+  if (matchingMappings.length > 1) {
+    errors.push(`${context}: يوجد أكثر من ربط لنفس اليوزر القديم (${reference.name || reference.legacyId || "بدون اسم"})`);
+    return null;
+  }
+
+  const mapping = matchingMappings[0];
+  const targetEmail = normalized(mapping?.targetEmail);
+  const targetName = normalized(mapping?.targetName || mapping?.legacyName || reference.name);
+  let matches: MarketingUser[] = [];
+
+  if (mapping && targetEmail) {
+    matches = meta.users.filter((item) => normalized(item.email) === targetEmail);
+  } else if (targetName) {
+    matches = meta.users.filter((item) => normalized(item.full_name || item.fullName) === targetName);
+  }
+
+  if (matches.length > 1) {
+    errors.push(`${context}: الاسم أو البريد مربوط بأكثر من يوزر في النظام الجديد (${mapping?.targetEmail || mapping?.targetName || reference.name || "بدون اسم"})`);
+    return null;
+  }
+
+  const user = matches[0] || null;
+  if (!user) {
+    errors.push(`${context}: اليوزر غير موجود في النظام الجديد (${mapping?.targetEmail || mapping?.targetName || reference.name || reference.legacyId || "بدون اسم"})`);
+    return null;
+  }
+
+  if (targetName && normalized(user.full_name || user.fullName) !== targetName) {
+    errors.push(`${context}: البريد المحدد لا يطابق الاسم العربي المطلوب (${mapping?.targetName || mapping?.legacyName || reference.name})`);
+    return null;
+  }
+
   return user;
 }
 
@@ -287,13 +337,13 @@ function resolveCar(label: string, meta: MarketingMeta, usedCarIds: Set<string>,
   return null;
 }
 
-function resolveCreative(creative: FreshImportCreative, meta: MarketingMeta, errors: string[], context: string): CreativeDraft | null {
+function resolveCreative(creative: FreshImportCreative, mappings: FreshImportUserMapping[], meta: MarketingMeta, errors: string[], context: string): CreativeDraft | null {
   const creativeType = resolveCreativeType(creative.creativeTypeName, meta, errors, context);
   if (!creativeType) return null;
 
   const resolvedContentUsers = (creative.contentUsers || []).map((reference, index) => ({
     reference,
-    user: resolveUser(reference, meta, errors, `${context} / كاتب المحتوى ${index + 1}`),
+    user: resolveUser(reference, mappings, meta, errors, `${context} / كاتب المحتوى ${index + 1}`),
   }));
   const contentAssignments = resolvedContentUsers.flatMap(({ reference, user }) => user ? [{
     userId: user.id,
@@ -318,7 +368,7 @@ function resolveCreative(creative: FreshImportCreative, meta: MarketingMeta, err
   };
 
   const primaryAssignments = (creative.primaryUsers || []).flatMap((reference, index) => {
-    const user = resolveUser(reference, meta, errors, `${context} / يوزر القسم الأساسي ${index + 1}`);
+    const user = resolveUser(reference, mappings, meta, errors, `${context} / يوزر القسم الأساسي ${index + 1}`);
     if (!user) return [];
     const contentUserIds = resolveContentLinks(reference);
     if (!contentUserIds.length) errors.push(`${context}: اليوزر ${reference.name || reference.email} غير مربوط بكاتب محتوى`);
@@ -329,7 +379,7 @@ function resolveCreative(creative: FreshImportCreative, meta: MarketingMeta, err
     const department = resolveDepartment(group.departmentName, group.departmentRole, meta, errors, `${context} / القسم الاختياري ${groupIndex + 1}`);
     if (!department) return [];
     const assignments = (group.users || []).flatMap((reference, userIndex) => {
-      const user = resolveUser(reference, meta, errors, `${context} / ${department.name} / يوزر ${userIndex + 1}`);
+      const user = resolveUser(reference, mappings, meta, errors, `${context} / ${department.name} / يوزر ${userIndex + 1}`);
       if (!user) return [];
       const contentUserIds = resolveContentLinks(reference);
       if (!contentUserIds.length) errors.push(`${context}: اليوزر ${reference.name || reference.email} غير مربوط بكاتب محتوى`);
@@ -373,13 +423,14 @@ export function resolveFreshMarketingImport(bundle: FreshMarketingImportBundle, 
   if (Number(bundle?.version) !== 1) errors.push("إصدار ملف النقل غير مدعوم");
   if (!String(bundle?.migrationKey || "").trim()) errors.push("مفتاح عملية النقل غير موجود");
 
+  const mappings = Array.isArray(bundle.userMappings) ? bundle.userMappings : [];
   const summary = { campaigns: 0, agendas: 0, creatives: 0, taskTemplates: 0, executionTasks: 0, cars: 0 };
   const campaigns = (bundle.campaigns || []).flatMap((campaign, campaignIndex) => {
     const context = `الحملة ${campaign.name || campaignIndex + 1}`;
     const campaignType = resolveCampaignType(campaign.campaignTypeName, meta, errors, context);
     if (!campaignType) return [];
     const creatives = campaign.creatives.flatMap((creative, creativeIndex) => {
-      const resolved = resolveCreative(creative, meta, errors, `${context} / كرييتيف ${creativeIndex + 1}`);
+      const resolved = resolveCreative(creative, mappings, meta, errors, `${context} / كرييتيف ${creativeIndex + 1}`);
       return resolved ? [resolved] : [];
     });
     const byLegacyId = new Map(creatives.map((creative) => [creative.tempId, creative]));
@@ -427,7 +478,7 @@ export function resolveFreshMarketingImport(bundle: FreshMarketingImportBundle, 
     const days = (agenda.days || []).map((day) => ({
       date: String(day.date || "").slice(0, 10),
       creatives: (day.creatives || []).flatMap((creative, creativeIndex) => {
-        const resolved = resolveCreative(creative, meta, errors, `${context} / ${day.date} / كرييتيف ${creativeIndex + 1}`);
+        const resolved = resolveCreative(creative, mappings, meta, errors, `${context} / ${day.date} / كرييتيف ${creativeIndex + 1}`);
         if (!resolved) return [];
         summary.creatives += 1;
         summary.cars += resolved.cars.length;
