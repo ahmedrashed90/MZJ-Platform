@@ -201,8 +201,25 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
       count(*)::int as total_contacts,
       count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='open'))::int as open_contacts,
       count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='closed'))::int as completed_contacts,
-      count(*) filter(where exists(select 1 from crm.conversations cv where cv.contact_id=c.id))::int as contacts_with_conversations
+      count(*) filter(where exists(select 1 from crm.conversations cv where cv.contact_id=c.id))::int as contacts_with_conversations,
+      coalesce(sum(contact_sales.sales_orders_count),0)::int as total_sales_orders,
+      coalesce(sum(contact_sales.sold_vehicles_count),0)::int as total_sold_vehicles
     from crm.contacts c
+    left join (
+      select
+        sales_lead.contact_id,
+        count(*)::int as sales_orders_count,
+        coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_vehicles_count
+      from integrations.erpnext_sales_orders so
+      join crm.leads sales_lead on sales_lead.id=so.crm_lead_id
+      left join lateral (
+        select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
+        from integrations.erpnext_sales_order_vehicles sov
+        where sov.sales_order_id=so.id
+      ) vehicle_stats on true
+      where coalesce(so.is_cancelled,false)=false
+      group by sales_lead.contact_id
+    ) contact_sales on contact_sales.contact_id=c.id
     where (
       ${scope.all}::boolean
       or exists(

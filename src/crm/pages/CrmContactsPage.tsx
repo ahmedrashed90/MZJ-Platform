@@ -425,6 +425,8 @@ export function CrmContactsPage() {
       <SummaryCard icon={ClockCounterClockwise} label="لديها طلبات مفتوحة" value={number.format(Number(summary.open_contacts || 0))} />
       <SummaryCard icon={CheckCircle} label="لديها طلبات منتهية" value={number.format(Number(summary.completed_contacts || 0))} />
       <SummaryCard icon={ChatCircleDots} label="لديها محادثات" value={number.format(Number(summary.contacts_with_conversations || 0))} />
+      <SummaryCard icon={Car} label="إجمالي السيارات المباعة" value={number.format(Number(summary.total_sold_vehicles || 0))} />
+      <SummaryCard icon={Receipt} label="إجمالي طلبات البيع" value={number.format(Number(summary.total_sales_orders || 0))} />
     </section>
 
     <section className="crm-contact-list-shell">
@@ -479,7 +481,7 @@ export function CrmContactsPage() {
             <SummaryCard icon={ClockCounterClockwise} label="آخر عملية بيع" value={formatDate(profile.salesSummary.lastSaleAt)} />
           </section>
 
-          <section className="crm-contact-info-panel">
+          <section className="crm-contact-info-panel crm-contact-primary-info">
             <div className="crm-contact-section-title"><div><h3>البيانات الحالية</h3><p>آخر بيانات فعالة مرتبطة بملف العميل.</p></div><IdentificationCard size={23} /></div>
             <div className="crm-contact-info-grid">
               <article><small>الاسم</small><strong>{contactName}</strong></article><article><small>رقم الجوال</small><strong dir="ltr">{text(profile.contact.primary_phone || profile.contact.primary_phone_normalized)}</strong></article>
