@@ -5936,61 +5936,271 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 
 
-/* Operations inventory/all/archive: use the available canvas and keep VIN visible. */
-.operations-inventory-list-page {
-  width: calc(100% + 40px);
-  margin-inline: -20px;
+/* Operations data workspace: balanced full-width layout for inventory, all cars and archive. */
+@media (min-width: 781px) {
+  .operations-module {
+    width: calc(100% + 24px);
+    margin-inline: -12px;
+  }
 }
-.operations-inventory-list-page > .module-page-head,
-.operations-inventory-list-page > .operations-alert {
-  margin-inline: 20px;
-}
-.operations-inventory-list-page .operations-data-panel {
+
+.operations-module .operations-tabs {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border: 1px solid #eadfda;
   border-radius: 14px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 8px 24px rgba(72,45,35,.045);
 }
+
+.operations-module .operations-tabs a {
+  min-height: 38px;
+  padding-inline: 14px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.operations-module .operations-page > .module-page-head {
+  min-height: 84px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 15px 18px;
+  border: 1px solid #eadfda;
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.99), rgba(255,249,246,.96));
+  box-shadow: 0 8px 24px rgba(72,45,35,.045);
+}
+
+.operations-module .operations-page > .module-page-head h1 {
+  font-size: 27px;
+  line-height: 1.25;
+}
+
+.operations-module .operations-page > .module-page-head p {
+  margin-top: 4px;
+  line-height: 1.55;
+}
+
+.operations-module .operations-header-actions {
+  gap: 8px;
+}
+
+.operations-module .operations-header-actions button,
+.operations-module .operations-count {
+  min-height: 38px;
+}
+
+.operations-inventory-list-page {
+  width: 100%;
+  margin: 0;
+}
+
+.operations-inventory-list-page .operations-data-panel {
+  overflow: visible;
+  border-color: #e8ddd8;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(64,40,31,.055);
+}
+
 .operations-inventory-list-page .operations-filters {
-  padding-inline: 10px;
+  grid-template-columns: minmax(330px,2.3fr) minmax(170px,.9fr) minmax(170px,.9fr) minmax(125px,.65fr) auto;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 0;
+  border-bottom: 1px solid #eee5e1;
+  border-radius: 14px 14px 0 0;
+  background: linear-gradient(180deg,#fff 0%,#fcfaf9 100%);
 }
-.operations-inventory-list-page .operations-table th,
-.operations-inventory-list-page .operations-table td {
-  height: 42px;
-  padding: 8px 7px;
-  font-size: 11.5px;
+
+.operations-inventory-list-page .operations-filters.sticky {
+  top: 66px;
+  box-shadow: 0 7px 18px rgba(65,41,32,.04);
 }
-.operations-inventory-list-page .operations-table th {
-  font-size: 11px;
+
+.operations-inventory-list-page .operations-filters input,
+.operations-inventory-list-page .operations-filters select,
+.operations-inventory-list-page .operations-search {
+  min-height: 40px;
+  border-radius: 9px;
 }
+
+.operations-inventory-list-page .operations-filters > button {
+  min-width: 88px;
+  min-height: 40px;
+  border-color: #d9c9c2;
+  background: #fff;
+}
+
+.operations-inventory-list-page .operations-table-shell {
+  overflow: hidden;
+  border-radius: 0 0 14px 14px;
+  background: #fff;
+}
+
+.operations-inventory-list-page .operations-table-tools {
+  min-height: 38px;
+  padding: 6px 11px;
+  border-bottom: 1px solid #eee5e1;
+  background: #fff;
+  color: #7d706a;
+}
+
+.operations-inventory-list-page .operations-table-tools button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: #fffaf7;
+}
+
 .operations-inventory-list-page .operations-table-scroll {
+  max-height: calc(100vh - 304px);
+  min-height: 330px;
+  border: 0;
+  background: #fff;
   scrollbar-gutter: stable;
 }
+
+.operations-inventory-list-page .operations-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.operations-inventory-list-page .operations-table th,
+.operations-inventory-list-page .operations-table td {
+  height: 45px;
+  padding: 8px 9px;
+  border-bottom-color: #eee8e5;
+  font-size: 11.5px;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.operations-inventory-list-page .operations-table th {
+  height: 42px;
+  color: #695b55;
+  font-size: 10.8px;
+  letter-spacing: 0;
+  background: linear-gradient(180deg,#f8f5f3 0%,#f4efec 100%);
+  border-bottom: 1px solid #dfd4cf;
+}
+
+.operations-inventory-list-page .operations-table tbody tr:nth-child(even) td {
+  background: #fdfcfa;
+}
+
+.operations-inventory-list-page .operations-table tbody tr:hover td {
+  background: #fff8f4;
+}
+
+.operations-inventory-list-page .operations-table td > span[title] {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .operations-vehicle-table th:first-child,
 .operations-vehicle-table td:first-child {
   position: sticky;
   right: 0;
 }
+
 .operations-vehicle-table th:first-child {
-  z-index: 8;
-  background: #f7f2ef;
-  box-shadow: -1px 0 0 #e8dfda;
+  z-index: 9;
+  color: #5d3329;
+  background: linear-gradient(180deg,#f5ece8 0%,#efe3dd 100%);
+  box-shadow: -5px 0 10px rgba(68,43,34,.06), -1px 0 0 #ded1cb;
 }
+
 .operations-vehicle-table td:first-child {
-  z-index: 3;
+  z-index: 4;
   background: #fff;
-  box-shadow: -1px 0 0 #eee7e3;
+  box-shadow: -5px 0 10px rgba(68,43,34,.035), -1px 0 0 #e8ddd8;
 }
-.operations-vehicle-table tbody tr:hover td:first-child {
-  background: #fbf8f6;
+
+.operations-inventory-list-page .operations-table tbody tr:nth-child(even) td:first-child {
+  background: #fdfcfa;
 }
+
+.operations-inventory-list-page .operations-table tbody tr:hover td:first-child {
+  background: #fff8f4;
+}
+
+.operations-inventory-list-page .operations-vin-link {
+  color: #b94f30;
+  text-decoration: none;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.operations-inventory-list-page .operations-vin-link:hover {
+  color: #7b3023;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.operations-inventory-list-page .operations-pagination {
+  min-height: 52px;
+  padding: 9px 12px;
+  border-top: 1px solid #eee5e1;
+  background: #fcfaf9;
+}
+
+.operations-inventory-list-page .operations-pagination button {
+  min-width: 78px;
+  min-height: 34px;
+  padding: 6px 12px;
+}
+
+.operations-table-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.operations-table-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid #f5f1ef;
+  background: #aa9b94;
+}
+
 .department-card.metrics-4 .department-metrics {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
+
+@media (max-width: 1120px) {
+  .operations-inventory-list-page .operations-filters {
+    grid-template-columns: repeat(4,minmax(0,1fr));
+  }
+  .operations-inventory-list-page .operations-filters .operations-search {
+    grid-column: 1 / -1;
+  }
+  .operations-inventory-list-page .operations-table-scroll {
+    max-height: calc(100vh - 360px);
+  }
+}
+
 @media (max-width: 780px) {
-  .operations-inventory-list-page {
+  .operations-module {
     width: 100%;
     margin-inline: 0;
   }
-  .operations-inventory-list-page > .module-page-head,
-  .operations-inventory-list-page > .operations-alert {
-    margin-inline: 0;
+  .operations-module .operations-tabs {
+    margin-bottom: 10px;
+    border-radius: 12px;
+  }
+  .operations-module .operations-page > .module-page-head {
+    min-height: 0;
+    padding: 13px;
+  }
+  .operations-inventory-list-page .operations-filters {
+    grid-template-columns: 1fr;
+  }
+  .operations-inventory-list-page .operations-filters .operations-search {
+    grid-column: auto;
+  }
+  .operations-inventory-list-page .operations-table-scroll {
+    max-height: none;
+    min-height: 300px;
   }
 }
