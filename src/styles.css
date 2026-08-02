@@ -5495,24 +5495,24 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .dashboard-unified-widget-grid .dashboard-main-widget-analytics > .panel { min-height: 360px; }
 }
 
-/* CRM contacts totals and customer profile refinement */
+/* CRM contacts totals + compact premium customer profile */
 .crm-contact-overview-grid {
   grid-template-columns:repeat(6,minmax(0,1fr));
 }
 .crm-contact-overview-grid .crm-contact-summary-card {
   position:relative;
   overflow:hidden;
-  min-height:104px;
+  min-height:96px;
   border-color:#eaded8;
   background:linear-gradient(145deg,#fff 0%,#fffaf7 100%);
-  box-shadow:0 10px 28px rgba(71,38,29,.055);
+  box-shadow:0 9px 25px rgba(71,38,29,.05);
 }
 .crm-contact-overview-grid .crm-contact-summary-card::after {
   content:"";
   position:absolute;
   inset-inline-start:0;
-  top:18px;
-  bottom:18px;
+  top:17px;
+  bottom:17px;
   width:3px;
   border-radius:0 4px 4px 0;
   background:#9c5a47;
@@ -5529,15 +5529,15 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .crm-contact-profile-backdrop {
   background:
-    radial-gradient(circle at 88% 5%,rgba(169,93,72,.09),transparent 31%),
-    radial-gradient(circle at 10% 95%,rgba(50,132,91,.06),transparent 28%),
+    radial-gradient(circle at 88% 4%,rgba(169,93,72,.075),transparent 29%),
+    radial-gradient(circle at 8% 96%,rgba(50,132,91,.045),transparent 25%),
     #f6f2ef;
 }
 .crm-contact-profile-hero {
-  padding:13px 24px 19px;
-  background:rgba(255,255,255,.94);
+  padding:10px 22px 12px;
+  background:rgba(255,255,255,.95);
   border-bottom-color:#e3d5ce;
-  box-shadow:0 10px 30px rgba(60,32,24,.06);
+  box-shadow:0 8px 25px rgba(60,32,24,.05);
 }
 .crm-contact-profile-actions,
 .crm-contact-profile-identity {
@@ -5545,27 +5545,27 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   margin-inline:auto;
 }
 .crm-contact-profile-actions {
-  margin-bottom:10px;
+  margin-bottom:7px;
 }
 .crm-contact-profile-identity {
   position:relative;
   overflow:hidden;
-  min-height:96px;
-  padding:16px 18px;
+  min-height:76px;
+  padding:11px 14px;
   border:1px solid #e7d9d2;
-  border-radius:20px;
-  background:linear-gradient(135deg,#fff 0%,#fff9f5 70%,#f8eee9 100%);
-  box-shadow:0 11px 30px rgba(69,36,28,.055);
+  border-radius:16px;
+  background:linear-gradient(135deg,#fff 0%,#fffaf7 72%,#f8eee9 100%);
+  box-shadow:0 8px 24px rgba(69,36,28,.045);
 }
 .crm-contact-profile-identity::before {
   content:"";
   position:absolute;
-  inset-inline-end:-65px;
+  inset-inline-end:-48px;
   top:-92px;
-  width:235px;
-  height:235px;
+  width:205px;
+  height:205px;
   border-radius:50%;
-  background:rgba(161,88,69,.08);
+  background:rgba(161,88,69,.065);
   pointer-events:none;
 }
 .crm-contact-profile-identity>div,
@@ -5573,159 +5573,364 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   position:relative;
   z-index:1;
 }
+.crm-contact-profile-identity .crm-contact-avatar {
+  width:48px;
+  height:48px;
+  flex-basis:48px;
+  border-radius:14px;
+  box-shadow:0 7px 18px rgba(103,54,42,.16);
+}
 .crm-contact-profile-identity h2 {
-  max-width:900px;
+  max-width:980px;
+  margin:2px 0;
+  font-size:21px;
   line-height:1.35;
 }
+.crm-contact-profile-identity p {
+  font-size:10px;
+}
+.crm-contact-hero-badges {
+  gap:6px;
+}
 .crm-contact-hero-badges span {
-  background:rgba(255,255,255,.78);
-  box-shadow:0 3px 10px rgba(78,42,32,.035);
+  padding:6px 9px;
+  background:rgba(255,255,255,.8);
+  box-shadow:0 2px 8px rgba(78,42,32,.025);
+  font-size:10px;
 }
 .crm-contact-profile-body {
   grid-template-columns:repeat(12,minmax(0,1fr));
-  gap:16px;
+  gap:11px;
   align-items:start;
   width:min(1540px,calc(100% - 30px));
-  padding:19px 0 38px;
+  padding:13px 0 30px;
 }
 .crm-contact-sales-summary {
   grid-column:1 / -1;
   grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
 }
 .crm-contact-sales-summary .crm-contact-summary-card {
-  min-height:104px;
+  min-height:78px;
+  padding:10px 12px;
   border-color:#e5d7d0;
+  border-radius:14px;
   background:linear-gradient(145deg,#fff 0%,#fff9f5 100%);
-  box-shadow:0 10px 30px rgba(66,35,27,.055);
+  box-shadow:0 7px 21px rgba(66,35,27,.045);
+}
+.crm-contact-sales-summary .crm-contact-summary-card>span {
+  width:38px;
+  height:38px;
+  flex-basis:38px;
+  border-radius:11px;
+}
+.crm-contact-sales-summary .crm-contact-summary-card strong {
+  font-size:17px;
+}
+.crm-contact-sales-summary .crm-contact-summary-card small {
+  font-size:10px;
+}
+.crm-contact-sales-summary .crm-contact-summary-card p {
+  font-size:9px;
 }
 .crm-contact-sales-summary .crm-contact-summary-card:nth-child(2)>span,
 .crm-contact-sales-summary .crm-contact-summary-card:nth-child(3)>span {
   background:#eaf7ef;
   color:#14764a;
 }
-.crm-contact-primary-info {
-  grid-column:span 4;
-}
-.crm-contact-sales-orders-panel {
-  grid-column:span 8;
-}
+.crm-contact-primary-info,
+.crm-contact-sales-orders-panel,
 .crm-contact-secondary-grid {
   grid-column:1 / -1;
 }
 .crm-contact-info-panel,
 .crm-contact-sales-orders-panel {
+  padding:12px 13px;
   border-color:#e6d9d2;
-  border-radius:20px;
-  box-shadow:0 11px 32px rgba(66,35,27,.05);
+  border-radius:16px;
+  background:rgba(255,255,255,.96);
+  box-shadow:0 8px 24px rgba(66,35,27,.042);
 }
 .crm-contact-primary-info {
-  background:linear-gradient(160deg,#fff 0%,#fffaf7 100%);
-}
-.crm-contact-primary-info .crm-contact-info-grid {
-  grid-template-columns:repeat(2,minmax(0,1fr));
+  background:linear-gradient(145deg,#fff 0%,#fffaf7 100%);
 }
 .crm-contact-section-title {
-  min-height:50px;
-  padding-bottom:13px;
-  margin-bottom:14px;
+  min-height:38px;
+  padding-bottom:8px;
+  margin-bottom:9px;
+}
+.crm-contact-section-title h3 {
+  font-size:15px;
+}
+.crm-contact-section-title p {
+  margin-top:2px;
+  font-size:9px;
 }
 .crm-contact-section-title>svg {
-  width:42px;
-  height:42px;
-  padding:9px;
-  border-radius:13px;
+  width:34px;
+  height:34px;
+  padding:7px;
+  border-radius:10px;
   background:#fff0e8;
   color:var(--brand);
   box-sizing:border-box;
 }
-.crm-contact-info-grid article {
-  position:relative;
-  min-height:82px;
-  padding:13px 14px;
-  border-color:#eaded8;
-  background:rgba(255,255,255,.86);
-  box-shadow:0 4px 13px rgba(75,40,31,.025);
-}
-.crm-contact-info-grid article::before {
-  content:"";
-  position:absolute;
-  inset-inline-start:0;
-  top:15px;
-  bottom:15px;
-  width:2px;
-  border-radius:2px;
-  background:#d7aa99;
-}
-.crm-contact-info-grid small {
+.crm-contact-section-title>span {
+  padding:5px 9px;
   font-size:10px;
-  letter-spacing:.01em;
 }
-.crm-contact-info-grid strong {
-  line-height:1.55;
+.crm-contact-primary-info .crm-contact-info-grid {
+  grid-template-columns:minmax(230px,1.7fr) repeat(7,minmax(105px,1fr));
+  gap:1px;
+  overflow:hidden;
+  border:1px solid #eaded8;
+  border-radius:12px;
+  background:#eaded8;
+}
+.crm-contact-primary-info .crm-contact-info-grid article {
+  min-height:56px;
+  padding:8px 10px;
+  border:0;
+  border-radius:0;
+  background:linear-gradient(145deg,#fff 0%,#fffaf7 100%);
+  box-shadow:none;
+}
+.crm-contact-primary-info .crm-contact-info-grid article::before {
+  display:none;
+}
+.crm-contact-primary-info .crm-contact-info-grid small {
+  font-size:9px;
+}
+.crm-contact-primary-info .crm-contact-info-grid strong {
+  font-size:11px;
+  line-height:1.45;
 }
 .crm-contact-sales-orders-panel {
   background:#fff;
 }
+.crm-contact-sales-orders-list {
+  gap:8px;
+}
 .crm-sales-order-card {
-  border-color:#e5d7d0;
-  border-radius:16px;
-  box-shadow:0 6px 20px rgba(68,37,29,.035);
+  border-color:#e4d7d0;
+  border-radius:13px;
+  box-shadow:0 5px 17px rgba(68,37,29,.03);
   transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease;
 }
 .crm-sales-order-card:hover {
-  border-color:#d9b9ac;
-  box-shadow:0 10px 28px rgba(68,37,29,.065);
+  border-color:#d8b9ad;
+  box-shadow:0 8px 22px rgba(68,37,29,.055);
 }
 .crm-sales-order-head {
-  min-height:74px;
-  padding:14px 15px;
+  min-height:58px;
+  grid-template-columns:minmax(220px,1.45fr) minmax(115px,.8fr) minmax(145px,1fr) minmax(115px,.8fr) minmax(66px,.45fr) minmax(140px,.95fr) auto auto;
+  gap:8px;
+  padding:9px 12px;
   background:linear-gradient(135deg,#fff 0%,#fffaf7 100%);
 }
+.crm-sales-order-head>div {
+  gap:2px;
+}
+.crm-sales-order-head small {
+  font-size:8px;
+}
+.crm-sales-order-head strong {
+  font-size:11px;
+}
+.crm-sales-order-number {
+  gap:8px!important;
+}
+.crm-sales-order-number>span {
+  width:34px;
+  height:34px;
+  border-radius:10px;
+}
+.crm-sales-order-state {
+  padding:5px 8px;
+  font-size:9px;
+}
 .crm-sales-order-actions {
-  padding:0 15px 12px;
-  background:#fffaf7;
+  gap:6px;
+  padding:6px 12px 8px;
+  border-top:1px dashed #efe2dc;
+  background:#fffdfb;
+}
+.crm-sales-order-actions .compact {
+  min-height:28px;
+  padding:0 9px;
+  border-radius:8px;
+  font-size:9px;
 }
 .crm-sales-order-details {
-  padding:15px;
+  gap:8px;
+  padding:9px 12px 11px;
   background:linear-gradient(180deg,#fffaf7 0%,#fff 100%);
 }
+.crm-sales-order-financials {
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:1px;
+  overflow:hidden;
+  border:1px solid #eadbd4;
+  border-radius:10px;
+  background:#eadbd4;
+}
 .crm-sales-order-financials article {
-  min-height:68px;
-  align-content:center;
+  min-height:42px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:7px 9px;
+  border:0;
+  border-radius:0;
   background:#fff;
-  box-shadow:0 4px 14px rgba(70,38,29,.025);
+  box-shadow:none;
+}
+.crm-sales-order-financials small {
+  font-size:8px;
+}
+.crm-sales-order-financials strong {
+  font-size:11px;
+  white-space:nowrap;
+}
+.crm-sales-order-meta {
+  gap:6px;
+}
+.crm-sales-order-meta span {
+  padding:5px 7px;
+  border-radius:8px;
+  font-size:9px;
+}
+.crm-sales-order-cancel-note {
+  padding:7px 9px;
+  border-radius:9px;
+  font-size:10px;
+}
+.crm-sales-vehicles-table {
+  border-radius:10px;
+}
+.crm-sales-vehicles-table .crm-table {
+  min-width:940px;
+  font-size:10px;
+}
+.crm-sales-vehicles-table .crm-table th {
+  padding:8px 8px;
+  font-size:10px;
+}
+.crm-sales-vehicles-table .crm-table td {
+  padding:8px 8px;
+  font-size:10px;
 }
 .crm-contact-secondary-grid {
-  gap:14px;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
 }
 .crm-contact-secondary-grid .crm-contact-info-panel {
-  min-height:310px;
+  min-height:0;
+  padding:11px 12px;
+}
+.crm-contact-secondary-grid .crm-contact-section-title {
+  min-height:35px;
+}
+.crm-contact-timeline {
+  max-height:230px;
+  gap:6px;
 }
 .crm-contact-timeline article {
+  padding:8px 9px;
   border-color:#eaded8;
-  border-radius:12px;
+  border-radius:9px;
   background:linear-gradient(145deg,#fff 0%,#fffaf7 100%);
-  box-shadow:0 4px 14px rgba(70,38,29,.025);
+  box-shadow:none;
+}
+.crm-contact-timeline strong {
+  font-size:10px;
+}
+.crm-contact-timeline p {
+  margin:4px 0;
+  font-size:9px;
+  line-height:1.55;
+}
+.crm-contact-timeline small {
+  font-size:8px;
+}
+.crm-contact-empty-section {
+  padding:16px;
+  font-size:10px;
 }
 @media(max-width:1450px) {
   .crm-contact-overview-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
 }
 @media(max-width:1180px) {
-  .crm-contact-primary-info { grid-column:span 5; }
-  .crm-contact-sales-orders-panel { grid-column:span 7; }
+  .crm-contact-primary-info .crm-contact-info-grid {
+    grid-template-columns:minmax(220px,1.7fr) repeat(3,minmax(120px,1fr));
+  }
+  .crm-contact-secondary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
-@media(max-width:900px) {
-  .crm-contact-overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .crm-contact-primary-info,
-  .crm-contact-sales-orders-panel { grid-column:1 / -1; }
-  .crm-contact-primary-info .crm-contact-info-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+@media(max-width:1100px) {
+  .crm-contact-sales-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .crm-sales-order-head {
+    grid-template-columns:minmax(200px,1.4fr) repeat(2,minmax(110px,.85fr)) auto auto;
+  }
+  .crm-sales-order-head>div:nth-of-type(4),
+  .crm-sales-order-head>div:nth-of-type(5),
+  .crm-sales-order-head>div:nth-of-type(6) {
+    display:none;
+  }
 }
-@media(max-width:700px) {
+@media(max-width:760px) {
+  .crm-contact-profile-hero { padding:9px 10px 11px; }
   .crm-contact-profile-actions,
   .crm-contact-profile-identity { width:100%; }
-  .crm-contact-profile-identity { padding:14px; }
-  .crm-contact-primary-info .crm-contact-info-grid { grid-template-columns:1fr; }
+  .crm-contact-profile-identity {
+    min-height:0;
+    padding:11px;
+    grid-template-columns:auto minmax(0,1fr);
+  }
+  .crm-contact-profile-identity h2 { font-size:18px; }
+  .crm-contact-hero-badges {
+    grid-column:1 / -1;
+    justify-content:flex-start;
+  }
+  .crm-contact-profile-body {
+    width:calc(100% - 16px);
+    padding-top:9px;
+  }
+  .crm-contact-primary-info .crm-contact-info-grid {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .crm-contact-primary-info .crm-contact-info-grid article:first-child {
+    grid-column:1 / -1;
+  }
+  .crm-sales-order-head {
+    grid-template-columns:1fr auto auto;
+  }
+  .crm-sales-order-head>div:not(:first-child) {
+    display:none;
+  }
+  .crm-sales-order-actions {
+    justify-content:stretch;
+  }
+  .crm-sales-order-actions button {
+    flex:1;
+  }
+  .crm-sales-order-financials {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .crm-contact-secondary-grid {
+    grid-template-columns:1fr;
+  }
 }
 @media(max-width:560px) {
-  .crm-contact-overview-grid { grid-template-columns:1fr; }
+  .crm-contact-overview-grid,
+  .crm-contact-sales-summary {
+    grid-template-columns:1fr;
+  }
+  .crm-contact-primary-info .crm-contact-info-grid,
+  .crm-sales-order-financials {
+    grid-template-columns:1fr;
+  }
+  .crm-contact-primary-info .crm-contact-info-grid article:first-child {
+    grid-column:auto;
+  }
 }
