@@ -2023,8 +2023,8 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     where t.task_kind='execution'
       and t.is_deleted=false
       and (
-        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
-        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null and cam.status in ('ready_publish','publishing'))
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null and ag.status in ('ready_publish','publishing'))
       )
       and (
         ${unrestricted}=true
@@ -2049,8 +2049,8 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     where t.id=${taskId}::uuid and t.task_kind='execution' and t.is_deleted=false
       and (
-        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
-        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null and cam.status in ('ready_publish','publishing'))
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null and ag.status in ('ready_publish','publishing'))
       )
     limit 1
   `;
