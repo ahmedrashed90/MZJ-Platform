@@ -363,17 +363,9 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
   return (
     <div className={`crm-page crm-admin-page ${embedded ? "embedded" : ""}`}>
-      {!embedded ? (
-        <header className="crm-page-head">
-          <div><h1>إعدادات CRM</h1><p>كل الإعدادات التشغيلية في مكان واحد بدون تعديل السورس.</p></div>
-          <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />إعادة تحميل</button>
-        </header>
-      ) : (
-        <div className="crm-settings-toolbar">
-          <div><span>إدارة CRM</span><h2>إعدادات العملاء والمبيعات</h2><p>كل إعدادات التشغيل والتواصل والتقارير مرتبة في مجموعات واضحة.</p></div>
-          <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث البيانات"}</button>
-        </div>
-      )}
+      <div className="page-top-actions">
+        <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : embedded ? "تحديث البيانات" : "إعادة تحميل"}</button>
+      </div>
 
       <section className="crm-settings-navigation" aria-label="تبويبات إعدادات CRM">
         {tabGroups.map((group) => {

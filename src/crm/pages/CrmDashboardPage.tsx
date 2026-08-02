@@ -240,15 +240,9 @@ export function CrmDashboardPage() {
 
   return (
     <div className="crm-page crm-dashboard-page">
-      <header className="crm-page-head">
-        <div>
-          <h1>الداش بورد</h1>
-          <p>متابعة العملاء والمحادثات حسب القسم والحالة، بنفس ترتيب الحالات المحفوظ في الإدارة.</p>
-        </div>
-        <button className="crm-secondary-button" type="button" onClick={() => void loadDashboard()}>
-          <ArrowClockwise size={18} />تحديث البيانات
-        </button>
-      </header>
+      <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => void loadDashboard()}>
+        <ArrowClockwise size={18} />تحديث البيانات
+      </button></div>
 
       <div className="crm-department-tabs crm-main-department-tabs">
         {departments.map((item) => (

@@ -113,7 +113,6 @@ export function MovementPage() {
 
   return (
     <div className="module-page operations-page operations-movement-page">
-      <header className="module-page-head"><div><h1>الحركة</h1><p>تحريك سيارة أو عدة سيارات إلى مكان وحالة جديدين داخل عملية واحدة، مع حفظ سجل مستقل لكل سيارة.</p></div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 

@@ -6204,3 +6204,44 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
     min-height: 300px;
   }
 }
+
+/* Compact page actions after removing repeated in-page page titles. */
+.page-top-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 0 0 12px;
+}
+.dashboard-controls-only {
+  width: 100%;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.notifications-unread-summary {
+  min-height: 34px;
+}
+.notifications-unread-summary strong {
+  font-size: 18px;
+  line-height: 1;
+}
+.notifications-unread-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.unified-settings-section-actions {
+  padding: 0;
+}
+.kpi-branch-summary-footer {
+  display: grid;
+  gap: 10px;
+}
+.kpi-branch-summary-footer > .kpi-manager-breakdown {
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}

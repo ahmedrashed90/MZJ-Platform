@@ -189,10 +189,6 @@ export function UnifiedReportsPage() {
 
   return (
     <div className="module-page unified-center-page">
-      <header className="module-page-head unified-page-head">
-        <div><h1>التقارير</h1><p>صفحة موحدة تعرض تقارير الأنظمة الفعلية وفق صلاحيات المستخدم.</p></div>
-        <ChartBar size={32} weight="duotone" />
-      </header>
       {tabs.length ? (
         <>
           <nav className="unified-system-tabs" aria-label="أنظمة التقارير">

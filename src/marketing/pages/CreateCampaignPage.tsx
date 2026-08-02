@@ -6,6 +6,7 @@ import { CreativeEditor, newCreativeDraft } from "../components/CreativeEditor";
 import { CreativeMultiPicker } from "../components/CreativeMultiPicker";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
+import { compactExecutionFolderCreation } from "../executionFolders";
 import type { CreativeDraft, ExecutionFolderCreation, MarketingMeta, RawFolderRequest, RawFolderResult } from "../types";
 
 const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], contentDepartmentId: "", actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
@@ -88,19 +89,6 @@ export function CreateCampaignPage() {
     const value = new Date(`${date}T00:00:00`);
     return Number.isNaN(value.getTime()) ? date : new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(value);
   }
-  const executionFolderPlanKey = useMemo(() => JSON.stringify({
-    monthKey: form.publishStart.slice(0, 7),
-    campaignCode: form.campaignCode,
-    campaignFolderName: `${form.campaignCode}-${form.name}`,
-    creatives: creatives.map((creative) => ({
-      tempId: creative.tempId,
-      creativeTypeId: creative.creativeTypeId,
-      cars: creative.cars.map((car) => car.id),
-      users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)].map((assignment) => assignment.userId),
-    })),
-  }), [form.publishStart, form.campaignCode, form.name, creatives]);
-  useEffect(() => { setExecutionFolders(null); }, [executionFolderPlanKey]);
-
   const relations = useMemo(() => creatives.flatMap((creative) => {
     const creativeLabel = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.name || "";
     const user = (id: string) => meta.users.find((item) => item.id === id)?.full_name || meta.users.find((item) => item.id === id)?.fullName || id;
@@ -109,6 +97,36 @@ export function CreateCampaignPage() {
     creative.optionalAssignments.forEach((group) => group.assignments.forEach((assignment) => assignment.contentUserIds.forEach((contentId) => rows.push({ day: "", creative: creativeLabel, department: meta.departments.find((item) => item.id === group.departmentId)?.name, user: user(assignment.userId), contentUser: user(contentId), dueOn: assignment.dueOn, note: assignment.note }))));
     return rows;
   }), [creatives, meta]);
+  const rawFolderPayload = useMemo<RawFolderRequest>(() => ({
+    monthKey: form.publishStart.slice(0, 7),
+    campaignCode: form.campaignCode,
+    campaignFolderName: `${form.campaignCode}-${form.name}`,
+    campaignDisplayName: form.name,
+    driveLetter: "Z:",
+    remoteRoot: "/var/www/mzj-raw",
+    creatives: creatives.map((creative, index) => {
+      const executionAssignments = [
+        ...creative.primaryAssignments,
+        ...creative.optionalAssignments.flatMap((group) => group.assignments),
+      ];
+      const users = [...new Map(executionAssignments.map((assignment) => {
+        const name = meta.users.find((item) => item.id === assignment.userId)?.full_name
+          || meta.users.find((item) => item.id === assignment.userId)?.fullName
+          || assignment.userId;
+        return [assignment.userId, { uid: assignment.userId, name }] as const;
+      })).values()];
+      return {
+        name: creativeName(creative.tempId),
+        folderName: `${String(index + 1).padStart(2, "0")}-${creativeName(creative.tempId)}`,
+        creativeInstanceId: creative.tempId,
+        creativeIndex: index + 1,
+        cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })),
+        users,
+      };
+    }),
+  }), [form.publishStart, form.campaignCode, form.name, creatives, meta.users, meta.creativeTypes]);
+  const rawFolderPlanKey = useMemo(() => JSON.stringify(rawFolderPayload), [rawFolderPayload]);
+  useEffect(() => { setExecutionFolders(null); }, [rawFolderPlanKey]);
 
   function validateCurrent() {
     if (step === 0 && (!form.campaignTypeId || !form.campaignCode || !form.name || !form.publishStart || !form.publishEnd)) return "أكمل بيانات الحملة الأساسية";
@@ -136,26 +154,10 @@ export function CreateCampaignPage() {
   async function createRawFolders() {
     setLoading(true); setError(""); setExecutionFolders(null);
     try {
-      const payload: RawFolderRequest = {
-        monthKey: form.publishStart.slice(0, 7),
-        campaignCode: form.campaignCode,
-        campaignFolderName: `${form.campaignCode}-${form.name}`,
-        campaignDisplayName: form.name,
-        driveLetter: "Z:",
-        creatives: creatives.map((creative, index) => ({
-          name: creativeName(creative.tempId),
-          folderName: `${String(index + 1).padStart(2, "0")}-${creativeName(creative.tempId)}`,
-          creativeInstanceId: creative.tempId,
-          creativeIndex: index + 1,
-          cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })),
-          users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)]
-            .filter((assignment, assignmentIndex, all) => all.findIndex((item) => item.userId === assignment.userId) === assignmentIndex)
-            .map((assignment) => ({ uid: assignment.userId, name: meta.users.find((item) => item.id === assignment.userId)?.full_name || assignment.userId })),
-        })),
-      };
-      const result = await marketingFetch<RawFolderResult>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_raw_folders", payload }) });
-      setExecutionFolders({ request: payload, result });
-      setMessage(result.message || "تم إنشاء فولدرات الخام");
+      const result = await marketingFetch<RawFolderResult>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_raw_folders", payload: rawFolderPayload }) });
+      if (result.ok === false || !result.rawFolders || !Object.keys(result.rawFolders).length) throw new Error(result.message || "لم يرجع السيرفر مسارات فولدرات الخام");
+      setExecutionFolders(compactExecutionFolderCreation(rawFolderPayload, result));
+      setMessage(result.message || "تم إنشاء فولدرات الخام وربط مساراتها بالتاسكات التنفيذية");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر إنشاء فولدرات الخام"); }
     finally { setLoading(false); }
   }

@@ -141,7 +141,7 @@ export function CrmDatabasePage() {
 
   return (
     <div className="crm-page crm-database-page">
-      <header className="crm-page-head"><div><h1>قاعدة البيانات</h1><p>عرض وتصفية وتعديل ونقل وتصدير عملاء CRM.</p></div><div className="crm-head-actions"><button className="crm-secondary-button" onClick={() => void exportRows()} disabled={exporting}><FileXls size={18} />{exporting ? "جاري التجهيز..." : "تصدير Excel"}</button><button className="crm-secondary-button" onClick={() => void printRows()} disabled={exporting}><FilePdf size={18} />تصدير PDF</button><button className="crm-primary-button" onClick={() => setTransferOpen(true)} disabled={!checked.size}><UsersThree size={18} />نقل العملاء ({checked.size})</button></div></header>
+      <div className="crm-head-actions page-top-actions"><button className="crm-secondary-button" onClick={() => void exportRows()} disabled={exporting}><FileXls size={18} />{exporting ? "جاري التجهيز..." : "تصدير Excel"}</button><button className="crm-secondary-button" onClick={() => void printRows()} disabled={exporting}><FilePdf size={18} />تصدير PDF</button><button className="crm-primary-button" onClick={() => setTransferOpen(true)} disabled={!checked.size}><UsersThree size={18} />نقل العملاء ({checked.size})</button></div>
 
       <div className="crm-filter-panel">
         <input type="date" title="التاريخ من" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} />

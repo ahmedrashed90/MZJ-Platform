@@ -317,67 +317,132 @@ function contentDepartmentId(meta: { contentDepartmentId?: string; departments: 
 
 type ExecutionFolderCreationInput = { request?: Record<string, any>; result?: Record<string, any> };
 
+type ExecutionFolderLinkInput = {
+  creativeLinkId: string;
+  creativeName: string;
+  assignedTo: string;
+};
+
 function objectValue(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
+function objectItems(value: unknown) {
+  if (Array.isArray(value)) return value.map(objectValue);
+  return Object.values(objectValue(value)).map(objectValue);
+}
+
 function normalizedFolderMatch(value: unknown) {
-  return clean(value).toLocaleLowerCase("en-US");
+  return clean(value).normalize("NFKC").toLocaleLowerCase("en-US");
 }
 
-function safeFolderSegment(value: unknown) {
-  return clean(value)
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
-    .replace(/[. ]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+function firstText(value: unknown, keys: string[]) {
+  const record = objectValue(value);
+  for (const key of keys) {
+    const text = clean(record[key]);
+    if (text) return text;
+  }
+  return "";
 }
 
-function raidriveWindowsPath(driveLetter: unknown, parts: unknown[]) {
+function joinServerPath(base: unknown, ...parts: unknown[]) {
+  const root = clean(base).replace(/\\/g, "/").replace(/\/+$/g, "");
+  const tail = parts.map((part) => clean(part).replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean);
+  return [root, ...tail].filter(Boolean).join("/");
+}
+
+function raidrivePathFromServerPath(serverPath: unknown, driveLetter: unknown, roots: unknown[]) {
+  let value = clean(serverPath);
+  if (!value) return "";
+  try { value = decodeURIComponent(value); } catch { /* keep the exact path returned by the server */ }
+  if (/^file:\/\//i.test(value)) value = value.replace(/^file:\/+/i, "/");
+  if (/^[a-z]:[\\/]/i.test(value)) {
+    const normalized = value.replace(/\//g, "\\").replace(/\\+$/g, "");
+    return `${normalized}\\`;
+  }
+
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const candidateRoots = [...new Set([
+    ...roots.map((root) => clean(root).replace(/\\/g, "/").replace(/\/+$/g, "")).filter(Boolean),
+    process.env.MZJ_RAW_ROOT,
+    "/var/www/mzj-raw",
+  ].map((root) => clean(root).replace(/\\/g, "/").replace(/\/+$/g, "")).filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+
+  let relative = "";
+  for (const root of candidateRoots) {
+    if (normalized === root) { relative = ""; break; }
+    if (normalized.startsWith(`${root}/`)) { relative = normalized.slice(root.length + 1); break; }
+  }
+  if (!relative) {
+    const marker = normalized.toLocaleLowerCase("en-US").indexOf("/mzj-raw/");
+    if (marker >= 0) relative = normalized.slice(marker + "/mzj-raw/".length);
+  }
+  if (!relative && !normalized.startsWith("/")) relative = normalized;
+  if (!relative) return "";
+
   const drive = (clean(driveLetter) || "Z:").replace(/[\\/]+$/g, "");
-  const segments = parts.map(safeFolderSegment).filter(Boolean);
-  return `${drive}\\${segments.join("\\")}\\`;
+  const windowsRelative = relative.split("/").filter(Boolean).join("\\");
+  return windowsRelative ? `${drive}\\${windowsRelative}\\` : `${drive}\\`;
 }
 
-function executionFoldersForTask(
-  creationValue: unknown,
-  input: { creativeLinkId: string; creativeName: string; assignedTo: string },
-) {
+function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderLinkInput) {
   const creation = objectValue(creationValue) as ExecutionFolderCreationInput;
   const request = objectValue(creation.request);
   const result = objectValue(creation.result);
-  if (result.ok === false || !arrayValue(request.creatives).length) return null;
+  if (!Object.keys(request).length || !Object.keys(result).length || result.ok === false) return null;
 
-  const requestCreatives = arrayValue<Record<string, any>>(request.creatives);
-  const serverCreatives = Object.values(objectValue(result.rawFolders)).map(objectValue);
   const creativeLinkId = normalizedFolderMatch(input.creativeLinkId);
   const creativeName = normalizedFolderMatch(input.creativeName);
+  const requestCreatives = arrayValue<Record<string, any>>(request.creatives);
   const requestCreative = requestCreatives.find((item) => normalizedFolderMatch(item.creativeInstanceId) === creativeLinkId)
     || requestCreatives.find((item) => normalizedFolderMatch(item.folderName) === creativeLinkId)
     || requestCreatives.find((item) => normalizedFolderMatch(item.name) === creativeName);
   if (!requestCreative) return null;
 
+  const serverCreatives = objectItems(result.rawFolders);
   const requestFolderName = clean(requestCreative.folderName);
   const serverCreative = serverCreatives.find((item) => normalizedFolderMatch(item.creativeInstanceId) === creativeLinkId)
     || serverCreatives.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestFolderName))
     || serverCreatives.find((item) => normalizedFolderMatch(item.name) === creativeName);
+  if (!serverCreative) return null;
+
   const assignedTo = clean(input.assignedTo);
-  const requestUser = arrayValue<Record<string, any>>(requestCreative.users).find((item) => clean(item.uid) === assignedTo);
+  const requestUser = arrayValue<Record<string, any>>(requestCreative.users).find((item) => clean(item.uid || item.id) === assignedTo);
   if (!requestUser) return null;
-  const serverUsers = Object.values(objectValue(serverCreative?.users)).map(objectValue);
-  const serverUser = serverUsers.find((item) => clean(item.uid) === assignedTo)
+  const serverUsers = objectItems(serverCreative.users);
+  const serverUser = serverUsers.find((item) => clean(item.uid || item.id || item.userId) === assignedTo)
     || serverUsers.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestUser.folderName || requestUser.name));
+  if (!serverUser) return null;
 
   const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
   const monthKey = clean(result.monthKey || request.monthKey);
   const campaignCode = clean(result.campaignCode || request.campaignCode);
   const campaignFolderName = clean(result.campaignFolderName || request.campaignFolderName || request.campaignDisplayName || campaignCode);
-  const creativeFolderName = clean(serverCreative?.folderName || requestCreative.folderName || requestCreative.name);
-  const userFolderName = clean(serverUser?.folderName || requestUser.folderName || requestUser.name);
-  if (!monthKey || !campaignFolderName || !creativeFolderName || !userFolderName) return null;
+  const creativeFolderName = clean(serverCreative.folderName || requestCreative.folderName || requestCreative.name);
+  const userFolderName = clean(serverUser.folderName || requestUser.folderName || requestUser.name);
+  const rawRoots = [result.rawRoot, result.rootPath, result.basePath, request.remoteRoot, request.rawRoot];
 
+  const campaignServerPath = firstText(result, ["campaignFolderPath", "folderPath", "campaignPath"])
+    || joinServerPath(firstText(result, ["rawRoot", "rootPath", "basePath"]) || request.remoteRoot || request.rawRoot, monthKey, campaignFolderName);
+  const creativeServerPath = firstText(serverCreative, ["folderPath", "creativeFolderPath", "path"])
+    || joinServerPath(campaignServerPath, creativeFolderName);
+  const rawServerPath = firstText(serverCreative, ["rawFolderPath", "rawPath"])
+    || joinServerPath(creativeServerPath, "01-RAW");
+  const outputServerPath = firstText(serverCreative, ["outputFolderPath", "outputPath"])
+    || joinServerPath(creativeServerPath, "02-OUTPUT");
+  const userOutputServerPath = firstText(serverUser, ["folderPath", "outputFolderPath", "path"])
+    || joinServerPath(outputServerPath, userFolderName);
+
+  const rawWindowsPath = raidrivePathFromServerPath(rawServerPath, driveLetter, rawRoots);
+  const outputWindowsPath = raidrivePathFromServerPath(outputServerPath, driveLetter, rawRoots);
+  const userOutputWindowsPath = raidrivePathFromServerPath(userOutputServerPath, driveLetter, rawRoots);
+  if (!rawWindowsPath || !userOutputWindowsPath) return null;
+
+  const subFolders = objectValue(serverCreative.subFolders);
   return {
     linked: true,
+    version: 2,
     type: "raidrive_sftp",
     driveLetter,
     monthKey,
@@ -385,12 +450,17 @@ function executionFoldersForTask(
     campaignFolderName,
     creativeFolderName,
     userFolderName,
-    rawFolderUrl: clean(serverCreative?.rawFolderUrl || serverCreative?.subFolders?.raw),
-    outputFolderUrl: clean(serverCreative?.outputFolderUrl || serverCreative?.subFolders?.output),
-    userOutputFolderUrl: clean(serverUser?.outputFolderUrl),
-    rawWindowsPath: raidriveWindowsPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "01-RAW"]),
-    outputWindowsPath: raidriveWindowsPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT"]),
-    userOutputWindowsPath: raidriveWindowsPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT", userFolderName]),
+    creativeInstanceId: clean(serverCreative.creativeInstanceId || requestCreative.creativeInstanceId),
+    assignedUserId: assignedTo,
+    rawServerPath,
+    outputServerPath,
+    userOutputServerPath,
+    rawFolderUrl: clean(serverCreative.rawFolderUrl || subFolders.raw),
+    outputFolderUrl: clean(serverCreative.outputFolderUrl || subFolders.output),
+    userOutputFolderUrl: clean(serverUser.outputFolderUrl || serverUser.folderUrl),
+    rawWindowsPath,
+    outputWindowsPath,
+    userOutputWindowsPath,
   };
 }
 
@@ -631,8 +701,7 @@ async function createAgendaInTransaction(tx: any, body: Record<string, any>, use
           insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
           values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
         `;
-        const agendaCreativeLinkId = `${clean(rawCreative.tempId || rawCreative.id)}:${dayDate}:${instance + 1}`;
-        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:agendaCreativeLinkId });
+        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:`${dayDate}__${clean(rawCreative.tempId)}__${instance + 1}` });
         const templatesWithoutExecution = await tx<any[]>`
           select tt.id::text
           from marketing.task_templates tt

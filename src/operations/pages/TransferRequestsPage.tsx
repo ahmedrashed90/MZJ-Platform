@@ -200,13 +200,6 @@ export function TransferRequestsPage() {
 
   return (
     <div className="module-page operations-page operations-transfer-page">
-      <header className="module-page-head">
-        <div>
-          <h1>الطلبات</h1>
-          <p>إنشاء طلبات النقل ومتابعة طلبات النقل والتصوير خلال المراحل الأربع بين المكان المصدر والمكان المستهدف.</p>
-        </div>
-      </header>
-
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 

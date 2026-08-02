@@ -142,12 +142,9 @@ export function CrmManualLeadsPage() {
 
   return (
     <div className="crm-page crm-manual-leads-page">
-      <header className="crm-page-head">
-        <div><h1>إضافة العملاء</h1><p>تسجيل العميل يدويًا ومنع تكرار رقم الجوال، مع عرض الطلبات المسجلة داخل نفس الصفحة.</p></div>
-        <button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
-          <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
-        </button>
-      </header>
+      <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
+        <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
+      </button></div>
 
       <div className="crm-department-tabs crm-inner-page-tabs">
         <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><PlusCircle size={18} />إضافة عميل</button>

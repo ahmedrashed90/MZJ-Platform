@@ -134,17 +134,18 @@ function taskExecutionFolders(value: unknown): TaskExecutionFolders | null {
   }
   if (typeof value !== "object" || Array.isArray(value)) return null;
   const folders = value as TaskExecutionFolders;
-  return folders.linked ? folders : null;
+  if (!folders.linked || !folders.rawWindowsPath || !(folders.userOutputWindowsPath || folders.outputWindowsPath)) return null;
+  return folders;
 }
 
 function openExecutionFolder(path: unknown, fallbackUrl: unknown) {
   const windowsPath = String(path || "").trim();
-  const url = String(fallbackUrl || "").trim();
-  if (!windowsPath) {
-    if (url) window.open(url, "_blank", "noopener,noreferrer");
+  if (windowsPath) {
+    window.location.href = `mzjfolder://open?path=${encodeURIComponent(windowsPath)}`;
     return;
   }
-  window.location.href = `mzjfolder://open?path=${encodeURIComponent(windowsPath)}`;
+  const url = String(fallbackUrl || "").trim();
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
 }
 
 
@@ -348,7 +349,6 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   }
 
   const task = payload?.task;
-  const executionFolders = task?.task_kind === "execution" ? taskExecutionFolders(task.execution_folders) : null;
   const permissions = payload?.permissions || {};
   const canReview = Boolean(permissions.canApproveTemplate || permissions.canRejectTemplate);
   const canViewFeedback = Boolean(permissions.canViewFeedback || canReview);
@@ -360,6 +360,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const finalUploadLoadedBytes = finalUpload?.files.reduce((sum, item) => sum + Math.min(item.loaded, item.size), 0) || 0;
   const finalUploadPercent = finalUploadTotalBytes ? Math.round((finalUploadLoadedBytes / finalUploadTotalBytes) * 100) : 0;
   const activeFinalUploadFile = finalUpload?.files.find((item) => item.status === "uploading" || item.status === "verifying") || null;
+  const executionFolders = task?.task_kind === "execution" ? taskExecutionFolders(task.execution_folders) : null;
 
   function selectReviewField(key: string) {
     if (!canReview) return;
@@ -438,15 +439,11 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
 
         {executionFolders ? <section className="marketing-task-section marketing-execution-folders-section">
           <div className="marketing-task-section-heading">
-            <div><h3><FolderOpen size={21} weight="duotone" />ملفات التنفيذ</h3><p>افتح فولدر الخام الخاص بالكرييتيف أو فولدر التسليم الخاص بك مباشرة من RaiDrive.</p></div>
+            <div><h3><FolderOpen size={21} />ملفات التنفيذ</h3><p>فتح فولدر الخام للكرييتيف أو فولدر التسليم الخاص بك مباشرة.</p></div>
           </div>
-          <div className="marketing-execution-folder-actions">
-            <button type="button" className="marketing-execution-folder-button raw" onClick={() => openExecutionFolder(executionFolders.rawWindowsPath, executionFolders.rawFolderUrl)}>
-              <span><FolderOpen size={25} weight="duotone" /></span><div><strong>فتح فولدر RAW</strong><small>ملفات الخام داخل 01-RAW</small></div>
-            </button>
-            <button type="button" className="marketing-execution-folder-button output" onClick={() => openExecutionFolder(executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath, executionFolders.userOutputFolderUrl || executionFolders.outputFolderUrl)}>
-              <span><FolderOpen size={25} weight="duotone" /></span><div><strong>فتح فولدر OUTPUT</strong><small>فولدر التسليم الخاص باليوزر داخل 02-OUTPUT</small></div>
-            </button>
+          <div className="marketing-inline-actions">
+            <button type="button" className="secondary" title={executionFolders.rawWindowsPath} onClick={() => openExecutionFolder(executionFolders.rawWindowsPath, executionFolders.rawFolderUrl)}><FolderOpen size={18} />فتح فولدر RAW</button>
+            <button type="button" className="secondary" title={executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath} onClick={() => openExecutionFolder(executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath, executionFolders.userOutputFolderUrl || executionFolders.outputFolderUrl)}><FolderOpen size={18} />فتح فولدر OUTPUT</button>
           </div>
         </section> : null}
 

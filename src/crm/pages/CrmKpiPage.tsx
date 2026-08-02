@@ -111,6 +111,14 @@ function rating(total: number) {
   return "غير مناسب";
 }
 
+function branchManagerRating(total: number) {
+  if (total >= 100) return "ممتاز";
+  if (total >= 90) return "جيد";
+  if (total >= 80) return "مقبول";
+  if (total >= 70) return "ضعيف";
+  return "غير مناسب";
+}
+
 function emptyDetails(workDays = 1): KpiDetails {
   return {
     workDays: Math.max(1, workDays),
@@ -147,7 +155,7 @@ function calculate(detailsInput: KpiDetails) {
     .map((entry) => Math.max(0, number(entry)));
   const totalDelay = delayValues.reduce((sum, value) => sum + value, 0);
   const averageDelay = delayValues.length ? totalDelay / delayValues.length : 0;
-  const speedRate = delayValues.length ? clamp(100 - (averageDelay / maximumAllowed) * 100) : 100;
+  const speedRate = delayValues.length ? clamp(100 - (averageDelay / maximumAllowed) * 100) : 0;
   const personality = details.efficiency?.personality || basePersonality;
   const technical = details.efficiency?.technical || baseTechnical;
   const personalityRate = (clamp(personality.customerFitHonesty) + clamp(personality.carNotesHonesty) + speedRate) / 3;
@@ -221,13 +229,15 @@ export function CrmKpiPage() {
     return !filters.q || search.includes(filters.q.toLowerCase());
   }), [agents, filters.branch, filters.agent, filters.q]);
 
-  const visibleRows = useMemo(() => rows.filter((row) => {
-    const search = [row.full_name, row.rating, row.department_name, row.branch_name].join(" ").toLowerCase();
-    return !filters.q || search.includes(filters.q.toLowerCase());
-  }), [rows, filters.q]);
-
   function rowForAgent(agent: any) {
-    return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code)) || rows.find((row) => row.user_id === agent.id);
+    return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code))
+      || rows.find((row) => row.user_id === agent.id);
+  }
+
+  function resultForAgent(agent: any) {
+    const row = rowForAgent(agent);
+    const details = normalizeDetails(row?.details, businessDates(period.from, period.to).length);
+    return { row, calc: calculate(details) };
   }
 
   function updateDetails(mutator: (draft: KpiDetails) => void) {
@@ -363,18 +373,28 @@ th{background:#f8ece5;font-weight:900}
   }
 
   const reportSummary = useMemo(() => {
-    const average = (key: string) => visibleRows.length ? visibleRows.reduce((sum, row) => sum + number(row[key]), 0) / visibleRows.length : 0;
-    return { count: visibleRows.length, speed: average("speed_score"), efficiency: average("efficiency_score"), discipline: average("discipline_score"), value: average("value_score"), total: average("total_score") };
-  }, [visibleRows]);
+    const calculatedRows = visibleAgents.map((agent) => resultForAgent(agent).calc);
+    const average = (key: keyof ReturnType<typeof calculate>) => calculatedRows.length
+      ? calculatedRows.reduce((sum, item) => sum + number(item[key]), 0) / calculatedRows.length
+      : 0;
+    return {
+      count: visibleAgents.length,
+      speed: average("speedRate"),
+      efficiency: average("efficiencyRate"),
+      discipline: average("disciplineRate"),
+      value: average("valueRate"),
+      total: average("finalRate"),
+    };
+  }, [visibleAgents, rows, period.from, period.to]);
 
   const branchReports = useMemo(() => {
     const grouped = new Map<string, any[]>();
-    visibleRows.forEach((row) => {
-      const key = row.branch_name || row.branch_code || "بدون فرع";
-      grouped.set(key, [...(grouped.get(key) || []), row]);
+    visibleAgents.forEach((agent) => {
+      const key = agent.branch_name || agent.branch_code || "بدون فرع";
+      grouped.set(key, [...(grouped.get(key) || []), agent]);
     });
-    return [...grouped.entries()].map(([branchName, branchRows]) => {
-      const details = branchRows.map((row) => ({ row, calc: calculate(normalizeDetails(row.details, number(row.details?.workDays, 1))) }));
+    return [...grouped.entries()].map(([branchName, branchAgents]) => {
+      const details = branchAgents.map((agent) => ({ agent, ...resultForAgent(agent) }));
       const total = details.reduce((acc, item) => ({
         attendance: acc.attendance + item.calc.attendancePoints,
         appearance: acc.appearance + item.calc.appearancePoints,
@@ -385,26 +405,23 @@ th{background:#f8ece5;font-weight:900}
         points: acc.points + item.calc.totalPoints,
       }), { attendance: 0, appearance: 0, behavior: 0, efficiency: 0, customer: 0, sales: 0, points: 0 });
       const workDays = Math.max(1, businessDates(period.from, period.to).length);
-      const count = Math.max(1, branchRows.length);
+      const count = Math.max(1, branchAgents.length);
       const discipline = clamp(((total.attendance + total.appearance + total.behavior) / (count * workDays * 9)) * 100);
       const excellence = clamp((total.efficiency / (count * workDays * 3)) * 100);
       const value = clamp(((total.customer + total.sales) / (count * 80)) * 100);
-      const managerRate = (discipline + excellence + value) / 3;
-      const best = details.slice().sort((a, b) => b.calc.totalPoints - a.calc.totalPoints)[0];
-      return { branchName, rows: details, total, managerRate, managerRating: rating(managerRate), best };
+      const managerRate = ((discipline + excellence) / 2 + value) / 2;
+      const best = details.slice().sort((a, b) =>
+        b.calc.totalPoints - a.calc.totalPoints
+        || b.calc.finalRate - a.calc.finalRate
+        || String(a.agent.full_name || "").localeCompare(String(b.agent.full_name || ""), "ar")
+      )[0];
+      return { branchName, rows: details, total, discipline, excellence, value, managerRate, managerRating: branchManagerRating(managerRate), best };
     });
-  }, [visibleRows, period.from, period.to]);
+  }, [visibleAgents, rows, period.from, period.to]);
 
   return (
     <div className="crm-page kpi-page kpi-page-v3">
-      <header className="crm-page-head kpi-page-head-clean">
-        <div>
-          <span className="crm-eyebrow">إدارة أداء المبيعات</span>
-          <h1>تقييم المناديب KPI</h1>
-          <p>نفس معادلات النظام القديم مع عرض واضح للنسب والنتيجة، واستبعاد يوم الجمعة تلقائيًا.</p>
-        </div>
-        <button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button>
-      </header>
+      <div className="page-top-actions"><button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button></div>
 
       <div className="crm-department-tabs kpi-main-tabs centered">
         <button type="button" className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><UsersThree size={18} />إضافة التقييم</button>
@@ -433,14 +450,14 @@ th{background:#f8ece5;font-weight:900}
           <div className="kpi-count-badges"><span>{visibleAgents.length} مندوب</span><span>{businessDates(period.from, period.to).length} يوم عمل</span></div>
         </header>
         <div className="crm-table-shell kpi-agents-table"><table className="crm-table kpi-score-table"><thead><tr><th>الفرع</th><th>المندوب</th><th>القسم</th><th>عدد المبيعات</th><th>درجة المندوب</th><th>السرعة</th><th>الكفاءة</th><th>الانضباط</th><th>القيمة</th><th>نسبة KPI</th><th>التقييم</th><th>إجراءات</th></tr></thead><tbody>
-          {visibleAgents.map((agent) => { const last = rowForAgent(agent); const result = last ? calculate(normalizeDetails(last.details, number(last.details?.workDays, 1))) : null; return <tr key={agent.id}>
+          {visibleAgents.map((agent) => { const { row: last, calc: result } = resultForAgent(agent); return <tr key={`${agent.id}-${agent.branch_code || "branch"}`}>
             <td>{agent.branch_name || (agent.branches || []).join("، ") || "—"}</td>
             <td><div className="kpi-agent-cell"><strong>{agent.full_name}</strong><small>{agent.employee_no || ""}</small></div></td>
             <td>{agent.department_name || (agent.departments || []).join("، ") || "—"}</td>
-            <td><strong className="kpi-number-emphasis">{last?.total_sales ?? last?.calculated_sales ?? 0}</strong></td>
-            <td><strong className="kpi-number-emphasis">{result ? Math.round(result.totalPoints) : 0}</strong></td>
-            {[last?.speed_score,last?.efficiency_score,last?.discipline_score,last?.value_score,last?.total_score].map((score,index) => <td key={index}>{last ? <span className={`kpi-rate-pill ${rateClass(score)}`}>{percent(score)}</span> : "—"}</td>)}
-            <td>{last ? <span className={`kpi-rating-pill ${rateClass(last.total_score)}`}>{last.rating || "—"}</span> : "—"}</td>
+            <td><strong className="kpi-number-emphasis">{last?.calculated_sales ?? last?.total_sales ?? result.salesCount ?? 0}</strong></td>
+            <td><strong className="kpi-number-emphasis">{Math.round(result.totalPoints)}</strong></td>
+            {[result.speedRate,result.efficiencyRate,result.disciplineRate,result.valueRate,result.finalRate].map((score,index) => <td key={index}><span className={`kpi-rate-pill ${rateClass(score)}`}>{percent(score)}</span></td>)}
+            <td><span className={`kpi-rating-pill ${rateClass(result.finalRate)}`}>{result.rating}</span></td>
             <td><button type="button" className="crm-primary-button small kpi-evaluate-button" onClick={() => open(agent, last)}>{permissions.canSave ? (last ? "تعديل التقييم" : "تقييم") : "عرض التقييم"}</button></td>
           </tr>; })}
           {!visibleAgents.length ? <tr><td colSpan={12}><div className="crm-empty-state">لا يوجد مناديب مبيعات مطابقون للفلاتر</div></td></tr> : null}
@@ -458,12 +475,15 @@ th{background:#f8ece5;font-weight:900}
         </section>
         {branchReports.map((report) => <section className="crm-panel kpi-branch-report" key={report.branchName}>
           <header><div><span className="crm-eyebrow">تقرير مدير الفرع</span><h2>{report.branchName}</h2><p>{period.from} إلى {period.to}</p></div><span className={`kpi-manager-score ${rateClass(report.managerRate)}`}>{percent(report.managerRate)}<small>{report.managerRating}</small></span></header>
-          <div className="crm-table-shell"><table className="crm-table kpi-branch-matrix"><thead><tr><th>البند</th>{report.rows.map(({ row }) => <th key={row.id}><strong className="kpi-report-agent-name">{row.full_name}</strong></th>)}<th>الإجمالي</th></tr></thead><tbody>{[
+          <div className="crm-table-shell"><table className="crm-table kpi-branch-matrix"><thead><tr><th>البند</th>{report.rows.map(({ agent }) => <th key={`${agent.id}-${agent.branch_code || "branch"}`}><strong className="kpi-report-agent-name">{agent.full_name}</strong></th>)}<th>الإجمالي</th></tr></thead><tbody>{[
             ["الحضور","attendancePoints"],["الهيئة","appearancePoints"],["السلوك","behaviorPoints"],["الكفاءة (التميز)","efficiencyPoints"],["تقييم العملاء","customerPoints"],["عدد المبيعات","salesCount"],["إجمالي نقاط المندوب","totalPoints"],
-          ].map(([label,key]) => <tr key={key}><td><strong>{label}</strong></td>{report.rows.map(({ row, calc }) => <td key={row.id}>{Math.round(number((calc as any)[key]))}</td>)}<td><strong>{key === "attendancePoints" ? report.total.attendance : key === "appearancePoints" ? report.total.appearance : key === "behaviorPoints" ? report.total.behavior : key === "efficiencyPoints" ? Math.round(report.total.efficiency) : key === "customerPoints" ? report.total.customer : key === "salesCount" ? report.total.sales : Math.round(report.total.points)}</strong></td></tr>)}</tbody></table></div>
-          <footer><div><Trophy size={25} weight="duotone" /><span>أفضل مندوب<strong>{report.best?.row?.full_name || "—"}</strong></span><span>إجمالي النقاط<strong>{report.best ? Math.round(report.best.calc.totalPoints) : 0}</strong></span><span>KPI<strong>{report.best ? percent(report.best.calc.finalRate) : "—"}</strong></span></div></footer>
+          ].map(([label,key]) => <tr key={key}><td><strong>{label}</strong></td>{report.rows.map(({ agent, calc }) => <td key={`${agent.id}-${agent.branch_code || "branch"}`}>{Math.round(number((calc as any)[key]))}</td>)}<td><strong>{key === "attendancePoints" ? report.total.attendance : key === "appearancePoints" ? report.total.appearance : key === "behaviorPoints" ? report.total.behavior : key === "efficiencyPoints" ? Math.round(report.total.efficiency) : key === "customerPoints" ? report.total.customer : key === "salesCount" ? report.total.sales : Math.round(report.total.points)}</strong></td></tr>)}</tbody></table></div>
+          <footer className="kpi-branch-summary-footer">
+            <div><Trophy size={25} weight="duotone" /><span>أعلى مندوب في التقييم<strong>{report.best?.agent?.full_name || "—"}</strong></span><span>إجمالي النقاط<strong>{report.best ? Math.round(report.best.calc.totalPoints) : 0}</strong></span><span>KPI<strong>{report.best ? percent(report.best.calc.finalRate) : "—"}</strong></span><span>التقييم<strong>{report.best?.calc.rating || "—"}</strong></span></div>
+            <div className="kpi-manager-breakdown"><span>انضباط الفرع<strong>{percent(report.discipline)}</strong></span><span>تميز الفرع<strong>{percent(report.excellence)}</strong></span><span>قيمة الفرع<strong>{percent(report.value)}</strong></span><span>درجة مدير الفرع<strong>{percent(report.managerRate)}</strong></span><span>تقييم مدير الفرع<strong>{report.managerRating}</strong></span></div>
+          </footer>
         </section>)}
-        {!visibleRows.length ? <div className="crm-empty-state panel">لا توجد تقييمات ضمن الفترة والفلاتر المحددة</div> : null}
+        {!visibleAgents.length ? <div className="crm-empty-state panel">لا يوجد مناديب مبيعات ضمن الفترة والفلاتر المحددة</div> : null}
       </div> : null}
 
       {modal ? <div className="crm-modal-backdrop kpi-fullscreen-backdrop" onMouseDown={() => setModal(false)}>

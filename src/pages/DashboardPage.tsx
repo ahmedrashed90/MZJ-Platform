@@ -635,12 +635,7 @@ export function DashboardPage() {
   return (
     <>
       <div className="dashboard-page">
-        <header className="dashboard-head">
-          <div className="dashboard-title">
-            <h1>الداش بورد</h1>
-            <p>نظرة عامة على أداء جميع الأنظمة</p>
-          </div>
-          <div className="dashboard-controls">
+        <div className="dashboard-controls page-top-actions dashboard-controls-only">
             <div className="dashboard-widget-settings">
               <button className="icon-button" type="button" aria-label="تخصيص كروت الداش بورد" title="تخصيص كروت الداش بورد" onClick={() => { setDateOpen(false); setDashboardCustomizeOpen((value) => !value); }} aria-expanded={dashboardCustomizeOpen}><GearSix size={20} /></button>
               {dashboardCustomizeOpen ? <div className="dashboard-widget-settings-popover">
@@ -666,8 +661,7 @@ export function DashboardPage() {
                 <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>آخر 7 أيام</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
               </div> : null}
             </div>
-          </div>
-        </header>
+        </div>
 
         {disconnected ? (
           <div className="connection-banner">

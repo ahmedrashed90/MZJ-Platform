@@ -60,41 +60,45 @@ export type CreativeDraft = {
   notes?: Record<string, string>;
 };
 
-export type RawFolderUserRequest = { uid: string; name: string; folderName?: string };
-export type RawFolderCreativeRequest = {
+export type RawFolderRequestUser = {
+  uid: string;
+  name: string;
+  folderName?: string;
+};
+
+export type RawFolderRequestCreative = {
   name: string;
   folderName: string;
   creativeInstanceId: string;
   creativeIndex: number;
   cars: Array<{ id: string; name: string; folderName?: string }>;
-  users: RawFolderUserRequest[];
+  users: RawFolderRequestUser[];
 };
+
 export type RawFolderRequest = {
   monthKey: string;
   campaignCode: string;
   campaignFolderName: string;
   campaignDisplayName?: string;
-  driveLetter: string;
-  creatives: RawFolderCreativeRequest[];
+  driveLetter?: string;
+  remoteRoot?: string;
+  creatives: RawFolderRequestCreative[];
 };
-export type RawFolderUserResult = RawFolderUserRequest & { outputFolderUrl?: string; folderPath?: string };
-export type RawFolderCreativeResult = {
-  name?: string;
-  folderName?: string;
-  creativeInstanceId?: string;
-  rawFolderUrl?: string;
-  outputFolderUrl?: string;
-  subFolders?: { raw?: string; output?: string };
-  users?: Record<string, RawFolderUserResult>;
-};
+
 export type RawFolderResult = {
   ok?: boolean;
   message?: string;
-  rawBaseUrl?: string;
   monthKey?: string;
   campaignCode?: string;
   campaignFolderName?: string;
-  campaignFolderUrl?: string;
-  rawFolders?: Record<string, RawFolderCreativeResult>;
+  campaignFolderPath?: string;
+  rawRoot?: string;
+  driveLetter?: string;
+  rawFolders?: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
 };
-export type ExecutionFolderCreation = { request: RawFolderRequest; result: RawFolderResult };
+
+export type ExecutionFolderCreation = {
+  request: RawFolderRequest;
+  result: RawFolderResult;
+};

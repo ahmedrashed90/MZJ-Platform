@@ -83,7 +83,7 @@ function calculate(detailsInput: KpiDetails, workDaysInput: number) {
   const totalDelay = delayValues.reduce((sum, value) => sum + value, 0);
   const averageDelay = delayValues.length ? totalDelay / delayValues.length : 0;
   const delayRate = delayValues.length ? clamp((averageDelay / maximumAllowed) * 100) : 0;
-  const speedRate = delayValues.length ? clamp(100 - delayRate) : 100;
+  const speedRate = delayValues.length ? clamp(100 - delayRate) : 0;
 
   const personality = details.efficiency?.personality || {};
   const technical = details.efficiency?.technical || {};
@@ -205,6 +205,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const scope = userScope(user);
   const permissions = await resolveKpiAccess(sql, user);
   const kpiScopeAll = scope.all || hasPermission(user, "crm.kpi.rate_all");
+  // Sales-department lateral selection is equivalent to requiring primary_department.code in ('cash_sales','finance_sales'), while still finding a valid sales department when another CRM department is marked primary.
 
   if (request.method === "GET") {
     const from = clean(request.query.from);
@@ -256,9 +257,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
         where usd.user_id=u.id and usd.system_code='crm'
+          and d.code in ('cash_sales','finance_sales')
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
-      ) primary_department on primary_department.code in ('cash_sales','finance_sales')
+      ) primary_department on true
       join lateral (
         select b.code,b.name,b.sort_order
         from core.user_system_branches usb
@@ -305,9 +307,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
         where usd.user_id=u.id and usd.system_code='crm'
+          and d.code in ('cash_sales','finance_sales')
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
-      ) primary_department on primary_department.code in ('cash_sales','finance_sales')
+      ) primary_department on true
       join lateral (
         select b.code,b.name,b.sort_order
         from core.user_system_branches usb
@@ -355,9 +358,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
         where usd.user_id=u.id and usd.system_code='crm'
+          and d.code in ('cash_sales','finance_sales')
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
-      ) primary_department on primary_department.code in ('cash_sales','finance_sales')
+      ) primary_department on true
       join lateral (
         select b.code,b.name
         from core.user_system_branches usb

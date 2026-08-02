@@ -127,17 +127,10 @@ export function CrmFinanceHistoryPage() {
 
   return (
     <div className="crm-page crm-finance-history-page">
-      <header className="crm-page-head crm-finance-history-head-clean">
-        <div>
-          <span className="crm-eyebrow">CRM / مبيعات التمويل</span>
-          <h1>سجل عملاء التمويل</h1>
-          <p>ملف زمني واضح لكل عميل من لحظة دخوله، مع الحالات والملاحظات والمسؤولين وتوقيت كل حركة.</p>
-        </div>
-        <div className="crm-finance-history-head-stats">
-          <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA")}</b> عميل</span>
-          <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA")}</b> حركة</span>
-        </div>
-      </header>
+      <div className="crm-finance-history-head-stats page-top-actions" data-legacy-class="crm-finance-history-head-clean">
+        <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA")}</b> عميل</span>
+        <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA")}</b> حركة</span>
+      </div>
 
       <div className="crm-inner-page-tabs crm-finance-history-tabs centered">
         <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}><UsersThree size={18} />سجل العملاء</button>

@@ -236,10 +236,6 @@ export function UnifiedDatabasePage() {
 
   return (
     <div className="module-page unified-center-page">
-      <header className="module-page-head unified-page-head">
-        <div><h1>قاعدة البيانات</h1><p>واجهة موحدة للبحث والعرض والتصفية والتصدير من قواعد بيانات الأنظمة الفعلية.</p></div>
-        <Database size={32} weight="duotone" />
-      </header>
       {tabs.length ? (
         <>
           <nav className="unified-system-tabs" aria-label="أنظمة قاعدة البيانات">

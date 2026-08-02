@@ -5,6 +5,7 @@ import { marketingFetch, marketingQuery } from "../api";
 import { CreativeEditor, newCreativeDraft } from "../components/CreativeEditor";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
+import { compactExecutionFolderCreation } from "../executionFolders";
 import type { CreativeDraft, ExecutionFolderCreation, MarketingMeta, RawFolderRequest, RawFolderResult } from "../types";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 
@@ -25,6 +26,10 @@ const emptyMeta: MarketingMeta = {
 };
 
 type AgendaDay = { date: string; creatives: CreativeDraft[] };
+
+function agendaCreativeInstanceId(dayDate: string, tempId: string, instance: number) {
+  return `${dayDate}__${tempId}__${instance + 1}`;
+}
 
 function between(start: string, end: string) {
   const result: string[] = [];
@@ -101,22 +106,6 @@ export function CreateAgendaPage() {
     return meta.creativeTypes.find((item) => item.id === id)?.name || "—";
   }
 
-  const executionFolderPlanKey = useMemo(() => JSON.stringify({
-    monthKey: form.monthKey,
-    campaignFolderName: form.name,
-    days: days.map((day) => ({
-      date: day.date,
-      creatives: day.creatives.map((creative) => ({
-        tempId: creative.tempId,
-        creativeTypeId: creative.creativeTypeId,
-        quantity: creative.quantity,
-        cars: creative.cars.map((car) => car.id),
-        users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)].map((assignment) => assignment.userId),
-      })),
-    })),
-  }), [form.monthKey, form.name, days]);
-  useEffect(() => { setExecutionFolders(null); }, [executionFolderPlanKey]);
-
   const relations = useMemo(() => days.flatMap((day) => day.creatives.flatMap((creative) => {
     const label = creativeName(creative.creativeTypeId);
     const user = (id: string) => meta.users.find((item) => item.id === id)?.full_name || meta.users.find((item) => item.id === id)?.fullName || id;
@@ -141,6 +130,37 @@ export function CreateAgendaPage() {
     }))));
     return rows;
   })), [days, meta]);
+
+  const rawFolderPayload = useMemo<RawFolderRequest>(() => ({
+    monthKey: form.monthKey,
+    campaignCode: form.monthKey,
+    campaignFolderName: form.name,
+    campaignDisplayName: form.name,
+    driveLetter: "Z:",
+    remoteRoot: "/var/www/mzj-raw",
+    creatives: days.flatMap((day) => day.creatives.flatMap((creative, index) => Array.from({ length: Math.max(1, creative.quantity) }, (_, instance) => {
+      const executionAssignments = [
+        ...creative.primaryAssignments,
+        ...creative.optionalAssignments.flatMap((group) => group.assignments),
+      ];
+      const users = [...new Map(executionAssignments.map((assignment) => {
+        const name = meta.users.find((item) => item.id === assignment.userId)?.full_name
+          || meta.users.find((item) => item.id === assignment.userId)?.fullName
+          || assignment.userId;
+        return [assignment.userId, { uid: assignment.userId, name }] as const;
+      })).values()];
+      return {
+        name: creativeName(creative.creativeTypeId),
+        folderName: `${day.date}-${creativeName(creative.creativeTypeId)}-${index + 1}-${instance + 1}`,
+        creativeInstanceId: agendaCreativeInstanceId(day.date, creative.tempId, instance),
+        creativeIndex: index + 1,
+        cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })),
+        users,
+      };
+    }))),
+  }), [form.monthKey, form.name, days, meta.users, meta.creativeTypes]);
+  const rawFolderPlanKey = useMemo(() => JSON.stringify(rawFolderPayload), [rawFolderPayload]);
+  useEffect(() => { setExecutionFolders(null); }, [rawFolderPlanKey]);
 
   const totalCreatives = days.reduce((sum, day) => sum + day.creatives.reduce((part, item) => part + item.quantity, 0), 0);
   const totalTemplates = days.reduce((sum, day) => sum + day.creatives.reduce((part, item) => part + item.contentAssignments.length * item.quantity, 0), 0);
@@ -212,34 +232,13 @@ export function CreateAgendaPage() {
     setError("");
     setExecutionFolders(null);
     try {
-      let creativeSequence = 0;
-      const creatives = days.flatMap((day) => day.creatives.flatMap((creative, index) => Array.from({ length: creative.quantity }, (_, instance) => {
-        creativeSequence += 1;
-        return {
-          name: creativeName(creative.creativeTypeId),
-          folderName: `${day.date}-${creativeName(creative.creativeTypeId)}-${index + 1}-${instance + 1}`,
-          creativeInstanceId: `${creative.tempId}:${day.date}:${instance + 1}`,
-          creativeIndex: creativeSequence,
-          cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })),
-          users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)]
-            .filter((assignment, assignmentIndex, all) => all.findIndex((item) => item.userId === assignment.userId) === assignmentIndex)
-            .map((assignment) => ({ uid: assignment.userId, name: meta.users.find((item) => item.id === assignment.userId)?.full_name || assignment.userId })),
-        };
-      })));
-      const payload: RawFolderRequest = {
-        monthKey: form.monthKey,
-        campaignCode: form.monthKey,
-        campaignFolderName: form.name,
-        campaignDisplayName: form.name,
-        driveLetter: "Z:",
-        creatives,
-      };
       const result = await marketingFetch<RawFolderResult>("/api/marketing", {
         method: "POST",
-        body: JSON.stringify({ action: "create_raw_folders", payload }),
+        body: JSON.stringify({ action: "create_raw_folders", payload: rawFolderPayload }),
       });
-      setExecutionFolders({ request: payload, result });
-      setMessage(result.message || "تم إنشاء فولدرات الخام");
+      if (result.ok === false || !result.rawFolders || !Object.keys(result.rawFolders).length) throw new Error(result.message || "لم يرجع السيرفر مسارات فولدرات الخام");
+      setExecutionFolders(compactExecutionFolderCreation(rawFolderPayload, result));
+      setMessage(result.message || "تم إنشاء فولدرات الخام وربط مساراتها بالتاسكات التنفيذية");
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر إنشاء فولدرات الخام");
     } finally {

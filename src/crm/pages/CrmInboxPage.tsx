@@ -69,14 +69,7 @@ export function CrmInboxPage() {
 
   return (
     <div className="crm-page crm-unclassified-page">
-      <header className="crm-page-head crm-unclassified-head">
-        <div>
-          <span className="crm-page-kicker"><Sparkle size={18} weight="duotone" /> نقطة المراجعة قبل إنشاء العميل</span>
-          <h1>رسائل غير مصنفة</h1>
-          <p>تظهر هنا الرسائل التي لم يُحدد صاحبها بعد هل يحتاج مبيعات كاش أو تمويل أو خدمة عملاء. بعد التصنيف تُنشأ دورة الخدمة وتختفي الرسالة من هذه الصفحة.</p>
-        </div>
-        <button className="crm-secondary-button" type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث"}</button>
-      </header>
+      <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث"}</button></div>
 
       <section className="crm-unclassified-summary">
         <article><span className="icon"><ChatCircleDots size={23} /></span><div><small>إجمالي غير المصنف</small><strong>{Number(summary.total || 0).toLocaleString("ar-SA")}</strong></div></article>

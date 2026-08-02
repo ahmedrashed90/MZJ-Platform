@@ -84,13 +84,9 @@ export function SettingsPage() {
       </section>
 
       <main className="unified-settings-main">
-        <header className="unified-settings-section-head">
-          <div className="unified-settings-section-identity">
-            <span className="unified-settings-section-icon"><ActiveIcon size={26} weight="duotone" /></span>
-            <div><span>الإعدادات / {activeDefinition?.label}</span><h2>{activeDefinition?.label}</h2><p>{activeDefinition?.description}</p></div>
-          </div>
+        <div className="unified-settings-section-actions page-top-actions">
           <button type="button" onClick={() => setContentOpen((current) => !current)}>{contentOpen ? <CaretUp size={18} /> : <CaretDown size={18} />}{contentOpen ? "إغلاق القسم" : "فتح القسم"}</button>
-        </header>
+        </div>
 
         {contentOpen ? (
           <div className="unified-settings-content">

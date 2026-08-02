@@ -196,14 +196,11 @@ export function CrmReportsPage() {
 
   return (
     <div className="crm-page crm-reports-page">
-      <header className="crm-page-head">
-        <div><h1>التقارير</h1><p>المؤشرات والمصادر والأقسام والمناديب وخدمة العملاء تعتمد على نفس الفلاتر ومصدر الحساب.</p></div>
-        <div className="crm-head-actions">
-          <button className="crm-secondary-button" onClick={exportAll}><FileXls size={18} />تصدير Excel</button>
-          <button className="crm-secondary-button" onClick={printAll}><FilePdf size={18} />تصدير PDF</button>
-          <button className="crm-primary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
-        </div>
-      </header>
+      <div className="crm-head-actions page-top-actions">
+        <button className="crm-secondary-button" onClick={exportAll}><FileXls size={18} />تصدير Excel</button>
+        <button className="crm-secondary-button" onClick={printAll}><FilePdf size={18} />تصدير PDF</button>
+        <button className="crm-primary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button>
+      </div>
 
       <section className="crm-reports-filters-pro">
         <header><div><h2>فلاتر التقارير</h2><p>حدد الفترة والقسم والمسؤول والمصدر، ثم استخدم البحث لتضييق النتائج.</p></div><button type="button" className="crm-secondary-button" onClick={() => setFilters(emptyFilters)}>مسح الفلاتر</button></header>

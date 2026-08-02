@@ -228,13 +228,6 @@ export function ApprovalsPage() {
 
   return (
     <div className="module-page operations-page operations-approvals-page">
-      <header className="module-page-head">
-        <div>
-          <h1>الموافقات المالية والإدارية</h1>
-          <p>عرض واضح لحالة كل سيارة، مع إدارة كل موافقة بشكل مستقل قبل التسليم.</p>
-        </div>
-      </header>
-
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 

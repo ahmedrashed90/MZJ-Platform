@@ -211,16 +211,10 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
   return (
     <div className="module-page tracking-orders-page">
-      <header className="module-page-head tracking-page-head">
-        <div>
-          <h1>{archivedOnly ? "أرشيف طلبات التراكينج" : "طلبات التراكينج"}</h1>
-          <p>{archivedOnly ? "الطلبات المنتهية التي تم نقلها إلى الأرشيف." : "طلبات البيع والسيارات ومراحل التنفيذ وروابط تتبع العميل من داخل المنصة."}</p>
-        </div>
-        <button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>
-          <ArrowClockwise size={18} className={loading ? "spin" : ""} />
-          تحديث
-        </button>
-      </header>
+      <div className="page-top-actions"><button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>
+        <ArrowClockwise size={18} className={loading ? "spin" : ""} />
+        تحديث
+      </button></div>
 
       {error ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>{error}</span></div> : null}
       {message ? <div className="success-banner tracking-success-banner"><CheckCircle size={20} weight="fill" /><span>{message}</span></div> : null}
