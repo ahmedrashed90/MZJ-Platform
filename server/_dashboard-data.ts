@@ -3,6 +3,7 @@ import type { DashboardData } from "../src/types.js";
 import type { SessionUser } from "./_auth.js";
 import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
+import { trackingAccessScope } from "./_tracking-access.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
 
@@ -148,21 +149,30 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
 
   if (canAccessSystem(user, "tracking")) {
     try {
-      const trackingAccess = getSystemAccess(user, "tracking");
-      const trackingAll = trackingAccess.dataScope === "all";
-      const trackingBranches = trackingAccess.branchCodes.length ? trackingAccess.branchCodes : ["__none__"];
+      const trackingScope = trackingAccessScope(user);
+      const trackingBranches = trackingScope.branchCodes;
       const [row] = await sql<any[]>`select count(*) filter(where coalesce(is_archived,false)=false)::int as requests,count(*) filter(where coalesce(is_archived,false)=false and status='in_progress')::int as in_progress,count(*) filter(where coalesce(is_archived,false)=false and status='completed')::int as completed
         from tracking.orders o
         where coalesce(is_deleted,false)=false
           and coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-          and (${trackingAll}=true or o.branch in ${sql(trackingBranches)} or exists(select 1 from tracking.order_stages os where os.order_id=o.id and (os.completed_by=${user.id}::uuid or os.reverted_by=${user.id}::uuid)))`;
+          and (
+            ${trackingScope.unrestricted}=true
+            or (${trackingScope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+            or (${trackingScope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+            or (${trackingScope.branchScoped}=true and o.branch in ${sql(trackingBranches)})
+          )`;
       data.tracking = { requests: asNumber(row?.requests), inProgress: asNumber(row?.in_progress), completed: asNumber(row?.completed) };
       data.operations.salesTracking = { total: asNumber(row?.requests), notStarted: 0, inProgress: asNumber(row?.in_progress), completed: asNumber(row?.completed) };
       const [st] = await sql<any[]>`select count(*) filter(where coalesce(is_archived,false)=false and status='not_started')::int as not_started
         from tracking.orders o
         where coalesce(is_deleted,false)=false
           and coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-          and (${trackingAll}=true or o.branch in ${sql(trackingBranches)} or exists(select 1 from tracking.order_stages os where os.order_id=o.id and (os.completed_by=${user.id}::uuid or os.reverted_by=${user.id}::uuid)))`;
+          and (
+            ${trackingScope.unrestricted}=true
+            or (${trackingScope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+            or (${trackingScope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+            or (${trackingScope.branchScoped}=true and o.branch in ${sql(trackingBranches)})
+          )`;
       data.operations.salesTracking.notStarted = asNumber(st?.not_started);
     } catch (error) { data.sectionErrors!.tracking = errorText(error); console.error("Dashboard tracking query failed", error); }
   }

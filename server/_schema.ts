@@ -327,12 +327,14 @@ create table if not exists tracking.orders (
   customer_name text,
   customer_mobile text,
   order_date date,
+  assigned_to uuid references core.users(id) on delete set null,
   status text not null default 'not_started',
   tracking_token text unique default encode(gen_random_bytes(24), 'hex'),
   is_archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists tracking_orders_assigned_to_idx on tracking.orders(assigned_to,updated_at desc);
 
 create table if not exists tracking.order_vehicles (
   id uuid primary key default gen_random_uuid(),

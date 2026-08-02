@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { requireTrackingUser } from "../_tracking-auth.js";
-import { getSystemAccess, hasPermission } from "../_access-control.js";
+import { hasPermission } from "../_access-control.js";
+import { trackingAccessScope } from "../_tracking-access.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.js";
@@ -14,9 +15,8 @@ function validDate(value: unknown) {
 }
 
 async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<typeof requireTrackingUser>>>) {
-  const access = getSystemAccess(user, "tracking");
-  const unrestricted = access.dataScope === "all";
-  const branches = access.branchCodes.length ? access.branchCodes : ["__none__"];
+  const scope = trackingAccessScope(user);
+  const branches = scope.branchCodes;
   const sql = getSql();
   const [order] = await sql<any[]>`
     select o.*,o.id::text,
@@ -25,7 +25,12 @@ async function getOrderDetail(id: string, user: NonNullable<Awaited<ReturnType<t
       coalesce((select count(*) from tracking.vehicle_stages vs join tracking.order_vehicles v on v.id=vs.vehicle_id join tracking.stages s on s.id=vs.stage_id and s.is_active=true where v.order_id=o.id),0)::int as total_stages
     from tracking.orders o
     where o.id=${id}::uuid and coalesce(o.is_deleted,false)=false
-      and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+      and (
+        ${scope.unrestricted}=true
+        or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+        or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+        or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
+      )
   `;
   if (!order) return null;
 
@@ -86,6 +91,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const user = await requireTrackingUser(request, response);
   if (!user) return;
   const sql = getSql();
+  const scope = trackingAccessScope(user);
+  const branches = scope.branchCodes;
 
   if (request.method === "GET") {
     const id = clean(request.query.id);
@@ -106,9 +113,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const archivedOnly = ["1", "true", "yes"].includes(clean(request.query.archived).toLowerCase());
     const limit = Math.min(Math.max(Number(request.query.limit || 1000), 1), 2000);
     const pattern = `%${search}%`;
-    const access = getSystemAccess(user, "tracking");
-    const unrestricted = access.dataScope === "all";
-    const branches = access.branchCodes.length ? access.branchCodes : ["__none__"];
     const orders = await sql<any[]>`
       select
         o.id::text,o.sales_order_no,o.customer_name,o.customer_mobile,o.branch,o.order_date,o.delivery_date,o.sales_person,
@@ -122,7 +126,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       left join tracking.vehicle_stages vs on vs.vehicle_id=v.id
       left join tracking.stages sx on sx.id=vs.stage_id and sx.is_active=true
       where coalesce(o.is_deleted,false)=false
-        and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+        and (
+          ${scope.unrestricted}=true
+          or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+          or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+          or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
+        )
         and coalesce(o.is_archived,false)=${archivedOnly}
         and (vs.id is null or sx.id is not null)
         and (${status}='' or o.status=${status})
@@ -146,7 +155,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         count(*) filter (where coalesce(is_archived,false)=false and status='completed')::int as completed,
         count(*) filter (where coalesce(is_archived,false)=true)::int as archived
       from tracking.orders o where coalesce(is_deleted,false)=false
-        and (${unrestricted}=true or o.branch in ${sql(branches)} or exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+        and (
+          ${scope.unrestricted}=true
+          or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+          or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+          or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
+        )
         and (${from || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) >= ${from || null}::date)
         and (${to || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) <= ${to || null}::date)
     `;
@@ -170,6 +184,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         left join tracking.vehicle_stages vs on vs.vehicle_id=v.id
         left join tracking.stages s on s.id=vs.stage_id
         where o.id=${orderId}::uuid and coalesce(o.is_deleted,false)=false
+          and (
+            ${scope.unrestricted}=true
+            or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
+            or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
+            or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
+          )
         group by o.id
       `;
       if (!archiveState) return response.status(404).json({ ok: false, error: "طلب التتبع غير موجود" });
@@ -203,7 +223,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!vehicleId || !stageId) return response.status(400).json({ ok: false, error: "السيارة والمرحلة مطلوبتان" });
 
     const [row] = await sql<any[]>`
-      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived,o.is_cancelled,o.branch
+      select vs.id::text,vs.status,v.order_id::text,s.name,s.sort_order,o.is_archived,o.is_cancelled,o.branch,o.assigned_to::text
       from tracking.vehicle_stages vs
       join tracking.order_vehicles v on v.id=vs.vehicle_id
       join tracking.orders o on o.id=v.order_id
@@ -211,8 +231,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where vs.vehicle_id=${vehicleId}::uuid and vs.stage_id=${stageId}::uuid
     `;
     if (!row) return response.status(404).json({ ok: false, error: "مرحلة السيارة غير موجودة" });
-    const access = getSystemAccess(user, "tracking");
-    const canAccessOrder = access.dataScope === "all" || access.branchCodes.includes(clean(row.branch)) || Boolean((await sql<any[]>`select 1 from tracking.stage_events where order_id=${row.order_id}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
+    const workflowAssigned = scope.workflowAssignedOnly
+      ? Boolean((await sql<any[]>`select 1 from tracking.stage_events where order_id=${row.order_id}::uuid and actor_id=${user.id}::uuid limit 1`)[0])
+      : false;
+    const canAccessOrder = scope.unrestricted
+      || (scope.assignedOnly && clean(row.assigned_to) === user.id)
+      || (scope.workflowAssignedOnly && workflowAssigned)
+      || (scope.branchScoped && branches.includes(clean(row.branch)));
     if (!canAccessOrder) return response.status(403).json({ ok: false, error: "الطلب خارج نطاق بياناتك" });
     const stageNo = String(Number(row.sort_order || 0)).padStart(2, "0");
     const permissionCode = action === "complete_stage" ? `tracking.stage.${stageNo}.complete` : `tracking.stage.${stageNo}.rollback`;

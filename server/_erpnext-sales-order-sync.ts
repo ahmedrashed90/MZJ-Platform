@@ -532,6 +532,21 @@ async function linkCrmCustomer(input: {
   });
 }
 
+async function syncTrackingOrderAssignment(
+  tx: any,
+  trackingOrderId: string | null | undefined,
+  mapping: PlatformUserMapping | null,
+) {
+  const orderId = clean(trackingOrderId);
+  if (!orderId) return;
+  const assignedTo = mapping?.id || null;
+  await tx`
+    update tracking.orders
+    set assigned_to=${assignedTo}::uuid
+    where id=${orderId}::uuid and assigned_to is distinct from ${assignedTo}::uuid
+  `;
+}
+
 async function upsertSalesOrderRecord(input: {
   normalized: NormalizedErpNextSalesOrder;
   userStatus: UserLinkStatus;
@@ -584,6 +599,7 @@ async function upsertSalesOrderRecord(input: {
         where id=${row.id}::uuid
         returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
       `;
+      await syncTrackingOrderAssignment(tx, trackingOrderId || row.tracking_order_id, mapping);
       return row;
     }
 
@@ -603,6 +619,7 @@ async function upsertSalesOrderRecord(input: {
         ${subtotalBeforeTax},${taxValue},${totalInclVat},${registrationFee},${userStatus},${tx.json(warnings)},${tx.json(normalized.rawBody)},now(),now()
       ) returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
     `;
+    await syncTrackingOrderAssignment(tx, trackingOrderId || row.tracking_order_id, mapping);
     return row;
   });
 }
