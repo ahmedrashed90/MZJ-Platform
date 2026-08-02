@@ -1,4 +1,5 @@
 import { ensureCrmSchema } from "./_crm-schema.js";
+import { ensureAccessControlSchema } from "./_access-control-schema.js";
 import { getSql } from "./_db.js";
 import { ensureErpNextSalesOrderSchema, ensureErpNextUserMappingSchema } from "./_erpnext-integration-schema.js";
 import { ensureOperationsSchema } from "./_operations-schema.js";
@@ -9,9 +10,10 @@ import { clean, dateValue, numberValue } from "./_tracking-utils.js";
 import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
 import type { ErpNextVehiclePayload, NormalizedErpNextSalesOrder } from "./_erpnext-sales-order-normalizer.js";
 
-type PlatformUserMapping = {
+export type PlatformUserMapping = {
   id: string;
   full_name: string;
+  email: string | null;
   next_erp_user_id: string | null;
   department_code: string | null;
   department_name: string | null;
@@ -19,7 +21,7 @@ type PlatformUserMapping = {
   branch_name: string | null;
 };
 
-type UserLinkStatus =
+export type UserLinkStatus =
   | "linked"
   | "missing_user_id"
   | "user_not_mapped"
@@ -78,15 +80,19 @@ function uniqueWarnings(warnings: LinkWarning[]) {
   });
 }
 
-async function resolvePlatformUser(erpUserId: string): Promise<{
+export type ErpNextUserResolution = {
   status: UserLinkStatus;
   mapping: PlatformUserMapping | null;
   candidate: PlatformUserMapping | null;
-}> {
+};
+
+export async function resolveErpNextPlatformUser(erpUserId: string): Promise<ErpNextUserResolution> {
+  await ensureAccessControlSchema();
+  await ensureErpNextUserMappingSchema();
   if (!erpUserId) return { status: "missing_user_id", mapping: null, candidate: null };
   const sql = getSql();
   const [candidate] = await sql<PlatformUserMapping[]>`
-    select u.id::text,u.full_name,u.next_erp_user_id,
+    select u.id::text,u.full_name,u.email,u.next_erp_user_id,
       dep.code as department_code,dep.name as department_name,
       br.code as branch_code,br.name as branch_name
     from core.users u
@@ -1127,6 +1133,7 @@ export async function cancelErpNextSalesOrder(input: {
 export async function syncErpNextSalesOrder(input: {
   normalized: NormalizedErpNextSalesOrder;
   trackingResults: TrackingIngestResult[];
+  userResolution?: ErpNextUserResolution;
 }) {
   await ensureCrmSchema();
   await ensureOperationsSchema();
@@ -1143,7 +1150,7 @@ export async function syncErpNextSalesOrder(input: {
       itemNo: warning.itemNo,
     }));
 
-  const userResolution = await resolvePlatformUser(normalized.erpUserId);
+  const userResolution = input.userResolution || await resolveErpNextPlatformUser(normalized.erpUserId);
   const mapping = userResolution.mapping;
   if (userResolution.status === "missing_user_id") {
     warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مندوب البيع في NEXT ERP غير موجود في بيانات طلب البيع" });

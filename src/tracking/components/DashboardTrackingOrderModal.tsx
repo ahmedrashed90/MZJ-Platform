@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, CalendarBlank, Car, CheckCircle, Clock, CurrencyCircleDollar, MapPin, Phone, User, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
-import { formatTrackingDate, formatTrackingMoney, trackingStatusLabel } from "../api";
+import { formatTrackingDate, formatTrackingMoney, trackingStatusLabel, trackingBranchLabel } from "../api";
 import type { TrackingOrderDetail, TrackingOrderRow, TrackingVehicle } from "../types";
 
 function visibleVin(vehicle: TrackingVehicle) {
@@ -62,7 +62,7 @@ export function DashboardTrackingOrderModal({
           <section className="tracking-order-info-grid dashboard-tracking-info-grid">
             <div><User size={18} /><span><small>اسم العميل</small><strong>{order.customer_name || "—"}</strong></span></div>
             <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{order.customer_mobile || "—"}</strong></span></div>
-            <div><MapPin size={18} /><span><small>الفرع</small><strong>{order.branch || "—"}</strong></span></div>
+            <div><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(order.branch)}</strong></span></div>
             <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(order.order_date, false)}</strong></span></div>
             <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(order.delivery_date, false)}</strong></span></div>
             <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(order.total_incl_vat)}</strong></span></div>

@@ -6,7 +6,7 @@ import { CrmReportsPage } from "../crm/pages/CrmReportsPage";
 import { MonitoringPage } from "../marketing/pages/MonitoringPage";
 import "../marketing/marketing.css";
 import { operationsFetch, formatOperationsDate, queryString as operationsQuery } from "../operations/api";
-import { trackingFetch, trackingQuery, trackingStatusLabel, formatTrackingDate } from "../tracking/api";
+import { trackingFetch, trackingQuery, trackingStatusLabel, formatTrackingDate, trackingBranchLabel } from "../tracking/api";
 import type { TrackingCounts, TrackingOrderRow } from "../tracking/types";
 import { canAccessMarketing, canAccessOperations, canAccessTracking, canAccessCrm, hasPermission } from "../systemAccess";
 import type { DashboardData } from "../types";
@@ -164,7 +164,7 @@ function TrackingReports() {
           {orders.slice(0, 50).map((order) => {
             const totalStages = Number(order.total_stages || 0);
             const progress = totalStages ? Math.round((Number(order.completed_stages || 0) / totalStages) * 100) : 0;
-            return <tr key={order.id}><td><strong>{order.sales_order_no}</strong></td><td>{order.customer_name || "—"}</td><td>{order.branch || "—"}</td><td>{order.sales_person || "—"}</td><td>{metric(order.vehicles_count)}</td><td>{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</td><td>{progress.toLocaleString("ar-SA")}%</td><td>{formatTrackingDate(order.updated_at)}</td></tr>;
+            return <tr key={order.id}><td><strong>{order.sales_order_no}</strong></td><td>{order.customer_name || "—"}</td><td>{trackingBranchLabel(order.branch)}</td><td>{order.sales_person || "—"}</td><td>{metric(order.vehicles_count)}</td><td>{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</td><td>{progress.toLocaleString("ar-SA")}%</td><td>{formatTrackingDate(order.updated_at)}</td></tr>;
           })}
           {!orders.length && !loading ? <tr><td colSpan={8}><div className="unified-empty-row">لا توجد طلبات تراكينج متاحة.</div></td></tr> : null}
         </tbody></table></div>

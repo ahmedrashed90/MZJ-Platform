@@ -25,7 +25,7 @@ import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { Modal } from "../../components/Modal";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
-import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel } from "../api";
+import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel, trackingBranchLabel } from "../api";
 import type { TrackingCounts, TrackingOrderDetail, TrackingOrderRow, TrackingStage, TrackingVehicle } from "../types";
 
 type ListResponse = { ok: boolean; orders: TrackingOrderRow[]; counts: TrackingCounts };
@@ -271,7 +271,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                   <tr key={order.id} onClick={() => void openOrder(order.id)}>
                     <td><button type="button" className="tracking-order-link">{order.sales_order_no}</button><small>{order.vins || "لا يوجد رقم هيكل"}</small></td>
                     <td><strong>{order.customer_name || "—"}</strong><small>{order.customer_mobile || "—"}</small></td>
-                    <td>{order.branch || "—"}</td>
+                    <td>{trackingBranchLabel(order.branch)}</td>
                     <td>{order.vehicles_count}</td>
                     <td><div className="tracking-mini-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
                     <td><span className={`tracking-status ${order.is_cancelled ? "cancelled" : order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived, order.is_cancelled)}</span></td>
@@ -319,7 +319,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
               <section className="tracking-order-info-grid">
                 <div><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
                 <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
-                <div><MapPin size={18} /><span><small>الفرع</small><strong>{selected.branch || "—"}</strong></span></div>
+                <div><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
                 <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
                 <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
                 <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>

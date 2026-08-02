@@ -27,7 +27,8 @@ const RESET_ROOT_TABLES = [
 ] as const;
 
 type DepartmentKey = "cash" | "finance" | "service";
-type ImportRow = Record<string, unknown>;
+type ImportCell = string | number | boolean | null;
+type ImportRow = Record<string, ImportCell>;
 type BackupColumn = { name: string; nullable: boolean; generated: boolean };
 type BackupTable = { schema: string; name: string; columns: BackupColumn[]; primaryKey: string[]; rows: Record<string, unknown>[] };
 type DatabaseBackup = { format: string; version: number; createdAt: string; applicationVersion: string; createdBy: { id: string; name: string }; tables: BackupTable[] };

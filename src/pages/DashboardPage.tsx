@@ -40,7 +40,7 @@ import { useNavigate } from "react-router-dom";
 import { useEscapeToClose } from "../components/useEscapeToClose";
 import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
-import { formatTrackingDate, trackingFetch, trackingQuery, trackingStatusLabel } from "../tracking/api";
+import { formatTrackingDate, trackingFetch, trackingQuery, trackingStatusLabel, trackingBranchLabel } from "../tracking/api";
 import type { TrackingOrderDetail, TrackingOrderRow, TrackingStatus } from "../tracking/types";
 import { DashboardTrackingOrderModal } from "../tracking/components/DashboardTrackingOrderModal";
 import type { DashboardData, NullableNumber } from "../types";
@@ -251,7 +251,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen, onTrackingOpen }: { detai
                       >
                         <td><strong>{order.sales_order_no || "—"}</strong><small>اضغط لفتح الطلب</small></td>
                         <td>{order.customer_name || "—"}</td>
-                        <td>{order.branch || "—"}</td>
+                        <td>{trackingBranchLabel(order.branch)}</td>
                         <td><span className="drawer-tracking-status">{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</span></td>
                         <td><div className="drawer-tracking-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
                         <td>{formatTrackingDate(order.updated_at)}</td>
