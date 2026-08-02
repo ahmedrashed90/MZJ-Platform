@@ -138,9 +138,18 @@ function taskExecutionFolders(value: unknown): TaskExecutionFolders | null {
   return folders;
 }
 
+function normalizeExecutionWindowsPath(path: unknown) {
+  let value = String(path || "").trim().replace(/^['"]+|['"]+$/g, "");
+  try { value = decodeURIComponent(value); } catch { /* keep stored path */ }
+  value = value.replace(/^file:\/+/i, "").replace(/\//g, "\\").replace(/\\+$/g, "");
+  return /^[a-z]:\\/i.test(value) ? value : "";
+}
+
 function openExecutionFolder(path: unknown, fallbackUrl: unknown) {
-  const windowsPath = String(path || "").trim();
+  const windowsPath = normalizeExecutionWindowsPath(path);
   if (windowsPath) {
+    // Keep the protocol launch inside the user's click and do not send a trailing
+    // backslash; quoted Explorer arguments ending with a slash can open Documents.
     window.location.href = `mzjfolder://open?path=${encodeURIComponent(windowsPath)}`;
     return;
   }

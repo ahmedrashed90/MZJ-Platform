@@ -356,10 +356,7 @@ function raidrivePathFromServerPath(serverPath: unknown, driveLetter: unknown, r
   if (!value) return "";
   try { value = decodeURIComponent(value); } catch { /* keep the exact path returned by the server */ }
   if (/^file:\/\//i.test(value)) value = value.replace(/^file:\/+/i, "/");
-  if (/^[a-z]:[\\/]/i.test(value)) {
-    const normalized = value.replace(/\//g, "\\").replace(/\\+$/g, "");
-    return `${normalized}\\`;
-  }
+  if (/^[a-z]:[\\/]/i.test(value)) return value.replace(/\//g, "\\").replace(/\\+$/g, "");
 
   const normalized = value.replace(/\\/g, "/").replace(/\/+$/g, "");
   const candidateRoots = [...new Set([
@@ -371,7 +368,6 @@ function raidrivePathFromServerPath(serverPath: unknown, driveLetter: unknown, r
 
   let relative = "";
   for (const root of candidateRoots) {
-    if (normalized === root) { relative = ""; break; }
     if (normalized.startsWith(`${root}/`)) { relative = normalized.slice(root.length + 1); break; }
   }
   if (!relative) {
@@ -383,7 +379,48 @@ function raidrivePathFromServerPath(serverPath: unknown, driveLetter: unknown, r
 
   const drive = (clean(driveLetter) || "Z:").replace(/[\\/]+$/g, "");
   const windowsRelative = relative.split("/").filter(Boolean).join("\\");
-  return windowsRelative ? `${drive}\\${windowsRelative}\\` : `${drive}\\`;
+  return windowsRelative ? `${drive}\\${windowsRelative}` : `${drive}\\`;
+}
+
+function raidriveFolderPath(driveLetter: unknown, parts: unknown[]) {
+  const drive = (clean(driveLetter) || "Z:").replace(/[\\/]+$/g, "");
+  const folders = parts
+    .map((part) => clean(part).replace(/[\\/]+/g, "-").replace(/^\.+|\.+$/g, "").trim())
+    .filter(Boolean);
+  return folders.length ? `${drive}\\${folders.join("\\")}` : "";
+}
+
+function normalizedWindowsFolderPath(value: unknown) {
+  let path = clean(value);
+  if (!path) return "";
+  try { path = decodeURIComponent(path); } catch { /* keep stored value */ }
+  path = path.replace(/^file:\/+/i, "").replace(/\//g, "\\").replace(/\\+$/g, "");
+  return /^[a-z]:\\/i.test(path) ? path : "";
+}
+
+function repairedExecutionFolders(value: unknown) {
+  const folders = objectValue(value);
+  if (!folders.linked) return folders;
+  const driveLetter = clean(folders.driveLetter) || "Z:";
+  const roots = [folders.rawRoot, folders.rootPath, folders.basePath, "/var/www/mzj-raw"];
+  // Translate the exact filesystem paths returned by the RAW server first. The
+  // deterministic path is only a compatibility fallback for older task rows.
+  const rawWindowsPath = raidrivePathFromServerPath(folders.rawServerPath, driveLetter, roots)
+    || normalizedWindowsFolderPath(folders.rawWindowsPath)
+    || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "01-RAW"]);
+  const outputWindowsPath = raidrivePathFromServerPath(folders.outputServerPath, driveLetter, roots)
+    || normalizedWindowsFolderPath(folders.outputWindowsPath)
+    || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "02-OUTPUT"]);
+  const userOutputWindowsPath = raidrivePathFromServerPath(folders.userOutputServerPath, driveLetter, roots)
+    || normalizedWindowsFolderPath(folders.userOutputWindowsPath)
+    || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "02-OUTPUT", folders.userFolderName]);
+  return {
+    ...folders,
+    version: 4,
+    rawWindowsPath,
+    outputWindowsPath,
+    userOutputWindowsPath: userOutputWindowsPath || outputWindowsPath,
+  };
 }
 
 function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderLinkInput) {
@@ -434,15 +471,28 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
   const userOutputServerPath = firstText(serverUser, ["folderPath", "outputFolderPath", "path"])
     || joinServerPath(outputServerPath, userFolderName);
 
-  const rawWindowsPath = raidrivePathFromServerPath(rawServerPath, driveLetter, rawRoots);
-  const outputWindowsPath = raidrivePathFromServerPath(outputServerPath, driveLetter, rawRoots);
-  const userOutputWindowsPath = raidrivePathFromServerPath(userOutputServerPath, driveLetter, rawRoots);
+  // The RAW server's folderPath values are authoritative because they contain
+  // its exact safeName output. Translate those paths to the RaiDrive mount; do
+  // not guess folder names from the form, which makes Explorer fall back to
+  // Documents when the guessed directory does not exist.
+  const explicitRawWindowsPath = firstText(serverCreative, ["rawWindowsPath", "windowsRawPath"]);
+  const explicitOutputWindowsPath = firstText(serverCreative, ["outputWindowsPath", "windowsOutputPath"]);
+  const explicitUserOutputWindowsPath = firstText(serverUser, ["userOutputWindowsPath", "outputWindowsPath", "windowsPath"]);
+  const rawWindowsPath = normalizedWindowsFolderPath(explicitRawWindowsPath)
+    || raidrivePathFromServerPath(rawServerPath, driveLetter, rawRoots)
+    || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "01-RAW"]);
+  const outputWindowsPath = normalizedWindowsFolderPath(explicitOutputWindowsPath)
+    || raidrivePathFromServerPath(outputServerPath, driveLetter, rawRoots)
+    || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT"]);
+  const userOutputWindowsPath = normalizedWindowsFolderPath(explicitUserOutputWindowsPath)
+    || raidrivePathFromServerPath(userOutputServerPath, driveLetter, rawRoots)
+    || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT", userFolderName]);
   if (!rawWindowsPath || !userOutputWindowsPath) return null;
 
   const subFolders = objectValue(serverCreative.subFolders);
   return {
     linked: true,
-    version: 2,
+    version: 4,
     type: "raidrive_sftp",
     driveLetter,
     monthKey,
@@ -1354,6 +1404,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
   `;
   if (!task) throw new Error("التاسك غير موجود");
   if (!await canAccessMarketingTask(sql,user,id)) throw new Error("لا توجد صلاحية لعرض التاسك");
+  if (task.task_kind === "execution") task.execution_folders = repairedExecutionFolders(task.execution_folders);
   const actionsPromise = task.department_id
     ? sql<any[]>`select a.id::text,a.name,a.percentage::float,a.admin_only,a.sort_order,coalesce(p.completed,false) as completed,p.completed_at,u.full_name as completed_by_name from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${id}::uuid left join core.users u on u.id=p.completed_by where a.department_id=${task.department_id}::uuid and a.is_active=true order by a.sort_order,a.created_at`
     : Promise.resolve([] as any[]);

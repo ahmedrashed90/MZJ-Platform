@@ -13,6 +13,7 @@ function compactServerUsers(value: unknown) {
       name: user.name || user.fullName || user.full_name || "",
       folderName: user.folderName || key,
       folderPath: user.folderPath || user.outputFolderPath || user.path || "",
+      outputWindowsPath: user.userOutputWindowsPath || user.outputWindowsPath || user.windowsPath || "",
       outputFolderUrl: user.outputFolderUrl || user.folderUrl || "",
     }];
   }));
@@ -33,6 +34,8 @@ function compactRawFolders(value: unknown) {
       folderUrl: creative.folderUrl || "",
       rawFolderPath: creative.rawFolderPath || creative.rawPath || "",
       outputFolderPath: creative.outputFolderPath || creative.outputPath || "",
+      rawWindowsPath: creative.rawWindowsPath || creative.windowsRawPath || "",
+      outputWindowsPath: creative.outputWindowsPath || creative.windowsOutputPath || "",
       rawFolderUrl: creative.rawFolderUrl || subFolders.raw || "",
       outputFolderUrl: creative.outputFolderUrl || subFolders.output || "",
       subFolders: {
@@ -71,6 +74,7 @@ export function compactExecutionFolderCreation(request: RawFolderRequest, result
       campaignFolderName: result.campaignFolderName,
       campaignFolderPath: result.campaignFolderPath,
       rawRoot: result.rawRoot,
+      rawBaseUrl: result.rawBaseUrl,
       driveLetter: result.driveLetter,
       rootPath: result.rootPath,
       basePath: result.basePath,
