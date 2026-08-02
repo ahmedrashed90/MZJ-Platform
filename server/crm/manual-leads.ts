@@ -73,25 +73,30 @@ export default async function handler(request: VercelRequest, response: VercelRe
       select count(*)::int as count
       from crm.manual_lead_requests r
       left join core.users sales on sales.id=r.requested_assigned_to
+      left join crm.leads current_lead on current_lead.id=coalesce(r.created_lead_id,r.duplicate_lead_id) and current_lead.is_deleted=false
+      left join core.users current_sales on current_sales.id=current_lead.assigned_to
       where r.is_deleted=false
         and (${status || null}::text is null or r.approval_status=${status || null})
-        and (${q || null}::text is null or concat_ws(' ',r.customer_name,r.phone,r.source_code,r.car_name,sales.full_name) ilike ${q ? `%${q}%` : null})
+        and (${q || null}::text is null or concat_ws(' ',r.customer_name,r.phone,r.source_code,r.car_name,sales.full_name,current_sales.full_name) ilike ${q ? `%${q}%` : null})
         and (${isCrmManager(user)}::boolean or r.requested_by=${user.id}::uuid)
     `;
     const rows = await sql<any[]>`
       select r.*,r.id::text,r.requested_by::text,r.reviewed_by::text,r.duplicate_lead_id::text,r.created_lead_id::text,
         req.full_name as requested_by_name,rev.full_name as reviewed_by_name,sales.full_name as requested_assigned_name,cc.full_name as requested_call_center_name,
+        current_lead.assigned_to::text as current_assigned_to,current_sales.full_name as current_assigned_name,
         dup.customer_name as duplicate_customer_name,dup.status_label as duplicate_status,src.name as source_name
       from crm.manual_lead_requests r
       left join core.users req on req.id=r.requested_by
       left join core.users rev on rev.id=r.reviewed_by
       left join core.users sales on sales.id=r.requested_assigned_to
       left join core.users cc on cc.id=r.requested_call_center_to
+      left join crm.leads current_lead on current_lead.id=coalesce(r.created_lead_id,r.duplicate_lead_id) and current_lead.is_deleted=false
+      left join core.users current_sales on current_sales.id=current_lead.assigned_to
       left join crm.leads dup on dup.id=r.duplicate_lead_id
       left join core.sources src on src.code=r.source_code
       where r.is_deleted=false
         and (${status || null}::text is null or r.approval_status=${status || null})
-        and (${q || null}::text is null or concat_ws(' ',r.customer_name,r.phone,r.source_code,r.car_name,sales.full_name) ilike ${q ? `%${q}%` : null})
+        and (${q || null}::text is null or concat_ws(' ',r.customer_name,r.phone,r.source_code,r.car_name,sales.full_name,current_sales.full_name) ilike ${q ? `%${q}%` : null})
         and (${isCrmManager(user)}::boolean or r.requested_by=${user.id}::uuid)
       order by r.created_at desc
       limit ${pageSize} offset ${offset}

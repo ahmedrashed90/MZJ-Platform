@@ -71,7 +71,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (
         ${includeClosed}::boolean
         or not (
-          (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label in ('تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'))
+          (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label='تم البيع')
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
         )
       )

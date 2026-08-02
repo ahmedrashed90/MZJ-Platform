@@ -184,7 +184,7 @@ export function CrmManualLeadsPage() {
           </div>
           <div className="crm-table-shell compact">
             <table className="crm-table">
-              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب المسؤول</th><th>الكول سنتر</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب الحالي</th><th>الكول سنتر</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.id}>
@@ -192,7 +192,7 @@ export function CrmManualLeadsPage() {
                     <td>{row.phone}</td>
                     <td>{sourceLabel(row.source_code, row.source_name)}</td>
                     <td>{row.payment_type || "—"}</td>
-                    <td>{row.requested_assigned_name || row.requested_by_name || "—"}</td>
+                    <td>{row.current_assigned_name || row.requested_assigned_name || row.requested_by_name || "—"}</td>
                     <td>{row.requested_call_center_name || "—"}</td>
                     <td>{formatDate(row.updated_at)}</td>
                     <td><span className={`crm-status-pill ${row.approval_status}`}>{row.approval_status === "pending" ? "بانتظار موافقة الإدارة" : row.approval_status === "approved" ? "تمت الموافقة" : "مرفوض"}</span></td>

@@ -55,6 +55,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const detailQ = clean(request.query.detailQ);
   const detailPage = boundedInt(request.query.detailPage, 1, 1, 100000);
   const detailPageSize = boundedInt(request.query.detailPageSize, 100, 10, 200);
+  const summaryOnly = ["1", "true", "yes"].includes(clean(request.query.summaryOnly).toLowerCase());
 
   /*
    * NEXT ERP sales use the salesperson's primary CRM department/branch as the
@@ -205,7 +206,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
               or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (so.platform_user_id=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
               or (coalesce(so.platform_department_code,primary_department.code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=any(${scope.branchCodes}::text[])))
             )
-            and (${department || null}::text is null or coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null} or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='wholesale_sales'))
+            and (
+              ${department || null}::text is null
+              or (${department || null}='cash' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('cash_sales','wholesale','wholesale_sales'))
+              or (${department || null}='finance' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('finance_sales','call_center'))
+              or (${department || null}='service' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='customer_service')
+              or coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null}
+              or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='wholesale_sales')
+            )
             and (${branch || null}::text is null or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=${branch || null})
             and (${agent || null}::uuid is null or so.platform_user_id=${agent || null}::uuid)
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
@@ -360,7 +368,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
         or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (so.platform_user_id=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (coalesce(so.platform_department_code,primary_department.code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=any(${scope.branchCodes}::text[])))
       )
-      and (${department || null}::text is null or coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null} or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='wholesale_sales'))
+      and (
+        ${department || null}::text is null
+        or (${department || null}='cash' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('cash_sales','wholesale','wholesale_sales'))
+        or (${department || null}='finance' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('finance_sales','call_center'))
+        or (${department || null}='service' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='customer_service')
+        or coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null}
+        or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='wholesale_sales')
+      )
       and (${branch || null}::text is null or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=${branch || null})
       and (${agent || null}::uuid is null or so.platform_user_id=${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
@@ -428,6 +443,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
       salesQuality: percent(statusCountWithFactOnlySales(salesNum), salesDen),
     };
   };
+
+  if (summaryOnly) {
+    return response.status(200).json({
+      ok: true,
+      filters: { from, to, q, department, branch, agent, callCenter, source },
+      totals: makeMetrics(leads, salesFacts),
+      quality: { ...quality, summary_cards: summaryCards },
+    });
+  }
 
   const group = (
     rows: any[],

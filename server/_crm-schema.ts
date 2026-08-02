@@ -1364,6 +1364,64 @@ on conflict(version) do nothing;
 commit;
 `;
 
+const CRM_ONLY_SOLD_CLOSES_REQUEST_20260802_SQL = String.raw`
+begin;
+
+alter table crm.crm_runtime_settings
+  alter column closed_statuses set default '{"cash":["تم البيع"],"finance":["تم البيع"],"service":["تم الانتهاء"]}'::jsonb;
+
+update crm.crm_runtime_settings
+set closed_statuses=jsonb_set(
+      jsonb_set(coalesce(closed_statuses,'{}'::jsonb),'{cash}','["تم البيع"]'::jsonb,true),
+      '{finance}','["تم البيع"]'::jsonb,true
+    ),
+    updated_at=now()
+where id='default';
+
+with candidates as (
+  select distinct on (l.id)
+    l.id as lead_id,
+    r.id as request_id
+  from crm.leads l
+  join crm.service_requests r on r.lead_id=l.id
+  where l.is_deleted=false
+    and l.current_request_id is null
+    and l.service_key in ('cash','finance')
+    and trim(coalesce(l.status_label,''))='غير مؤهل'
+    and r.request_state='closed'
+    and trim(coalesce(r.status_label,''))='غير مؤهل'
+    and not exists (
+      select 1 from crm.service_requests open_request
+      where open_request.lead_id=l.id and open_request.request_state='open'
+    )
+  order by l.id,r.opened_at desc,r.updated_at desc
+), reopened as (
+  update crm.service_requests r
+  set request_state='open',closed_at=null,closed_by=null,closure_reason=null,updated_at=now()
+  from candidates c
+  where r.id=c.request_id
+  returning r.id,r.lead_id,r.conversation_id
+)
+update crm.leads l
+set current_request_id=reopened.id,updated_at=now()
+from reopened
+where l.id=reopened.lead_id;
+
+update crm.conversations c
+set service_request_id=r.id,classification_state='classified',closed_at=null,updated_at=now()
+from crm.service_requests r
+where r.conversation_id=c.id
+  and r.request_state='open'
+  and trim(coalesce(r.status_label,''))='غير مؤهل'
+  and r.service_key in ('cash','finance');
+
+insert into core.schema_migrations(version)
+values('crm-only-sold-closes-request-20260802')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1418,6 +1476,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-kpi-permissions-sold-quantity-20260728'
       `;
       if (!kpiPermissionsSoldQuantityMigration) await runSqlScript(CRM_KPI_PERMISSIONS_SOLD_QUANTITY_20260728_SQL);
+      const [onlySoldClosesRequestMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-only-sold-closes-request-20260802'
+      `;
+      if (!onlySoldClosesRequestMigration) await runSqlScript(CRM_ONLY_SOLD_CLOSES_REQUEST_20260802_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;
