@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, FileXls, MagnifyingGlass, MapPin, WarningCircle } from "@phosphor-icons/react";
+import { CheckCircle, CurrencyCircleDollar, FileXls, MagnifyingGlass, MapPin, ShieldCheck, WarningCircle, XCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { exportExcel, operationsFetch, queryString } from "../api";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "./ResizableOperationsTable";
+import { useAuth } from "../../auth/AuthContext";
+import { hasPermission } from "../../systemAccess";
 
 type RequestKindFilter = "all" | "transfer" | "photography";
 type RequestStatusFilter = "" | "request_received" | "vehicle_received" | "vehicle_sent" | "completed";
@@ -123,11 +125,17 @@ function DashboardApprovalBadge({ approved }: { approved: boolean }) {
 }
 
 export function DashboardOperationsModal({ selection, onClose }: { selection: DashboardOperationsSelection | null; onClose: () => void }) {
+  const { user } = useAuth();
+  const canApproveFinancial = hasPermission(user, "operations.approval.financial");
+  const canApproveAdministrative = hasPermission(user, "operations.approval.administrative");
   const [search, setSearch] = useState("");
   const [rows, setRows] = useState<Vehicle[]>([]);
   const [requestRows, setRequestRows] = useState<RequestRow[]>([]);
   const [approvalRows, setApprovalRows] = useState<ApprovalVehicle[]>([]);
   const [selectedApproval, setSelectedApproval] = useState<ApprovalVehicle | null>(null);
+  const [financialNote, setFinancialNote] = useState("");
+  const [administrativeNote, setAdministrativeNote] = useState("");
+  const [message, setMessage] = useState("");
   const [shortageRows, setShortageRows] = useState<ShortageRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -173,11 +181,17 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         const payload = await operationsFetch<{ rows: ApprovalVehicle[] }>(
           `/api/operations${queryString({ resource: "approvals", filter: selection.filter, search })}`,
         );
-        setApprovalRows(payload.rows || []);
+        const nextRows = payload.rows || [];
+        setApprovalRows(nextRows);
+        setSelectedApproval((current) => {
+          if (!current) return null;
+          const updated = nextRows.find((row) => row.vehicle_id === current.vehicle_id);
+          return updated ? { ...current, ...updated } : current;
+        });
         setRows([]);
         setRequestRows([]);
         setShortageRows([]);
-        setTotal((payload.rows || []).length);
+        setTotal(nextRows.length);
       }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تحميل التفاصيل");
@@ -191,6 +205,9 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     setPage(1);
     setDetail(null);
     setSelectedApproval(null);
+    setFinancialNote("");
+    setAdministrativeNote("");
+    setMessage("");
     setRows([]);
     setRequestRows([]);
     setApprovalRows([]);
@@ -204,8 +221,41 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
   }, [kind]);
 
   useEffect(() => {
+    if (!selectedApproval) return;
+    setFinancialNote(selectedApproval.financial_note || "");
+    setAdministrativeNote(selectedApproval.administrative_note || "");
+    setMessage("");
+  }, [selectedApproval?.vehicle_id, selectedApproval?.cycle_no]);
+
+  useEffect(() => {
     if (selection) void load();
   }, [selection, kind, page]);
+
+  async function act(type: "financial" | "administrative", action: "approve" | "revert" | "note") {
+    if (!selectedApproval) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = await operationsFetch<{ approval?: Partial<ApprovalVehicle>; autoArchived?: boolean; message?: string }>("/api/operations", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "approval_action",
+          vehicleId: selectedApproval.vehicle_id,
+          approvalType: type,
+          approvalAction: action,
+          note: type === "financial" ? financialNote : administrativeNote,
+        }),
+      });
+      setMessage(payload.message || "تم تحديث الموافقات");
+      setSelectedApproval((current) => payload.autoArchived || !current ? null : { ...current, ...(payload.approval || {}) });
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحديث الموافقة");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function exportVehicles() {
     if (!selection || selection.mode !== "vehicles") return;
@@ -373,6 +423,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         </div>
 
         {error ? <div className="operations-alert error">{error}</div> : null}
+        {message && !selectedApproval ? <div className="operations-alert success">{message}</div> : null}
 
         {selection?.mode === "vehicles" ? (
           <>
@@ -496,16 +547,40 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
               <article><span>ملاحظات الحالة</span><p>{selectedApproval.state_note || "لا توجد ملاحظات حالة"}</p></article>
               <article><span>حجز - نواقص - تحديد مكان</span><p>{selectedApproval.shortage_note || "لا توجد ملاحظات حجز أو نواقص"}</p></article>
             </section>
+            {message ? <div className="operations-alert success dashboard-approval-action-message">{message}</div> : null}
+            {error ? <div className="operations-alert error dashboard-approval-action-message">{error}</div> : null}
             <section className="dashboard-approval-detail-cards">
-              <article>
-                <header><strong>الموافقة المالية</strong><DashboardApprovalBadge approved={selectedApproval.financial_approved} /></header>
+              <article className={selectedApproval.financial_approved ? "complete" : "pending"}>
+                <header>
+                  <div className="dashboard-approval-card-title"><span><CurrencyCircleDollar size={23} /></span><div><strong>الموافقة المالية</strong><small>{selectedApproval.financial_approved ? "تم اعتماد الموافقة المالية" : "في انتظار اعتماد المسؤول المالي"}</small></div></div>
+                  <DashboardApprovalBadge approved={selectedApproval.financial_approved} />
+                </header>
                 <dl><div><dt>المسؤول</dt><dd>{selectedApproval.financial_approved_by_name || "—"}</dd></div><div><dt>التاريخ</dt><dd>{formatApprovalDate(selectedApproval.financial_approved_at)}</dd></div></dl>
-                <div className="dashboard-approval-detail-note"><span>الملاحظة المالية</span><p>{selectedApproval.financial_note || "لا توجد ملاحظة مالية"}</p></div>
+                <label className="dashboard-approval-action-note"><span>الملاحظة المالية</span><textarea value={financialNote} onChange={(event) => setFinancialNote(event.target.value)} placeholder="اكتب الملاحظة المالية هنا" disabled={!canApproveFinancial || loading} /></label>
+                <footer className="dashboard-approval-action-footer">
+                  {canApproveFinancial ? <>
+                    <button type="button" onClick={() => void act("financial", "note")} disabled={loading}>حفظ الملاحظة</button>
+                    {selectedApproval.financial_approved
+                      ? <button type="button" className="danger-outline" onClick={() => void act("financial", "revert")} disabled={loading}><XCircle size={17} />تراجع عن الموافقة</button>
+                      : <button type="button" className="primary" onClick={() => void act("financial", "approve")} disabled={loading}><CheckCircle size={17} />اعتماد مالي</button>}
+                  </> : <span className="operations-no-permission">عرض فقط — لا توجد صلاحية تنفيذ الموافقة المالية.</span>}
+                </footer>
               </article>
-              <article>
-                <header><strong>الموافقة الإدارية</strong><DashboardApprovalBadge approved={selectedApproval.administrative_approved} /></header>
+              <article className={selectedApproval.administrative_approved ? "complete" : "pending"}>
+                <header>
+                  <div className="dashboard-approval-card-title"><span><ShieldCheck size={23} /></span><div><strong>الموافقة الإدارية</strong><small>{selectedApproval.administrative_approved ? "تم اعتماد الموافقة الإدارية" : "في انتظار اعتماد المسؤول الإداري"}</small></div></div>
+                  <DashboardApprovalBadge approved={selectedApproval.administrative_approved} />
+                </header>
                 <dl><div><dt>المسؤول</dt><dd>{selectedApproval.administrative_approved_by_name || "—"}</dd></div><div><dt>التاريخ</dt><dd>{formatApprovalDate(selectedApproval.administrative_approved_at)}</dd></div></dl>
-                <div className="dashboard-approval-detail-note"><span>الملاحظة الإدارية</span><p>{selectedApproval.administrative_note || "لا توجد ملاحظة إدارية"}</p></div>
+                <label className="dashboard-approval-action-note"><span>الملاحظة الإدارية</span><textarea value={administrativeNote} onChange={(event) => setAdministrativeNote(event.target.value)} placeholder="اكتب الملاحظة الإدارية هنا" disabled={!canApproveAdministrative || loading} /></label>
+                <footer className="dashboard-approval-action-footer">
+                  {canApproveAdministrative ? <>
+                    <button type="button" onClick={() => void act("administrative", "note")} disabled={loading}>حفظ الملاحظة</button>
+                    {selectedApproval.administrative_approved
+                      ? <button type="button" className="danger-outline" onClick={() => void act("administrative", "revert")} disabled={loading}><XCircle size={17} />تراجع عن الموافقة</button>
+                      : <button type="button" className="primary" onClick={() => void act("administrative", "approve")} disabled={loading}><CheckCircle size={17} />اعتماد إداري</button>}
+                  </> : <span className="operations-no-permission">عرض فقط — لا توجد صلاحية تنفيذ الموافقة الإدارية.</span>}
+                </footer>
               </article>
             </section>
             <footer className="dashboard-approval-detail-footer">آخر تحديث: {formatApprovalDate(selectedApproval.updated_at)}</footer>

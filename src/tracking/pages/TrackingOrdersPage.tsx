@@ -20,6 +20,7 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
+import { useSearchParams } from "react-router-dom";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { Modal } from "../../components/Modal";
 import { useAuth } from "../../auth/AuthContext";
@@ -41,6 +42,9 @@ function visibleVin(vehicle: TrackingVehicle) {
 
 export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: boolean }) {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const requestedOrderId = String(searchParams.get("order") || "").trim();
+  const requestedOrderRef = useRef("");
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
   const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
   const [search, setSearch] = useState("");
@@ -94,6 +98,12 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   }
 
   useEffect(() => { setStatus(""); void loadOrders("", ""); }, [archivedOnly]);
+
+  useEffect(() => {
+    if (!requestedOrderId || requestedOrderRef.current === requestedOrderId) return;
+    requestedOrderRef.current = requestedOrderId;
+    void openOrder(requestedOrderId);
+  }, [requestedOrderId]);
 
   const activeVehicle = useMemo(
     () => selected?.vehicles.find((vehicle) => vehicle.id === activeVehicleId) || selected?.vehicles[0] || null,
