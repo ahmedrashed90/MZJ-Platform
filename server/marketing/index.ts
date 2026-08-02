@@ -2398,6 +2398,18 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   return{ok:true,cars,requests,locations};
 }
 
+async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.photo_request.complete"))throw new Error("لا توجد صلاحية لتحديث حالة التصوير");
+  const vehicleIds=[...new Set(arrayValue<string>(body.vehicleIds).map(clean).filter(Boolean))];
+  if(!vehicleIds.length)throw new Error("لم يتم تحديد سيارات لتحديث حالة التصوير");
+  return sql.begin(async tx=>{
+    const rows=await tx<any[]>`select id::text from operations.vehicles where id in ${tx(vehicleIds)} and is_deleted=false and archived_at is null for update`;
+    if(rows.length!==vehicleIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
+    await tx`update operations.vehicles set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1 where id in ${tx(vehicleIds)} and coalesce(photographed,false)=false`;
+    return{ok:true,message:vehicleIds.length===1?"تم تحديث السيارة إلى تم التصوير":`تم تحديث ${vehicleIds.length.toLocaleString("ar-SA")} سيارة إلى تم التصوير`};
+  });
+}
+
 async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const vehicles=arrayValue(body.vehicles).map((item:any)=>({vehicleId:clean(item.vehicleId),note:clean(item.note)})).filter((item:any)=>item.vehicleId);
   const destinationLocationId=clean(body.destinationLocationId);
@@ -2536,6 +2548,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
     else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
+    else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
     else if(action==='complete_photo_request')result=await completePhotographyRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='create_raw_folders')result=await createRawFolders(body);

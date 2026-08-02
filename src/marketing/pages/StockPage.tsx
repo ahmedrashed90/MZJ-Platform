@@ -50,6 +50,7 @@ type StockPayload = {
 
 type GroupedCar = StockCar & {
   quantity: number;
+  vehicleIds: string[];
   usage: any[];
   locationNames: string[];
 };
@@ -112,6 +113,7 @@ export function StockPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [completingRequestId, setCompletingRequestId] = useState("");
+  const [markingStockId, setMarkingStockId] = useState("");
 
   async function load() {
     setError("");
@@ -138,6 +140,7 @@ export function StockPage() {
       const contentUsage = Array.isArray(car.content_usage) ? car.content_usage : [];
       if (existing) {
         existing.quantity += 1;
+        existing.vehicleIds.push(car.id);
         existing.usage.push(...contentUsage);
         existing.photographed = Boolean(existing.photographed || car.photographed);
         if (!existing.photographed_at && car.photographed_at) existing.photographed_at = car.photographed_at;
@@ -146,6 +149,7 @@ export function StockPage() {
         map.set(key, {
           ...car,
           quantity: 1,
+          vehicleIds: [car.id],
           usage: [...contentUsage],
           locationNames: car.location_name ? [car.location_name] : [],
         });
@@ -266,6 +270,25 @@ export function StockPage() {
     if (!busy) resetRequest();
   }
 
+  async function markStockPhotographed(row: GroupedCar) {
+    if (row.photographed || markingStockId) return;
+    setMarkingStockId(row.id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "mark_stock_photographed", vehicleIds: row.vehicleIds }),
+      });
+      setMessage(result.message);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحديث حالة التصوير");
+    } finally {
+      setMarkingStockId("");
+    }
+  }
+
   async function completePhotoRequest(requestId: string) {
     setBusy(true);
     setCompletingRequestId(requestId);
@@ -361,7 +384,7 @@ export function StockPage() {
                       <td>{row.interior_color || "—"}</td>
                       <td>{row.locationNames.join("، ") || "—"}</td>
                       <td>{row.quantity}</td>
-                      <td><span className={row.photographed ? "marketing-status success" : "marketing-status warning"}>{row.photographed ? "تم التصوير" : "لم يتم التصوير"}</span></td>
+                      <td>{row.photographed ? <span className="marketing-status success">تم التصوير</span> : <button type="button" className="marketing-status warning marketing-photo-status-button" disabled={markingStockId === row.id} onClick={() => void markStockPhotographed(row)}>{markingStockId === row.id ? "جاري التحديث..." : "لم يتم التصوير"}</button>}</td>
                       <td>{row.usage.length ? <div className="usage-tags">{row.usage.slice(0, 4).map((item, index) => <span key={index}>{item?.creativeName || item?.contentType || item?.sourceName || "مستخدم"}</span>)}</div> : "غير مستخدمة"}</td>
                     </tr>
                   ))}

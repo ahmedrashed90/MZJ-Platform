@@ -275,7 +275,7 @@ function DepartmentCard({
   onOpen: () => void;
 }) {
   return (
-    <button className="department-card" type="button" onClick={onOpen}>
+    <button className={`department-card metrics-${metrics.length}`} type="button" onClick={onOpen}>
       <div className="department-card-head">
         <div className="department-icon"><Icon size={20} weight="duotone" /></div>
         <strong>{title}</strong>
@@ -779,9 +779,10 @@ export function DashboardPage() {
               ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
               <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
                 { label: "الحملات", value: marketing?.campaigns ?? null },
+                { label: "الأجندات", value: marketing?.agendas ?? null },
                 { label: "مجدولة", value: marketing?.scheduled ?? null },
                 { label: "متأخرة", value: marketing?.delayed ?? null },
-              ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
+              ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "الأجندات", value: marketing?.agendas ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
               <DepartmentCard title="التراكينج" icon={MapPin} metrics={[
                 { label: "الطلبات", value: tracking?.requests ?? null },
                 { label: "متابعة", value: tracking?.inProgress ?? null },

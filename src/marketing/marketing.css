@@ -5172,3 +5172,19 @@
 .marketing-fresh-import-errors ul { margin:10px 0 0; padding-inline-start:22px; max-height:250px; overflow:auto; }
 .marketing-fresh-import-errors li { margin:6px 0; font-size:12px; font-weight:700; }
 @media (max-width:720px) { .marketing-fresh-import-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+
+.marketing-page button.marketing-photo-status-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: none;
+}
+.marketing-page button.marketing-photo-status-button:hover:not(:disabled) {
+  border-color: #d7b77c;
+  background: #fff3d9;
+  transform: translateY(-1px);
+}

@@ -32,6 +32,7 @@ export type DashboardData = {
   };
   marketing: {
     campaigns: NullableNumber;
+    agendas: NullableNumber;
     scheduled: NullableNumber;
     delayed: NullableNumber;
   };

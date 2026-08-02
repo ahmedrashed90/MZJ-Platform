@@ -5934,3 +5934,63 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
     grid-column:auto;
   }
 }
+
+
+/* Operations inventory/all/archive: use the available canvas and keep VIN visible. */
+.operations-inventory-list-page {
+  width: calc(100% + 40px);
+  margin-inline: -20px;
+}
+.operations-inventory-list-page > .module-page-head,
+.operations-inventory-list-page > .operations-alert {
+  margin-inline: 20px;
+}
+.operations-inventory-list-page .operations-data-panel {
+  border-radius: 14px;
+}
+.operations-inventory-list-page .operations-filters {
+  padding-inline: 10px;
+}
+.operations-inventory-list-page .operations-table th,
+.operations-inventory-list-page .operations-table td {
+  height: 42px;
+  padding: 8px 7px;
+  font-size: 11.5px;
+}
+.operations-inventory-list-page .operations-table th {
+  font-size: 11px;
+}
+.operations-inventory-list-page .operations-table-scroll {
+  scrollbar-gutter: stable;
+}
+.operations-vehicle-table th:first-child,
+.operations-vehicle-table td:first-child {
+  position: sticky;
+  right: 0;
+}
+.operations-vehicle-table th:first-child {
+  z-index: 8;
+  background: #f7f2ef;
+  box-shadow: -1px 0 0 #e8dfda;
+}
+.operations-vehicle-table td:first-child {
+  z-index: 3;
+  background: #fff;
+  box-shadow: -1px 0 0 #eee7e3;
+}
+.operations-vehicle-table tbody tr:hover td:first-child {
+  background: #fbf8f6;
+}
+.department-card.metrics-4 .department-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 780px) {
+  .operations-inventory-list-page {
+    width: 100%;
+    margin-inline: 0;
+  }
+  .operations-inventory-list-page > .module-page-head,
+  .operations-inventory-list-page > .operations-alert {
+    margin-inline: 0;
+  }
+}

@@ -21,7 +21,7 @@ function emptyData(range: { from: string; to: string }): DashboardData {
     range,
     sectionErrors: {},
     crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
-    marketing: { campaigns: null, scheduled: null, delayed: null },
+    marketing: { campaigns: null, agendas: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
       inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, reservedByLocation: [], underDelivery: null, delivered: null, hasNotes: null },
@@ -119,12 +119,19 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
     try {
       const marketingAccess = getSystemAccess(user, "marketing");
       const marketingAll = marketingAccess.dataScope === "all";
-      const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed
-        from marketing.campaigns c
-        where is_deleted=false
-          and coalesce(c.campaign_date,(c.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-          and (${marketingAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`;
-      data.marketing = { campaigns: asNumber(row?.campaigns), scheduled: asNumber(row?.scheduled), delayed: asNumber(row?.delayed) };
+      const [[campaignRow], [agendaRow]] = await Promise.all([
+        sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed
+          from marketing.campaigns c
+          where is_deleted=false
+            and coalesce(c.campaign_date,(c.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (${marketingAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`,
+        sql<any[]>`select count(*)::int as agendas
+          from marketing.agendas a
+          where a.archived_at is null
+            and coalesce(a.publish_start,(a.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (${marketingAll}=true or a.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`,
+      ]);
+      data.marketing = { campaigns: asNumber(campaignRow?.campaigns), agendas: asNumber(agendaRow?.agendas), scheduled: asNumber(campaignRow?.scheduled), delayed: asNumber(campaignRow?.delayed) };
     } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
   }
 
