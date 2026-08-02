@@ -41,7 +41,8 @@ import { useEscapeToClose } from "../components/useEscapeToClose";
 import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
 import { formatTrackingDate, trackingFetch, trackingQuery, trackingStatusLabel } from "../tracking/api";
-import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
+import type { TrackingOrderDetail, TrackingOrderRow, TrackingStatus } from "../tracking/types";
+import { DashboardTrackingOrderModal } from "../tracking/components/DashboardTrackingOrderModal";
 import type { DashboardData, NullableNumber } from "../types";
 import { DashboardOperationsModal, type DashboardOperationsSelection } from "../operations/components/DashboardOperationsModal";
 import { useAuth } from "../auth/AuthContext";
@@ -442,6 +443,10 @@ export function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [operationsSelection, setOperationsSelection] = useState<DashboardOperationsSelection | null>(null);
+  const [trackingTarget, setTrackingTarget] = useState<TrackingOrderRow | null>(null);
+  const [trackingOrderDetail, setTrackingOrderDetail] = useState<TrackingOrderDetail | null>(null);
+  const [trackingDetailLoading, setTrackingDetailLoading] = useState(false);
+  const [trackingDetailError, setTrackingDetailError] = useState("");
   const [loading, setLoading] = useState(true);
   const [appliedRange, setAppliedRange] = useState(defaultDashboardRange);
   const [draftRange, setDraftRange] = useState(defaultDashboardRange);
@@ -451,6 +456,7 @@ export function DashboardPage() {
   const [draggedWidget, setDraggedWidget] = useState<string | null>(null);
   const [dashboardCustomizeOpen, setDashboardCustomizeOpen] = useState(false);
   const detailsRequestId = useRef(0);
+  const trackingDetailRequestId = useRef(0);
   const layoutMutationRef = useRef(0);
   const layoutSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   useEscapeToClose(dateOpen, () => setDateOpen(false));
@@ -544,27 +550,42 @@ export function DashboardPage() {
     setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
     try {
       const baseFilters = { limit: 2000, from: appliedRange.from, to: appliedRange.to };
-      const payloads = status === "completed"
-        ? await Promise.all([
-            trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ ...baseFilters, status: "completed", archived: false })}`),
-            trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ ...baseFilters, archived: true })}`),
-          ])
-        : [await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ ...baseFilters, status, archived: false })}`)];
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ ...baseFilters, status, archived: false })}`);
       if (detailsRequestId.current !== requestId) return;
-      const uniqueOrders = new Map<string, TrackingOrderRow>();
-      payloads.flatMap((payload) => payload.orders || []).forEach((order) => uniqueOrders.set(order.id, order));
-      const trackingOrders = [...uniqueOrders.values()].sort((left, right) => new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime());
-      setDetails({ title, subtitle: "اضغط على أي طلب لفتح شاشة التتبع الخاصة به", trackingOrders });
+      const trackingOrders = [...(payload.orders || [])].sort((left, right) => new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime());
+      setDetails({ title, subtitle: "اضغط على أي طلب لفتح تفاصيله داخل الداش بورد", trackingOrders });
     } catch (failure) {
       if (detailsRequestId.current !== requestId) return;
       setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات الطلبات" });
     }
   }
 
-  function openTrackingOrder(order: TrackingOrderRow) {
+  async function openTrackingOrder(order: TrackingOrderRow) {
     detailsRequestId.current += 1;
+    const requestId = ++trackingDetailRequestId.current;
     setDetails(null);
-    navigate(`/tracking?order=${encodeURIComponent(order.id)}`);
+    setTrackingTarget(order);
+    setTrackingOrderDetail(null);
+    setTrackingDetailError("");
+    setTrackingDetailLoading(true);
+    try {
+      const payload = await trackingFetch<{ ok: boolean; order: TrackingOrderDetail }>(`/api/tracking/orders?id=${encodeURIComponent(order.id)}`);
+      if (trackingDetailRequestId.current !== requestId) return;
+      setTrackingOrderDetail(payload.order);
+    } catch (failure) {
+      if (trackingDetailRequestId.current !== requestId) return;
+      setTrackingDetailError(failure instanceof Error ? failure.message : "تعذر فتح تفاصيل طلب التتبع");
+    } finally {
+      if (trackingDetailRequestId.current === requestId) setTrackingDetailLoading(false);
+    }
+  }
+
+  function closeTrackingOrder() {
+    trackingDetailRequestId.current += 1;
+    setTrackingTarget(null);
+    setTrackingOrderDetail(null);
+    setTrackingDetailError("");
+    setTrackingDetailLoading(false);
   }
 
   function openCrmLead(item: DashboardLeadItem) {
@@ -814,17 +835,16 @@ export function DashboardPage() {
             <div className="department-grid">
               <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
                 { label: "العملاء", value: crm?.cashSales ?? null },
-                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "تم البيع", value: crm?.cashSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
               ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
               <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
                 { label: "العملاء", value: crm?.financeSales ?? null },
-                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "تم البيع", value: crm?.financeSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
               ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
               <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
                 { label: "العملاء", value: crm?.customerService ?? null },
-                { label: "تم البيع", value: crm?.sold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
               ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
               <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
@@ -951,6 +971,7 @@ export function DashboardPage() {
       </div>
       <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} onTrackingOpen={openTrackingOrder} />
       <DashboardOperationsModal selection={operationsSelection} onClose={() => setOperationsSelection(null)} />
+      <DashboardTrackingOrderModal target={trackingTarget} order={trackingOrderDetail} loading={trackingDetailLoading} error={trackingDetailError} onClose={closeTrackingOrder} />
     </>
   );
 }

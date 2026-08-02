@@ -166,6 +166,7 @@ function trackingRequirement(route: string, request: VercelRequest): ApiPermissi
 }
 
 export function resolveApiPermission(route: string, request: VercelRequest): ApiPermissionRequirement | null {
+  if (route === "data-management") return req("platform.superadmin", "core", "settings", "data_management");
   if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public"].includes(route)) return null;
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");

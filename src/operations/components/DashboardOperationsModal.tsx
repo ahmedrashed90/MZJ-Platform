@@ -526,26 +526,12 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
         className="wide dashboard-approval-detail-modal"
       >
         {selectedApproval ? (
-          <div className="dashboard-approval-detail-content">
-            <section className="dashboard-approval-detail-summary">
+          <div className="dashboard-approval-detail-content dashboard-approval-action-first">
+            <section className="dashboard-approval-quick-summary">
               <div><small>رقم الهيكل</small><strong dir="ltr">{selectedApproval.vin}</strong></div>
               <div><small>السيارة</small><strong>{selectedApproval.car_name || "—"}</strong></div>
-              <div><small>البيان</small><strong>{selectedApproval.statement || "—"}</strong></div>
-              <div><small>الوكيل</small><strong>{selectedApproval.agent_name || "—"}</strong></div>
-              <div><small>الموديل</small><strong>{selectedApproval.model_year || "—"}</strong></div>
-              <div><small>اللون الداخلي</small><strong>{selectedApproval.interior_color || "—"}</strong></div>
-              <div><small>اللون الخارجي</small><strong>{selectedApproval.exterior_color || "—"}</strong></div>
-              <div><small>اللوحة</small><strong>{selectedApproval.plate_no || "—"}</strong></div>
-              <div><small>اسم الدفعة</small><strong>{selectedApproval.batch_no || "—"}</strong></div>
               <div><small>المكان الحالي</small><strong>{selectedApproval.location_name || "—"}</strong></div>
               <div><small>الحالة</small><strong>{selectedApproval.status_name || selectedApproval.status_code || "—"}</strong></div>
-              <div><small>الوجهة المنتظرة</small><strong>{selectedApproval.pending_destination_name || "—"}</strong></div>
-              <div><small>دورة الموافقات</small><strong>{selectedApproval.cycle_no || 1}</strong></div>
-            </section>
-            <section className="dashboard-approval-vehicle-notes">
-              <article><span>ملاحظات السيارة</span><p>{selectedApproval.notes || "لا توجد ملاحظات"}</p></article>
-              <article><span>ملاحظات الحالة</span><p>{selectedApproval.state_note || "لا توجد ملاحظات حالة"}</p></article>
-              <article><span>حجز - نواقص - تحديد مكان</span><p>{selectedApproval.shortage_note || "لا توجد ملاحظات حجز أو نواقص"}</p></article>
             </section>
             {message ? <div className="operations-alert success dashboard-approval-action-message">{message}</div> : null}
             {error ? <div className="operations-alert error dashboard-approval-action-message">{error}</div> : null}
@@ -556,7 +542,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
                   <DashboardApprovalBadge approved={selectedApproval.financial_approved} />
                 </header>
                 <dl><div><dt>المسؤول</dt><dd>{selectedApproval.financial_approved_by_name || "—"}</dd></div><div><dt>التاريخ</dt><dd>{formatApprovalDate(selectedApproval.financial_approved_at)}</dd></div></dl>
-                <label className="dashboard-approval-action-note"><span>الملاحظة المالية</span><textarea value={financialNote} onChange={(event) => setFinancialNote(event.target.value)} placeholder="اكتب الملاحظة المالية هنا" disabled={!canApproveFinancial || loading} /></label>
+                <label className="dashboard-approval-action-note"><span>الملاحظة المالية</span><textarea rows={3} value={financialNote} onChange={(event) => setFinancialNote(event.target.value)} placeholder="اكتب الملاحظة المالية هنا" disabled={!canApproveFinancial || loading} /></label>
                 <footer className="dashboard-approval-action-footer">
                   {canApproveFinancial ? <>
                     <button type="button" onClick={() => void act("financial", "note")} disabled={loading}>حفظ الملاحظة</button>
@@ -572,7 +558,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
                   <DashboardApprovalBadge approved={selectedApproval.administrative_approved} />
                 </header>
                 <dl><div><dt>المسؤول</dt><dd>{selectedApproval.administrative_approved_by_name || "—"}</dd></div><div><dt>التاريخ</dt><dd>{formatApprovalDate(selectedApproval.administrative_approved_at)}</dd></div></dl>
-                <label className="dashboard-approval-action-note"><span>الملاحظة الإدارية</span><textarea value={administrativeNote} onChange={(event) => setAdministrativeNote(event.target.value)} placeholder="اكتب الملاحظة الإدارية هنا" disabled={!canApproveAdministrative || loading} /></label>
+                <label className="dashboard-approval-action-note"><span>الملاحظة الإدارية</span><textarea rows={3} value={administrativeNote} onChange={(event) => setAdministrativeNote(event.target.value)} placeholder="اكتب الملاحظة الإدارية هنا" disabled={!canApproveAdministrative || loading} /></label>
                 <footer className="dashboard-approval-action-footer">
                   {canApproveAdministrative ? <>
                     <button type="button" onClick={() => void act("administrative", "note")} disabled={loading}>حفظ الملاحظة</button>
@@ -583,6 +569,25 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
                 </footer>
               </article>
             </section>
+            <details className="dashboard-approval-more-details">
+              <summary>بيانات السيارة والملاحظات الكاملة</summary>
+              <section className="dashboard-approval-detail-summary">
+                <div><small>البيان</small><strong>{selectedApproval.statement || "—"}</strong></div>
+                <div><small>الوكيل</small><strong>{selectedApproval.agent_name || "—"}</strong></div>
+                <div><small>الموديل</small><strong>{selectedApproval.model_year || "—"}</strong></div>
+                <div><small>اللون الداخلي</small><strong>{selectedApproval.interior_color || "—"}</strong></div>
+                <div><small>اللون الخارجي</small><strong>{selectedApproval.exterior_color || "—"}</strong></div>
+                <div><small>اللوحة</small><strong>{selectedApproval.plate_no || "—"}</strong></div>
+                <div><small>اسم الدفعة</small><strong>{selectedApproval.batch_no || "—"}</strong></div>
+                <div><small>الوجهة المنتظرة</small><strong>{selectedApproval.pending_destination_name || "—"}</strong></div>
+                <div><small>دورة الموافقات</small><strong>{selectedApproval.cycle_no || 1}</strong></div>
+              </section>
+              <section className="dashboard-approval-vehicle-notes">
+                <article><span>ملاحظات السيارة</span><p>{selectedApproval.notes || "لا توجد ملاحظات"}</p></article>
+                <article><span>ملاحظات الحالة</span><p>{selectedApproval.state_note || "لا توجد ملاحظات حالة"}</p></article>
+                <article><span>حجز - نواقص - تحديد مكان</span><p>{selectedApproval.shortage_note || "لا توجد ملاحظات حجز أو نواقص"}</p></article>
+              </section>
+            </details>
             <footer className="dashboard-approval-detail-footer">آخر تحديث: {formatApprovalDate(selectedApproval.updated_at)}</footer>
           </div>
         ) : null}

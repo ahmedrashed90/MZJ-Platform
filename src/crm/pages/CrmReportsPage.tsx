@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowClockwise, FilePdf, FileXls, MagnifyingGlass, Users, X } from "@phosphor-icons/react";
+import { ArrowClockwise, Buildings, CalendarBlank, FilePdf, FileXls, FunnelSimple, MagnifyingGlass, UserFocus, Users, X } from "@phosphor-icons/react";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
@@ -259,22 +259,40 @@ export function CrmReportsPage() {
       </div>
 
       <section className="crm-reports-filters-pro">
-        <header><div><h2>فلاتر التقارير</h2><p>حدد الفترة والقسم والمسؤول والمصدر، ثم استخدم البحث لتضييق النتائج.</p></div><button type="button" className="crm-secondary-button" onClick={() => setFilters(emptyFilters)}>مسح الفلاتر</button></header>
-        <div className="crm-report-filter-row crm-report-filter-row-primary">
-          <div className="crm-report-filter-group dates">
-            <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
-            <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
+        <header>
+          <div className="crm-report-filter-title">
+            <span className="crm-report-filter-title-icon"><FunnelSimple size={24} weight="duotone" /></span>
+            <div><h2>فلاتر التقارير</h2><p>حدد نطاق التقرير بدقة؛ كل مجموعة مستقلة وواضحة مثل نموذج تقييم المناديب.</p></div>
           </div>
-          <div className="crm-report-filter-group organization">
-            <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="wholesale">قسم الجملة</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
-            <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
-          </div>
-        </div>
-        <div className="crm-report-filter-row crm-report-filter-row-secondary">
-          <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilter("agent", event.target.value)}><option value="">كل المناديب</option>{salesUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
-          <label><span>الكول سنتر</span><select value={filters.callCenter} onChange={(event) => setFilter("callCenter", event.target.value)}><option value="">كل مناديب الكول سنتر</option>{callCenterUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
-          <label><span>المصدر</span><select value={filters.source} onChange={(event) => setFilter("source", event.target.value)}><option value="">كل المصادر</option>{(meta?.sources || []).map((item) => <option key={item.code} value={item.code}>{sourceLabel(item.code, item.name)}</option>)}</select></label>
-          <label className="crm-search-box wide crm-report-search"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="بحث بالاسم أو الجوال أو السيارة أو المصدر" /></label>
+          <button type="button" className="crm-secondary-button" onClick={() => setFilters(emptyFilters)}>مسح الفلاتر</button>
+        </header>
+        <div className="crm-report-filter-blocks">
+          <section className="crm-report-filter-block">
+            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>تاريخ تسجيل العميل داخل التقرير</small></div></div>
+            <div className="crm-report-filter-fields two-columns">
+              <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
+              <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
+            </div>
+          </section>
+          <section className="crm-report-filter-block">
+            <div className="crm-report-filter-block-head"><span><Buildings size={19} /></span><div><strong>القسم والفرع</strong><small>حدد نطاق الإدارة أو الموقع</small></div></div>
+            <div className="crm-report-filter-fields two-columns">
+              <label><span>القسم</span><select value={filters.department} onChange={(event) => setFilter("department", event.target.value)}><option value="">كل الأقسام</option><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="wholesale">قسم الجملة</option><option value="customer_service">خدمة العملاء</option><option value="call_center">كول سنتر</option></select></label>
+              <label><span>الفرع</span><select value={filters.branch} onChange={(event) => setFilter("branch", event.target.value)}><option value="">كل الفروع</option>{(meta?.branches || []).map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+            </div>
+          </section>
+          <section className="crm-report-filter-block wide">
+            <div className="crm-report-filter-block-head"><span><UserFocus size={19} /></span><div><strong>المسؤول والمصدر</strong><small>المندوب والكول سنتر ومصدر العميل</small></div></div>
+            <div className="crm-report-filter-fields three-columns">
+              <label><span>المندوب</span><select value={filters.agent} onChange={(event) => setFilter("agent", event.target.value)}><option value="">كل المناديب</option>{salesUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
+              <label><span>الكول سنتر</span><select value={filters.callCenter} onChange={(event) => setFilter("callCenter", event.target.value)}><option value="">كل مناديب الكول سنتر</option>{callCenterUsers.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
+              <label><span>المصدر</span><select value={filters.source} onChange={(event) => setFilter("source", event.target.value)}><option value="">كل المصادر</option>{(meta?.sources || []).map((item) => <option key={item.code} value={item.code}>{sourceLabel(item.code, item.name)}</option>)}</select></label>
+            </div>
+          </section>
+          <section className="crm-report-filter-block search-block">
+            <div className="crm-report-filter-block-head"><span><MagnifyingGlass size={19} /></span><div><strong>البحث داخل النتائج</strong><small>بالاسم أو الجوال أو السيارة أو المصدر</small></div></div>
+            <label className="crm-search-box wide crm-report-search"><MagnifyingGlass size={18} /><input value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="اكتب كلمة البحث" /></label>
+          </section>
         </div>
       </section>
 

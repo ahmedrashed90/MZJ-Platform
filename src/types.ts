@@ -14,6 +14,8 @@ export type DashboardData = {
     openServiceConversations: NullableNumber;
     noAnswerCustomers: NullableNumber;
     sold: NullableNumber;
+    cashSold: NullableNumber;
+    financeSold: NullableNumber;
     cashSales: NullableNumber;
     financeSales: NullableNumber;
     customerService: NullableNumber;

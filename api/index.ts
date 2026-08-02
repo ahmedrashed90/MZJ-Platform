@@ -49,6 +49,7 @@ import platformConnectionsHandler from "../server/marketing/platform-connections
 import activityHandler from "../server/activity.js";
 import notificationsHandler from "../server/notifications.js";
 import notificationSettingsHandler from "../server/notification-settings.js";
+import dataManagementHandler from "../server/data-management.js";
 import { ensureRequestId, logApiWriteIfMissing } from "../server/_activity.js";
 import { getSessionUser } from "../server/_auth.js";
 import type { PermissionUser } from "../server/_access-control.js";
@@ -110,6 +111,7 @@ const routes = new Map<string, ApiHandler>([
   ["activity", activityHandler],
   ["notifications", notificationsHandler],
   ["notification-settings", notificationSettingsHandler],
+  ["data-management", dataManagementHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
