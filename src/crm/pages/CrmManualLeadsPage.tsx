@@ -184,7 +184,7 @@ export function CrmManualLeadsPage() {
           </div>
           <div className="crm-table-shell compact">
             <table className="crm-table">
-              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب الحالي</th><th>الكول سنتر</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب الحالي</th><th>المندوب الجديد</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.id}>
@@ -193,7 +193,7 @@ export function CrmManualLeadsPage() {
                     <td>{sourceLabel(row.source_code, row.source_name)}</td>
                     <td>{row.payment_type || "—"}</td>
                     <td>{row.current_assigned_name || row.requested_assigned_name || row.requested_by_name || "—"}</td>
-                    <td>{row.requested_call_center_name || "—"}</td>
+                    <td>{row.requested_assigned_name || "—"}</td>
                     <td>{formatDate(row.updated_at)}</td>
                     <td><span className={`crm-status-pill ${row.approval_status}`}>{row.approval_status === "pending" ? "بانتظار موافقة الإدارة" : row.approval_status === "approved" ? "تمت الموافقة" : "مرفوض"}</span></td>
                     <td><div className="crm-row-actions">{row.approval_status === "pending" ? <button title="موافقة" onClick={() => { setApproval(row); setApprovalAgent(row.requested_assigned_to || ""); }}><Check size={16} /></button> : null}<button title="تعديل" onClick={() => editRow(row)}><PencilSimple size={16} /></button><button title="مسح" onClick={() => void remove(row.id)}><Trash size={16} /></button></div></td>
