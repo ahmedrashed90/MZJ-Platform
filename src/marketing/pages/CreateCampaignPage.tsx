@@ -6,7 +6,7 @@ import { CreativeEditor, newCreativeDraft } from "../components/CreativeEditor";
 import { CreativeMultiPicker } from "../components/CreativeMultiPicker";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
-import type { CreativeDraft, MarketingMeta } from "../types";
+import type { CreativeDraft, ExecutionFolderCreation, MarketingMeta, RawFolderRequest, RawFolderResult } from "../types";
 
 const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], contentDepartmentId: "", actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
 const steps = ["بيانات الحملة", "الكرييتيف", "الميزانية", "جدول النشر", "المراجعة والإنشاء"];
@@ -55,6 +55,7 @@ export function CreateCampaignPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [executionFolders, setExecutionFolders] = useState<ExecutionFolderCreation | null>(null);
 
   useEffect(() => { marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`).then(setMeta).catch((failure) => setError(failure instanceof Error ? failure.message : "تعذر تحميل الإعدادات")); }, []);
   async function campaignTypeChanged(id: string) {
@@ -87,6 +88,19 @@ export function CreateCampaignPage() {
     const value = new Date(`${date}T00:00:00`);
     return Number.isNaN(value.getTime()) ? date : new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(value);
   }
+  const executionFolderPlanKey = useMemo(() => JSON.stringify({
+    monthKey: form.publishStart.slice(0, 7),
+    campaignCode: form.campaignCode,
+    campaignFolderName: `${form.campaignCode}-${form.name}`,
+    creatives: creatives.map((creative) => ({
+      tempId: creative.tempId,
+      creativeTypeId: creative.creativeTypeId,
+      cars: creative.cars.map((car) => car.id),
+      users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)].map((assignment) => assignment.userId),
+    })),
+  }), [form.publishStart, form.campaignCode, form.name, creatives]);
+  useEffect(() => { setExecutionFolders(null); }, [executionFolderPlanKey]);
+
   const relations = useMemo(() => creatives.flatMap((creative) => {
     const creativeLabel = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.name || "";
     const user = (id: string) => meta.users.find((item) => item.id === id)?.full_name || meta.users.find((item) => item.id === id)?.fullName || id;
@@ -113,17 +127,34 @@ export function CreateCampaignPage() {
   async function create() {
     setLoading(true); setError(""); setMessage("");
     try {
-      const result = await marketingFetch<{ message: string; id: string; code: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_campaign", ...form, creatives, budgets, schedule }) });
+      const result = await marketingFetch<{ message: string; id: string; code: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_campaign", ...form, creatives, budgets, schedule, executionFolders }) });
       setMessage(`${result.message} — ${result.code}`);
-      setStep(0); setForm({ campaignDate: marketingLocalDateKey(), publishStart: "", publishEnd: "", campaignTypeId: "", campaignCode: "", name: "", objective: "", requiredFromContent: "" }); setCreatives([newCreativeDraft()]); setBudgets([]); setSchedule([]);
+      setStep(0); setForm({ campaignDate: marketingLocalDateKey(), publishStart: "", publishEnd: "", campaignTypeId: "", campaignCode: "", name: "", objective: "", requiredFromContent: "" }); setCreatives([newCreativeDraft()]); setBudgets([]); setSchedule([]); setExecutionFolders(null);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر إنشاء الحملة"); }
     finally { setLoading(false); }
   }
   async function createRawFolders() {
-    setLoading(true); setError("");
+    setLoading(true); setError(""); setExecutionFolders(null);
     try {
-      const payload = { monthKey: form.publishStart.slice(0, 7), campaignCode: form.campaignCode, campaignFolderName: `${form.campaignCode}-${form.name}`, creatives: creatives.map((creative, index) => ({ name: creativeName(creative.tempId), folderName: `${String(index + 1).padStart(2, "0")}-${creativeName(creative.tempId)}`, creativeInstanceId: creative.tempId, creativeIndex: index + 1, cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })), users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)].map((assignment) => ({ uid: assignment.userId, name: meta.users.find((item) => item.id === assignment.userId)?.full_name || assignment.userId })) })) };
-      const result = await marketingFetch<{ message?: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_raw_folders", payload }) });
+      const payload: RawFolderRequest = {
+        monthKey: form.publishStart.slice(0, 7),
+        campaignCode: form.campaignCode,
+        campaignFolderName: `${form.campaignCode}-${form.name}`,
+        campaignDisplayName: form.name,
+        driveLetter: "Z:",
+        creatives: creatives.map((creative, index) => ({
+          name: creativeName(creative.tempId),
+          folderName: `${String(index + 1).padStart(2, "0")}-${creativeName(creative.tempId)}`,
+          creativeInstanceId: creative.tempId,
+          creativeIndex: index + 1,
+          cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })),
+          users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)]
+            .filter((assignment, assignmentIndex, all) => all.findIndex((item) => item.userId === assignment.userId) === assignmentIndex)
+            .map((assignment) => ({ uid: assignment.userId, name: meta.users.find((item) => item.id === assignment.userId)?.full_name || assignment.userId })),
+        })),
+      };
+      const result = await marketingFetch<RawFolderResult>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_raw_folders", payload }) });
+      setExecutionFolders({ request: payload, result });
       setMessage(result.message || "تم إنشاء فولدرات الخام");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر إنشاء فولدرات الخام"); }
     finally { setLoading(false); }

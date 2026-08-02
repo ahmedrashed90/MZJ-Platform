@@ -315,7 +315,86 @@ async function nextCampaignCode(sql: ReturnType<typeof getSql>, campaignTypeId: 
 
 function contentDepartmentId(meta: { contentDepartmentId?: string; departments: any[] }) { return clean(meta.contentDepartmentId || meta.departments.find((item) => item.is_content)?.id); }
 
-async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string }) {
+type ExecutionFolderCreationInput = { request?: Record<string, any>; result?: Record<string, any> };
+
+function objectValue(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function normalizedFolderMatch(value: unknown) {
+  return clean(value).toLocaleLowerCase("en-US");
+}
+
+function safeFolderSegment(value: unknown) {
+  return clean(value)
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function raidriveWindowsPath(driveLetter: unknown, parts: unknown[]) {
+  const drive = (clean(driveLetter) || "Z:").replace(/[\\/]+$/g, "");
+  const segments = parts.map(safeFolderSegment).filter(Boolean);
+  return `${drive}\\${segments.join("\\")}\\`;
+}
+
+function executionFoldersForTask(
+  creationValue: unknown,
+  input: { creativeLinkId: string; creativeName: string; assignedTo: string },
+) {
+  const creation = objectValue(creationValue) as ExecutionFolderCreationInput;
+  const request = objectValue(creation.request);
+  const result = objectValue(creation.result);
+  if (result.ok === false || !arrayValue(request.creatives).length) return null;
+
+  const requestCreatives = arrayValue<Record<string, any>>(request.creatives);
+  const serverCreatives = Object.values(objectValue(result.rawFolders)).map(objectValue);
+  const creativeLinkId = normalizedFolderMatch(input.creativeLinkId);
+  const creativeName = normalizedFolderMatch(input.creativeName);
+  const requestCreative = requestCreatives.find((item) => normalizedFolderMatch(item.creativeInstanceId) === creativeLinkId)
+    || requestCreatives.find((item) => normalizedFolderMatch(item.folderName) === creativeLinkId)
+    || requestCreatives.find((item) => normalizedFolderMatch(item.name) === creativeName);
+  if (!requestCreative) return null;
+
+  const requestFolderName = clean(requestCreative.folderName);
+  const serverCreative = serverCreatives.find((item) => normalizedFolderMatch(item.creativeInstanceId) === creativeLinkId)
+    || serverCreatives.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestFolderName))
+    || serverCreatives.find((item) => normalizedFolderMatch(item.name) === creativeName);
+  const assignedTo = clean(input.assignedTo);
+  const requestUser = arrayValue<Record<string, any>>(requestCreative.users).find((item) => clean(item.uid) === assignedTo);
+  if (!requestUser) return null;
+  const serverUsers = Object.values(objectValue(serverCreative?.users)).map(objectValue);
+  const serverUser = serverUsers.find((item) => clean(item.uid) === assignedTo)
+    || serverUsers.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestUser.folderName || requestUser.name));
+
+  const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
+  const monthKey = clean(result.monthKey || request.monthKey);
+  const campaignCode = clean(result.campaignCode || request.campaignCode);
+  const campaignFolderName = clean(result.campaignFolderName || request.campaignFolderName || request.campaignDisplayName || campaignCode);
+  const creativeFolderName = clean(serverCreative?.folderName || requestCreative.folderName || requestCreative.name);
+  const userFolderName = clean(serverUser?.folderName || requestUser.folderName || requestUser.name);
+  if (!monthKey || !campaignFolderName || !creativeFolderName || !userFolderName) return null;
+
+  return {
+    linked: true,
+    type: "raidrive_sftp",
+    driveLetter,
+    monthKey,
+    campaignCode,
+    campaignFolderName,
+    creativeFolderName,
+    userFolderName,
+    rawFolderUrl: clean(serverCreative?.rawFolderUrl || serverCreative?.subFolders?.raw),
+    outputFolderUrl: clean(serverCreative?.outputFolderUrl || serverCreative?.subFolders?.output),
+    userOutputFolderUrl: clean(serverUser?.outputFolderUrl),
+    rawWindowsPath: raidriveWindowsPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "01-RAW"]),
+    outputWindowsPath: raidriveWindowsPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT"]),
+    userOutputWindowsPath: raidriveWindowsPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT", userFolderName]),
+  };
+}
+
+async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
   const templates = new Map<string, string>();
   let templateIndex = 0;
   for (const content of input.contentAssignments) {
@@ -359,9 +438,14 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
         const templateId = templates.get(contentUserId); if (!templateId) continue;
         taskIndex += 1;
         linkedTemplateUsers.add(contentUserId);
+        const executionFolders = executionFoldersForTask(input.executionFolderCreation, {
+          creativeLinkId: clean(input.creativeFolderLinkId) || input.creativeName,
+          creativeName: input.creativeName,
+          assignedTo,
+        });
         const [task] = await tx<any[]>`
-          insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note)
-          values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'execution',${group.departmentId}::uuid,${assignedTo}::uuid,${contentUserId}::uuid,${templateId}::uuid,'execution',${`${input.creativeName} - تنفيذ ${taskIndex}`},'required',${isoDate(assignment.dueOn)},0,${clean(assignment.note)||null})
+          insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note,execution_folders)
+          values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'execution',${group.departmentId}::uuid,${assignedTo}::uuid,${contentUserId}::uuid,${templateId}::uuid,'execution',${`${input.creativeName} - تنفيذ ${taskIndex}`},'required',${isoDate(assignment.dueOn)},0,${clean(assignment.note)||null},${tx.json(dbJson(executionFolders || {}))})
           returning id::text
         `;
         await tx`insert into marketing.task_action_progress(task_id,action_id) select ${task.id}::uuid,id from marketing.assignment_actions where department_id=${group.departmentId}::uuid and is_active=true on conflict do nothing`;
@@ -416,7 +500,7 @@ async function createCampaignInTransaction(
       values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,${Math.max(1,numberValue(rawCreative.quantity,1))},'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
     `;
     creativeMap.set(tempId, creative.id);
-    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent) });
+    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
   }
   for (const budget of arrayValue(body.budgets)) {
     const requestedCreativeIds = arrayValue<string>(budget.creativeTempIds).length
@@ -547,7 +631,8 @@ async function createAgendaInTransaction(tx: any, body: Record<string, any>, use
           insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
           values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
         `;
-        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"" });
+        const agendaCreativeLinkId = `${clean(rawCreative.tempId || rawCreative.id)}:${dayDate}:${instance + 1}`;
+        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:agendaCreativeLinkId });
         const templatesWithoutExecution = await tx<any[]>`
           select tt.id::text
           from marketing.task_templates tt

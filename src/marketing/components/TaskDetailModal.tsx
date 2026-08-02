@@ -7,6 +7,7 @@ import {
   DownloadSimple,
   FileArrowUp,
   FloppyDisk,
+  FolderOpen,
   ShieldCheck,
   WarningCircle,
   XCircle,
@@ -114,6 +115,36 @@ function carsText(cars: unknown) {
 
 function DetailItem({ label, value, wide = false }: { label: string; value: unknown; wide?: boolean }) {
   return <article className={wide ? "wide" : ""}><small>{label}</small><strong>{String(value || "—")}</strong></article>;
+}
+
+type TaskExecutionFolders = {
+  linked?: boolean;
+  rawWindowsPath?: string;
+  outputWindowsPath?: string;
+  userOutputWindowsPath?: string;
+  rawFolderUrl?: string;
+  outputFolderUrl?: string;
+  userOutputFolderUrl?: string;
+};
+
+function taskExecutionFolders(value: unknown): TaskExecutionFolders | null {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try { return taskExecutionFolders(JSON.parse(value)); } catch { return null; }
+  }
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  const folders = value as TaskExecutionFolders;
+  return folders.linked ? folders : null;
+}
+
+function openExecutionFolder(path: unknown, fallbackUrl: unknown) {
+  const windowsPath = String(path || "").trim();
+  const url = String(fallbackUrl || "").trim();
+  if (!windowsPath) {
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  window.location.href = `mzjfolder://open?path=${encodeURIComponent(windowsPath)}`;
 }
 
 
@@ -317,6 +348,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   }
 
   const task = payload?.task;
+  const executionFolders = task?.task_kind === "execution" ? taskExecutionFolders(task.execution_folders) : null;
   const permissions = payload?.permissions || {};
   const canReview = Boolean(permissions.canApproveTemplate || permissions.canRejectTemplate);
   const canViewFeedback = Boolean(permissions.canViewFeedback || canReview);
@@ -402,6 +434,20 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <DetailItem label="المطلوب من كاتب المحتوى" value={task.required_from_content} wide />
           </div>
           <div className="marketing-task-progress"><span>نسبة الإنجاز</span><ProgressBar value={Number(task.progress || 0)} /></div>
+        </section> : null}
+
+        {executionFolders ? <section className="marketing-task-section marketing-execution-folders-section">
+          <div className="marketing-task-section-heading">
+            <div><h3><FolderOpen size={21} weight="duotone" />ملفات التنفيذ</h3><p>افتح فولدر الخام الخاص بالكرييتيف أو فولدر التسليم الخاص بك مباشرة من RaiDrive.</p></div>
+          </div>
+          <div className="marketing-execution-folder-actions">
+            <button type="button" className="marketing-execution-folder-button raw" onClick={() => openExecutionFolder(executionFolders.rawWindowsPath, executionFolders.rawFolderUrl)}>
+              <span><FolderOpen size={25} weight="duotone" /></span><div><strong>فتح فولدر RAW</strong><small>ملفات الخام داخل 01-RAW</small></div>
+            </button>
+            <button type="button" className="marketing-execution-folder-button output" onClick={() => openExecutionFolder(executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath, executionFolders.userOutputFolderUrl || executionFolders.outputFolderUrl)}>
+              <span><FolderOpen size={25} weight="duotone" /></span><div><strong>فتح فولدر OUTPUT</strong><small>فولدر التسليم الخاص باليوزر داخل 02-OUTPUT</small></div>
+            </button>
+          </div>
         </section> : null}
 
         {task.task_kind === "task_template" ? <>

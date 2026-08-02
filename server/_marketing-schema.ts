@@ -341,6 +341,7 @@ create table if not exists marketing.tasks (
   note text,
   final_file_id uuid references marketing.files(id) on delete set null,
   approved_template_data jsonb not null default '{}'::jsonb,
+  execution_folders jsonb not null default '{}'::jsonb,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -370,6 +371,7 @@ alter table marketing.tasks add column if not exists received_at timestamptz;
 alter table marketing.tasks add column if not exists note text;
 alter table marketing.tasks add column if not exists final_file_id uuid references marketing.files(id) on delete set null;
 alter table marketing.tasks add column if not exists approved_template_data jsonb not null default '{}'::jsonb;
+alter table marketing.tasks add column if not exists execution_folders jsonb not null default '{}'::jsonb;
 alter table marketing.tasks add column if not exists is_deleted boolean not null default false;
 
 update marketing.campaigns set name=coalesce(nullif(name,''),'حملة') where name is null or name='';
