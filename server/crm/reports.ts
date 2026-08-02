@@ -482,18 +482,48 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sourceGroup = (groupName: string) => {
     const groupRows = leads.filter((row) => row.source_report_group === groupName);
     const groupFacts = salesFacts.filter((fact) => fact.source_report_group === groupName);
-    return group(groupRows, groupFacts, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name), (fact) => fact.source_code || "__none__", (fact) => sourceLabel(fact.source_code, fact.source_name));
+    return {
+      rows: group(groupRows, groupFacts, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name), (fact) => fact.source_code || "__none__", (fact) => sourceLabel(fact.source_code, fact.source_name)),
+      summary: makeMetrics(groupRows, groupFacts),
+    };
   };
+  const digitalSources = sourceGroup("digital");
+  const directSources = sourceGroup("direct");
+  const otherSources = sourceGroup("other");
   const salesRows = leads.filter((row) => row.department_code !== "customer_service" && row.assigned_is_call_center !== true);
   const salesOnlyFacts = salesFacts.filter((fact) => fact.department_code !== "customer_service");
   const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`);
-  const agents = group(salesRows, salesOnlyFacts, "agent", (row) => row.assigned_to || "__none__", (row) => row.assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع");
+
+  const agentContext = new Map<string, { departments: Set<string>; branches: Set<string> }>();
+  const rememberAgentContext = (item: any) => {
+    const key = String(item.assigned_to || "__none__");
+    if (!agentContext.has(key)) agentContext.set(key, { departments: new Set<string>(), branches: new Set<string>() });
+    const context = agentContext.get(key)!;
+    if (item.department_code) context.departments.add(departmentLabel(item.department_code));
+    const branchName = item.branch_name || item.branch_code;
+    if (branchName) context.branches.add(String(branchName));
+  };
+  salesRows.forEach(rememberAgentContext);
+  salesOnlyFacts.forEach(rememberAgentContext);
+  const agents = group(salesRows, salesOnlyFacts, "agent", (row) => row.assigned_to || "__none__", (row) => row.assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع")
+    .map((row) => {
+      const context = agentContext.get(String(row.detailValue || "__none__"));
+      return {
+        ...row,
+        department: context ? [...context.departments].sort((a, b) => a.localeCompare(b, "ar")).join("، ") : "غير محدد",
+        branch: context ? [...context.branches].sort((a, b) => a.localeCompare(b, "ar")).join("، ") || "بدون فرع" : "بدون فرع",
+      };
+    });
+
   const serviceRows = leads.filter((row) => row.department_code === "customer_service");
+  const serviceFacts = salesFacts.filter((fact) => fact.department_code === "customer_service");
+  const serviceDone = serviceRows.filter((row) => [norm("تم الانتهاء"), norm("تم الإنتهاء")].includes(norm(row.status_label))).length;
   const service = {
     name: "خدمة العملاء",
-    ...makeMetrics(serviceRows, salesFacts.filter((fact) => fact.department_code === "customer_service")),
+    ...makeMetrics(serviceRows, serviceFacts),
     working: serviceRows.filter((row) => norm(row.status_label) === norm("جاري العمل")).length,
-    done: serviceRows.filter((row) => [norm("تم الانتهاء"), norm("تم الإنتهاء")].includes(norm(row.status_label))).length,
+    done: serviceDone,
+    quality: serviceRows.length ? Math.round((serviceDone / serviceRows.length) * 100) : 0,
     detailKind: "service",
     detailValue: "customer_service",
   };
@@ -502,13 +532,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     ok: true,
     filters: { from, to, q, department, branch, agent, callCenter, source },
     totals: makeMetrics(leads, salesFacts),
-    digitalSources: sourceGroup("digital"),
-    directSources: sourceGroup("direct"),
-    otherSources: sourceGroup("other"),
+    digitalSources: digitalSources.rows,
+    directSources: directSources.rows,
+    otherSources: otherSources.rows,
     sources: sourceRows,
     departments,
     agents,
     service,
+    sectionSummaries: {
+      digitalSources: digitalSources.summary,
+      directSources: directSources.summary,
+      otherSources: otherSources.summary,
+      departments: makeMetrics(salesRows, salesOnlyFacts),
+      agents: makeMetrics(salesRows, salesOnlyFacts),
+    },
     quality: { ...quality, summary_cards: summaryCards },
   });
 }
