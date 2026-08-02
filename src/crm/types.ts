@@ -25,6 +25,7 @@ export type CrmStatus = {
   value: string;
   sort_order: number;
   is_active?: boolean;
+  show_on_dashboard?: boolean;
   count?: number;
 };
 

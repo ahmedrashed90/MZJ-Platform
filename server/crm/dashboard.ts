@@ -28,6 +28,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const customerFields = await getCustomerFieldDefinitions();
 
+  const configuredStatuses = await sql<any[]>`
+    select id, department_code, label, value, sort_order, is_active, show_on_dashboard
+    from crm.dashboard_statuses
+    where department_code = ${department} and is_active = true
+    order by sort_order
+  `;
+  const statuses = configuredStatuses.filter((item) => item.show_on_dashboard !== false);
+  const showSoldStatus = (department === "cash" || department === "finance")
+    && statuses.some((item) => String(item.value || item.label || "").trim() === "تم البيع");
+
   const rows = await sql<any[]>`
     select
       l.id::text, l.legacy_id, l.customer_name, l.phone, l.phone_normalized, l.source_code, l.source_name,
@@ -69,7 +79,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         (${department} = 'service' and l.department_code = 'customer_service')
       )
       and (
-        ${includeClosed}::boolean
+        ${includeClosed || showSoldStatus}::boolean
         or not (
           (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label='تم البيع')
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
@@ -89,13 +99,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     row.completion_percent = calculateLeadCompletion(row, customerFields);
     delete row.catalog_source_name;
   }
-
-  const statuses = await sql<any[]>`
-    select id, department_code, label, value, sort_order
-    from crm.dashboard_statuses
-    where department_code = ${department} and is_active = true
-    order by sort_order
-  `;
 
   const totals = statuses.map((item) => ({
     ...item,

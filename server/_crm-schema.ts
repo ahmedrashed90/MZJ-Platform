@@ -78,6 +78,7 @@ create table if not exists crm.dashboard_statuses (
   value text not null,
   sort_order integer not null default 0,
   is_active boolean not null default true,
+  show_on_dashboard boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -1422,6 +1423,24 @@ on conflict(version) do nothing;
 commit;
 `;
 
+const CRM_DASHBOARD_STATUS_VISIBILITY_20260802_SQL = String.raw`
+begin;
+
+alter table crm.dashboard_statuses
+  add column if not exists show_on_dashboard boolean not null default true;
+
+update crm.dashboard_statuses
+set show_on_dashboard=false,updated_at=now()
+where department_code in ('cash','finance')
+  and trim(coalesce(value,label,''))='تم البيع';
+
+insert into core.schema_migrations(version)
+values('crm-dashboard-status-visibility-20260802')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1480,6 +1499,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-only-sold-closes-request-20260802'
       `;
       if (!onlySoldClosesRequestMigration) await runSqlScript(CRM_ONLY_SOLD_CLOSES_REQUEST_20260802_SQL);
+      const [dashboardStatusVisibilityMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-dashboard-status-visibility-20260802'
+      `;
+      if (!dashboardStatusVisibilityMigration) await runSqlScript(CRM_DASHBOARD_STATUS_VISIBILITY_20260802_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

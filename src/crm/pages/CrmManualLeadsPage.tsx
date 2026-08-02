@@ -184,7 +184,7 @@ export function CrmManualLeadsPage() {
           </div>
           <div className="crm-table-shell compact">
             <table className="crm-table">
-              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب الحالي</th><th>المندوب الجديد</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب السابق</th><th>المندوب الحالي</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.id}>

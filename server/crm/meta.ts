@@ -9,7 +9,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const sql = getSql();
 
   const [statuses, branches, users, sources, quality, endpoints, templates, mappings, customerFields] = await Promise.all([
-    sql`select id, department_code, label, value, sort_order, is_active from crm.dashboard_statuses order by department_code, sort_order`,
+    sql`select id, department_code, label, value, sort_order, is_active, show_on_dashboard from crm.dashboard_statuses order by department_code, sort_order`,
     sql`select code, name, is_active, sort_order from core.branches where is_active = true order by sort_order, name`,
     sql`
       select u.id::text, u.full_name, u.employee_no, u.is_active, u.can_receive_leads,

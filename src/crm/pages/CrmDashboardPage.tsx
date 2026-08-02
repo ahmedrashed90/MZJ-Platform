@@ -67,9 +67,12 @@ function readPatch(lead: CrmLead): CrmLead {
   };
 }
 
-function isDashboardTerminalStatus(department: string, value: string) {
+function isDashboardTerminalStatus(department: string, value: string, statuses: CrmStatus[]) {
   const status = String(value || "").trim();
-  if (department === "cash" || department === "finance") return status === "تم البيع";
+  if (department === "cash" || department === "finance") {
+    if (status !== "تم البيع") return false;
+    return !statuses.some((item) => item.is_active !== false && item.show_on_dashboard !== false && String(item.value || item.label).trim() === status);
+  }
   if (department === "service") return ["تم الانتهاء", "تم الإنتهاء"].includes(status);
   return false;
 }
@@ -237,7 +240,7 @@ export function CrmDashboardPage() {
       return byUnreadFirst(left, right);
     };
     const statusGroups = statuses
-      .filter((status) => status.is_active !== false)
+      .filter((status) => status.is_active !== false && status.show_on_dashboard !== false)
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
       .map((status) => ({
         ...status,
@@ -391,7 +394,7 @@ export function CrmDashboardPage() {
           setSelected((current) => current?.id === updated.id ? { ...current, ...updated } : current);
         }}
         onSaved={(updated) => {
-          if (isDashboardTerminalStatus(department, leadStatus(updated))) {
+          if (isDashboardTerminalStatus(department, leadStatus(updated), statuses)) {
             setLeads((current) => current.filter((lead) => lead.id !== updated.id));
             setSummaryView((current) => current ? { ...current, leads: current.leads.filter((lead) => lead.id !== updated.id) } : current);
             setSelected(null);
