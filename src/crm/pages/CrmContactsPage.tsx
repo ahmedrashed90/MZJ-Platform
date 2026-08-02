@@ -238,6 +238,19 @@ export function CrmContactsPage() {
       window.requestAnimationFrame(() => window.scrollTo({ top: listScroll.current, behavior: "auto" }));
     }
   }, [contactId]);
+  useEffect(() => {
+    if (!contactId) return;
+    const root = document.documentElement;
+    const body = document.body;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      root.style.overflow = previousRootOverflow;
+      body.style.overflow = previousBodyOverflow;
+    };
+  }, [contactId]);
 
   function applySearch() {
     const next = new URLSearchParams(searchParams);
