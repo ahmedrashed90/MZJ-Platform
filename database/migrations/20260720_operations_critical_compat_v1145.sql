@@ -105,6 +105,8 @@ end $$;
 create table if not exists operations.event_outbox (
   id uuid primary key default gen_random_uuid(),
   event_type text not null,
+  aggregate_type text,
+  aggregate_id text,
   system_code text not null default 'operations',
   entity_type text,
   entity_id text,
@@ -124,6 +126,8 @@ create table if not exists operations.event_outbox (
   processed_at timestamptz
 );
 alter table operations.event_outbox add column if not exists event_type text;
+alter table operations.event_outbox add column if not exists aggregate_type text;
+alter table operations.event_outbox add column if not exists aggregate_id text;
 alter table operations.event_outbox add column if not exists system_code text not null default 'operations';
 alter table operations.event_outbox add column if not exists entity_type text;
 alter table operations.event_outbox add column if not exists entity_id text;

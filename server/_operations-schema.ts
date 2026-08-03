@@ -596,6 +596,8 @@ create index if not exists operations_vehicle_deletion_audit_vin_idx on operatio
 create table if not exists operations.event_outbox (
   id uuid primary key default gen_random_uuid(),
   event_type text not null,
+  aggregate_type text,
+  aggregate_id text,
   system_code text not null default 'operations',
   entity_type text,
   entity_id text,
@@ -618,6 +620,8 @@ create table if not exists operations.event_outbox (
 -- critical flows (movement, transfer requests, tracking delete) must never fail
 -- because an optional notification table is missing a newer column.
 alter table operations.event_outbox add column if not exists event_type text;
+alter table operations.event_outbox add column if not exists aggregate_type text;
+alter table operations.event_outbox add column if not exists aggregate_id text;
 alter table operations.event_outbox add column if not exists system_code text not null default 'operations';
 alter table operations.event_outbox add column if not exists entity_type text;
 alter table operations.event_outbox add column if not exists entity_id text;

@@ -251,18 +251,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     for (const sibling of siblingVehicles) await ensureVehicleStageRows(sibling.id);
 
-    if (action === "complete_stage") {
-      const [previousPending] = await sql<any[]>`
-        select 1
-        from tracking.order_vehicles ov
-        join tracking.vehicle_stages pvs on pvs.vehicle_id=ov.id
-        join tracking.stages ps on ps.id=pvs.stage_id and ps.is_active=true
-        where ov.order_id=${row.order_id}::uuid and ps.sort_order<${Number(row.sort_order)} and pvs.status<>'completed'
-        limit 1
-      `;
-      if (previousPending) return response.status(400).json({ ok: false, error: "لا يمكن تنفيذ المرحلة قبل استكمال المراحل السابقة لجميع سيارات الطلب" });
-    }
-
     let affectedCount = 0;
     await sql.begin(async (tx) => {
       if (action === "complete_stage") {

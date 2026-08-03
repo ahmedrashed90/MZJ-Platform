@@ -932,22 +932,32 @@ async function persistVehicleMovement(
     who: MovementActor;
     batchId: string;
     movementType?: string;
+    noteOnly?: boolean;
   },
 ) {
   const { vehicle, destination, newStatus, raw, generalNote, who, batchId } = input;
+  const noteOnly = Boolean(input.noteOnly);
+  const nextStateNote = raw.stateNote === undefined ? clean(vehicle.state_note) : clean(raw.stateNote);
+  const nextShortageNote = raw.shortageNote === undefined ? clean(vehicle.shortage_note) : clean(raw.shortageNote);
   const before = { ...vehicle };
   const [movement] = await tx`
     insert into operations.movements(vehicle_id,from_location_id,to_location_id,old_status,new_status,note,state_note,shortage_note,performed_by,performed_by_name,performed_by_role,performed_by_branch,batch_id,movement_type,before_data)
-    values (${vehicle.id}::uuid,${vehicle.location_id},${destination.id}::uuid,${vehicle.status_code},${newStatus},${clean(raw.note)||clean(generalNote)||null},${clean(raw.stateNote)||null},${clean(raw.shortageNote)||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${batchId}::uuid,${input.movementType || 'direct'},${tx.json(before)}) returning id::text
+    values (${vehicle.id}::uuid,${vehicle.location_id},${destination.id}::uuid,${vehicle.status_code},${newStatus},${clean(raw.note)||clean(generalNote)||null},${nextStateNote||null},${nextShortageNote||null},${who.id}::uuid,${who.name},${who.role},${who.branch},${batchId}::uuid,${input.movementType || (noteOnly ? 'note_update' : 'direct')},${tx.json(before)}) returning id::text
   `;
-  const [updated] = await tx`
-    update operations.vehicles set location_id=${destination.id}::uuid,status_code=${newStatus},state_note=${clean(raw.stateNote)||null},shortage_note=${clean(raw.shortageNote)||null},
-      has_notes=${newStatus==='has_notes'},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
-    where id=${vehicle.id}::uuid returning *,id::text
-  `;
+  const [updated] = noteOnly
+    ? await tx`
+        update operations.vehicles set state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null},
+          updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+        where id=${vehicle.id}::uuid returning *,id::text
+      `
+    : await tx`
+        update operations.vehicles set location_id=${destination.id}::uuid,status_code=${newStatus},state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null},
+          has_notes=${newStatus==='has_notes'},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
+        where id=${vehicle.id}::uuid returning *,id::text
+      `;
   await tx`update operations.movements set after_data=${tx.json(updated)} where id=${movement.id}::uuid`;
-  if (clean(raw.stateNote)) await tx`insert into operations.vehicle_status_notes(vehicle_id,status_code,note,movement_id,created_by,created_by_name) values (${vehicle.id}::uuid,${newStatus},${clean(raw.stateNote)},${movement.id}::uuid,${who.id}::uuid,${who.name})`;
-  if (vehicle.location_id && Array.isArray(raw.checks)) {
+  if (nextStateNote && (!noteOnly || nextStateNote !== clean(vehicle.state_note))) await tx`insert into operations.vehicle_status_notes(vehicle_id,status_code,note,movement_id,created_by,created_by_name) values (${vehicle.id}::uuid,${newStatus},${nextStateNote},${movement.id}::uuid,${who.id}::uuid,${who.name})`;
+  if (!noteOnly && vehicle.location_id && Array.isArray(raw.checks)) {
     for (const check of raw.checks) {
       const itemCode = clean(check.itemCode);
       if (!itemCode) continue;
@@ -962,7 +972,10 @@ async function persistVehicleMovement(
   }
   try {
     await tx.savepoint(async (eventTx: any) => {
-      await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values ('operations.vehicle.moved','vehicle',${vehicle.id},${vehicle.id}::uuid,${vehicle.vin},${who.id}::uuid,${who.name},${destination.branch_code},'تم تحريك سيارة',${`${vehicle.vin} إلى ${destination.name}`},${eventTx.json({ movementId: movement.id, batchId })})`;
+      const eventType = noteOnly ? 'operations.vehicle.note_updated' : 'operations.vehicle.moved';
+      const eventTitle = noteOnly ? 'تم تحديث ملاحظة سيارة' : 'تم تحريك سيارة';
+      const eventDescription = noteOnly ? `${vehicle.vin}: تم تحديث حجز - نواقص - تحديد مكان` : `${vehicle.vin} إلى ${destination.name}`;
+      await eventTx`insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,destination_branch,title,description,metadata) values (${eventType},'vehicle',${vehicle.id},'vehicle',${vehicle.id},${vehicle.id}::uuid,${vehicle.vin},${who.id}::uuid,${who.name},${destination.branch_code},${eventTitle},${eventDescription},${eventTx.json({ movementId: movement.id, batchId, noteOnly })})`;
     });
   } catch (outboxError) {
     console.error('Operations movement outbox failed', { vehicleId: vehicle.id, outboxError });
@@ -997,6 +1010,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
     }
 
     const moved: any[] = [];
+    const notesUpdated: any[] = [];
     const pendingApprovals: any[] = [];
     for (const raw of items) {
       const vehicleId = clean(raw.vehicleId);
@@ -1008,8 +1022,33 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (!v) throw new OperationError(404, "VEHICLE_NOT_FOUND", `السيارة ${vehicleId} غير موجودة`);
       assertBranchAccess(user, v.branch_code, v.location_code, `لا تملك صلاحية تحريك السيارة ${v.vin}`);
       assertVehicleStatusAccess(user, v.status_code, `لا تملك صلاحية التعامل مع الحالة الحالية للسيارة ${v.vin}`);
-      if (String(v.location_id) === destinationLocationId && v.status_code === newStatus) throw new OperationError(409, "CONFLICT", `السيارة ${v.vin} موجودة بالفعل في المكان والحالة المختارين`);
-      if (newStatus === "has_notes" && !clean(raw.stateNote)) throw new OperationError(400, "VALIDATION_ERROR", `ملاحظات الحالة مطلوبة للسيارة ${v.vin}`);
+      const sameLocationAndStatus = String(v.location_id) === destinationLocationId && v.status_code === newStatus;
+      const sharedMovementNote = clean(body.note);
+      const effectiveShortageNote = sharedMovementNote || clean(raw.shortageNote);
+      const effectiveStateNote = clean(raw.stateNote);
+      const persistenceRaw = { ...raw, shortageNote: effectiveShortageNote, stateNote: effectiveStateNote };
+      const hasNoteUpdate = Boolean(clean(raw.note) || sharedMovementNote)
+        || effectiveShortageNote !== clean(v.shortage_note)
+        || effectiveStateNote !== clean(v.state_note);
+      if (sameLocationAndStatus && !hasNoteUpdate) throw new OperationError(409, "CONFLICT", `السيارة ${v.vin} موجودة بالفعل في المكان والحالة المختارين ولم تتم إضافة ملاحظة جديدة`);
+      if (newStatus === "has_notes" && !effectiveStateNote) throw new OperationError(400, "VALIDATION_ERROR", `ملاحظات الحالة مطلوبة للسيارة ${v.vin}`);
+
+      if (sameLocationAndStatus) {
+        const activeBatch = await ensureBatch();
+        const result = await persistVehicleMovement(tx, {
+          vehicle: v,
+          destination,
+          newStatus,
+          raw: persistenceRaw,
+          generalNote: sharedMovementNote,
+          who,
+          batchId: activeBatch.id,
+          movementType: "note_update",
+          noteOnly: true,
+        });
+        notesUpdated.push({ vehicleId, vin: v.vin, movementId: result.movement.id });
+        continue;
+      }
 
       if (newStatus === "delivered") {
         const approval = await ensureActiveVehicleApprovalCycle(tx, vehicleId);
@@ -1019,7 +1058,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
             destinationLocationId,
             note: clean(raw.note) || clean(body.note),
             stateNote: clean(raw.stateNote),
-            shortageNote: clean(raw.shortageNote),
+            shortageNote: effectiveShortageNote,
             checks: Array.isArray(raw.checks) ? raw.checks : [],
             requestedBy: who,
             requestedAt: new Date().toISOString(),
@@ -1034,7 +1073,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       if (!['under_delivery','delivered'].includes(newStatus) && v.status_code === 'under_delivery') await closeActiveVehicleApprovalCycle(tx, vehicleId);
 
       const activeBatch = await ensureBatch();
-      const result = await persistVehicleMovement(tx, { vehicle: v, destination, newStatus, raw, generalNote: clean(body.note), who, batchId: activeBatch.id });
+      const result = await persistVehicleMovement(tx, { vehicle: v, destination, newStatus, raw: persistenceRaw, generalNote: sharedMovementNote, who, batchId: activeBatch.id });
       if (newStatus === "delivered") await closeActiveVehicleApprovalCycle(tx, vehicleId);
       moved.push({
         vehicleId,
@@ -1047,8 +1086,9 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
 
     const parts: string[] = [];
     if (moved.length) parts.push(`تم تنفيذ الحركة على ${moved.length} سيارة`);
+    if (notesUpdated.length) parts.push(`تم تحديث حجز - نواقص - تحديد مكان لـ ${notesUpdated.length} سيارة`);
     if (pendingApprovals.length) parts.push(`تم إرسال ${pendingApprovals.length} سيارة للموافقات المالية والإدارية`);
-    return { ok: true, batchId: batch?.id || null, moved, pendingApprovals, message: parts.join("، ") || "لم يتم تنفيذ أي حركة" };
+    return { ok: true, batchId: batch?.id || null, moved, notesUpdated, pendingApprovals, message: parts.join("، ") || "لم يتم تنفيذ أي حركة أو تحديث" };
   });
 }
 
@@ -1091,7 +1131,7 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
     }
     try {
       await tx.savepoint(async (eventTx) => {
-        await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values ('operations.transfer_request.created','transfer_request',${request.id},${who.id}::uuid,${who.name},${request.source_branch_code},${request.destination_branch_code},'طلب نقل جديد',${requestNo},${eventTx.json({ vehicleIds })})`;
+        await eventTx`insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values ('operations.transfer_request.created','transfer_request',${request.id},'transfer_request',${request.id},${who.id}::uuid,${who.name},${request.source_branch_code},${request.destination_branch_code},'طلب نقل جديد',${requestNo},${eventTx.json({ vehicleIds })})`;
       });
     } catch (outboxError) {
       console.error('Operations transfer create outbox failed', { requestId: request.id, outboxError });
@@ -1208,7 +1248,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     }
     try {
       await tx.savepoint(async (eventTx) => {
-        await eventTx`insert into operations.event_outbox(event_type,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.request.${next}`},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},${`تحديث ${requestLabel}`},${r.request_no},${eventTx.json({ requestKind: r.request_kind, status: next })})`;
+        await eventTx`insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata) values (${`operations.request.${next}`},'transfer_request',${id},'transfer_request',${id},${who.id}::uuid,${who.name},${r.source_branch_code},${r.destination_branch_code},${`تحديث ${requestLabel}`},${r.request_no},${eventTx.json({ requestKind: r.request_kind, status: next })})`;
       });
     } catch (outboxError) {
       console.error("Operations request stage outbox failed", { requestId: id, next, outboxError });

@@ -893,6 +893,10 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
     return;
   }
 
+  if (action === "move_vehicles" && Array.isArray(result?.notesUpdated) && result.notesUpdated.length && (!Array.isArray(result?.moved) || !result.moved.length) && (!Array.isArray(result?.pendingApprovals) || !result.pendingApprovals.length)) {
+    return;
+  }
+
   if (action === "move_vehicles" && INVENTORY_STATUS_LABELS[requestedStatusCode] && Array.isArray(result?.moved) && result.moved.length) {
     const statusChangedVehicles = result.moved.filter((movedVehicle: any) => clean(movedVehicle?.previousStatusCode) !== requestedStatusCode);
     for (const movedVehicle of statusChangedVehicles) {

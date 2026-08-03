@@ -154,8 +154,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         try {
           await tx.savepoint(async (eventTx) => {
             await eventTx`
-              insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
-              values ('tracking.request.deleted','tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${eventTx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
+              insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
+              values ('tracking.request.deleted','tracking_order',${orderId},'tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${eventTx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
             `;
           });
         } catch (outboxError) {
