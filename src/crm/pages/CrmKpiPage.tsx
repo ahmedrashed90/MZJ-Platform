@@ -427,8 +427,8 @@ th{background:#f8ece5;font-weight:900}
   }, [visibleAgents, rows, period.from, period.to]);
 
   const addTotalSales = visibleAgents.reduce((sum, agent) => {
-    const { row, calc } = resultForAgent(agent);
-    return sum + number(row?.calculated_sales ?? row?.total_sales ?? calc.salesCount);
+    const { calc } = resultForAgent(agent);
+    return sum + number(calc.salesCount);
   }, 0);
 
   return (
@@ -465,7 +465,7 @@ th{background:#f8ece5;font-weight:900}
           {visibleAgents.map((agent) => { const { row: last, calc: result } = resultForAgent(agent); return <tr key={`${agent.id}-${agent.branch_code || "branch"}`}>
             <td>{agent.branch_name || (agent.branches || []).join("، ") || "—"}</td>
             <td><div className="kpi-agent-cell"><strong>{agent.full_name}</strong><small>{agent.employee_no || ""}</small></div></td>
-            <td><strong className="kpi-number-emphasis">{last?.calculated_sales ?? last?.total_sales ?? result.salesCount ?? 0}</strong></td>
+            <td><strong className="kpi-number-emphasis">{Math.round(result.salesCount)}</strong></td>
             <td><strong className="kpi-number-emphasis">{Math.round(result.totalPoints)}</strong></td>
             {[result.speedRate,result.efficiencyRate,result.disciplineRate,result.valueRate,result.finalRate].map((score,index) => <td key={index}><span className={`kpi-rate-pill ${rateClass(score)}`}>{percent(score)}</span></td>)}
             <td><span className={`kpi-rating-pill ${rateClass(result.finalRate)}`}>{result.rating}</span></td>

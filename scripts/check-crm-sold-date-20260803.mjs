@@ -32,7 +32,7 @@ assert(leads.includes('statusChanged && input.statusLabel === "تم البيع"'
 assert(dashboard.includes("coalesce(l.sold_at,l.registered_at,l.created_at)"), "CRM dashboard sold date filtering is missing");
 assert(reports.includes("coalesce(l.sold_at,l.registered_at,l.created_at)"), "CRM reports sold date filtering is missing");
 assert(unifiedDashboard.includes("scoped_manual_sold") && unifiedDashboard.includes("coalesce(l.sold_at,l.registered_at,l.created_at)"), "unified dashboard manual sold-date aggregation is missing");
-assert(kpi.includes("coalesce(l.sold_at,l.updated_at,l.created_at)"), "KPI manual sales still use update date instead of sold date");
+assert(!kpi.includes("calculated_sales") && !kpi.includes("coalesce(l.sold_at,l.updated_at,l.created_at)"), "KPI sales must stay independent from CRM sold-date aggregation");
 assert(erpSync.includes("sold_at=${saleAt}::timestamptz"), "ERP sales do not persist their actual sale date");
 assert(dataManagement.includes('"تاريخ تم البيع"') && dataManagement.includes("sold_at"), "customer import/export does not preserve sold date");
 

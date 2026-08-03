@@ -1441,6 +1441,34 @@ on conflict(version) do nothing;
 commit;
 `;
 
+const CRM_KPI_MANUAL_SALES_RESET_ALIGNMENT_20260803_SQL = String.raw`
+begin;
+
+do $$
+declare
+  latest_test_reset timestamptz;
+begin
+  if to_regclass('audit.activity_log') is not null
+     and to_regclass('crm.kpi_evaluations') is not null then
+    select max(created_at)
+    into latest_test_reset
+    from audit.activity_log
+    where action='test_data_reset';
+
+    if latest_test_reset is not null then
+      delete from crm.kpi_evaluations
+      where updated_at < latest_test_reset;
+    end if;
+  end if;
+end $$;
+
+insert into core.schema_migrations(version)
+values('crm-kpi-manual-sales-reset-alignment-20260803')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 const CRM_DASHBOARD_STATUS_VISIBILITY_20260802_SQL = String.raw`
 begin;
 
@@ -1525,6 +1553,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-sold-at-20260803'
       `;
       if (!soldAtMigration) await runSqlScript(CRM_SOLD_AT_20260803_SQL);
+      const [kpiManualSalesResetAlignmentMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-kpi-manual-sales-reset-alignment-20260803'
+      `;
+      if (!kpiManualSalesResetAlignmentMigration) await runSqlScript(CRM_KPI_MANUAL_SALES_RESET_ALIGNMENT_20260803_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

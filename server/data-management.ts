@@ -24,6 +24,7 @@ const RESET_ROOT_TABLES = [
   "crm.service_requests",
   "crm.conversations",
   "crm.leads",
+  "crm.kpi_evaluations",
 ] as const;
 
 type DepartmentKey = "cash" | "finance" | "service";
@@ -318,7 +319,7 @@ async function resetTestData(response: VercelResponse, user: SessionUser, confir
   }
   if (tables.length) await sql.unsafe(`truncate table ${tables.map((item) => { const [schema, name] = item.split("."); return qualified(schema, name); }).join(", ")} restart identity cascade`);
   await auditDataAction(user, "test_data_reset", { removed: before });
-  return response.status(200).json({ ok: true, message: "تم مسح بيانات العملاء والسيارات وطلبات التتبع والحملات والأجندات فقط.", removed: before });
+  return response.status(200).json({ ok: true, message: "تم مسح بيانات العملاء والسيارات وطلبات التتبع والحملات والأجندات وتقييمات KPI فقط.", removed: before });
 }
 
 async function currentTables(sql: ReturnType<typeof getSql>) {
