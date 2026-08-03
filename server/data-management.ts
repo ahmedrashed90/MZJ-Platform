@@ -367,7 +367,7 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
     statusMap.set(normalizedText(item.label), value);
   });
 
-  const serviceKey = department;
+  const serviceKey = "service" as const;
   const departmentCode = departmentCodeFromKey(serviceKey);
   const defaultBranch = branchForDepartment(serviceKey);
   const result = { received: rows.length, imported: 0, duplicates: 0, skipped: 0, errors: [] as Array<{ row: number; reason: string }> };
@@ -397,15 +397,11 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
       const sourceCode = sourceInfo?.code || "manual";
       const sourceName = sourceInfo?.name || sourceLabel(sourceText || sourceCode);
       const mappedBranch = branchMap.get(normalizedText(branchText));
-      let branchCode = serviceKey === "service"
-        ? "customer_service"
-        : serviceKey === "finance"
-          ? "online"
-          : mappedBranch?.code || defaultBranch;
+      let branchCode = "customer_service";
 
       const assignedText = rowValue(sourceRow, ["المندوب", "اسم المندوب", "المسؤول", "مندوب المبيعات", "sales person", "agent"]);
       const assignedUser = userMap.get(normalizedText(assignedText));
-      const acceptedDepartments = serviceKey === "finance" ? ["finance_sales"] : serviceKey === "service" ? ["customer_service"] : ["cash_sales", "wholesale", "wholesale_sales"];
+      const acceptedDepartments = ["customer_service"];
       const assignedUserAllowed = Boolean(assignedUser?.department_codes?.some((code) => acceptedDepartments.includes(code)));
       let assignment = assignedUser && assignedUserAllowed
         ? { assignedTo: assignedUser.id, assignedName: assignedUser.full_name, branchCode }
@@ -415,7 +411,7 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
       const callCenter = { assignedTo: null, assignedName: "" };
 
       const importedStatus = rowValue(sourceRow, ["الحالة", "حالة العميل", "status"]);
-      const normalizedImportedStatus = serviceKey === "service" && normalizedText(importedStatus) === normalizedText("تم البيع") ? "تم الانتهاء" : importedStatus;
+      const normalizedImportedStatus = normalizedText(importedStatus) === normalizedText("تم البيع") ? "تم الانتهاء" : importedStatus;
       const statusLabel = statusMap.get(normalizedText(normalizedImportedStatus)) || "عميل جديد";
       const soldQuantity = statusLabel === "تم البيع"
         ? toPositiveInteger(rowValue(sourceRow, ["عدد المباع", "الكمية المباعة", "sold quantity"])) || 1
@@ -432,7 +428,7 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
         departmentCode,
         branchCode,
         statusLabel,
-        paymentType: serviceKey === "finance" ? "تمويل" : serviceKey === "service" ? "خدمة عملاء" : "كاش",
+        paymentType: "خدمة عملاء",
         carName: rowValue(sourceRow, ["اسم السيارة", "السيارة", "نوع السيارة", "car", "car name"]),
         carCategory: rowValue(sourceRow, ["الفئة", "فئة السيارة", "category"]),
         location: rowValue(sourceRow, ["المكان", "المدينة", "location"]),
