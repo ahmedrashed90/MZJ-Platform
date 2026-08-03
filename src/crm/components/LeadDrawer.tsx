@@ -515,14 +515,16 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   }
 
   async function saveLead() {
+    const currentLead = lead;
+    if (!currentLead) return;
     setSaving(true);
     setNotice("");
     try {
-      const originalServiceKey = departmentKeyFromCode(lead.department_code || lead.service_key) as ServiceKey;
-      const originalValues = leadCoreValues(lead, originalServiceKey);
-      const originalDepartmentCode = value(lead.department_code) || departmentCodeFor(originalServiceKey);
-      const originalBranchCode = value(lead.branch_code) || branchCodeFor(originalServiceKey);
-      const originalPaymentType = value(lead.payment_type) || paymentTypeFor(originalServiceKey);
+      const originalServiceKey = departmentKeyFromCode(currentLead.department_code || currentLead.service_key) as ServiceKey;
+      const originalValues = leadCoreValues(currentLead, originalServiceKey);
+      const originalDepartmentCode = value(currentLead.department_code) || departmentCodeFor(originalServiceKey);
+      const originalBranchCode = value(currentLead.branch_code) || branchCodeFor(originalServiceKey);
+      const originalPaymentType = value(currentLead.payment_type) || paymentTypeFor(originalServiceKey);
       const payload: Record<string, unknown> = { id: activeForm.id };
       if (!showConversation) payload.databaseEdit = true;
 
@@ -547,8 +549,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       addChangedField(payload, "financeType", activeForm.values.finance_type, originalValues.finance_type);
 
       if (!showConversation) {
-        addChangedField(payload, "assignedTo", activeForm.assignedTo || null, value(lead.assigned_to) || null);
-        addChangedField(payload, "callCenterAssignedTo", activeForm.callCenterAssignedTo || null, value(lead.call_center_assigned_to) || null);
+        addChangedField(payload, "assignedTo", activeForm.assignedTo || null, value(currentLead.assigned_to) || null);
+        addChangedField(payload, "callCenterAssignedTo", activeForm.callCenterAssignedTo || null, value(currentLead.call_center_assigned_to) || null);
         if (activeForm.values.status_label === "تم البيع") {
           addChangedDateField(payload, "soldAt", activeForm.values.sold_at, originalValues.sold_at);
         }
@@ -558,7 +560,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         addChangedField(payload, "soldQuantity", Math.max(1, Math.floor(Number(activeForm.values.sold_quantity || 1))), originalValues.sold_quantity || "1");
       }
 
-      const originalCustomFields = lead.extra_data && typeof lead.extra_data === "object" ? lead.extra_data : {};
+      const originalCustomFields = currentLead.extra_data && typeof currentLead.extra_data === "object" ? currentLead.extra_data : {};
       const customFields = Object.fromEntries(
         Object.entries(activeForm.customFields).filter(([key, next]) => comparableValue(next) !== comparableValue(originalCustomFields[key])),
       );
