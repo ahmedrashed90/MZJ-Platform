@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Car, Trash, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, Car, CheckCircle, Trash, WarningCircle, XCircle } from "@phosphor-icons/react";
 import { OperationsVehiclePicker } from "../components/OperationsVehiclePicker";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "../components/ResizableOperationsTable";
 import { operationsFetch, queryString } from "../api";
@@ -123,7 +123,7 @@ export function MovementPage() {
           <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
         </div>
 
-        <label className="operations-field operations-general-note"><span>ملاحظات عامة للحركة</span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="ملاحظة اختيارية تطبق على الحركة" /></label>
+        <label className="operations-field operations-general-note"><span>حجز - نواقص - تحديد مكان</span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="اكتب الحجز أو النواقص أو تحديد المكان" /></label>
 
         {!selected.length ? (
           <div className="operations-empty-state"><Car size={42} weight="duotone" /><strong>لم يتم اختيار سيارات</strong><span>ابحث عن السيارة وأضفها، ثم حدد المكان والحالة الجديدة.</span></div>
@@ -148,20 +148,31 @@ export function MovementPage() {
                     const checkValue = item.checks[check.code] || { status: "unknown", note: "" };
                     return (
                       <article key={check.code} className={`operations-check-edit-card status-${checkValue.status}`}>
-                        <header><strong>{check.name}</strong><span>{checkValue.status === "ok" ? "صح" : checkValue.status === "missing" ? "غلط" : "غير محدد"}</span></header>
+                        <header>
+                          <strong>{check.name}</strong>
+                          <span className="operations-check-state">
+                            {checkValue.status === "ok" ? <><CheckCircle size={15} weight="fill" />صح</> : checkValue.status === "missing" ? <><XCircle size={15} weight="fill" />غلط</> : "لم يتم التحديد"}
+                          </span>
+                        </header>
                         <div className="operations-check-binary" role="group" aria-label={`حالة ${check.name}`}>
                           <button
                             type="button"
                             className={`operations-check-binary-option ok${checkValue.status === "ok" ? " active" : ""}`}
                             aria-pressed={checkValue.status === "ok"}
                             onClick={() => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: "ok" } } })}
-                          ><span aria-hidden="true">✓</span>صح</button>
+                          >
+                            <span className="operations-check-option-icon" aria-hidden="true"><CheckCircle size={22} weight={checkValue.status === "ok" ? "fill" : "regular"} /></span>
+                            <span className="operations-check-option-copy"><b>صح</b><small>الحالة سليمة</small></span>
+                          </button>
                           <button
                             type="button"
                             className={`operations-check-binary-option missing${checkValue.status === "missing" ? " active" : ""}`}
                             aria-pressed={checkValue.status === "missing"}
                             onClick={() => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: "missing" } } })}
-                          ><span aria-hidden="true">✕</span>غلط</button>
+                          >
+                            <span className="operations-check-option-icon" aria-hidden="true"><XCircle size={22} weight={checkValue.status === "missing" ? "fill" : "regular"} /></span>
+                            <span className="operations-check-option-copy"><b>غلط</b><small>توجد ملاحظة</small></span>
+                          </button>
                         </div>
                         <label><span>الملاحظة</span><input placeholder="اكتب ملاحظة اختيارية" value={checkValue.note} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, note: event.target.value } } })} /></label>
                       </article>

@@ -1,0 +1,18 @@
+Operations agency check UI refinement
+=====================================
+
+Source:
+MZJ-Platform-v1.19.4-operations-agency-check-true-false-CLEAN.zip
+
+Checks:
+- MovementPage.tsx TypeScript/TSX syntax: PASS
+- CSS brace balance: PASS
+- scripts/check-operations-native-v2.mjs: PASS
+- scripts/check-operations-workflow-v1162.mjs: PASS
+- scripts/check-vehicle-inventory-status-notifications-v1211.mjs: PASS (13/13)
+
+Scope verification:
+- Search field desktop width changed: PASS
+- General note label changed to حجز - نواقص - تحديد مكان: PASS
+- Direct professional true/false controls remain mapped to ok/missing: PASS
+- No API, database, or movement payload logic changed: PASS
