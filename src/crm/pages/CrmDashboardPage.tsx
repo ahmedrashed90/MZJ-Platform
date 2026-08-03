@@ -242,9 +242,20 @@ export function CrmDashboardPage() {
       }
       return byUnreadFirst(left, right);
     };
-    const statusGroups = statuses
+    const orderedStatuses = statuses
       .filter((status) => status.is_active !== false && status.show_on_dashboard !== false)
-      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    if (department === "cash" || department === "finance") {
+      const statusValue = (status: CrmStatus) => String(status.value || status.label).trim();
+      const noAnswerIndex = orderedStatuses.findIndex((status) => statusValue(status) === "لم يتم الرد");
+      if (noAnswerIndex >= 0) {
+        const [noAnswerStatus] = orderedStatuses.splice(noAnswerIndex, 1);
+        const notContactedIndex = orderedStatuses.findIndex((status) => statusValue(status) === "لم يتم الاتصال");
+        if (notContactedIndex >= 0) orderedStatuses.splice(notContactedIndex + 1, 0, noAnswerStatus);
+        else orderedStatuses.splice(noAnswerIndex, 0, noAnswerStatus);
+      }
+    }
+    const statusGroups = orderedStatuses
       .map((status) => ({
         ...status,
         unread_messages: false,
