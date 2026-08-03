@@ -1,0 +1,23 @@
+{
+  "id": "/crm?crmSalesApp=1",
+  "name": "MZJ CRM - المندوبين",
+  "short_name": "MZJ CRM",
+  "description": "داش بورد CRM وإضافة العملاء لمناديب MZJ",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/crm?crmSalesApp=1",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "orientation": "any",
+  "background_color": "#fbfaf9",
+  "theme_color": "#6c3329",
+  "icons": [
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "داش بورد CRM", "short_name": "الداش بورد", "url": "/crm?crmSalesApp=1", "icons": [{ "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }] },
+    { "name": "إضافة العملاء", "short_name": "إضافة عميل", "url": "/crm/manual-leads?crmSalesApp=1", "icons": [{ "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }] }
+  ]
+}

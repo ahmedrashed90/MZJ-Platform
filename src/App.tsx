@@ -15,6 +15,7 @@ import { UnifiedDatabasePage } from "./pages/UnifiedDatabasePage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { HelpPage } from "./pages/HelpPage";
 import { canAccessSystem, canOpenSettings, defaultSystemPath, hasPermission, type PlatformSystem } from "./systemAccess";
+import { isCrmSalesAppMode } from "./mobile/crmSalesApp";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
 const CrmDashboardPage = lazy(() => import("./crm/pages/CrmDashboardPage").then((module) => ({ default: module.CrmDashboardPage })));
@@ -83,13 +84,22 @@ function SettingsRoute() {
 }
 
 function PlatformRoutes() {
+  const crmSalesApp = isCrmSalesAppMode();
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${crmSalesApp ? "crm-sales-app-shell" : ""}`}>
       <ActivityTracker />
       <Sidebar />
       <main className="page-shell">
         <Suspense fallback={<div className="crm-loading-panel">جاري تحميل الصفحة...</div>}>
         <Routes>
+          {crmSalesApp ? <>
+            <Route path="/" element={<Navigate to="/crm?crmSalesApp=1" replace />} />
+            <Route path="/crm" element={<SystemGuard system="crm"><CrmLayout /></SystemGuard>}>
+              <Route index element={<PermissionGuard permission="crm.dashboard.view"><CrmDashboardPage /></PermissionGuard>} />
+              <Route path="manual-leads" element={<PermissionGuard permission="crm.manual_leads.view"><CrmManualLeadsPage /></PermissionGuard>} />
+            </Route>
+            <Route path="*" element={<Navigate to="/crm?crmSalesApp=1" replace />} />
+          </> : <>
           <Route path="/" element={<HomeRoute />} />
           <Route path="/crm" element={<SystemGuard system="crm"><CrmLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="crm.dashboard.view"><CrmDashboardPage /></PermissionGuard>} />
@@ -141,6 +151,7 @@ function PlatformRoutes() {
           <Route path="/activity" element={<PermissionGuard permission="platform.activity.view"><ActivityPage /></PermissionGuard>} />
           <Route path="/notifications" element={<NotificationsRoute />} />
           <Route path="/help" element={<HelpPage />} />
+          </>}
         </Routes>
         </Suspense>
       </main>

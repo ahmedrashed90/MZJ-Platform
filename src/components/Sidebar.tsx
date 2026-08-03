@@ -3,6 +3,7 @@ import { ChartBar, Database, Gear, House, MapPin, Megaphone, Pulse, Question, Si
 import { useAuth } from "../auth/AuthContext";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canOpenSettings, hasPermission } from "../systemAccess";
+import { isCrmSalesAppMode } from "../mobile/crmSalesApp";
 
 const items = [
   { href: "/", label: "الداش بورد", icon: House, permission: "platform.dashboard.view" },
@@ -26,9 +27,14 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const crmSalesApp = isCrmSalesAppMode();
   const systemAllowed: Record<string, boolean> = { crm: canAccessCrm(user), marketing: canAccessMarketing(user), operations: canAccessOperations(user), tracking: canAccessTracking(user) };
-  const visibleItems = items.filter((item) => "permission" in item ? hasPermission(user, item.permission) : systemAllowed[item.system]);
-  const visibleSupport = supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));
+  const visibleItems = crmSalesApp
+    ? items.filter((item) => item.href === "/crm" && canAccessCrm(user))
+    : items.filter((item) => "permission" in item ? hasPermission(user, item.permission) : systemAllowed[item.system]);
+  const visibleSupport = crmSalesApp
+    ? []
+    : supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));
   const fullName = user?.fullName?.trim() || "مستخدم المنصة";
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 

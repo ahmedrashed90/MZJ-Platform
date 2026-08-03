@@ -6672,3 +6672,45 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .operations-check-option-icon { width: 29px; height: 29px; flex-basis: 29px; }
   .operations-check-edit-card > label { grid-template-columns: 1fr; gap: 5px; }
 }
+
+
+/* CRM sales app: scoped mobile behavior for dashboard and manual leads only. */
+html.mzj-crm-sales-app,
+html.mzj-crm-sales-app body,
+html.mzj-crm-sales-app #root,
+html.mzj-crm-sales-app .app-shell {
+  min-height: var(--mzj-crm-sales-app-height, 100dvh);
+}
+
+@media (display-mode: standalone) {
+  html.mzj-crm-sales-app body {
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@media (max-width: 820px) {
+  html.mzj-crm-sales-app .page-shell:has(.crm-dashboard-page),
+  html.mzj-crm-sales-app .page-shell:has(.crm-manual-leads-page) {
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-right: max(10px, env(safe-area-inset-right));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+    padding-left: max(10px, env(safe-area-inset-left));
+  }
+
+  html.mzj-crm-sales-app .crm-dashboard-page,
+  html.mzj-crm-sales-app .crm-manual-leads-page {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  html.mzj-crm-sales-app .crm-dashboard-page input,
+  html.mzj-crm-sales-app .crm-dashboard-page select,
+  html.mzj-crm-sales-app .crm-dashboard-page textarea,
+  html.mzj-crm-sales-app .crm-manual-leads-page input,
+  html.mzj-crm-sales-app .crm-manual-leads-page select,
+  html.mzj-crm-sales-app .crm-manual-leads-page textarea {
+    font-size: 16px;
+  }
+}
