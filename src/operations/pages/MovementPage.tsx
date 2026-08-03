@@ -49,7 +49,7 @@ export function MovementPage() {
       note: "",
       stateNote: row.state_note || "",
       shortageNote: row.shortage_note || "",
-      checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "unknown", note: "" }])),
+      checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "ok", note: "" }])),
     }]);
     setSearch("");
     setResults([]);
@@ -96,7 +96,10 @@ export function MovementPage() {
             note: item.note,
             stateNote: item.stateNote,
             shortageNote: item.shortageNote,
-            checks: item.location_code === "agency" ? Object.entries(item.checks).map(([itemCode, value]: [string, { status: string; note: string }]) => ({ itemCode, status: value.status, note: value.note })) : [],
+            checks: item.location_code === "agency" ? meta.checkItems.map((check) => {
+              const value = item.checks[check.code] || { status: "ok", note: "" };
+              return { itemCode: check.code, status: value.status, note: value.note };
+            }) : [],
           })),
         }),
       });
@@ -118,9 +121,13 @@ export function MovementPage() {
 
       <section className="panel operations-movement-panel">
         <div className="operations-movement-controls">
-          <OperationsVehiclePicker search={search} results={results} placeholder="ابحث برقم الهيكل أو السيارة أو البيان" onSearchChange={setSearch} onSelect={add} />
-          <label className="operations-control-field"><span>المكان الجديد</span><select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+          <div className="operations-movement-search">
+            <OperationsVehiclePicker search={search} results={results} placeholder="ابحث برقم الهيكل أو السيارة أو البيان" onSearchChange={setSearch} onSelect={add} />
+          </div>
+          <div className="operations-movement-targets" aria-label="بيانات الحركة الجديدة">
+            <label className="operations-control-field"><span>المكان الجديد</span><select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+          </div>
         </div>
 
         <label className="operations-field operations-general-note"><span>حجز - نواقص - تحديد مكان</span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="اكتب الحجز أو النواقص أو تحديد المكان" /></label>
@@ -145,7 +152,7 @@ export function MovementPage() {
                 <summary>تشيك الوكالة للسيارة <b dir="ltr">{item.vin}</b></summary>
                 <div className="operations-check-editor">
                   {meta.checkItems.map((check) => {
-                    const checkValue = item.checks[check.code] || { status: "unknown", note: "" };
+                    const checkValue = item.checks[check.code] || { status: "ok", note: "" };
                     return (
                       <article key={check.code} className={`operations-check-edit-card status-${checkValue.status}`}>
                         <header>

@@ -6560,3 +6560,51 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .data-management-hero { grid-template-columns:1fr; }
   .data-management-import-result details { grid-column:auto; }
 }
+
+/* Operations movement tablet layout and agency-check defaults v1.19.4 clean */
+.operations-movement-controls {
+  grid-template-columns: minmax(420px, 1.75fr) minmax(430px, 1fr);
+  align-items: stretch;
+}
+.operations-movement-search {
+  min-width: 0;
+  display: grid;
+  align-content: end;
+}
+.operations-movement-targets {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fcfaf9;
+}
+.operations-movement-targets .operations-control-field > span {
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+}
+
+@media (max-width: 1360px) {
+  .operations-movement-page .operations-movement-panel { padding: 14px; }
+  .operations-movement-controls {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .operations-movement-search,
+  .operations-movement-controls .operations-vehicle-picker { grid-column: 1; width: 100%; }
+  .operations-movement-targets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operations-general-note textarea { min-height: 64px; }
+  .operations-check-editor { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .operations-movement-page .operations-movement-panel { padding: 10px; }
+  .operations-movement-targets { grid-template-columns: 1fr; padding: 9px; }
+  .operations-check-editor { grid-template-columns: 1fr; }
+  .operations-check-binary-option { min-height: 46px; padding: 6px 8px; }
+  .operations-check-option-icon { width: 29px; height: 29px; flex-basis: 29px; }
+  .operations-check-edit-card > label { grid-template-columns: 1fr; gap: 5px; }
+}
