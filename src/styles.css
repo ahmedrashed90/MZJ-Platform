@@ -2683,9 +2683,16 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .operations-check-edit-card > header span { font-size: 11px; font-weight: 900; color: #746963; }
 .operations-check-edit-card.status-ok > header span { color: #257341; }
 .operations-check-edit-card.status-missing > header span { color: #a42e35; }
+.operations-check-binary { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
+.operations-check-binary-option { min-width: 0; height: 42px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: #746963; display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: inherit; font-weight: 900; cursor: pointer; transition: border-color .16s ease,background .16s ease,color .16s ease,box-shadow .16s ease; }
+.operations-check-binary-option > span { width: 21px; height: 21px; border: 1px solid currentColor; border-radius: 50%; display: grid; place-items: center; font-size: 13px; line-height: 1; }
+.operations-check-binary-option:hover { border-color: #bda79c; background: #fffaf7; }
+.operations-check-binary-option.ok.active { border-color: #47a365; background: #e9f7ed; color: #257341; box-shadow: 0 0 0 2px rgba(71,163,101,.1); }
+.operations-check-binary-option.missing.active { border-color: #cf6970; background: #fff0ef; color: #a42e35; box-shadow: 0 0 0 2px rgba(207,105,112,.1); }
+.operations-check-binary-option:focus-visible { outline: 3px solid rgba(145,72,54,.18); outline-offset: 2px; }
 .operations-check-edit-card > label { min-width: 0; display: grid; grid-template-columns: 68px minmax(0,1fr); align-items: center; gap: 9px; padding: 0; border: 0; }
 .operations-check-edit-card > label > span { color: var(--muted); font-size: 12px; font-weight: 800; }
-.operations-check-edit-card select,.operations-check-edit-card input { width: 100%; min-width: 0; height: 40px; border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 7px 10px; font: inherit; }
+.operations-check-edit-card input { width: 100%; min-width: 0; height: 40px; border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 7px 10px; font: inherit; }
 
 .operations-transfer-page .operations-primary-button,
 .operations-movement-page .operations-submit-movement { width: 100%; min-height: 46px; }

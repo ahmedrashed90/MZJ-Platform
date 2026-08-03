@@ -26,6 +26,7 @@ const checks = [
   ["Operations dashboard inventory and shortage drilldowns use fullscreen modal", dashboardModal.includes("dashboard-operations-modal-fullscreen") && styles.includes(".dashboard-operations-modal-fullscreen")],
   ["Vehicle checks are rendered as separated professional cards", detail.includes("operations-check-card") && styles.includes(".operations-check-card > header")],
   ["Agency movement checks are rendered as separated editor cards", movementPage.includes("operations-check-edit-card") && styles.includes(".operations-check-edit-card > label")],
+  ["Agency movement checks use direct true/false buttons instead of a dropdown", movementPage.includes("operations-check-binary") && movementPage.includes('aria-pressed={checkValue.status === "ok"}') && movementPage.includes('aria-pressed={checkValue.status === "missing"}') && movementPage.includes(">صح</button>") && movementPage.includes(">غلط</button>") && !movementPage.includes('select value={checkValue.status}') && styles.includes(".operations-check-binary-option.ok.active") && styles.includes(".operations-check-binary-option.missing.active")],
   ["Tracking request is a compact progress control with percentage tones", vehicleTable.includes("trackingProgressTone") && styles.includes(".operations-tracking-open.low") && styles.includes(".operations-tracking-open.medium") && styles.includes(".operations-tracking-open.high")],
   ["Approval screen closes a vehicle after automatic final delivery", approvalsPage.includes("setSelected(updated || null)")],
 ];

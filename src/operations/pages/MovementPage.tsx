@@ -148,8 +148,21 @@ export function MovementPage() {
                     const checkValue = item.checks[check.code] || { status: "unknown", note: "" };
                     return (
                       <article key={check.code} className={`operations-check-edit-card status-${checkValue.status}`}>
-                        <header><strong>{check.name}</strong><span>{checkValue.status === "ok" ? "موجود" : checkValue.status === "missing" ? "ناقص" : "غير محدد"}</span></header>
-                        <label><span>الحالة</span><select value={checkValue.status} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: event.target.value } } })}><option value="unknown">غير محدد</option><option value="ok">موجود</option><option value="missing">ناقص</option></select></label>
+                        <header><strong>{check.name}</strong><span>{checkValue.status === "ok" ? "صح" : checkValue.status === "missing" ? "غلط" : "غير محدد"}</span></header>
+                        <div className="operations-check-binary" role="group" aria-label={`حالة ${check.name}`}>
+                          <button
+                            type="button"
+                            className={`operations-check-binary-option ok${checkValue.status === "ok" ? " active" : ""}`}
+                            aria-pressed={checkValue.status === "ok"}
+                            onClick={() => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: "ok" } } })}
+                          ><span aria-hidden="true">✓</span>صح</button>
+                          <button
+                            type="button"
+                            className={`operations-check-binary-option missing${checkValue.status === "missing" ? " active" : ""}`}
+                            aria-pressed={checkValue.status === "missing"}
+                            onClick={() => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: "missing" } } })}
+                          ><span aria-hidden="true">✕</span>غلط</button>
+                        </div>
                         <label><span>الملاحظة</span><input placeholder="اكتب ملاحظة اختيارية" value={checkValue.note} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, note: event.target.value } } })} /></label>
                       </article>
                     );
