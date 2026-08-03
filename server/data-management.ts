@@ -68,14 +68,44 @@ function rowValue(row: ImportRow, aliases: string[]) {
   return "";
 }
 
+function latinDigits(value: string) {
+  return value
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
+}
+
+function validDateParts(year: number, month: number, day: number) {
+  if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
 function parseImportedDate(value: string) {
-  const text = clean(value);
+  const text = latinDigits(clean(value))
+    .replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim();
   if (!text) return null;
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
-  const match = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
-  if (!match) return null;
-  const [, day, month, year] = match;
-  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+
+  const iso = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?=\D|$)/);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    if (!validDateParts(year, month, day)) return null;
+    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  const dayFirst = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})(?=\D|$)/);
+  if (!dayFirst) return null;
+  const day = Number(dayFirst[1]);
+  const month = Number(dayFirst[2]);
+  const year = Number(dayFirst[3]);
+  if (!validDateParts(year, month, day)) return null;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function validUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function departmentWhere(department: DepartmentKey) {
@@ -142,12 +172,156 @@ async function exportCustomers(response: VercelResponse, department: DepartmentK
   });
 }
 
+async function updateExistingSoldCustomers(
+  response: VercelResponse,
+  user: SessionUser,
+  department: Exclude<DepartmentKey, "service">,
+  rows: ImportRow[],
+  startRow: number,
+) {
+  const sql = getSql();
+  const departmentCodes = departmentWhere(department);
+  const result = {
+    received: rows.length,
+    imported: 0,
+    updated: 0,
+    unchanged: 0,
+    duplicates: 0,
+    skipped: 0,
+    errors: [] as Array<{ row: number; reason: string }>,
+  };
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const sourceRow = rows[index];
+    const rowNumber = startRow + index;
+    try {
+      const importedStatus = rowValue(sourceRow, ["الحالة", "حالة العميل", "status"]);
+      if (normalizedText(importedStatus) !== normalizedText("تم البيع")) {
+        result.unchanged += 1;
+        continue;
+      }
+
+      const lastUpdate = rowValue(sourceRow, [
+        "آخر تحديث",
+        "اخر تحديث",
+        "تاريخ آخر تحديث",
+        "تاريخ اخر تحديث",
+        "updated at",
+        "last update",
+        "last updated",
+      ]);
+      const soldDate = parseImportedDate(lastUpdate);
+      if (!soldDate) {
+        result.skipped += 1;
+        result.errors.push({ row: rowNumber, reason: "حالة تم البيع تحتاج تاريخًا صحيحًا في عمود آخر تحديث" });
+        continue;
+      }
+
+      const internalId = rowValue(sourceRow, ["رقم داخلي", "المعرف الداخلي", "lead id", "customer id", "id"]);
+      const phone = rowValue(sourceRow, ["رقم الجوال", "الجوال", "رقم الهاتف", "الهاتف", "mobile", "phone", "phone number"]);
+      const phoneNormalized = normalizePhone(phone);
+      let matches: any[] = [];
+
+      if (internalId) {
+        if (!validUuid(internalId)) {
+          result.skipped += 1;
+          result.errors.push({ row: rowNumber, reason: "الرقم الداخلي غير صالح؛ لم تتم إضافة عميل جديد" });
+          continue;
+        }
+        matches = await sql<any[]>`
+          select id::text,status_label,sold_at,
+            (sold_at at time zone 'Asia/Riyadh')::date::text as sold_date
+          from crm.leads
+          where id=${internalId}::uuid
+            and department_code=any(${departmentCodes}::text[])
+            and is_deleted=false
+          limit 1
+        `;
+      } else if (phoneNormalized) {
+        matches = await sql<any[]>`
+          select id::text,status_label,sold_at,
+            (sold_at at time zone 'Asia/Riyadh')::date::text as sold_date
+          from crm.leads
+          where phone_normalized=${phoneNormalized}
+            and department_code=any(${departmentCodes}::text[])
+            and is_deleted=false
+          order by created_at desc,id desc
+          limit 2
+        `;
+        if (matches.length > 1) {
+          result.skipped += 1;
+          result.errors.push({ row: rowNumber, reason: "يوجد أكثر من عميل بنفس رقم الجوال؛ استخدم ملف التصدير الذي يحتوي على الرقم الداخلي" });
+          continue;
+        }
+      } else {
+        result.skipped += 1;
+        result.errors.push({ row: rowNumber, reason: "لا يوجد رقم داخلي أو رقم جوال صالح لمطابقة العميل" });
+        continue;
+      }
+
+      const existing = matches[0];
+      if (!existing) {
+        result.skipped += 1;
+        result.errors.push({ row: rowNumber, reason: "العميل غير موجود في القسم المختار؛ لم تتم إضافة عميل جديد" });
+        continue;
+      }
+      if (normalizedText(existing.status_label) !== normalizedText("تم البيع")) {
+        result.skipped += 1;
+        result.errors.push({ row: rowNumber, reason: "حالة العميل الحالية في النظام ليست تم البيع؛ لم يتم تغيير الحالة" });
+        continue;
+      }
+      if (clean(existing.sold_date) === soldDate) {
+        result.unchanged += 1;
+        continue;
+      }
+
+      const updatedLead = await sql.begin(async (tx) => {
+        const [updated] = await tx<any[]>`
+          update crm.leads
+          set sold_at=(${soldDate}::date::timestamp at time zone 'Asia/Riyadh'),
+              updated_by=${user.id}::uuid
+          where id=${existing.id}::uuid
+            and department_code=any(${departmentCodes}::text[])
+            and status_label='تم البيع'
+            and is_deleted=false
+          returning id::text
+        `;
+        if (!updated) return null;
+        await tx`
+          insert into crm.lead_events(lead_id,event_type,old_status,new_status,actor_id,actor_name,actor_role,note,details)
+          values(
+            ${existing.id}::uuid,'sold_date_updated','تم البيع','تم البيع',${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},
+            'تحديث تاريخ تم البيع من عمود آخر تحديث في ملف التصدير',
+            ${tx.json({ row: rowNumber, department, previousSoldAt: existing.sold_at || null, soldAt: soldDate, sourceColumn: "آخر تحديث" })}
+          )
+        `;
+        return updated;
+      });
+      if (!updatedLead) {
+        result.skipped += 1;
+        result.errors.push({ row: rowNumber, reason: "تعذر تحديث العميل لأن بياناته تغيرت أثناء الاستيراد" });
+        continue;
+      }
+      result.updated += 1;
+    } catch (error) {
+      result.skipped += 1;
+      result.errors.push({ row: rowNumber, reason: error instanceof Error ? error.message : "تعذر تحديث الصف" });
+    }
+  }
+
+  await auditDataAction(user, "sold_dates_updated_from_export", { department, ...result, errors: result.errors.slice(0, 50) });
+  return response.status(200).json({ ok: true, department, mode: "update_existing", result });
+}
+
 async function importCustomers(request: VercelRequest, response: VercelResponse, user: SessionUser, department: DepartmentKey) {
   await ensureCrmSchema();
   const sql = getSql();
   const body = parseBody(request);
   const rows = Array.isArray(body.rows) ? body.rows.slice(0, 250) as ImportRow[] : [];
   if (!rows.length) return response.status(400).json({ ok: false, error: "لا توجد صفوف صالحة للاستيراد" });
+  if (department === "cash" || department === "finance") {
+    return updateExistingSoldCustomers(response, user, department, rows, Number(body.startRow || 2));
+  }
 
   const [branches, sources, users, statuses, customerFields] = await Promise.all([
     sql<any[]>`select code,name from core.branches where is_active=true order by sort_order,name`,

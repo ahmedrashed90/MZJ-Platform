@@ -17,7 +17,7 @@ import { downloadXlsx } from "../crm/xlsx";
 type DepartmentKey = "cash" | "finance" | "service";
 type DepartmentDefinition = { key: DepartmentKey; label: string; sheetName: string; description: string };
 type ImportError = { row: number; reason: string };
-type ImportResult = { received: number; imported: number; duplicates: number; skipped: number; errors: ImportError[] };
+type ImportResult = { received: number; imported: number; updated: number; unchanged: number; duplicates: number; skipped: number; errors: ImportError[] };
 type Notice = { tone: "success" | "error" | "warning"; text: string } | null;
 
 const RESET_PHRASE = "مسح كل البيانات التجريبية";
@@ -80,7 +80,7 @@ function bytesToBase64(bytes: Uint8Array) {
 }
 
 function emptyImportResult(): ImportResult {
-  return { received: 0, imported: 0, duplicates: 0, skipped: 0, errors: [] };
+  return { received: 0, imported: 0, updated: 0, unchanged: 0, duplicates: 0, skipped: 0, errors: [] };
 }
 
 export function DataManagementPanel() {
@@ -96,12 +96,12 @@ export function DataManagementPanel() {
 
   const importRules = useMemo(() => [
     "القسم يُفرض من زر الاستيراد المختار، ولا تؤثر خانة القسم داخل الشيت.",
-    "اسم العميل ورقم جوال صالح إلزاميان، وأي صف ناقص يُستبعد مع توضيح رقمه.",
-    "رقم الجوال المكرر داخل قاعدة البيانات لا يُستبدل ولا تُعدل بياناته.",
-    "الحالة تُطابق حالات القسم المسجلة، وأي حالة غير معروفة تبدأ كعميل جديد بدون إدخال حالة غريبة.",
-    "أسماء الأعمدة العربية والإنجليزية الشائعة مدعومة، ويُحفظ الصف الأصلي للرجوع إليه.",
-    "اسم المندوب والفرع والمصدر يُطابق الموجود في النظام، وإلا يطبق التوزيع المعتمد.",
-    "استيراد عملاء التمويل لا يعيّن أي مندوب كول سنتر، حتى لو كان العمود موجودًا في ملف قديم.",
+    "ملفا الكاش والتمويل المصدّران من هذه الصفحة يحدّثان العملاء الموجودين فقط، ولا يضيفان أي عميل جديد.",
+    "المطابقة تتم بالرقم الداخلي الموجود في ملف التصدير، ويُستخدم رقم الجوال فقط عند غياب الرقم الداخلي.",
+    "عندما تكون الحالة تم البيع، يؤخذ تاريخ تم البيع من عمود آخر تحديث، بما في ذلك التاريخ العربي مثل ١٩/٥/٢٠٢٦، ٥:٥٢:٤٨ م.",
+    "الصفوف غير الموجودة في قاعدة البيانات تُستبعد مع توضيح رقم الصف، بدون إنشاء عميل بديل.",
+    "الصفوف التي حالتها ليست تم البيع تظل بدون تغيير عند إعادة استيراد ملف الكاش أو التمويل.",
+    "استيراد خدمة العملاء يظل بنفس منطق النقل القديم بدون أي تغيير.",
   ], []);
 
   async function exportDepartment(department: DepartmentDefinition) {
@@ -140,12 +140,19 @@ export function DataManagementPanel() {
         const result = payload.result as ImportResult;
         total.received += Number(result?.received || 0);
         total.imported += Number(result?.imported || 0);
+        total.updated += Number(result?.updated || 0);
+        total.unchanged += Number(result?.unchanged || 0);
         total.duplicates += Number(result?.duplicates || 0);
         total.skipped += Number(result?.skipped || 0);
         total.errors.push(...(Array.isArray(result?.errors) ? result.errors : []));
       }
       setImportResult({ department: department.key, result: total });
-      setNotice({ tone: "success", text: `اكتمل استيراد ${department.label}: تمت إضافة ${total.imported.toLocaleString("ar-SA")} عميل بدون تعديل أي عميل موجود.` });
+      setNotice({
+        tone: "success",
+        text: department.key === "service"
+          ? `اكتمل استيراد ${department.label}: تمت إضافة ${total.imported.toLocaleString("ar-SA")} عميل بدون تعديل أي عميل موجود.`
+          : `اكتمل تحديث ${department.label}: تم تحديث تاريخ تم البيع لـ ${total.updated.toLocaleString("ar-SA")} عميل، ولم تتم إضافة أي عميل جديد.`,
+      });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "تعذر استيراد ملف العملاء" });
     } finally {
@@ -283,8 +290,8 @@ export function DataManagementPanel() {
         {importResult ? (
           <div className="data-management-import-result">
             <div><span>تمت القراءة</span><strong>{importResult.result.received.toLocaleString("ar-SA")}</strong></div>
-            <div className="success"><span>تمت الإضافة</span><strong>{importResult.result.imported.toLocaleString("ar-SA")}</strong></div>
-            <div><span>مكرر بدون تعديل</span><strong>{importResult.result.duplicates.toLocaleString("ar-SA")}</strong></div>
+            <div className="success"><span>{importResult.department === "service" ? "تمت الإضافة" : "تم التحديث"}</span><strong>{(importResult.department === "service" ? importResult.result.imported : importResult.result.updated).toLocaleString("ar-SA")}</strong></div>
+            <div><span>{importResult.department === "service" ? "مكرر بدون تعديل" : "بدون تغيير"}</span><strong>{(importResult.department === "service" ? importResult.result.duplicates : importResult.result.unchanged).toLocaleString("ar-SA")}</strong></div>
             <div className={importResult.result.skipped ? "warning" : ""}><span>صفوف مستبعدة</span><strong>{importResult.result.skipped.toLocaleString("ar-SA")}</strong></div>
             {importResult.result.errors.length ? <details><summary>عرض أسباب الاستبعاد</summary><div>{importResult.result.errors.slice(0, 80).map((item, index) => <p key={`${item.row}-${index}`}><b>الصف {item.row.toLocaleString("ar-SA")}</b><span>{item.reason}</span></p>)}</div></details> : null}
           </div>
