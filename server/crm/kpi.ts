@@ -245,7 +245,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             select sum(greatest(1,coalesce(l.sold_quantity,1)))::int
             from crm.leads l
             where l.assigned_to=u.id and l.status_label='تم البيع' and l.is_deleted=false
-              and (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date between e.period_start and e.period_end
+              and (coalesce(l.sold_at,l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date between e.period_start and e.period_end
               and l.branch_code=primary_branch.code and l.department_code=primary_department.code
               and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false)
           ),0)

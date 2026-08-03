@@ -64,6 +64,12 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           where l.is_deleted=false
             and (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
+        ), scoped_manual_sold as (
+          select * from crm.leads l
+          where l.is_deleted=false and l.status_label='تم البيع'
+            and (coalesce(l.sold_at,l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
+            and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false)
+            and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
         ), scoped_erp_sold as (
           select
             coalesce(nullif(so.platform_department_code,''),sold_lead.department_code) as department_code,
@@ -88,15 +94,15 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
           (
             coalesce((select sum(quantity) from scoped_erp_sold),0)
-            + coalesce(sum(greatest(coalesce(sold_quantity,1),1)) filter(where status_label='تم البيع' and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=scoped_leads.id and coalesce(so.is_cancelled,false)=false)),0)
+            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold),0)
           )::int as sold,
           (
             coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
-            + coalesce(sum(greatest(coalesce(sold_quantity,1),1)) filter(where status_label='تم البيع' and department_code in ('cash_sales','wholesale','wholesale_sales') and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=scoped_leads.id and coalesce(so.is_cancelled,false)=false)),0)
+            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
           )::int as cash_sold,
           (
             coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('finance_sales','call_center')),0)
-            + coalesce(sum(greatest(coalesce(sold_quantity,1),1)) filter(where status_label='تم البيع' and department_code in ('finance_sales','call_center') and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=scoped_leads.id and coalesce(so.is_cancelled,false)=false)),0)
+            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold where department_code in ('finance_sales','call_center')),0)
           )::int as finance_sold,
           count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
           count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,

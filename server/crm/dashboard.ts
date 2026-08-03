@@ -47,7 +47,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.notes, l.status_note, l.extra_data, l.completion_percent, l.credit_limit, l.credit_qualified,
       l.dashboard_unread, l.has_unread_message, l.has_unread_messages, l.message_unread, l.is_unread,
       l.last_message_direction, l.last_incoming_message_at, l.dashboard_message_read_at,
-      l.created_at, l.updated_at, l.registered_at,
+      l.created_at, l.updated_at, l.registered_at, l.sold_at,
       src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
@@ -85,8 +85,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
         )
       )
-      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+      and (${from || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})

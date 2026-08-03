@@ -92,6 +92,21 @@ function comparableDate(input: unknown) {
   return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
 }
 
+function riyadhDateInput(input: unknown = new Date()) {
+  const raw = input instanceof Date ? input.toISOString() : comparableValue(input);
+  if (!raw) return "";
+  const parsed = input instanceof Date ? input : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 function addChangedField(payload: Record<string, unknown>, key: string, next: unknown, previous: unknown) {
   if (comparableValue(next) !== comparableValue(previous)) payload[key] = next;
 }
@@ -160,6 +175,7 @@ function leadCoreValues(lead: CrmLead, serviceKey: ServiceKey) {
     color: value(lead.color),
     finance_type: value(lead.finance_type) || (serviceKey === "finance" ? "general" : ""),
     sold_quantity: value(lead.sold_quantity || 1),
+    sold_at: lead.sold_at ? riyadhDateInput(lead.sold_at) : "",
     notes: value(lead.notes),
   };
 }
@@ -426,6 +442,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
           ...activeForm.values,
           status_label: next,
           sold_quantity: next === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
+          sold_at: next === "تم البيع" ? (activeForm.values.sold_at || riyadhDateInput()) : activeForm.values.sold_at,
         },
       };
       setForm(nextForm);
@@ -532,6 +549,9 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       if (!showConversation) {
         addChangedField(payload, "assignedTo", activeForm.assignedTo || null, value(lead.assigned_to) || null);
         addChangedField(payload, "callCenterAssignedTo", activeForm.callCenterAssignedTo || null, value(lead.call_center_assigned_to) || null);
+        if (activeForm.values.status_label === "تم البيع") {
+          addChangedDateField(payload, "soldAt", activeForm.values.sold_at, originalValues.sold_at);
+        }
       }
 
       if (activeForm.values.status_label === "تم البيع") {
@@ -758,7 +778,19 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                   <label><span>القسم</span><select value={activeForm.departmentCode} onChange={(event) => changeDatabaseDepartment(event.target.value)}>{databaseDepartmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
                   <label><span>الفرع</span><select value={activeForm.branchCode} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="">بدون فرع</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
                   <label><span>الدفع</span><select value={activeForm.paymentType} onChange={(event) => setForm((current) => current ? { ...current, paymentType: event.target.value } : current)}><option value="كاش">كاش</option><option value="تمويل">تمويل</option><option value="خدمة عملاء">خدمة عملاء</option></select></label>
-                  <label><span>الحالة</span><select value={activeForm.values.status_label} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, status_label: event.target.value, follow_up_at: isPostponed(event.target.value) ? current.values.follow_up_at : "" } } : current)}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
+                  <label><span>الحالة</span><select value={activeForm.values.status_label} onChange={(event) => {
+                    const nextStatus = event.target.value;
+                    setForm((current) => current ? {
+                      ...current,
+                      values: {
+                        ...current.values,
+                        status_label: nextStatus,
+                        follow_up_at: isPostponed(nextStatus) ? current.values.follow_up_at : "",
+                        sold_at: nextStatus === "تم البيع" ? (current.values.sold_at || riyadhDateInput()) : current.values.sold_at,
+                      },
+                    } : current);
+                  }}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
+                  {activeForm.values.status_label === "تم البيع" ? <label className="crm-sold-at-field"><span>تاريخ تم البيع</span><input type="date" value={activeForm.values.sold_at || ""} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_at: event.target.value } } : current)} /></label> : null}
                   <label><span>المسؤول</span><select value={activeForm.assignedTo} onChange={(event) => setForm((current) => current ? { ...current, assignedTo: event.target.value } : current)}><option value="">غير موزع</option>{editableAgents.map((user) => <option key={user.id} value={user.id}>{user.full_name}{user.branches.length ? ` - ${user.branches.join("، ")}` : ""}</option>)}</select></label>
                   <label><span>الكول سنتر</span><select value={activeForm.callCenterAssignedTo} onChange={(event) => setForm((current) => current ? { ...current, callCenterAssignedTo: event.target.value } : current)}><option value="">بدون كول سنتر</option>{editableCallCenterUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
                 </div>

@@ -103,6 +103,7 @@ function leadPayload(body: Record<string, any>) {
     assignedTo: clean(body.assignedTo ?? body.assigned_to) || null,
     callCenterAssignedTo: clean(body.callCenterAssignedTo ?? body.call_center_assigned_to) || null,
     soldQuantity: soldQuantity(body.soldQuantity ?? body.sold_quantity),
+    soldAt: clean(body.soldAt ?? body.sold_at) || null,
     extraData: body.customFields ?? body.extraData ?? body.extra_data ?? {},
   };
 }
@@ -202,6 +203,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   const customerFields = await getCustomerFieldDefinitions();
   input.extraData = sanitizeCustomFieldValues(input.extraData, customerFields);
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
+  if (input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
   if (!input.customerName) return response.status(400).json({ ok: false, error: "اسم العميل مطلوب" });
   if (!input.phoneNormalized) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
   const missingRequired = missingRequiredCustomerFields(input, customerFields);
@@ -225,14 +227,14 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
       car_name, car_category, location, age, salary, obligation, salary_bank, car_model, car_type, color,
       finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
       assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
-      responsible_name_snapshot, call_center_name_snapshot, sold_quantity, completion_percent, credit_limit, credit_qualified
+      responsible_name_snapshot, call_center_name_snapshot, sold_quantity, sold_at, completion_percent, credit_limit, credit_qualified
     ) values (
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
       ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
       ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
-      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
+      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${input.statusLabel === "تم البيع" ? (input.soldAt || new Date().toISOString()) : null}::timestamptz, ${completionPercent}, ${credit.amount}, ${credit.qualified}
     ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
   `;
   await sql`
@@ -304,6 +306,15 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const previousPaymentType = clean(before.payment_type) || (previousServiceKey === "finance" ? "تمويل" : previousServiceKey === "service" ? "خدمة عملاء" : "كاش");
   const previousFinanceType = clean(before.finance_type) || (previousServiceKey === "finance" ? "general" : "");
   const previousSoldQuantity = previousStatusLabel === "تم البيع" ? (before.sold_quantity || 1) : before.sold_quantity;
+  const statusLabelChanged = previousStatusLabel !== input.statusLabel;
+  const soldAtFieldProvided = hasOwnField(body, ["soldAt", "sold_at"]);
+  const soldDateChangeRequested = databaseEdit && changedDate(body, ["soldAt", "sold_at"], before.sold_at);
+  if (soldAtFieldProvided && input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) {
+    return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
+  }
+  if (soldAtFieldProvided && input.soldAt && input.statusLabel !== "تم البيع") {
+    return response.status(400).json({ ok: false, error: "يمكن تحديد تاريخ تم البيع للعملاء بحالة تم البيع فقط" });
+  }
   const assignedFieldProvided = hasOwnField(body, ["assignedTo", "assigned_to", "responsibleId"]);
   const callCenterFieldProvided = hasOwnField(body, ["callCenterAssignedTo", "call_center_assigned_to"]);
   const ownerChangeRequested = databaseEdit
@@ -318,7 +329,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const noteAdditionRequested = Boolean(newNote);
   const previousExtraData = before.extra_data && typeof before.extra_data === "object" ? before.extra_data : {};
   const customFieldsChanged = Object.entries(customFieldPatch).some(([key, next]) => clean(next) !== clean(previousExtraData[key]));
-  const generalDataChangeRequested = customFieldsChanged || [
+  const generalDataChangeRequested = soldDateChangeRequested || customFieldsChanged || [
     changedText(body, ["customerName", "customer_name", "name", "fullName", "full_name"], before.customer_name),
     changedText(body, ["phone", "mobile", "phone_number", "phoneNumber"], before.phone_normalized, normalizePhone),
     changedText(body, ["sourceCode", "source_code", "source"], before.source_code),
@@ -464,7 +475,10 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
 
   const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
-  const statusChanged = clean(before.status_label) !== input.statusLabel;
+  const statusChanged = statusLabelChanged;
+  let nextSoldAt = clean(before.sold_at) || null;
+  if (databaseEdit && soldAtFieldProvided) nextSoldAt = input.soldAt || null;
+  if (statusChanged && input.statusLabel === "تم البيع" && !soldAtFieldProvided) nextSoldAt = new Date().toISOString();
   const branchChanged = clean(before.branch_code) !== input.branchCode;
   const assignedChanged = clean(before.assigned_to) !== clean(assignedTo);
   const callCenterChanged = clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
@@ -505,6 +519,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       responsible_name_snapshot=${assignedName || null},
       call_center_name_snapshot=${callCenterName || null},
       sold_quantity=${input.soldQuantity},
+      sold_at=${nextSoldAt}::timestamptz,
       updated_by=${user.id}::uuid,
       updated_at=now()
     where id=${id}::uuid

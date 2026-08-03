@@ -137,8 +137,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const filtersSql = sql`
     ${scopeSql}
-    and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-    and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+    and (${from || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+    and (${to || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     and (
       ${department || null}::text is null
       or (${department || null}='call_center' and l.call_center_assigned_to is not null)
@@ -291,7 +291,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       with effective_leads as (${effectiveLeads})
       select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
         l.report_department_code as department_code,l.report_branch_code as branch_code,
-        l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.registered_at,l.created_at,l.updated_at,
+        l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.sold_at,l.registered_at,l.created_at,l.updated_at,
         l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
         l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
         l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group
@@ -315,7 +315,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     with effective_leads as (${effectiveLeads})
     select l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
       l.report_department_code as department_code,l.report_branch_code as branch_code,
-      l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.registered_at,l.created_at,l.updated_at,
+      l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.sold_at,l.registered_at,l.created_at,l.updated_at,
       l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
       l.assigned_is_call_center,l.has_active_erp_order,l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
       l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group

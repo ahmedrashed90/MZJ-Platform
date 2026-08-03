@@ -360,7 +360,7 @@ async function linkCrmCustomer(input: {
           contact_id,customer_name,phone,phone_normalized,source_code,source_name,platform_code,
           service_key,department_code,branch_code,status_code,status_label,payment_type,
           car_name,car_category,car_model,car_type,color,notes,extra_data,source_history,
-          assigned_to,created_by,updated_by,registered_at,responsible_name_snapshot,completion_percent
+          assigned_to,created_by,updated_by,registered_at,sold_at,responsible_name_snapshot,completion_percent
         ) values (
           ${contact.id}::uuid,${customerName},${normalized.actualCustomerPhone||null},${normalized.actualCustomerPhoneNormalized||null},
           'next_erp','NEXT ERP','next_erp',${serviceKey},${departmentCode},${branchCode},null,'تم البيع',${paymentType(serviceKey)},
@@ -369,7 +369,7 @@ async function linkCrmCustomer(input: {
           ${`تم إنشاء العميل تلقائيًا من طلب البيع ${normalized.orderNo} في NEXT ERP`},
           ${tx.json({ ...sourceMetadata, salesOrders: [normalized.orderNo] })},
           ${tx.json([{ source: "next_erp", at: saleAt, orderNo: normalized.orderNo }])},
-          ${mapping.id}::uuid,${mapping.id}::uuid,${mapping.id}::uuid,${saleAt}::timestamptz,${mapping.full_name},100
+          ${mapping.id}::uuid,${mapping.id}::uuid,${mapping.id}::uuid,${saleAt}::timestamptz,${saleAt}::timestamptz,${mapping.full_name},100
         )
         returning *,id::text,contact_id::text,current_request_id::text,assigned_to::text,call_center_assigned_to::text
       `;
@@ -456,7 +456,7 @@ async function linkCrmCustomer(input: {
           phone=coalesce(nullif(${normalized.actualCustomerPhone},''),phone),
           phone_normalized=coalesce(nullif(${normalized.actualCustomerPhoneNormalized},''),phone_normalized),
           service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},
-          status_code=null,status_label='تم البيع',payment_type=${paymentType(serviceKey)},
+          status_code=null,status_label='تم البيع',payment_type=${paymentType(serviceKey)},sold_at=${saleAt}::timestamptz,
           assigned_to=${mapping.id}::uuid,responsible_name_snapshot=${mapping.full_name},
           car_name=coalesce(nullif(car_name,''),${clean(firstPayload.item?.type)||null}),
           car_category=coalesce(nullif(car_category,''),${clean(firstPayload.item?.category)||null}),
@@ -787,6 +787,7 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
     select
       coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_quantity,
       coalesce(sum(coalesce(so.total_incl_vat,0)),0)::float as total_sales_amount,
+      max(coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at)) as last_sale_at,
       coalesce(json_agg(so.sales_order_no order by coalesce(so.order_date,so.received_at::date),so.received_at) filter(where so.id is not null),'[]'::json) as sales_orders
     from integrations.erpnext_sales_orders so
     left join lateral (
@@ -806,6 +807,7 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
         when status_label='تم البيع' then greatest(coalesce(sold_quantity,1),1)
         else 0
       end,
+      sold_at=case when ${soldQuantity}>0 then coalesce(${sales?.last_sale_at || null}::timestamptz,sold_at) else sold_at end,
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
         salesOrders,
         erpSalesOrdersCount: salesOrders.length,

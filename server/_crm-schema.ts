@@ -44,6 +44,7 @@ alter table crm.leads add column if not exists last_contact_at timestamptz;
 alter table crm.leads add column if not exists responsible_name_snapshot text;
 alter table crm.leads add column if not exists call_center_name_snapshot text;
 alter table crm.leads add column if not exists sold_quantity integer;
+alter table crm.leads add column if not exists sold_at timestamptz;
 do $$
 begin
   if not exists (
@@ -1423,6 +1424,23 @@ on conflict(version) do nothing;
 commit;
 `;
 
+const CRM_SOLD_AT_20260803_SQL = String.raw`
+begin;
+
+alter table crm.leads
+  add column if not exists sold_at timestamptz;
+
+create index if not exists crm_leads_sold_at_idx
+  on crm.leads(sold_at)
+  where is_deleted=false and status_label='تم البيع';
+
+insert into core.schema_migrations(version)
+values('crm-sold-at-20260803')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 const CRM_DASHBOARD_STATUS_VISIBILITY_20260802_SQL = String.raw`
 begin;
 
@@ -1503,6 +1521,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-dashboard-status-visibility-20260802'
       `;
       if (!dashboardStatusVisibilityMigration) await runSqlScript(CRM_DASHBOARD_STATUS_VISIBILITY_20260802_SQL);
+      const [soldAtMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-sold-at-20260803'
+      `;
+      if (!soldAtMigration) await runSqlScript(CRM_SOLD_AT_20260803_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;

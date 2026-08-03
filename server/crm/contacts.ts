@@ -522,6 +522,7 @@ async function deleteSalesOrder(request: VercelRequest, response: VercelResponse
         status_code=null,
         status_label='عميل جديد',
         sold_quantity=0,
+        sold_at=null,
         updated_by=${user.id}::uuid,
         updated_at=now()
       where id=${deleted.crm_lead_id}::uuid

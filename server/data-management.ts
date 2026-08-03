@@ -107,7 +107,7 @@ async function exportCustomers(response: VercelResponse, department: DepartmentK
     select
       l.id::text,l.customer_name,l.phone,l.phone_normalized,l.department_code,l.branch_code,
       coalesce(b.name,l.branch_code,'') as branch_name,l.source_code,l.source_name,l.car_name,l.car_category,
-      l.status_label,l.payment_type,l.notes,l.status_note,l.sold_quantity,l.responsible_name_snapshot,
+      l.status_label,l.payment_type,l.notes,l.status_note,l.sold_quantity,l.sold_at,l.responsible_name_snapshot,
       l.call_center_name_snapshot,l.registered_at,l.created_at,l.updated_at
     from crm.leads l
     left join core.branches b on b.code=l.branch_code
@@ -132,6 +132,7 @@ async function exportCustomers(response: VercelResponse, department: DepartmentK
       "المندوب": row.responsible_name_snapshot || "",
       "الكول سنتر": row.call_center_name_snapshot || "",
       "عدد المباع": row.sold_quantity || "",
+      "تاريخ تم البيع": row.sold_at || "",
       "ملاحظات": row.notes || "",
       "ملاحظات الحالة": row.status_note || "",
       "تاريخ التسجيل": row.registered_at || row.created_at || "",
@@ -245,6 +246,7 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
         ? toPositiveInteger(rowValue(sourceRow, ["عدد المباع", "الكمية المباعة", "sold quantity"])) || 1
         : null;
       const registeredAt = parseImportedDate(rowValue(sourceRow, ["تاريخ التسجيل", "تاريخ الاضافة", "created at", "registered at"]));
+      const soldAt = statusLabel === "تم البيع" ? parseImportedDate(rowValue(sourceRow, ["تاريخ تم البيع", "تاريخ البيع", "sold at", "sale date"])) : null;
       const leadInput = {
         customerName,
         phone,
@@ -273,13 +275,13 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
         insert into crm.leads(
           customer_name,phone,phone_normalized,source_code,source_name,service_key,department_code,branch_code,
           status_label,payment_type,car_name,car_category,location,notes,status_note,assigned_to,call_center_assigned_to,
-          created_by,updated_by,registered_at,responsible_name_snapshot,call_center_name_snapshot,sold_quantity,
+          created_by,updated_by,registered_at,responsible_name_snapshot,call_center_name_snapshot,sold_quantity,sold_at,
           completion_percent,credit_limit,credit_qualified,extra_data
         ) values(
           ${customerName},${phone},${phoneNormalized},${sourceCode},${sourceName},${serviceKey},${departmentCode},${branchCode || null},
           ${statusLabel},${leadInput.paymentType},${leadInput.carName || null},${leadInput.carCategory || null},${leadInput.location || null},${leadInput.notes || null},${leadInput.statusNote || null},
           ${assignment.assignedTo || null}::uuid,${callCenter.assignedTo || null}::uuid,${user.id}::uuid,${user.id}::uuid,coalesce(${registeredAt || null}::date,now()),
-          ${assignment.assignedName || null},${callCenter.assignedName || null},${soldQuantity},${completionPercent},${credit.amount},${credit.qualified},
+          ${assignment.assignedName || null},${callCenter.assignedName || null},${soldQuantity},${soldAt || null}::date,${completionPercent},${credit.amount},${credit.qualified},
           ${sql.json({ importedFrom: "legacy_excel", importedAt: new Date().toISOString(), originalRow: sourceRow })}
         ) returning *,id::text
       `;
