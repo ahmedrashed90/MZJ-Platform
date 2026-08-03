@@ -29,9 +29,9 @@ const dashboardReportCards = [
   { key: "marketing", label: "جودة التسويق", field: "marketingQuality", suffix: "%" },
   { key: "total", label: "إجمالي العملاء", field: "total", suffix: "" },
   { key: "notContacted", label: "لم يتم الاتصال", field: "notContacted", suffix: "" },
+  { key: "potential", label: "لم يتم الرد", field: "potential", suffix: "" },
   { key: "waste", label: "غير مؤهل", field: "notQualified", suffix: "" },
   { key: "qualified", label: "مؤهل", field: "qualified", suffix: "" },
-  { key: "potential", label: "لم يتم الرد", field: "potential", suffix: "" },
   { key: "sold", label: "تم البيع", field: "sold", suffix: "" },
   { key: "sales", label: "جودة المبيعات", field: "salesQuality", suffix: "%" },
 ] as const;
@@ -242,20 +242,9 @@ export function CrmDashboardPage() {
       }
       return byUnreadFirst(left, right);
     };
-    const orderedStatuses = statuses
+    const statusGroups = statuses
       .filter((status) => status.is_active !== false && status.show_on_dashboard !== false)
-      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-    if (department === "cash" || department === "finance") {
-      const statusValue = (status: CrmStatus) => String(status.value || status.label).trim();
-      const noAnswerIndex = orderedStatuses.findIndex((status) => statusValue(status) === "لم يتم الرد");
-      if (noAnswerIndex >= 0) {
-        const [noAnswerStatus] = orderedStatuses.splice(noAnswerIndex, 1);
-        const notContactedIndex = orderedStatuses.findIndex((status) => statusValue(status) === "لم يتم الاتصال");
-        if (notContactedIndex >= 0) orderedStatuses.splice(notContactedIndex + 1, 0, noAnswerStatus);
-        else orderedStatuses.splice(noAnswerIndex, 0, noAnswerStatus);
-      }
-    }
-    const statusGroups = orderedStatuses
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
       .map((status) => ({
         ...status,
         unread_messages: false,
