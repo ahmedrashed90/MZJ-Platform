@@ -285,11 +285,21 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
     {
       key: "vin",
       label: "رقم الهيكل",
-      width: 155,
-      min: 130,
-      max: 240,
+      width: 170,
+      min: 145,
+      max: 250,
       value: (row) => row.vin,
-      render: (row) => <strong dir="ltr">{row.vin}</strong>,
+      render: (row) => (
+        <button
+          type="button"
+          className="dashboard-approval-vehicle-button vin"
+          onClick={() => setSelectedApproval(row)}
+          aria-label={`فتح الموافقات المالية والإدارية للسيارة ${row.vin}`}
+        >
+          <strong dir="ltr">{row.vin}</strong>
+          <span>فتح الموافقات</span>
+        </button>
+      ),
     },
     {
       key: "vehicle",
@@ -298,7 +308,20 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
       min: 220,
       max: 460,
       value: (row) => `${row.car_name || ""} ${row.statement || ""}`,
-      render: (row) => <div className="operations-cell-stack"><strong>{row.car_name || "—"}</strong><small>{row.statement || "بدون بيان"}</small></div>,
+      render: (row) => (
+        <button
+          type="button"
+          className="dashboard-approval-vehicle-button"
+          onClick={() => setSelectedApproval(row)}
+          aria-label={`فتح الموافقات المالية والإدارية للسيارة ${row.car_name || row.vin}`}
+        >
+          <span className="operations-cell-stack">
+            <strong>{row.car_name || "—"}</strong>
+            <small>{row.statement || "بدون بيان"}</small>
+          </span>
+          <span className="dashboard-approval-open-hint"><ShieldCheck size={16} />فتح الموافقات</span>
+        </button>
+      ),
     },
     {
       key: "model",
@@ -362,14 +385,6 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
       max: 230,
       value: (row) => formatApprovalDate(row.updated_at),
       render: (row) => formatApprovalDate(row.updated_at),
-    },
-    {
-      key: "action",
-      label: "التفاصيل",
-      width: 120,
-      min: 105,
-      max: 160,
-      render: (row) => <button type="button" className="operations-table-action" onClick={() => setSelectedApproval(row)}>عرض كامل</button>,
     },
   ], []);
 
@@ -470,7 +485,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
             <div className="dashboard-approvals-summary">
               <div>
                 <strong>{selection.title}</strong>
-                <span>السيارات المطابقة للحالة المحددة من كارت الموافقات.</span>
+                <span>اضغط على اسم السيارة أو رقم الهيكل لفتح الموافقة المالية والإدارية مباشرة.</span>
               </div>
               <b>{total.toLocaleString("ar-SA")}</b>
             </div>
@@ -478,9 +493,10 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
               rows={approvalRows}
               columns={approvalColumns}
               rowKey={(row) => row.id}
-              storageKey="mzj.dashboard.approvals.columns.v1149"
+              storageKey="mzj.dashboard.approvals.columns.direct-action.v1194"
               emptyText={loading ? "جاري تحميل السيارات..." : "لا توجد سيارات في هذه الحالة"}
-              minTableWidth={2100}
+              helperText="اضغط على اسم السيارة أو رقم الهيكل لفتح الموافقات مباشرة. ويمكنك سحب العلامة بين الأعمدة لتغيير العرض."
+              minTableWidth={1880}
               tableClassName="dashboard-approvals-table"
             />
           </div>

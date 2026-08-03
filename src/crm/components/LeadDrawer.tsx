@@ -37,6 +37,8 @@ type CustomerForm = {
   departmentCode: string;
   branchCode: string;
   paymentType: string;
+  assignedTo: string;
+  callCenterAssignedTo: string;
   values: Record<string, string>;
   customFields: Record<string, string>;
 };
@@ -46,6 +48,12 @@ const fallbackFinanceOptions = [
   { value: "general", label: "عام 45%" },
   { value: "rate55", label: "55%" },
   { value: "realEstate", label: "عقاري 65%" },
+];
+
+const databaseDepartmentOptions = [
+  { value: "cash_sales", label: "مبيعات الكاش", serviceKey: "cash" as ServiceKey },
+  { value: "finance_sales", label: "مبيعات التمويل", serviceKey: "finance" as ServiceKey },
+  { value: "customer_service", label: "خدمة العملاء", serviceKey: "service" as ServiceKey },
 ];
 
 const fallbackFields: CrmCustomerField[] = [
@@ -186,6 +194,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       departmentCode: value(lead.department_code) || departmentCodeFor(serviceKey),
       branchCode: value(lead.branch_code) || branchCodeFor(serviceKey),
       paymentType: value(lead.payment_type) || paymentTypeFor(serviceKey),
+      assignedTo: value(lead.assigned_to),
+      callCenterAssignedTo: value(lead.call_center_assigned_to),
       values: leadCoreValues(lead, serviceKey),
       customFields: Object.fromEntries(Object.entries(extra).map(([key, raw]) => [key, value(raw)])),
     });
@@ -267,12 +277,42 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     .filter((item) => item.department_code === department && item.is_active !== false)
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department]);
 
+  const editableBranches = useMemo(() => {
+    const branches = meta?.branches || [];
+    const departmentCode = form?.departmentCode || departmentCodeFor(department);
+    const userBranchCodes = new Set((meta?.users || [])
+      .filter((user) => user.department_codes.includes(departmentCode))
+      .flatMap((user) => user.branch_codes || []));
+    const currentBranch = form?.branchCode || "";
+    const matching = branches.filter((branch) => {
+      if (userBranchCodes.size) return userBranchCodes.has(branch.code) || branch.code === currentBranch;
+      if (department === "finance") return branch.code === "online" || branch.code === currentBranch;
+      if (department === "service") return branch.code === "customer_service" || branch.code === currentBranch;
+      return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
+    });
+    return matching.length ? matching : branches;
+  }, [meta?.branches, meta?.users, form?.departmentCode, form?.branchCode, department]);
+
+  const editableAgents = useMemo(() => {
+    const departmentCode = form?.departmentCode || departmentCodeFor(department);
+    const matching = (meta?.users || []).filter((user) => user.department_codes.includes(departmentCode));
+    const current = (meta?.users || []).find((user) => user.id === form?.assignedTo);
+    return current && !matching.some((user) => user.id === current.id) ? [current, ...matching] : matching;
+  }, [meta?.users, form?.departmentCode, form?.assignedTo, department]);
+
+  const editableCallCenterUsers = useMemo(() => {
+    const matching = (meta?.users || []).filter((user) => user.department_codes.includes("call_center"));
+    const current = (meta?.users || []).find((user) => user.id === form?.callCenterAssignedTo);
+    return current && !matching.some((user) => user.id === current.id) ? [current, ...matching] : matching;
+  }, [meta?.users, form?.callCenterAssignedTo]);
+
   const configuredFields = useMemo(() => {
     const source = meta?.customerFields?.length ? meta.customerFields : fallbackFields;
     return source.filter((field) => field.is_active !== false && (!field.department_keys?.length || field.department_keys.includes(department)))
+      .filter((field) => showConversation || !["status_label", "department_code", "department_transfer"].includes(field.field_key))
       .filter((field) => field.field_key !== "follow_up_at" || isPostponed(form?.values.status_label))
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-  }, [meta?.customerFields, department, form?.values.status_label]);
+  }, [meta?.customerFields, department, form?.values.status_label, showConversation]);
 
   function renderTemplateInComposer(template: { content?: string | null } | undefined, sourceForm: CustomerForm | null = form) {
     if (!template?.content || !sourceForm) return "";
@@ -398,12 +438,53 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     };
   }
 
+  function changeDatabaseDepartment(nextDepartmentCode: string) {
+    setForm((current) => {
+      if (!current) return current;
+      const option = databaseDepartmentOptions.find((item) => item.value === nextDepartmentCode) || databaseDepartmentOptions[0];
+      const nextServiceKey = option.serviceKey;
+      const nextStatuses = (meta?.statuses || [])
+        .filter((item) => item.department_code === nextServiceKey && item.is_active !== false)
+        .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+      const statusStillValid = nextStatuses.some((item) => item.value === current.values.status_label);
+      const departmentUsers = (meta?.users || []).filter((user) => user.department_codes.includes(nextDepartmentCode));
+      const allowedBranchCodes = new Set(departmentUsers.flatMap((user) => user.branch_codes || []));
+      const candidateBranches = (meta?.branches || []).filter((branch) => {
+        if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code);
+        if (nextServiceKey === "finance") return branch.code === "online";
+        if (nextServiceKey === "service") return branch.code === "customer_service";
+        return !["online", "customer_service"].includes(branch.code);
+      });
+      const currentBranchIsValid = candidateBranches.some((branch) => branch.code === current.branchCode);
+      const nextBranchCode = currentBranchIsValid
+        ? current.branchCode
+        : branchCodeFor(nextServiceKey) || candidateBranches[0]?.code || "";
+      const currentAgentIsValid = departmentUsers.some((user) => user.id === current.assignedTo);
+      return {
+        ...current,
+        serviceKey: nextServiceKey,
+        departmentCode: nextDepartmentCode,
+        branchCode: nextBranchCode,
+        paymentType: paymentTypeFor(nextServiceKey),
+        assignedTo: currentAgentIsValid ? current.assignedTo : "",
+        values: {
+          ...current.values,
+          department_code: nextDepartmentCode,
+          status_label: statusStillValid ? current.values.status_label : (nextStatuses.find((item) => item.value === "عميل جديد")?.value || nextStatuses[0]?.value || "عميل جديد"),
+          follow_up_at: statusStillValid && isPostponed(current.values.status_label) ? current.values.follow_up_at : "",
+          finance_type: nextServiceKey === "finance" ? (current.values.finance_type || "general") : current.values.finance_type,
+        },
+      };
+    });
+  }
+
   async function saveLead() {
     setSaving(true);
     setNotice("");
     try {
       const payload = {
         id: activeForm.id,
+        databaseEdit: !showConversation,
         customerName: activeForm.values.customer_name,
         phone: activeForm.values.phone,
         sourceCode: activeForm.values.source_code,
@@ -412,6 +493,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         branchCode: activeForm.branchCode,
         statusLabel: activeForm.values.status_label,
         paymentType: activeForm.paymentType,
+        assignedTo: activeForm.assignedTo || null,
+        callCenterAssignedTo: activeForm.callCenterAssignedTo || null,
         followUpAt: activeForm.values.follow_up_at || null,
         age: activeForm.values.age,
         salary: activeForm.values.salary,
@@ -628,6 +711,19 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
           <section className="crm-drawer-details crm-customer-details-panel">
             <header className="crm-customer-details-title"><h3>بيانات العميل</h3><span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span></header>
+            {!showConversation ? (
+              <section className="crm-database-edit-routing" aria-label="تعديل بيانات توزيع العميل">
+                <header><div><strong>بيانات التوزيع والحالة</strong><span>الحفظ يحدّث نفس العميل الحالي ولا ينشئ عميلاً جديدًا.</span></div></header>
+                <div className="crm-database-edit-routing-grid">
+                  <label><span>القسم</span><select value={activeForm.departmentCode} onChange={(event) => changeDatabaseDepartment(event.target.value)}>{databaseDepartmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+                  <label><span>الفرع</span><select value={activeForm.branchCode} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="">بدون فرع</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
+                  <label><span>الدفع</span><select value={activeForm.paymentType} onChange={(event) => setForm((current) => current ? { ...current, paymentType: event.target.value } : current)}><option value="كاش">كاش</option><option value="تمويل">تمويل</option><option value="خدمة عملاء">خدمة عملاء</option></select></label>
+                  <label><span>الحالة</span><select value={activeForm.values.status_label} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, status_label: event.target.value, follow_up_at: isPostponed(event.target.value) ? current.values.follow_up_at : "" } } : current)}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
+                  <label><span>المسؤول</span><select value={activeForm.assignedTo} onChange={(event) => setForm((current) => current ? { ...current, assignedTo: event.target.value } : current)}><option value="">غير موزع</option>{editableAgents.map((user) => <option key={user.id} value={user.id}>{user.full_name}{user.branches.length ? ` - ${user.branches.join("، ")}` : ""}</option>)}</select></label>
+                  <label><span>الكول سنتر</span><select value={activeForm.callCenterAssignedTo} onChange={(event) => setForm((current) => current ? { ...current, callCenterAssignedTo: event.target.value } : current)}><option value="">بدون كول سنتر</option>{editableCallCenterUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
+                </div>
+              </section>
+            ) : null}
             <div className="crm-form-grid">
               {configuredFields.map(renderField)}
               {activeForm.values.status_label === "تم البيع" && (department === "cash" || department === "finance") ? (

@@ -2994,6 +2994,59 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   border: 1px solid var(--line);
 }
 .dashboard-approvals-table td { vertical-align: middle; }
+.dashboard-approval-vehicle-button {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  padding: 8px 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.dashboard-approval-vehicle-button:hover,
+.dashboard-approval-vehicle-button:focus-visible {
+  border-color: #d8b4a5;
+  background: #fff7f2;
+  box-shadow: 0 7px 18px rgba(91,48,36,.08);
+  outline: none;
+  transform: translateY(-1px);
+}
+.dashboard-approval-vehicle-button .operations-cell-stack { min-width: 0; }
+.dashboard-approval-open-hint {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #dfc2b6;
+  border-radius: 999px;
+  background: #fff;
+  color: #884632;
+  font-size: 9px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+.dashboard-approval-vehicle-button.vin {
+  direction: ltr;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+}
+.dashboard-approval-vehicle-button.vin strong { color: #4c2a21; font-size: 11px; }
+.dashboard-approval-vehicle-button.vin span { color: #965844; font-size: 9px; font-weight: 900; }
+.dashboard-approvals-table tbody tr:focus-within td { background: #fffaf7; }
+
 
 .operations-import-panel { align-content: start; }
 .operations-import-title { padding-bottom: 14px; border-bottom: 1px solid #eee9e6; margin-bottom: 14px; }
@@ -3062,6 +3115,15 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-edit-customer-grid { grid-template-columns:1fr; direction:rtl; overflow:auto; }
 .crm-edit-customer-grid .crm-customer-details-panel { min-width:0; }
 .crm-edit-customer-workspace .crm-customer-workspace-head { position:sticky; top:0; z-index:2; }
+.crm-database-edit-routing { margin:0 0 16px; padding:15px; border:1px solid #e7cfc3; border-radius:17px; background:linear-gradient(145deg,#fffaf7,#fff); box-shadow:0 12px 28px rgba(81,44,34,.045); }
+.crm-database-edit-routing > header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; padding-bottom:11px; border-bottom:1px dashed #ead8cf; }
+.crm-database-edit-routing > header strong { display:block; color:#523129; font-size:14px; }
+.crm-database-edit-routing > header span { display:block; margin-top:4px; color:#8b7168; font-size:10px; font-weight:700; }
+.crm-database-edit-routing-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:11px; }
+.crm-database-edit-routing-grid label { display:grid; gap:6px; }
+.crm-database-edit-routing-grid label > span { color:#6f5148; font-size:10px; font-weight:900; }
+.crm-database-edit-routing-grid select { width:100%; min-height:44px; border:1px solid #dfc7bb; border-radius:11px; background:#fff; padding:0 11px; color:#4f3029; outline:none; font-weight:800; }
+.crm-database-edit-routing-grid select:focus { border-color:#b76146; box-shadow:0 0 0 3px rgba(183,97,70,.11); }
 
 .crm-unclassified-head { align-items:center; }
 .crm-unclassified-summary,.crm-contacts-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
@@ -3216,6 +3278,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .crm-contact-profile-status,.crm-contact-detail-grid,.crm-contact-identities { grid-template-columns:1fr; }
   .crm-edit-customer-backdrop { padding:0; }
   .crm-edit-customer-workspace { width:100vw; height:100vh; border-radius:0; }
+  .crm-database-edit-routing-grid { grid-template-columns:1fr; }
 }
 
 .crm-contact-custom-data {
@@ -5307,7 +5370,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .dashboard-approvals-modal .dashboard-approvals-results { min-height:0; grid-template-rows:auto minmax(0,1fr); }
 .dashboard-approvals-modal .operations-resizable-table-shell { min-height:0; }
 .dashboard-approvals-modal .operations-resizable-table-shell .operations-table-scroll { max-height:none; height:calc(100vh - 292px); }
-.dashboard-approvals-table { width:max(100%,2100px); }
+.dashboard-approvals-table { width:max(100%,1880px); }
 .dashboard-approvals-table th,.dashboard-approvals-table td { white-space:normal; vertical-align:top; line-height:1.55; overflow-wrap:anywhere; }
 .dashboard-approval-cell { display:grid; justify-items:start; gap:4px; }
 .dashboard-approval-cell small,.dashboard-approval-cell time { color:var(--muted); font-size:9px; }

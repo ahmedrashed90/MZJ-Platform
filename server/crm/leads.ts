@@ -215,6 +215,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
 async function update(request: VercelRequest, response: VercelResponse, user: any) {
   const sql = getSql();
   const body = parseBody(request);
+  const databaseEdit = body.databaseEdit === true || clean(body.updateMode ?? body.update_mode) === "database";
   const id = clean(body.id || request.query.id);
   if (!id) return response.status(400).json({ ok: false, error: "رقم العميل مطلوب" });
 
@@ -250,10 +251,12 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   }
 
   const departmentChanged = clean(before.department_code) !== input.departmentCode;
-  if (departmentChanged) {
+  if (departmentChanged && !databaseEdit) {
     input.statusLabel = "عميل جديد";
     input.statusCode = "";
     input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+  } else if (databaseEdit && clean(before.status_label) !== input.statusLabel) {
+    input.statusCode = "";
   }
 
   if (input.phone && !input.phoneNormalized) {
@@ -285,7 +288,68 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   let callCenterAssignedTo = clean(before.call_center_assigned_to) || null;
   let callCenterName = clean(before.call_center_name || before.call_center_name_snapshot);
 
-  if (departmentChanged) {
+  const assignedFieldProvided = Object.prototype.hasOwnProperty.call(body, "assignedTo") || Object.prototype.hasOwnProperty.call(body, "assigned_to");
+  const callCenterFieldProvided = Object.prototype.hasOwnProperty.call(body, "callCenterAssignedTo") || Object.prototype.hasOwnProperty.call(body, "call_center_assigned_to");
+
+  if (databaseEdit && assignedFieldProvided) {
+    assignedTo = clean(body.assignedTo ?? body.assigned_to) || null;
+    if (!assignedTo) {
+      assignedName = "";
+    } else if (assignedTo === clean(before.assigned_to)) {
+      assignedName = clean(before.assigned_name || before.responsible_name_snapshot);
+    } else {
+      const [assignee] = await sql<any[]>`
+        select u.id::text,u.full_name
+        from core.users u
+        where u.id=${assignedTo}::uuid and u.is_active=true
+          and (
+            exists (
+              select 1 from core.user_system_departments usd
+              join core.departments d on d.id=usd.department_id and d.is_active=true
+              where usd.user_id=u.id and usd.system_code='crm' and d.code=${input.departmentCode}
+            )
+            or exists (
+              select 1 from core.user_departments ud
+              join core.departments d on d.id=ud.department_id and d.is_active=true
+              where ud.user_id=u.id and d.code=${input.departmentCode}
+            )
+          )
+      `;
+      if (!assignee) return response.status(400).json({ ok: false, error: "المسؤول المختار غير تابع للقسم المحدد" });
+      assignedName = clean(assignee.full_name);
+    }
+  }
+
+  if (databaseEdit && callCenterFieldProvided) {
+    callCenterAssignedTo = clean(body.callCenterAssignedTo ?? body.call_center_assigned_to) || null;
+    if (!callCenterAssignedTo) {
+      callCenterName = "";
+    } else if (callCenterAssignedTo === clean(before.call_center_assigned_to)) {
+      callCenterName = clean(before.call_center_name || before.call_center_name_snapshot);
+    } else {
+      const [callCenterUser] = await sql<any[]>`
+        select u.id::text,u.full_name
+        from core.users u
+        where u.id=${callCenterAssignedTo}::uuid and u.is_active=true
+          and (
+            exists (
+              select 1 from core.user_system_departments usd
+              join core.departments d on d.id=usd.department_id and d.is_active=true
+              where usd.user_id=u.id and usd.system_code='crm' and d.code='call_center'
+            )
+            or exists (
+              select 1 from core.user_departments ud
+              join core.departments d on d.id=ud.department_id and d.is_active=true
+              where ud.user_id=u.id and d.code='call_center'
+            )
+          )
+      `;
+      if (!callCenterUser) return response.status(400).json({ ok: false, error: "موظف الكول سنتر المختار غير صالح" });
+      callCenterName = clean(callCenterUser.full_name);
+    }
+  }
+
+  if (departmentChanged && !databaseEdit) {
     const assignment = await chooseAssignment(input.serviceKey, input.branchCode, input.sourceCode);
     input.branchCode = assignment.branchCode || branchForDepartment(input.serviceKey);
     assignedTo = assignment.assignedTo;
@@ -311,6 +375,8 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
   const statusChanged = clean(before.status_label) !== input.statusLabel;
   const branchChanged = clean(before.branch_code) !== input.branchCode;
+  const assignedChanged = clean(before.assigned_to) !== clean(assignedTo);
+  const callCenterChanged = clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
 
   const [row] = await sql<any[]>`
     update crm.leads set
@@ -355,14 +421,14 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   `;
 
   let lifecycleResult: any = null;
-  if (statusChanged || departmentChanged || branchChanged) {
+  if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {
     const [event] = await sql<{ id: number }[]>`
       insert into crm.lead_events(
         lead_id,event_type,old_status,new_status,old_department,new_department,
         old_branch,new_branch,actor_id,actor_name,actor_role,note,details
       ) values (
         ${id}::uuid,
-        ${departmentChanged || branchChanged ? "department_transfer" : "status_change"},
+        ${departmentChanged || branchChanged ? "department_transfer" : statusChanged ? "status_change" : "ownership_change"},
         ${before.status_label || null},${input.statusLabel || null},
         ${before.department_code || null},${input.departmentCode || null},
         ${before.branch_code || null},${input.branchCode || null},
@@ -381,7 +447,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       `;
     }
 
-    if (departmentChanged || branchChanged || clean(before.assigned_to) !== clean(assignedTo)) {
+    if (departmentChanged || branchChanged || assignedChanged) {
       await recordOwnershipEvent({
         contactId: before.contact_id || null,
         requestId: before.current_request_id || null,
@@ -416,9 +482,15 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   row.credit_qualified = credit.qualified;
   row.assigned_name = assignedName || null;
   row.call_center_name = callCenterName || null;
+  if (input.branchCode) {
+    const [branchInfo] = await sql<any[]>`select name from core.branches where code=${input.branchCode} limit 1`;
+    row.branch_name = branchInfo?.name || null;
+  } else {
+    row.branch_name = null;
+  }
 
   await audit(user, "lead_updated", "lead", id, row, before);
-  if (departmentChanged || branchChanged) await emitCrmLeadNotification(user, "transfer", row, before).catch((error) => console.error("CRM transfer notification failed", error));
+  if (departmentChanged || branchChanged || assignedChanged || callCenterChanged) await emitCrmLeadNotification(user, "transfer", row, before).catch((error) => console.error("CRM transfer notification failed", error));
   if (statusChanged) await emitCrmLeadNotification(user, "status", row, before).catch((error) => console.error("CRM status notification failed", error));
   return response.status(200).json({ ok: true, row, lifecycleResult });
 }
