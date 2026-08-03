@@ -6,7 +6,7 @@ import { getSql } from "./_db.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { attachLeadToContactAndOpenRequest } from "./_crm-lifecycle.js";
 import { calculateLeadCompletion, getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
-import { branchForDepartment, calculateCreditLimit, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, sourceLabel } from "./_crm-utils.js";
+import { branchForDepartment, calculateCreditLimit, chooseAssignment, clean, departmentCodeFromKey, sourceLabel } from "./_crm-utils.js";
 import { normalizePhone } from "./_phone-utils.js";
 
 const BACKUP_FORMAT = "mzj-platform-database-backup";
@@ -78,7 +78,7 @@ function parseImportedDate(value: string) {
 }
 
 function departmentWhere(department: DepartmentKey) {
-  if (department === "finance") return ["finance_sales", "call_center"];
+  if (department === "finance") return ["finance_sales"];
   if (department === "service") return ["customer_service"];
   return ["cash_sales", "wholesale", "wholesale_sales"];
 }
@@ -236,14 +236,7 @@ async function importCustomers(request: VercelRequest, response: VercelResponse,
         : await chooseAssignment(serviceKey, branchCode, sourceCode);
       branchCode = assignment.branchCode || branchCode || defaultBranch;
 
-      const callCenterText = rowValue(sourceRow, ["الكول سنتر", "مندوب الكول سنتر", "call center"]);
-      const callCenterUser = userMap.get(normalizedText(callCenterText));
-      const callCenterUserAllowed = Boolean(callCenterUser?.department_codes?.includes("call_center"));
-      const callCenter = serviceKey === "finance"
-        ? callCenterUser && callCenterUserAllowed
-          ? { assignedTo: callCenterUser.id, assignedName: callCenterUser.full_name }
-          : await chooseCallCenterAssignment(sourceCode, branchCode || "online")
-        : { assignedTo: null, assignedName: "" };
+      const callCenter = { assignedTo: null, assignedName: "" };
 
       const importedStatus = rowValue(sourceRow, ["الحالة", "حالة العميل", "status"]);
       const normalizedImportedStatus = serviceKey === "service" && normalizedText(importedStatus) === normalizedText("تم البيع") ? "تم الانتهاء" : importedStatus;

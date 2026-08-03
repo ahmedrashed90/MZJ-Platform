@@ -23,10 +23,28 @@ type Notice = { tone: "success" | "error" | "warning"; text: string } | null;
 const RESET_PHRASE = "مسح كل البيانات التجريبية";
 const IMPORT_BATCH_SIZE = 200;
 const RESTORE_CHUNK_SIZE = 850 * 1024;
+const CUSTOMER_EXPORT_COLUMNS = [
+  "رقم داخلي",
+  "اسم العميل",
+  "رقم الجوال",
+  "القسم",
+  "الفرع",
+  "المصدر",
+  "اسم السيارة",
+  "الفئة",
+  "الحالة",
+  "نوع البيع",
+  "المندوب",
+  "عدد المباع",
+  "ملاحظات",
+  "ملاحظات الحالة",
+  "تاريخ التسجيل",
+  "آخر تحديث",
+];
 
 const departments: DepartmentDefinition[] = [
   { key: "cash", label: "عملاء الكاش", sheetName: "عملاء الكاش", description: "مبيعات الكاش وفروعها فقط" },
-  { key: "finance", label: "عملاء التمويل", sheetName: "عملاء التمويل", description: "مبيعات التمويل والكول سنتر" },
+  { key: "finance", label: "عملاء التمويل", sheetName: "عملاء التمويل", description: "مبيعات التمويل فقط — بدون إسناد كول سنتر" },
   { key: "service", label: "خدمة العملاء", sheetName: "خدمة العملاء", description: "طلبات وعملاء خدمة العملاء فقط" },
 ];
 
@@ -83,6 +101,7 @@ export function DataManagementPanel() {
     "الحالة تُطابق حالات القسم المسجلة، وأي حالة غير معروفة تبدأ كعميل جديد بدون إدخال حالة غريبة.",
     "أسماء الأعمدة العربية والإنجليزية الشائعة مدعومة، ويُحفظ الصف الأصلي للرجوع إليه.",
     "اسم المندوب والفرع والمصدر يُطابق الموجود في النظام، وإلا يطبق التوزيع المعتمد.",
+    "استيراد عملاء التمويل لا يعيّن أي مندوب كول سنتر، حتى لو كان العمود موجودًا في ملف قديم.",
   ], []);
 
   async function exportDepartment(department: DepartmentDefinition) {
@@ -92,7 +111,7 @@ export function DataManagementPanel() {
       const response = await fetch(`/api/data-management?action=export_customers&department=${department.key}`, { credentials: "include", cache: "no-store" });
       const payload = await responseJson(response);
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
-      downloadXlsx(`MZJ-${department.sheetName}-${new Date().toISOString().slice(0, 10)}.xlsx`, rows, department.sheetName);
+      downloadXlsx(`MZJ-${department.sheetName}-${new Date().toISOString().slice(0, 10)}.xlsx`, rows, department.sheetName, CUSTOMER_EXPORT_COLUMNS);
       setNotice({ tone: "success", text: `تم تجهيز ملف ${department.label} ويحتوي على ${rows.length.toLocaleString("ar-SA")} عميل.` });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "تعذر تصدير العملاء" });
