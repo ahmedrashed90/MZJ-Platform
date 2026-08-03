@@ -819,7 +819,7 @@ async function deleteVehicle(sql: ReturnType<typeof getSql>, body: Record<string
     const [vehicle] = await tx<any[]>`
       select v.*,v.id::text,l.branch_code,l.code as location_code
       from operations.vehicles v left join operations.locations l on l.id=v.location_id
-      where v.id=${id}::uuid and v.is_deleted=false for update
+      where v.id=${id}::uuid and v.is_deleted=false for update of v
     `;
     if (!vehicle) throw new OperationError(404, "VEHICLE_NOT_FOUND", "السيارة غير موجودة");
     assertBranchAccess(user, vehicle.branch_code, vehicle.location_code, "لا تملك صلاحية مسح سيارة في هذا الفرع");

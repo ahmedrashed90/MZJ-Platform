@@ -1,3 +1,18 @@
+# بيان التسليم — إصلاح خطأ قفل حذف السيارة في العمليات
+
+- المصدر المباشر: `MZJ-Platform-v1.19.4-operations-tablet-agency-default-ok-CLEAN.zip`.
+- إصلاح خطأ PostgreSQL: `FOR UPDATE cannot be applied to the nullable side of an outer join`.
+- السبب كان استعلام حذف السيارة يقفل نتيجة `LEFT JOIN` كاملة بدل صف السيارة الأساسي.
+- تم تقييد القفل إلى جدول السيارة فقط باستخدام `FOR UPDATE OF v` داخل الاستعلام الأصلي.
+- لا تغيير في منطق الحذف أو الصلاحيات أو بيانات السيارات أو قاعدة البيانات.
+- لا يوجد SQL يدوي أو Migration مطلوبة.
+- تم الحفاظ على تنسيق التابلت والافتراضي «صح» لتشييك الوكالة دون تغيير.
+- فحوص العمليات والحذف وتركيب TypeScript: ناجحة.
+
+راجع `docs/OPERATIONS-DELETE-VEHICLE-LOCK-FIX-AR.md` و`test-results/OPERATIONS-DELETE-VEHICLE-LOCK-FIX.txt`.
+
+---
+
 # بيان التسليم — ضبط الحركة على التابلت والافتراضي لتشييك الوكالة
 
 - المصدر المباشر: `MZJ-Platform-v1.19.4-operations-agency-check-ui-refinement-CLEAN.zip`.
