@@ -20,11 +20,10 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
     if (method === "GET") return req("crm.database.view", "crm", "database", "list");
     if (method === "POST") return req("crm.customer.create", "crm", "manual_leads", "create");
     if (method === "DELETE") return req("crm.customer.delete", "crm", "database", "delete");
-    const fields = payload.patch && typeof payload.patch === "object" ? Object.keys(payload.patch) : Object.keys(payload);
-    if (fields.some((field) => ["assignedTo", "assigned_to", "responsibleId"].includes(field))) return req("crm.customer.owner.change", "crm", "database", "owner_change");
-    if (fields.some((field) => ["callCenterAssignedTo", "call_center_assigned_to"].includes(field))) return req("crm.customer.call_center.change", "crm", "database", "call_center_change");
-    if (fields.some((field) => ["status", "statusLabel", "status_label"].includes(field))) return req("crm.customer.status.update", "crm", "database", "status_update");
-    return req("crm.customer.update", "crm", "database", "update");
+    // Updates can contain more than one independently-authorized change (for example status + note).
+    // The gateway verifies access to the customer, then the CRM handler checks every changed field
+    // against its exact permission after comparing the request with the stored row.
+    return req("crm.customer.view", "crm", "database", "update");
   }
   if (route === "crm/history") return req("crm.finance_history.view", "crm", "finance_history", "view");
   if (route === "crm/contacts") return method === "DELETE" ? req("crm.contacts.purge", "crm", "contacts", "purge") : req("crm.contacts.view", "crm", "contacts", "view");

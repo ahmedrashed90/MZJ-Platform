@@ -4,6 +4,7 @@ import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
+import { requirePermissionForUser } from "../_access-control.js";
 
 
 function soldQuantity(value: unknown) {
@@ -25,6 +26,42 @@ function riyadhNoteTimestamp(date = new Date()) {
   }).formatToParts(date);
   const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
   return `${part("day")}/${part("month")}/${part("year")} ${part("hour")}:${part("minute")}`;
+}
+
+function hasOwnField(body: Record<string, any>, aliases: string[]) {
+  return aliases.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+}
+
+function providedValue(body: Record<string, any>, aliases: string[]) {
+  for (const field of aliases) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) return body[field];
+  }
+  return undefined;
+}
+
+function comparableDate(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
+}
+
+function comparableNumber(value: unknown) {
+  if (value == null || value === "") return "";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? String(parsed) : clean(value);
+}
+
+function changedText(body: Record<string, any>, aliases: string[], previous: unknown, normalizer: (value: unknown) => string = clean) {
+  return hasOwnField(body, aliases) && normalizer(providedValue(body, aliases)) !== normalizer(previous);
+}
+
+function changedNumber(body: Record<string, any>, aliases: string[], previous: unknown) {
+  return hasOwnField(body, aliases) && comparableNumber(providedValue(body, aliases)) !== comparableNumber(previous);
+}
+
+function changedDate(body: Record<string, any>, aliases: string[], previous: unknown) {
+  return hasOwnField(body, aliases) && comparableDate(providedValue(body, aliases)) !== comparableDate(previous);
 }
 
 function leadPayload(body: Record<string, any>) {
@@ -239,9 +276,10 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
 
   const input = leadPayload({ ...before, ...body });
   const customerFields = await getCustomerFieldDefinitions();
+  const customFieldPatch = sanitizeCustomFieldValues(body.customFields ?? body.extraData ?? body.extra_data ?? {}, customerFields);
   input.extraData = {
     ...((before.extra_data && typeof before.extra_data === "object") ? before.extra_data : {}),
-    ...sanitizeCustomFieldValues(body.customFields ?? body.extraData ?? body.extra_data ?? {}, customerFields),
+    ...customFieldPatch,
   };
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
   const newNote = clean(body.newNote ?? body.new_note);
@@ -257,6 +295,62 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
   } else if (databaseEdit && clean(before.status_label) !== input.statusLabel) {
     input.statusCode = "";
+  }
+
+  const previousServiceKey = departmentKey(before.service_key || before.department_code || before.payment_type);
+  const previousDepartmentCode = clean(before.department_code) || departmentCodeFromKey(previousServiceKey);
+  const previousBranchCode = clean(before.branch_code) || branchForDepartment(previousServiceKey);
+  const previousStatusLabel = clean(before.status_label) || "عميل جديد";
+  const previousPaymentType = clean(before.payment_type) || (previousServiceKey === "finance" ? "تمويل" : previousServiceKey === "service" ? "خدمة عملاء" : "كاش");
+  const previousFinanceType = clean(before.finance_type) || (previousServiceKey === "finance" ? "general" : "");
+  const previousSoldQuantity = previousStatusLabel === "تم البيع" ? (before.sold_quantity || 1) : before.sold_quantity;
+  const assignedFieldProvided = hasOwnField(body, ["assignedTo", "assigned_to", "responsibleId"]);
+  const callCenterFieldProvided = hasOwnField(body, ["callCenterAssignedTo", "call_center_assigned_to"]);
+  const ownerChangeRequested = databaseEdit
+    && assignedFieldProvided
+    && clean(providedValue(body, ["assignedTo", "assigned_to", "responsibleId"])) !== clean(before.assigned_to);
+  const callCenterChangeRequested = databaseEdit
+    && callCenterFieldProvided
+    && clean(providedValue(body, ["callCenterAssignedTo", "call_center_assigned_to"])) !== clean(before.call_center_assigned_to);
+  const statusChangeRequested = changedText(body, ["status", "statusLabel", "status_label"], previousStatusLabel)
+    || changedDate(body, ["followUpAt", "follow_up_at"], before.follow_up_at)
+    || changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
+  const noteAdditionRequested = Boolean(newNote);
+  const previousExtraData = before.extra_data && typeof before.extra_data === "object" ? before.extra_data : {};
+  const customFieldsChanged = Object.entries(customFieldPatch).some(([key, next]) => clean(next) !== clean(previousExtraData[key]));
+  const generalDataChangeRequested = customFieldsChanged || [
+    changedText(body, ["customerName", "customer_name", "name", "fullName", "full_name"], before.customer_name),
+    changedText(body, ["phone", "mobile", "phone_number", "phoneNumber"], before.phone_normalized, normalizePhone),
+    changedText(body, ["sourceCode", "source_code", "source"], before.source_code),
+    changedText(body, ["serviceKey", "service_key"], previousServiceKey, departmentKey),
+    changedText(body, ["departmentCode", "department_code"], previousDepartmentCode),
+    changedText(body, ["branchCode", "branch_code"], previousBranchCode),
+    changedText(body, ["paymentType", "payment_type"], previousPaymentType),
+    changedText(body, ["platformCode", "platform_code", "platform"], before.platform_code),
+    changedText(body, ["carName", "car_name", "car"], before.car_name),
+    changedText(body, ["carCategory", "car_category", "vehicleCategory", "vehicle_category", "carTrim", "trim", "variant", "grade"], before.car_category),
+    changedText(body, ["location", "place"], before.location),
+    changedNumber(body, ["age"], before.age),
+    changedNumber(body, ["salary"], before.salary),
+    changedNumber(body, ["obligation"], before.obligation),
+    changedText(body, ["salaryBank", "salary_bank", "bank"], before.salary_bank),
+    changedText(body, ["carModel", "car_model", "model"], before.car_model),
+    changedText(body, ["carType", "car_type"], before.car_type || before.car_name),
+    changedText(body, ["color"], before.color),
+    changedText(body, ["financeType", "finance_type"], previousFinanceType),
+  ].some(Boolean);
+
+  const permissionChecks: Array<[boolean, string, string]> = [
+    [generalDataChangeRequested, "crm.customer.update", "update"],
+    [statusChangeRequested, "crm.customer.status.update", "status_update"],
+    [noteAdditionRequested, "crm.customer.note.add", "note_add"],
+    [ownerChangeRequested, "crm.customer.owner.change", "owner_change"],
+    [callCenterChangeRequested, "crm.customer.call_center.change", "call_center_change"],
+  ];
+  for (const [required, permissionCode, action] of permissionChecks) {
+    if (!required) continue;
+    const allowed = await requirePermissionForUser(request, response, user, permissionCode, { systemCode: "crm", pageCode: "database", action });
+    if (!allowed) return;
   }
 
   if (input.phone && !input.phoneNormalized) {
@@ -287,9 +381,6 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   let assignedName = clean(before.assigned_name || before.responsible_name_snapshot);
   let callCenterAssignedTo = clean(before.call_center_assigned_to) || null;
   let callCenterName = clean(before.call_center_name || before.call_center_name_snapshot);
-
-  const assignedFieldProvided = Object.prototype.hasOwnProperty.call(body, "assignedTo") || Object.prototype.hasOwnProperty.call(body, "assigned_to");
-  const callCenterFieldProvided = Object.prototype.hasOwnProperty.call(body, "callCenterAssignedTo") || Object.prototype.hasOwnProperty.call(body, "call_center_assigned_to");
 
   if (databaseEdit && assignedFieldProvided) {
     assignedTo = clean(body.assignedTo ?? body.assigned_to) || null;

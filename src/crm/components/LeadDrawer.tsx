@@ -81,6 +81,25 @@ function value(input: unknown) {
   return input == null ? "" : String(input);
 }
 
+function comparableValue(input: unknown) {
+  return input == null ? "" : String(input).trim();
+}
+
+function comparableDate(input: unknown) {
+  const raw = comparableValue(input);
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
+}
+
+function addChangedField(payload: Record<string, unknown>, key: string, next: unknown, previous: unknown) {
+  if (comparableValue(next) !== comparableValue(previous)) payload[key] = next;
+}
+
+function addChangedDateField(payload: Record<string, unknown>, key: string, next: unknown, previous: unknown) {
+  if (comparableDate(next) !== comparableDate(previous)) payload[key] = next || null;
+}
+
 function isOutboundMessage(message: CrmMessage) {
   const senderType = String(message.sender_type || "").trim().toLowerCase();
   const providerStatus = String(message.provider_status || "").trim().toLowerCase();
@@ -482,35 +501,56 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setSaving(true);
     setNotice("");
     try {
-      const payload = {
-        id: activeForm.id,
-        databaseEdit: !showConversation,
-        customerName: activeForm.values.customer_name,
-        phone: activeForm.values.phone,
-        sourceCode: activeForm.values.source_code,
-        serviceKey: activeForm.serviceKey,
-        departmentCode: activeForm.departmentCode,
-        branchCode: activeForm.branchCode,
-        statusLabel: activeForm.values.status_label,
-        paymentType: activeForm.paymentType,
-        assignedTo: activeForm.assignedTo || null,
-        callCenterAssignedTo: activeForm.callCenterAssignedTo || null,
-        followUpAt: activeForm.values.follow_up_at || null,
-        age: activeForm.values.age,
-        salary: activeForm.values.salary,
-        obligation: activeForm.values.obligation,
-        salaryBank: activeForm.values.salary_bank,
-        location: activeForm.values.location,
-        carType: activeForm.values.car_type,
-        carCategory: activeForm.values.car_category,
-        carName: activeForm.values.car_type,
-        carModel: activeForm.values.car_model,
-        color: activeForm.values.color,
-        financeType: activeForm.values.finance_type,
-        soldQuantity: activeForm.values.status_label === "تم البيع" ? Math.max(1, Math.floor(Number(activeForm.values.sold_quantity || 1))) : undefined,
-        newNote: noteDraft.trim(),
-        customFields: activeForm.customFields,
-      };
+      const originalServiceKey = departmentKeyFromCode(lead.department_code || lead.service_key) as ServiceKey;
+      const originalValues = leadCoreValues(lead, originalServiceKey);
+      const originalDepartmentCode = value(lead.department_code) || departmentCodeFor(originalServiceKey);
+      const originalBranchCode = value(lead.branch_code) || branchCodeFor(originalServiceKey);
+      const originalPaymentType = value(lead.payment_type) || paymentTypeFor(originalServiceKey);
+      const payload: Record<string, unknown> = { id: activeForm.id };
+      if (!showConversation) payload.databaseEdit = true;
+
+      addChangedField(payload, "customerName", activeForm.values.customer_name, originalValues.customer_name);
+      addChangedField(payload, "phone", activeForm.values.phone, originalValues.phone);
+      addChangedField(payload, "sourceCode", activeForm.values.source_code, originalValues.source_code);
+      addChangedField(payload, "serviceKey", activeForm.serviceKey, originalServiceKey);
+      addChangedField(payload, "departmentCode", activeForm.departmentCode, originalDepartmentCode);
+      addChangedField(payload, "branchCode", activeForm.branchCode, originalBranchCode);
+      addChangedField(payload, "statusLabel", activeForm.values.status_label, originalValues.status_label);
+      addChangedField(payload, "paymentType", activeForm.paymentType, originalPaymentType);
+      addChangedDateField(payload, "followUpAt", activeForm.values.follow_up_at, originalValues.follow_up_at);
+      addChangedField(payload, "age", activeForm.values.age, originalValues.age);
+      addChangedField(payload, "salary", activeForm.values.salary, originalValues.salary);
+      addChangedField(payload, "obligation", activeForm.values.obligation, originalValues.obligation);
+      addChangedField(payload, "salaryBank", activeForm.values.salary_bank, originalValues.salary_bank);
+      addChangedField(payload, "location", activeForm.values.location, originalValues.location);
+      addChangedField(payload, "carType", activeForm.values.car_type, originalValues.car_type);
+      addChangedField(payload, "carCategory", activeForm.values.car_category, originalValues.car_category);
+      addChangedField(payload, "carModel", activeForm.values.car_model, originalValues.car_model);
+      addChangedField(payload, "color", activeForm.values.color, originalValues.color);
+      addChangedField(payload, "financeType", activeForm.values.finance_type, originalValues.finance_type);
+
+      if (!showConversation) {
+        addChangedField(payload, "assignedTo", activeForm.assignedTo || null, value(lead.assigned_to) || null);
+        addChangedField(payload, "callCenterAssignedTo", activeForm.callCenterAssignedTo || null, value(lead.call_center_assigned_to) || null);
+      }
+
+      if (activeForm.values.status_label === "تم البيع") {
+        addChangedField(payload, "soldQuantity", Math.max(1, Math.floor(Number(activeForm.values.sold_quantity || 1))), originalValues.sold_quantity || "1");
+      }
+
+      const originalCustomFields = lead.extra_data && typeof lead.extra_data === "object" ? lead.extra_data : {};
+      const customFields = Object.fromEntries(
+        Object.entries(activeForm.customFields).filter(([key, next]) => comparableValue(next) !== comparableValue(originalCustomFields[key])),
+      );
+      if (Object.keys(customFields).length) payload.customFields = customFields;
+      if (noteDraft.trim()) payload.newNote = noteDraft.trim();
+
+      const changedKeys = Object.keys(payload).filter((key) => !["id", "databaseEdit"].includes(key));
+      if (!changedKeys.length) {
+        setNotice("لا توجد تغييرات لحفظها");
+        return;
+      }
+
       const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
       setForm((current) => current ? { ...current, values: { ...current.values, notes: value(result.row.notes) } } : current);
       setNoteDraft("");
