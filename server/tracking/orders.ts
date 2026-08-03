@@ -3,6 +3,7 @@ import { getSql } from "../_db.js";
 import { requireTrackingUser } from "../_tracking-auth.js";
 import { hasPermission } from "../_access-control.js";
 import { trackingAccessScope } from "../_tracking-access.js";
+import { getTrackingCountSummary } from "../_tracking-counts.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { tryArchiveVehicleForTrackingRecord } from "../_operations-auto-archive.js";
@@ -147,23 +148,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by o.updated_at desc
       limit ${limit}
     `;
-    const [counts] = await sql<any[]>`
-      select
-        count(*) filter (where coalesce(is_archived,false)=false)::int as total,
-        count(*) filter (where coalesce(is_archived,false)=false and status='not_started')::int as not_started,
-        count(*) filter (where coalesce(is_archived,false)=false and status='in_progress')::int as in_progress,
-        count(*) filter (where coalesce(is_archived,false)=false and status='completed')::int as completed,
-        count(*) filter (where coalesce(is_archived,false)=true)::int as archived
-      from tracking.orders o where coalesce(is_deleted,false)=false
-        and (
-          ${scope.unrestricted}=true
-          or (${scope.assignedOnly}=true and o.assigned_to=${user.id}::uuid)
-          or (${scope.workflowAssignedOnly}=true and exists(select 1 from tracking.stage_events se where se.order_id=o.id and se.actor_id=${user.id}::uuid))
-          or (${scope.branchScoped}=true and o.branch in ${sql(branches)})
-        )
-        and (${from || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) >= ${from || null}::date)
-        and (${to || null}::date is null or coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) <= ${to || null}::date)
-    `;
+    const countSummary = await getTrackingCountSummary(sql, user, { from, to });
+    const counts = {
+      total: countSummary.total,
+      not_started: countSummary.notStarted,
+      in_progress: countSummary.inProgress,
+      completed: countSummary.completed,
+      archived: countSummary.archived,
+    };
     return response.status(200).json({ ok: true, orders, counts });
   }
 

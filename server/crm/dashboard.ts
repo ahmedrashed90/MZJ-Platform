@@ -17,6 +17,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const department = departmentKey(request.query.department || "cash");
   const q = clean(request.query.q);
   const branch = clean(request.query.branch);
+  const agent = clean(request.query.agent);
   const status = clean(request.query.status);
   const requestedFrom = clean(request.query.from);
   const requestedTo = clean(request.query.to);
@@ -88,6 +89,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (${from || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
       and (${to || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
+      and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})
     order by coalesce(greatest(l.last_message_at,c.last_message_at), l.updated_at, l.created_at) desc

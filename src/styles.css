@@ -325,7 +325,8 @@ button.small-metric { cursor: pointer; }
   justify-content: space-between;
   gap: 10px;
 }
-.operation-card-head h3 { margin: 0; font-size: 14px; }
+.operation-card-head h3 { min-width: 0; margin: 0; font-size: 14px; }
+.dashboard-operation-widget .operation-card-has-badge .operation-card-head { padding-left: 52px; }
 .operation-badge { min-width: 30px; height: 30px; padding-inline: 8px; border: 1px solid var(--line-strong); background: #fff; border-radius: 999px; display: grid; place-items: center; font-size: 11px; font-weight: 800; }
 .operation-card-body { flex: 1; display: flex; flex-direction: column; padding: 13px; }
 .operation-metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -966,7 +967,7 @@ button.small-metric { cursor: pointer; }
 .crm-dashboard-summary-grid small,.crm-dashboard-summary-grid strong { display: block; }
 .crm-dashboard-summary-grid small { color: var(--muted); font-size: 10px; }
 .crm-dashboard-summary-grid strong { margin-top: 4px; font-size: 24px; }
-.crm-dashboard-toolbar { grid-template-columns: minmax(300px,1fr) 210px auto; align-items: center; }
+.crm-dashboard-toolbar { grid-template-columns: minmax(300px,1fr) 190px 190px auto; align-items: center; }
 .crm-dashboard-toolbar select { min-height: 42px; border: 1px solid var(--line); border-radius: 11px; padding: 0 11px; background: #fff; color: var(--ink); }
 .crm-dashboard-page .crm-board { padding-bottom: 11px; }
 .crm-dashboard-page .crm-status-column { min-width: 282px; }
@@ -1103,7 +1104,7 @@ button.small-metric { cursor: pointer; }
 }
 @media (max-width: 1050px) {
   .crm-dashboard-summary-grid,.crm-report-summary-eight { grid-template-columns: repeat(2,1fr); }
-  .crm-dashboard-toolbar { grid-template-columns: 1fr 180px; }
+  .crm-dashboard-toolbar { grid-template-columns: 1fr repeat(2,180px); }
   .crm-dashboard-toolbar .crm-toolbar-summary { grid-column: 1/-1; }
   .crm-customer-workspace { overflow-y: auto; }
   .crm-customer-workspace-grid { grid-template-columns: 1fr; direction: rtl; overflow: visible; }

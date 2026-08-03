@@ -359,7 +359,7 @@ function OperationCard({
 }) {
   return (
     <section
-      className={`operation-card operation-card-clickable ${className}`}
+      className={`operation-card operation-card-clickable ${badge !== undefined ? "operation-card-has-badge" : ""} ${className}`}
       role="button"
       tabIndex={0}
       aria-label={`عرض ${title}`}
@@ -549,8 +549,7 @@ export function DashboardPage() {
     const requestId = ++detailsRequestId.current;
     setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
     try {
-      const baseFilters = { limit: 2000, from: appliedRange.from, to: appliedRange.to };
-      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ ...baseFilters, status, archived: false })}`);
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ limit: 2000, status, archived: false })}`);
       if (detailsRequestId.current !== requestId) return;
       const trackingOrders = [...(payload.orders || [])].sort((left, right) => new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime());
       setDetails({ title, subtitle: "اضغط على أي طلب لفتح تفاصيله داخل الداش بورد", trackingOrders });
@@ -860,7 +859,7 @@ export function DashboardPage() {
               ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
             </div>
           </section>)}
-            {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
+            {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" badge={operations?.inventory.actualTotal ?? null} className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />

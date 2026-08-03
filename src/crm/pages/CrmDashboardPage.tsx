@@ -111,6 +111,7 @@ export function CrmDashboardPage() {
   const [department, setDepartment] = useState(() => initialDepartment(requestedDepartment));
   const [q, setQ] = useState("");
   const [branch, setBranch] = useState("");
+  const [agent, setAgent] = useState("");
   const [statuses, setStatuses] = useState<CrmStatus[]>([]);
   const [leads, setLeads] = useState<CrmLead[]>([]);
   const [selected, setSelected] = useState<CrmLead | null>(null);
@@ -125,6 +126,7 @@ export function CrmDashboardPage() {
     if (!departments.some((item) => item.key === requestedDepartment) || requestedDepartment === department) return;
     setDepartment(requestedDepartment);
     setBranch("");
+    setAgent("");
     setSelected(null);
     setReportSummary(null);
     openedRequestedLead.current = "";
@@ -136,7 +138,7 @@ export function CrmDashboardPage() {
       void loadReportSummary();
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [department, q, branch]);
+  }, [department, q, branch, agent]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -146,7 +148,7 @@ export function CrmDashboardPage() {
       }
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [department, q, branch]);
+  }, [department, q, branch, agent]);
 
   useEffect(() => {
     if (!requestedLeadId || loading || openedRequestedLead.current === requestedLeadId) return;
@@ -172,7 +174,7 @@ export function CrmDashboardPage() {
     if (!silent) setError("");
     try {
       const result = await crmFetch<{ ok: boolean; statuses: CrmStatus[]; leads: CrmLead[] }>(
-        `/api/crm/dashboard${queryString({ department, q, branch })}`,
+        `/api/crm/dashboard${queryString({ department, q, branch, agent })}`,
       );
       setStatuses(result.statuses || []);
       setLeads(result.leads || []);
@@ -191,7 +193,7 @@ export function CrmDashboardPage() {
     }
     try {
       const result = await crmFetch<DashboardReportSummary>(
-        `/api/crm/reports${queryString({ department, q, branch, summaryOnly: 1 })}`,
+        `/api/crm/reports${queryString({ department, q, branch, agent, summaryOnly: 1 })}`,
       );
       setReportSummary(result);
     } catch (failure) {
@@ -208,6 +210,7 @@ export function CrmDashboardPage() {
   function selectDepartment(nextDepartment: string) {
     setDepartment(nextDepartment);
     setBranch("");
+    setAgent("");
     setSelected(null);
     setReportSummary(null);
     openedRequestedLead.current = "";
@@ -279,6 +282,19 @@ export function CrmDashboardPage() {
     return all.filter((item) => item.code !== "online" && item.code !== "customer_service");
   }, [meta, department]);
 
+  const visibleAgents = useMemo(() => {
+    const departmentCodes = department === "finance"
+      ? new Set(["finance_sales"])
+      : department === "service"
+        ? new Set(["customer_service"])
+        : new Set(["cash_sales", "wholesale", "wholesale_sales"]);
+    return (meta?.users || [])
+      .filter((item) => item.can_receive_leads !== false)
+      .filter((item) => item.department_codes.some((code) => departmentCodes.has(code)))
+      .filter((item) => !branch || item.branch_codes.includes(branch))
+      .sort((left, right) => left.full_name.localeCompare(right.full_name, "ar"));
+  }, [meta, department, branch]);
+
   return (
     <div className="crm-page crm-dashboard-page">
       <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => { void loadDashboard(); void loadReportSummary(); }}>
@@ -319,9 +335,13 @@ export function CrmDashboardPage() {
 
       <div className="crm-toolbar crm-dashboard-toolbar">
         <label className="crm-search-box"><MagnifyingGlass size={18} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="بحث باسم العميل أو رقم الجوال" /></label>
-        <select value={branch} onChange={(event) => setBranch(event.target.value)}>
+        <select value={branch} onChange={(event) => { setBranch(event.target.value); setAgent(""); }}>
           <option value="">كل الفروع</option>
           {visibleBranches.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}
+        </select>
+        <select value={agent} onChange={(event) => setAgent(event.target.value)}>
+          <option value="">كل المناديب</option>
+          {visibleAgents.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}
         </select>
         <div className="crm-toolbar-summary"><UsersThree size={19} /><strong>{leads.length.toLocaleString("ar-SA")}</strong><span>عميل ظاهر</span></div>
       </div>
@@ -356,7 +376,6 @@ export function CrmDashboardPage() {
                     </div>
                     <div className="crm-lead-card-grid compact">
                       <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
-                      {department === "finance" ? <span>الكول سنتر: <b>{lead.call_center_name || "غير موزع"}</b></span> : null}
                     </div>
                     <footer><span>{lead.car_name || lead.car_type || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
                   </button>
