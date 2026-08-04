@@ -4,6 +4,7 @@ import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
+import { requirePermissionForUser } from "../_access-control.js";
 
 
 function soldQuantity(value: unknown) {
@@ -25,6 +26,42 @@ function riyadhNoteTimestamp(date = new Date()) {
   }).formatToParts(date);
   const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
   return `${part("day")}/${part("month")}/${part("year")} ${part("hour")}:${part("minute")}`;
+}
+
+function hasOwnField(body: Record<string, any>, aliases: string[]) {
+  return aliases.some((field) => Object.prototype.hasOwnProperty.call(body, field));
+}
+
+function providedValue(body: Record<string, any>, aliases: string[]) {
+  for (const field of aliases) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) return body[field];
+  }
+  return undefined;
+}
+
+function comparableDate(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
+}
+
+function comparableNumber(value: unknown) {
+  if (value == null || value === "") return "";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? String(parsed) : clean(value);
+}
+
+function changedText(body: Record<string, any>, aliases: string[], previous: unknown, normalizer: (value: unknown) => string = clean) {
+  return hasOwnField(body, aliases) && normalizer(providedValue(body, aliases)) !== normalizer(previous);
+}
+
+function changedNumber(body: Record<string, any>, aliases: string[], previous: unknown) {
+  return hasOwnField(body, aliases) && comparableNumber(providedValue(body, aliases)) !== comparableNumber(previous);
+}
+
+function changedDate(body: Record<string, any>, aliases: string[], previous: unknown) {
+  return hasOwnField(body, aliases) && comparableDate(providedValue(body, aliases)) !== comparableDate(previous);
 }
 
 function leadPayload(body: Record<string, any>) {
@@ -66,6 +103,7 @@ function leadPayload(body: Record<string, any>) {
     assignedTo: clean(body.assignedTo ?? body.assigned_to) || null,
     callCenterAssignedTo: clean(body.callCenterAssignedTo ?? body.call_center_assigned_to) || null,
     soldQuantity: soldQuantity(body.soldQuantity ?? body.sold_quantity),
+    soldAt: clean(body.soldAt ?? body.sold_at) || null,
     extraData: body.customFields ?? body.extraData ?? body.extra_data ?? {},
   };
 }
@@ -165,6 +203,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   const customerFields = await getCustomerFieldDefinitions();
   input.extraData = sanitizeCustomFieldValues(input.extraData, customerFields);
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
+  if (input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
   if (!input.customerName) return response.status(400).json({ ok: false, error: "اسم العميل مطلوب" });
   if (!input.phoneNormalized) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
   const missingRequired = missingRequiredCustomerFields(input, customerFields);
@@ -188,14 +227,14 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
       car_name, car_category, location, age, salary, obligation, salary_bank, car_model, car_type, color,
       finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
       assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
-      responsible_name_snapshot, call_center_name_snapshot, sold_quantity, completion_percent, credit_limit, credit_qualified
+      responsible_name_snapshot, call_center_name_snapshot, sold_quantity, sold_at, completion_percent, credit_limit, credit_qualified
     ) values (
       ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
       ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
       ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
       ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
       ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
-      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${completionPercent}, ${credit.amount}, ${credit.qualified}
+      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${input.statusLabel === "تم البيع" ? (input.soldAt || new Date().toISOString()) : null}::timestamptz, ${completionPercent}, ${credit.amount}, ${credit.qualified}
     ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
   `;
   await sql`
@@ -215,6 +254,7 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
 async function update(request: VercelRequest, response: VercelResponse, user: any) {
   const sql = getSql();
   const body = parseBody(request);
+  const databaseEdit = body.databaseEdit === true || clean(body.updateMode ?? body.update_mode) === "database";
   const id = clean(body.id || request.query.id);
   if (!id) return response.status(400).json({ ok: false, error: "رقم العميل مطلوب" });
 
@@ -238,9 +278,10 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
 
   const input = leadPayload({ ...before, ...body });
   const customerFields = await getCustomerFieldDefinitions();
+  const customFieldPatch = sanitizeCustomFieldValues(body.customFields ?? body.extraData ?? body.extra_data ?? {}, customerFields);
   input.extraData = {
     ...((before.extra_data && typeof before.extra_data === "object") ? before.extra_data : {}),
-    ...sanitizeCustomFieldValues(body.customFields ?? body.extraData ?? body.extra_data ?? {}, customerFields),
+    ...customFieldPatch,
   };
   input.sourceName = await resolveSourceName(input.sourceCode, input.sourceName);
   const newNote = clean(body.newNote ?? body.new_note);
@@ -250,10 +291,77 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   }
 
   const departmentChanged = clean(before.department_code) !== input.departmentCode;
-  if (departmentChanged) {
+  if (departmentChanged && !databaseEdit) {
     input.statusLabel = "عميل جديد";
     input.statusCode = "";
     input.paymentType = input.serviceKey === "finance" ? "تمويل" : input.serviceKey === "service" ? "خدمة عملاء" : "كاش";
+  } else if (databaseEdit && clean(before.status_label) !== input.statusLabel) {
+    input.statusCode = "";
+  }
+
+  const previousServiceKey = departmentKey(before.service_key || before.department_code || before.payment_type);
+  const previousDepartmentCode = clean(before.department_code) || departmentCodeFromKey(previousServiceKey);
+  const previousBranchCode = clean(before.branch_code) || branchForDepartment(previousServiceKey);
+  const previousStatusLabel = clean(before.status_label) || "عميل جديد";
+  const previousPaymentType = clean(before.payment_type) || (previousServiceKey === "finance" ? "تمويل" : previousServiceKey === "service" ? "خدمة عملاء" : "كاش");
+  const previousFinanceType = clean(before.finance_type) || (previousServiceKey === "finance" ? "general" : "");
+  const previousSoldQuantity = previousStatusLabel === "تم البيع" ? (before.sold_quantity || 1) : before.sold_quantity;
+  const statusLabelChanged = previousStatusLabel !== input.statusLabel;
+  const soldAtFieldProvided = hasOwnField(body, ["soldAt", "sold_at"]);
+  const soldDateChangeRequested = databaseEdit && changedDate(body, ["soldAt", "sold_at"], before.sold_at);
+  if (soldAtFieldProvided && input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) {
+    return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
+  }
+  if (soldAtFieldProvided && input.soldAt && input.statusLabel !== "تم البيع") {
+    return response.status(400).json({ ok: false, error: "يمكن تحديد تاريخ تم البيع للعملاء بحالة تم البيع فقط" });
+  }
+  const assignedFieldProvided = hasOwnField(body, ["assignedTo", "assigned_to", "responsibleId"]);
+  const callCenterFieldProvided = hasOwnField(body, ["callCenterAssignedTo", "call_center_assigned_to"]);
+  const ownerChangeRequested = databaseEdit
+    && assignedFieldProvided
+    && clean(providedValue(body, ["assignedTo", "assigned_to", "responsibleId"])) !== clean(before.assigned_to);
+  const callCenterChangeRequested = databaseEdit
+    && callCenterFieldProvided
+    && clean(providedValue(body, ["callCenterAssignedTo", "call_center_assigned_to"])) !== clean(before.call_center_assigned_to);
+  const statusChangeRequested = changedText(body, ["status", "statusLabel", "status_label"], previousStatusLabel)
+    || changedDate(body, ["followUpAt", "follow_up_at"], before.follow_up_at)
+    || changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
+  const noteAdditionRequested = Boolean(newNote);
+  const previousExtraData = before.extra_data && typeof before.extra_data === "object" ? before.extra_data : {};
+  const customFieldsChanged = Object.entries(customFieldPatch).some(([key, next]) => clean(next) !== clean(previousExtraData[key]));
+  const generalDataChangeRequested = soldDateChangeRequested || customFieldsChanged || [
+    changedText(body, ["customerName", "customer_name", "name", "fullName", "full_name"], before.customer_name),
+    changedText(body, ["phone", "mobile", "phone_number", "phoneNumber"], before.phone_normalized, normalizePhone),
+    changedText(body, ["sourceCode", "source_code", "source"], before.source_code),
+    changedText(body, ["serviceKey", "service_key"], previousServiceKey, departmentKey),
+    changedText(body, ["departmentCode", "department_code"], previousDepartmentCode),
+    changedText(body, ["branchCode", "branch_code"], previousBranchCode),
+    changedText(body, ["paymentType", "payment_type"], previousPaymentType),
+    changedText(body, ["platformCode", "platform_code", "platform"], before.platform_code),
+    changedText(body, ["carName", "car_name", "car"], before.car_name),
+    changedText(body, ["carCategory", "car_category", "vehicleCategory", "vehicle_category", "carTrim", "trim", "variant", "grade"], before.car_category),
+    changedText(body, ["location", "place"], before.location),
+    changedNumber(body, ["age"], before.age),
+    changedNumber(body, ["salary"], before.salary),
+    changedNumber(body, ["obligation"], before.obligation),
+    changedText(body, ["salaryBank", "salary_bank", "bank"], before.salary_bank),
+    changedText(body, ["carModel", "car_model", "model"], before.car_model),
+    changedText(body, ["carType", "car_type"], before.car_type || before.car_name),
+    changedText(body, ["color"], before.color),
+    changedText(body, ["financeType", "finance_type"], previousFinanceType),
+  ].some(Boolean);
+
+  const permissionChecks: Array<[boolean, string, string]> = [
+    [generalDataChangeRequested, "crm.customer.update", "update"],
+    [statusChangeRequested, "crm.customer.status.update", "status_update"],
+    [noteAdditionRequested, "crm.customer.note.add", "note_add"],
+    [ownerChangeRequested, "crm.customer.owner.change", "owner_change"],
+    [callCenterChangeRequested, "crm.customer.call_center.change", "call_center_change"],
+  ];
+  for (const [required, permissionCode, action] of permissionChecks) {
+    if (!required) continue;
+    const allowed = await requirePermissionForUser(request, response, user, permissionCode, { systemCode: "crm", pageCode: "database", action });
+    if (!allowed) return;
   }
 
   if (input.phone && !input.phoneNormalized) {
@@ -285,7 +393,65 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   let callCenterAssignedTo = clean(before.call_center_assigned_to) || null;
   let callCenterName = clean(before.call_center_name || before.call_center_name_snapshot);
 
-  if (departmentChanged) {
+  if (databaseEdit && assignedFieldProvided) {
+    assignedTo = clean(body.assignedTo ?? body.assigned_to) || null;
+    if (!assignedTo) {
+      assignedName = "";
+    } else if (assignedTo === clean(before.assigned_to)) {
+      assignedName = clean(before.assigned_name || before.responsible_name_snapshot);
+    } else {
+      const [assignee] = await sql<any[]>`
+        select u.id::text,u.full_name
+        from core.users u
+        where u.id=${assignedTo}::uuid and u.is_active=true
+          and (
+            exists (
+              select 1 from core.user_system_departments usd
+              join core.departments d on d.id=usd.department_id and d.is_active=true
+              where usd.user_id=u.id and usd.system_code='crm' and d.code=${input.departmentCode}
+            )
+            or exists (
+              select 1 from core.user_departments ud
+              join core.departments d on d.id=ud.department_id and d.is_active=true
+              where ud.user_id=u.id and d.code=${input.departmentCode}
+            )
+          )
+      `;
+      if (!assignee) return response.status(400).json({ ok: false, error: "المسؤول المختار غير تابع للقسم المحدد" });
+      assignedName = clean(assignee.full_name);
+    }
+  }
+
+  if (databaseEdit && callCenterFieldProvided) {
+    callCenterAssignedTo = clean(body.callCenterAssignedTo ?? body.call_center_assigned_to) || null;
+    if (!callCenterAssignedTo) {
+      callCenterName = "";
+    } else if (callCenterAssignedTo === clean(before.call_center_assigned_to)) {
+      callCenterName = clean(before.call_center_name || before.call_center_name_snapshot);
+    } else {
+      const [callCenterUser] = await sql<any[]>`
+        select u.id::text,u.full_name
+        from core.users u
+        where u.id=${callCenterAssignedTo}::uuid and u.is_active=true
+          and (
+            exists (
+              select 1 from core.user_system_departments usd
+              join core.departments d on d.id=usd.department_id and d.is_active=true
+              where usd.user_id=u.id and usd.system_code='crm' and d.code='call_center'
+            )
+            or exists (
+              select 1 from core.user_departments ud
+              join core.departments d on d.id=ud.department_id and d.is_active=true
+              where ud.user_id=u.id and d.code='call_center'
+            )
+          )
+      `;
+      if (!callCenterUser) return response.status(400).json({ ok: false, error: "موظف الكول سنتر المختار غير صالح" });
+      callCenterName = clean(callCenterUser.full_name);
+    }
+  }
+
+  if (departmentChanged && !databaseEdit) {
     const assignment = await chooseAssignment(input.serviceKey, input.branchCode, input.sourceCode);
     input.branchCode = assignment.branchCode || branchForDepartment(input.serviceKey);
     assignedTo = assignment.assignedTo;
@@ -309,8 +475,13 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
 
   const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
-  const statusChanged = clean(before.status_label) !== input.statusLabel;
+  const statusChanged = statusLabelChanged;
+  let nextSoldAt = clean(before.sold_at) || null;
+  if (databaseEdit && soldAtFieldProvided) nextSoldAt = input.soldAt || null;
+  if (statusChanged && input.statusLabel === "تم البيع" && !soldAtFieldProvided) nextSoldAt = new Date().toISOString();
   const branchChanged = clean(before.branch_code) !== input.branchCode;
+  const assignedChanged = clean(before.assigned_to) !== clean(assignedTo);
+  const callCenterChanged = clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
 
   const [row] = await sql<any[]>`
     update crm.leads set
@@ -348,6 +519,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       responsible_name_snapshot=${assignedName || null},
       call_center_name_snapshot=${callCenterName || null},
       sold_quantity=${input.soldQuantity},
+      sold_at=${nextSoldAt}::timestamptz,
       updated_by=${user.id}::uuid,
       updated_at=now()
     where id=${id}::uuid
@@ -355,14 +527,14 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   `;
 
   let lifecycleResult: any = null;
-  if (statusChanged || departmentChanged || branchChanged) {
+  if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {
     const [event] = await sql<{ id: number }[]>`
       insert into crm.lead_events(
         lead_id,event_type,old_status,new_status,old_department,new_department,
         old_branch,new_branch,actor_id,actor_name,actor_role,note,details
       ) values (
         ${id}::uuid,
-        ${departmentChanged || branchChanged ? "department_transfer" : "status_change"},
+        ${departmentChanged || branchChanged ? "department_transfer" : statusChanged ? "status_change" : "ownership_change"},
         ${before.status_label || null},${input.statusLabel || null},
         ${before.department_code || null},${input.departmentCode || null},
         ${before.branch_code || null},${input.branchCode || null},
@@ -381,7 +553,7 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
       `;
     }
 
-    if (departmentChanged || branchChanged || clean(before.assigned_to) !== clean(assignedTo)) {
+    if (departmentChanged || branchChanged || assignedChanged) {
       await recordOwnershipEvent({
         contactId: before.contact_id || null,
         requestId: before.current_request_id || null,
@@ -416,9 +588,15 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   row.credit_qualified = credit.qualified;
   row.assigned_name = assignedName || null;
   row.call_center_name = callCenterName || null;
+  if (input.branchCode) {
+    const [branchInfo] = await sql<any[]>`select name from core.branches where code=${input.branchCode} limit 1`;
+    row.branch_name = branchInfo?.name || null;
+  } else {
+    row.branch_name = null;
+  }
 
   await audit(user, "lead_updated", "lead", id, row, before);
-  if (departmentChanged || branchChanged) await emitCrmLeadNotification(user, "transfer", row, before).catch((error) => console.error("CRM transfer notification failed", error));
+  if (departmentChanged || branchChanged || assignedChanged || callCenterChanged) await emitCrmLeadNotification(user, "transfer", row, before).catch((error) => console.error("CRM transfer notification failed", error));
   if (statusChanged) await emitCrmLeadNotification(user, "status", row, before).catch((error) => console.error("CRM status notification failed", error));
   return response.status(200).json({ ok: true, row, lifecycleResult });
 }

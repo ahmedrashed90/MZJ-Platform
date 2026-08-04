@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { VehicleRow } from "../types";
 import { displayOperationsStateNote } from "../stateNote";
 
@@ -12,7 +12,7 @@ type Column = {
   render: (row: VehicleRow, onOpen: (id: string, tab?: "details" | "checks") => void) => React.ReactNode;
 };
 
-const STORAGE_KEY = "mzj.operations.vehicleTable.columnWidths.v1";
+const STORAGE_KEY = "mzj.operations.vehicleTable.columnWidths.v2";
 
 
 function trackingProgressTone(value?: number | null) {
@@ -42,25 +42,25 @@ function checkSummary(row: VehicleRow) {
 }
 
 const columns: Column[] = [
-  { key: "vin", label: "الهيكل (VIN)", width: 190, min: 135, max: 360, value: (row) => row.vin, render: (row, onOpen) => <button type="button" className="operations-vin-link" onClick={() => onOpen(row.id)}>{row.vin}</button> },
-  { key: "car", label: "السيارة", width: 150, min: 110, max: 300, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
-  { key: "statement", label: "البيان", width: 150, min: 110, max: 320, value: (row) => row.statement, render: (row) => row.statement || "—" },
-  { key: "agent", label: "الوكيل", width: 125, min: 95, max: 240, value: (row) => row.agent_name, render: (row) => row.agent_name || "—" },
-  { key: "interior", label: "اللون الداخلي", width: 125, min: 95, max: 220, value: (row) => row.interior_color, render: (row) => row.interior_color || "—" },
-  { key: "exterior", label: "اللون الخارجي", width: 125, min: 95, max: 220, value: (row) => row.exterior_color, render: (row) => row.exterior_color || "—" },
-  { key: "model", label: "موديل", width: 95, min: 80, max: 170, value: (row) => row.model_year, render: (row) => row.model_year || "—" },
-  { key: "plate", label: "اللوحة", width: 110, min: 90, max: 200, value: (row) => row.plate_no, render: (row) => row.plate_no || "—" },
-  { key: "batch", label: "اسم الدفعة بالتاريخ", width: 155, min: 125, max: 290, value: (row) => row.batch_no, render: (row) => row.batch_no || "—" },
-  { key: "location", label: "المكان", width: 115, min: 90, max: 220, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
-  { key: "notes", label: "ملاحظات في السيارة", width: 175, min: 125, max: 420, value: (row) => row.notes, render: (row) => <span title={row.notes || ""}>{row.notes || "—"}</span> },
-  { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 205, min: 150, max: 460, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
-  { key: "status", label: "الحالة", width: 145, min: 115, max: 260, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
-  { key: "reservedAdmin", label: "الإداري", width: 155, min: 115, max: 280, value: (row) => row.status_code === "reserved" ? row.reserved_by_name || row.reserved_by_email : "", render: (row) => { const admin = row.status_code === "reserved" ? row.reserved_by_name || row.reserved_by_email : ""; return <span title={row.status_code === "reserved" ? row.reserved_by_email || admin || "" : ""}>{admin || "—"}</span>; } },
-  { key: "stateNote", label: "ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)", width: 260, min: 190, max: 520, value: (row) => displayOperationsStateNote(row), render: (row) => { const note = displayOperationsStateNote(row); return <span title={note}>{row.status_code === "has_notes" || note ? note || "—" : "—"}</span>; } },
-  { key: "checks", label: "التشييك", width: 115, min: 95, max: 170, value: () => "عرض", render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link operations-check-view-button" title={summary.details.join("\n")} onClick={() => onOpen(row.id, "checks")}>عرض</button>; } },
-  { key: "financialApproval", label: "الموافقة المالية", width: 145, min: 120, max: 220, value: (row) => row.financial_approved ? "نعم" : "لا", render: (row) => <span className={row.financial_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "نعم ✓" : "لا —"}</span> },
-  { key: "administrativeApproval", label: "الموافقة الادارية", width: 155, min: 125, max: 230, value: (row) => row.administrative_approved ? "نعم" : "لا", render: (row) => <span className={row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.administrative_approved ? "نعم ✓" : "لا —"}</span> },
-  { key: "tracking", label: "Tracking", width: 150, min: 130, max: 220, value: (row) => row.tracking_order_no, render: (row) => {
+  { key: "vin", label: "الهيكل (VIN)", width: 155, min: 125, max: 320, value: (row) => row.vin, render: (row, onOpen) => <button type="button" className="operations-vin-link" onClick={() => onOpen(row.id)}>{row.vin}</button> },
+  { key: "car", label: "السيارة", width: 120, min: 95, max: 260, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
+  { key: "statement", label: "البيان", width: 130, min: 100, max: 300, value: (row) => row.statement, render: (row) => row.statement || "—" },
+  { key: "agent", label: "الوكيل", width: 105, min: 85, max: 220, value: (row) => row.agent_name, render: (row) => row.agent_name || "—" },
+  { key: "interior", label: "اللون الداخلي", width: 105, min: 85, max: 200, value: (row) => row.interior_color, render: (row) => row.interior_color || "—" },
+  { key: "exterior", label: "اللون الخارجي", width: 105, min: 85, max: 200, value: (row) => row.exterior_color, render: (row) => row.exterior_color || "—" },
+  { key: "model", label: "موديل", width: 80, min: 70, max: 150, value: (row) => row.model_year, render: (row) => row.model_year || "—" },
+  { key: "plate", label: "اللوحة", width: 90, min: 78, max: 180, value: (row) => row.plate_no, render: (row) => row.plate_no || "—" },
+  { key: "batch", label: "اسم الدفعة بالتاريخ", width: 125, min: 105, max: 270, value: (row) => row.batch_no, render: (row) => row.batch_no || "—" },
+  { key: "location", label: "المكان", width: 95, min: 82, max: 200, value: (row) => row.location_name, render: (row) => row.location_name || "—" },
+  { key: "notes", label: "ملاحظات في السيارة", width: 145, min: 115, max: 380, value: (row) => row.notes, render: (row) => <span title={row.notes || ""}>{row.notes || "—"}</span> },
+  { key: "shortage", label: "حجز - نواقص - تحديد مكان", width: 175, min: 135, max: 420, value: (row) => row.shortage_note, render: (row) => <span title={row.shortage_note || ""}>{row.shortage_note || "—"}</span> },
+  { key: "status", label: "الحالة", width: 125, min: 105, max: 240, value: (row) => row.status_name || row.status_code, render: (row) => <span className={`operations-status status-${row.status_code}`}>{row.status_name || row.status_code}</span> },
+  { key: "reservedAdmin", label: "الإداري", width: 125, min: 105, max: 260, value: (row) => row.status_code === "reserved" ? row.reserved_by_name || row.reserved_by_email : "", render: (row) => { const admin = row.status_code === "reserved" ? row.reserved_by_name || row.reserved_by_email : ""; return <span title={row.status_code === "reserved" ? row.reserved_by_email || admin || "" : ""}>{admin || "—"}</span>; } },
+  { key: "stateNote", label: "ملاحظات السيارات (تُفتح عند الحالة: بها ملاحظات)", width: 200, min: 165, max: 480, value: (row) => displayOperationsStateNote(row), render: (row) => { const note = displayOperationsStateNote(row); return <span title={note}>{row.status_code === "has_notes" || note ? note || "—" : "—"}</span>; } },
+  { key: "checks", label: "التشييك", width: 90, min: 78, max: 150, value: () => "عرض", render: (row, onOpen) => { const summary = checkSummary(row); return <button type="button" className="operations-inline-link operations-check-view-button" title={summary.details.join("\n")} onClick={() => onOpen(row.id, "checks")}>عرض</button>; } },
+  { key: "financialApproval", label: "الموافقة المالية", width: 115, min: 100, max: 200, value: (row) => row.financial_approved ? "نعم" : "لا", render: (row) => <span className={row.financial_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.financial_approved ? "نعم ✓" : "لا —"}</span> },
+  { key: "administrativeApproval", label: "الموافقة الادارية", width: 125, min: 105, max: 210, value: (row) => row.administrative_approved ? "نعم" : "لا", render: (row) => <span className={row.administrative_approved ? "operations-ok-badge" : "operations-warn-badge"}>{row.administrative_approved ? "نعم ✓" : "لا —"}</span> },
+  { key: "tracking", label: "Tracking", width: 135, min: 118, max: 210, value: (row) => row.tracking_order_no, render: (row) => {
     const progress = Math.max(0, Math.min(100, Number(row.tracking_progress || 0)));
     return row.tracking_order_id ? (
       <button type="button" className={`operations-tracking-open ${trackingProgressTone(progress)}`} onClick={() => window.location.assign(`/tracking?order=${encodeURIComponent(row.tracking_order_id || "")}`)} title={`فتح طلب ${row.tracking_order_no || "التراكينج"}`}>
@@ -82,7 +82,12 @@ function initialWidths() {
 
 export function VehicleTable({ rows, onOpen, emptyText = "لا توجد سيارات مطابقة" }: { rows: VehicleRow[]; onOpen: (id: string, tab?: "details" | "checks") => void; emptyText?: string }) {
   const [widths, setWidths] = useState<Record<string, number>>(initialWidths);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const tableWidth = useMemo(() => columns.reduce((sum, column) => sum + (widths[column.key] || column.width), 0), [widths]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  }, [rows]);
 
   function save(next: Record<string, number>) {
     setWidths(next);
@@ -127,8 +132,8 @@ export function VehicleTable({ rows, onOpen, emptyText = "لا توجد سيار
   return (
     <div className="operations-table-shell">
       <div className="operations-table-tools"><span>اسحب حد العمود لتغيير العرض، واضغط مرتين للضبط التلقائي.</span><button type="button" onClick={resetWidths}>إعادة ضبط الأعمدة</button></div>
-      <div className="operations-table-scroll">
-        <table className="operations-table" style={{ width: `${Math.max(1250, tableWidth)}px`, minWidth: "100%" }}>
+      <div ref={scrollRef} className="operations-table-scroll" dir="rtl">
+        <table className="operations-table operations-vehicle-table" style={{ width: `${Math.max(1180, tableWidth)}px`, minWidth: "100%" }}>
           <colgroup>{columns.map((column) => <col key={column.key} style={{ width: `${widths[column.key] || column.width}px` }} />)}</colgroup>
           <thead><tr>{columns.map((column) => <th key={column.key} style={{ width: widths[column.key] || column.width }}><span>{column.label}</span><span className="operations-column-resizer" role="separator" aria-orientation="vertical" aria-label={`اسحب لتغيير عرض عمود ${column.label}`} title="اسحب يمينًا أو يسارًا لتغيير العرض — ضغطتان للضبط التلقائي" onPointerDown={(event) => beginResize(event, column)} onDoubleClick={() => autoFit(column)} /></th>)}</tr></thead>
           <tbody>

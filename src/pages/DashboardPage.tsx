@@ -40,8 +40,9 @@ import { useNavigate } from "react-router-dom";
 import { useEscapeToClose } from "../components/useEscapeToClose";
 import { crmFetch, formatDate } from "../crm/api";
 import type { CrmLead } from "../crm/types";
-import { formatTrackingDate, trackingFetch, trackingQuery } from "../tracking/api";
-import type { TrackingOrderRow, TrackingStatus } from "../tracking/types";
+import { formatTrackingDate, trackingFetch, trackingQuery, trackingStatusLabel, trackingBranchLabel } from "../tracking/api";
+import type { TrackingOrderDetail, TrackingOrderRow, TrackingStatus } from "../tracking/types";
+import { DashboardTrackingOrderModal } from "../tracking/components/DashboardTrackingOrderModal";
 import type { DashboardData, NullableNumber } from "../types";
 import { DashboardOperationsModal, type DashboardOperationsSelection } from "../operations/components/DashboardOperationsModal";
 import { useAuth } from "../auth/AuthContext";
@@ -130,13 +131,40 @@ function sameStringArray(left: string[], right: string[]) {
 
 function DashboardUnifiedGrid({ order, children }: { order: string[]; children: React.ReactNode }) {
   const positions = new Map(order.map((id, index) => [id, index]));
+  const mainWidgetIds = new Set<string>(DEFAULT_MAIN_WIDGET_ORDER);
+  const operationWidgetIds = new Set<string>(OPERATION_DASHBOARD_WIDGET_IDS);
   const sortedChildren = Children.toArray(children).sort((left, right) => {
     if (!isValidElement(left) || !isValidElement(right)) return 0;
     const leftId = String((left.props as Record<string, unknown>)["data-widget-id"] || "");
     const rightId = String((right.props as Record<string, unknown>)["data-widget-id"] || "");
     return (positions.get(leftId) ?? Number.MAX_SAFE_INTEGER) - (positions.get(rightId) ?? Number.MAX_SAFE_INTEGER);
   });
-  return <section className="dashboard-unified-widget-grid">{sortedChildren}</section>;
+  const organizedChildren: React.ReactNode[] = [];
+  let mainDividerAdded = false;
+  let operationsDividerAdded = false;
+  for (const child of sortedChildren) {
+    const widgetId = isValidElement(child) ? String((child.props as Record<string, unknown>)["data-widget-id"] || "") : "";
+    if (!mainDividerAdded && mainWidgetIds.has(widgetId)) {
+      mainDividerAdded = true;
+      organizedChildren.push(
+        <div className="dashboard-section-divider dashboard-main-divider" key="dashboard-main-divider">
+          <div><span>مؤشرات المنصة</span><h2>CRM والتسويق وملخص الإدارات</h2></div>
+          <p>العملاء والمحادثات والمبيعات موزعة في مجموعة واضحة ومستقلة.</p>
+        </div>,
+      );
+    }
+    if (!operationsDividerAdded && operationWidgetIds.has(widgetId)) {
+      operationsDividerAdded = true;
+      organizedChildren.push(
+        <div className="dashboard-section-divider dashboard-operations-divider" key="dashboard-operations-divider">
+          <div><span>مؤشرات نظام العمليات</span><h2>المخزون والموافقات وتتبع إجراءات البيع</h2></div>
+          <p>كل كروت العمليات مجمعة بفاصل واضح لتسهيل المتابعة والتنفيذ.</p>
+        </div>,
+      );
+    }
+    organizedChildren.push(child);
+  }
+  return <section className="dashboard-unified-widget-grid">{organizedChildren}</section>;
 }
 
 function valueText(value: NullableNumber) {
@@ -162,7 +190,7 @@ type DetailPayload = {
   error?: string;
 };
 
-function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayload | null; onClose: () => void; onLeadOpen: (item: DashboardLeadItem) => void }) {
+function DetailsDrawer({ details, onClose, onLeadOpen, onTrackingOpen }: { details: DetailPayload | null; onClose: () => void; onLeadOpen: (item: DashboardLeadItem) => void; onTrackingOpen: (order: TrackingOrderRow) => void }) {
   useEscapeToClose(Boolean(details), onClose);
   if (!details) return null;
 
@@ -201,16 +229,30 @@ function DetailsDrawer({ details, onClose, onLeadOpen }: { details: DetailPayloa
           {details.trackingOrders ? (
             <div className="drawer-tracking-table-wrap">
               <table className="drawer-tracking-table">
-                <thead><tr><th>رقم الطلب</th><th>العميل</th><th>الفرع</th><th>التقدم</th><th>آخر تحديث</th></tr></thead>
+                <thead><tr><th>رقم الطلب</th><th>العميل</th><th>الفرع</th><th>الحالة</th><th>التقدم</th><th>آخر تحديث</th></tr></thead>
                 <tbody>
                   {details.trackingOrders.map((order) => {
                     const total = Number(order.total_stages || 0);
                     const percent = total > 0 ? Math.round((Number(order.completed_stages || 0) / total) * 100) : 0;
                     return (
-                      <tr key={order.id}>
-                        <td><strong>{order.sales_order_no || "—"}</strong></td>
+                      <tr
+                        key={order.id}
+                        className="tracking-order-clickable"
+                        role="button"
+                        tabIndex={0}
+                        title="فتح طلب التتبع"
+                        onClick={() => onTrackingOpen(order)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onTrackingOpen(order);
+                          }
+                        }}
+                      >
+                        <td><strong>{order.sales_order_no || "—"}</strong><small>اضغط لفتح الطلب</small></td>
                         <td>{order.customer_name || "—"}</td>
-                        <td>{order.branch || "—"}</td>
+                        <td>{trackingBranchLabel(order.branch)}</td>
+                        <td><span className="drawer-tracking-status">{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</span></td>
                         <td><div className="drawer-tracking-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
                         <td>{formatTrackingDate(order.updated_at)}</td>
                       </tr>
@@ -275,7 +317,7 @@ function DepartmentCard({
   onOpen: () => void;
 }) {
   return (
-    <button className="department-card" type="button" onClick={onOpen}>
+    <button className={`department-card metrics-${metrics.length}`} type="button" onClick={onOpen}>
       <div className="department-card-head">
         <div className="department-icon"><Icon size={20} weight="duotone" /></div>
         <strong>{title}</strong>
@@ -293,8 +335,9 @@ function DepartmentCard({
 }
 
 function OperationMetric({ label, value, onOpen }: { label: string; value: NullableNumber; onOpen: () => void }) {
+  const isActualTotal = label === "الإجمالي الفعلي";
   return (
-    <button type="button" className="operation-metric" onClick={onOpen}>
+    <button type="button" className={`operation-metric${isActualTotal ? " is-actual-total" : ""}`} onClick={onOpen}>
       <span>{label}</span>
       <Value value={value} />
     </button>
@@ -316,7 +359,7 @@ function OperationCard({
 }) {
   return (
     <section
-      className={`operation-card operation-card-clickable ${className}`}
+      className={`operation-card operation-card-clickable ${badge !== undefined ? "operation-card-has-badge" : ""} ${className}`}
       role="button"
       tabIndex={0}
       aria-label={`عرض ${title}`}
@@ -400,6 +443,10 @@ export function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [operationsSelection, setOperationsSelection] = useState<DashboardOperationsSelection | null>(null);
+  const [trackingTarget, setTrackingTarget] = useState<TrackingOrderRow | null>(null);
+  const [trackingOrderDetail, setTrackingOrderDetail] = useState<TrackingOrderDetail | null>(null);
+  const [trackingDetailLoading, setTrackingDetailLoading] = useState(false);
+  const [trackingDetailError, setTrackingDetailError] = useState("");
   const [loading, setLoading] = useState(true);
   const [appliedRange, setAppliedRange] = useState(defaultDashboardRange);
   const [draftRange, setDraftRange] = useState(defaultDashboardRange);
@@ -409,6 +456,7 @@ export function DashboardPage() {
   const [draggedWidget, setDraggedWidget] = useState<string | null>(null);
   const [dashboardCustomizeOpen, setDashboardCustomizeOpen] = useState(false);
   const detailsRequestId = useRef(0);
+  const trackingDetailRequestId = useRef(0);
   const layoutMutationRef = useRef(0);
   const layoutSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   useEscapeToClose(dateOpen, () => setDateOpen(false));
@@ -499,16 +547,44 @@ export function DashboardPage() {
 
   async function openTrackingList(title: string, status: TrackingStatus) {
     const requestId = ++detailsRequestId.current;
-    const archived = status === "completed";
     setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", loading: true, trackingOrders: [] });
     try {
-      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ status, archived, limit: 2000, from: appliedRange.from, to: appliedRange.to })}`);
+      const payload = await trackingFetch<{ ok: boolean; orders: TrackingOrderRow[] }>(`/api/tracking/orders${trackingQuery({ limit: 2000, status, archived: false })}`);
       if (detailsRequestId.current !== requestId) return;
-      setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: payload.orders || [] });
+      const trackingOrders = [...(payload.orders || [])].sort((left, right) => new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime());
+      setDetails({ title, subtitle: "اضغط على أي طلب لفتح تفاصيله داخل الداش بورد", trackingOrders });
     } catch (failure) {
       if (detailsRequestId.current !== requestId) return;
       setDetails({ title, subtitle: "بيانات الطلبات حسب الحالة", trackingOrders: [], error: failure instanceof Error ? failure.message : "تعذر تحميل بيانات الطلبات" });
     }
+  }
+
+  async function openTrackingOrder(order: TrackingOrderRow) {
+    detailsRequestId.current += 1;
+    const requestId = ++trackingDetailRequestId.current;
+    setDetails(null);
+    setTrackingTarget(order);
+    setTrackingOrderDetail(null);
+    setTrackingDetailError("");
+    setTrackingDetailLoading(true);
+    try {
+      const payload = await trackingFetch<{ ok: boolean; order: TrackingOrderDetail }>(`/api/tracking/orders?id=${encodeURIComponent(order.id)}`);
+      if (trackingDetailRequestId.current !== requestId) return;
+      setTrackingOrderDetail(payload.order);
+    } catch (failure) {
+      if (trackingDetailRequestId.current !== requestId) return;
+      setTrackingDetailError(failure instanceof Error ? failure.message : "تعذر فتح تفاصيل طلب التتبع");
+    } finally {
+      if (trackingDetailRequestId.current === requestId) setTrackingDetailLoading(false);
+    }
+  }
+
+  function closeTrackingOrder() {
+    trackingDetailRequestId.current += 1;
+    setTrackingTarget(null);
+    setTrackingOrderDetail(null);
+    setTrackingDetailError("");
+    setTrackingDetailLoading(false);
   }
 
   function openCrmLead(item: DashboardLeadItem) {
@@ -635,12 +711,7 @@ export function DashboardPage() {
   return (
     <>
       <div className="dashboard-page">
-        <header className="dashboard-head">
-          <div className="dashboard-title">
-            <h1>الداش بورد</h1>
-            <p>نظرة عامة على أداء جميع الأنظمة</p>
-          </div>
-          <div className="dashboard-controls">
+        <div className="dashboard-controls page-top-actions dashboard-controls-only">
             <div className="dashboard-widget-settings">
               <button className="icon-button" type="button" aria-label="تخصيص كروت الداش بورد" title="تخصيص كروت الداش بورد" onClick={() => { setDateOpen(false); setDashboardCustomizeOpen((value) => !value); }} aria-expanded={dashboardCustomizeOpen}><GearSix size={20} /></button>
               {dashboardCustomizeOpen ? <div className="dashboard-widget-settings-popover">
@@ -666,8 +737,7 @@ export function DashboardPage() {
                 <footer><button type="button" className="dashboard-range-reset" onClick={resetDashboardRange}>آخر 7 أيام</button><button type="button" className="dashboard-range-apply" disabled={rangeInvalid || loading} onClick={applyDashboardRange}>{loading ? "جاري التحديث..." : "تطبيق المدة"}</button></footer>
               </div> : null}
             </div>
-          </div>
-        </header>
+        </div>
 
         {disconnected ? (
           <div className="connection-banner">
@@ -764,24 +834,24 @@ export function DashboardPage() {
             <div className="department-grid">
               <DepartmentCard title="مبيعات الكاش" icon={Handbag} metrics={[
                 { label: "العملاء", value: crm?.cashSales ?? null },
-                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "تم البيع", value: crm?.cashSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openCashConversations ?? null },
               ]} onOpen={() => void openCrmList("مبيعات الكاش", "كل عملاء مبيعات الكاش", (lead) => dashboardDepartment(lead) === "cash")} />
               <DepartmentCard title="مبيعات التمويل" icon={UsersThree} metrics={[
                 { label: "العملاء", value: crm?.financeSales ?? null },
-                { label: "تم البيع", value: crm?.sold ?? null },
+                { label: "تم البيع", value: crm?.financeSold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openFinanceConversations ?? null },
               ]} onOpen={() => void openCrmList("مبيعات التمويل", "كل عملاء مبيعات التمويل", (lead) => dashboardDepartment(lead) === "finance")} />
               <DepartmentCard title="خدمة العملاء" icon={PhoneCall} metrics={[
                 { label: "العملاء", value: crm?.customerService ?? null },
-                { label: "تم البيع", value: crm?.sold ?? null },
                 { label: "محادثات مفتوحة", value: crm?.openServiceConversations ?? null },
               ]} onOpen={() => void openCrmList("خدمة العملاء", "كل عملاء خدمة العملاء", (lead) => dashboardDepartment(lead) === "service")} />
               <DepartmentCard title="التسويق" icon={Megaphone} metrics={[
                 { label: "الحملات", value: marketing?.campaigns ?? null },
+                { label: "الأجندات", value: marketing?.agendas ?? null },
                 { label: "مجدولة", value: marketing?.scheduled ?? null },
                 { label: "متأخرة", value: marketing?.delayed ?? null },
-              ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
+              ]} onOpen={() => open("التسويق", [{ label: "الحملات", value: marketing?.campaigns ?? null }, { label: "الأجندات", value: marketing?.agendas ?? null }, { label: "مجدولة", value: marketing?.scheduled ?? null }, { label: "متأخرة", value: marketing?.delayed ?? null }])} />
               <DepartmentCard title="التراكينج" icon={MapPin} metrics={[
                 { label: "الطلبات", value: tracking?.requests ?? null },
                 { label: "متابعة", value: tracking?.inProgress ?? null },
@@ -789,7 +859,7 @@ export function DashboardPage() {
               ]} onOpen={() => open("التراكينج", [{ label: "الطلبات", value: tracking?.requests ?? null }, { label: "متابعة", value: tracking?.inProgress ?? null }, { label: "مكتملة", value: tracking?.completed ?? null }])} />
             </div>
           </section>)}
-            {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
+            {draggableOperationWidget("inventory", <OperationCard title="إجمالي المخزون" badge={operations?.inventory.actualTotal ?? null} className="inventory-card" onView={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "actual_total", metricName: "الإجمالي الفعلي" })}>
               <div className="inventory-primary">
                 <span>الإجمالي الفعلي</span>
                 <Value value={operations?.inventory.actualTotal ?? null} />
@@ -898,8 +968,9 @@ export function DashboardPage() {
             </OperationCard>)}
         </DashboardUnifiedGrid>
       </div>
-      <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} />
+      <DetailsDrawer details={details} onClose={() => { detailsRequestId.current += 1; setDetails(null); }} onLeadOpen={openCrmLead} onTrackingOpen={openTrackingOrder} />
       <DashboardOperationsModal selection={operationsSelection} onClose={() => setOperationsSelection(null)} />
+      <DashboardTrackingOrderModal target={trackingTarget} order={trackingOrderDetail} loading={trackingDetailLoading} error={trackingDetailError} onClose={closeTrackingOrder} />
     </>
   );
 }

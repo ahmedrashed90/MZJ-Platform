@@ -17,6 +17,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const department = departmentKey(request.query.department || "cash");
   const q = clean(request.query.q);
   const branch = clean(request.query.branch);
+  const agent = clean(request.query.agent);
   const status = clean(request.query.status);
   const requestedFrom = clean(request.query.from);
   const requestedTo = clean(request.query.to);
@@ -28,6 +29,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const customerFields = await getCustomerFieldDefinitions();
 
+  const configuredStatuses = await sql<any[]>`
+    select id, department_code, label, value, sort_order, is_active, show_on_dashboard
+    from crm.dashboard_statuses
+    where department_code = ${department} and is_active = true
+    order by sort_order
+  `;
+  const statuses = configuredStatuses.filter((item) => item.show_on_dashboard !== false);
+  const showSoldStatus = (department === "cash" || department === "finance")
+    && statuses.some((item) => String(item.value || item.label || "").trim() === "تم البيع");
+
   const rows = await sql<any[]>`
     select
       l.id::text, l.legacy_id, l.customer_name, l.phone, l.phone_normalized, l.source_code, l.source_name,
@@ -37,7 +48,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.notes, l.status_note, l.extra_data, l.completion_percent, l.credit_limit, l.credit_qualified,
       l.dashboard_unread, l.has_unread_message, l.has_unread_messages, l.message_unread, l.is_unread,
       l.last_message_direction, l.last_incoming_message_at, l.dashboard_message_read_at,
-      l.created_at, l.updated_at, l.registered_at,
+      l.created_at, l.updated_at, l.registered_at, l.sold_at,
       src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
@@ -69,15 +80,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
         (${department} = 'service' and l.department_code = 'customer_service')
       )
       and (
-        ${includeClosed}::boolean
+        ${includeClosed || showSoldStatus}::boolean
         or not (
-          (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label in ('تم البيع','تم الانتهاء - إنشاء طلب البيع','تم الإنتهاء - إنشاء طلب البيع'))
+          (l.department_code in ('cash_sales','wholesale','wholesale_sales','finance_sales','call_center') and l.status_label='تم البيع')
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
         )
       )
-      and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-      and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+      and (${from || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
+      and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})
     order by coalesce(greatest(l.last_message_at,c.last_message_at), l.updated_at, l.created_at) desc
@@ -89,13 +101,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     row.completion_percent = calculateLeadCompletion(row, customerFields);
     delete row.catalog_source_name;
   }
-
-  const statuses = await sql<any[]>`
-    select id, department_code, label, value, sort_order
-    from crm.dashboard_statuses
-    where department_code = ${department} and is_active = true
-    order by sort_order
-  `;
 
   const totals = statuses.map((item) => ({
     ...item,

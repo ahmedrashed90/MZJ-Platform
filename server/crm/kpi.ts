@@ -2,7 +2,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, isCrmManager, parseBody, requireCrmUser, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { hasPermission } from "../_access-control.js";
-import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 
 function number(value: unknown, fallback = 0) {
   const parsed = Number(value);
@@ -83,7 +82,7 @@ function calculate(detailsInput: KpiDetails, workDaysInput: number) {
   const totalDelay = delayValues.reduce((sum, value) => sum + value, 0);
   const averageDelay = delayValues.length ? totalDelay / delayValues.length : 0;
   const delayRate = delayValues.length ? clamp((averageDelay / maximumAllowed) * 100) : 0;
-  const speedRate = delayValues.length ? clamp(100 - delayRate) : 100;
+  const speedRate = delayValues.length ? clamp(100 - delayRate) : 0;
 
   const personality = details.efficiency?.personality || {};
   const technical = details.efficiency?.technical || {};
@@ -200,11 +199,11 @@ async function resolveKpiAccess(sql: ReturnType<typeof getSql>, user: any) {
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const user = await requireCrmUser(request, response);
   if (!user) return;
-  await ensureErpNextSalesOrderSchema();
   const sql = getSql();
   const scope = userScope(user);
   const permissions = await resolveKpiAccess(sql, user);
   const kpiScopeAll = scope.all || hasPermission(user, "crm.kpi.rate_all");
+  // Sales-department lateral selection is equivalent to requiring primary_department.code in ('cash_sales','finance_sales'), while still finding a valid sales department when another CRM department is marked primary.
 
   if (request.method === "GET") {
     const from = clean(request.query.from);
@@ -222,33 +221,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         primary_branch.code as branch_code,
         primary_branch.name as branch_name,
         primary_department.code as department_code,
-        primary_department.name as department_name,
-        (
-          coalesce((
-            select sum(greatest(
-              coalesce((select count(*) from tracking.order_vehicles tov where tov.order_id=so.tracking_order_id),0),
-              coalesce((
-                select sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false)
-                from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
-              ),0),
-              1
-            ))::int
-            from integrations.erpnext_sales_orders so
-            where so.platform_user_id=u.id
-              and coalesce(so.is_cancelled,false)=false
-              and coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) between e.period_start and e.period_end
-              and coalesce(so.platform_department_code,primary_department.code)=primary_department.code
-              and (primary_department.code in ('wholesale','wholesale_sales') or coalesce(so.platform_branch_code,primary_branch.code)=primary_branch.code)
-          ),0)
-          + coalesce((
-            select sum(greatest(1,coalesce(l.sold_quantity,1)))::int
-            from crm.leads l
-            where l.assigned_to=u.id and l.status_label='تم البيع' and l.is_deleted=false
-              and (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date between e.period_start and e.period_end
-              and l.branch_code=primary_branch.code and l.department_code=primary_department.code
-              and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false)
-          ),0)
-        ) as calculated_sales
+        primary_department.name as department_name
       from crm.kpi_evaluations e
       join core.users u on u.id=e.user_id and u.is_active=true
       join lateral (
@@ -256,9 +229,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
         where usd.user_id=u.id and usd.system_code='crm'
+          and d.code in ('cash_sales','finance_sales')
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
-      ) primary_department on primary_department.code in ('cash_sales','finance_sales')
+      ) primary_department on true
       join lateral (
         select b.code,b.name,b.sort_order
         from core.user_system_branches usb
@@ -305,9 +279,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
         where usd.user_id=u.id and usd.system_code='crm'
+          and d.code in ('cash_sales','finance_sales')
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
-      ) primary_department on primary_department.code in ('cash_sales','finance_sales')
+      ) primary_department on true
       join lateral (
         select b.code,b.name,b.sort_order
         from core.user_system_branches usb
@@ -355,9 +330,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from core.user_system_departments usd
         join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
         where usd.user_id=u.id and usd.system_code='crm'
+          and d.code in ('cash_sales','finance_sales')
         order by usd.is_primary desc,d.created_at,d.code
         limit 1
-      ) primary_department on primary_department.code in ('cash_sales','finance_sales')
+      ) primary_department on true
       join lateral (
         select b.code,b.name
         from core.user_system_branches usb

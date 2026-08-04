@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireUser } from "../_auth.js";
 import { getSql } from "../_db.js";
 import { primaryRole } from "../_operations-auth.js";
-import { getSystemAccess, hasPermission } from "../_access-control.js";
+import { hasPermission } from "../_access-control.js";
+import { trackingAccessScope } from "../_tracking-access.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { OperationError, requestId, sendOperationError } from "../_operations-utils.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
@@ -17,9 +18,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const user = await requireUser(request, response);
     if (!user) return;
     const sql = getSql();
-    const access = getSystemAccess(user, "tracking");
-    const unrestricted = access.dataScope === "all";
-    const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch__"];
+    const scope = trackingAccessScope(user);
+    const branchCodes = scope.branchCodes;
 
     if (request.method === "GET") {
       if (!hasPermission(user, "tracking.delete.view")) {
@@ -29,7 +29,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         select d.id::text,d.order_internal_id::text,d.sales_order_no,d.customer_name,d.customer_mobile,d.reason,d.deleted_by_name,d.deleted_at,
           d.source_identity,d.source_fingerprint,d.request_id,d.snapshot->'order'->>'branch' as branch
         from tracking.deleted_orders d
-        where (${unrestricted}=true or d.snapshot->'order'->>'branch' in ${sql(branchCodes)} or d.deleted_by=${user.id}::uuid)
+        where (
+          ${scope.unrestricted}=true
+          or (${scope.assignedOnly}=true and d.snapshot->'order'->>'assigned_to'=${user.id})
+          or (${scope.workflowAssignedOnly}=true and d.deleted_by=${user.id}::uuid)
+          or (${scope.branchScoped}=true and d.snapshot->'order'->>'branch' in ${sql(branchCodes)})
+        )
         order by d.deleted_at desc limit 250
       `;
       return response.status(200).json({ ok: true, deleted, requestId: traceId });
@@ -62,7 +67,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
           );
         }
         const deletedBranch = clean(deletedOrder.snapshot?.order?.branch);
-        if (!unrestricted && !branchCodes.includes(deletedBranch) && clean(deletedOrder.deleted_by) !== user.id) {
+        const deletedAssignedTo = clean(deletedOrder.snapshot?.order?.assigned_to);
+        const canAccessDeletedRecord = scope.unrestricted
+          || (scope.assignedOnly && deletedAssignedTo === user.id)
+          || (scope.workflowAssignedOnly && clean(deletedOrder.deleted_by) === user.id)
+          || (scope.branchScoped && branchCodes.includes(deletedBranch));
+        if (!canAccessDeletedRecord) {
           throw new OperationError(403, "FORBIDDEN", "سجل الطلب خارج نطاق بياناتك");
         }
 
@@ -111,8 +121,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
         for update
       `;
       if (!order) throw new OperationError(404, "TRACKING_REQUEST_NOT_FOUND", "الطلب غير موجود أو تم حذفه مسبقًا");
-      const assignedToUser = Boolean((await tx<any[]>`select 1 from tracking.stage_events where order_id=${orderId}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
-      if (!unrestricted && !branchCodes.includes(clean(order.branch)) && !assignedToUser) throw new OperationError(403, "FORBIDDEN", "الطلب خارج نطاق بياناتك");
+      const workflowAssigned = scope.workflowAssignedOnly
+        ? Boolean((await tx<any[]>`select 1 from tracking.stage_events where order_id=${orderId}::uuid and actor_id=${user.id}::uuid limit 1`)[0])
+        : false;
+      const canAccessOrder = scope.unrestricted
+        || (scope.assignedOnly && clean(order.assigned_to) === user.id)
+        || (scope.workflowAssignedOnly && workflowAssigned)
+        || (scope.branchScoped && branchCodes.includes(clean(order.branch)));
+      if (!canAccessOrder) throw new OperationError(403, "FORBIDDEN", "الطلب خارج نطاق بياناتك");
       if (confirmation !== order.sales_order_no) throw new OperationError(400, "VALIDATION_ERROR", "اكتب رقم الطلب كاملًا لتأكيد الحذف");
 
       const vehicles = await tx<any[]>`select *,id::text,vehicle_id::text from tracking.order_vehicles where order_id=${orderId}::uuid order by created_at`;
@@ -138,8 +154,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         try {
           await tx.savepoint(async (eventTx) => {
             await eventTx`
-              insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
-              values ('tracking.request.deleted','tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${eventTx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
+              insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
+              values ('tracking.request.deleted','tracking_order',${orderId},'tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${eventTx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
             `;
           });
         } catch (outboxError) {

@@ -12,6 +12,7 @@ const checks = [
   ['Deployment migration contains the same FK repair', migration.includes("ref_table='check_item_definitions'") && migration.includes('references operations.check_item_definitions(code)')],
   ['Vehicle delete removes related tracking SMS', api.includes('delete from tracking.sms_messages where vehicle_id') && api.includes('delete from tracking.sms_messages where order_id')],
   ['Vehicle delete remains transactional', api.includes('async function deleteVehicle') && api.includes('return sql.begin(async (tx) =>')],
+  ['Vehicle delete locks only the base vehicle row across the nullable location join', /async function deleteVehicle[\s\S]*?left join operations\.locations l on l\.id=v\.location_id[\s\S]*?for update of v/.test(api)],
   ['Inventory detail exposes complete vehicle delete action', modal.includes('مسح السيارة') && modal.includes('delete_vehicle') && modal.includes('confirmVin')],
 ];
 

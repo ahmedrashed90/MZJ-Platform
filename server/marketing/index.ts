@@ -9,9 +9,15 @@ import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
-import { decryptPlatformToken, publicPlatformConnection } from "../_platform-connections.js";
+import {
+  decryptPlatformToken,
+  getYouTubePublishSettings,
+  loadYouTubePublishOptions,
+  publicPlatformConnection,
+} from "../_platform-connections.js";
+import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
-import { backfillPublishedPosts, engagementData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
+import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 function bodyObject(request: VercelRequest) {
@@ -309,7 +315,206 @@ async function nextCampaignCode(sql: ReturnType<typeof getSql>, campaignTypeId: 
 
 function contentDepartmentId(meta: { contentDepartmentId?: string; departments: any[] }) { return clean(meta.contentDepartmentId || meta.departments.find((item) => item.is_content)?.id); }
 
-async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string }) {
+type ExecutionFolderCreationInput = { request?: Record<string, any>; result?: Record<string, any> };
+
+type ExecutionFolderLinkInput = {
+  creativeLinkId: string;
+  creativeName: string;
+  assignedTo: string;
+};
+
+function objectValue(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function objectItems(value: unknown) {
+  if (Array.isArray(value)) return value.map(objectValue);
+  return Object.values(objectValue(value)).map(objectValue);
+}
+
+function normalizedFolderMatch(value: unknown) {
+  return clean(value).normalize("NFKC").toLocaleLowerCase("en-US");
+}
+
+function firstText(value: unknown, keys: string[]) {
+  const record = objectValue(value);
+  for (const key of keys) {
+    const text = clean(record[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
+function joinServerPath(base: unknown, ...parts: unknown[]) {
+  const root = clean(base).replace(/\\/g, "/").replace(/\/+$/g, "");
+  const tail = parts.map((part) => clean(part).replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean);
+  return [root, ...tail].filter(Boolean).join("/");
+}
+
+function raidrivePathFromServerPath(serverPath: unknown, driveLetter: unknown, roots: unknown[]) {
+  let value = clean(serverPath);
+  if (!value) return "";
+  try { value = decodeURIComponent(value); } catch { /* keep the exact path returned by the server */ }
+  if (/^file:\/\//i.test(value)) value = value.replace(/^file:\/+/i, "/");
+  if (/^[a-z]:[\\/]/i.test(value)) return value.replace(/\//g, "\\").replace(/\\+$/g, "");
+
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const candidateRoots = [...new Set([
+    ...roots.map((root) => clean(root).replace(/\\/g, "/").replace(/\/+$/g, "")).filter(Boolean),
+    process.env.MZJ_RAW_ROOT,
+    "/var/www/mzj-raw",
+  ].map((root) => clean(root).replace(/\\/g, "/").replace(/\/+$/g, "")).filter(Boolean))]
+    .sort((a, b) => b.length - a.length);
+
+  let relative = "";
+  for (const root of candidateRoots) {
+    if (normalized.startsWith(`${root}/`)) { relative = normalized.slice(root.length + 1); break; }
+  }
+  if (!relative) {
+    const marker = normalized.toLocaleLowerCase("en-US").indexOf("/mzj-raw/");
+    if (marker >= 0) relative = normalized.slice(marker + "/mzj-raw/".length);
+  }
+  if (!relative && !normalized.startsWith("/")) relative = normalized;
+  if (!relative) return "";
+
+  const drive = (clean(driveLetter) || "Z:").replace(/[\\/]+$/g, "");
+  const windowsRelative = relative.split("/").filter(Boolean).join("\\");
+  return windowsRelative ? `${drive}\\${windowsRelative}` : `${drive}\\`;
+}
+
+function raidriveFolderPath(driveLetter: unknown, parts: unknown[]) {
+  const drive = (clean(driveLetter) || "Z:").replace(/[\\/]+$/g, "");
+  const folders = parts
+    .map((part) => clean(part).replace(/[\\/]+/g, "-").replace(/^\.+|\.+$/g, "").trim())
+    .filter(Boolean);
+  return folders.length ? `${drive}\\${folders.join("\\")}` : "";
+}
+
+function normalizedWindowsFolderPath(value: unknown) {
+  let path = clean(value);
+  if (!path) return "";
+  try { path = decodeURIComponent(path); } catch { /* keep stored value */ }
+  path = path.replace(/^file:\/+/i, "").replace(/\//g, "\\").replace(/\\+$/g, "");
+  return /^[a-z]:\\/i.test(path) ? path : "";
+}
+
+function repairedExecutionFolders(value: unknown) {
+  const folders = objectValue(value);
+  if (!folders.linked) return folders;
+  const driveLetter = clean(folders.driveLetter) || "Z:";
+  const roots = [folders.rawRoot, folders.rootPath, folders.basePath, "/var/www/mzj-raw"];
+  // Translate the exact filesystem paths returned by the RAW server first. The
+  // deterministic path is only a compatibility fallback for older task rows.
+  const rawWindowsPath = raidrivePathFromServerPath(folders.rawServerPath, driveLetter, roots)
+    || normalizedWindowsFolderPath(folders.rawWindowsPath)
+    || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "01-RAW"]);
+  const outputWindowsPath = raidrivePathFromServerPath(folders.outputServerPath, driveLetter, roots)
+    || normalizedWindowsFolderPath(folders.outputWindowsPath)
+    || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "02-OUTPUT"]);
+  const userOutputWindowsPath = raidrivePathFromServerPath(folders.userOutputServerPath, driveLetter, roots)
+    || normalizedWindowsFolderPath(folders.userOutputWindowsPath)
+    || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "02-OUTPUT", folders.userFolderName]);
+  return {
+    ...folders,
+    version: 4,
+    rawWindowsPath,
+    outputWindowsPath,
+    userOutputWindowsPath: userOutputWindowsPath || outputWindowsPath,
+  };
+}
+
+function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderLinkInput) {
+  const creation = objectValue(creationValue) as ExecutionFolderCreationInput;
+  const request = objectValue(creation.request);
+  const result = objectValue(creation.result);
+  if (!Object.keys(request).length || !Object.keys(result).length || result.ok === false) return null;
+
+  const creativeLinkId = normalizedFolderMatch(input.creativeLinkId);
+  const creativeName = normalizedFolderMatch(input.creativeName);
+  const requestCreatives = arrayValue<Record<string, any>>(request.creatives);
+  const requestCreative = requestCreatives.find((item) => normalizedFolderMatch(item.creativeInstanceId) === creativeLinkId)
+    || requestCreatives.find((item) => normalizedFolderMatch(item.folderName) === creativeLinkId)
+    || requestCreatives.find((item) => normalizedFolderMatch(item.name) === creativeName);
+  if (!requestCreative) return null;
+
+  const serverCreatives = objectItems(result.rawFolders);
+  const requestFolderName = clean(requestCreative.folderName);
+  const serverCreative = serverCreatives.find((item) => normalizedFolderMatch(item.creativeInstanceId) === creativeLinkId)
+    || serverCreatives.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestFolderName))
+    || serverCreatives.find((item) => normalizedFolderMatch(item.name) === creativeName);
+  if (!serverCreative) return null;
+
+  const assignedTo = clean(input.assignedTo);
+  const requestUser = arrayValue<Record<string, any>>(requestCreative.users).find((item) => clean(item.uid || item.id) === assignedTo);
+  if (!requestUser) return null;
+  const serverUsers = objectItems(serverCreative.users);
+  const serverUser = serverUsers.find((item) => clean(item.uid || item.id || item.userId) === assignedTo)
+    || serverUsers.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestUser.folderName || requestUser.name));
+  if (!serverUser) return null;
+
+  const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
+  const monthKey = clean(result.monthKey || request.monthKey);
+  const campaignCode = clean(result.campaignCode || request.campaignCode);
+  const campaignFolderName = clean(result.campaignFolderName || request.campaignFolderName || request.campaignDisplayName || campaignCode);
+  const creativeFolderName = clean(serverCreative.folderName || requestCreative.folderName || requestCreative.name);
+  const userFolderName = clean(serverUser.folderName || requestUser.folderName || requestUser.name);
+  const rawRoots = [result.rawRoot, result.rootPath, result.basePath, request.remoteRoot, request.rawRoot];
+
+  const campaignServerPath = firstText(result, ["campaignFolderPath", "folderPath", "campaignPath"])
+    || joinServerPath(firstText(result, ["rawRoot", "rootPath", "basePath"]) || request.remoteRoot || request.rawRoot, monthKey, campaignFolderName);
+  const creativeServerPath = firstText(serverCreative, ["folderPath", "creativeFolderPath", "path"])
+    || joinServerPath(campaignServerPath, creativeFolderName);
+  const rawServerPath = firstText(serverCreative, ["rawFolderPath", "rawPath"])
+    || joinServerPath(creativeServerPath, "01-RAW");
+  const outputServerPath = firstText(serverCreative, ["outputFolderPath", "outputPath"])
+    || joinServerPath(creativeServerPath, "02-OUTPUT");
+  const userOutputServerPath = firstText(serverUser, ["folderPath", "outputFolderPath", "path"])
+    || joinServerPath(outputServerPath, userFolderName);
+
+  // The RAW server's folderPath values are authoritative because they contain
+  // its exact safeName output. Translate those paths to the RaiDrive mount; do
+  // not guess folder names from the form, which makes Explorer fall back to
+  // Documents when the guessed directory does not exist.
+  const explicitRawWindowsPath = firstText(serverCreative, ["rawWindowsPath", "windowsRawPath"]);
+  const explicitOutputWindowsPath = firstText(serverCreative, ["outputWindowsPath", "windowsOutputPath"]);
+  const explicitUserOutputWindowsPath = firstText(serverUser, ["userOutputWindowsPath", "outputWindowsPath", "windowsPath"]);
+  const rawWindowsPath = normalizedWindowsFolderPath(explicitRawWindowsPath)
+    || raidrivePathFromServerPath(rawServerPath, driveLetter, rawRoots)
+    || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "01-RAW"]);
+  const outputWindowsPath = normalizedWindowsFolderPath(explicitOutputWindowsPath)
+    || raidrivePathFromServerPath(outputServerPath, driveLetter, rawRoots)
+    || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT"]);
+  const userOutputWindowsPath = normalizedWindowsFolderPath(explicitUserOutputWindowsPath)
+    || raidrivePathFromServerPath(userOutputServerPath, driveLetter, rawRoots)
+    || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT", userFolderName]);
+  if (!rawWindowsPath || !userOutputWindowsPath) return null;
+
+  const subFolders = objectValue(serverCreative.subFolders);
+  return {
+    linked: true,
+    version: 4,
+    type: "raidrive_sftp",
+    driveLetter,
+    monthKey,
+    campaignCode,
+    campaignFolderName,
+    creativeFolderName,
+    userFolderName,
+    creativeInstanceId: clean(serverCreative.creativeInstanceId || requestCreative.creativeInstanceId),
+    assignedUserId: assignedTo,
+    rawServerPath,
+    outputServerPath,
+    userOutputServerPath,
+    rawFolderUrl: clean(serverCreative.rawFolderUrl || subFolders.raw),
+    outputFolderUrl: clean(serverCreative.outputFolderUrl || subFolders.output),
+    userOutputFolderUrl: clean(serverUser.outputFolderUrl || serverUser.folderUrl),
+    rawWindowsPath,
+    outputWindowsPath,
+    userOutputWindowsPath,
+  };
+}
+
+async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
   const templates = new Map<string, string>();
   let templateIndex = 0;
   for (const content of input.contentAssignments) {
@@ -353,9 +558,14 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
         const templateId = templates.get(contentUserId); if (!templateId) continue;
         taskIndex += 1;
         linkedTemplateUsers.add(contentUserId);
+        const executionFolders = executionFoldersForTask(input.executionFolderCreation, {
+          creativeLinkId: clean(input.creativeFolderLinkId) || input.creativeName,
+          creativeName: input.creativeName,
+          assignedTo,
+        });
         const [task] = await tx<any[]>`
-          insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note)
-          values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'execution',${group.departmentId}::uuid,${assignedTo}::uuid,${contentUserId}::uuid,${templateId}::uuid,'execution',${`${input.creativeName} - تنفيذ ${taskIndex}`},'required',${isoDate(assignment.dueOn)},0,${clean(assignment.note)||null})
+          insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,note,execution_folders)
+          values (${input.campaignId ? tx`${input.campaignId}::uuid` : null},${input.agendaId ? tx`${input.agendaId}::uuid` : null},${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,'execution',${group.departmentId}::uuid,${assignedTo}::uuid,${contentUserId}::uuid,${templateId}::uuid,'execution',${`${input.creativeName} - تنفيذ ${taskIndex}`},'required',${isoDate(assignment.dueOn)},0,${clean(assignment.note)||null},${tx.json(dbJson(executionFolders || {}))})
           returning id::text
         `;
         await tx`insert into marketing.task_action_progress(task_id,action_id) select ${task.id}::uuid,id from marketing.assignment_actions where department_id=${group.departmentId}::uuid and is_active=true on conflict do nothing`;
@@ -368,59 +578,109 @@ async function createTasksForCreative(tx: any, input: { sourceType: "campaign" |
   if (unlinkedContentUser) throw new Error(`يجب ربط كل Task Template بتاسك تنفيذي داخل ${input.creativeName}`);
 }
 
-async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+async function createCampaignInTransaction(
+  tx: any,
+  body: Record<string, any>,
+  user: SessionUser,
+  contentId: string,
+  options: { preserveRequestedCode?: boolean } = {},
+) {
   const campaignTypeId = clean(body.campaignTypeId); const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd);
   if (!campaignTypeId || !name || !start || !end) throw new Error("بيانات الحملة الأساسية غير مكتملة");
-  const meta = await marketingMeta(sql, user); const contentId = contentDepartmentId(meta);
-  return sql.begin(async (tx) => {
-    let code = await allocateCampaignCode(tx, campaignTypeId, clean(body.campaignCode));
-    let campaign: any = null;
-    for (let attempt = 0; attempt < 3 && !campaign; attempt += 1) {
-      [campaign] = await tx<any[]>`
-        insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
-        select ${code},${name},ct.id,ct.name,${clean(body.objective)||null},'required',${isoDate(body.campaignDate)||new Date().toISOString().slice(0,10)},${start},${end},${start}::date,${end}::date,${clean(body.requiredFromContent)||null},${tx.json(dbJson({ ...body, campaignCode: code }))},0,${user.id}::uuid
-        from marketing.campaign_types ct where ct.id=${campaignTypeId}::uuid and ct.is_active=true
-        on conflict(campaign_code) do nothing
-        returning id::text,campaign_code,name
-      `;
-      if (!campaign) code = await allocateCampaignCode(tx, campaignTypeId);
+  const requestedCode = clean(body.campaignCode);
+  let code = requestedCode && options.preserveRequestedCode
+    ? requestedCode
+    : await allocateCampaignCode(tx, campaignTypeId, requestedCode);
+  let campaign: any = null;
+  for (let attempt = 0; attempt < 3 && !campaign; attempt += 1) {
+    [campaign] = await tx<any[]>`
+      insert into marketing.campaigns(campaign_code,name,campaign_type_id,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,required_from_content,payload,progress,created_by)
+      select ${code},${name},ct.id,ct.name,${clean(body.objective)||null},'required',${isoDate(body.campaignDate)||new Date().toISOString().slice(0,10)},${start},${end},${start}::date,${end}::date,${clean(body.requiredFromContent)||null},${tx.json(dbJson({ ...body, campaignCode: code }))},0,${user.id}::uuid
+      from marketing.campaign_types ct where ct.id=${campaignTypeId}::uuid and ct.is_active=true
+      on conflict(campaign_code) do nothing
+      returning id::text,campaign_code,name
+    `;
+    if (!campaign) {
+      if (options.preserveRequestedCode && requestedCode) throw new Error("كود الحملة موجود بالفعل داخل النظام الجديد");
+      code = await allocateCampaignCode(tx, campaignTypeId);
     }
-    if (!campaign) throw new Error("تعذر إنشاء كود حملة فريد. أعد المحاولة مرة أخرى");
-    const creativeMap = new Map<string, string>();
-    let creativeIndex = 0;
-    for (const rawCreative of arrayValue(body.creatives)) {
-      creativeIndex += 1;
-      const creativeTypeId = clean(rawCreative.creativeTypeId);
-      const [creativeType] = await tx<any[]>`select c.*,d.name as department_name from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeTypeId}::uuid`;
-      if (!creativeType) continue;
-      const tempId = clean(rawCreative.tempId || rawCreative.id || `creative-${creativeIndex}`);
-      const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
-      const [creative] = await tx<any[]>`
-        insert into marketing.creatives(campaign_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
-        values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,${Math.max(1,numberValue(rawCreative.quantity,1))},'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
-      `;
-      creativeMap.set(tempId, creative.id);
-      await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent) });
+  }
+  if (!campaign) throw new Error("تعذر إنشاء كود حملة فريد. أعد المحاولة مرة أخرى");
+  const creativeMap = new Map<string, string>();
+  let creativeIndex = 0;
+  for (const rawCreative of arrayValue(body.creatives)) {
+    creativeIndex += 1;
+    const creativeTypeId = clean(rawCreative.creativeTypeId);
+    const [creativeType] = await tx<any[]>`select c.*,d.name as department_name from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeTypeId}::uuid`;
+    if (!creativeType) continue;
+    const tempId = clean(rawCreative.tempId || rawCreative.id || `creative-${creativeIndex}`);
+    const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
+    const [creative] = await tx<any[]>`
+      insert into marketing.creatives(campaign_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
+      values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,${Math.max(1,numberValue(rawCreative.quantity,1))},'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
+    `;
+    creativeMap.set(tempId, creative.id);
+    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
+  }
+  for (const budget of arrayValue(body.budgets)) {
+    const requestedCreativeIds = arrayValue<string>(budget.creativeTempIds).length
+      ? arrayValue<string>(budget.creativeTempIds)
+      : [clean(budget.creativeTempId)].filter(Boolean);
+    const creativeIds = [...new Set(requestedCreativeIds.flatMap((tempId) => {
+      const creativeId = creativeMap.get(clean(tempId));
+      return creativeId ? [creativeId] : [];
+    }))];
+    if (!creativeIds.length) continue;
+    const amounts = arrayValue(budget.platformAmounts)
+      .map((item: any) => ({ platformId: clean(item.platformId), amount: Math.max(0, numberValue(item.amount)) }))
+      .filter((item: any) => item.platformId);
+    const total = amounts.reduce((sum, item: any) => sum + item.amount, 0);
+    const [budgetItem] = await tx<any[]>`
+      insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
+      values(
+        ${campaign.id}::uuid,
+        ${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},
+        ${creativeIds.length === 1 ? tx`${creativeIds[0]}::uuid` : null},
+        ${Math.max(1,numberValue(budget.adsCount,1))},
+        ${clean(budget.contentGoal)||null},
+        ${clean(budget.expectedGoal)||null},
+        ${tx.json(dbJson(amounts))},
+        ${total}
+      ) returning id::text
+    `;
+    for (const creativeId of creativeIds) {
+      await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${budgetItem.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
     }
-    for (const budget of arrayValue(body.budgets)) {
-      const creativeId = creativeMap.get(clean(budget.creativeTempId)) || null;
-      const amounts = arrayValue(budget.platformAmounts); const total = amounts.reduce((sum, item: any) => sum + numberValue(item.amount), 0);
-      await tx`insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total) values (${campaign.id}::uuid,${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},${creativeId ? tx`${creativeId}::uuid` : null},${Math.max(1,numberValue(budget.adsCount,1))},${clean(budget.contentGoal)||null},${clean(budget.expectedGoal)||null},${tx.json(dbJson(amounts))},${total})`;
-    }
-    for (const item of arrayValue(body.schedule)) {
-      const creativeId = creativeMap.get(clean(item.creativeTempId)); if (!creativeId || !isoDate(item.date)) continue;
+  }
+  for (const item of arrayValue(body.schedule)) {
+    const requestedCreativeIds = arrayValue<string>(item.creativeTempIds).length
+      ? arrayValue<string>(item.creativeTempIds)
+      : [clean(item.creativeTempId)].filter(Boolean);
+    const creativeIds = [...new Set(requestedCreativeIds.flatMap((tempId) => {
+      const creativeId = creativeMap.get(clean(tempId));
+      return creativeId ? [creativeId] : [];
+    }))];
+    const publishDate = isoDate(item.date);
+    if (!creativeIds.length || !publishDate) continue;
+    for (const creativeId of creativeIds) {
       const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creativeId}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
       const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
       for (const scheduleTask of scheduleTasks) {
         const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
         for (const platform of arrayValue(item.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
-          await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'campaign',${campaign.id}::uuid,${creativeId}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${isoDate(item.date)},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
+          await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'campaign',${campaign.id}::uuid,${creativeId}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${publishDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
         }
       }
     }
-    await audit(tx as any,user,"campaign_created","campaign",campaign.id,{ code,name },undefined,undefined);
-    return { ok: true, id: campaign.id, code, message: "تم إنشاء الحملة والتاسكات" };
-  });
+  }
+  await audit(tx as any,user,"campaign_created","campaign",campaign.id,{ code,name },undefined,undefined);
+  return { ok: true, id: campaign.id, code, message: "تم إنشاء الحملة والتاسكات" };
+}
+
+async function createCampaign(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const meta = await marketingMeta(sql, user);
+  const contentId = contentDepartmentId(meta);
+  return sql.begin((tx) => createCampaignInTransaction(tx, body, user, contentId));
 }
 
 function datesBetween(start: string, end: string) {
@@ -429,96 +689,451 @@ function datesBetween(start: string, end: string) {
   return output;
 }
 
-async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+async function createAgendaInTransaction(tx: any, body: Record<string, any>, user: SessionUser, contentId: string) {
   const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd); const monthKey = clean(body.monthKey);
   if (!name || !start || !end || !monthKey) throw new Error("بيانات الأجندة الأساسية غير مكتملة");
-  const meta = await marketingMeta(sql,user); const contentId = contentDepartmentId(meta);
-  return sql.begin(async (tx) => {
-    const [agenda] = await tx<any[]>`insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by) values (${name},${monthKey},${start},${end},'required',${tx.json(dbJson(body))},0,${user.id}::uuid) returning id::text`;
-    let creativeIndex = 0;
-    for (const day of arrayValue(body.days)) {
-      const dayDate = isoDate(day.date); if (!dayDate) continue;
-      for (const rawCreative of arrayValue(day.creatives)) {
-        const quantity = Math.max(1,numberValue(rawCreative.quantity,1));
-        for (let instance=0; instance<quantity; instance += 1) {
-          creativeIndex += 1;
-          const creativeTypeId = clean(rawCreative.creativeTypeId);
-          const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
-          if (!creativeType) continue;
-          const contentAssignmentMap = new Map<string, any>();
-          for (const assignment of arrayValue(rawCreative.contentAssignments)) {
+  const [agenda] = await tx<any[]>`insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by) values (${name},${monthKey},${start},${end},'required',${tx.json(dbJson(body))},0,${user.id}::uuid) returning id::text`;
+  let creativeIndex = 0;
+  for (const day of arrayValue(body.days)) {
+    const dayDate = isoDate(day.date); if (!dayDate) continue;
+    for (const rawCreative of arrayValue(day.creatives)) {
+      const quantity = Math.max(1,numberValue(rawCreative.quantity,1));
+      for (let instance=0; instance<quantity; instance += 1) {
+        creativeIndex += 1;
+        const creativeTypeId = clean(rawCreative.creativeTypeId);
+        const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
+        if (!creativeType) continue;
+        const contentAssignmentMap = new Map<string, any>();
+        for (const assignment of arrayValue(rawCreative.contentAssignments)) {
+          const userId = clean(assignment.userId);
+          if (!userId) continue;
+          contentAssignmentMap.set(userId, { ...assignment, userId });
+        }
+        const contentAssignments = [...contentAssignmentMap.values()];
+        const contentUserIds = contentAssignments.map((item: any) => clean(item.userId)).filter(Boolean);
+        if (!contentUserIds.length) throw new Error(`اختر يوزر قسم المحتوى للكرييتيف ${creativeType.name}`);
+
+        const normalizeExecutionAssignments = (assignments: any[]) => {
+          const assignmentMap = new Map<string, any>();
+          for (const assignment of arrayValue(assignments)) {
             const userId = clean(assignment.userId);
             if (!userId) continue;
-            contentAssignmentMap.set(userId, { ...assignment, userId });
+            const linked = arrayValue<string>(assignment.contentUserIds).map(clean).filter((id) => contentUserIds.includes(id));
+            const existing = assignmentMap.get(userId);
+            assignmentMap.set(userId, {
+              ...(existing || assignment),
+              ...assignment,
+              userId,
+              contentUserIds: [...new Set([...(existing?.contentUserIds || []), ...linked])],
+            });
           }
-          const contentAssignments = [...contentAssignmentMap.values()];
-          const contentUserIds = contentAssignments.map((item: any) => clean(item.userId)).filter(Boolean);
-          if (!contentUserIds.length) throw new Error(`اختر يوزر قسم المحتوى للكرييتيف ${creativeType.name}`);
-
-          const normalizeExecutionAssignments = (assignments: any[]) => {
-            const assignmentMap = new Map<string, any>();
-            for (const assignment of arrayValue(assignments)) {
-              const userId = clean(assignment.userId);
-              if (!userId) continue;
-              const linked = arrayValue<string>(assignment.contentUserIds).map(clean).filter((id) => contentUserIds.includes(id));
-              const existing = assignmentMap.get(userId);
-              assignmentMap.set(userId, {
-                ...(existing || assignment),
-                ...assignment,
-                userId,
-                contentUserIds: [...new Set([...(existing?.contentUserIds || []), ...linked])],
-              });
-            }
-            return [...assignmentMap.values()];
-          };
-          const primaryAssignments = normalizeExecutionAssignments(rawCreative.primaryAssignments);
-          const optionalAssignments = arrayValue(rawCreative.optionalAssignments).map((group: any) => ({
-            ...group,
-            assignments: normalizeExecutionAssignments(group.assignments),
-          }));
-          const executionAssignments = [
-            ...primaryAssignments,
-            ...optionalAssignments.flatMap((group: any) => arrayValue(group.assignments)),
-          ];
-          if (!executionAssignments.length) throw new Error(`اختر يوزرًا تنفيذيًا للكرييتيف ${creativeType.name}`);
-          const coveredContentUsers = new Set(executionAssignments.flatMap((assignment: any) => arrayValue<string>(assignment.contentUserIds).map(clean).filter(Boolean)));
-          const missingContentUsers = contentUserIds.filter((id: string) => !coveredContentUsers.has(id));
-          if (missingContentUsers.length && executionAssignments.length === 1) {
-            executionAssignments[0].contentUserIds = [...new Set([...arrayValue<string>(executionAssignments[0].contentUserIds).map(clean).filter(Boolean), ...missingContentUsers])];
-          } else if (missingContentUsers.length) {
-            throw new Error(`كل Task Template يجب ربطه بتاسك تنفيذي داخل ${creativeType.name}`);
-          }
-          const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
-          const [creative] = await tx<any[]>`
-            insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
-            values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
-          `;
-          await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"" });
-          const templatesWithoutExecution = await tx<any[]>`
-            select tt.id::text
-            from marketing.task_templates tt
-            where tt.creative_id=${creative.id}::uuid
-              and not exists (
-                select 1 from marketing.tasks execution_task
-                where execution_task.task_template_id=tt.id
-                  and execution_task.task_kind='execution'
-                  and execution_task.is_deleted=false
-              )
-          `;
-          if (templatesWithoutExecution.length) throw new Error(`كل Task Template يجب أن يكون معه تاسك تنفيذي داخل ${creativeType.name}`);
-          const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creative.id}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
-          const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
-          for (const scheduleTask of scheduleTasks) {
-            const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
-            for (const platform of arrayValue(rawCreative.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
-              await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'agenda',${agenda.id}::uuid,${creative.id}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${dayDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
-            }
+          return [...assignmentMap.values()];
+        };
+        const primaryAssignments = normalizeExecutionAssignments(rawCreative.primaryAssignments);
+        const optionalAssignments = arrayValue(rawCreative.optionalAssignments).map((group: any) => ({
+          ...group,
+          assignments: normalizeExecutionAssignments(group.assignments),
+        }));
+        const executionAssignments = [
+          ...primaryAssignments,
+          ...optionalAssignments.flatMap((group: any) => arrayValue(group.assignments)),
+        ];
+        if (!executionAssignments.length) throw new Error(`اختر يوزرًا تنفيذيًا للكرييتيف ${creativeType.name}`);
+        const coveredContentUsers = new Set(executionAssignments.flatMap((assignment: any) => arrayValue<string>(assignment.contentUserIds).map(clean).filter(Boolean)));
+        const missingContentUsers = contentUserIds.filter((id: string) => !coveredContentUsers.has(id));
+        if (missingContentUsers.length && executionAssignments.length === 1) {
+          executionAssignments[0].contentUserIds = [...new Set([...arrayValue<string>(executionAssignments[0].contentUserIds).map(clean).filter(Boolean), ...missingContentUsers])];
+        } else if (missingContentUsers.length) {
+          throw new Error(`كل Task Template يجب ربطه بتاسك تنفيذي داخل ${creativeType.name}`);
+        }
+        const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
+        const [creative] = await tx<any[]>`
+          insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
+          values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
+        `;
+        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:`${dayDate}__${clean(rawCreative.tempId)}__${instance + 1}` });
+        const templatesWithoutExecution = await tx<any[]>`
+          select tt.id::text
+          from marketing.task_templates tt
+          where tt.creative_id=${creative.id}::uuid
+            and not exists (
+              select 1 from marketing.tasks execution_task
+              where execution_task.task_template_id=tt.id
+                and execution_task.task_kind='execution'
+                and execution_task.is_deleted=false
+            )
+        `;
+        if (templatesWithoutExecution.length) throw new Error(`كل Task Template يجب أن يكون معه تاسك تنفيذي داخل ${creativeType.name}`);
+        const executionTasks = await tx<any[]>`select id::text from marketing.tasks where creative_id=${creative.id}::uuid and task_kind='execution' and is_deleted=false order by created_at`;
+        const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
+        for (const scheduleTask of scheduleTasks) {
+          const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
+          for (const platform of arrayValue(rawCreative.platforms)) for (const postTypeId of arrayValue<string>(platform.postTypeIds)) {
+            await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id) values (${scheduleGroup.id}::uuid,'agenda',${agenda.id}::uuid,${creative.id}::uuid,${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},${dayDate},${clean(platform.platformId)}::uuid,${clean(postTypeId)}::uuid)`;
           }
         }
       }
     }
-    await audit(tx as any,user,"agenda_created","agenda",agenda.id,{ name,monthKey },undefined,undefined);
-    return { ok:true,id:agenda.id,message:"تم إنشاء الأجندة والتاسكات" };
+  }
+  await audit(tx as any,user,"agenda_created","agenda",agenda.id,{ name,monthKey },undefined,undefined);
+  return { ok:true,id:agenda.id,message:"تم إنشاء الأجندة والتاسكات" };
+}
+
+async function createAgenda(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const meta = await marketingMeta(sql, user);
+  const contentId = contentDepartmentId(meta);
+  return sql.begin((tx) => createAgendaInTransaction(tx, body, user, contentId));
+}
+
+async function importFreshMarketingBundle(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.campaign.create") || !hasPermission(user, "marketing.agenda.create")) {
+    throw new Error("لا توجد صلاحية لإنشاء الحملة والأجندة");
+  }
+  if (clean(body.format) !== "mzj-marketing-fresh-import" || numberValue(body.version) !== 1) {
+    throw new Error("ملف النقل غير معتمد");
+  }
+  const migrationKey = clean(body.migrationKey);
+  if (!migrationKey || migrationKey.length > 180) throw new Error("مفتاح عملية النقل غير صحيح");
+  const campaigns = arrayValue<Record<string, any>>(body.campaigns);
+  const agendas = arrayValue<Record<string, any>>(body.agendas);
+  if (!campaigns.length && !agendas.length) throw new Error("ملف النقل لا يحتوي على حملة أو أجندة");
+
+  const meta = await marketingMeta(sql, user);
+  const contentId = contentDepartmentId(meta);
+  return sql.begin(async (tx) => {
+    const [existing] = await tx<any[]>`
+      select details
+      from marketing.data_migrations
+      where migration_key=${migrationKey}
+      for update
+    `;
+    if (existing) {
+      return { ok: true, alreadyApplied: true, message: "تم تنفيذ عملية النقل دي قبل كده", details: existing.details || {} };
+    }
+
+    const createdCampaigns: any[] = [];
+    const createdAgendas: any[] = [];
+    for (const campaign of campaigns) {
+      createdCampaigns.push(await createCampaignInTransaction(tx, campaign, user, contentId, { preserveRequestedCode: true }));
+    }
+    for (const agenda of agendas) {
+      createdAgendas.push(await createAgendaInTransaction(tx, agenda, user, contentId));
+    }
+    const details = {
+      source: body.source || null,
+      campaigns: createdCampaigns.map((item) => ({ id: item.id, code: item.code })),
+      agendas: createdAgendas.map((item) => ({ id: item.id })),
+      importedBy: user.id,
+    };
+    await tx`
+      insert into marketing.data_migrations(migration_key,details)
+      values(${migrationKey},${tx.json(dbJson(details))})
+    `;
+    return {
+      ok: true,
+      alreadyApplied: false,
+      message: "تم إنشاء الحملة والأجندة وتوليد التاسكات من البداية",
+      details,
+    };
+  });
+}
+
+type EntityCreativeScheduleInput = {
+  id?: string;
+  date?: string;
+  platforms?: Array<{ platformId?: string; postTypeIds?: string[] }>;
+};
+
+type EntityCreativeBudgetInput = {
+  id?: string;
+  funnelId?: string;
+  adsCount?: number;
+  contentGoal?: string;
+  expectedGoal?: string;
+  platformAmounts?: Array<{ platformId?: string; amount?: number }>;
+};
+
+function creativeTaskFlowSnapshot(value: any) {
+  return JSON.stringify(dbJson({
+    creativeTypeId: clean(value?.creativeTypeId || value?.creative_type_id),
+    quantity: Math.max(1, numberValue(value?.quantity, 1)),
+    cars: arrayValue(value?.cars),
+    contentAssignments: arrayValue(value?.contentAssignments ?? value?.content_assignments),
+    primaryAssignments: arrayValue(value?.primaryAssignments ?? value?.primary_assignments),
+    optionalAssignments: arrayValue(value?.optionalAssignments ?? value?.optional_assignments),
+  }));
+}
+
+async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: string, budgets: EntityCreativeBudgetInput[]) {
+  const affected = await tx<any[]>`
+    select distinct b.id::text
+    from marketing.budget_items b
+    left join marketing.budget_item_creatives bic on bic.budget_item_id=b.id
+    where b.campaign_id=${campaignId}::uuid and (bic.creative_id=${creativeId}::uuid or b.creative_id=${creativeId}::uuid)
+  `;
+  await tx`delete from marketing.budget_item_creatives where creative_id=${creativeId}::uuid and budget_item_id in (select id from marketing.budget_items where campaign_id=${campaignId}::uuid)`;
+  for (const item of affected) {
+    const [remaining] = await tx<any[]>`select creative_id::text from marketing.budget_item_creatives where budget_item_id=${item.id}::uuid order by created_at limit 1`;
+    if (!remaining) await tx`delete from marketing.budget_items where id=${item.id}::uuid`;
+    else await tx`update marketing.budget_items set creative_id=${remaining.creative_id}::uuid where id=${item.id}::uuid`;
+  }
+  for (const budget of arrayValue<EntityCreativeBudgetInput>(budgets)) {
+    const amounts = arrayValue(budget.platformAmounts)
+      .map((item) => ({ platformId: clean(item.platformId), amount: Math.max(0, numberValue(item.amount)) }))
+      .filter((item) => item.platformId);
+    const total = amounts.reduce((sum, item) => sum + item.amount, 0);
+    const [created] = await tx<any[]>`
+      insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
+      values(
+        ${campaignId}::uuid,
+        ${clean(budget.funnelId) ? tx`${clean(budget.funnelId)}::uuid` : null},
+        ${creativeId}::uuid,
+        ${Math.max(1, numberValue(budget.adsCount, 1))},
+        ${clean(budget.contentGoal) || null},
+        ${clean(budget.expectedGoal) || null},
+        ${tx.json(dbJson(amounts))},
+        ${total}
+      ) returning id::text
+    `;
+    await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${created.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
+  }
+}
+
+async function replaceCreativeSchedule(tx: any, input: {
+  sourceType: "campaign" | "agenda";
+  sourceId: string;
+  creativeId: string;
+  start: string;
+  end: string;
+  schedule: EntityCreativeScheduleInput[];
+}) {
+  await tx`delete from marketing.publish_schedule where source_type=${input.sourceType} and source_id=${input.sourceId}::uuid and creative_id=${input.creativeId}::uuid`;
+  const executionTasks = await tx<any[]>`
+    select id::text from marketing.tasks
+    where creative_id=${input.creativeId}::uuid and task_kind='execution' and is_deleted=false
+    order by created_at
+  `;
+  const scheduleTasks = executionTasks.length ? executionTasks : [{ id: null }];
+  let firstDate = "";
+  for (const item of arrayValue<EntityCreativeScheduleInput>(input.schedule)) {
+    const publishDate = isoDate(item.date);
+    if (!publishDate) continue;
+    if (publishDate < input.start || publishDate > input.end) throw new Error("تاريخ النشر خارج فترة الحملة أو الأجندة");
+    if (!firstDate) firstDate = publishDate;
+    const platforms = arrayValue(item.platforms)
+      .map((platform) => ({
+        platformId: clean(platform.platformId),
+        postTypeIds: [...new Set(arrayValue<string>(platform.postTypeIds).map(clean).filter(Boolean))],
+      }))
+      .filter((platform) => platform.platformId && platform.postTypeIds.length);
+    for (const scheduleTask of scheduleTasks) {
+      const [scheduleGroup] = await tx<any[]>`select gen_random_uuid()::text as id`;
+      for (const platform of platforms) {
+        for (const postTypeId of platform.postTypeIds) {
+          await tx`
+            insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id)
+            values(
+              ${scheduleGroup.id}::uuid,
+              ${input.sourceType},
+              ${input.sourceId}::uuid,
+              ${input.creativeId}::uuid,
+              ${scheduleTask.id ? tx`${scheduleTask.id}::uuid` : null},
+              ${publishDate},
+              ${platform.platformId}::uuid,
+              ${postTypeId}::uuid
+            )
+          `;
+        }
+      }
+    }
+  }
+  await tx`update marketing.creatives set schedule_day=${firstDate || null},updated_at=now() where id=${input.creativeId}::uuid`;
+}
+
+async function promoteCreativeRevisionForReview(tx: any, creativeId: string, previousTemplates: any[], user: SessionUser) {
+  if (!previousTemplates.length) return;
+  const currentTemplates = await tx<any[]>`
+    select id::text,content_user_id::text from marketing.task_templates
+    where creative_id=${creativeId}::uuid
+    order by created_at desc
+  `;
+  const latestByUser = new Map<string, any>();
+  for (const item of currentTemplates) if (!latestByUser.has(item.content_user_id)) latestByUser.set(item.content_user_id, item);
+  const promotedUsers = new Set<string>();
+  for (const previous of previousTemplates) {
+    if (previous.status !== 'approved' || promotedUsers.has(previous.content_user_id)) continue;
+    promotedUsers.add(previous.content_user_id);
+    const current = latestByUser.get(previous.content_user_id);
+    if (!current || current.id === previous.id) continue;
+    await tx`
+      update marketing.task_templates
+      set status='under_review',progress=50,file_id=${previous.file_id ? tx`${previous.file_id}::uuid` : null},
+          template_data=${tx.json(dbJson(previous.template_data || {}))},
+          approved_data=${tx.json(dbJson(previous.approved_data || {}))},
+          admin_note='تم تعديل بيانات الكرييتيف ويحتاج إعادة اعتماد',updated_at=now()
+      where id=${current.id}::uuid
+    `;
+    await tx`update marketing.tasks set status='under_review',progress=50,updated_at=now() where task_template_id=${current.id}::uuid and task_kind='task_template' and is_deleted=false`;
+    await tx`
+      insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name)
+      values(
+        ${current.id}::uuid,
+        'creative_revision',
+        'تم إنشاء مراجعة جديدة بعد تعديل بيانات الكرييتيف',
+        ${tx.json(dbJson(previous.approved_data || previous.template_data || {}))},
+        ${tx.json(dbJson(previous.template_data || {}))},
+        ${user.id}::uuid,
+        ${user.fullName}
+      )
+    `;
+  }
+}
+
+async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const sourceType = clean(body.sourceType) as "campaign" | "agenda";
+  const sourceId = clean(body.sourceId);
+  const creativeId = clean(body.creativeId);
+  const rawCreative = body.creative || {};
+  if (!['campaign','agenda'].includes(sourceType) || !sourceId) throw new Error("بيانات الحملة أو الأجندة غير صحيحة");
+  const permission = sourceType === 'campaign' ? 'marketing.campaign.edit' : 'marketing.agenda.edit';
+  if (!hasPermission(user, permission)) throw new Error("لا توجد صلاحية لتعديل الكرييتيفات");
+  await assertMarketingEntityAccess(sql, user, sourceType, sourceId);
+  const creativeTypeId = clean(rawCreative.creativeTypeId);
+  if (!creativeTypeId) throw new Error("اختر نوع الكرييتيف");
+  const budgetInputs = arrayValue<EntityCreativeBudgetInput>(body.budgets);
+  const scheduleInputs = arrayValue<EntityCreativeScheduleInput>(body.schedule);
+  if (sourceType === 'campaign' && !budgetInputs.length) throw new Error("أضف ميزانية للكرييتيف");
+  if (sourceType === 'campaign' && budgetInputs.some((item) => !arrayValue(item.platformAmounts).some((part) => clean(part.platformId)))) {
+    throw new Error("حدد منصة واحدة على الأقل لكل بند ميزانية");
+  }
+  if (!scheduleInputs.length) throw new Error("أضف موعد نشر واحدًا على الأقل للكرييتيف");
+  if (scheduleInputs.some((item) => !isoDate(item.date) || !arrayValue(item.platforms).some((platform) => clean(platform.platformId) && arrayValue<string>(platform.postTypeIds).some((id) => clean(id))))) {
+    throw new Error("أكمل تاريخ ومنصة ونوع النشر لكل موعد");
+  }
+  const meta = await marketingMeta(sql, user);
+  const contentId = contentDepartmentId(meta);
+  const contentAssignments = arrayValue(rawCreative.contentAssignments);
+  const primaryAssignments = arrayValue(rawCreative.primaryAssignments);
+  const optionalAssignments = arrayValue(rawCreative.optionalAssignments);
+  if (!contentAssignments.length) throw new Error("اختر يوزر قسم المحتوى");
+  if (![...primaryAssignments, ...optionalAssignments.flatMap((group: any) => arrayValue(group.assignments))].length) throw new Error("اختر يوزرًا تنفيذيًا واحدًا على الأقل");
+
+  return sql.begin(async (tx) => {
+    const [entity] = sourceType === 'campaign'
+      ? await tx<any[]>`select id::text,name,campaign_code as code,publish_start::text,publish_end::text,required_from_content from marketing.campaigns where id=${sourceId}::uuid and is_deleted=false for update`
+      : await tx<any[]>`select id::text,name,month_key as code,publish_start::text,publish_end::text,''::text as required_from_content from marketing.agendas where id=${sourceId}::uuid for update`;
+    if (!entity) throw new Error(sourceType === 'campaign' ? "الحملة غير موجودة" : "الأجندة غير موجودة");
+    const [creativeType] = await tx<any[]>`
+      select c.*,d.name as department_name
+      from marketing.creative_types c
+      left join marketing.departments d on d.id=c.primary_department_id
+      where c.id=${creativeTypeId}::uuid and c.is_active=true
+    `;
+    if (!creativeType) throw new Error("نوع الكرييتيف غير موجود");
+
+    const saveSingle = async (existingId: string | null) => {
+      let targetId = existingId || '';
+      let taskFlowChanged = true;
+      let previousTemplates: any[] = [];
+      let creativeIndex = 1;
+      if (existingId) {
+        const [existing] = await tx<any[]>`
+          select *,id::text,creative_type_id::text
+          from marketing.creatives
+          where id=${existingId}::uuid
+            and ((${sourceType}='campaign' and campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and agenda_id=${sourceId}::uuid))
+          for update
+        `;
+        if (!existing) throw new Error("الكرييتيف غير موجود داخل السجل المحدد");
+        const [published] = await tx<any[]>`select 1 from marketing.publish_schedule where creative_id=${existingId}::uuid and status='published' limit 1`;
+        if (published) throw new Error("لا يمكن تعديل كرييتيف تم نشره");
+        taskFlowChanged = creativeTaskFlowSnapshot(existing) !== creativeTaskFlowSnapshot(rawCreative);
+        if (taskFlowChanged) {
+          const [started] = await tx<any[]>`
+            select 1 from marketing.tasks
+            where creative_id=${existingId}::uuid and task_kind='execution' and is_deleted=false
+              and (received_at is not null or progress>0 or status in ('in_progress','ready_to_complete','completed'))
+            limit 1
+          `;
+          if (started) throw new Error("بدأ تنفيذ هذا الكرييتيف؛ يمكن تعديل الميزانية وجدول النشر فقط دون تغيير بيانات التكليف");
+          previousTemplates = await tx<any[]>`
+            select distinct on (content_user_id) *,id::text,content_user_id::text,file_id::text
+            from marketing.task_templates
+            where creative_id=${existingId}::uuid
+            order by content_user_id,created_at desc,id desc
+          `;
+          await tx`update marketing.tasks set is_deleted=true,updated_at=now() where creative_id=${existingId}::uuid and is_deleted=false`;
+        }
+        await tx`
+          update marketing.creatives set
+            creative_type=${creativeType.name},creative_type_id=${creativeTypeId}::uuid,
+            quantity=${Math.max(1, numberValue(rawCreative.quantity, 1))},
+            status=case when ${taskFlowChanged} then 'required' else status end,name=${creativeType.name},
+            primary_department_id=${creativeType.primary_department_id},cars=${tx.json(dbJson(arrayValue(rawCreative.cars)))},
+            content_assignments=${tx.json(dbJson(contentAssignments))},primary_assignments=${tx.json(dbJson(primaryAssignments))},
+            optional_assignments=${tx.json(dbJson(optionalAssignments))},platform_assignments=${tx.json(dbJson(arrayValue(rawCreative.platforms)))},
+            notes=${tx.json(dbJson(rawCreative.notes || {}))},updated_at=now()
+          where id=${existingId}::uuid
+        `;
+        const [sequence] = await tx<any[]>`select count(*)::int + 1000 as value from marketing.task_templates where source_type=${sourceType} and source_id=${sourceId}::uuid`;
+        creativeIndex = Number(sequence?.value || 1001);
+      } else {
+        const [sequence] = await tx<any[]>`select count(*)::int + 1 as value from marketing.creatives where (${sourceType}='campaign' and campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and agenda_id=${sourceId}::uuid)`;
+        creativeIndex = Number(sequence?.value || 1);
+        const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,'0')}`;
+        const [created] = await tx<any[]>`
+          insert into marketing.creatives(campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
+          values(
+            ${sourceType === 'campaign' ? tx`${sourceId}::uuid` : null},
+            ${sourceType === 'agenda' ? tx`${sourceId}::uuid` : null},
+            ${creativeType.name},${creativeTypeId}::uuid,${sourceType === 'agenda' ? 1 : Math.max(1, numberValue(rawCreative.quantity, 1))},
+            'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},
+            ${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},
+            ${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}
+          ) returning id::text
+        `;
+        targetId = created.id;
+      }
+
+      if (!existingId || taskFlowChanged) {
+        await createTasksForCreative(tx, {
+          sourceType,sourceId,
+          campaignId: sourceType === 'campaign' ? sourceId : null,
+          agendaId: sourceType === 'agenda' ? sourceId : null,
+          sourceCode: entity.code || entity.name,
+          sourceName: entity.name,
+          creativeId: targetId,
+          creativeIndex,
+          creativeName: creativeType.name,
+          creativeType: creativeType.name,
+          contentDepartmentId: contentId,
+          contentAssignments,
+          primaryDepartmentId: clean(creativeType.primary_department_id),
+          primaryAssignments,
+          optionalAssignments,
+          requiredFromContent: clean(entity.required_from_content),
+        });
+        if (existingId) await promoteCreativeRevisionForReview(tx, targetId, previousTemplates, user);
+      }
+
+      if (sourceType === 'campaign') await replaceCreativeBudgets(tx, sourceId, targetId, budgetInputs);
+      await replaceCreativeSchedule(tx, {
+        sourceType,sourceId,creativeId:targetId,start:entity.publish_start,end:entity.publish_end,
+        schedule:scheduleInputs,
+      });
+      return targetId;
+    };
+
+    const quantity = Math.max(1, numberValue(rawCreative.quantity, 1));
+    const ids: string[] = [];
+    if (!creativeId && sourceType === 'agenda' && quantity > 1) {
+      for (let index = 0; index < quantity; index += 1) ids.push(await saveSingle(null));
+    } else {
+      ids.push(await saveSingle(creativeId || null));
+    }
+    await recalculateProgress(tx, sourceType, sourceId);
+    await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name },undefined,undefined);
+    return { ok:true,id:sourceId,creativeIds:ids,message:creativeId ? "تم تعديل الكرييتيف وإنشاء مراجعة التكليف عند الحاجة" : "تمت إضافة الكرييتيف والتاسكات المرتبطة" };
   });
 }
 
@@ -728,11 +1343,23 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
     ? await sql<any[]>`select 'agenda' as source_type,a.*,a.id::text,a.result_file_id::text from marketing.agendas a where a.id=${id}::uuid`
     : await sql<any[]>`select 'campaign' as source_type,c.*,c.id::text,c.campaign_type_id::text,c.result_file_id::text,ct.name as campaign_type_name from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id where c.id=${id}::uuid and c.is_deleted=false`;
   if (!entity) throw new Error("السجل غير موجود");
-  const [creatives,tasks,budgets,schedule,reviewHistory,files] = await Promise.all([
+  const [creatives,tasks,budgets,schedule,reviewHistory,files,engagementResultsPayload] = await Promise.all([
     sql<any[]>`select c.*,c.id::text,c.campaign_id::text,c.agenda_id::text,c.creative_type_id::text,c.primary_department_id::text,ct.name as creative_type_name,d.name as primary_department_name from marketing.creatives c left join marketing.creative_types ct on ct.id=c.creative_type_id left join marketing.departments d on d.id=c.primary_department_id where (${sourceType}='campaign' and c.campaign_id=${id}::uuid) or (${sourceType}='agenda' and c.agenda_id=${id}::uuid) order by c.created_at`,
     sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false order by d.name,u.full_name`,
     sourceType === "campaign" ? sql<any[]>`
       select b.*,b.id::text,b.funnel_id::text,b.creative_id::text,f.name as funnel_name,c.name as creative_name,
+        coalesce((
+          select jsonb_agg(link.creative_id::text order by linked_creative.instance_code,linked_creative.name)
+          from marketing.budget_item_creatives link
+          join marketing.creatives linked_creative on linked_creative.id=link.creative_id
+          where link.budget_item_id=b.id
+        ),case when b.creative_id is null then '[]'::jsonb else jsonb_build_array(b.creative_id::text) end) as creative_ids,
+        coalesce((
+          select string_agg(linked_creative.name, '، ' order by linked_creative.instance_code,linked_creative.name)
+          from marketing.budget_item_creatives link
+          join marketing.creatives linked_creative on linked_creative.id=link.creative_id
+          where link.budget_item_id=b.id
+        ),c.name,'—') as creative_names,
         coalesce((
           select jsonb_agg(jsonb_build_object(
             'platformId',part.value->>'platformId',
@@ -751,8 +1378,9 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
     sql<any[]>`select s.*,s.id::text,s.platform_id::text,s.post_type_id::text,p.name as platform_name,pt.name as post_type_name,c.name as creative_name,c.instance_code from marketing.publish_schedule s left join marketing.platforms p on p.id=s.platform_id left join marketing.platform_post_types pt on pt.id=s.post_type_id left join marketing.creatives c on c.id=s.creative_id where s.source_type=${sourceType} and s.source_id=${id}::uuid order by s.publish_date,p.name,pt.name`,
     sql<any[]>`select h.*,h.id::text,h.task_template_id::text from marketing.task_review_history h join marketing.task_templates tt on tt.id=h.task_template_id where tt.source_type=${sourceType} and tt.source_id=${id}::uuid order by h.created_at desc`,
     sql<any[]>`select f.*,f.id::text from marketing.files f where f.source_type=${sourceType} and f.source_id=${id}::uuid order by f.created_at desc`,
+    engagementResultsData(sql,{ sourceType, sourceId:id, source:entity }),
   ]);
-  return { ok:true,entity,creatives,tasks,budgets,schedule,reviewHistory,files };
+  return { ok:true,entity,creatives,tasks,budgets,schedule,reviewHistory,files,engagementResults:engagementResultsPayload.groups[0] || null };
 }
 
 async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: SessionUser) {
@@ -776,6 +1404,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
   `;
   if (!task) throw new Error("التاسك غير موجود");
   if (!await canAccessMarketingTask(sql,user,id)) throw new Error("لا توجد صلاحية لعرض التاسك");
+  if (task.task_kind === "execution") task.execution_folders = repairedExecutionFolders(task.execution_folders);
   const actionsPromise = task.department_id
     ? sql<any[]>`select a.id::text,a.name,a.percentage::float,a.admin_only,a.sort_order,coalesce(p.completed,false) as completed,p.completed_at,u.full_name as completed_by_name from marketing.assignment_actions a left join marketing.task_action_progress p on p.action_id=a.id and p.task_id=${id}::uuid left join core.users u on u.id=p.completed_by where a.department_id=${task.department_id}::uuid and a.is_active=true order by a.sort_order,a.created_at`
     : Promise.resolve([] as any[]);
@@ -1300,6 +1929,12 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(aggregate_data.status,'waiting') as status,
       coalesce(aggregate_data.schedule_ids,array[]::text[]) as schedule_ids,
       aggregate_data.platform_name,
+      coalesce(youtube_data.youtube_options,'{}'::jsonb) as youtube_options,
+      coalesce(
+        nullif(t.approved_template_data->>'proposedName',''),
+        case when tt.status='approved' then nullif(tt.approved_data->>'proposedName','') end,
+        c.name
+      ) as youtube_title_seed,
       aggregate_data.post_type_name,
       coalesce(error_data.publish_errors,'[]'::jsonb) as publish_errors,
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
@@ -1349,6 +1984,14 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       ) grouped
     ) platform_data on true
     left join lateral (
+      select ps.publish_options->'youtube' as youtube_options
+      from marketing.publish_schedule ps
+      join marketing.platforms yp on yp.id=ps.platform_id and lower(yp.code)='youtube'
+      where schedule_row.group_id is not null and ps.group_id=schedule_row.group_id
+      order by ps.updated_at desc,ps.created_at desc,ps.id desc
+      limit 1
+    ) youtube_data on true
+    left join lateral (
       select coalesce(jsonb_agg(jsonb_build_object(
         'scheduleId',latest.schedule_id,
         'platformName',latest.platform_name,
@@ -1380,8 +2023,8 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     where t.task_kind='execution'
       and t.is_deleted=false
       and (
-        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null and cam.status in ('ready_publish','publishing'))
-        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null and ag.status in ('ready_publish','publishing'))
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
       )
       and (
         ${unrestricted}=true
@@ -1391,7 +2034,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       )
     order by coalesce(schedule_row.publish_date,t.due_at::date,cam.publish_start,ag.publish_start),t.created_at,t.id
   `;
-  return{ok:true,rows};
+  return{ok:true,rows,youtubeDefaults:await getYouTubePublishSettings(sql)};
 }
 async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
@@ -1406,8 +2049,8 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     where t.id=${taskId}::uuid and t.task_kind='execution' and t.is_deleted=false
       and (
-        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null and cam.status in ('ready_publish','publishing'))
-        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null and ag.status in ('ready_publish','publishing'))
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
       )
     limit 1
   `;
@@ -1419,14 +2062,40 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
   })).filter((platform:any)=>platform.platformId);
   if(normalizedPlatforms.some((platform:any)=>!platform.postTypeIds.length))throw new Error("حدد نوع نشر لكل منصة مختارة");
-  const combinations=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId})));
-  if(!combinations.length){const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);if(platformId&&postTypeId)combinations.push({platformId,postTypeId});}
+  const requestedPlatformIds=[...new Set(normalizedPlatforms.map((platform:any)=>platform.platformId))];
+  const platformRows=requestedPlatformIds.length?await sql<any[]>`select id::text,lower(code) as code from marketing.platforms where id in ${sql(requestedPlatformIds)} and is_active=true`:[];
+  const platformCodeById=new Map(platformRows.map((platform:any)=>[clean(platform.id),clean(platform.code)]));
+  if(platformRows.length!==requestedPlatformIds.length)throw new Error("إحدى منصات النشر غير موجودة أو غير مفعلة");
+  const combinations=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId,platformCode:platformCodeById.get(platform.platformId)||""})));
+  if(!combinations.length){
+    const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);
+    if(platformId&&postTypeId){
+      const[legacyPlatform]=await sql<any[]>`select id::text,lower(code) as code from marketing.platforms where id=${platformId}::uuid and is_active=true`;
+      if(legacyPlatform)combinations.push({platformId,postTypeId,platformCode:clean(legacyPlatform.code)});
+    }
+  }
   if(!combinations.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+  const youtubeSelected=combinations.some((item:any)=>item.platformCode==='youtube');
+  const youtubeDefaults=await getYouTubePublishSettings(sql);
+  const youtubeOptions=normalizeYouTubePublishOptions(body.youtubeOptions,youtubeDefaults,{
+    title:clean(body.youtubeTitle)||clean(body.caption),
+    description:[clean(body.caption),clean(body.hashtags)].filter(Boolean).join("\n\n"),
+  });
+  if(youtubeSelected){
+    if(!youtubeOptions.title)throw new Error("عنوان فيديو YouTube مطلوب");
+    if([...youtubeOptions.title].length>100)throw new Error("عنوان YouTube يجب ألا يتجاوز 100 حرف");
+    if(Buffer.byteLength(youtubeOptions.description,'utf8')>5000)throw new Error("وصف YouTube يجب ألا يتجاوز 5000 بايت");
+    if(youtubeOptions.tags.join(',').length>500)throw new Error("كلمات YouTube المفتاحية تتجاوز 500 حرف");
+    if(!youtubeOptions.categoryId)throw new Error("تصنيف فيديو YouTube مطلوب");
+  }
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
   await sql.begin(async tx=>{
     await tx`delete from marketing.publish_schedule where group_id=${groupId}::uuid`;
-    for(const item of combinations)await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},'waiting')`;
+    for(const item of combinations){
+      const publishOptions=item.platformCode==='youtube'?{youtube:youtubeOptions}:{};
+      await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,publish_options,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},${tx.json(dbJson(publishOptions))},'waiting')`;
+    }
   });
   return{ok:true,message:"تم حفظ تجهيز النشر"};
 }
@@ -1896,7 +2565,7 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.photography_date,r.completed_at,r.note,r.cancelled_at,
+      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.note,r.cancelled_at,
         sl.name as source_location_name,dl.name as destination_location_name,
         (r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
         coalesce((
@@ -1934,13 +2603,23 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   return{ok:true,cars,requests,locations};
 }
 
+async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.photo_request.complete"))throw new Error("لا توجد صلاحية لتحديث حالة التصوير");
+  const vehicleIds=[...new Set(arrayValue<string>(body.vehicleIds).map(clean).filter(Boolean))];
+  if(!vehicleIds.length)throw new Error("لم يتم تحديد سيارات لتحديث حالة التصوير");
+  return sql.begin(async tx=>{
+    const rows=await tx<any[]>`select id::text from operations.vehicles where id in ${tx(vehicleIds)} and is_deleted=false and archived_at is null for update`;
+    if(rows.length!==vehicleIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
+    await tx`update operations.vehicles set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1 where id in ${tx(vehicleIds)} and coalesce(photographed,false)=false`;
+    return{ok:true,message:vehicleIds.length===1?"تم تحديث السيارة إلى تم التصوير":`تم تحديث ${vehicleIds.length.toLocaleString("ar-SA")} سيارة إلى تم التصوير`};
+  });
+}
+
 async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const vehicles=arrayValue(body.vehicles).map((item:any)=>({vehicleId:clean(item.vehicleId),note:clean(item.note)})).filter((item:any)=>item.vehicleId);
   const destinationLocationId=clean(body.destinationLocationId);
-  const photographyDate=isoDate(body.photographyDate);
   if(!vehicles.length)throw new Error("اختر سيارة واحدة على الأقل");
   if(!destinationLocationId)throw new Error("اختر المكان المستهدف");
-  if(!photographyDate)throw new Error("حدد تاريخ التصوير");
   const uniqueIds=[...new Set(vehicles.map((item:any)=>item.vehicleId))];
   if(uniqueIds.length!==vehicles.length)throw new Error("لا يمكن اختيار السيارة نفسها أكثر من مرة");
   return sql.begin(async tx=>{
@@ -1965,12 +2644,12 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
     const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;
     const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;
     const[request]=await tx<any[]>`
-      insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,photography_date,note)
-      values(${requestNo},'marketing','photography','photography',${source.location_id},${destinationLocationId}::uuid,'created',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${photographyDate}::date,${clean(body.note)||null})
+      insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,note)
+      values(${requestNo},'marketing','photography','photography',${source.location_id},${destinationLocationId}::uuid,'created',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null})
       returning *,id::text
     `;
     for(const car of cars)await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${car.id}::uuid,${car.location_id},${car.status_code},${car.itemNote||null})`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,photographyDate,vehicles}))})`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,vehicles}))})`;
     return{ok:true,request,message:"تم إنشاء طلب التصوير"};
   });
 }
@@ -2011,7 +2690,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
     if(request.method==='GET'){
-      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create'))?await loadOperationsCars(sql):[]});
+      if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create')||hasPermission(user,'marketing.campaign.edit')||hasPermission(user,'marketing.agenda.edit'))?await loadOperationsCars(sql):[]});
       if(resource==='dashboard')return response.status(200).json(await dashboard(sql,user));
       if(resource==='dashboard_version')return response.status(200).json({ok:true,version:await dashboardVersion(sql)});
       if(resource==='database')return response.status(200).json(await databaseRows(sql,user));
@@ -2020,6 +2699,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='packages')return response.status(200).json({ok:true,rows:await sql<any[]>`select p.*,p.id::text,p.category_id::text,p.sales_type_id::text,coalesce(c.name,p.category) as category_name,coalesce(s.name,p.sales_type,'—') as sales_type_name from marketing.packages p left join marketing.package_categories c on c.id=p.category_id left join marketing.package_sales_types s on s.id=p.sales_type_id where p.is_active=true order by coalesce(c.sort_order,999),coalesce(s.sort_order,999),p.name`});
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
+      if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
       if(resource==='engagement'){if(!hasPermission(user,'marketing.publish_prep.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});return response.status(200).json(await engagementData(sql));}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
@@ -2035,6 +2715,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const body=bodyObject(request),action=clean(body.action); let result:any;
     if(action==='create_campaign')result=await createCampaign(sql,body,user);
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
+    else if(action==='import_fresh_marketing_bundle')result=await importFreshMarketingBundle(sql,body,user);
+    else if(action==='save_entity_creative')result=await saveEntityCreative(sql,body,user);
     else if(action==='save_department')result=await saveDepartment(sql,body,user);
     else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body);
     else if(action==='save_creative_type')result=await saveCreativeType(sql,body);
@@ -2071,6 +2753,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
     else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
+    else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
     else if(action==='complete_photo_request')result=await completePhotographyRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='create_raw_folders')result=await createRawFolders(body);

@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import type { VercelRequest } from "@vercel/node";
 import type { SessionUser } from "./_auth.js";
 import { hasPermission } from "../shared/system-access.js";
+import {
+  YOUTUBE_CATEGORY_FALLBACKS,
+  normalizeYouTubePublishSettings,
+  type YouTubePublishSettings,
+} from "../shared/youtube-publishing.js";
 
 export type PlatformProvider = "meta" | "tiktok" | "youtube";
 type Sql = ReturnType<typeof import("./_db.js").getSql>;
@@ -230,10 +235,11 @@ function providerStatus(row: ConnectionRow | undefined) {
 }
 
 export async function listPlatformConnections(sql: Sql, user: SessionUser, request: VercelRequest) {
-  const [rows, events, drafts] = await Promise.all([
+  const [rows, events, drafts, youtubePublishSettings] = await Promise.all([
     connectionRows(sql),
     connectionEvents(sql),
     sql<ConnectionDraftRow[]>`select id::text,provider,payload_encrypted,public_payload,expires_at from marketing.platform_connection_drafts where user_id=${user.id}::uuid and expires_at>now()`,
+    getYouTubePublishSettings(sql),
   ]);
   const byPlatform = new Map(rows.map((row) => [row.platform, row]));
   const metaDraft = drafts.find((draft) => draft.provider === "meta");
@@ -332,6 +338,7 @@ export async function listPlatformConnections(sql: Sql, user: SessionUser, reque
         requiresSelection: false,
         availablePages: [],
         assets: { youtube: youtube ? publicPlatformConnection(youtube) : null },
+        publishSettings: youtubePublishSettings,
       },
     ],
     events: events.map((event) => ({
@@ -643,6 +650,82 @@ async function refreshYouTubeToken(refreshToken: string) {
   });
   return fetchJson("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
 }
+export async function getYouTubePublishSettings(sql: Sql): Promise<YouTubePublishSettings> {
+  const [row] = await sql<any[]>`select settings from marketing.platform_publish_settings where platform='youtube'`;
+  return normalizeYouTubePublishSettings(row?.settings);
+}
+
+export async function saveYouTubePublishSettings(sql: Sql, user: SessionUser, value: unknown) {
+  const settings = normalizeYouTubePublishSettings(value);
+  if (!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(settings.defaultLanguage)) throw new Error("لغة YouTube الافتراضية غير صالحة");
+  if (settings.defaultTags.join(",").length > 500) throw new Error("الكلمات المفتاحية الافتراضية تتجاوز حد YouTube");
+  await sql`
+    insert into marketing.platform_publish_settings(platform,settings,updated_by,updated_at)
+    values('youtube',${sql.json(dbJson(settings))},${user.id}::uuid,now())
+    on conflict(platform) do update set settings=excluded.settings,updated_by=excluded.updated_by,updated_at=now()
+  `;
+  await recordEvent(sql, user, "youtube", "settings_saved", "success", undefined, {
+    privacyStatus: settings.privacyStatus,
+    categoryId: settings.categoryId,
+    defaultPlaylistId: settings.defaultPlaylistId || null,
+  });
+  return { ok: true, settings, message: "تم حفظ إعدادات نشر YouTube" };
+}
+
+export async function getYouTubeAccessToken(sql: Sql) {
+  const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='youtube'`;
+  if (!row?.connected || !row.access_token_encrypted) throw new Error("اربط قناة YouTube أولًا");
+  const scopes = array(row.scopes).map(clean).filter(Boolean);
+  assertScopes(scopes, youtubeScopes(), "YouTube");
+  let accessToken = decryptPlatformToken(row.access_token_encrypted);
+  if (tokenNearExpiry(row.token_expires_at, 5)) {
+    const refreshToken = row.refresh_token_encrypted ? decryptPlatformToken(row.refresh_token_encrypted) : "";
+    if (!refreshToken) throw new Error("Refresh Token الخاص بـYouTube غير موجود. أعد ربط القناة.");
+    const refreshed = await refreshYouTubeToken(refreshToken);
+    accessToken = clean(refreshed.access_token);
+    if (!accessToken) throw new Error("Google لم ترجع Access Token جديدًا");
+    await sql`
+      update marketing.platform_connections
+      set access_token_encrypted=${encryptPlatformToken(accessToken)},token_expires_at=${addSeconds(refreshed.expires_in)},last_verified_at=now(),last_error=null,updated_at=now()
+      where platform='youtube'
+    `;
+  }
+  return { accessToken, connection: row };
+}
+
+export async function loadYouTubePublishOptions(sql: Sql) {
+  const settings = await getYouTubePublishSettings(sql);
+  const [connection] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='youtube'`;
+  if (!connection?.connected) return { ok: true, connected: false, settings, categories: YOUTUBE_CATEGORY_FALLBACKS, playlists: [] };
+  const { accessToken } = await getYouTubeAccessToken(sql);
+  const categoryUrl = new URL("https://www.googleapis.com/youtube/v3/videoCategories");
+  categoryUrl.searchParams.set("part", "snippet");
+  categoryUrl.searchParams.set("regionCode", "SA");
+  const playlistUrl = new URL("https://www.googleapis.com/youtube/v3/playlists");
+  playlistUrl.searchParams.set("part", "id,snippet,status");
+  playlistUrl.searchParams.set("mine", "true");
+  playlistUrl.searchParams.set("maxResults", "50");
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const [categoryPayload, playlistPayload] = await Promise.all([
+    fetchJson(categoryUrl.toString(), { headers }),
+    fetchJson(playlistUrl.toString(), { headers }),
+  ]);
+  const categories = array(categoryPayload.items)
+    .filter((item) => object(item.snippet).assignable !== false)
+    .map((item) => ({ id: clean(item.id), title: clean(object(item.snippet).title) }))
+    .filter((item) => item.id && item.title);
+  const playlists = array(playlistPayload.items)
+    .map((item) => ({ id: clean(item.id), title: clean(object(item.snippet).title), privacyStatus: clean(object(item.status).privacyStatus) }))
+    .filter((item) => item.id && item.title);
+  return {
+    ok: true,
+    connected: true,
+    settings,
+    categories: categories.length ? categories : YOUTUBE_CATEGORY_FALLBACKS,
+    playlists,
+  };
+}
+
 async function loadYouTubeChannel(accessToken: string) {
   const url = new URL("https://www.googleapis.com/youtube/v3/channels");
   url.searchParams.set("part", "id,snippet");

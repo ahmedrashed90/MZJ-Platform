@@ -20,11 +20,10 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
     if (method === "GET") return req("crm.database.view", "crm", "database", "list");
     if (method === "POST") return req("crm.customer.create", "crm", "manual_leads", "create");
     if (method === "DELETE") return req("crm.customer.delete", "crm", "database", "delete");
-    const fields = payload.patch && typeof payload.patch === "object" ? Object.keys(payload.patch) : Object.keys(payload);
-    if (fields.some((field) => ["assignedTo", "assigned_to", "responsibleId"].includes(field))) return req("crm.customer.owner.change", "crm", "database", "owner_change");
-    if (fields.some((field) => ["callCenterAssignedTo", "call_center_assigned_to"].includes(field))) return req("crm.customer.call_center.change", "crm", "database", "call_center_change");
-    if (fields.some((field) => ["status", "statusLabel", "status_label"].includes(field))) return req("crm.customer.status.update", "crm", "database", "status_update");
-    return req("crm.customer.update", "crm", "database", "update");
+    // Updates can contain more than one independently-authorized change (for example status + note).
+    // The gateway verifies access to the customer, then the CRM handler checks every changed field
+    // against its exact permission after comparing the request with the stored row.
+    return req("crm.customer.view", "crm", "database", "update");
   }
   if (route === "crm/history") return req("crm.finance_history.view", "crm", "finance_history", "view");
   if (route === "crm/contacts") return method === "DELETE" ? req("crm.contacts.purge", "crm", "contacts", "purge") : req("crm.contacts.view", "crm", "contacts", "view");
@@ -108,7 +107,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (method === "GET") {
     const map: Record<string, string> = {
       meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
-      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", engagement: "marketing.publish_prep.view", monitoring: "marketing.monitoring.view",
+      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.publish_prep.view", monitoring: "marketing.monitoring.view",
       calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", attendance: "marketing.attendance.view", stock: "marketing.stock.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
     };
@@ -121,7 +120,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     attach_final_file: "marketing.task.final_file.upload", prepare_final_upload: "marketing.task.final_file.upload", upload_final_file_proxy: "marketing.task.final_file.upload", cancel_final_upload: "marketing.task.final_file.upload", attach_final_media_group: "marketing.task.final_file.upload",
     move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.publish.now", subscribe_engagement_webhooks: "marketing.connections.manage", manage_engagement_item: "marketing.publish.now",
     archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
-    create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
+    create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
     save_user_colors: "settings.marketing.manage",
@@ -166,6 +165,7 @@ function trackingRequirement(route: string, request: VercelRequest): ApiPermissi
 }
 
 export function resolveApiPermission(route: string, request: VercelRequest): ApiPermissionRequirement | null {
+  if (route === "data-management") return req("platform.superadmin", "core", "settings", "data_management");
   if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public"].includes(route)) return null;
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");

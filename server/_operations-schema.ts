@@ -440,7 +440,6 @@ alter table operations.transfer_requests alter column status set default 'create
 alter table operations.transfer_requests add column if not exists requested_by uuid references core.users(id);
 alter table operations.transfer_requests add column if not exists requested_at timestamptz not null default now();
 alter table operations.transfer_requests add column if not exists completed_at timestamptz;
-alter table operations.transfer_requests add column if not exists photography_date date;
 alter table operations.transfer_requests add column if not exists request_kind text not null default 'transfer';
 alter table operations.transfer_requests add column if not exists source_branch_code text;
 alter table operations.transfer_requests add column if not exists destination_branch_code text;
@@ -565,6 +564,19 @@ create table if not exists operations.import_batches (
   imported_by_name text,
   created_at timestamptz not null default now()
 );
+-- Compatibility with production databases where import_batches was created by an older schema.
+-- CREATE TABLE IF NOT EXISTS does not add columns that were introduced later.
+alter table operations.import_batches add column if not exists mode text;
+alter table operations.import_batches add column if not exists file_name text;
+alter table operations.import_batches add column if not exists total_rows integer not null default 0;
+alter table operations.import_batches add column if not exists inserted_rows integer not null default 0;
+alter table operations.import_batches add column if not exists updated_rows integer not null default 0;
+alter table operations.import_batches add column if not exists skipped_rows integer not null default 0;
+alter table operations.import_batches add column if not exists failed_rows integer not null default 0;
+alter table operations.import_batches add column if not exists report jsonb not null default '{}'::jsonb;
+alter table operations.import_batches add column if not exists imported_by uuid references core.users(id);
+alter table operations.import_batches add column if not exists imported_by_name text;
+alter table operations.import_batches add column if not exists created_at timestamptz not null default now();
 
 create table if not exists operations.vehicle_deletion_audit (
   id uuid primary key default gen_random_uuid(),
@@ -584,6 +596,8 @@ create index if not exists operations_vehicle_deletion_audit_vin_idx on operatio
 create table if not exists operations.event_outbox (
   id uuid primary key default gen_random_uuid(),
   event_type text not null,
+  aggregate_type text,
+  aggregate_id text,
   system_code text not null default 'operations',
   entity_type text,
   entity_id text,
@@ -606,6 +620,8 @@ create table if not exists operations.event_outbox (
 -- critical flows (movement, transfer requests, tracking delete) must never fail
 -- because an optional notification table is missing a newer column.
 alter table operations.event_outbox add column if not exists event_type text;
+alter table operations.event_outbox add column if not exists aggregate_type text;
+alter table operations.event_outbox add column if not exists aggregate_id text;
 alter table operations.event_outbox add column if not exists system_code text not null default 'operations';
 alter table operations.event_outbox add column if not exists entity_type text;
 alter table operations.event_outbox add column if not exists entity_id text;

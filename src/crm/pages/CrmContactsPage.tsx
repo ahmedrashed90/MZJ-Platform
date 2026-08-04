@@ -117,6 +117,26 @@ type ContactProfile = {
     lastSaleAt?: string | null;
   };
   canPurge: boolean;
+  canManageSalesOrders: boolean;
+};
+
+type SalesOrderVehicleDraft = {
+  id: string;
+  label: string;
+  qty: string;
+  unitPrice: string;
+  itemValue: string;
+  totalInclVat: string;
+};
+
+type SalesOrderEditDraft = {
+  orderDate: string;
+  deliveryDate: string;
+  subtotalBeforeTax: string;
+  taxValue: string;
+  registrationFee: string;
+  totalInclVat: string;
+  vehicles: SalesOrderVehicleDraft[];
 };
 
 const pageSize = 50;
@@ -125,6 +145,16 @@ const number = new Intl.NumberFormat("ar-SA");
 
 function text(value: unknown) {
   return String(value ?? "").trim() || "—";
+}
+
+function dateInput(value: unknown) {
+  const raw = String(value ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : "";
+}
+
+function numberInput(value: unknown) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? String(parsed) : "0";
 }
 
 function latestLead(profile: ContactProfile | null) {
@@ -154,11 +184,21 @@ export function CrmContactsPage() {
   const [confirmPhone, setConfirmPhone] = useState("");
   const [purgeError, setPurgeError] = useState("");
   const [purging, setPurging] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
+  const [orderDraft, setOrderDraft] = useState<SalesOrderEditDraft | null>(null);
+  const [orderEditError, setOrderEditError] = useState("");
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [deletingOrder, setDeletingOrder] = useState<SalesOrder | null>(null);
+  const [deleteOrderConfirmation, setDeleteOrderConfirmation] = useState("");
+  const [deleteOrderError, setDeleteOrderError] = useState("");
+  const [deletingSalesOrder, setDeletingSalesOrder] = useState(false);
   const openedFromList = useRef(false);
   const listScroll = useRef(0);
 
-  useEscapeToClose(Boolean(contactId && !purgeOpen), () => closeProfile());
+  useEscapeToClose(Boolean(contactId && !purgeOpen && !editingOrder && !deletingOrder), () => closeProfile());
   useEscapeToClose(purgeOpen, () => setPurgeOpen(false));
+  useEscapeToClose(Boolean(editingOrder), () => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); });
+  useEscapeToClose(Boolean(deletingOrder), () => { setDeletingOrder(null); setDeleteOrderConfirmation(""); setDeleteOrderError(""); });
 
   async function loadList() {
     setLoading(true);
@@ -197,6 +237,19 @@ export function CrmContactsPage() {
       setProfile(null);
       window.requestAnimationFrame(() => window.scrollTo({ top: listScroll.current, behavior: "auto" }));
     }
+  }, [contactId]);
+  useEffect(() => {
+    if (!contactId) return;
+    const root = document.documentElement;
+    const body = document.body;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      root.style.overflow = previousRootOverflow;
+      body.style.overflow = previousBodyOverflow;
+    };
   }, [contactId]);
 
   function applySearch() {
@@ -268,16 +321,116 @@ export function CrmContactsPage() {
     }
   }
 
+  function openOrderEditor(order: SalesOrder) {
+    setEditingOrder(order);
+    setOrderEditError("");
+    setOrderDraft({
+      orderDate: dateInput(order.order_date),
+      deliveryDate: dateInput(order.delivery_date),
+      subtotalBeforeTax: numberInput(order.subtotal_before_tax),
+      taxValue: numberInput(order.tax_value),
+      registrationFee: numberInput(order.registration_fee),
+      totalInclVat: numberInput(order.total_incl_vat),
+      vehicles: (order.vehicles || []).map((vehicle, index) => ({
+        id: vehicle.id,
+        label: [vehicle.vin, vehicle.itemType || vehicle.itemCategory || vehicle.itemNo, vehicle.itemModel].filter(Boolean).join(" · ") || `السيارة رقم ${index + 1}`,
+        qty: numberInput(vehicle.qty || 1),
+        unitPrice: numberInput(vehicle.unitPrice),
+        itemValue: numberInput(vehicle.itemValue),
+        totalInclVat: numberInput(vehicle.totalInclVat),
+      })),
+    });
+  }
+
+  function updateOrderDraft(field: keyof Omit<SalesOrderEditDraft, "vehicles">, value: string) {
+    setOrderDraft((current) => current ? { ...current, [field]: value } : current);
+    if (orderEditError) setOrderEditError("");
+  }
+
+  function updateVehicleDraft(id: string, field: keyof Omit<SalesOrderVehicleDraft, "id" | "label">, value: string) {
+    setOrderDraft((current) => current ? {
+      ...current,
+      vehicles: current.vehicles.map((vehicle) => vehicle.id === id ? { ...vehicle, [field]: value } : vehicle),
+    } : current);
+    if (orderEditError) setOrderEditError("");
+  }
+
+  async function saveSalesOrder() {
+    if (!profile || !editingOrder || !orderDraft) return;
+    setSavingOrder(true);
+    setOrderEditError("");
+    try {
+      await crmFetch("/api/crm/contacts", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "update_sales_order",
+          contactId: profile.contact.id,
+          orderId: editingOrder.id,
+          order: {
+            orderDate: orderDraft.orderDate,
+            deliveryDate: orderDraft.deliveryDate,
+            subtotalBeforeTax: orderDraft.subtotalBeforeTax,
+            taxValue: orderDraft.taxValue,
+            registrationFee: orderDraft.registrationFee,
+            totalInclVat: orderDraft.totalInclVat,
+          },
+          vehicles: orderDraft.vehicles.map((vehicle) => ({
+            id: vehicle.id,
+            qty: vehicle.qty,
+            unitPrice: vehicle.unitPrice,
+            itemValue: vehicle.itemValue,
+            totalInclVat: vehicle.totalInclVat,
+          })),
+        }),
+      });
+      const updatedOrderId = editingOrder.id;
+      setEditingOrder(null);
+      setOrderDraft(null);
+      await Promise.all([loadProfile(profile.contact.id), loadList()]);
+      setExpandedOrderId(updatedOrderId);
+    } catch (failure) {
+      setOrderEditError(failure instanceof Error ? failure.message : "تعذر تعديل طلب البيع");
+    } finally {
+      setSavingOrder(false);
+    }
+  }
+
+  function openOrderDelete(order: SalesOrder) {
+    setDeletingOrder(order);
+    setDeleteOrderConfirmation("");
+    setDeleteOrderError("");
+  }
+
+  async function deleteSalesOrder() {
+    if (!profile || !deletingOrder) return;
+    const confirmation = deleteOrderConfirmation.trim();
+    setDeletingSalesOrder(true);
+    setDeleteOrderError("");
+    try {
+      await crmFetch(`/api/crm/contacts${queryString({ resource: "sales_order", id: deletingOrder.id, contactId: profile.contact.id })}`, {
+        method: "DELETE",
+        headers: { "x-mzj-sales-order-delete-confirmation": confirmation },
+        body: JSON.stringify({
+          contactId: profile.contact.id,
+          orderId: deletingOrder.id,
+          confirmation,
+        }),
+      });
+      setDeletingOrder(null);
+      setDeleteOrderConfirmation("");
+      await Promise.all([loadProfile(profile.contact.id), loadList()]);
+    } catch (failure) {
+      setDeleteOrderError(failure instanceof Error ? failure.message : "تعذر حذف طلب البيع");
+    } finally {
+      setDeletingSalesOrder(false);
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const lead = latestLead(profile);
   const contactName = profile ? text(profile.contact.display_name || lead?.customer_name) : "";
 
   return <div className="crm-page crm-contacts-page-v2">
-    <header className="crm-page-header crm-contacts-header-v2">
-      <div><span className="crm-kicker">السجل الدائم للعملاء</span><h1>جهات الاتصال</h1><p>ملف موحد لكل عميل يجمع بياناته وطلبات البيع والمحادثات وسجل التغييرات بدون تكرار.</p></div>
-      <button type="button" className="crm-secondary-button" onClick={() => void loadList()} disabled={loading}><ArrowClockwise size={18} />تحديث</button>
-    </header>
-
     {error ? <div className="crm-error-banner">{error}</div> : null}
 
     <section className="crm-contact-overview-grid">
@@ -285,12 +438,15 @@ export function CrmContactsPage() {
       <SummaryCard icon={ClockCounterClockwise} label="لديها طلبات مفتوحة" value={number.format(Number(summary.open_contacts || 0))} />
       <SummaryCard icon={CheckCircle} label="لديها طلبات منتهية" value={number.format(Number(summary.completed_contacts || 0))} />
       <SummaryCard icon={ChatCircleDots} label="لديها محادثات" value={number.format(Number(summary.contacts_with_conversations || 0))} />
+      <SummaryCard icon={Car} label="إجمالي السيارات المباعة" value={number.format(Number(summary.total_sold_vehicles || 0))} />
+      <SummaryCard icon={Receipt} label="إجمالي طلبات البيع" value={number.format(Number(summary.total_sales_orders || 0))} />
     </section>
 
     <section className="crm-contact-list-shell">
       <form className="crm-contact-search-v2" onSubmit={(event) => { event.preventDefault(); applySearch(); }}>
         <label><MagnifyingGlass size={20} /><input value={q} onChange={(event) => setQ(event.target.value)} placeholder="بحث بالاسم أو رقم الجوال أو الحالة أو رقم طلب البيع أو الملاحظات" /></label>
         <button type="submit" className="crm-primary-button">بحث</button>
+        <button type="button" className="crm-secondary-button" onClick={() => void loadList()} disabled={loading}><ArrowClockwise size={18} />تحديث</button>
         <span>النتائج: {number.format(total)}</span>
       </form>
 
@@ -338,7 +494,7 @@ export function CrmContactsPage() {
             <SummaryCard icon={ClockCounterClockwise} label="آخر عملية بيع" value={formatDate(profile.salesSummary.lastSaleAt)} />
           </section>
 
-          <section className="crm-contact-info-panel">
+          <section className="crm-contact-info-panel crm-contact-primary-info">
             <div className="crm-contact-section-title"><div><h3>البيانات الحالية</h3><p>آخر بيانات فعالة مرتبطة بملف العميل.</p></div><IdentificationCard size={23} /></div>
             <div className="crm-contact-info-grid">
               <article><small>الاسم</small><strong>{contactName}</strong></article><article><small>رقم الجوال</small><strong dir="ltr">{text(profile.contact.primary_phone || profile.contact.primary_phone_normalized)}</strong></article>
@@ -364,6 +520,10 @@ export function CrmContactsPage() {
                     <span className={`crm-sales-order-state ${order.is_cancelled ? "cancelled" : "active"}`}>{order.is_cancelled ? "ملغي" : text(order.erp_status || "نشط")}</span>
                     {open ? <CaretUp size={19} /> : <CaretDown size={19} />}
                   </button>
+                  {profile.canManageSalesOrders ? <div className="crm-sales-order-actions">
+                    {!order.is_cancelled ? <button type="button" className="crm-secondary-button compact" onClick={() => openOrderEditor(order)}><NotePencil size={16} />تعديل طلب البيع</button> : null}
+                    <button type="button" className="crm-danger-button ghost compact" onClick={() => openOrderDelete(order)}><Trash size={16} />حذف طلب البيع</button>
+                  </div> : null}
                   {open ? <div className="crm-sales-order-details">
                     <div className="crm-sales-order-financials">
                       <article><small>قبل الضريبة</small><strong>{money.format(Number(order.subtotal_before_tax || 0))}</strong></article>
@@ -395,5 +555,43 @@ export function CrmContactsPage() {
     </div> : null}
 
     {purgeOpen && profile ? <div className="crm-modal-backdrop crm-contact-purge-backdrop" onMouseDown={() => { setPurgeOpen(false); setPurgeError(""); }}><div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>حذف ملف العميل بالكامل</h2><p>سيتم حذف جهة الاتصال والعميل وطلبات الخدمة والمحادثات والرسائل نهائيًا.</p></div><button className="crm-icon-button" type="button" onClick={() => { setPurgeOpen(false); setPurgeError(""); }}><X size={18} /></button></header><div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>هذا الإجراء غير قابل للتراجع</strong><span>{profile.contact.primary_phone || profile.contact.primary_phone_normalized ? `اكتب رقم الجوال المسجل للتأكيد: ${profile.contact.primary_phone || profile.contact.primary_phone_normalized}` : "لا يوجد رقم جوال مسجل. اكتب كلمة التأكيد الأساسية 2106"}</span></div></div>{purgeError ? <div className="crm-alert error">{purgeError}</div> : null}<label className="crm-form-label"><span>التأكيد</span><input value={confirmPhone} onChange={(event) => { setConfirmPhone(event.target.value); if (purgeError) setPurgeError(""); }} /></label><div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setPurgeOpen(false); setPurgeError(""); }}>إلغاء</button><button type="button" className="crm-danger-button" disabled={purging || !confirmPhone.trim()} onClick={() => void purgeContact()}><Trash size={17} />{purging ? "جاري الحذف..." : "حذف الملف بالكامل"}</button></div></div></div> : null}
+
+    {editingOrder && orderDraft && profile ? <div className="crm-modal-backdrop crm-contact-purge-backdrop" onMouseDown={() => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); }}>
+      <div className="crm-modal-card crm-sales-order-edit-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><h2>تعديل طلب البيع</h2><p dir="ltr">{editingOrder.sales_order_no}</p></div><button className="crm-icon-button" type="button" onClick={() => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); }}><X size={18} /></button></header>
+        {orderEditError ? <div className="crm-alert error">{orderEditError}</div> : null}
+        <div className="crm-sales-order-edit-grid">
+          <label className="crm-form-label"><span>تاريخ الطلب</span><input type="date" value={orderDraft.orderDate} onChange={(event) => updateOrderDraft("orderDate", event.target.value)} /></label>
+          <label className="crm-form-label"><span>تاريخ التسليم</span><input type="date" value={orderDraft.deliveryDate} onChange={(event) => updateOrderDraft("deliveryDate", event.target.value)} /></label>
+          <label className="crm-form-label"><span>القيمة قبل الضريبة</span><input type="number" min="0" step="0.01" value={orderDraft.subtotalBeforeTax} onChange={(event) => updateOrderDraft("subtotalBeforeTax", event.target.value)} /></label>
+          <label className="crm-form-label"><span>قيمة الضريبة</span><input type="number" min="0" step="0.01" value={orderDraft.taxValue} onChange={(event) => updateOrderDraft("taxValue", event.target.value)} /></label>
+          <label className="crm-form-label"><span>رسوم التسجيل</span><input type="number" min="0" step="0.01" value={orderDraft.registrationFee} onChange={(event) => updateOrderDraft("registrationFee", event.target.value)} /></label>
+          <label className="crm-form-label"><span>الإجمالي شامل الضريبة</span><input type="number" min="0" step="0.01" value={orderDraft.totalInclVat} onChange={(event) => updateOrderDraft("totalInclVat", event.target.value)} /></label>
+        </div>
+        {orderDraft.vehicles.length ? <section className="crm-sales-order-edit-vehicles">
+          <div><h3>السيارات داخل الطلب</h3><p>تعديل الكمية والقيم فقط بدون تغيير ربط السيارة أو رقم الهيكل.</p></div>
+          {orderDraft.vehicles.map((vehicle) => <article key={vehicle.id}>
+            <strong>{vehicle.label}</strong>
+            <div className="crm-sales-order-vehicle-edit-grid">
+              <label className="crm-form-label"><span>الكمية</span><input type="number" min="1" step="0.01" value={vehicle.qty} onChange={(event) => updateVehicleDraft(vehicle.id, "qty", event.target.value)} /></label>
+              <label className="crm-form-label"><span>سعر الوحدة</span><input type="number" min="0" step="0.01" value={vehicle.unitPrice} onChange={(event) => updateVehicleDraft(vehicle.id, "unitPrice", event.target.value)} /></label>
+              <label className="crm-form-label"><span>القيمة</span><input type="number" min="0" step="0.01" value={vehicle.itemValue} onChange={(event) => updateVehicleDraft(vehicle.id, "itemValue", event.target.value)} /></label>
+              <label className="crm-form-label"><span>الإجمالي شامل الضريبة</span><input type="number" min="0" step="0.01" value={vehicle.totalInclVat} onChange={(event) => updateVehicleDraft(vehicle.id, "totalInclVat", event.target.value)} /></label>
+            </div>
+          </article>)}
+        </section> : null}
+        <div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); }}>إلغاء</button><button type="button" className="crm-primary-button" disabled={savingOrder} onClick={() => void saveSalesOrder()}><CheckCircle size={17} />{savingOrder ? "جاري الحفظ..." : "حفظ التعديل"}</button></div>
+      </div>
+    </div> : null}
+
+    {deletingOrder && profile ? <div className="crm-modal-backdrop crm-contact-purge-backdrop" onMouseDown={() => { setDeletingOrder(null); setDeleteOrderConfirmation(""); setDeleteOrderError(""); }}>
+      <div className="crm-modal-card crm-contact-purge-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <header><div><h2>حذف طلب البيع</h2><p dir="ltr">{deletingOrder.sales_order_no}</p></div><button className="crm-icon-button" type="button" onClick={() => { setDeletingOrder(null); setDeleteOrderConfirmation(""); setDeleteOrderError(""); }}><X size={18} /></button></header>
+        <div className="crm-contact-purge-warning"><Trash size={28} /><div><strong>سيتم حذف هذا الطلب من ملف العميل</strong><span>سينخفض عدد طلبات البيع والسيارات وإجمالي المبيعات في جهات الاتصال والتقارير وKPI حسب بيانات الطلب المحذوف.</span></div></div>
+        {deleteOrderError ? <div className="crm-alert error">{deleteOrderError}</div> : null}
+        <label className="crm-form-label"><span>اكتب رقم طلب البيع كاملًا للتأكيد</span><input dir="ltr" value={deleteOrderConfirmation} onChange={(event) => { setDeleteOrderConfirmation(event.target.value); if (deleteOrderError) setDeleteOrderError(""); }} placeholder={deletingOrder.sales_order_no} /></label>
+        <div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setDeletingOrder(null); setDeleteOrderConfirmation(""); setDeleteOrderError(""); }}>إلغاء</button><button type="button" className="crm-danger-button" disabled={deletingSalesOrder || deleteOrderConfirmation.trim() !== deletingOrder.sales_order_no} onClick={() => void deleteSalesOrder()}><Trash size={17} />{deletingSalesOrder ? "جاري الحذف..." : "حذف طلب البيع"}</button></div>
+      </div>
+    </div> : null}
   </div>;
 }

@@ -59,3 +59,46 @@ export type CreativeDraft = {
   platforms: PlatformAssignment[];
   notes?: Record<string, string>;
 };
+
+export type RawFolderRequestUser = {
+  uid: string;
+  name: string;
+  folderName?: string;
+};
+
+export type RawFolderRequestCreative = {
+  name: string;
+  folderName: string;
+  creativeInstanceId: string;
+  creativeIndex: number;
+  cars: Array<{ id: string; name: string; folderName?: string }>;
+  users: RawFolderRequestUser[];
+};
+
+export type RawFolderRequest = {
+  monthKey: string;
+  campaignCode: string;
+  campaignFolderName: string;
+  campaignDisplayName?: string;
+  driveLetter?: string;
+  remoteRoot?: string;
+  creatives: RawFolderRequestCreative[];
+};
+
+export type RawFolderResult = {
+  ok?: boolean;
+  message?: string;
+  monthKey?: string;
+  campaignCode?: string;
+  campaignFolderName?: string;
+  campaignFolderPath?: string;
+  rawRoot?: string;
+  driveLetter?: string;
+  rawFolders?: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
+};
+
+export type ExecutionFolderCreation = {
+  request: RawFolderRequest;
+  result: RawFolderResult;
+};

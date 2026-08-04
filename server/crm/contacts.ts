@@ -3,6 +3,7 @@ import { audit, clean, normalizePhone, parseBody, positiveInt, requireCrmUser, s
 import { hasPermission } from "../../shared/access-control.js";
 import { getSql } from "../_db.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
+import { cancelErpNextSalesOrder, refreshCrmLeadSalesSnapshot } from "../_erpnext-sales-order-sync.js";
 
 function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
   return {
@@ -17,6 +18,31 @@ function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
 
 function canPurgeContact(user: any) {
   return hasPermission(user, "crm.contacts.purge");
+}
+
+function canManageSalesOrders(user: any) {
+  return canPurgeContact(user);
+}
+
+function dateOrNull(value: unknown, label: string) {
+  const normalized = clean(value);
+  if (!normalized) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) throw new Error(`${label} غير صحيح`);
+  const parsed = new Date(`${normalized}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) throw new Error(`${label} غير صحيح`);
+  return normalized;
+}
+
+function nonNegativeNumber(value: unknown, label: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${label} يجب أن يكون رقمًا صحيحًا أكبر من أو يساوي صفر`);
+  return Math.round(parsed * 100) / 100;
+}
+
+function positiveQuantity(value: unknown, label: string) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} يجب أن تكون واحدًا أو أكثر`);
+  return Math.round(parsed * 100) / 100;
 }
 
 async function canAccessContact(contactId: string, user: any) {
@@ -175,8 +201,25 @@ async function listContacts(request: VercelRequest, response: VercelResponse, us
       count(*)::int as total_contacts,
       count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='open'))::int as open_contacts,
       count(*) filter(where exists(select 1 from crm.service_requests r where r.contact_id=c.id and r.request_state='closed'))::int as completed_contacts,
-      count(*) filter(where exists(select 1 from crm.conversations cv where cv.contact_id=c.id))::int as contacts_with_conversations
+      count(*) filter(where exists(select 1 from crm.conversations cv where cv.contact_id=c.id))::int as contacts_with_conversations,
+      coalesce(sum(contact_sales.sales_orders_count),0)::int as total_sales_orders,
+      coalesce(sum(contact_sales.sold_vehicles_count),0)::int as total_sold_vehicles
     from crm.contacts c
+    left join (
+      select
+        sales_lead.contact_id,
+        count(*)::int as sales_orders_count,
+        coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_vehicles_count
+      from integrations.erpnext_sales_orders so
+      join crm.leads sales_lead on sales_lead.id=so.crm_lead_id
+      left join lateral (
+        select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
+        from integrations.erpnext_sales_order_vehicles sov
+        where sov.sales_order_id=so.id
+      ) vehicle_stats on true
+      where coalesce(so.is_cancelled,false)=false
+      group by sales_lead.contact_id
+    ) contact_sales on contact_sales.contact_id=c.id
     where (
       ${scope.all}::boolean
       or exists(
@@ -297,7 +340,220 @@ async function contactProfile(request: VercelRequest, response: VercelResponse, 
     totalSalesAmount: activeSalesOrders.reduce((total: number, order: any) => total + Number(order.total_incl_vat || 0), 0),
     lastSaleAt: activeSalesOrders[0]?.order_date || activeSalesOrders[0]?.received_at || null,
   };
-  return response.status(200).json({ ok: true, contact, identities, leads, requests, conversations, messages, events, ownership, notes, salesOrders, salesSummary, canPurge: canPurgeContact(user) });
+  return response.status(200).json({
+    ok: true,
+    contact,
+    identities,
+    leads,
+    requests,
+    conversations,
+    messages,
+    events,
+    ownership,
+    notes,
+    salesOrders,
+    salesSummary,
+    canPurge: canPurgeContact(user),
+    canManageSalesOrders: canManageSalesOrders(user),
+  });
+}
+
+async function updateSalesOrder(request: VercelRequest, response: VercelResponse, user: any) {
+  if (!canManageSalesOrders(user)) return response.status(403).json({ ok: false, error: "تعديل طلبات البيع متاح لمدير النظام أو مدير المبيعات فقط" });
+  const body = parseBody(request);
+  const contactId = clean(body.contactId || body.contact_id || request.query.contactId);
+  const orderId = clean(body.orderId || body.order_id || request.query.id);
+  if (!contactId || !orderId) return response.status(400).json({ ok: false, error: "بيانات طلب البيع غير مكتملة" });
+  if (!(await canAccessContact(contactId, user))) return response.status(404).json({ ok: false, error: "جهة الاتصال غير موجودة أو لا توجد صلاحية لتعديلها" });
+
+  let orderDate: string | null;
+  let deliveryDate: string | null;
+  let subtotalBeforeTax: number;
+  let taxValue: number;
+  let registrationFee: number;
+  let totalInclVat: number;
+  let vehicleUpdates: Array<{ id: string; qty: number; unitPrice: number; itemValue: number; totalInclVat: number }>;
+  try {
+    const orderInput = body.order && typeof body.order === "object" ? body.order : {};
+    orderDate = dateOrNull(orderInput.orderDate ?? orderInput.order_date, "تاريخ الطلب");
+    deliveryDate = dateOrNull(orderInput.deliveryDate ?? orderInput.delivery_date, "تاريخ التسليم");
+    subtotalBeforeTax = nonNegativeNumber(orderInput.subtotalBeforeTax ?? orderInput.subtotal_before_tax, "القيمة قبل الضريبة");
+    taxValue = nonNegativeNumber(orderInput.taxValue ?? orderInput.tax_value, "قيمة الضريبة");
+    registrationFee = nonNegativeNumber(orderInput.registrationFee ?? orderInput.registration_fee, "رسوم التسجيل");
+    totalInclVat = nonNegativeNumber(orderInput.totalInclVat ?? orderInput.total_incl_vat, "إجمالي الطلب");
+    vehicleUpdates = (Array.isArray(body.vehicles) ? body.vehicles : []).map((vehicle: any, index: number) => ({
+      id: clean(vehicle?.id),
+      qty: positiveQuantity(vehicle?.qty, `كمية السيارة رقم ${index + 1}`),
+      unitPrice: nonNegativeNumber(vehicle?.unitPrice ?? vehicle?.unit_price, `سعر السيارة رقم ${index + 1}`),
+      itemValue: nonNegativeNumber(vehicle?.itemValue ?? vehicle?.item_value, `قيمة السيارة رقم ${index + 1}`),
+      totalInclVat: nonNegativeNumber(vehicle?.totalInclVat ?? vehicle?.total_incl_vat, `إجمالي السيارة رقم ${index + 1}`),
+    }));
+    if (vehicleUpdates.some((vehicle) => !vehicle.id)) throw new Error("بيانات إحدى السيارات غير مكتملة");
+  } catch (failure) {
+    return response.status(400).json({ ok: false, error: failure instanceof Error ? failure.message : "بيانات التعديل غير صحيحة" });
+  }
+
+  const sql = getSql();
+  const result = await sql.begin(async (tx: any) => {
+    const [beforeOrder] = await tx<any[]>`
+      select so.*,so.id::text,so.crm_lead_id::text
+      from integrations.erpnext_sales_orders so
+      join crm.leads l on l.id=so.crm_lead_id
+      where so.id=${orderId}::uuid and l.contact_id=${contactId}::uuid
+      limit 1 for update
+    `;
+    if (!beforeOrder) return null;
+    if (beforeOrder.is_cancelled) return { cancelled: true, beforeOrder };
+
+    const beforeVehicles = await tx<any[]>`
+      select *,id::text from integrations.erpnext_sales_order_vehicles
+      where sales_order_id=${orderId}::uuid
+      order by created_at,id
+      for update
+    `;
+    const allowedVehicleIds = new Set(beforeVehicles.map((vehicle: any) => clean(vehicle.id)));
+    if (vehicleUpdates.some((vehicle) => !allowedVehicleIds.has(vehicle.id))) return { invalidVehicle: true, beforeOrder, beforeVehicles };
+
+    const [afterOrder] = await tx<any[]>`
+      update integrations.erpnext_sales_orders set
+        order_date=${orderDate}::date,
+        delivery_date=${deliveryDate}::date,
+        subtotal_before_tax=${subtotalBeforeTax},
+        tax_value=${taxValue},
+        registration_fee=${registrationFee},
+        total_incl_vat=${totalInclVat},
+        updated_at=now()
+      where id=${orderId}::uuid
+      returning *,id::text,crm_lead_id::text
+    `;
+
+    for (const vehicle of vehicleUpdates) {
+      await tx`
+        update integrations.erpnext_sales_order_vehicles set
+          qty=${vehicle.qty},
+          unit_price=${vehicle.unitPrice},
+          item_value=${vehicle.itemValue},
+          total_incl_vat=${vehicle.totalInclVat},
+          updated_at=now()
+        where id=${vehicle.id}::uuid and sales_order_id=${orderId}::uuid
+      `;
+    }
+    const afterVehicles = await tx<any[]>`
+      select *,id::text from integrations.erpnext_sales_order_vehicles
+      where sales_order_id=${orderId}::uuid
+      order by created_at,id
+    `;
+    return { beforeOrder, beforeVehicles, afterOrder, afterVehicles };
+  });
+
+  if (!result) return response.status(404).json({ ok: false, error: "طلب البيع غير موجود داخل ملف العميل" });
+  if ((result as any).cancelled) return response.status(409).json({ ok: false, error: "لا يمكن تعديل طلب بيع ملغي" });
+  if ((result as any).invalidVehicle) return response.status(400).json({ ok: false, error: "إحدى السيارات لا تتبع طلب البيع المحدد" });
+
+  await refreshCrmLeadSalesSnapshot((result as any).afterOrder.crm_lead_id);
+  await audit(
+    user,
+    "sales_order_updated",
+    "erpnext_sales_order",
+    orderId,
+    { order: (result as any).afterOrder, vehicles: (result as any).afterVehicles },
+    { order: (result as any).beforeOrder, vehicles: (result as any).beforeVehicles },
+  );
+  return response.status(200).json({ ok: true, orderId, message: "تم تعديل طلب البيع وتحديث التقارير" });
+}
+
+async function deleteSalesOrder(request: VercelRequest, response: VercelResponse, user: any) {
+  if (!canManageSalesOrders(user)) return response.status(403).json({ ok: false, error: "حذف طلبات البيع متاح لمدير النظام أو مدير المبيعات فقط" });
+  const sql = getSql();
+  const body = parseBody(request);
+  const contactId = clean(body.contactId || body.contact_id || request.query.contactId);
+  const orderId = clean(body.orderId || body.order_id || request.query.id);
+  const confirmationHeader = request.headers["x-mzj-sales-order-delete-confirmation"];
+  const confirmation = clean(body.confirmation ?? (Array.isArray(confirmationHeader) ? confirmationHeader[0] : confirmationHeader));
+  if (!contactId || !orderId) return response.status(400).json({ ok: false, error: "بيانات طلب البيع غير مكتملة" });
+  if (!(await canAccessContact(contactId, user))) return response.status(404).json({ ok: false, error: "جهة الاتصال غير موجودة أو لا توجد صلاحية لتعديلها" });
+
+  const [order] = await sql<any[]>`
+    select so.*,so.id::text,so.platform_user_id::text,so.crm_lead_id::text,so.tracking_order_id::text
+    from integrations.erpnext_sales_orders so
+    join crm.leads l on l.id=so.crm_lead_id
+    where so.id=${orderId}::uuid and l.contact_id=${contactId}::uuid
+    limit 1
+  `;
+  if (!order) return response.status(404).json({ ok: false, error: "طلب البيع غير موجود داخل ملف العميل" });
+  if (!confirmation || confirmation !== clean(order.sales_order_no)) {
+    return response.status(400).json({ ok: false, error: "اكتب رقم طلب البيع كاملًا لتأكيد الحذف" });
+  }
+
+  const cancellation = await cancelErpNextSalesOrder({
+    mode: "crm_only",
+    reason: `تم حذف طلب البيع ${order.sales_order_no} من صفحة جهات الاتصال`,
+    actor: {
+      id: user.id,
+      name: user.fullName,
+      role: Array.isArray(user.roles) ? user.roles.join("، ") : "CRM",
+    },
+    normalized: {
+      orderNo: clean(order.sales_order_no),
+      sourceInstanceKey: clean(order.source_instance_key),
+      erpCreatedAt: order.erp_created_at ? new Date(order.erp_created_at).toISOString() : "legacy",
+      erpStatus: "Cancelled",
+      erpEvent: "crm.sales_order.deleted",
+      rawBody: {
+        action: "deleted_from_crm_contact",
+        orderId,
+        contactId,
+        deletedBy: user.id,
+      },
+    } as any,
+  });
+  if (!(cancellation as any)?.found) return response.status(409).json({ ok: false, error: "تعذر تجهيز طلب البيع للحذف" });
+
+  const [deleted] = await sql<any[]>`
+    delete from integrations.erpnext_sales_orders
+    where id=${orderId}::uuid
+    returning *,id::text,crm_lead_id::text
+  `;
+  if (!deleted) return response.status(404).json({ ok: false, error: "تم حذف طلب البيع بالفعل" });
+  let reopenedLead: any = null;
+  if (["cancel_recorded", "already_cancelled"].includes(clean((cancellation as any)?.crm?.status)) && deleted.crm_lead_id) {
+    [reopenedLead] = await sql<any[]>`
+      update crm.leads set
+        status_code=null,
+        status_label='عميل جديد',
+        sold_quantity=0,
+        sold_at=null,
+        updated_by=${user.id}::uuid,
+        updated_at=now()
+      where id=${deleted.crm_lead_id}::uuid
+        and status_label='تم البيع'
+        and not exists(
+          select 1 from integrations.erpnext_sales_orders active_order
+          where active_order.crm_lead_id=crm.leads.id and coalesce(active_order.is_cancelled,false)=false
+        )
+      returning id::text,status_code,status_label,sold_quantity
+    `;
+    if (reopenedLead) {
+      await sql`
+        insert into crm.lead_events(
+          lead_id,event_type,old_status,new_status,actor_id,actor_name,actor_role,note,details,created_at
+        ) values(
+          ${deleted.crm_lead_id}::uuid,'sales_order_deleted','تم البيع','عميل جديد',${user.id}::uuid,${user.fullName},
+          ${Array.isArray(user.roles) ? user.roles.join("، ") : null},${`تم حذف طلب البيع ${deleted.sales_order_no} من صفحة جهات الاتصال`},
+          ${sql.json({ salesOrderNo: deleted.sales_order_no, contactId, orderId })},now()
+        )
+      `;
+    }
+  }
+  await refreshCrmLeadSalesSnapshot(deleted.crm_lead_id);
+  await audit(user, "sales_order_deleted", "erpnext_sales_order", orderId, {
+    deleted: true,
+    contactId,
+    salesOrderNo: deleted.sales_order_no,
+    cancellation,
+    reopenedLead,
+  }, order);
+  return response.status(200).json({ ok: true, deleted: { id: orderId, salesOrderNo: deleted.sales_order_no }, message: "تم حذف طلب البيع وتحديث التقارير" });
 }
 
 async function purgeContact(request: VercelRequest, response: VercelResponse, user: any) {
@@ -359,6 +615,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const id = clean(request.query.id);
     return id ? contactProfile(request, response, user, id) : listContacts(request, response, user);
   }
-  if (request.method === "DELETE") return purgeContact(request, response, user);
+  if (request.method === "PATCH") return updateSalesOrder(request, response, user);
+  if (request.method === "DELETE") {
+    if (clean(request.query.resource) === "sales_order") return deleteSalesOrder(request, response, user);
+    return purgeContact(request, response, user);
+  }
   return response.status(405).json({ ok: false, error: "Method not allowed" });
 }

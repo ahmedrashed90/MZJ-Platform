@@ -4,7 +4,8 @@ import {
   ErpNextSalesOrderError,
   normalizeErpNextSalesOrder,
 } from "../_erpnext-sales-order-normalizer.js";
-import { cancelErpNextSalesOrder, syncErpNextSalesOrder } from "../_erpnext-sales-order-sync.js";
+import { cancelErpNextSalesOrder, resolveErpNextPlatformUser, syncErpNextSalesOrder } from "../_erpnext-sales-order-sync.js";
+import { resolveErpNextTrackingBranchCode } from "../_erpnext-branch-routing.js";
 import { clean } from "../_tracking-utils.js";
 import { ingestTrackingOrder, TrackingIngestError } from "./tracking-orders.js";
 
@@ -59,11 +60,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
       });
     }
 
+    const userResolution = await resolveErpNextPlatformUser(normalized.erpUserId);
+    const trackingBranchCode = resolveErpNextTrackingBranchCode({
+      erpBranch: normalized.erpBranch,
+      erpUserId: normalized.erpUserId,
+      platformUser: userResolution.candidate,
+    });
     const results = [];
     for (const payload of normalized.payloads) {
-      results.push(await ingestTrackingOrder(payload));
+      results.push(await ingestTrackingOrder({ ...payload, branch: trackingBranchCode || payload.branch }));
     }
-    const linkage = await syncErpNextSalesOrder({ normalized, trackingResults: results });
+    const linkage = await syncErpNextSalesOrder({ normalized, trackingResults: results, userResolution });
 
     return response.status(200).json({
       ok: true,

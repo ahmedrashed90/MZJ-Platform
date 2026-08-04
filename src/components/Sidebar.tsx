@@ -29,10 +29,24 @@ export function Sidebar() {
   const systemAllowed: Record<string, boolean> = { crm: canAccessCrm(user), marketing: canAccessMarketing(user), operations: canAccessOperations(user), tracking: canAccessTracking(user) };
   const visibleItems = items.filter((item) => "permission" in item ? hasPermission(user, item.permission) : systemAllowed[item.system]);
   const visibleSupport = supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));
+  const fullName = user?.fullName?.trim() || "مستخدم المنصة";
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
+
   return <aside className="sidebar">
     <div className="brand-block"><img src="/logo.png" alt="MZJ" /><span>مجموعة محمد بن ذعار العجمي</span></div>
     <nav className="sidebar-nav" aria-label="القائمة الرئيسية"><div className="nav-group">{visibleItems.map((item) => <Item key={item.href} {...item} />)}</div><div className="nav-separator" /><div className="nav-group">{visibleSupport.map((item) => <Item key={item.href} {...item} />)}</div></nav>
-    <div className="sidebar-account" aria-label="الحساب"><div className="account-avatar">{user?.fullName.trim().slice(0, 1) || "م"}</div><div className="account-copy"><strong>{user?.fullName}</strong><span>{roleText}</span></div><NotificationBell /><button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={18} /></button></div>
+    <div className="sidebar-account" aria-label="الحساب">
+      <div className="account-avatar" aria-hidden="true">{fullName.slice(0, 1)}</div>
+      <div className="account-details">
+        <div className="account-row account-primary">
+          <strong className="account-name" title={fullName}>{fullName}</strong>
+          <NotificationBell />
+        </div>
+        <div className="account-row account-secondary">
+          <span className="account-role" title={roleText}>{roleText}</span>
+          <button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={17} /></button>
+        </div>
+      </div>
+    </div>
   </aside>;
 }

@@ -139,9 +139,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true });
     }
     const [row] = await sql<any[]>`
-      insert into crm.dashboard_statuses(id,department_code,label,value,sort_order,is_active,updated_at)
-      values (${id},${clean(body.departmentCode)},${clean(body.label)},${clean(body.value)},${Number(body.sortOrder||0)},${body.isActive!==false},now())
-      on conflict (id) do update set department_code=excluded.department_code,label=excluded.label,value=excluded.value,sort_order=excluded.sort_order,is_active=excluded.is_active,updated_at=now()
+      insert into crm.dashboard_statuses(id,department_code,label,value,sort_order,is_active,show_on_dashboard,updated_at)
+      values (${id},${clean(body.departmentCode)},${clean(body.label)},${clean(body.value)},${Number(body.sortOrder||0)},${body.isActive!==false},${body.showOnDashboard!==false},now())
+      on conflict (id) do update set department_code=excluded.department_code,label=excluded.label,value=excluded.value,sort_order=excluded.sort_order,is_active=excluded.is_active,show_on_dashboard=excluded.show_on_dashboard,updated_at=now()
       returning *
     `;
     await audit(user, "crm_status_saved", "dashboard_status", id, row);

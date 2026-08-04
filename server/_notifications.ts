@@ -186,17 +186,6 @@ function notificationDateTime(value: unknown) {
   }).format(date);
 }
 
-function notificationDateOnly(value: unknown) {
-  const normalized = clean(value);
-  if (!normalized) return "";
-  const date = new Date(normalized);
-  if (!Number.isFinite(date.getTime())) return normalized;
-  return new Intl.DateTimeFormat("ar-SA", {
-    dateStyle: "medium",
-    timeZone: "Asia/Riyadh",
-  }).format(date);
-}
-
 function providerPostIdFromPublishResult(platform: unknown, input: unknown) {
   const result = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, any> : {};
   const publish = result.publish && typeof result.publish === "object" && !Array.isArray(result.publish) ? result.publish as Record<string, any> : {};
@@ -506,64 +495,6 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
   const sql = getSql();
   const id = clean(result?.id || body?.id || body?.sourceId || body?.taskId || body?.templateId);
   const actor = { actorId: user.id, actorName: user.fullName };
-  if (action === "create_photo_request" || action === "complete_photo_request") {
-    const requestId = clean(result?.request?.id || body?.id);
-    if (!requestId || !validUuid(requestId)) return;
-    const [requestSummary] = await sql<any[]>`
-      select r.id::text,r.request_no,r.request_kind,r.status,r.photography_date,r.note,r.requested_by_name,
-        r.source_branch_code,r.destination_branch_code,sl.name as source_location_name,dl.name as destination_location_name,
-        count(rv.vehicle_id)::int as vehicles_count,
-        string_agg(
-          concat_ws(' - ',nullif(v.vin,''),nullif(coalesce(v.car_name,v.statement),'')),
-          E'\n' order by v.vin
-        ) filter (where v.id is not null) as vehicles_details
-      from operations.transfer_requests r
-      left join operations.locations sl on sl.id=r.source_location_id
-      left join operations.locations dl on dl.id=r.destination_location_id
-      left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
-      left join operations.vehicles v on v.id=rv.vehicle_id
-      where r.id=${requestId}::uuid and r.request_kind='photography'
-      group by r.id,sl.name,dl.name
-    `;
-    if (!requestSummary) return;
-    const completed = action === "complete_photo_request";
-    await createNotification({
-      systemCode: "operations",
-      eventType: completed ? "photography_request_completed" : "photography_request_created",
-      title: completed ? "تم إنهاء طلب التصوير" : "تم إنشاء طلب تصوير جديد",
-      body: joinDetails([
-        detailLine("رقم الطلب", requestSummary.request_no),
-        detailLine("نوع الطلب", "طلب تصوير"),
-        detailLine("الإجراء", completed ? "تم الانتهاء من طلب التصوير" : "إنشاء طلب التصوير"),
-        detailLine("المرحلة الحالية", operationsRequestStageLabel(requestSummary.status)),
-        detailLine("تاريخ التصوير", notificationDateOnly(requestSummary.photography_date)),
-        detailPath("المسار", requestSummary.source_location_name, requestSummary.destination_location_name),
-        detailCount("عدد السيارات", requestSummary.vehicles_count),
-        detailLine("سيارات الطلب", requestSummary.vehicles_details),
-        detailLine("منشئ الطلب", requestSummary.requested_by_name),
-        detailLine("ملاحظات الطلب", requestSummary.note),
-        detailLine("المسؤول", user.fullName),
-      ]),
-      entityType: "request",
-      entityId: requestId,
-      actionUrl: "/operations/transfers",
-      severity: "success",
-      branchCodes: [requestSummary.source_branch_code, requestSummary.destination_branch_code],
-      ...actor,
-      metadata: {
-        responsibleName: user.fullName,
-        requestKind: "photography",
-        photographyDate: clean(requestSummary.photography_date),
-        requestNo: clean(requestSummary.request_no),
-      },
-      dedupeKey: notificationDedupe(
-        completed ? "operations-photography-request-completed" : "operations-photography-request-created",
-        requestId,
-        completed ? clean(result?.message) || requestSummary.status : requestSummary.request_no,
-      ),
-    });
-    return;
-  }
   if (action === "publish_now") {
     const successfulRows = Array.isArray(result?.results)
       ? result.results.filter((item: any) => item?.ok && validUuid(clean(item?.id)))
@@ -962,6 +893,10 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
     return;
   }
 
+  if (action === "move_vehicles" && Array.isArray(result?.notesUpdated) && result.notesUpdated.length && (!Array.isArray(result?.moved) || !result.moved.length) && (!Array.isArray(result?.pendingApprovals) || !result.pendingApprovals.length)) {
+    return;
+  }
+
   if (action === "move_vehicles" && INVENTORY_STATUS_LABELS[requestedStatusCode] && Array.isArray(result?.moved) && result.moved.length) {
     const statusChangedVehicles = result.moved.filter((movedVehicle: any) => clean(movedVehicle?.previousStatusCode) !== requestedStatusCode);
     for (const movedVehicle of statusChangedVehicles) {
@@ -1009,19 +944,14 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
   const requestId = item.type === "request" ? id : clean(body?.requestId || body?.id);
   if (requestId && validUuid(requestId)) {
     [requestSummary] = await sql<any[]>`
-      select r.id::text,r.request_no,r.request_kind,r.status,r.cancellation_reason,r.note,r.photography_date,r.requested_by_name,
+      select r.id::text,r.request_no,r.request_kind,r.status,r.cancellation_reason,r.note,
         sl.name as source_location_name,dl.name as destination_location_name,
         r.source_branch_code,r.destination_branch_code,
-        count(rv.vehicle_id)::int as vehicles_count,
-        string_agg(
-          concat_ws(' - ',nullif(v.vin,''),nullif(coalesce(v.car_name,v.statement),'')),
-          E'\n' order by v.vin
-        ) filter (where v.id is not null) as vehicles_details
+        count(rv.vehicle_id)::int as vehicles_count
       from operations.transfer_requests r
       left join operations.locations sl on sl.id=r.source_location_id
       left join operations.locations dl on dl.id=r.destination_location_id
       left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
-      left join operations.vehicles v on v.id=rv.vehicle_id
       where r.id=${requestId}::uuid
       group by r.id,sl.name,dl.name
     `;
@@ -1050,31 +980,27 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
 
   if (action === "create_transfer" || action === "transfer_action") {
     const transferAction = clean(body?.transferAction);
-    const currentStageLabel = operationsRequestStageLabel(requestSummary?.status || (action === "create_transfer" ? "created" : ""));
     const actionLabel = transferAction === "delete"
       ? "حذف الطلب"
       : transferAction === "cancel"
         ? "إلغاء الطلب"
-        : currentStageLabel;
+        : "تحديث المرحلة";
     title = action === "create_transfer"
       ? `تم إنشاء ${operationsRequestKindLabel(requestSummary?.request_kind)}`
       : transferAction === "cancel"
         ? `تم إلغاء ${operationsRequestKindLabel(requestSummary?.request_kind)}`
         : transferAction === "delete"
           ? `تم حذف ${operationsRequestKindLabel(requestSummary?.request_kind)}`
-          : `تم تحديث ${operationsRequestKindLabel(requestSummary?.request_kind)} إلى: ${currentStageLabel}`;
+          : `تم تحديث مرحلة ${operationsRequestKindLabel(requestSummary?.request_kind)}`;
     bodyText = joinDetails([
       detailLine("رقم الطلب", requestSummary?.request_no),
       detailLine("نوع الطلب", operationsRequestKindLabel(requestSummary?.request_kind)),
       detailLine("الإجراء", action === "create_transfer" ? "إنشاء الطلب" : actionLabel),
-      detailLine("المرحلة الحالية", currentStageLabel),
-      detailLine("تاريخ التصوير", clean(requestSummary?.request_kind) === "photography" ? notificationDateOnly(requestSummary?.photography_date) : ""),
+      detailLine("المرحلة الحالية", operationsRequestStageLabel(requestSummary?.status || (action === "create_transfer" ? "created" : ""))),
       detailPath("المسار", requestSummary?.source_location_name, requestSummary?.destination_location_name),
       detailCount("عدد السيارات", requestSummary?.vehicles_count || values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : []).length),
-      detailLine("سيارات الطلب", clean(requestSummary?.request_kind) === "photography" ? requestSummary?.vehicles_details : ""),
-      detailLine("منشئ الطلب", requestSummary?.requested_by_name),
       detailLine(transferAction === "cancel" ? "سبب الإلغاء" : "ملاحظة", clean(body?.reason) || clean(body?.note) || clean(requestSummary?.note)),
-      detailLine("المسؤول", user.fullName),
+      detailLine("بواسطة", user.fullName),
     ]);
   } else if (action === "approval_action") {
     const approvalType = clean(body?.approvalType);

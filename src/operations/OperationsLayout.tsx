@@ -12,7 +12,6 @@ const tabs = [
   ["/operations/movement", "الحركة", "operations.movement.view"],
   ["/operations/transfers", "الطلبات", "operations.transfers.view"],
   ["/operations/approvals", "الموافقات", "operations.approvals.view"],
-  ["/operations/all", "جميع السيارات", "operations.all.view"],
   ["/operations/movements", "سجل الحركات", "operations.movements.view"],
   ["/operations/archive", "الأرشيف", "operations.archive.view"],
 ] as const;

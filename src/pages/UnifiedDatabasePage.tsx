@@ -8,7 +8,7 @@ import type { CrmLead, CrmMeta } from "../crm/types";
 import { marketingDate, marketingFetch, marketingQuery } from "../marketing/api";
 import { operationsFetch, formatOperationsDate, queryString as operationsQuery } from "../operations/api";
 import type { OperationsMeta, VehicleRow } from "../operations/types";
-import { trackingFetch, trackingQuery, trackingStatusLabel, formatTrackingDate } from "../tracking/api";
+import { trackingFetch, trackingQuery, trackingStatusLabel, formatTrackingDate, trackingBranchLabel } from "../tracking/api";
 import type { TrackingCounts, TrackingOrderRow } from "../tracking/types";
 import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, hasPermission } from "../systemAccess";
 
@@ -209,7 +209,7 @@ export function UnifiedDatabasePage() {
           "رقم الطلب": order.sales_order_no,
           "العميل": order.customer_name,
           "الجوال": order.customer_mobile,
-          "الفرع": order.branch,
+          "الفرع": trackingBranchLabel(order.branch),
           "المندوب": order.sales_person,
           "عدد السيارات": order.vehicles_count,
           "الحالة": trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled)),
@@ -236,10 +236,6 @@ export function UnifiedDatabasePage() {
 
   return (
     <div className="module-page unified-center-page">
-      <header className="module-page-head unified-page-head">
-        <div><h1>قاعدة البيانات</h1><p>واجهة موحدة للبحث والعرض والتصفية والتصدير من قواعد بيانات الأنظمة الفعلية.</p></div>
-        <Database size={32} weight="duotone" />
-      </header>
       {tabs.length ? (
         <>
           <nav className="unified-system-tabs" aria-label="أنظمة قاعدة البيانات">
@@ -262,7 +258,7 @@ export function UnifiedDatabasePage() {
               {active === "crm" ? <table><thead><tr><th>اسم العميل</th><th>الجوال</th><th>القسم</th><th>الفرع</th><th>الحالة</th><th>المصدر</th><th>السيارة</th><th>المسؤول</th><th>آخر تحديث</th></tr></thead><tbody>{(rows as CrmLead[]).map((row) => <tr key={row.id}><td><strong>{row.customer_name || "—"}</strong></td><td>{row.phone || row.phone_normalized || "—"}</td><td>{departmentLabel(row.department_code)}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{row.status_label || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.car_name || "—"}</td><td>{row.assigned_name || "—"}</td><td>{formatDate(row.updated_at)}</td></tr>)}</tbody></table> : null}
               {active === "marketing" ? <table><thead><tr><th>النوع</th><th>الكود</th><th>الاسم</th><th>التصنيف</th><th>الهدف</th><th>بداية النشر</th><th>نهاية النشر</th><th>الحالة</th></tr></thead><tbody>{(rows as MarketingRow[]).map((row) => <tr key={`${row.source_type}-${row.id}`}><td><span className="unified-record-badge">{row.source_type === "agenda" ? "أجندة" : "حملة"}</span></td><td>{row.code || "—"}</td><td><strong>{row.name || "—"}</strong></td><td>{row.type || "—"}</td><td>{row.objective || "—"}</td><td>{marketingDate(row.publish_start)}</td><td>{marketingDate(row.publish_end)}</td><td>{row.status || "—"}</td></tr>)}</tbody></table> : null}
               {active === "operations" ? <table><thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>الموديل</th><th>الداخلي</th><th>الخارجي</th><th>المكان</th><th>الحالة</th><th>آخر تحديث</th></tr></thead><tbody>{(rows as VehicleRow[]).map((row) => <tr key={row.id}><td><strong>{row.vin}</strong></td><td>{row.car_name || "—"}</td><td>{row.statement || "—"}</td><td>{row.model_year || "—"}</td><td>{row.interior_color || "—"}</td><td>{row.exterior_color || "—"}</td><td>{row.location_name || "—"}</td><td>{row.status_name || "—"}</td><td>{formatOperationsDate(row.updated_at)}</td></tr>)}</tbody></table> : null}
-              {active === "tracking" ? <table><thead><tr><th>رقم الطلب</th><th>العميل</th><th>الجوال</th><th>الفرع</th><th>المندوب</th><th>السيارات</th><th>الحالة</th><th>التقدم</th><th>تاريخ التسليم</th><th>آخر تحديث</th></tr></thead><tbody>{(rows as TrackingOrderRow[]).map((order) => <tr key={order.id}><td><strong>{order.sales_order_no}</strong></td><td>{order.customer_name || "—"}</td><td>{order.customer_mobile || "—"}</td><td>{order.branch || "—"}</td><td>{order.sales_person || "—"}</td><td>{Number(order.vehicles_count || 0).toLocaleString("ar-SA")}</td><td>{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</td><td>{progress(order).toLocaleString("ar-SA")}%</td><td>{formatTrackingDate(order.delivery_date, false)}</td><td>{formatTrackingDate(order.updated_at)}</td></tr>)}</tbody></table> : null}
+              {active === "tracking" ? <table><thead><tr><th>رقم الطلب</th><th>العميل</th><th>الجوال</th><th>الفرع</th><th>المندوب</th><th>السيارات</th><th>الحالة</th><th>التقدم</th><th>تاريخ التسليم</th><th>آخر تحديث</th></tr></thead><tbody>{(rows as TrackingOrderRow[]).map((order) => <tr key={order.id}><td><strong>{order.sales_order_no}</strong></td><td>{order.customer_name || "—"}</td><td>{order.customer_mobile || "—"}</td><td>{trackingBranchLabel(order.branch)}</td><td>{order.sales_person || "—"}</td><td>{Number(order.vehicles_count || 0).toLocaleString("ar-SA")}</td><td>{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</td><td>{progress(order).toLocaleString("ar-SA")}%</td><td>{formatTrackingDate(order.delivery_date, false)}</td><td>{formatTrackingDate(order.updated_at)}</td></tr>)}</tbody></table> : null}
               {!loading && !rows.length ? <div className="unified-empty-row">لا توجد بيانات مطابقة للبحث والفلاتر الحالية.</div> : null}
               {loading ? <div className="unified-empty-row">جاري تحميل البيانات...</div> : null}
             </div>

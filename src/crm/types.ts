@@ -25,6 +25,7 @@ export type CrmStatus = {
   value: string;
   sort_order: number;
   is_active?: boolean;
+  show_on_dashboard?: boolean;
   count?: number;
 };
 
@@ -97,6 +98,7 @@ export type CrmLead = {
   assigned_name?: string | null;
   call_center_assigned_to?: string | null;
   sold_quantity?: number | null;
+  sold_at?: string | null;
   call_center_name?: string | null;
   conversation_id?: string | null;
   conversation_legacy_id?: string | null;

@@ -31,7 +31,6 @@ type PhotoRequestRow = {
   status: string;
   requested_by_name?: string | null;
   requested_at: string;
-  photography_date?: string | null;
   completed_at?: string | null;
   cancelled_at?: string | null;
   note?: string | null;
@@ -51,6 +50,7 @@ type StockPayload = {
 
 type GroupedCar = StockCar & {
   quantity: number;
+  vehicleIds: string[];
   usage: any[];
   locationNames: string[];
 };
@@ -107,13 +107,13 @@ export function StockPage() {
   const [pickerSearch, setPickerSearch] = useState("");
   const [selectedCars, setSelectedCars] = useState<GroupedCar[]>([]);
   const [destinationLocationId, setDestinationLocationId] = useState("");
-  const [photographyDate, setPhotographyDate] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [requestNote, setRequestNote] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [completingRequestId, setCompletingRequestId] = useState("");
+  const [markingStockId, setMarkingStockId] = useState("");
 
   async function load() {
     setError("");
@@ -140,6 +140,7 @@ export function StockPage() {
       const contentUsage = Array.isArray(car.content_usage) ? car.content_usage : [];
       if (existing) {
         existing.quantity += 1;
+        existing.vehicleIds.push(car.id);
         existing.usage.push(...contentUsage);
         existing.photographed = Boolean(existing.photographed || car.photographed);
         if (!existing.photographed_at && car.photographed_at) existing.photographed_at = car.photographed_at;
@@ -148,6 +149,7 @@ export function StockPage() {
         map.set(key, {
           ...car,
           quantity: 1,
+          vehicleIds: [car.id],
           usage: [...contentUsage],
           locationNames: car.location_name ? [car.location_name] : [],
         });
@@ -242,7 +244,6 @@ export function StockPage() {
   function openRequest(row: GroupedCar) {
     setSelectedCars([row]);
     setDestinationLocationId("");
-    setPhotographyDate("");
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
@@ -260,7 +261,6 @@ export function StockPage() {
     setRequestOpen(false);
     setSelectedCars([]);
     setDestinationLocationId("");
-    setPhotographyDate("");
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
@@ -268,6 +268,25 @@ export function StockPage() {
 
   function closeRequest() {
     if (!busy) resetRequest();
+  }
+
+  async function markStockPhotographed(row: GroupedCar) {
+    if (row.photographed || markingStockId) return;
+    setMarkingStockId(row.id);
+    setError("");
+    setMessage("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "mark_stock_photographed", vehicleIds: row.vehicleIds }),
+      });
+      setMessage(result.message);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحديث حالة التصوير");
+    } finally {
+      setMarkingStockId("");
+    }
   }
 
   async function completePhotoRequest(requestId: string) {
@@ -293,7 +312,7 @@ export function StockPage() {
   }
 
   async function createRequest() {
-    if (!selectedCars.length || !destinationLocationId || !photographyDate) return;
+    if (!selectedCars.length || !destinationLocationId) return;
     setBusy(true);
     setError("");
     setMessage("");
@@ -303,7 +322,6 @@ export function StockPage() {
         body: JSON.stringify({
           action: "create_photo_request",
           destinationLocationId,
-          photographyDate,
           note: requestNote,
           vehicles: selectedCars.map((row) => ({ vehicleId: row.id, note: notes[row.id] || "" })),
         }),
@@ -366,7 +384,7 @@ export function StockPage() {
                       <td>{row.interior_color || "—"}</td>
                       <td>{row.locationNames.join("، ") || "—"}</td>
                       <td>{row.quantity}</td>
-                      <td><span className={row.photographed ? "marketing-status success" : "marketing-status warning"}>{row.photographed ? "تم التصوير" : "لم يتم التصوير"}</span></td>
+                      <td>{row.photographed ? <span className="marketing-status success">تم التصوير</span> : <button type="button" className="marketing-status warning marketing-photo-status-button" disabled={markingStockId === row.id} onClick={() => void markStockPhotographed(row)}>{markingStockId === row.id ? "جاري التحديث..." : "لم يتم التصوير"}</button>}</td>
                       <td>{row.usage.length ? <div className="usage-tags">{row.usage.slice(0, 4).map((item, index) => <span key={index}>{item?.creativeName || item?.contentType || item?.sourceName || "مستخدم"}</span>)}</div> : "غير مستخدمة"}</td>
                     </tr>
                   ))}
@@ -385,13 +403,12 @@ export function StockPage() {
           <section className="marketing-card">
             <div className="marketing-table-wrap">
               <table>
-                <thead><tr><th>رقم الطلب</th><th>الحالة</th><th>تاريخ التصوير</th><th>المكان المصدر</th><th>المكان المستهدف</th><th>المنشئ</th><th>تاريخ الإنشاء</th><th>السيارات</th><th>الإجراء</th></tr></thead>
+                <thead><tr><th>رقم الطلب</th><th>الحالة</th><th>المكان المصدر</th><th>المكان المستهدف</th><th>المنشئ</th><th>تاريخ الإنشاء</th><th>السيارات</th><th>الإجراء</th></tr></thead>
                 <tbody>
                   {visibleRequests.length ? visibleRequests.map((row) => (
                     <tr key={row.id}>
                       <td><strong>{row.request_no}</strong></td>
                       <td><span className={`marketing-status ${row.status === "completed" ? "success" : "warning"}`}>{row.cancelled_at ? "ملغي" : requestStatusLabels[row.status] || row.status}</span></td>
-                      <td>{marketingDate(row.photography_date)}</td>
                       <td>{row.source_location_name || "—"}</td>
                       <td>{row.destination_location_name || "—"}</td>
                       <td>{row.requested_by_name || "—"}</td>
@@ -399,7 +416,7 @@ export function StockPage() {
                       <td>{row.vehicles.length.toLocaleString("ar-SA")}</td>
                       <td><button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedRequest(row)}>عرض ومتابعة</button></td>
                     </tr>
-                  )) : <tr><td colSpan={9}>لا توجد طلبات في هذا التبويب.</td></tr>}
+                  )) : <tr><td colSpan={8}>لا توجد طلبات في هذا التبويب.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -418,7 +435,6 @@ export function StockPage() {
           <div className="operations-transfer-detail">
             <div className="operations-request-summary-grid">
               <div><small>الحالة الحالية</small><strong>{selectedRequest.cancelled_at ? "ملغي" : requestStatusLabels[selectedRequest.status] || selectedRequest.status}</strong></div>
-              <div><small>تاريخ التصوير</small><strong>{marketingDate(selectedRequest.photography_date)}</strong></div>
               <div><small>المكان المصدر</small><strong>{selectedRequest.source_location_name || "—"}</strong></div>
               <div><small>المكان المستهدف</small><strong>{selectedRequest.destination_location_name || "—"}</strong></div>
               <div><small>المنشئ</small><strong>{selectedRequest.requested_by_name || "—"}</strong></div>
@@ -476,7 +492,7 @@ export function StockPage() {
         footer={(
           <>
             <button type="button" className="secondary" disabled={busy} onClick={closeRequest}>إلغاء</button>
-            <button type="button" className="primary" disabled={busy || !selectedCars.length || !destinationLocationId || !photographyDate || selectedCars.some((row) => Boolean(row.active_transfer_requests))} onClick={() => void createRequest()}>
+            <button type="button" className="primary" disabled={busy || !selectedCars.length || !destinationLocationId || selectedCars.some((row) => Boolean(row.active_transfer_requests))} onClick={() => void createRequest()}>
               <Camera size={18} />{busy ? "جاري الإنشاء..." : "إنشاء طلب التصوير"}
             </button>
           </>
@@ -497,10 +513,6 @@ export function StockPage() {
                 <option value="">اختر المكان</option>
                 {(data?.locations || []).filter((item) => item.id !== selectedSourceLocationId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
-            </label>
-            <label className="operations-control-field">
-              <span>تاريخ التصوير</span>
-              <input type="date" value={photographyDate} onChange={(event) => setPhotographyDate(event.target.value)} />
             </label>
           </div>
 

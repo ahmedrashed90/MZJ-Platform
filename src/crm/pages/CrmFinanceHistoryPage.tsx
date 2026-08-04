@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowRight,
   ArrowUp,
   ChatCircleDots,
@@ -127,17 +128,10 @@ export function CrmFinanceHistoryPage() {
 
   return (
     <div className="crm-page crm-finance-history-page">
-      <header className="crm-page-head crm-finance-history-head-clean">
-        <div>
-          <span className="crm-eyebrow">CRM / مبيعات التمويل</span>
-          <h1>سجل عملاء التمويل</h1>
-          <p>ملف زمني واضح لكل عميل من لحظة دخوله، مع الحالات والملاحظات والمسؤولين وتوقيت كل حركة.</p>
-        </div>
-        <div className="crm-finance-history-head-stats">
-          <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA")}</b> عميل</span>
-          <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA")}</b> حركة</span>
-        </div>
-      </header>
+      <div className="crm-finance-history-head-stats page-top-actions" data-legacy-class="crm-finance-history-head-clean">
+        <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA")}</b> عميل</span>
+        <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA")}</b> حركة</span>
+      </div>
 
       <div className="crm-inner-page-tabs crm-finance-history-tabs centered">
         <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}><UsersThree size={18} />سجل العملاء</button>
@@ -261,7 +255,7 @@ export function CrmFinanceHistoryPage() {
                       <strong>{event.event_type === "lead_created" || event.event_type === "integration_lead_created" ? "دخول العميل إلى النظام" : event.event_type === "status_change" ? "تغيير حالة العميل" : event.event_type === "department_transfer" ? "تحويل العميل" : event.event_type}</strong>
                       <time>{formatDate(event.created_at)}</time>
                     </header>
-                    {event.old_status || event.new_status ? <p><span className="crm-status-pill old">{event.old_status || "غير مسجل"}</span><ArrowRight size={16} /><span className="crm-status-pill new">{event.new_status || "غير مسجل"}</span></p> : null}
+                    {event.old_status || event.new_status ? <p><span className="crm-status-pill old">{event.old_status || "غير مسجل"}</span><ArrowLeft size={16} /><span className="crm-status-pill new">{event.new_status || "غير مسجل"}</span></p> : null}
                     {event.old_department || event.new_department ? <small>القسم: {event.old_department || "—"} ← {event.new_department || "—"}</small> : null}
                     <small>صفة مغير الحالة: {event.actor_role || "النظام"}</small>
                     <small>اسم مغير الحالة: {event.actor_name || "النظام"}</small>

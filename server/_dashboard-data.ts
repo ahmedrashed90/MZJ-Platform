@@ -3,6 +3,7 @@ import type { DashboardData } from "../src/types.js";
 import type { SessionUser } from "./_auth.js";
 import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
+import { getTrackingCountSummary } from "./_tracking-counts.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
 
@@ -20,8 +21,8 @@ function emptyData(range: { from: string; to: string }): DashboardData {
     generatedAt: new Date().toISOString(),
     range,
     sectionErrors: {},
-    crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
-    marketing: { campaigns: null, scheduled: null, delayed: null },
+    crm: { totalCustomers: null, openConversations: null, openCashConversations: null, openFinanceConversations: null, openServiceConversations: null, noAnswerCustomers: null, sold: null, cashSold: null, financeSold: null, cashSales: null, financeSales: null, customerService: null, newToday: null, newThisWeek: null, recentConversations: [], newCustomersSeries: [] },
+    marketing: { campaigns: null, agendas: null, scheduled: null, delayed: null },
     tracking: { requests: null, inProgress: null, completed: null },
     operations: {
       inventory: { actualTotal: null, agency: null, availableForSale: null, reserved: null, reservedByLocation: [], underDelivery: null, delivered: null, hasNotes: null },
@@ -63,29 +64,46 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           where l.is_deleted=false
             and (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
+        ), scoped_manual_sold as (
+          select * from crm.leads l
+          where l.is_deleted=false and l.status_label='تم البيع'
+            and (coalesce(l.sold_at,l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
+            and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false)
+            and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
+        ), scoped_erp_sold as (
+          select
+            coalesce(nullif(so.platform_department_code,''),sold_lead.department_code) as department_code,
+            sum(coalesce(vehicle_stats.quantity,1))::int as quantity
+          from integrations.erpnext_sales_orders so
+          join crm.leads sold_lead on sold_lead.id=so.crm_lead_id and sold_lead.is_deleted=false
+          left join lateral (
+            select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
+            from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
+          ) vehicle_stats on true
+          where coalesce(so.is_cancelled,false)=false
+            and coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (
+              ${crmAll}=true
+              or (${crmAssigned}=true and (so.platform_user_id=${user.id}::uuid or sold_lead.call_center_assigned_to=${user.id}::uuid or sold_lead.created_by=${user.id}::uuid))
+              or (coalesce(so.platform_branch_code,sold_lead.branch_code) in ${sql(crmBranches)} and coalesce(so.platform_department_code,sold_lead.department_code) in ${sql(crmDepartments)})
+            )
+          group by coalesce(nullif(so.platform_department_code,''),sold_lead.department_code)
         )
         select
           count(*)::int as total_customers,
           count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
           (
-            coalesce((
-              select sum(coalesce(vehicle_stats.quantity,1))
-              from integrations.erpnext_sales_orders so
-              join crm.leads sold_lead on sold_lead.id=so.crm_lead_id and sold_lead.is_deleted=false
-              left join lateral (
-                select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
-                from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
-              ) vehicle_stats on true
-              where coalesce(so.is_cancelled,false)=false
-                and coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-                and (
-                  ${crmAll}=true
-                  or (${crmAssigned}=true and (so.platform_user_id=${user.id}::uuid or sold_lead.call_center_assigned_to=${user.id}::uuid or sold_lead.created_by=${user.id}::uuid))
-                  or (coalesce(so.platform_branch_code,sold_lead.branch_code) in ${sql(crmBranches)} and coalesce(so.platform_department_code,sold_lead.department_code) in ${sql(crmDepartments)})
-                )
-            ),0)
-            + coalesce(sum(greatest(coalesce(sold_quantity,1),1)) filter(where status_label='تم البيع' and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=scoped_leads.id and coalesce(so.is_cancelled,false)=false)),0)
+            coalesce((select sum(quantity) from scoped_erp_sold),0)
+            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold),0)
           )::int as sold,
+          (
+            coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
+            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
+          )::int as cash_sold,
+          (
+            coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('finance_sales','call_center')),0)
+            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold where department_code in ('finance_sales','call_center')),0)
+          )::int as finance_sold,
           count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
           count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
           count(*) filter(where department_code='customer_service')::int as customer_service,
@@ -108,7 +126,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           group by day order by day`,
       ]);
       data.crm = {
-        totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations), openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
+        totalCustomers: asNumber(row?.total_customers), openConversations: asNumber(row?.open_conversations), openCashConversations: asNumber(row?.open_cash_conversations), openFinanceConversations: asNumber(row?.open_finance_conversations), openServiceConversations: asNumber(row?.open_service_conversations), noAnswerCustomers: asNumber(row?.no_answer_customers), sold: asNumber(row?.sold), cashSold: asNumber(row?.cash_sold), financeSold: asNumber(row?.finance_sold), cashSales: asNumber(row?.cash_sales), financeSales: asNumber(row?.finance_sales), customerService: asNumber(row?.customer_service), newToday: asNumber(row?.new_today), newThisWeek: asNumber(row?.new_this_week),
         recentConversations: recent.map((item) => ({ id: item.id, customerName: item.customer_name, preview: item.preview_text, time: item.last_message_at ? new Date(item.last_message_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "", unreadCount: asNumber(item.unread_count), leadId: item.lead_id, department: item.department_code === "finance_sales" || item.department_code === "call_center" ? "finance" : item.department_code === "customer_service" ? "service" : "cash" })),
         newCustomersSeries: series.map((item) => ({ label: item.label, value: asNumber(item.value) })),
       };
@@ -119,33 +137,35 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
     try {
       const marketingAccess = getSystemAccess(user, "marketing");
       const marketingAll = marketingAccess.dataScope === "all";
-      const [row] = await sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed
-        from marketing.campaigns c
-        where is_deleted=false
-          and coalesce(c.campaign_date,(c.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-          and (${marketingAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`;
-      data.marketing = { campaigns: asNumber(row?.campaigns), scheduled: asNumber(row?.scheduled), delayed: asNumber(row?.delayed) };
+      const [[campaignRow], [agendaRow]] = await Promise.all([
+        sql<any[]>`select count(*)::int as campaigns,count(*) filter(where status='scheduled')::int as scheduled,count(*) filter(where due_at<now() and status not in ('completed','archived'))::int as delayed
+          from marketing.campaigns c
+          where is_deleted=false
+            and coalesce(c.campaign_date,(c.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (${marketingAll}=true or c.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.campaign_id=c.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`,
+        sql<any[]>`select count(*)::int as agendas
+          from marketing.agendas a
+          where a.archived_at is null
+            and coalesce(a.publish_start,(a.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
+            and (${marketingAll}=true or a.created_by=${user.id}::uuid or exists(select 1 from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid)))`,
+      ]);
+      data.marketing = { campaigns: asNumber(campaignRow?.campaigns), agendas: asNumber(agendaRow?.agendas), scheduled: asNumber(campaignRow?.scheduled), delayed: asNumber(campaignRow?.delayed) };
     } catch (error) { data.sectionErrors!.marketing = errorText(error); console.error("Dashboard marketing query failed", error); }
   }
 
   if (canAccessSystem(user, "tracking")) {
     try {
-      const trackingAccess = getSystemAccess(user, "tracking");
-      const trackingAll = trackingAccess.dataScope === "all";
-      const trackingBranches = trackingAccess.branchCodes.length ? trackingAccess.branchCodes : ["__none__"];
-      const [row] = await sql<any[]>`select count(*) filter(where coalesce(is_archived,false)=false)::int as requests,count(*) filter(where coalesce(is_archived,false)=false and status='in_progress')::int as in_progress,count(*) filter(where status='completed' or coalesce(is_archived,false)=true)::int as completed
-        from tracking.orders o
-        where coalesce(is_deleted,false)=false
-          and coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-          and (${trackingAll}=true or o.branch in ${sql(trackingBranches)} or exists(select 1 from tracking.order_stages os where os.order_id=o.id and (os.completed_by=${user.id}::uuid or os.reverted_by=${user.id}::uuid)))`;
-      data.tracking = { requests: asNumber(row?.requests), inProgress: asNumber(row?.in_progress), completed: asNumber(row?.completed) };
-      data.operations.salesTracking = { total: asNumber(row?.requests), notStarted: 0, inProgress: asNumber(row?.in_progress), completed: asNumber(row?.completed) };
-      const [st] = await sql<any[]>`select count(*) filter(where coalesce(is_archived,false)=false and status='not_started')::int as not_started
-        from tracking.orders o
-        where coalesce(is_deleted,false)=false
-          and coalesce(o.order_date,(o.created_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-          and (${trackingAll}=true or o.branch in ${sql(trackingBranches)} or exists(select 1 from tracking.order_stages os where os.order_id=o.id and (os.completed_by=${user.id}::uuid or os.reverted_by=${user.id}::uuid)))`;
-      data.operations.salesTracking.notStarted = asNumber(st?.not_started);
+      // The unified dashboard must mirror the Tracking system counters exactly,
+      // so these figures intentionally use the canonical all-active-orders count
+      // rather than the dashboard date range used by the other dashboard cards.
+      const counts = await getTrackingCountSummary(sql, user);
+      data.tracking = { requests: counts.total, inProgress: counts.inProgress, completed: counts.completed };
+      data.operations.salesTracking = {
+        total: counts.total,
+        notStarted: counts.notStarted,
+        inProgress: counts.inProgress,
+        completed: counts.completed,
+      };
     } catch (error) { data.sectionErrors!.tracking = errorText(error); console.error("Dashboard tracking query failed", error); }
   }
 

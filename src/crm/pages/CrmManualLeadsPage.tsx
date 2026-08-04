@@ -142,12 +142,9 @@ export function CrmManualLeadsPage() {
 
   return (
     <div className="crm-page crm-manual-leads-page">
-      <header className="crm-page-head">
-        <div><h1>إضافة العملاء</h1><p>تسجيل العميل يدويًا ومنع تكرار رقم الجوال، مع عرض الطلبات المسجلة داخل نفس الصفحة.</p></div>
-        <button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
-          <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
-        </button>
-      </header>
+      <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => tab === "list" ? void loadRows() : resetForm()}>
+        <ArrowClockwise size={18} />{tab === "list" ? "تحديث" : "تفريغ الحقول"}
+      </button></div>
 
       <div className="crm-department-tabs crm-inner-page-tabs">
         <button className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><PlusCircle size={18} />إضافة عميل</button>
@@ -187,7 +184,7 @@ export function CrmManualLeadsPage() {
           </div>
           <div className="crm-table-shell compact">
             <table className="crm-table">
-              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب المسؤول</th><th>الكول سنتر</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>المصدر</th><th>الدفع</th><th>المندوب السابق</th><th>المندوب الحالي</th><th>آخر تحديث</th><th>حالة الموافقة</th><th>إجراءات</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.id}>
@@ -195,8 +192,8 @@ export function CrmManualLeadsPage() {
                     <td>{row.phone}</td>
                     <td>{sourceLabel(row.source_code, row.source_name)}</td>
                     <td>{row.payment_type || "—"}</td>
-                    <td>{row.requested_assigned_name || row.requested_by_name || "—"}</td>
-                    <td>{row.requested_call_center_name || "—"}</td>
+                    <td>{row.current_assigned_name || row.requested_assigned_name || row.requested_by_name || "—"}</td>
+                    <td>{row.requested_assigned_name || "—"}</td>
                     <td>{formatDate(row.updated_at)}</td>
                     <td><span className={`crm-status-pill ${row.approval_status}`}>{row.approval_status === "pending" ? "بانتظار موافقة الإدارة" : row.approval_status === "approved" ? "تمت الموافقة" : "مرفوض"}</span></td>
                     <td><div className="crm-row-actions">{row.approval_status === "pending" ? <button title="موافقة" onClick={() => { setApproval(row); setApprovalAgent(row.requested_assigned_to || ""); }}><Check size={16} /></button> : null}<button title="تعديل" onClick={() => editRow(row)}><PencilSimple size={16} /></button><button title="مسح" onClick={() => void remove(row.id)}><Trash size={16} /></button></div></td>

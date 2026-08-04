@@ -136,6 +136,7 @@ create table if not exists crm.leads (
   assigned_to uuid references core.users(id),
   call_center_assigned_to uuid references core.users(id),
   sold_quantity integer check (sold_quantity is null or sold_quantity >= 1),
+  sold_at timestamptz,
   notes text,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),
@@ -300,7 +301,6 @@ create table if not exists operations.transfer_requests (
   status text not null,
   requested_by uuid references core.users(id),
   requested_at timestamptz not null default now(),
-  photography_date date,
   completed_at timestamptz
 );
 
@@ -328,12 +328,14 @@ create table if not exists tracking.orders (
   customer_name text,
   customer_mobile text,
   order_date date,
+  assigned_to uuid references core.users(id) on delete set null,
   status text not null default 'not_started',
   tracking_token text unique default encode(gen_random_bytes(24), 'hex'),
   is_archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+create index if not exists tracking_orders_assigned_to_idx on tracking.orders(assigned_to,updated_at desc);
 
 create table if not exists tracking.order_vehicles (
   id uuid primary key default gen_random_uuid(),

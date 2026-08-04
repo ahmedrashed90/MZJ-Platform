@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CaretDown, CaretUp, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { Bell, CaretDown, CaretUp, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { UsersPermissionsPanel } from "../access-control/UsersPermissionsPanel";
 import { useAuth } from "../auth/AuthContext";
@@ -9,8 +9,9 @@ import { NotificationSettingsPanel } from "../notifications/NotificationSettings
 import { OperationsSettingsPanel } from "../operations/components/OperationsSettingsPanel";
 import { hasPermission } from "../systemAccess";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
+import { DataManagementPanel } from "../settings/DataManagementPanel";
 
-type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking";
+type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking" | "data";
 
 type SectionDefinition = {
   key: Section;
@@ -27,8 +28,9 @@ const sectionDefinitions: SectionDefinition[] = [
   { key: "notifications", label: "إعدادات الإشعارات", description: "الصوت والكارت المؤقت ومدة الظهور وتنبيهات الأنظمة", keywords: "الإشعارات الجرس الصوت الكارت البادج التنبيه", icon: Bell, permissions: [], personal: true },
   { key: "operations", label: "إعدادات العمليات", description: "حالات السيارات والمواقع ومسارات العمل", keywords: "العمليات السيارات المواقع", icon: Wrench, permissions: ["settings.operations.view", "settings.operations.manage"] },
   { key: "tracking", label: "إعدادات التتبع", description: "المراحل والرسائل وإعدادات التراكينج", keywords: "التتبع التراكينج المراحل الرسائل", icon: Path, permissions: ["settings.tracking.view", "settings.tracking.manage"] },
-  { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage"] },
+  { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage", "marketing.platforms.view"] },
   { key: "crm", label: "إعدادات CRM", description: "مسارات العملاء والأتمتة والتوزيع والتقارير", keywords: "CRM العملاء الأتمتة التوزيع السرعة الكفاءة", icon: GearSix, permissions: ["settings.crm.view", "settings.crm.manage"] },
+  { key: "data", label: "البيانات والنسخ الاحتياطية", description: "استيراد وتصدير العملاء والنسخ الاحتياطية ومسح بيانات التجربة", keywords: "البيانات النسخة الاحتياطية استيراد تصدير العملاء مسح التجربة", icon: Database, permissions: ["platform.superadmin"] },
 ];
 
 export function SettingsPage() {
@@ -62,21 +64,13 @@ export function SettingsPage() {
 
   return (
     <div className="module-page settings-page unified-settings-page">
-      <header className="unified-settings-hero">
-        <div className="unified-settings-hero-copy">
-          <span className="unified-settings-eyebrow">مركز إدارة المنصة</span>
-          <h1>الإعدادات</h1>
-          <p>اختر النظام المطلوب ثم عدّل إعداداته من مساحة واضحة وموحدة بدون التنقل بين صفحات متفرقة.</p>
-        </div>
-        <label className="unified-settings-search">
-          <MagnifyingGlass size={19} />
-          <input value={navigationSearch} onChange={(event) => setNavigationSearch(event.target.value)} placeholder="ابحث عن إعداد أو نظام" />
-        </label>
-      </header>
-
       <section className="unified-settings-picker">
         <header className="unified-settings-picker-head">
           <div><strong>أقسام الإعدادات</strong><span>اختر القسم المطلوب لفتح أدواته كاملة.</span></div>
+          <label className="unified-settings-search unified-settings-picker-search">
+            <MagnifyingGlass size={18} />
+            <input value={navigationSearch} onChange={(event) => setNavigationSearch(event.target.value)} placeholder="ابحث عن إعداد أو نظام" />
+          </label>
           <b>{available.length.toLocaleString("ar-SA")} أقسام متاحة</b>
         </header>
         <nav className="unified-settings-section-grid" aria-label="أقسام الإعدادات">
@@ -92,13 +86,9 @@ export function SettingsPage() {
       </section>
 
       <main className="unified-settings-main">
-        <header className="unified-settings-section-head">
-          <div className="unified-settings-section-identity">
-            <span className="unified-settings-section-icon"><ActiveIcon size={26} weight="duotone" /></span>
-            <div><span>الإعدادات / {activeDefinition?.label}</span><h2>{activeDefinition?.label}</h2><p>{activeDefinition?.description}</p></div>
-          </div>
+        <div className="unified-settings-section-actions page-top-actions">
           <button type="button" onClick={() => setContentOpen((current) => !current)}>{contentOpen ? <CaretUp size={18} /> : <CaretDown size={18} />}{contentOpen ? "إغلاق القسم" : "فتح القسم"}</button>
-        </header>
+        </div>
 
         {contentOpen ? (
           <div className="unified-settings-content">
@@ -108,6 +98,7 @@ export function SettingsPage() {
             {section === "marketing" ? <MarketingSettingsPanel readOnly={!hasPermission(user, "settings.marketing.manage")} /> : null}
             {section === "operations" ? <OperationsSettingsPanel /> : null}
             {section === "tracking" ? <TrackingSettingsPanel readOnly={!hasPermission(user, "settings.tracking.manage")} /> : null}
+            {section === "data" ? <DataManagementPanel /> : null}
           </div>
         ) : (
           <div className="unified-settings-collapsed"><ActiveIcon size={30} weight="duotone" /><strong>تم إغلاق قسم {activeDefinition?.label}</strong><span>يمكن فتحه مرة أخرى بدون فقد أي بيانات.</span></div>

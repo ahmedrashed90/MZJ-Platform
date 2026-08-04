@@ -341,6 +341,7 @@ create table if not exists marketing.tasks (
   note text,
   final_file_id uuid references marketing.files(id) on delete set null,
   approved_template_data jsonb not null default '{}'::jsonb,
+  execution_folders jsonb not null default '{}'::jsonb,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -370,6 +371,7 @@ alter table marketing.tasks add column if not exists received_at timestamptz;
 alter table marketing.tasks add column if not exists note text;
 alter table marketing.tasks add column if not exists final_file_id uuid references marketing.files(id) on delete set null;
 alter table marketing.tasks add column if not exists approved_template_data jsonb not null default '{}'::jsonb;
+alter table marketing.tasks add column if not exists execution_folders jsonb not null default '{}'::jsonb;
 alter table marketing.tasks add column if not exists is_deleted boolean not null default false;
 
 update marketing.campaigns set name=coalesce(nullif(name,''),'حملة') where name is null or name='';
@@ -413,6 +415,17 @@ create table if not exists marketing.budget_items (
   created_at timestamptz not null default now()
 );
 
+create table if not exists marketing.budget_item_creatives (
+  budget_item_id uuid not null references marketing.budget_items(id) on delete cascade,
+  creative_id uuid not null references marketing.creatives(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key(budget_item_id,creative_id)
+);
+create index if not exists marketing_budget_item_creatives_creative_idx on marketing.budget_item_creatives(creative_id,budget_item_id);
+insert into marketing.budget_item_creatives(budget_item_id,creative_id)
+select id,creative_id from marketing.budget_items where creative_id is not null
+on conflict do nothing;
+
 create table if not exists marketing.publish_schedule (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null default gen_random_uuid(),
@@ -437,6 +450,33 @@ update marketing.publish_schedule set group_id=gen_random_uuid() where group_id 
 alter table marketing.publish_schedule alter column group_id set default gen_random_uuid();
 alter table marketing.publish_schedule alter column group_id set not null;
 alter table marketing.publish_schedule add column if not exists task_id uuid references marketing.tasks(id) on delete cascade;
+alter table marketing.publish_schedule add column if not exists publish_options jsonb not null default '{}'::jsonb;
+
+create table if not exists marketing.platform_publish_settings (
+  platform text primary key,
+  settings jsonb not null default '{}'::jsonb,
+  updated_by uuid references core.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint platform_publish_settings_platform_check check(platform in ('youtube'))
+);
+
+insert into marketing.platform_publish_settings(platform,settings)
+values('youtube','{"privacyStatus":"unlisted","madeForKids":false,"categoryId":"2","defaultLanguage":"ar","defaultPlaylistId":"","notifySubscribers":true,"embeddable":true,"license":"youtube","publicStatsViewable":true,"defaultTags":[],"descriptionTemplate":""}'::jsonb)
+on conflict(platform) do nothing;
+
+insert into marketing.platform_post_types(platform_id,name,width,height,is_active)
+select p.id,seed.name,seed.width,seed.height,true
+from marketing.platforms p
+cross join (values ('فيديو',1920,1080),('Shorts',1080,1920)) as seed(name,width,height)
+where lower(p.code)='youtube'
+on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now();
+
+update marketing.platform_post_types pt
+set is_active=false,updated_at=now()
+from marketing.platforms p
+where p.id=pt.platform_id and lower(p.code)='youtube'
+  and lower(btrim(pt.name)) in ('عام','غير مدرج','خاص','public','unlisted','private');
 
 create table if not exists marketing.platform_connections (
   platform text primary key,
@@ -898,7 +938,7 @@ create table if not exists marketing.published_posts (
   source_id uuid not null,
   creative_id uuid references marketing.creatives(id) on delete set null,
   task_id uuid references marketing.tasks(id) on delete set null,
-  platform text not null check(platform in ('facebook','instagram')),
+  platform text not null check(platform in ('facebook','instagram','tiktok','snapchat','youtube')),
   account_id text not null,
   provider_post_id text not null,
   provider_media_id text,
@@ -927,11 +967,13 @@ alter table marketing.published_posts add column if not exists is_deleted boolea
 alter table marketing.published_posts add column if not exists deleted_at timestamptz;
 alter table marketing.published_posts add column if not exists deleted_by uuid references core.users(id);
 create index if not exists marketing_published_posts_active_idx on marketing.published_posts(published_at desc) where is_deleted=false;
+alter table marketing.published_posts drop constraint if exists published_posts_platform_check;
+alter table marketing.published_posts add constraint published_posts_platform_check check(platform in ('facebook','instagram','tiktok','snapchat','youtube'));
 
 create table if not exists marketing.post_comments (
   id uuid primary key default gen_random_uuid(),
   published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
-  platform text not null check(platform in ('facebook','instagram')),
+  platform text not null check(platform in ('facebook','instagram','tiktok','snapchat','youtube')),
   provider_comment_id text not null,
   provider_post_id text,
   account_id text not null,
@@ -950,11 +992,13 @@ create table if not exists marketing.post_comments (
 create index if not exists marketing_post_comments_post_idx on marketing.post_comments(published_post_id,commented_at desc,created_at desc);
 create index if not exists marketing_post_comments_commenter_idx on marketing.post_comments(platform,account_id,commenter_id);
 create index if not exists marketing_post_comments_lead_idx on marketing.post_comments(crm_lead_id) where crm_lead_id is not null;
+alter table marketing.post_comments drop constraint if exists post_comments_platform_check;
+alter table marketing.post_comments add constraint post_comments_platform_check check(platform in ('facebook','instagram','tiktok','snapchat','youtube'));
 
 create table if not exists marketing.post_engagements (
   id uuid primary key default gen_random_uuid(),
   published_post_id uuid not null references marketing.published_posts(id) on delete cascade,
-  platform text not null check(platform in ('facebook','instagram')),
+  platform text not null check(platform in ('facebook','instagram','tiktok','snapchat','youtube')),
   engagement_type text not null check(engagement_type in ('comment','like','share')),
   provider_event_id text not null,
   provider_post_id text,
@@ -980,6 +1024,8 @@ create index if not exists marketing_post_engagements_post_idx on marketing.post
 create index if not exists marketing_post_engagements_actor_idx on marketing.post_engagements(platform,account_id,actor_id) where is_deleted=false;
 create index if not exists marketing_post_engagements_lead_idx on marketing.post_engagements(crm_lead_id) where crm_lead_id is not null and is_deleted=false;
 create index if not exists marketing_post_engagements_type_idx on marketing.post_engagements(engagement_type,engaged_at desc) where is_deleted=false;
+alter table marketing.post_engagements drop constraint if exists post_engagements_platform_check;
+alter table marketing.post_engagements add constraint post_engagements_platform_check check(platform in ('facebook','instagram','tiktok','snapchat','youtube'));
 
 insert into marketing.post_engagements(
   id,published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,

@@ -12,6 +12,336 @@ function asArray<T = any>(value: unknown): T[] { return Array.isArray(value) ? v
 function numberValue(value: unknown) { const number = Number(value); return Number.isFinite(number) ? number : 0; }
 function graphVersion() { return clean(process.env.META_GRAPH_VERSION) || "v25.0"; }
 
+const RESULT_PLATFORMS = ["facebook", "instagram", "tiktok", "snapchat", "youtube"] as const;
+
+type ResultPlatform = typeof RESULT_PLATFORMS[number];
+
+type ResultMetricBucket = {
+  posts: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+  views: number;
+  reach: number;
+  identifiedEngagements: number;
+  commentEvents: number;
+  likeEvents: number;
+  shareEvents: number;
+  actors: Set<string>;
+  leads: Map<string, { sold: boolean; soldQuantity: number }>;
+};
+
+function emptyResultMetricBucket(): ResultMetricBucket {
+  return {
+    posts: 0,
+    likes: 0,
+    comments: 0,
+    shares: 0,
+    saves: 0,
+    views: 0,
+    reach: 0,
+    identifiedEngagements: 0,
+    commentEvents: 0,
+    likeEvents: 0,
+    shareEvents: 0,
+    actors: new Set<string>(),
+    leads: new Map<string, { sold: boolean; soldQuantity: number }>(),
+  };
+}
+
+function resultPlatform(value: unknown): ResultPlatform | "" {
+  const platform = clean(value).toLowerCase();
+  return RESULT_PLATFORMS.includes(platform as ResultPlatform) ? platform as ResultPlatform : "";
+}
+
+function addPostMetrics(bucket: ResultMetricBucket, row: any) {
+  bucket.posts += 1;
+  bucket.likes += numberValue(row.likes_count);
+  bucket.comments += numberValue(row.comments_count);
+  bucket.shares += numberValue(row.shares_count);
+  bucket.saves += numberValue(row.saves_count);
+  bucket.views += numberValue(row.views_count);
+  bucket.reach += numberValue(row.reach_count);
+}
+
+function addLead(bucket: ResultMetricBucket, leadId: string, sold: boolean, soldQuantity: number) {
+  if (!leadId) return;
+  const current = bucket.leads.get(leadId);
+  bucket.leads.set(leadId, {
+    sold: Boolean(current?.sold || sold),
+    soldQuantity: Math.max(numberValue(current?.soldQuantity), sold ? Math.max(1, numberValue(soldQuantity) || 1) : 0),
+  });
+}
+
+function addEngagementToBucket(bucket: ResultMetricBucket, row: any) {
+  bucket.identifiedEngagements += 1;
+  if (row.engagement_type === "comment") bucket.commentEvents += 1;
+  if (row.engagement_type === "like") bucket.likeEvents += 1;
+  if (row.engagement_type === "share") bucket.shareEvents += 1;
+  const actorId = clean(row.actor_id);
+  if (actorId) bucket.actors.add(`${clean(row.platform)}:${clean(row.account_id)}:${actorId}`);
+  const leadId = clean(row.crm_lead_id);
+  if (leadId && row.crm_is_deleted !== true) {
+    const sold = clean(row.status_label) === "تم البيع";
+    addLead(bucket, leadId, sold, numberValue(row.sold_quantity));
+  }
+}
+
+function finalizeResultMetricBucket(bucket: ResultMetricBucket) {
+  const soldLeads = [...bucket.leads.values()].filter((lead) => lead.sold).length;
+  const soldQuantity = [...bucket.leads.values()].reduce((total, lead) => total + numberValue(lead.soldQuantity), 0);
+  const crmLeads = bucket.leads.size;
+  const identifiedAccounts = bucket.actors.size;
+  return {
+    posts: bucket.posts,
+    likes: bucket.likes,
+    comments: bucket.comments,
+    shares: bucket.shares,
+    saves: bucket.saves,
+    views: bucket.views,
+    reach: bucket.reach,
+    engagements: bucket.likes + bucket.comments + bucket.shares,
+    identifiedEngagements: bucket.identifiedEngagements,
+    commentEvents: bucket.commentEvents,
+    likeEvents: bucket.likeEvents,
+    shareEvents: bucket.shareEvents,
+    identifiedAccounts,
+    crmLeads,
+    soldLeads,
+    soldQuantity,
+    crmConversionRate: identifiedAccounts ? Number(((crmLeads / identifiedAccounts) * 100).toFixed(2)) : 0,
+    salesConversionRate: crmLeads ? Number(((soldLeads / crmLeads) * 100).toFixed(2)) : 0,
+  };
+}
+
+function sourceResultBase(sourceType: string, source: any) {
+  return {
+    sourceType,
+    sourceId: clean(source?.source_id || source?.id),
+    name: clean(source?.source_name || source?.name) || (sourceType === "agenda" ? "أجندة" : "حملة"),
+    code: clean(source?.source_code || source?.campaign_code || source?.month_key),
+    publishStart: source?.publish_start || null,
+    publishEnd: source?.publish_end || null,
+    status: clean(source?.source_status || source?.status),
+  };
+}
+
+export async function engagementResultsData(
+  sql: ReturnType<typeof getSql>,
+  input: { sourceType?: string; sourceId?: string; source?: any } = {},
+) {
+  await ensureCrmSchema();
+  const sourceType = clean(input.sourceType);
+  const sourceId = clean(input.sourceId);
+  const scoped = Boolean(sourceType && sourceId);
+  const posts = scoped
+    ? await sql<any[]>`
+      select pp.*,pp.id::text,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
+        coalesce(campaign.name,agenda.name,'—') as source_name,
+        coalesce(campaign.campaign_code,agenda.month_key,'') as source_code,
+        coalesce(campaign.publish_start,agenda.publish_start) as publish_start,
+        coalesce(campaign.publish_end,agenda.publish_end) as publish_end,
+        coalesce(campaign.status,agenda.status,'') as source_status,
+        coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name
+      from marketing.published_posts pp
+      left join marketing.campaigns campaign on pp.source_type='campaign' and campaign.id=pp.source_id
+      left join marketing.agendas agenda on pp.source_type='agenda' and agenda.id=pp.source_id
+      left join marketing.creatives cr on cr.id=pp.creative_id
+      where pp.is_deleted=false and pp.source_type=${sourceType} and pp.source_id=${sourceId}::uuid
+      order by pp.published_at desc
+    `
+    : await sql<any[]>`
+      select pp.*,pp.id::text,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
+        coalesce(campaign.name,agenda.name,'—') as source_name,
+        coalesce(campaign.campaign_code,agenda.month_key,'') as source_code,
+        coalesce(campaign.publish_start,agenda.publish_start) as publish_start,
+        coalesce(campaign.publish_end,agenda.publish_end) as publish_end,
+        coalesce(campaign.status,agenda.status,'') as source_status,
+        coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name
+      from marketing.published_posts pp
+      left join marketing.campaigns campaign on pp.source_type='campaign' and campaign.id=pp.source_id
+      left join marketing.agendas agenda on pp.source_type='agenda' and agenda.id=pp.source_id
+      left join marketing.creatives cr on cr.id=pp.creative_id
+      where pp.is_deleted=false
+      order by pp.published_at desc
+    `;
+  const engagements = scoped
+    ? await sql<any[]>`
+      select pe.*,pe.id::text,pe.published_post_id::text,pe.crm_lead_id::text,
+        pp.source_type,pp.source_id::text,pp.platform,
+        l.status_label,l.sold_quantity,l.is_deleted as crm_is_deleted
+      from marketing.post_engagements pe
+      join marketing.published_posts pp on pp.id=pe.published_post_id
+      left join crm.leads l on l.id=pe.crm_lead_id
+      where pe.is_deleted=false and pp.is_deleted=false and pp.source_type=${sourceType} and pp.source_id=${sourceId}::uuid
+      order by coalesce(pe.engaged_at,pe.created_at) desc
+    `
+    : await sql<any[]>`
+      select pe.*,pe.id::text,pe.published_post_id::text,pe.crm_lead_id::text,
+        pp.source_type,pp.source_id::text,pp.platform,
+        l.status_label,l.sold_quantity,l.is_deleted as crm_is_deleted
+      from marketing.post_engagements pe
+      join marketing.published_posts pp on pp.id=pe.published_post_id
+      left join crm.leads l on l.id=pe.crm_lead_id
+      where pe.is_deleted=false and pp.is_deleted=false
+      order by coalesce(pe.engaged_at,pe.created_at) desc
+    `;
+  const connections = await sql<any[]>`
+    select platform,connected,status,state,last_verified_at
+    from marketing.platform_connections
+    where platform in ('facebook','instagram','tiktok','youtube')
+  `;
+  const connectionMap = new Map(connections.map((row: any) => [clean(row.platform), row]));
+  const eventsByPost = new Map<string, any[]>();
+  for (const event of engagements) {
+    const postId = clean(event.published_post_id);
+    if (!postId) continue;
+    const rows = eventsByPost.get(postId) || [];
+    rows.push(event);
+    eventsByPost.set(postId, rows);
+  }
+
+  type GroupState = {
+    base: ReturnType<typeof sourceResultBase>;
+    summary: ResultMetricBucket;
+    platforms: Map<ResultPlatform, ResultMetricBucket>;
+    posts: any[];
+    creatives: Map<string, { id: string; name: string; bucket: ResultMetricBucket }>;
+  };
+
+  const groups = new Map<string, GroupState>();
+  const ensureGroup = (row: any) => {
+    const rowSourceType = clean(row.source_type || sourceType) || "campaign";
+    const rowSourceId = clean(row.source_id || sourceId);
+    const key = `${rowSourceType}:${rowSourceId}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        base: sourceResultBase(rowSourceType, row),
+        summary: emptyResultMetricBucket(),
+        platforms: new Map<ResultPlatform, ResultMetricBucket>(),
+        posts: [],
+        creatives: new Map<string, { id: string; name: string; bucket: ResultMetricBucket }>(),
+      };
+      groups.set(key, group);
+    }
+    return group;
+  };
+
+  for (const post of posts) {
+    const platform = resultPlatform(post.platform);
+    if (!platform) continue;
+    const group = ensureGroup(post);
+    const platformBucket = group.platforms.get(platform) || emptyResultMetricBucket();
+    group.platforms.set(platform, platformBucket);
+    addPostMetrics(group.summary, post);
+    addPostMetrics(platformBucket, post);
+
+    const postBucket = emptyResultMetricBucket();
+    addPostMetrics(postBucket, post);
+    const postEvents = eventsByPost.get(clean(post.id)) || [];
+    for (const event of postEvents) {
+      addEngagementToBucket(group.summary, event);
+      addEngagementToBucket(platformBucket, event);
+      addEngagementToBucket(postBucket, event);
+    }
+    const postMetrics = finalizeResultMetricBucket(postBucket);
+    const score = postMetrics.likes + postMetrics.comments + postMetrics.shares;
+    group.posts.push({
+      id: clean(post.id),
+      sourceType: clean(post.source_type),
+      sourceId: clean(post.source_id),
+      platform,
+      providerPostId: clean(post.provider_post_id),
+      permalink: clean(post.permalink),
+      postTypeName: clean(post.post_type_name) || "—",
+      creativeId: clean(post.creative_id),
+      creativeName: clean(post.creative_name) || "—",
+      publishedAt: post.published_at,
+      lastSyncedAt: post.last_synced_at,
+      syncStatus: clean(post.sync_status) || "pending",
+      syncError: clean(post.sync_error),
+      archivedAt: post.archived_at || null,
+      score,
+      ...postMetrics,
+    });
+
+    const creativeKey = clean(post.creative_id) || `name:${clean(post.creative_name) || "unknown"}`;
+    const creative = group.creatives.get(creativeKey) || {
+      id: clean(post.creative_id),
+      name: clean(post.creative_name) || "—",
+      bucket: emptyResultMetricBucket(),
+    };
+    addPostMetrics(creative.bucket, post);
+    for (const event of postEvents) addEngagementToBucket(creative.bucket, event);
+    group.creatives.set(creativeKey, creative);
+  }
+
+  if (scoped && !groups.size) {
+    let source = input.source;
+    if (!source) {
+      const [loaded] = sourceType === "agenda"
+        ? await sql<any[]>`select id::text,name,month_key,publish_start,publish_end,status from marketing.agendas where id=${sourceId}::uuid`
+        : await sql<any[]>`select id::text,name,campaign_code,publish_start,publish_end,status from marketing.campaigns where id=${sourceId}::uuid and is_deleted=false`;
+      source = loaded;
+    }
+    if (source) ensureGroup({ ...source, source_type: sourceType, source_id: sourceId });
+  }
+
+  const finalizedGroups = [...groups.values()].map((group) => {
+    const postsSorted = [...group.posts].sort((a, b) => String(b.publishedAt || "").localeCompare(String(a.publishedAt || "")));
+    const creativeRows = [...group.creatives.values()].map((creative) => ({
+      id: creative.id,
+      name: creative.name,
+      ...finalizeResultMetricBucket(creative.bucket),
+    })).sort((a, b) => b.engagements - a.engagements || b.posts - a.posts);
+    const platformRows = RESULT_PLATFORMS.map((platform) => {
+      const bucket = group.platforms.get(platform) || emptyResultMetricBucket();
+      const connection = connectionMap.get(platform);
+      const platformPosts = postsSorted.filter((post) => post.platform === platform);
+      const platformSyncDates = platformPosts.map((post) => post.lastSyncedAt).filter(Boolean).sort();
+      const lastSyncedAt = platformSyncDates[platformSyncDates.length - 1] || null;
+      const syncStatus = platformPosts.some((post) => post.syncStatus === "failed")
+        ? "failed"
+        : platformPosts.length && platformPosts.every((post) => post.syncStatus === "synced")
+          ? "synced"
+          : platformPosts.length ? "pending" : "waiting";
+      return {
+        platform,
+        connected: Boolean(connection?.connected),
+        connectionStatus: clean(connection?.status || connection?.state),
+        dataStatus: platformPosts.length ? "available" : (platform === "tiktok" || platform === "snapchat" || platform === "youtube" ? "pending_integration" : "waiting_posts"),
+        syncStatus,
+        lastSyncedAt,
+        ...finalizeResultMetricBucket(bucket),
+      };
+    });
+    const summary = finalizeResultMetricBucket(group.summary);
+    const bestPost = [...postsSorted].sort((a, b) => b.score - a.score || b.views - a.views)[0] || null;
+    const bestCreative = creativeRows[0] || null;
+    const sourceSyncDates = postsSorted.map((post) => post.lastSyncedAt).filter(Boolean).sort();
+    const lastSyncedAt = sourceSyncDates[sourceSyncDates.length - 1] || null;
+    return {
+      ...group.base,
+      summary: { ...summary, lastSyncedAt },
+      platforms: platformRows,
+      posts: postsSorted,
+      creatives: creativeRows,
+      bestPost,
+      bestCreative,
+    };
+  }).sort((a, b) => String(b.publishEnd || b.publishStart || "").localeCompare(String(a.publishEnd || a.publishStart || "")) || a.name.localeCompare(b.name, "ar"));
+
+  return {
+    groups: finalizedGroups,
+    campaigns: finalizedGroups.filter((group) => group.sourceType === "campaign"),
+    agendas: finalizedGroups.filter((group) => group.sourceType === "agenda"),
+    supportedPlatforms: [...RESULT_PLATFORMS],
+  };
+}
+
+
 type MetaGraphHost = "facebook" | "instagram";
 type MetaGraphFailure = Error & { meta?: Record<string, any> };
 
@@ -336,12 +666,14 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     return asArray(stored.results).filter((item: any) => clean(item?.platform) === clean(row.platform));
   });
   const callbackBase = clean(process.env.MZJ_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : ''));
+  const results = await engagementResultsData(sql);
   return {
     ok: true,
     rows,
     engagements,
     comments: engagements.filter((row: any) => row.engagement_type === 'comment'),
     summary: { ...summary, ...engagementSummary, crmLeads },
+    results,
     webhook: {
       callbackUrl: callbackBase ? `${callbackBase.replace(/\/$/,'')}/api/integrations/meta/engagement-webhook` : '/api/integrations/meta/engagement-webhook',
       verifyTokenConfigured: Boolean(clean(process.env.META_WEBHOOK_VERIFY_TOKEN)),

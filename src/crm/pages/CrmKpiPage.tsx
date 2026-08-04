@@ -9,7 +9,6 @@ import {
   Minus,
   PencilSimple,
   Plus,
-  Trophy,
   UsersThree,
   X,
 } from "@phosphor-icons/react";
@@ -111,6 +110,14 @@ function rating(total: number) {
   return "غير مناسب";
 }
 
+function branchManagerRating(total: number) {
+  if (total >= 100) return "ممتاز";
+  if (total >= 90) return "جيد";
+  if (total >= 80) return "مقبول";
+  if (total >= 70) return "ضعيف";
+  return "غير مناسب";
+}
+
 function emptyDetails(workDays = 1): KpiDetails {
   return {
     workDays: Math.max(1, workDays),
@@ -147,7 +154,7 @@ function calculate(detailsInput: KpiDetails) {
     .map((entry) => Math.max(0, number(entry)));
   const totalDelay = delayValues.reduce((sum, value) => sum + value, 0);
   const averageDelay = delayValues.length ? totalDelay / delayValues.length : 0;
-  const speedRate = delayValues.length ? clamp(100 - (averageDelay / maximumAllowed) * 100) : 100;
+  const speedRate = delayValues.length ? clamp(100 - (averageDelay / maximumAllowed) * 100) : 0;
   const personality = details.efficiency?.personality || basePersonality;
   const technical = details.efficiency?.technical || baseTechnical;
   const personalityRate = (clamp(personality.customerFitHonesty) + clamp(personality.carNotesHonesty) + speedRate) / 3;
@@ -164,14 +171,22 @@ function calculate(detailsInput: KpiDetails) {
   const valueRate = clamp(((customerPoints + salesCount) / 80) * 100);
   const finalRate = ((efficiencyRate + disciplineRate) / 2 + valueRate) / 2;
   const totalPoints = attendancePoints + appearancePoints + behaviorPoints + efficiencyPoints + customerPoints + salesCount;
-  return { workDays, totalDelay, averageDelay, speedRate, personalityRate, technicalRate, efficiencyRate, efficiencyPoints, attendancePoints, appearancePoints, behaviorPoints, customerPoints, salesCount, disciplineRate, valueRate, finalRate, totalPoints, rating: rating(finalRate) };
+  return { workDays, totalDelay, averageDelay, speedRate, personalityRate, technicalRate, efficiencyRate, efficiencyPoints, attendancePoints, appearancePoints, behaviorPoints, customerPoints, salesCount, disciplineRate, valueRate, finalRate, totalPoints, rating: rating(Math.round(finalRate)) };
 }
 
 const basePersonality = { customerFitHonesty: 0, carNotesHonesty: 0 };
 const baseTechnical = { currentPrices: 0, oldPrices: 0, carSpecs: 0, competitorsComparison: 0, salesChannels: 0 };
 
-function percent(value: unknown) { return `${Math.round(number(value) * 100) / 100}%`; }
+function percent(value: unknown) { return `${Math.round(number(value))}%`; }
 function rateClass(value: unknown) { const n = number(value); return n >= 80 ? "good" : n >= 50 ? "mid" : "bad"; }
+function representativeRatingClass(value: unknown) {
+  const label = rating(Math.round(number(value)));
+  return label === "غير مناسب" ? "branch-rating-red" : label === "ضعيف" || label === "مقبول" ? "branch-rating-yellow" : "branch-rating-green";
+}
+function branchManagerRatingClass(value: unknown) {
+  const label = branchManagerRating(number(value));
+  return label === "غير مناسب" ? "branch-rating-red" : label === "ضعيف" || label === "مقبول" ? "branch-rating-yellow" : "branch-rating-green";
+}
 
 export function CrmKpiPage() {
   const defaultMonth = currentMonth();
@@ -221,13 +236,15 @@ export function CrmKpiPage() {
     return !filters.q || search.includes(filters.q.toLowerCase());
   }), [agents, filters.branch, filters.agent, filters.q]);
 
-  const visibleRows = useMemo(() => rows.filter((row) => {
-    const search = [row.full_name, row.rating, row.department_name, row.branch_name].join(" ").toLowerCase();
-    return !filters.q || search.includes(filters.q.toLowerCase());
-  }), [rows, filters.q]);
-
   function rowForAgent(agent: any) {
-    return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code)) || rows.find((row) => row.user_id === agent.id);
+    return rows.find((row) => row.user_id === agent.id && (!agent.branch_code || !row.branch_code || row.branch_code === agent.branch_code))
+      || rows.find((row) => row.user_id === agent.id);
+  }
+
+  function resultForAgent(agent: any) {
+    const row = rowForAgent(agent);
+    const details = normalizeDetails(row?.details, businessDates(period.from, period.to).length);
+    return { row, calc: calculate(details) };
   }
 
   function updateDetails(mutator: (draft: KpiDetails) => void) {
@@ -308,7 +325,7 @@ export function CrmKpiPage() {
 
     const personality = details.efficiency.personality;
     const technical = details.efficiency.technical;
-    const efficiencyHtml = `<section class="box"><h2>تفاصيل الكفاءة</h2><div class="metrics">${metric("الشخصية", percent(result.personalityRate), rateClass(result.personalityRate))}${metric("الفنية", percent(result.technicalRate), rateClass(result.technicalRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("نقاط التميز", result.efficiencyPoints)}</div><div class="two"><table><thead><tr><th colspan="2">الشخصية</th></tr></thead><tbody><tr><th>اختيار السيارة المناسبة للعميل</th><td>${safe(personality.customerFitHonesty)}%</td></tr><tr><th>توضيح ملاحظات السيارة</th><td>${safe(personality.carNotesHonesty)}%</td></tr><tr><th>نتيجة السرعة</th><td>${safe(percent(result.speedRate))}</td></tr></tbody></table><table><thead><tr><th colspan="2">الفنية</th></tr></thead><tbody><tr><th>حفظ الأسعار الحالية</th><td>${safe(technical.currentPrices)}%</td></tr><tr><th>حفظ الأسعار السابقة</th><td>${safe(technical.oldPrices)}%</td></tr><tr><th>معرفة مواصفات السيارات</th><td>${safe(technical.carSpecs)}%</td></tr><tr><th>مقارنة المنافسين</th><td>${safe(technical.competitorsComparison)}%</td></tr><tr><th>معرفة قنوات البيع</th><td>${safe(technical.salesChannels)}%</td></tr></tbody></table></div></section>`;
+    const efficiencyHtml = `<section class="box"><h2>تفاصيل الكفاءة</h2><div class="metrics">${metric("الشخصية", percent(result.personalityRate), rateClass(result.personalityRate))}${metric("الفنية", percent(result.technicalRate), rateClass(result.technicalRate))}${metric("الكفاءة", percent(result.efficiencyRate), rateClass(result.efficiencyRate))}${metric("نقاط التميز", result.efficiencyPoints)}</div><div class="two"><table><thead><tr><th colspan="2">الشخصية</th></tr></thead><tbody><tr><th>اختيار السيارة المناسبة للعميل</th><td>${safe(personality.customerFitHonesty)}%</td></tr><tr><th>توضيح ملاحظات السيارة</th><td>${safe(personality.carNotesHonesty)}%</td></tr><tr><th>نتيجة السرعة</th><td>${safe(percent(result.speedRate))}</td></tr></tbody></table><table><thead><tr><th colspan="2">الفنية</th></tr></thead><tbody><tr><th>حفظ الأسعار الحالية</th><td>${safe(technical.currentPrices)}%</td></tr><tr><th>حفظ الأسعار السابقة</th><td>${safe(technical.oldPrices)}%</td></tr><tr><th>المعرفة التفصيلية بمواصفات السيارة</th><td>${safe(technical.carSpecs)}%</td></tr><tr><th>معرفة فروق السيارة مع البراندات الأخرى</th><td>${safe(technical.competitorsComparison)}%</td></tr><tr><th>معرفة طرق وقنوات البيع كاش أو أقساط</th><td>${safe(technical.salesChannels)}%</td></tr></tbody></table></div></section>`;
 
     const disciplineRows = dailyDates.map((date) => {
       const row = details.dailyPerformance?.[date] || { attendance: 0, appearance: 0, behavior: 0, customerRating: 0, salesCount: 0 };
@@ -363,18 +380,28 @@ th{background:#f8ece5;font-weight:900}
   }
 
   const reportSummary = useMemo(() => {
-    const average = (key: string) => visibleRows.length ? visibleRows.reduce((sum, row) => sum + number(row[key]), 0) / visibleRows.length : 0;
-    return { count: visibleRows.length, speed: average("speed_score"), efficiency: average("efficiency_score"), discipline: average("discipline_score"), value: average("value_score"), total: average("total_score") };
-  }, [visibleRows]);
+    const calculatedRows = visibleAgents.map((agent) => resultForAgent(agent).calc);
+    const average = (key: keyof ReturnType<typeof calculate>) => calculatedRows.length
+      ? calculatedRows.reduce((sum, item) => sum + number(item[key]), 0) / calculatedRows.length
+      : 0;
+    return {
+      count: visibleAgents.length,
+      speed: average("speedRate"),
+      efficiency: average("efficiencyRate"),
+      discipline: average("disciplineRate"),
+      value: average("valueRate"),
+      total: average("finalRate"),
+    };
+  }, [visibleAgents, rows, period.from, period.to]);
 
   const branchReports = useMemo(() => {
     const grouped = new Map<string, any[]>();
-    visibleRows.forEach((row) => {
-      const key = row.branch_name || row.branch_code || "بدون فرع";
-      grouped.set(key, [...(grouped.get(key) || []), row]);
+    visibleAgents.forEach((agent) => {
+      const key = agent.branch_name || agent.branch_code || "بدون فرع";
+      grouped.set(key, [...(grouped.get(key) || []), agent]);
     });
-    return [...grouped.entries()].map(([branchName, branchRows]) => {
-      const details = branchRows.map((row) => ({ row, calc: calculate(normalizeDetails(row.details, number(row.details?.workDays, 1))) }));
+    return [...grouped.entries()].map(([branchName, branchAgents]) => {
+      const details = branchAgents.map((agent) => ({ agent, ...resultForAgent(agent) }));
       const total = details.reduce((acc, item) => ({
         attendance: acc.attendance + item.calc.attendancePoints,
         appearance: acc.appearance + item.calc.appearancePoints,
@@ -385,26 +412,28 @@ th{background:#f8ece5;font-weight:900}
         points: acc.points + item.calc.totalPoints,
       }), { attendance: 0, appearance: 0, behavior: 0, efficiency: 0, customer: 0, sales: 0, points: 0 });
       const workDays = Math.max(1, businessDates(period.from, period.to).length);
-      const count = Math.max(1, branchRows.length);
+      const count = Math.max(1, branchAgents.length);
       const discipline = clamp(((total.attendance + total.appearance + total.behavior) / (count * workDays * 9)) * 100);
       const excellence = clamp((total.efficiency / (count * workDays * 3)) * 100);
       const value = clamp(((total.customer + total.sales) / (count * 80)) * 100);
-      const managerRate = (discipline + excellence + value) / 3;
-      const best = details.slice().sort((a, b) => b.calc.totalPoints - a.calc.totalPoints)[0];
-      return { branchName, rows: details, total, managerRate, managerRating: rating(managerRate), best };
+      const managerRate = ((discipline + excellence) / 2 + value) / 2;
+      const best = details.slice().sort((a, b) =>
+        b.calc.totalPoints - a.calc.totalPoints
+        || b.calc.finalRate - a.calc.finalRate
+        || String(a.agent.full_name || "").localeCompare(String(b.agent.full_name || ""), "ar")
+      )[0];
+      return { branchName, rows: details, total, discipline, excellence, value, managerRate, managerRating: branchManagerRating(managerRate), best };
     });
-  }, [visibleRows, period.from, period.to]);
+  }, [visibleAgents, rows, period.from, period.to]);
+
+  const addTotalSales = visibleAgents.reduce((sum, agent) => {
+    const { calc } = resultForAgent(agent);
+    return sum + number(calc.salesCount);
+  }, 0);
 
   return (
     <div className="crm-page kpi-page kpi-page-v3">
-      <header className="crm-page-head kpi-page-head-clean">
-        <div>
-          <span className="crm-eyebrow">إدارة أداء المبيعات</span>
-          <h1>تقييم المناديب KPI</h1>
-          <p>نفس معادلات النظام القديم مع عرض واضح للنسب والنتيجة، واستبعاد يوم الجمعة تلقائيًا.</p>
-        </div>
-        <button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button>
-      </header>
+      <div className="page-top-actions"><button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load()}><ArrowClockwise size={18} />{loading ? "جاري التحديث..." : "تحديث"}</button></div>
 
       <div className="crm-department-tabs kpi-main-tabs centered">
         <button type="button" className={tab === "add" ? "active" : ""} onClick={() => setTab("add")}><UsersThree size={18} />إضافة التقييم</button>
@@ -427,43 +456,77 @@ th{background:#f8ece5;font-weight:900}
 
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
 
-      {tab === "add" ? <section className="kpi-agents-section">
-        <header className="kpi-section-head-clean">
-          <div><h2>إضافة تقييم المناديب</h2><p>كل مندوب يظهر حسب فرعه وقسمه، وتُعرض آخر نتيجة محفوظة داخل الفترة المحددة.</p></div>
-          <div className="kpi-count-badges"><span>{visibleAgents.length} مندوب</span><span>{businessDates(period.from, period.to).length} يوم عمل</span></div>
+      {tab === "add" ? <section className="kpi-agents-section kpi-add-evaluation-wrap">
+        <header className="crm-panel kpi-section-head-clean kpi-add-title">
+          <div><h2>إضافة تقييم المناديب</h2><p>كل مندوب يظهر حسب فرعه، مع نفس آلية الحفظ والحسابات المعتمدة.</p></div>
+          <div className="kpi-count-badges kpi-add-title-chips"><span>{visibleAgents.length} مندوب</span><span>إجمالي المبيعات {Math.round(addTotalSales)}</span></div>
         </header>
-        <div className="crm-table-shell kpi-agents-table"><table className="crm-table kpi-score-table"><thead><tr><th>الفرع</th><th>المندوب</th><th>القسم</th><th>عدد المبيعات</th><th>درجة المندوب</th><th>السرعة</th><th>الكفاءة</th><th>الانضباط</th><th>القيمة</th><th>نسبة KPI</th><th>التقييم</th><th>إجراءات</th></tr></thead><tbody>
-          {visibleAgents.map((agent) => { const last = rowForAgent(agent); const result = last ? calculate(normalizeDetails(last.details, number(last.details?.workDays, 1))) : null; return <tr key={agent.id}>
+        <div className="crm-table-shell kpi-agents-table"><table className="crm-table kpi-score-table"><thead><tr><th>الفرع</th><th>المندوب</th><th>عدد المبيعات</th><th>درجة المندوب</th><th>السرعة</th><th>الكفاءة</th><th>الانضباط</th><th>القيمة</th><th>نسبة KPI</th><th>التقييم</th><th>إجراءات</th></tr></thead><tbody>
+          {visibleAgents.map((agent) => { const { row: last, calc: result } = resultForAgent(agent); return <tr key={`${agent.id}-${agent.branch_code || "branch"}`}>
             <td>{agent.branch_name || (agent.branches || []).join("، ") || "—"}</td>
             <td><div className="kpi-agent-cell"><strong>{agent.full_name}</strong><small>{agent.employee_no || ""}</small></div></td>
-            <td>{agent.department_name || (agent.departments || []).join("، ") || "—"}</td>
-            <td><strong className="kpi-number-emphasis">{last?.total_sales ?? last?.calculated_sales ?? 0}</strong></td>
-            <td><strong className="kpi-number-emphasis">{result ? Math.round(result.totalPoints) : 0}</strong></td>
-            {[last?.speed_score,last?.efficiency_score,last?.discipline_score,last?.value_score,last?.total_score].map((score,index) => <td key={index}>{last ? <span className={`kpi-rate-pill ${rateClass(score)}`}>{percent(score)}</span> : "—"}</td>)}
-            <td>{last ? <span className={`kpi-rating-pill ${rateClass(last.total_score)}`}>{last.rating || "—"}</span> : "—"}</td>
+            <td><strong className="kpi-number-emphasis">{Math.round(result.salesCount)}</strong></td>
+            <td><strong className="kpi-number-emphasis">{Math.round(result.totalPoints)}</strong></td>
+            {[result.speedRate,result.efficiencyRate,result.disciplineRate,result.valueRate,result.finalRate].map((score,index) => <td key={index}><span className={`kpi-rate-pill ${rateClass(score)}`}>{percent(score)}</span></td>)}
+            <td><span className={`kpi-rating-pill ${rateClass(result.finalRate)}`}>{result.rating}</span></td>
             <td><button type="button" className="crm-primary-button small kpi-evaluate-button" onClick={() => open(agent, last)}>{permissions.canSave ? (last ? "تعديل التقييم" : "تقييم") : "عرض التقييم"}</button></td>
           </tr>; })}
-          {!visibleAgents.length ? <tr><td colSpan={12}><div className="crm-empty-state">لا يوجد مناديب مبيعات مطابقون للفلاتر</div></td></tr> : null}
+          {!visibleAgents.length ? <tr><td colSpan={11}><div className="crm-empty-state">لا يوجد مناديب مبيعات مطابقون للفلاتر</div></td></tr> : null}
         </tbody></table></div>
       </section> : null}
 
       {tab === "reports" ? <div className="kpi-reports-stack">
         <section className="crm-report-summary kpi-report-summary">
-          <article><UsersThree size={22} /><span>عدد المناديب</span><strong>{reportSummary.count}</strong></article>
-          <article className={rateClass(reportSummary.speed)}><span>متوسط السرعة</span><strong>{percent(reportSummary.speed)}</strong></article>
-          <article className={rateClass(reportSummary.efficiency)}><span>متوسط الكفاءة</span><strong>{percent(reportSummary.efficiency)}</strong></article>
-          <article className={rateClass(reportSummary.discipline)}><span>متوسط الانضباط</span><strong>{percent(reportSummary.discipline)}</strong></article>
-          <article className={rateClass(reportSummary.value)}><span>متوسط القيمة</span><strong>{percent(reportSummary.value)}</strong></article>
-          <article className={rateClass(reportSummary.total)}><Trophy size={22} /><span>متوسط KPI</span><strong>{percent(reportSummary.total)}</strong></article>
+          <article><UsersThree size={22} /><span>عدد المناديب</span><strong>{reportSummary.count}</strong><small>حسب الفرع والفلاتر</small></article>
+          <article className={rateClass(reportSummary.speed)}><span>متوسط السرعة</span><strong>{percent(reportSummary.speed)}</strong><small>من تأخير الحضور</small></article>
+          <article className={rateClass(reportSummary.efficiency)}><span>متوسط الكفاءة</span><strong>{percent(reportSummary.efficiency)}</strong><small>شخصية + فنية + سرعة</small></article>
+          <article className={rateClass(reportSummary.discipline)}><span>متوسط الانضباط</span><strong>{percent(reportSummary.discipline)}</strong><small>الحضور + الهيئة + السلوك</small></article>
+          <article className={rateClass(reportSummary.value)}><span>متوسط القيمة</span><strong>{percent(reportSummary.value)}</strong><small>تقييم العملاء + المبيعات</small></article>
         </section>
-        {branchReports.map((report) => <section className="crm-panel kpi-branch-report" key={report.branchName}>
-          <header><div><span className="crm-eyebrow">تقرير مدير الفرع</span><h2>{report.branchName}</h2><p>{period.from} إلى {period.to}</p></div><span className={`kpi-manager-score ${rateClass(report.managerRate)}`}>{percent(report.managerRate)}<small>{report.managerRating}</small></span></header>
-          <div className="crm-table-shell"><table className="crm-table kpi-branch-matrix"><thead><tr><th>البند</th>{report.rows.map(({ row }) => <th key={row.id}><strong className="kpi-report-agent-name">{row.full_name}</strong></th>)}<th>الإجمالي</th></tr></thead><tbody>{[
-            ["الحضور","attendancePoints"],["الهيئة","appearancePoints"],["السلوك","behaviorPoints"],["الكفاءة (التميز)","efficiencyPoints"],["تقييم العملاء","customerPoints"],["عدد المبيعات","salesCount"],["إجمالي نقاط المندوب","totalPoints"],
-          ].map(([label,key]) => <tr key={key}><td><strong>{label}</strong></td>{report.rows.map(({ row, calc }) => <td key={row.id}>{Math.round(number((calc as any)[key]))}</td>)}<td><strong>{key === "attendancePoints" ? report.total.attendance : key === "appearancePoints" ? report.total.appearance : key === "behaviorPoints" ? report.total.behavior : key === "efficiencyPoints" ? Math.round(report.total.efficiency) : key === "customerPoints" ? report.total.customer : key === "salesCount" ? report.total.sales : Math.round(report.total.points)}</strong></td></tr>)}</tbody></table></div>
-          <footer><div><Trophy size={25} weight="duotone" /><span>أفضل مندوب<strong>{report.best?.row?.full_name || "—"}</strong></span><span>إجمالي النقاط<strong>{report.best ? Math.round(report.best.calc.totalPoints) : 0}</strong></span><span>KPI<strong>{report.best ? percent(report.best.calc.finalRate) : "—"}</strong></span></div></footer>
-        </section>)}
-        {!visibleRows.length ? <div className="crm-empty-state panel">لا توجد تقييمات ضمن الفترة والفلاتر المحددة</div> : null}
+        <section className="crm-panel kpi-report-title-old">
+          <div><h2>تقرير نتيجة مدير الفرع / كل الفروع</h2><p>تجميع درجات المناديب مثل شيت تحليل الأداء، والحسبة تستبعد أيام الجمعة.</p></div>
+          <span>{period.from || "..."} إلى {period.to || "..."}</span>
+        </section>
+        {branchReports.map((report) => {
+          const representativeTone = representativeRatingClass(report.best?.calc.finalRate || 0);
+          const managerTone = branchManagerRatingClass(report.managerRate);
+          const matrixRows = [
+            { label: "تقييم إنضباط الحضور", key: "attendancePoints", total: report.total.attendance, ratio: report.discipline, classification: "إنضباط الفرع" },
+            { label: "تقييم إنضباط الهيئة", key: "appearancePoints", total: report.total.appearance, ratio: report.discipline, classification: "إنضباط الفرع" },
+            { label: "تقييم إنضباط السلوك", key: "behaviorPoints", total: report.total.behavior, ratio: report.discipline, classification: "إنضباط الفرع" },
+            { label: "تقييم الكفاءة (التميز)", key: "efficiencyPoints", total: report.total.efficiency, ratio: report.excellence, classification: "تميز الفرع" },
+            { label: "تقييم العملاء", key: "customerPoints", total: report.total.customer, ratio: report.value, classification: "قيمة الفرع" },
+            { label: "عدد المبيعات", key: "salesCount", total: report.total.sales, ratio: report.value, classification: "قيمة الفرع" },
+          ];
+          return <section className="crm-panel kpi-branch-report kpi-branch-report-old" key={report.branchName}>
+            <div className="kpi-report-head">
+              <div><h2>تقرير نتيجة مدير الفرع / {report.branchName}</h2><p>هذا التقرير خاص بفرع {report.branchName} فقط.</p></div>
+              <span className="kpi-report-count-chip">{report.rows.length} مندوب</span>
+            </div>
+            <div className="crm-table-shell kpi-old-branch-table"><table className="crm-table kpi-branch-matrix"><thead><tr><th>الإجمالي</th>{report.rows.map(({ agent }) => <th key={`${agent.id}-${agent.branch_code || "branch"}`}><strong className="kpi-report-agent-name">{agent.full_name}</strong></th>)}<th>البند</th><th>النسبة</th><th>التصنيف</th></tr></thead><tbody>
+              {matrixRows.map((row) => <tr key={row.key}><td className="kpi-total-cell"><strong>{Math.round(number(row.total))}</strong></td>{report.rows.map(({ agent, calc }) => <td key={`${agent.id}-${agent.branch_code || "branch"}`}>{Math.round(number((calc as any)[row.key]))}</td>)}<td className="kpi-item-cell">{row.label}</td><td>{percent(row.ratio)}</td><td>{row.classification}</td></tr>)}
+              <tr className="kpi-branch-total-row"><td className="kpi-total-cell"><strong>{Math.round(report.total.points)}</strong></td>{report.rows.map(({ agent, calc }) => <td key={`${agent.id}-${agent.branch_code || "branch"}`}><strong>{Math.round(calc.totalPoints)}</strong></td>)}<td className="kpi-item-cell">إجمالي درجات المناديب خلال الشهر</td><td></td><td></td></tr>
+            </tbody></table></div>
+            <div className="kpi-report-summary-old">
+              <article className="kpi-representative-summary">
+                <h3>مندوب الفرع</h3>
+                <p>اسم المندوب</p><strong>{report.best?.agent?.full_name || "—"}</strong>
+                <p>إجمالي النقاط</p><strong>{report.best ? Math.round(report.best.calc.totalPoints) : 0}</strong>
+                <p>نسبة KPI</p><strong className={`representative-score-value ${representativeTone}`}>{report.best ? percent(report.best.calc.finalRate) : "—"}</strong>
+                <p>التقييم</p><strong className={`representative-rating-value ${representativeTone}`}>{report.best?.calc.rating || "—"}</strong>
+              </article>
+              <article className="kpi-manager-summary">
+                <h3>مدير الفرع - {report.branchName}</h3>
+                <p>إنضباط الفرع</p><strong>{percent(report.discipline)}</strong>
+                <p>تميز الفرع</p><strong>{percent(report.excellence)}</strong>
+                <p>قيمة الفرع</p><strong>{percent(report.value)}</strong>
+                <p>درجة مدير الفرع</p><strong className={`branch-manager-score-value ${managerTone}`}>{percent(report.managerRate)}</strong>
+                <p>تقييمه</p><strong className={`branch-manager-rating-value ${managerTone}`}>{report.managerRating}</strong>
+              </article>
+            </div>
+          </section>;
+        })}
+        {!visibleAgents.length ? <div className="crm-empty-state panel">لا يوجد مناديب مبيعات ضمن الفترة والفلاتر المحددة</div> : null}
       </div> : null}
 
       {modal ? <div className="crm-modal-backdrop kpi-fullscreen-backdrop" onMouseDown={() => setModal(false)}>
@@ -485,11 +548,11 @@ th{background:#f8ece5;font-weight:900}
           </div>
 
           <div className="kpi-fullscreen-content">
-            {modalTab === "speed" ? <section className="kpi-panel">{!permissions.canEditSpeed ? <div className="crm-inline-notice">هذا الجزء للعرض فقط. التعديل متاح لمستخدمي السرعة المحددين في إعدادات CRM.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditSpeed}><header><div><h3>تقييم السرعة</h3><p>أدخل دقائق تأخير كل عملية بيع يوميًا. الجمعة مستبعدة من الفترة.</p></div><label><span>الحد المسموح</span><input type="number" min="0.01" step="0.1" value={form.details.speed.maxAllowedMinutes} onChange={(event) => updateDetails((draft) => { draft.speed.maxAllowedMinutes = Math.max(.01,number(event.target.value,3)); })} /></label></header>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}<span>من السبت إلى الخميس</span></h4><div className="kpi-daily-list">{week.map((date) => { const values = form.details.speed.dailyDelaySales[date] || [""]; return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17} /><strong>{arabicDate(date)}</strong><button type="button" onClick={() => updateDetails((draft) => { draft.speed.dailyDelaySales[date] = [...(draft.speed.dailyDelaySales[date] || [""]),""]; })}><Plus size={14} />إضافة</button></header><div className="kpi-delay-list">{values.map((value,index) => <div key={`${date}-${index}`}><input type="number" min="0" step="0.1" value={value} placeholder="دقائق التأخير" onChange={(event) => updateDetails((draft) => { const list=[...(draft.speed.dailyDelaySales[date] || [""])]; list[index]=event.target.value; draft.speed.dailyDelaySales[date]=list; })} /><button type="button" title="حذف" onClick={() => updateDetails((draft) => { const list=[...(draft.speed.dailyDelaySales[date] || [""])]; list.splice(index,1); draft.speed.dailyDelaySales[date]=list.length?list:[""]; })}><Minus size={14} /></button></div>)}</div></article>; })}</div></div>)}<div className="kpi-modal-stats"><span><small>إجمالي التأخير</small><b>{calculated.totalDelay.toFixed(2)} دقيقة</b></span><span><small>متوسط التأخير</small><b>{calculated.averageDelay.toFixed(2)} دقيقة</b></span><span className={rateClass(calculated.speedRate)}><small>نسبة السرعة</small><b>{percent(calculated.speedRate)}</b></span></div></fieldset></section> : null}
-            {modalTab === "efficiency" ? <section className="kpi-panel">{!permissions.canEditEfficiency ? <div className="crm-inline-notice">هذا الجزء للعرض فقط. التعديل متاح لمستخدمي الكفاءة المحددين في إعدادات CRM.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditEfficiency}><h3>الكفاءة</h3><div className="kpi-two-cols"><article className="kpi-sub-card"><h4>الشخصية</h4><label><span>المصداقية في إعطاء العميل السيارة المناسبة</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.customerFitHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.customerFitHonesty=clamp(event.target.value); })} /></label><label><span>المصداقية في توضيح ملاحظات السيارة</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.carNotesHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.carNotesHonesty=clamp(event.target.value); })} /></label><div className={`kpi-readonly-box ${rateClass(calculated.speedRate)}`}><small>نتيجة السرعة</small><strong>{percent(calculated.speedRate)}</strong></div></article><article className="kpi-sub-card"><h4>الفنية</h4>{([ ["currentPrices","حفظ الأسعار الحالية"],["oldPrices","حفظ الأسعار السابقة"],["carSpecs","معرفة مواصفات السيارات"],["competitorsComparison","مقارنة المنافسين"],["salesChannels","معرفة قنوات البيع"] ] as const).map(([key,label]) => <label key={key}><span>{label}</span><input type="number" min="0" max="100" value={form.details.efficiency.technical[key]} onChange={(event) => updateDetails((draft) => { draft.efficiency.technical[key]=clamp(event.target.value); })} /></label>)}</article></div><div className="kpi-modal-stats"><span className={rateClass(calculated.personalityRate)}><small>الشخصية</small><b>{percent(calculated.personalityRate)}</b></span><span className={rateClass(calculated.technicalRate)}><small>الفنية</small><b>{percent(calculated.technicalRate)}</b></span><span className={rateClass(calculated.efficiencyRate)}><small>الكفاءة</small><b>{percent(calculated.efficiencyRate)}</b></span><span><small>نقاط التميز</small><b>{calculated.efficiencyPoints}</b></span></div></fieldset></section> : null}
-            {modalTab === "discipline" ? <section className="kpi-panel">{!permissions.canEditBase ? <div className="crm-inline-notice">الانضباط للعرض فقط ويحتاج صلاحية إدارة تقييمات KPI.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditBase}><h3>الانضباط اليومي</h3>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}</h4><div className="kpi-daily-list">{week.map((date) => { const row=performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17}/><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid"><label><span>الحضور / 3</span><input type="number" min="0" max="3" value={row.attendance} onChange={(event)=>setPerformance(date,"attendance",event.target.value)}/></label><label><span>الهيئة / 3</span><input type="number" min="0" max="3" value={row.appearance} onChange={(event)=>setPerformance(date,"appearance",event.target.value)}/></label><label><span>السلوك / 3</span><input type="number" min="0" max="3" value={row.behavior} onChange={(event)=>setPerformance(date,"behavior",event.target.value)}/></label></div></article>; })}</div></div>)}<div className="kpi-modal-stats"><span><small>الحضور</small><b>{calculated.attendancePoints}</b></span><span><small>الهيئة</small><b>{calculated.appearancePoints}</b></span><span><small>السلوك</small><b>{calculated.behaviorPoints}</b></span><span className={rateClass(calculated.disciplineRate)}><small>الانضباط</small><b>{percent(calculated.disciplineRate)}</b></span></div></fieldset></section> : null}
-            {modalTab === "value" ? <section className="kpi-panel">{!permissions.canEditBase ? <div className="crm-inline-notice">القيمة للعرض فقط وتحتاج صلاحية إدارة تقييمات KPI.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditBase}><h3>القيمة اليومية</h3>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}</h4><div className="kpi-daily-list">{week.map((date) => { const row=performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17}/><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid two"><label><span>تقييم العملاء / 3</span><input type="number" min="0" max="3" value={row.customerRating} onChange={(event)=>setPerformance(date,"customerRating",event.target.value)}/></label><label><span>عدد المبيعات</span><input type="number" min="0" value={row.salesCount} onChange={(event)=>setPerformance(date,"salesCount",event.target.value)}/></label></div></article>; })}</div></div>)}<div className="kpi-modal-stats"><span><small>تقييم العملاء</small><b>{calculated.customerPoints}</b></span><span><small>المبيعات</small><b>{calculated.salesCount}</b></span><span className={rateClass(calculated.valueRate)}><small>القيمة</small><b>{percent(calculated.valueRate)}</b></span></div></fieldset></section> : null}
-            {modalTab === "result" ? <section className="kpi-panel"><h3>النتيجة النهائية</h3><div className="kpi-result-hero"><div className={rateClass(calculated.finalRate)}><span>نسبة KPI</span><strong>{percent(calculated.finalRate)}</strong><b>{calculated.rating}</b></div><div><span>إجمالي النقاط</span><strong>{Math.round(calculated.totalPoints)}</strong></div></div><div className="kpi-result-table"><span className={rateClass(calculated.speedRate)}>السرعة<b>{percent(calculated.speedRate)}</b></span><span className={rateClass(calculated.efficiencyRate)}>الكفاءة<b>{percent(calculated.efficiencyRate)}</b></span><span className={rateClass(calculated.disciplineRate)}>الانضباط<b>{percent(calculated.disciplineRate)}</b></span><span className={rateClass(calculated.valueRate)}>القيمة<b>{percent(calculated.valueRate)}</b></span><span>المبيعات<b>{calculated.salesCount}</b></span><span>أيام العمل<b>{calculated.workDays}</b></span></div><label className="kpi-notes"><span>ملاحظات التقييم</span><textarea disabled={!permissions.canEditBase} rows={5} value={form.notes} onChange={(event)=>setForm((current)=>({...current,notes:event.target.value}))}/></label></section> : null}
+            {modalTab === "speed" ? <section className="kpi-panel">{!permissions.canEditSpeed ? <div className="crm-inline-notice">هذا الجزء للعرض فقط. التعديل متاح لمستخدمي السرعة المحددين في إعدادات CRM.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditSpeed}><header><div><h3>تقييم السرعة</h3><p>أدخل دقائق تأخير كل عملية بيع يوميًا. الجمعة مستبعدة من الفترة.</p></div><label><span>الحد المسموح</span><input type="number" min="0.01" step="0.1" value={form.details.speed.maxAllowedMinutes} onChange={(event) => updateDetails((draft) => { draft.speed.maxAllowedMinutes = Math.max(.01,number(event.target.value,3)); })} /></label></header>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}<span>من السبت إلى الخميس</span></h4><div className="kpi-daily-list">{week.map((date) => { const values = form.details.speed.dailyDelaySales[date] || [""]; return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17} /><strong>{arabicDate(date)}</strong><button type="button" onClick={() => updateDetails((draft) => { draft.speed.dailyDelaySales[date] = [...(draft.speed.dailyDelaySales[date] || [""]),""]; })}><Plus size={14} />إضافة</button></header><div className="kpi-delay-list">{values.map((value,index) => <div key={`${date}-${index}`}><input type="number" min="0" step="0.1" value={value} placeholder="دقائق التأخير" onChange={(event) => updateDetails((draft) => { const list=[...(draft.speed.dailyDelaySales[date] || [""])]; list[index]=event.target.value; draft.speed.dailyDelaySales[date]=list; })} /><button type="button" title="حذف" onClick={() => updateDetails((draft) => { const list=[...(draft.speed.dailyDelaySales[date] || [""])]; list.splice(index,1); draft.speed.dailyDelaySales[date]=list.length?list:[""]; })}><Minus size={14} /></button></div>)}</div></article>; })}</div></div>)}<div className="kpi-modal-stats six"><span><small>إجمالي دقائق التأخير</small><b>{Math.round(calculated.totalDelay)} دقيقة</b></span><span><small>عدد الطلبات</small><b>{Object.values(form.details.speed.dailyDelaySales || {}).flat().filter((value) => String(value ?? "").trim() !== "").length}</b></span><span><small>متوسط عدد دقائق التأخير</small><b>{Math.round(calculated.averageDelay)} دقيقة</b></span><span><small>أقصى دقائق مسموح بها</small><b>{form.details.speed.maxAllowedMinutes} دقائق</b></span><span className={rateClass(100 - calculated.speedRate)}><small>نسبة التأخير خلال الشهر</small><b>{percent(100 - calculated.speedRate)}</b></span><span className={rateClass(calculated.speedRate)}><small>نسبة سرعة المندوب خلال الشهر</small><b>{percent(calculated.speedRate)}</b></span></div></fieldset></section> : null}
+            {modalTab === "efficiency" ? <section className="kpi-panel">{!permissions.canEditEfficiency ? <div className="crm-inline-notice">هذا الجزء للعرض فقط. التعديل متاح لمستخدمي الكفاءة المحددين في إعدادات CRM.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditEfficiency}><h3>الكفاءة</h3><div className="kpi-two-cols"><article className="kpi-sub-card"><h4>الشخصية</h4><label><span>المصداقية</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.customerFitHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.customerFitHonesty=clamp(event.target.value); })} /></label><label><span>المعرفة التفصيلية بالمخزون</span><input type="number" min="0" max="100" value={form.details.efficiency.personality.carNotesHonesty} onChange={(event) => updateDetails((draft) => { draft.efficiency.personality.carNotesHonesty=clamp(event.target.value); })} /></label><div className={`kpi-readonly-box ${rateClass(calculated.speedRate)}`}><small>نتيجة السرعة</small><strong>{percent(calculated.speedRate)}</strong></div></article><article className="kpi-sub-card"><h4>الفنية</h4>{([ ["currentPrices","حفظ الأسعار الحالية"],["oldPrices","حفظ الأسعار السابقة"],["carSpecs","المعرفة التفصيلية بمواصفات السيارة"],["competitorsComparison","معرفة فروق السيارة مع البراندات الأخرى"],["salesChannels","معرفة طرق وقنوات البيع كاش أو أقساط"] ] as const).map(([key,label]) => <label key={key}><span>{label}</span><input type="number" min="0" max="100" value={form.details.efficiency.technical[key]} onChange={(event) => updateDetails((draft) => { draft.efficiency.technical[key]=clamp(event.target.value); })} /></label>)}</article></div><div className="kpi-modal-stats four"><span className={rateClass(calculated.personalityRate)}><small>متوسط الكفاءة الشخصية</small><b>{percent(calculated.personalityRate)}</b></span><span className={rateClass(calculated.technicalRate)}><small>متوسط الكفاءة الفنية</small><b>{percent(calculated.technicalRate)}</b></span><span className={rateClass(calculated.efficiencyRate)}><small>متوسط الكفاءة</small><b>{percent(calculated.efficiencyRate)}</b></span><span><small>تحويل الكفاءة إلى عدد نقاط</small><b>{Math.round(calculated.efficiencyPoints)}</b></span></div><div className="kpi-level-table"><h4>تقييم مستوى كفاءة المندوب</h4><table><tbody><tr><th>البند</th><th>أقل من 60% ضعيف</th><th>من 60% : 74% متوسط</th><th>من 75% : 89% جيد</th><th>من 90% : 100% ممتاز</th></tr><tr><td>الدرجة</td><td>0</td><td>1</td><td>2</td><td>3</td></tr><tr><td>درجة مستوى كفاءة المندوب خلال الشهر</td><td>{calculated.efficiencyRate < 60 ? Math.round(calculated.efficiencyPoints) : 0}</td><td>{calculated.efficiencyRate >= 60 && calculated.efficiencyRate < 75 ? Math.round(calculated.efficiencyPoints) : 0}</td><td>{calculated.efficiencyRate >= 75 && calculated.efficiencyRate < 90 ? Math.round(calculated.efficiencyPoints) : 0}</td><td>{calculated.efficiencyRate >= 90 ? Math.round(calculated.efficiencyPoints) : 0}</td></tr></tbody></table></div></fieldset></section> : null}
+            {modalTab === "discipline" ? <section className="kpi-panel">{!permissions.canEditBase ? <div className="crm-inline-notice">الانضباط للعرض فقط ويحتاج صلاحية إدارة تقييمات KPI.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditBase}><h3>الانضباط اليومي</h3>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}</h4><div className="kpi-daily-list">{week.map((date) => { const row=performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17}/><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid"><label><span>الحضور / 3</span><input type="number" min="0" max="3" value={row.attendance} onChange={(event)=>setPerformance(date,"attendance",event.target.value)}/></label><label><span>الهيئة / 3</span><input type="number" min="0" max="3" value={row.appearance} onChange={(event)=>setPerformance(date,"appearance",event.target.value)}/></label><label><span>السلوك / 3</span><input type="number" min="0" max="3" value={row.behavior} onChange={(event)=>setPerformance(date,"behavior",event.target.value)}/></label></div></article>; })}</div></div>)}<div className="kpi-modal-stats four"><span><small>إجمالي نقاط الحضور</small><b>{Math.round(calculated.attendancePoints)}</b></span><span><small>إجمالي نقاط الهيئة</small><b>{Math.round(calculated.appearancePoints)}</b></span><span><small>إجمالي نقاط السلوك</small><b>{Math.round(calculated.behaviorPoints)}</b></span><span className={rateClass(calculated.disciplineRate)}><small>نسبة الانضباط</small><b>{percent(calculated.disciplineRate)}</b></span></div></fieldset></section> : null}
+            {modalTab === "value" ? <section className="kpi-panel">{!permissions.canEditBase ? <div className="crm-inline-notice">القيمة للعرض فقط وتحتاج صلاحية إدارة تقييمات KPI.</div> : null}<fieldset className="kpi-permission-fieldset" disabled={!permissions.canEditBase}><h3>القيمة اليومية</h3>{weeks.map((week,index) => <div className="kpi-week-card" key={index}><h4>الأسبوع {index + 1}</h4><div className="kpi-daily-list">{week.map((date) => { const row=performanceFor(date); return <article className="kpi-day-card" key={date}><header><CalendarBlank size={17}/><strong>{arabicDate(date)}</strong></header><div className="kpi-week-grid two"><label><span>تقييم العملاء / 3</span><input type="number" min="0" max="3" value={row.customerRating} onChange={(event)=>setPerformance(date,"customerRating",event.target.value)}/></label><label><span>عدد المبيعات</span><input type="number" min="0" value={row.salesCount} onChange={(event)=>setPerformance(date,"salesCount",event.target.value)}/></label></div></article>; })}</div></div>)}<div className="kpi-modal-stats three"><span><small>إجمالي نقاط تقييم العملاء</small><b>{Math.round(calculated.customerPoints)}</b></span><span><small>إجمالي عدد المبيعات</small><b>{Math.round(calculated.salesCount)}</b></span><span className={rateClass(calculated.valueRate)}><small>نسبة القيمة</small><b>{percent(calculated.valueRate)}</b></span></div></fieldset></section> : null}
+            {modalTab === "result" ? <section className="kpi-panel"><h3>النتيجة المحسوبة</h3><div className="kpi-modal-stats four"><span className={rateClass(calculated.speedRate)}><small>نسبة السرعة</small><b>{percent(calculated.speedRate)}</b></span><span className={rateClass(calculated.efficiencyRate)}><small>نسبة الكفاءة</small><b>{percent(calculated.efficiencyRate)}</b></span><span className={rateClass(calculated.disciplineRate)}><small>نسبة الانضباط</small><b>{percent(calculated.disciplineRate)}</b></span><span className={rateClass(calculated.valueRate)}><small>نسبة القيمة</small><b>{percent(calculated.valueRate)}</b></span><span className={rateClass(calculated.finalRate)}><small>نسبة KPI</small><b>{percent(calculated.finalRate)}</b></span><span><small>إجمالي النقاط</small><b>{Math.round(calculated.totalPoints)}</b></span><span className={rateClass(calculated.finalRate)}><small>التقييم</small><b>{calculated.rating}</b></span></div><div className="kpi-result-table old-result-table"><h4>نتيجة المندوب في تحليل الأداء</h4><table><thead><tr><th>البند</th><th>الدرجة</th></tr></thead><tbody>{[["تقييم إنضباط الحضور",calculated.attendancePoints],["تقييم إنضباط الهيئة",calculated.appearancePoints],["تقييم إنضباط السلوك",calculated.behaviorPoints],["تقييم الكفاءة (التميز)",calculated.efficiencyPoints],["تقييم العملاء",calculated.customerPoints],["عدد المبيعات",calculated.salesCount]].map(([label,value]) => <tr key={String(label)}><td>{label}</td><td>{Math.round(number(value))}</td></tr>)}<tr className="dark"><td>إجمالي درجات المناديب خلال الشهر</td><td>{Math.round(calculated.totalPoints)}</td></tr></tbody></table></div><label className="kpi-notes"><span>ملاحظات التقييم</span><textarea disabled={!permissions.canEditBase} rows={5} value={form.notes} onChange={(event)=>setForm((current)=>({...current,notes:event.target.value}))}/></label></section> : null}
             {!modalDays.length && modalTab !== "efficiency" && modalTab !== "result" ? <div className="crm-empty-state panel">حدد فترة تقييم صحيحة أولًا.</div> : null}
           </div>
 

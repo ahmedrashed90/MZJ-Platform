@@ -80,8 +80,6 @@ export function HelpPage() {
 
   return (
     <div className="module-page help-page">
-      <header className="module-page-head help-page-head"><div><h1>المساعدة</h1><p>دليل استخدام مختصر وواضح لأنظمة منصة MZJ والصفحات المتاحة لحسابك.</p></div><Lifebuoy size={38} weight="duotone" /></header>
-
       <section className="help-hero">
         <div><span>مركز مساعدة المنصة</span><h2>كيف نقدر نساعدك؟</h2><p>ابحث باسم الصفحة أو الوظيفة للوصول إلى خطوات الاستخدام بسرعة.</p></div>
         <label><MagnifyingGlass size={22} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ابحث في المساعدة: مستخدم، حملة، سيارة، تقرير..." /></label>

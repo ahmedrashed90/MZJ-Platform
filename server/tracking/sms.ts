@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSql } from "../_db.js";
 import { queueFirebaseSms } from "../_firebase-sms.js";
 import { requireTrackingUser } from "../_tracking-auth.js";
-import { getSystemAccess, hasPermission } from "../_access-control.js";
+import { hasPermission } from "../_access-control.js";
+import { trackingAccessScope } from "../_tracking-access.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { clean, normalizeSaudiPhone, publicTrackingUrl } from "../_tracking-utils.js";
 
@@ -45,7 +46,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const sql = getSql();
   const [row] = await sql<any[]>`
-    select o.*,o.id::text,
+    select o.*,o.id::text,o.assigned_to::text,
       (select count(*) from tracking.order_vehicles vx where vx.order_id=o.id)::int as vehicles_count,
       v.id::text as vehicle_id,v.vin,v.item_no,v.car_name,
       s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,o.tracking_token
@@ -56,8 +57,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
   `;
   if (!row) return response.status(404).json({ ok: false, error: "لم يتم العثور على بيانات الرسالة" });
   if (row.is_cancelled) return response.status(400).json({ ok: false, error: "طلب البيع ملغي من NEXT ERP ولا يمكن إرسال SMS+ له" });
-  const access = getSystemAccess(user, "tracking");
-  const inScope = access.dataScope === "all" || access.branchCodes.includes(clean(row.branch)) || Boolean((await sql<any[]>`select 1 from tracking.stage_events where order_id=${row.id}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
+  const scope = trackingAccessScope(user);
+  const workflowAssigned = scope.workflowAssignedOnly
+    ? Boolean((await sql<any[]>`select 1 from tracking.stage_events where order_id=${row.id}::uuid and actor_id=${user.id}::uuid limit 1`)[0])
+    : false;
+  const inScope = scope.unrestricted
+    || (scope.assignedOnly && clean(row.assigned_to) === user.id)
+    || (scope.workflowAssignedOnly && workflowAssigned)
+    || (scope.branchScoped && scope.branchCodes.includes(clean(row.branch)));
   if (!inScope) return response.status(403).json({ ok: false, error: "الطلب خارج نطاق بياناتك" });
   const stageNo = String(Number(row.sort_order || 0)).padStart(2, "0");
   const stagePermission = `tracking.stage.${stageNo}.sms`;

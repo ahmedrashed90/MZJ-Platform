@@ -20,6 +20,7 @@ alter table tracking.orders add column if not exists customer_vat text;
 alter table tracking.orders add column if not exists branch text;
 alter table tracking.orders add column if not exists delivery_date date;
 alter table tracking.orders add column if not exists sales_person text;
+alter table tracking.orders add column if not exists assigned_to uuid references core.users(id) on delete set null;
 alter table tracking.orders add column if not exists subtotal_before_tax numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists tax_value numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists total_incl_vat numeric(14,2) not null default 0;
@@ -43,6 +44,39 @@ alter table tracking.orders add column if not exists source_instance_key text;
 alter table tracking.orders add column if not exists erp_created_at timestamptz;
 create index if not exists tracking_orders_cancelled_idx on tracking.orders(is_cancelled,cancelled_at desc);
 create index if not exists tracking_orders_source_instance_idx on tracking.orders(source_instance_key);
+create index if not exists tracking_orders_assigned_to_idx on tracking.orders(assigned_to,updated_at desc);
+
+do $tracking_assignee_backfill$
+begin
+  if to_regclass('integrations.erpnext_sales_orders') is not null then
+    with mapped as (
+      select distinct on (o.id)
+        o.id as order_id,
+        so.platform_user_id
+      from tracking.orders o
+      join integrations.erpnext_sales_orders so
+        on so.platform_user_id is not null
+       and coalesce((to_jsonb(so)->>'is_cancelled')::boolean,false)=false
+       and (
+         so.tracking_order_id=o.id
+         or (so.tracking_order_id is null and so.sales_order_no=o.sales_order_no)
+       )
+      where o.assigned_to is null
+      order by
+        o.id,
+        case
+          when so.tracking_order_id=o.id then 0
+          else 1
+        end,
+        so.updated_at desc
+    )
+    update tracking.orders o
+    set assigned_to=m.platform_user_id
+    from mapped m
+    where o.id=m.order_id and o.assigned_to is null;
+  end if;
+end
+$tracking_assignee_backfill$;
 
 alter table tracking.order_vehicles add column if not exists item_no text;
 alter table tracking.order_vehicles add column if not exists item_type text;
