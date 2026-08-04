@@ -11,11 +11,13 @@ const contains = (file, ...tokens) => {
 expect("Package version is 1.19.4", JSON.parse(read("package.json")).version === "1.19.4");
 expect("ERPNext instance identity includes creation", contains("server/_erpnext-sales-order-normalizer.ts", "sourceInstanceKey", "created:${erpCreatedAt}", "isCancellation"));
 expect("ERPNext cancel route uses the unified endpoint", contains("server/integrations/erpnext-sales-order.ts", "normalized.isCancellation", "cancelErpNextSalesOrder"));
-expect("Cancellation is idempotent", contains("server/_erpnext-sales-order-sync.ts", "alreadyCancelled", "ERP_CANCEL_ORDER_NOT_FOUND"));
-expect("Cancelled tracking orders are preserved", contains("server/_erpnext-sales-order-sync.ts", "is_cancelled=true", "cancellation_source='next_erp'"));
+expect("Cancellation is idempotent and retries reconcile previous partial responses", contains("server/_erpnext-sales-order-sync.ts", "const alreadyCancelled = Boolean(order.is_cancelled)", "cancelled_at=coalesce(cancelled_at,now())", "if (!alreadyCancelled)", "ERP_CANCEL_ORDER_NOT_FOUND"));
+expect("Cancelled tracking orders leave the active list and stay in the archive", contains("server/_erpnext-sales-order-sync.ts", "is_cancelled=true", "cancellation_source='next_erp'", "is_archived=true", "archive_reason=${cancellationReason}"));
 expect("Operations returns only eligible under-delivery vehicles", contains("server/_erpnext-sales-order-sync.ts", "status_code='available_for_sale'", "OPERATIONS_NEWER_SALES_ORDER_PRESERVED", "OPERATIONS_CANCEL_REVIEW_REQUIRED"));
 expect("Approval cycles close with cancelled event", contains("server/_erpnext-sales-order-sync.ts", "'all','cancelled'", "is_active=false"));
 expect("CRM previous state is stored and restored", contains("server/_erpnext-sales-order-sync.ts", "crm_previous_state", "restored_previous_state", "erpnext_sales_order_cancelled"));
+expect("CRM cancelled sale clears the nullable sold snapshot instead of writing forbidden zero", contains("server/_erpnext-sales-order-sync.ts", "when status_label='تم البيع' then greatest(coalesce(sold_quantity,1),1)", "else null", "refreshCrmLeadSalesSnapshotWithDb(tx, crm.leadId)"));
+expect("Cancellation actor comes from the ERP user who executed Cancel", contains("server/_erpnext-sales-order-sync.ts", "cancellationActorEmail", "normalized.erpSubmittedByName", "NEXT ERP Cancellation"));
 expect("Multiple CRM sales orders inherit the original pre-sale state", contains("server/_erpnext-sales-order-sync.ts", "originIntegrationState", "inheritedPreviousState", "historicalOrigin"));
 expect("Tracking stage action updates all order vehicles", contains("server/tracking/orders.ts", "from tracking.order_vehicles ov", "ov.order_id=${row.order_id}::uuid", "لجميع سيارات الطلب"));
 expect("SMS sent state is persisted per order stage", contains("server/tracking/orders.ts", "tracking.sms_messages", "sm.order_id=${id}::uuid", "as sms_sent"));
@@ -27,7 +29,7 @@ expect("Public tracking shows cancellation instead of continuing the live flow",
 expect("Runtime schemas include cancellation columns", contains("server/_tracking-schema.ts", "cancellation_reason", "source_instance_key", "erp_created_at") && contains("server/_erpnext-integration-schema.ts", "crm_previous_state", "is_cancelled", "cancelled_at"));
 expect("Approval action constraint supports cancellation", contains("server/_operations-schema.ts", "position('cancelled'", "'reset','cancelled'"));
 expect("Migration exists", fs.existsSync("database/migrations/20260724_erpnext_cancel_tracking_sync_v1194.sql"));
-expect("Cancel webhook JSON exists", fs.existsSync("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt") && contains("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt", '"event": "sales_order.cancelled"', '"creation": {{ (doc.creation or \'\') | tojson }}'));
+expect("Cancel webhook JSON exists", fs.existsSync("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt") && contains("integration-assets/MZJ-ERPNext-Sales-Order-Cancel-Webhook-JSON.txt", '"event": "sales_order.cancelled"', `"creation": {{ (doc.creation or '') | tojson }}`, "custom_اسم_المستخدم", "custom_رقم_الجوال"));
 
 let failed = 0;
 for (const [label, passed] of checks) {

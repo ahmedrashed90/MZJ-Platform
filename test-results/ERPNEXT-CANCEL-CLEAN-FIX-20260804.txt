@@ -1,0 +1,30 @@
+MZJ Platform v1.19.4 — NEXT ERP cancellation clean fix
+Date: 2026-08-04
+
+CAUSE FOUND
+===========
+The cancellation transaction could complete, then CRM sales snapshot attempted to write sold_quantity=0.
+The CRM schema accepts NULL or values >= 1, so the post-transaction snapshot raised a database error and the webhook returned HTTP 500.
+The tracking record also remained visible in the active list because cancellation marked it cancelled but did not archive it.
+
+CLEAN SOURCE CHANGES
+====================
+1. CRM snapshot writes NULL when no active sale exists, and clears sold_at for non-sold leads.
+2. Snapshot refresh runs inside the cancellation transaction.
+3. Cancelled tracking orders are moved to the tracking archive and remain auditable.
+4. Retrying an already-cancelled order reconciles all systems without duplicate CRM events.
+5. Cancellation actor is resolved from modified_by / operations_admin_email, not the sales representative.
+6. Submit and cancel webhook assets read custom_اسم_المستخدم and custom_رقم_الجوال.
+
+VALIDATION
+==========
+- ERPNext cancellation source checks: 22/22 PASS
+- Modified TypeScript transpile diagnostics: 0 errors
+- ERPNext normalizer runtime checks: PASS
+- Webhook templates rendered and parsed as JSON: PASS (submit and cancel)
+- Tracking module regression check: PASS
+- ERPNext unified linkage regression check: PASS
+- Operations approval-cycle regression check: PASS
+- CRM sold quantity report alignment check: PASS
+
+No database migration was added. No unrelated UI or business logic was changed.

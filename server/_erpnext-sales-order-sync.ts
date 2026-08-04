@@ -780,10 +780,10 @@ async function linkOperationsVehicles(input: {
   };
 }
 
-export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
-  if (!clean(leadId)) return;
-  const sql = getSql();
-  const [sales] = await sql<any[]>`
+async function refreshCrmLeadSalesSnapshotWithDb(db: any, leadId: string | null | undefined) {
+  const normalizedLeadId = clean(leadId);
+  if (!normalizedLeadId) return;
+  const [sales] = await db<any[]>`
     select
       coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_quantity,
       coalesce(sum(coalesce(so.total_incl_vat,0)),0)::float as total_sales_amount,
@@ -794,29 +794,37 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
       select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
       from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
     ) vehicle_stats on true
-    where so.crm_lead_id=${clean(leadId)}::uuid and coalesce(so.is_cancelled,false)=false
+    where so.crm_lead_id=${normalizedLeadId}::uuid and coalesce(so.is_cancelled,false)=false
   `;
   const soldQuantity = Math.max(0, Number(sales?.sold_quantity || 0));
   const salesOrders: string[] = Array.isArray(sales?.sales_orders)
     ? Array.from(new Set<string>(sales.sales_orders.map((value: unknown) => clean(value)).filter((value: string) => Boolean(value))))
     : [];
-  await sql`
+  await db`
     update crm.leads set
       sold_quantity=case
         when ${soldQuantity}>0 then ${soldQuantity}
         when status_label='تم البيع' then greatest(coalesce(sold_quantity,1),1)
-        else 0
+        else null
       end,
-      sold_at=case when ${soldQuantity}>0 then coalesce(${sales?.last_sale_at || null}::timestamptz,sold_at) else sold_at end,
-      extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
+      sold_at=case
+        when ${soldQuantity}>0 then coalesce(${sales?.last_sale_at || null}::timestamptz,sold_at)
+        when status_label='تم البيع' then sold_at
+        else null
+      end,
+      extra_data=coalesce(extra_data,'{}'::jsonb)||${db.json({
         salesOrders,
         erpSalesOrdersCount: salesOrders.length,
         erpSoldQuantity: soldQuantity,
         totalSalesAmount: Number(sales?.total_sales_amount || 0),
       })},
       updated_at=now()
-    where id=${clean(leadId)}::uuid
+    where id=${normalizedLeadId}::uuid
   `;
+}
+
+export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefined) {
+  await refreshCrmLeadSalesSnapshotWithDb(getSql(), leadId);
 }
 
 export async function cancelErpNextSalesOrder(input: {
@@ -838,6 +846,17 @@ export async function cancelErpNextSalesOrder(input: {
   const sql = getSql();
   const warnings: LinkWarning[] = [];
   const cancellationReason = clean(input.reason) || `تم إلغاء طلب البيع ${normalized.orderNo} من NEXT ERP`;
+  const cancellationActorEmail = clean(normalized.erpSubmittedBy);
+  const [cancellationActor] = cancellationActorEmail ? await sql<any[]>`
+    select id::text,full_name,email,next_erp_user_id
+    from core.users
+    where is_active=true and (
+      lower(trim(coalesce(next_erp_user_id,'')))=lower(trim(${cancellationActorEmail}))
+      or lower(trim(coalesce(email,'')))=lower(trim(${cancellationActorEmail}))
+    )
+    order by case when lower(trim(coalesce(next_erp_user_id,'')))=lower(trim(${cancellationActorEmail})) then 0 else 1 end
+    limit 1
+  ` : [];
 
   const result = await sql.begin(async (tx: any) => {
     let [order] = await tx<any[]>`
@@ -877,32 +896,29 @@ export async function cancelErpNextSalesOrder(input: {
       };
     }
 
-    if (order.is_cancelled) {
-      return {
-        found: true,
-        alreadyCancelled: true,
-        integrationOrderId: order.id,
-        trackingCancelled: order.tracking_order_id ? 1 : 0,
-        operations: { linked: 0, returnedToAvailable: 0, preserved: 0 },
-        crm: { status: "already_cancelled", leadId: order.crm_lead_id || null, restored: false },
-      };
-    }
+    const alreadyCancelled = Boolean(order.is_cancelled);
 
-    const actorId = clean(input.actor?.id) || order.platform_user_id || null;
-    const actorName = clean(input.actor?.name) || "NEXT ERP Integration";
-    const actorRole = clean(input.actor?.role) || "NEXT ERP";
+    const actorId = clean(input.actor?.id) || clean(cancellationActor?.id) || null;
+    const actorName = clean(input.actor?.name)
+      || clean(normalized.erpSubmittedByName)
+      || clean(cancellationActor?.full_name)
+      || cancellationActorEmail
+      || "NEXT ERP Integration";
+    const actorRole = clean(input.actor?.role) || "NEXT ERP Cancellation";
 
     [order] = await tx<any[]>`
       update integrations.erpnext_sales_orders set
         erp_status=coalesce(nullif(${normalized.erpStatus},''),'Cancelled'),erp_event=${normalized.erpEvent||"sales_order.cancelled"},
-        is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},source_payload=${tx.json(normalized.rawBody)},updated_at=now()
+        is_cancelled=true,cancelled_at=coalesce(cancelled_at,now()),cancellation_reason=${cancellationReason},source_payload=${tx.json(normalized.rawBody)},updated_at=now()
       where id=${order.id}::uuid
       returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
     `;
 
     const trackingRows = crmOnly ? [] : await tx<any[]>`
       update tracking.orders set
-        is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},cancellation_source='next_erp',updated_at=now()
+        is_cancelled=true,cancelled_at=coalesce(cancelled_at,now()),cancellation_reason=${cancellationReason},cancellation_source='next_erp',
+        is_archived=true,archived_at=coalesce(archived_at,now()),archived_by=${actorId}::uuid,
+        archived_by_name=${actorName},archive_reason=${cancellationReason},updated_at=now()
       where coalesce(is_deleted,false)=false and (
         id=${order.tracking_order_id||null}::uuid
         or source_instance_key=${order.source_instance_key}
@@ -926,7 +942,7 @@ export async function cancelErpNextSalesOrder(input: {
     for (const salesVehicle of salesVehicles) {
       await tx`
         update integrations.erpnext_sales_order_vehicles
-        set is_cancelled=true,cancelled_at=now(),updated_at=now()
+        set is_cancelled=true,cancelled_at=coalesce(cancelled_at,now()),updated_at=now()
         where id=${salesVehicle.id}::uuid
       `;
       if (!salesVehicle.operations_vehicle_id) continue;
@@ -1113,17 +1129,19 @@ export async function cancelErpNextSalesOrder(input: {
           crm = { status: "cancel_recorded", leadId: lead.id, restored: false };
         }
 
-        await tx`
-          insert into crm.lead_events(
-            lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
-            actor_id,actor_name,actor_role,note,details,created_at
-          ) values(
-            ${lead.id}::uuid,'erpnext_sales_order_cancelled',${clean(lead.status_label)||null},${nextStatus||clean(lead.status_label)||null},
-            ${clean(lead.department_code)||null},${clean(lead.department_code)||null},${clean(lead.branch_code)||null},${clean(lead.branch_code)||null},
-            ${actorId}::uuid,${actorName},${actorRole},${cancellationReason},
-            ${tx.json({ salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key, crmStatus: crm.status })},now()
-          )
-        `;
+        if (!alreadyCancelled) {
+          await tx`
+            insert into crm.lead_events(
+              lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
+              actor_id,actor_name,actor_role,note,details,created_at
+            ) values(
+              ${lead.id}::uuid,'erpnext_sales_order_cancelled',${clean(lead.status_label)||null},${nextStatus||clean(lead.status_label)||null},
+              ${clean(lead.department_code)||null},${clean(lead.department_code)||null},${clean(lead.branch_code)||null},${clean(lead.branch_code)||null},
+              ${actorId}::uuid,${actorName},${actorRole},${cancellationReason},
+              ${tx.json({ salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key, crmStatus: crm.status })},now()
+            )
+          `;
+        }
       }
     }
 
@@ -1135,9 +1153,11 @@ export async function cancelErpNextSalesOrder(input: {
       where id=${order.id}::uuid
     `;
 
+    if (crm.leadId) await refreshCrmLeadSalesSnapshotWithDb(tx, crm.leadId);
+
     return {
       found: true,
-      alreadyCancelled: false,
+      alreadyCancelled,
       integrationOrderId: order.id,
       trackingCancelled: trackingRows.length,
       operations: { linked, returnedToAvailable, preserved },
@@ -1145,7 +1165,6 @@ export async function cancelErpNextSalesOrder(input: {
     };
   });
 
-  if ((result as any)?.crm?.leadId) await refreshCrmLeadSalesSnapshot((result as any).crm.leadId);
   return { ...result, warnings: uniqueWarnings(warnings) };
 }
 
