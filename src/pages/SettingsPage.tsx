@@ -71,7 +71,7 @@ export function SettingsPage() {
             <MagnifyingGlass size={18} />
             <input value={navigationSearch} onChange={(event) => setNavigationSearch(event.target.value)} placeholder="ابحث عن إعداد أو نظام" />
           </label>
-          <b>{available.length.toLocaleString("ar-SA")} أقسام متاحة</b>
+          <b>{available.length.toLocaleString("ar-SA-u-nu-latn")} أقسام متاحة</b>
         </header>
         <nav className="unified-settings-section-grid" aria-label="أقسام الإعدادات">
           {filteredSections.map(({ key, label, description, icon: Icon }) => (

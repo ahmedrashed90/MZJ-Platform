@@ -33,7 +33,7 @@ const tabLabels: Record<ReportTab, string> = {
 
 function metric(value: unknown) {
   const number = Number(value);
-  return Number.isFinite(number) ? number.toLocaleString("ar-SA") : "—";
+  return Number.isFinite(number) ? number.toLocaleString("ar-SA-u-nu-latn") : "—";
 }
 
 function OperationsReports() {
@@ -164,7 +164,7 @@ function TrackingReports() {
           {orders.slice(0, 50).map((order) => {
             const totalStages = Number(order.total_stages || 0);
             const progress = totalStages ? Math.round((Number(order.completed_stages || 0) / totalStages) * 100) : 0;
-            return <tr key={order.id}><td><strong>{order.sales_order_no}</strong></td><td>{order.customer_name || "—"}</td><td>{trackingBranchLabel(order.branch)}</td><td>{order.sales_person || "—"}</td><td>{metric(order.vehicles_count)}</td><td>{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</td><td>{progress.toLocaleString("ar-SA")}%</td><td>{formatTrackingDate(order.updated_at)}</td></tr>;
+            return <tr key={order.id}><td><strong>{order.sales_order_no}</strong></td><td>{order.customer_name || "—"}</td><td>{trackingBranchLabel(order.branch)}</td><td>{order.sales_person || "—"}</td><td>{metric(order.vehicles_count)}</td><td>{trackingStatusLabel(order.status, Boolean(order.is_archived), Boolean(order.is_cancelled))}</td><td>{progress.toLocaleString("ar-SA-u-nu-latn")}%</td><td>{formatTrackingDate(order.updated_at)}</td></tr>;
           })}
           {!orders.length && !loading ? <tr><td colSpan={8}><div className="unified-empty-row">لا توجد طلبات تراكينج متاحة.</div></td></tr> : null}
         </tbody></table></div>

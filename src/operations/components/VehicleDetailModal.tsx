@@ -20,7 +20,7 @@ function trackingProgressTone(value?: number | null) {
 
 function formatMoney(value: unknown) {
   const amount = Number(value || 0);
-  return Number.isFinite(amount) ? amount.toLocaleString("ar-SA", { style: "currency", currency: "SAR" }) : "—";
+  return Number.isFinite(amount) ? amount.toLocaleString("ar-SA-u-nu-latn", { style: "currency", currency: "SAR" }) : "—";
 }
 
 function linkStatusLabel(value: unknown) {

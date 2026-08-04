@@ -30,13 +30,13 @@ export function formatTrackingDate(value?: string | null, withTime = true) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString("ar-SA", withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
+  return date.toLocaleString("ar-SA-u-nu-latn", withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
 }
 
 export function formatTrackingMoney(value?: number | string | null) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "—";
-  return `${number.toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س`;
+  return `${number.toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س`;
 }
 
 export function trackingStatusLabel(status?: string | null, isArchived = false, isCancelled = false) {

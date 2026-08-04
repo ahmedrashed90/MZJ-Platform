@@ -27,7 +27,7 @@ export function formatDate(value?: string | null, withTime = true) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString("ar-SA", withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
+  return date.toLocaleString("ar-SA-u-nu-latn", withTime ? { dateStyle: "medium", timeStyle: "short" } : { dateStyle: "medium" });
 }
 
 export function departmentKeyFromCode(value?: string | null) {

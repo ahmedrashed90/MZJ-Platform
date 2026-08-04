@@ -1,0 +1,21 @@
+CRM Report Indicators / Latin Numbers - 2026-08-05
+
+Implemented scope
+- Added full report-indicator equation controls under Settings > CRM Settings > Report Indicators.
+- Applied the saved equations to CRM report totals, digital/direct/other sources, department/branch reports, agent reports, and cash/finance CRM dashboard cards.
+- Total customers now uses all filtered sales customers while excluding customer-service records by default.
+- Fixed cash/finance report filter aliases so dashboard report summaries use the same department population as the CRM dashboard.
+- Added automatic one-time database alignment for the requested default formulas.
+- Forced Latin/English digits for Arabic locale number/date formatting across the runtime UI and server-generated display strings.
+
+Validation
+PASS - CRM report indicator custom static checks (12/12)
+PASS - CRM reports/KPI regression checks
+PASS - CRM sold-quantity alignment checks
+PASS - CRM settings layout/distribution checks
+PASS - CRM module structure check
+PASS - Unified dashboard CRM filter checks
+PASS - Syntax transpilation for 208 TypeScript/TSX runtime files
+
+Build note
+The provided archive does not contain node_modules. The full project typecheck chain reached a script that imports the local TypeScript package and stopped with ERR_MODULE_NOT_FOUND. This is an environment/dependency absence, not a source syntax failure; the global TypeScript transpilation check passed for all runtime TypeScript files.

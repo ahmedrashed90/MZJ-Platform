@@ -129,8 +129,8 @@ export function CrmFinanceHistoryPage() {
   return (
     <div className="crm-page crm-finance-history-page">
       <div className="crm-finance-history-head-stats page-top-actions" data-legacy-class="crm-finance-history-head-clean">
-        <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA")}</b> عميل</span>
-        <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA")}</b> حركة</span>
+        <span><UsersThree size={19} /><b>{total.toLocaleString("ar-SA-u-nu-latn")}</b> عميل</span>
+        <span><ClockCounterClockwise size={19} /><b>{allEvents.toLocaleString("ar-SA-u-nu-latn")}</b> حركة</span>
       </div>
 
       <div className="crm-inner-page-tabs crm-finance-history-tabs centered">
@@ -153,9 +153,9 @@ export function CrmFinanceHistoryPage() {
           </section>
 
           <section className="crm-history-stats crm-history-stats-wide crm-finance-history-mini-stats">
-            <article><UsersThree size={24} /><span>نتائج الفلتر</span><strong>{rows.length.toLocaleString("ar-SA")}</strong></article>
-            <article><ClockCounterClockwise size={24} /><span>إجمالي الحركات</span><strong>{allEvents.toLocaleString("ar-SA")}</strong></article>
-            <article><ArrowRight size={24} /><span>الحالات الحالية</span><strong>{currentStatuses.toLocaleString("ar-SA")}</strong></article>
+            <article><UsersThree size={24} /><span>نتائج الفلتر</span><strong>{rows.length.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+            <article><ClockCounterClockwise size={24} /><span>إجمالي الحركات</span><strong>{allEvents.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+            <article><ArrowRight size={24} /><span>الحالات الحالية</span><strong>{currentStatuses.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
           </section>
 
           <div className="crm-finance-directory">
@@ -197,9 +197,9 @@ export function CrmFinanceHistoryPage() {
           {!loading && differences && !differenceDatesInvalid ? (
             <>
               <section className="crm-history-stats crm-history-stats-wide crm-difference-stats">
-                <article><UsersThree size={24} /><span>إجمالي العملاء في تاريخ البداية</span><strong>{differences.totalFrom.toLocaleString("ar-SA")}</strong></article>
-                <article><UsersThree size={24} /><span>إجمالي العملاء في تاريخ النهاية</span><strong>{differences.totalTo.toLocaleString("ar-SA")}</strong></article>
-                <article><ClockCounterClockwise size={24} /><span>الحالات التي تغير عددها</span><strong>{differences.changedStatuses.toLocaleString("ar-SA")}</strong></article>
+                <article><UsersThree size={24} /><span>إجمالي العملاء في تاريخ البداية</span><strong>{differences.totalFrom.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+                <article><UsersThree size={24} /><span>إجمالي العملاء في تاريخ النهاية</span><strong>{differences.totalTo.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+                <article><ClockCounterClockwise size={24} /><span>الحالات التي تغير عددها</span><strong>{differences.changedStatuses.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
               </section>
 
               <section className="crm-panel crm-difference-card">
@@ -211,13 +211,13 @@ export function CrmFinanceHistoryPage() {
                       {differences.rows.map((row) => (
                         <tr key={row.value} className={row.difference !== 0 ? "changed" : ""}>
                           <td><strong>{row.label}</strong>{row.label !== row.value ? <small>{row.value}</small> : null}</td>
-                          <td>{row.from.toLocaleString("ar-SA")}</td>
-                          <td>{row.to.toLocaleString("ar-SA")}</td>
-                          <td><strong>{row.difference > 0 ? `+${row.difference}` : row.difference.toLocaleString("ar-SA")}</strong></td>
+                          <td>{row.from.toLocaleString("ar-SA-u-nu-latn")}</td>
+                          <td>{row.to.toLocaleString("ar-SA-u-nu-latn")}</td>
+                          <td><strong>{row.difference > 0 ? `+${row.difference}` : row.difference.toLocaleString("ar-SA-u-nu-latn")}</strong></td>
                           <td>
                             <span className={`crm-difference-result ${row.difference > 0 ? "increase" : row.difference < 0 ? "decrease" : "same"}`}>
                               {row.difference > 0 ? <ArrowUp size={16} /> : row.difference < 0 ? <ArrowDown size={16} /> : <Minus size={16} />}
-                              {row.difference > 0 ? `زيادة ${Math.abs(row.difference).toLocaleString("ar-SA")}` : row.difference < 0 ? `انخفاض ${Math.abs(row.difference).toLocaleString("ar-SA")}` : "بدون تغيير"}
+                              {row.difference > 0 ? `زيادة ${Math.abs(row.difference).toLocaleString("ar-SA-u-nu-latn")}` : row.difference < 0 ? `انخفاض ${Math.abs(row.difference).toLocaleString("ar-SA-u-nu-latn")}` : "بدون تغيير"}
                             </span>
                           </td>
                         </tr>

@@ -4,11 +4,11 @@ import { marketingDate, marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 
 function number(value: unknown) {
-  return Number(value || 0).toLocaleString("ar-SA");
+  return Number(value || 0).toLocaleString("ar-SA-u-nu-latn");
 }
 
 function percentage(value: unknown) {
-  return `${Number(value || 0).toLocaleString("ar-SA", { maximumFractionDigits: 1 })}%`;
+  return `${Number(value || 0).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 1 })}%`;
 }
 
 function statusLabel(value: unknown) {

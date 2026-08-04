@@ -67,7 +67,7 @@ export function DepartmentsPage({ embedded = false }: { embedded?: boolean } = {
         <label>اسم القسم<input value={department.name} onChange={(e) => setDepartment({ ...department, name: e.target.value })} /></label>
         <label className="marketing-check"><input type="checkbox" checked={department.isContent} onChange={(e) => setDepartment({ ...department, isContent: e.target.checked })} />إضافة قسم محتوى</label>
         <div className="marketing-department-users-field">
-          <div className="marketing-department-users-head"><span>اليوزرات داخل القسم</span><strong>{department.userIds.length.toLocaleString("ar-SA")} محدد</strong></div>
+          <div className="marketing-department-users-head"><span>اليوزرات داخل القسم</span><strong>{department.userIds.length.toLocaleString("ar-SA-u-nu-latn")} محدد</strong></div>
           <label className="marketing-department-user-search"><MagnifyingGlass size={17} /><input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="ابحث بالاسم أو البريد" /></label>
           <div className="marketing-department-user-list">
             {filteredUsers.map((user) => { const selected = department.userIds.includes(user.id); return <button type="button" key={user.id} className={selected ? "selected" : ""} onClick={() => toggleDepartmentUser(user.id)}>{selected ? <CheckSquare size={19} weight="fill" /> : <Square size={19} />}<span><strong>{user.full_name || user.fullName}</strong><small>{user.email || "حساب فعال في المنصة"}</small></span></button>; })}

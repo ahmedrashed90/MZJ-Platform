@@ -145,7 +145,7 @@ export function MovementHistoryPage() {
       const pages: MovementHistoryRow[][] = [];
       for (let index = 0; index < all.length; index += rowsPerPage) pages.push(all.slice(index, index + rowsPerPage));
       if (!pages.length) pages.push([]);
-      const generatedAt = new Date().toLocaleString("ar-SA");
+      const generatedAt = new Date().toLocaleString("ar-SA-u-nu-latn");
       const pageMarkup = pages.map((pageRows, pageIndex) => {
         const technicalRows = pageRows.filter((row) => present(row.batch_id) || present(row.transfer_request_id));
         const technicalReferences = technicalRows.length ? `<aside class="technical-references">
@@ -155,7 +155,7 @@ export function MovementHistoryPage() {
         return `<section class="print-page">
           <header class="print-head">
             <div class="print-title"><h1>سجل الحركات</h1><p>${safe(filterSummary)}</p></div>
-            <div class="print-summary"><div><small>عدد الحركات</small><b>${all.length.toLocaleString("ar-SA")}</b></div><div><small>الصفحة</small><b>${(pageIndex + 1).toLocaleString("ar-SA")} / ${pages.length.toLocaleString("ar-SA")}</b></div></div>
+            <div class="print-summary"><div><small>عدد الحركات</small><b>${all.length.toLocaleString("ar-SA-u-nu-latn")}</b></div><div><small>الصفحة</small><b>${(pageIndex + 1).toLocaleString("ar-SA-u-nu-latn")} / ${pages.length.toLocaleString("ar-SA-u-nu-latn")}</b></div></div>
           </header>
           <div class="table-frame">
             <table>
@@ -253,7 +253,7 @@ export function MovementHistoryPage() {
 
   return (
     <div className="module-page operations-page operations-history-page">
-      <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span>{meta.permissions.canExport ? <><button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button><button type="button" className="operations-pdf-button" onClick={() => void exportPdfA3()} disabled={loading}><FilePdf size={17} />تصدير PDF</button></> : null}</div>
+      <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA-u-nu-latn")}</span>{meta.permissions.canExport ? <><button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button><button type="button" className="operations-pdf-button" onClick={() => void exportPdfA3()} disabled={loading}><FilePdf size={17} />تصدير PDF</button></> : null}</div>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-history-filters">

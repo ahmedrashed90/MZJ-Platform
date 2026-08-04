@@ -26,7 +26,7 @@ export function marketingLocalDateKey(date = new Date()) {
 export function marketingDate(value: unknown, withTime = false) {
   const date = new Date(String(value || ""));
   if (!Number.isFinite(date.getTime())) return "—";
-  return withTime ? date.toLocaleString("ar-SA") : date.toLocaleDateString("ar-SA");
+  return withTime ? date.toLocaleString("ar-SA-u-nu-latn") : date.toLocaleDateString("ar-SA-u-nu-latn");
 }
 
 export async function uploadMarketingFile(input: {

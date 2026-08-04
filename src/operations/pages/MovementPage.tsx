@@ -136,7 +136,7 @@ export function MovementPage() {
           <div className="operations-empty-state"><Car size={42} weight="duotone" /><strong>لم يتم اختيار سيارات</strong><span>ابحث عن السيارة وأضفها، ثم حدد المكان والحالة الجديدة.</span></div>
         ) : (
           <div className="operations-selection-table-wrap">
-            <div className="operations-selection-summary"><strong>{selected.length.toLocaleString("ar-SA")} سيارة محددة</strong><span>{destination ? <>المسار الجديد: <b>{destination.name}</b> <ArrowRight size={15} /> <b>{statusName}</b></> : "حدد المكان الجديد لإكمال الحركة"}</span></div>
+            <div className="operations-selection-summary"><strong>{selected.length.toLocaleString("ar-SA-u-nu-latn")} سيارة محددة</strong><span>{destination ? <>المسار الجديد: <b>{destination.name}</b> <ArrowRight size={15} /> <b>{statusName}</b></> : "حدد المكان الجديد لإكمال الحركة"}</span></div>
             <ResizableOperationsTable<SelectedVehicle>
               rows={selected}
               columns={columns}

@@ -98,7 +98,7 @@ function weekGroups(dates: string[]) {
 
 function arabicDate(value: string) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("ar-SA", { weekday: "long", year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+  return new Intl.DateTimeFormat("ar-SA-u-nu-latn", { weekday: "long", year: "numeric", month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 }
 
 function rating(total: number) {

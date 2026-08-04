@@ -540,16 +540,27 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
       {tab === "quality" ? (
         <div className="crm-quality-settings">
-          <section className="crm-panel"><h2>إعدادات مؤشرات التقارير</h2><p>كل كارت ومعادلة يقرأ الحالات المحفوظة هنا من PostgreSQL، ولا يسمح بحفظ حالة غير موجودة.</p></section>
+          <section className="crm-panel crm-quality-settings-intro">
+            <h2>إعدادات مؤشرات التقارير</h2>
+            <p>المعادلات المحفوظة هنا هي المصدر الموحد لصفحة التقارير، مصادر التسويق، تقارير الأقسام والفروع والمناديب، وكروت مبيعات الكاش والتمويل في الداش بورد.</p>
+          </section>
 
-          <section className="crm-panel quality-card">
-            <h2>تعريف كروت النتائج</h2>
-            <strong>حالات لم يتم الاتصال</strong>
-            <div className="crm-check-grid">{allStatusValues.map((status) => <label key={`not-${status}`}><input type="checkbox" checked={quality.notContactedStatuses.includes(status)} onChange={() => toggleQuality("notContactedStatuses", status)} />{status}</label>)}</div>
-            <strong>حالات العميل المؤهل</strong>
-            <div className="crm-check-grid">{allStatusValues.map((status) => <label key={`qualified-${status}`}><input type="checkbox" checked={quality.qualifiedStatuses.includes(status)} onChange={() => toggleQuality("qualifiedStatuses", status)} />{status}</label>)}</div>
-            <label className="crm-form-label"><span>إجمالي العملاء</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>
-            {quality.totalMode === "statuses" ? <div className="crm-check-grid">{allStatusValues.map((status) => <label key={`total-${status}`}><input type="checkbox" checked={quality.totalStatuses.includes(status)} onChange={() => toggleQuality("totalStatuses", status)} />{status}</label>)}</div> : null}
+          <section className="crm-panel quality-card crm-quality-definition-card">
+            <header><div><h2>إجمالي العملاء</h2><p>حدد هل يتم حساب الإجمالي من كل العملاء بعد الفلاتر مع استبعاد خدمة العملاء، أو من حالات محددة فقط.</p></div></header>
+            <label className="crm-form-label crm-quality-mode-field"><span>طريقة الحساب</span><select value={quality.totalMode} onChange={(event) => setQuality((current) => ({ ...current, totalMode: event.target.value }))}><option value="all">كل العملاء بعد الفلاتر بدون خدمة العملاء</option><option value="statuses">حالات محددة</option></select></label>
+            {quality.totalMode === "statuses" ? <><strong>الحالات التي تُحسب ضمن إجمالي العملاء</strong><div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`total-${status}`}><input type="checkbox" checked={quality.totalStatuses.includes(status)} onChange={() => toggleQuality("totalStatuses", status)} />{status}</label>)}</div></> : null}
+          </section>
+
+          <section className="crm-panel quality-card crm-quality-definition-card">
+            <header><div><h2>لم يتم الاتصال</h2><p>عدد لم يتم الاتصال = عدد العملاء الموجودين في الحالات المختارة.</p></div></header>
+            <strong>الحالات التي تُحسب ضمن لم يتم الاتصال</strong>
+            <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`not-${status}`}><input type="checkbox" checked={quality.notContactedStatuses.includes(status)} onChange={() => toggleQuality("notContactedStatuses", status)} />{status}</label>)}</div>
+          </section>
+
+          <section className="crm-panel quality-card crm-quality-definition-card">
+            <header><div><h2>مؤهل</h2><p>عدد مؤهل = عدد العملاء الموجودين في الحالات المختارة.</p></div></header>
+            <strong>الحالات التي تُحسب ضمن مؤهل</strong>
+            <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`qualified-${status}`}><input type="checkbox" checked={quality.qualifiedStatuses.includes(status)} onChange={() => toggleQuality("qualifiedStatuses", status)} />{status}</label>)}</div>
           </section>
 
           {["marketing", "sales"].map((type) => {
@@ -557,7 +568,13 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
             const numKey = marketing ? "marketingNumeratorStatuses" : "salesNumeratorStatuses";
             const denKey = marketing ? "marketingDenominatorStatuses" : "salesDenominatorStatuses";
             const modeKey = marketing ? "marketingDenominatorMode" : "salesDenominatorMode";
-            return <section className="crm-panel quality-card" key={type}><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><strong>حالات البسط</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div><label className="crm-form-label"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(event) => setQuality((current) => ({ ...current, [modeKey]: event.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر</option><option value="statuses">حالات محددة</option></select></label>{(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid">{allStatusValues.map((status) => <label key={status}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}</section>;
+            return <section className="crm-panel quality-card crm-quality-formula-card" key={type}>
+              <header><div><h2>{marketing ? "جودة التسويق" : "جودة المبيعات"}</h2><p>النسبة = عدد العملاء الموجودين في {marketing ? "حالات البسط" : "حالات البيع المختارة"} ÷ المقام المحدد × 100.</p></div></header>
+              <strong>{marketing ? "حالات البسط" : "حالات البيع المختارة"}</strong>
+              <div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`${type}-num-${status}`}><input type="checkbox" checked={(quality as any)[numKey].includes(status)} onChange={() => toggleQuality(numKey as keyof typeof quality, status)} />{status}</label>)}</div>
+              <label className="crm-form-label crm-quality-mode-field"><span>المقام</span><select value={(quality as any)[modeKey]} onChange={(event) => setQuality((current) => ({ ...current, [modeKey]: event.target.value }))}><option value="all">إجمالي العملاء بعد الفلاتر بدون خدمة العملاء</option><option value="statuses">حالات محددة</option></select></label>
+              {(quality as any)[modeKey] === "statuses" ? <><strong>حالات المقام</strong><div className="crm-check-grid crm-quality-status-grid">{allStatusValues.map((status) => <label key={`${type}-den-${status}`}><input type="checkbox" checked={(quality as any)[denKey].includes(status)} onChange={() => toggleQuality(denKey as keyof typeof quality, status)} />{status}</label>)}</div></> : null}
+            </section>;
           })}
 
           <section className="crm-panel quality-card">

@@ -100,7 +100,7 @@ function resultLabel(value: string | null) {
 
 function formatDate(value: string) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ar-SA", { dateStyle: "medium", timeStyle: "short" });
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("ar-SA-u-nu-latn", { dateStyle: "medium", timeStyle: "short" });
 }
 
 function queryString(values: Record<string, string | number>) {
@@ -206,10 +206,10 @@ export function ActivityPage() {
       </div>
 
       <section className="activity-stats">
-        <article><span><Pulse size={22} /></span><div><small>نشاطات اليوم</small><strong>{stats.today.toLocaleString("ar-SA")}</strong><p>كل الإجراءات المسجلة منذ بداية اليوم</p></div></article>
-        <article><span><UsersThree size={22} /></span><div><small>المستخدمون النشطون</small><strong>{stats.activeUsers.toLocaleString("ar-SA")}</strong><p>خلال آخر 24 ساعة</p></div></article>
-        <article><span><Eye size={22} /></span><div><small>مرات فتح الصفحات</small><strong>{stats.pageViews.toLocaleString("ar-SA")}</strong><p>خلال آخر 24 ساعة</p></div></article>
-        <article className={stats.failed ? "warning" : ""}><span><ShieldWarning size={22} /></span><div><small>العمليات المرفوضة أو الفاشلة</small><strong>{stats.failed.toLocaleString("ar-SA")}</strong><p>ضمن نتائج البحث الحالية</p></div></article>
+        <article><span><Pulse size={22} /></span><div><small>نشاطات اليوم</small><strong>{stats.today.toLocaleString("ar-SA-u-nu-latn")}</strong><p>كل الإجراءات المسجلة منذ بداية اليوم</p></div></article>
+        <article><span><UsersThree size={22} /></span><div><small>المستخدمون النشطون</small><strong>{stats.activeUsers.toLocaleString("ar-SA-u-nu-latn")}</strong><p>خلال آخر 24 ساعة</p></div></article>
+        <article><span><Eye size={22} /></span><div><small>مرات فتح الصفحات</small><strong>{stats.pageViews.toLocaleString("ar-SA-u-nu-latn")}</strong><p>خلال آخر 24 ساعة</p></div></article>
+        <article className={stats.failed ? "warning" : ""}><span><ShieldWarning size={22} /></span><div><small>العمليات المرفوضة أو الفاشلة</small><strong>{stats.failed.toLocaleString("ar-SA-u-nu-latn")}</strong><p>ضمن نتائج البحث الحالية</p></div></article>
       </section>
 
       <section className="panel activity-panel">
@@ -248,7 +248,7 @@ export function ActivityPage() {
           </table>
         </div>
 
-        <footer className="activity-pagination"><span>إجمالي {total.toLocaleString("ar-SA")} نشاط</span><div><button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}>السابق</button><b>صفحة {page.toLocaleString("ar-SA")} من {totalPages.toLocaleString("ar-SA")}</b><button type="button" disabled={page >= totalPages || loading} onClick={() => setPage((value) => value + 1)}>التالي</button></div></footer>
+        <footer className="activity-pagination"><span>إجمالي {total.toLocaleString("ar-SA-u-nu-latn")} نشاط</span><div><button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}>السابق</button><b>صفحة {page.toLocaleString("ar-SA-u-nu-latn")} من {totalPages.toLocaleString("ar-SA-u-nu-latn")}</b><button type="button" disabled={page >= totalPages || loading} onClick={() => setPage((value) => value + 1)}>التالي</button></div></footer>
       </section>
 
       <Modal open={Boolean(selected)} title="تفاصيل النشاط" subtitle={selected ? `${labelAction(selected.action)} · ${formatDate(selected.created_at)}` : undefined} onClose={() => setSelected(null)} className="activity-detail-modal">

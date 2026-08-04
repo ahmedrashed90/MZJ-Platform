@@ -148,19 +148,36 @@ export default async function handler(request: VercelRequest, response: VercelRe
     (coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) at time zone 'Asia/Riyadh')::date
   `;
 
+  const leadDepartmentFilterSql = sql`
+    (
+      ${department || null}::text is null
+      or (${department || null}='cash' and l.report_department_code in ('cash_sales','wholesale','wholesale_sales'))
+      or (${department || null}='finance' and l.report_department_code in ('finance_sales','call_center'))
+      or (${department || null}='service' and l.report_department_code='customer_service')
+      or (${department || null}='call_center' and l.call_center_assigned_to is not null)
+      or (${department || null}='wholesale' and l.report_department_code in ('wholesale','wholesale_sales'))
+      or (${department || null} in ('cash_sales','finance_sales','customer_service') and l.report_department_code=${department || null})
+      or l.service_key=${department || null}
+    )
+  `;
+  const salesFactDepartmentFilterSql = sql`
+    (
+      ${department || null}::text is null
+      or (${department || null}='cash' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('cash_sales','wholesale','wholesale_sales'))
+      or (${department || null}='finance' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('finance_sales','call_center'))
+      or (${department || null}='service' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='customer_service')
+      or (${department || null}='call_center' and l.call_center_assigned_to is not null)
+      or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('wholesale','wholesale_sales'))
+      or (${department || null} in ('cash_sales','finance_sales','customer_service') and coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null})
+      or l.service_key=${department || null}
+    )
+  `;
+
   const filtersSql = sql`
     ${scopeSql}
     and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
     and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
-    and (
-      ${department || null}::text is null
-      or (${department || null}='call_center' and l.call_center_assigned_to is not null)
-      or (${department || null}<>'call_center' and (
-        l.report_department_code=${department || null}
-        or (${department || null}='wholesale' and l.report_department_code='wholesale_sales')
-        or l.service_key=${department || null}
-      ))
-    )
+    and ${leadDepartmentFilterSql}
     and (${branch || null}::text is null or l.report_branch_code=${branch || null})
     and (${agent || null}::uuid is null or l.report_assigned_to=${agent || null}::uuid)
     and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
@@ -219,14 +236,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
               or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (so.platform_user_id=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
               or (coalesce(so.platform_department_code,primary_department.code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=any(${scope.branchCodes}::text[])))
             )
-            and (
-              ${department || null}::text is null
-              or (${department || null}='cash' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('cash_sales','wholesale','wholesale_sales'))
-              or (${department || null}='finance' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('finance_sales','call_center'))
-              or (${department || null}='service' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='customer_service')
-              or coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null}
-              or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='wholesale_sales')
-            )
+            and ${salesFactDepartmentFilterSql}
             and (${branch || null}::text is null or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=${branch || null})
             and (${agent || null}::uuid is null or so.platform_user_id=${agent || null}::uuid)
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
@@ -286,7 +296,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
     const detailMatch = sql`
       (
-        (${detailKind}='source' and coalesce(l.source_code,'__none__')=${detailValue})
+        (${detailKind}='source' and l.report_department_code<>'customer_service' and coalesce(l.source_code,'__none__')=${detailValue})
         or (${detailKind}='department_branch' and (coalesce(l.report_department_code,'__none__') || '|' || coalesce(l.report_branch_code,'__none__'))=${detailValue})
         or (${detailKind}='agent' and coalesce(l.report_assigned_to::text,'__none__')=${detailValue})
         or (${detailKind}='service' and l.report_department_code='customer_service')
@@ -384,14 +394,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (so.platform_user_id=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (coalesce(so.platform_department_code,primary_department.code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=any(${scope.branchCodes}::text[])))
       )
-      and (
-        ${department || null}::text is null
-        or (${department || null}='cash' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('cash_sales','wholesale','wholesale_sales'))
-        or (${department || null}='finance' and coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('finance_sales','call_center'))
-        or (${department || null}='service' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='customer_service')
-        or coalesce(so.platform_department_code,primary_department.code,l.department_code)=${department || null}
-        or (${department || null}='wholesale' and coalesce(so.platform_department_code,primary_department.code,l.department_code)='wholesale_sales')
-      )
+      and ${salesFactDepartmentFilterSql}
       and (${branch || null}::text is null or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=${branch || null})
       and (${agent || null}::uuid is null or so.platform_user_id=${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
@@ -431,7 +434,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const summaryCards = (Array.isArray(quality.summary_cards) ? quality.summary_cards : DEFAULT_SUMMARY_CARDS).filter((value: unknown) => DEFAULT_SUMMARY_CARDS.concat(["delayed"]).includes(String(value)));
 
   const makeMetrics = (rows: any[], facts: any[] = []) => {
-    const count = (set: Set<string>) => rows.reduce((total, lead) => total + (set.has(norm(lead.status_label)) ? 1 : 0), 0);
+    const count = (set: Set<string>) => new Set(
+      rows.filter((lead) => set.has(norm(lead.status_label))).map((lead) => String(lead.id || "")).filter(Boolean),
+    ).size;
     const rowLeadIds = new Set(rows.map((lead) => String(lead.id || "")).filter(Boolean));
     const factOnlyLeadIds = new Set(facts.map((fact) => String(fact.lead_id || "")).filter((id) => id && !rowLeadIds.has(id)));
     const factOnlySoldCustomers = factOnlyLeadIds.size;
@@ -460,11 +465,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
     };
   };
 
+  const reportRows = leads.filter((row) => row.department_code !== "customer_service");
+  const reportFacts = salesFacts.filter((fact) => fact.department_code !== "customer_service");
+
   if (summaryOnly) {
     return response.status(200).json({
       ok: true,
       filters: { from, to, q, department, branch, agent, callCenter, source },
-      totals: makeMetrics(leads, salesFacts),
+      totals: makeMetrics(reportRows, reportFacts),
       quality: { ...quality, summary_cards: summaryCards },
     });
   }
@@ -494,10 +502,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       .sort((a, b) => b.total - a.total || b.sold - a.sold || a.name.localeCompare(b.name, "ar"));
   };
 
-  const sourceRows = group(leads, salesFacts, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name), (fact) => fact.source_code || "__none__", (fact) => sourceLabel(fact.source_code, fact.source_name));
+  const sourceRows = group(reportRows, reportFacts, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name), (fact) => fact.source_code || "__none__", (fact) => sourceLabel(fact.source_code, fact.source_name));
   const sourceGroup = (groupName: string) => {
-    const groupRows = leads.filter((row) => row.source_report_group === groupName);
-    const groupFacts = salesFacts.filter((fact) => fact.source_report_group === groupName);
+    const groupRows = reportRows.filter((row) => row.source_report_group === groupName);
+    const groupFacts = reportFacts.filter((fact) => fact.source_report_group === groupName);
     return {
       rows: group(groupRows, groupFacts, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name), (fact) => fact.source_code || "__none__", (fact) => sourceLabel(fact.source_code, fact.source_name)),
       summary: makeMetrics(groupRows, groupFacts),
@@ -506,8 +514,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const digitalSources = sourceGroup("digital");
   const directSources = sourceGroup("direct");
   const otherSources = sourceGroup("other");
-  const salesRows = leads.filter((row) => row.department_code !== "customer_service" && row.assigned_is_call_center !== true);
-  const salesOnlyFacts = salesFacts.filter((fact) => fact.department_code !== "customer_service");
+  const salesRows = reportRows.filter((row) => row.assigned_is_call_center !== true);
+  const salesOnlyFacts = reportFacts;
   const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`);
 
   const agentContext = new Map<string, { departments: Set<string>; branches: Set<string> }>();
@@ -547,7 +555,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   return response.status(200).json({
     ok: true,
     filters: { from, to, q, department, branch, agent, callCenter, source },
-    totals: makeMetrics(leads, salesFacts),
+    totals: makeMetrics(reportRows, reportFacts),
     digitalSources: digitalSources.rows,
     directSources: directSources.rows,
     otherSources: otherSources.rows,

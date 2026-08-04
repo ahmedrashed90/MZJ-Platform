@@ -38,7 +38,7 @@ type ApprovalRow = {
 function formatApprovalDate(value?: string | null) {
   if (!value) return "—";
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA") : "—";
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA-u-nu-latn") : "—";
 }
 
 function ApprovalBadge({ approved, compact = false }: { approved: boolean; compact?: boolean }) {

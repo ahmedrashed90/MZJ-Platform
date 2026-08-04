@@ -197,7 +197,7 @@ export function CrmAutomationSettings() {
                   <label className="crm-switch-row"><input type="checkbox" checked={platform.isEnabled} onChange={(event) => setDraft({ ...draft, platforms: draft.platforms.map((item, itemIndex) => itemIndex === index ? { ...item, isEnabled: event.target.checked } : item) })} /><span>تشغيل على المنصة</span></label>
                   <div className="crm-automation-platform-meta">
                     <small>حالة الربط: <b>{ready ? "متصل وجاهز" : "غير مكتمل"}</b></small>
-                    {platform.lastSuccessAt ? <small>آخر نجاح: {new Date(platform.lastSuccessAt).toLocaleString("ar-SA")}</small> : <small>لا يوجد إرسال ناجح مسجل بعد</small>}
+                    {platform.lastSuccessAt ? <small>آخر نجاح: {new Date(platform.lastSuccessAt).toLocaleString("ar-SA-u-nu-latn")}</small> : <small>لا يوجد إرسال ناجح مسجل بعد</small>}
                     {endpoint?.healthUrl ? <a href={endpoint.healthUrl} target="_blank" rel="noreferrer">فتح Health Check</a> : null}
                   </div>
                   {platform.lastError ? <small className="crm-automation-error">{platform.lastError}</small> : null}

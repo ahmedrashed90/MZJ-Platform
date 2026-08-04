@@ -44,7 +44,7 @@ function between(start: string, end: string) {
 }
 
 function dayLabel(date: string) {
-  return new Date(`${date}T00:00:00`).toLocaleDateString("ar-SA", {
+  return new Date(`${date}T00:00:00`).toLocaleDateString("ar-SA-u-nu-latn", {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -304,7 +304,7 @@ export function CreateAgendaPage() {
 
         {step === 1 ? (
           <div className="marketing-agenda-days-v2">
-            <header><div><span><CalendarBlank size={24} /></span><div><h2>جدول الأيام والربط</h2><p>افتح كل يوم لإضافة الكرييتيفات وربط الأقسام والسيارات والمنصات.</p></div></div><strong>{days.length.toLocaleString("ar-SA")} يوم</strong></header>
+            <header><div><span><CalendarBlank size={24} /></span><div><h2>جدول الأيام والربط</h2><p>افتح كل يوم لإضافة الكرييتيفات وربط الأقسام والسيارات والمنصات.</p></div></div><strong>{days.length.toLocaleString("ar-SA-u-nu-latn")} يوم</strong></header>
             <div className="marketing-agenda-day-list">
               {days.map((day) => {
                 const count = day.creatives.reduce((sum, item) => sum + item.quantity, 0);
@@ -316,7 +316,7 @@ export function CreateAgendaPage() {
                         ? day.creatives.map((creative) => <span key={creative.tempId}>{creativeName(creative.creativeTypeId)} <b>× {creative.quantity}</b></span>)
                         : <small>لا توجد كرييتيفات مضافة لهذا اليوم</small>}
                     </div>
-                    <div className="marketing-agenda-day-count"><strong>{count.toLocaleString("ar-SA")}</strong><small>كرييتيف</small></div>
+                    <div className="marketing-agenda-day-count"><strong>{count.toLocaleString("ar-SA-u-nu-latn")}</strong><small>كرييتيف</small></div>
                     <button type="button" className="secondary" onClick={() => setEditingDay(day.date)}><PencilSimple size={17} />إضافة / تعديل الربط</button>
                   </article>
                 );
@@ -382,8 +382,8 @@ export function CreateAgendaPage() {
               <main className="marketing-agenda-editor-main">
                 <div className="marketing-agenda-editor-summary">
                   <div><small>اليوم</small><strong>{selectedDay.date}</strong></div>
-                  <div><small>الكرييتيفات</small><strong>{selectedDay.creatives.length.toLocaleString("ar-SA")}</strong></div>
-                  <div><small>إجمالي العدد</small><strong>{selectedDay.creatives.reduce((sum, item) => sum + item.quantity, 0).toLocaleString("ar-SA")}</strong></div>
+                  <div><small>الكرييتيفات</small><strong>{selectedDay.creatives.length.toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+                  <div><small>إجمالي العدد</small><strong>{selectedDay.creatives.reduce((sum, item) => sum + item.quantity, 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div>
                 </div>
                 {selectedDay.creatives.length ? (
                   <div className="marketing-agenda-creative-stack">

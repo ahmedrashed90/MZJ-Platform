@@ -461,7 +461,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <div className="marketing-revision-feedback-heading">
               <span><ChatCircleText size={22} weight="fill" /></span>
               <div><h3>{task.template_status === "rejected" ? "ملاحظات الرفض" : "التعديلات المطلوبة من المراجع"}</h3><p>الحقول المحددة داخل التصميم هي الحقول المطلوب مراجعتها قبل إعادة الرفع.</p></div>
-              <b>{selectedReviewCount.toLocaleString("ar-SA")} حقل</b>
+              <b>{selectedReviewCount.toLocaleString("ar-SA-u-nu-latn")} حقل</b>
             </div>
             {adminNote ? <p className="marketing-revision-general-note">{adminNote}</p> : null}
           </section> : null}
@@ -491,8 +491,8 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
               <span className={`marketing-template-review-status status-${task.template_status || "not_started"}`}>{templateStatusLabel(task.template_status)}</span>
             </div>
             <div className="marketing-review-overview">
-              <article><small>الحقول المحددة</small><strong>{selectedReviewCount.toLocaleString("ar-SA")}</strong><span>تظهر بوضوح لكاتب المحتوى</span></article>
-              <article><small>ملاحظات الحقول</small><strong>{notedReviewCount.toLocaleString("ar-SA")}</strong><span>ملاحظات مرتبطة بحقول محددة</span></article>
+              <article><small>الحقول المحددة</small><strong>{selectedReviewCount.toLocaleString("ar-SA-u-nu-latn")}</strong><span>تظهر بوضوح لكاتب المحتوى</span></article>
+              <article><small>ملاحظات الحقول</small><strong>{notedReviewCount.toLocaleString("ar-SA-u-nu-latn")}</strong><span>ملاحظات مرتبطة بحقول محددة</span></article>
               <article><small>حالة القالب</small><strong>{templateStatusLabel(task.template_status)}</strong><span>آخر حالة محفوظة في النظام</span></article>
             </div>
             <div className="marketing-review-command-bar">
@@ -509,7 +509,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             </div>
           </section> : null}
 
-          {payload.history?.length ? <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>سجل المراجعات</h3></div></div><div className="marketing-history">{payload.history.map((item: any) => { const note = historyNoteText(item.note); return <article key={item.id}><strong>{item.action}</strong><span>{item.actor_name || "—"}</span><small>{new Date(item.created_at).toLocaleString("ar-SA")}</small>{note ? <p>{note}</p> : null}</article>; })}</div></section> : null}
+          {payload.history?.length ? <section className="marketing-task-section"><div className="marketing-task-section-heading"><div><h3>سجل المراجعات</h3></div></div><div className="marketing-history">{payload.history.map((item: any) => { const note = historyNoteText(item.note); return <article key={item.id}><strong>{item.action}</strong><span>{item.actor_name || "—"}</span><small>{new Date(item.created_at).toLocaleString("ar-SA-u-nu-latn")}</small>{note ? <p>{note}</p> : null}</article>; })}</div></section> : null}
 
           <section className="marketing-template-command-bar">
             <div><h3>إجراءات الكاتب</h3><p>تحميل النموذج أو رفع نسخة جديدة من نفس الشاشة.</p></div>
@@ -546,7 +546,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
                 >
                   <span className="marketing-action-icon">{item.completed ? <CheckCircle size={23} weight="fill" /> : <span />}</span>
                   <span className="marketing-action-copy"><strong>{item.name}</strong><small>{item.completed ? "تم التنفيذ" : "لم يتم التنفيذ"}{item.admin_only ? " · إجراء إداري" : ""}</small></span>
-                  <b>{Number(item.percentage).toLocaleString("ar-SA")}%</b>
+                  <b>{Number(item.percentage).toLocaleString("ar-SA-u-nu-latn")}%</b>
                 </button>;
               }) : <p>لا توجد إجراءات تكليف معرفة لهذا القسم.</p>}
             </div>
@@ -606,7 +606,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <div>
               <h3>{task.status === "completed" ? "تم إنهاء التاسك" : Number(task.progress || 0) >= 100 ? "التاسك جاهز للإنهاء" : "إتمام التاسك"}</h3>
               <p>{task.status === "completed"
-                ? `تم نقله إلى قائمة التاسكات المنتهية${task.completed_by_name ? ` بواسطة ${task.completed_by_name}` : ""}${task.completed_at ? ` بتاريخ ${new Date(task.completed_at).toLocaleString("ar-SA")}` : ""}.`
+                ? `تم نقله إلى قائمة التاسكات المنتهية${task.completed_by_name ? ` بواسطة ${task.completed_by_name}` : ""}${task.completed_at ? ` بتاريخ ${new Date(task.completed_at).toLocaleString("ar-SA-u-nu-latn")}` : ""}.`
                 : Number(task.progress || 0) >= 100
                   ? "وصلت نسبة الإنجاز إلى 100%. استخدم زر تم الانتهاء الموجود على كارت التاسك في الداش بورد."
                   : "سيظهر زر تم الانتهاء على كارت التاسك في الداش بورد بعد وصول نسبة الإنجاز إلى 100%."}</p>

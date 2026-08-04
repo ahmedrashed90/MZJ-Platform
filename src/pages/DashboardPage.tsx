@@ -222,7 +222,7 @@ function DetailsDrawer({ details, onClose, onLeadOpen, onTrackingOpen }: { detai
             return (
               <button className="drawer-customer-row" key={lead.id} type="button" onClick={() => onLeadOpen(item)}>
                 <div><strong>{lead.customer_name || "عميل"}</strong><span>{lead.status_label || "عميل جديد"} · {item.department === "finance" ? "مبيعات التمويل" : item.department === "service" ? "خدمة العملاء" : "مبيعات الكاش"}</span><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}{lead.preview_text ? ` · ${lead.preview_text}` : ""}</small></div>
-                <div className="drawer-customer-meta">{unread > 0 ? <b>{unread.toLocaleString("ar-SA")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at || lead.created_at)}</time></div>
+                <div className="drawer-customer-meta">{unread > 0 ? <b>{unread.toLocaleString("ar-SA-u-nu-latn")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at || lead.created_at)}</time></div>
               </button>
             );
           })}

@@ -146,7 +146,7 @@ export function buildMarketingReportXlsxBytes<Row extends Record<string, ReportC
   const columns = options.columns;
   const lastColumn = columnName(columns.length - 1);
   const sheetName = cleanSheetName(options.sheetName);
-  const generatedAt = options.generatedAtLabel || `تاريخ التصدير: ${new Date().toLocaleString("ar-SA")}`;
+  const generatedAt = options.generatedAtLabel || `تاريخ التصدير: ${new Date().toLocaleString("ar-SA-u-nu-latn")}`;
   const sheetRows: string[] = [];
 
   sheetRows.push(`<row r="1" ht="36" customHeight="1">${cellXml("A1", options.title, 1)}</row>`);

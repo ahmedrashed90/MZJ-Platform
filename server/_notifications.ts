@@ -179,7 +179,7 @@ function notificationDateTime(value: unknown) {
   if (!normalized) return "";
   const date = new Date(normalized);
   if (!Number.isFinite(date.getTime())) return normalized;
-  return new Intl.DateTimeFormat("ar-SA", {
+  return new Intl.DateTimeFormat("ar-SA-u-nu-latn", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Asia/Riyadh",
@@ -192,7 +192,7 @@ function notificationDateOnly(value: unknown) {
   if (!match) return normalized;
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
   if (!Number.isFinite(date.getTime())) return normalized;
-  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory", {
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", {
     weekday: "long",
     day: "numeric",
     month: "long",

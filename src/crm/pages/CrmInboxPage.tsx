@@ -72,10 +72,10 @@ export function CrmInboxPage() {
       <div className="page-top-actions"><button className="crm-secondary-button" type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث"}</button></div>
 
       <section className="crm-unclassified-summary">
-        <article><span className="icon"><ChatCircleDots size={23} /></span><div><small>إجمالي غير المصنف</small><strong>{Number(summary.total || 0).toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon new"><Sparkle size={23} /></span><div><small>رسائل جديدة</small><strong>{Number(summary.new_count || 0).toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon waiting"><ClockCountdown size={23} /></span><div><small>بانتظار اختيار الخدمة</small><strong>{Number(summary.awaiting_count || 0).toLocaleString("ar-SA")}</strong></div></article>
-        <article><span className="icon unread"><WhatsappLogo size={23} /></span><div><small>غير مقروءة</small><strong>{Number(summary.unread_count || 0).toLocaleString("ar-SA")}</strong></div></article>
+        <article><span className="icon"><ChatCircleDots size={23} /></span><div><small>إجمالي غير المصنف</small><strong>{Number(summary.total || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <article><span className="icon new"><Sparkle size={23} /></span><div><small>رسائل جديدة</small><strong>{Number(summary.new_count || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <article><span className="icon waiting"><ClockCountdown size={23} /></span><div><small>بانتظار اختيار الخدمة</small><strong>{Number(summary.awaiting_count || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <article><span className="icon unread"><WhatsappLogo size={23} /></span><div><small>غير مقروءة</small><strong>{Number(summary.unread_count || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
       </section>
 
       <section className="crm-panel crm-unclassified-filter">

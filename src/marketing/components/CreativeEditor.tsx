@@ -68,7 +68,7 @@ function UserPicker({
     <div className="marketing-user-picker">
       <div className="marketing-user-picker-title">
         <strong>{title}</strong>
-        <small>{selectedIds.length.toLocaleString("ar-SA")} محدد</small>
+        <small>{selectedIds.length.toLocaleString("ar-SA-u-nu-latn")} محدد</small>
       </div>
       {users.length ? (
         <div className="marketing-chip-picker">
@@ -244,7 +244,7 @@ export function CreativeEditor({
           <MagnifyingGlass size={18} />
           <input value={carSearch} onChange={(event) => setCarSearch(event.target.value)} placeholder="ابحث برقم الهيكل أو السيارة أو البيان أو اللون أو المكان" />
         </label>
-        <span>المختار: <strong>{value.cars.length.toLocaleString("ar-SA")}</strong></span>
+        <span>المختار: <strong>{value.cars.length.toLocaleString("ar-SA-u-nu-latn")}</strong></span>
       </div>
       <div className="marketing-cars-grid">
         {filteredCars.map((car) => (
@@ -298,13 +298,13 @@ export function CreativeEditor({
           <article>
             <span>1</span>
             <div><strong>Task Template</strong><small>يُنشأ ليوزرات قسم المحتوى</small></div>
-            <b>{value.contentAssignments.length.toLocaleString("ar-SA")}</b>
+            <b>{value.contentAssignments.length.toLocaleString("ar-SA-u-nu-latn")}</b>
           </article>
           <i>←</i>
           <article>
             <span>2</span>
             <div><strong>التاسكات التنفيذية</strong><small>تُنشأ للقسم الأساسي والأقسام الاختيارية</small></div>
-            <b>{(value.primaryAssignments.length + value.optionalAssignments.reduce((sum, group) => sum + group.assignments.length, 0)).toLocaleString("ar-SA")}</b>
+            <b>{(value.primaryAssignments.length + value.optionalAssignments.reduce((sum, group) => sum + group.assignments.length, 0)).toLocaleString("ar-SA-u-nu-latn")}</b>
           </article>
         </section>
       ) : null}
@@ -523,7 +523,7 @@ export function CreativeEditor({
               <h3>المنصات وأنواع النشر</h3>
               <p>اختر المنصات المطلوبة، ثم حدد نوع أو أكثر من أنواع النشر لكل منصة.</p>
             </div>
-            <b>{value.platforms.length.toLocaleString("ar-SA")} منصة محددة</b>
+            <b>{value.platforms.length.toLocaleString("ar-SA-u-nu-latn")} منصة محددة</b>
           </header>
           <div className="marketing-platform-choice-grid">
             {meta.platforms.map((platform) => {
@@ -535,13 +535,13 @@ export function CreativeEditor({
                     <span className="marketing-platform-choice-icon">{selected ? <CheckCircle size={21} weight="fill" /> : <GlobeSimple size={21} weight="duotone" />}</span>
                     <span className="marketing-platform-choice-copy">
                       <strong>{platform.name}</strong>
-                      <small>{platformPostTypes.length.toLocaleString("ar-SA")} نوع نشر متاح</small>
+                      <small>{platformPostTypes.length.toLocaleString("ar-SA-u-nu-latn")} نوع نشر متاح</small>
                     </span>
                     <span className="marketing-platform-choice-state">{selected ? "محددة" : "اختيار"}</span>
                   </button>
                   {selected ? (
                     <div className="marketing-platform-post-types">
-                      <div className="marketing-platform-post-types-head"><span>أنواع النشر</span><small>{selected.postTypeIds.length.toLocaleString("ar-SA")} محدد</small></div>
+                      <div className="marketing-platform-post-types-head"><span>أنواع النشر</span><small>{selected.postTypeIds.length.toLocaleString("ar-SA-u-nu-latn")} محدد</small></div>
                       {platformPostTypes.length ? <div className="marketing-platform-post-type-grid">
                         {platformPostTypes.map((postType) => {
                           const active = selected.postTypeIds.includes(postType.id);

@@ -662,7 +662,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     if (type === "video" && url) return <video className="crm-chat-media-video" controls preload="metadata" src={url} />;
     if (message.media_asset_id || message.attachment_url || message.storage_key) {
       const Icon = type === "image" ? ImageSquare : type === "audio" ? FileAudio : type === "video" ? FileVideo : FilePdf;
-      return <div className="crm-chat-file-card" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA")} KB` : ""}</small></span><button type="button" className="crm-icon-button" title="تحميل الملف" onClick={(event) => { event.stopPropagation(); void downloadMedia(message); }}><DownloadSimple size={18} /></button></div>;
+      return <div className="crm-chat-file-card" role="button" tabIndex={0} onClick={() => void openMedia(message)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") void openMedia(message); }}><Icon size={24} /><span><strong>{message.file_name || "مرفق"}</strong><small>{message.mime_type || type || "ملف"}{message.file_size ? ` • ${Math.max(1, Math.round(message.file_size / 1024)).toLocaleString("ar-SA-u-nu-latn")} KB` : ""}</small></span><button type="button" className="crm-icon-button" title="تحميل الملف" onClick={(event) => { event.stopPropagation(); void downloadMedia(message); }}><DownloadSimple size={18} /></button></div>;
     }
     return null;
   }
@@ -804,7 +804,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 <label className="crm-sold-quantity-field"><span>عدد المباع <b className="crm-required-mark"> *</b></span><input type="number" min="1" step="1" value={activeForm.values.sold_quantity || "1"} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_quantity: String(Math.max(1, Math.floor(Number(event.target.value || 1)))) } } : current)} /></label>
               ) : null}
             </div>
-            {department === "finance" ? credit?.amount == null ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
+            {department === "finance" ? credit?.amount == null ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA-u-nu-latn")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
             <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>
           </section>

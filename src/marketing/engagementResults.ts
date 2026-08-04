@@ -97,9 +97,9 @@ export function marketingResultSourceLabel(platform: string) {
 }
 
 export function marketingResultCount(value: unknown) {
-  return Number(value || 0).toLocaleString("ar-SA");
+  return Number(value || 0).toLocaleString("ar-SA-u-nu-latn");
 }
 
 export function marketingResultPercent(value: unknown) {
-  return `${Number(value || 0).toLocaleString("ar-SA", { maximumFractionDigits: 2 })}%`;
+  return `${Number(value || 0).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 })}%`;
 }

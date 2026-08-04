@@ -98,7 +98,7 @@ export function DataManagementPanel() {
     "القسم يُفرض من زر الاستيراد المختار، ولا تؤثر خانة القسم داخل الشيت.",
     "ملفا الكاش والتمويل المصدّران من هذه الصفحة يحدّثان العملاء الموجودين فقط، ولا يضيفان أي عميل جديد.",
     "المطابقة تتم بالرقم الداخلي الموجود في ملف التصدير، ويُستخدم رقم الجوال فقط عند غياب الرقم الداخلي.",
-    "عندما تكون الحالة تم البيع، يؤخذ تاريخ تم البيع من عمود آخر تحديث، بما في ذلك التاريخ العربي مثل ١٩/٥/٢٠٢٦، ٥:٥٢:٤٨ م.",
+    "عندما تكون الحالة تم البيع، يؤخذ تاريخ تم البيع من عمود آخر تحديث، بما في ذلك التاريخ العربي مثل 19/5/2026، 5:52:48 م.",
     "الصفوف غير الموجودة في قاعدة البيانات تُستبعد مع توضيح رقم الصف، بدون إنشاء عميل بديل.",
     "الصفوف التي حالتها ليست تم البيع تظل بدون تغيير عند إعادة استيراد ملف الكاش أو التمويل.",
     "استيراد خدمة العملاء يظل بنفس منطق النقل القديم بدون أي تغيير.",
@@ -112,7 +112,7 @@ export function DataManagementPanel() {
       const payload = await responseJson(response);
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
       downloadXlsx(`MZJ-${department.sheetName}-${new Date().toISOString().slice(0, 10)}.xlsx`, rows, department.sheetName, CUSTOMER_EXPORT_COLUMNS);
-      setNotice({ tone: "success", text: `تم تجهيز ملف ${department.label} ويحتوي على ${rows.length.toLocaleString("ar-SA")} عميل.` });
+      setNotice({ tone: "success", text: `تم تجهيز ملف ${department.label} ويحتوي على ${rows.length.toLocaleString("ar-SA-u-nu-latn")} عميل.` });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "تعذر تصدير العملاء" });
     } finally {
@@ -150,8 +150,8 @@ export function DataManagementPanel() {
       setNotice({
         tone: "success",
         text: department.key === "service"
-          ? `اكتمل استيراد ${department.label}: تمت إضافة ${total.imported.toLocaleString("ar-SA")} عميل بدون تعديل أي عميل موجود.`
-          : `اكتمل تحديث ${department.label}: تم تحديث تاريخ تم البيع لـ ${total.updated.toLocaleString("ar-SA")} عميل، ولم تتم إضافة أي عميل جديد.`,
+          ? `اكتمل استيراد ${department.label}: تمت إضافة ${total.imported.toLocaleString("ar-SA-u-nu-latn")} عميل بدون تعديل أي عميل موجود.`
+          : `اكتمل تحديث ${department.label}: تم تحديث تاريخ تم البيع لـ ${total.updated.toLocaleString("ar-SA-u-nu-latn")} عميل، ولم تتم إضافة أي عميل جديد.`,
       });
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "تعذر استيراد ملف العملاء" });
@@ -289,11 +289,11 @@ export function DataManagementPanel() {
         </div>
         {importResult ? (
           <div className="data-management-import-result">
-            <div><span>تمت القراءة</span><strong>{importResult.result.received.toLocaleString("ar-SA")}</strong></div>
-            <div className="success"><span>{importResult.department === "service" ? "تمت الإضافة" : "تم التحديث"}</span><strong>{(importResult.department === "service" ? importResult.result.imported : importResult.result.updated).toLocaleString("ar-SA")}</strong></div>
-            <div><span>{importResult.department === "service" ? "مكرر بدون تعديل" : "بدون تغيير"}</span><strong>{(importResult.department === "service" ? importResult.result.duplicates : importResult.result.unchanged).toLocaleString("ar-SA")}</strong></div>
-            <div className={importResult.result.skipped ? "warning" : ""}><span>صفوف مستبعدة</span><strong>{importResult.result.skipped.toLocaleString("ar-SA")}</strong></div>
-            {importResult.result.errors.length ? <details><summary>عرض أسباب الاستبعاد</summary><div>{importResult.result.errors.slice(0, 80).map((item, index) => <p key={`${item.row}-${index}`}><b>الصف {item.row.toLocaleString("ar-SA")}</b><span>{item.reason}</span></p>)}</div></details> : null}
+            <div><span>تمت القراءة</span><strong>{importResult.result.received.toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+            <div className="success"><span>{importResult.department === "service" ? "تمت الإضافة" : "تم التحديث"}</span><strong>{(importResult.department === "service" ? importResult.result.imported : importResult.result.updated).toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+            <div><span>{importResult.department === "service" ? "مكرر بدون تعديل" : "بدون تغيير"}</span><strong>{(importResult.department === "service" ? importResult.result.duplicates : importResult.result.unchanged).toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+            <div className={importResult.result.skipped ? "warning" : ""}><span>صفوف مستبعدة</span><strong>{importResult.result.skipped.toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+            {importResult.result.errors.length ? <details><summary>عرض أسباب الاستبعاد</summary><div>{importResult.result.errors.slice(0, 80).map((item, index) => <p key={`${item.row}-${index}`}><b>الصف {item.row.toLocaleString("ar-SA-u-nu-latn")}</b><span>{item.reason}</span></p>)}</div></details> : null}
           </div>
         ) : null}
       </section>

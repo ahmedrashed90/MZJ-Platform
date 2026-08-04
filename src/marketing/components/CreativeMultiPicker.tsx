@@ -30,7 +30,7 @@ export function CreativeMultiPicker({
           <span>{label}</span>
           {hint ? <small>{hint}</small> : null}
         </div>
-        <b>{value.length.toLocaleString("ar-SA")} محدد</b>
+        <b>{value.length.toLocaleString("ar-SA-u-nu-latn")} محدد</b>
       </div>
       {items.length ? (
         <div className="marketing-creative-multi-options">

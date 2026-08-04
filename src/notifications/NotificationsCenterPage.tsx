@@ -11,7 +11,7 @@ const systems: Array<{ code: "all" | NotificationSystem; label: string }> = [
 const labels: Record<NotificationSystem, string> = { crm: "CRM", marketing: "التسويق", operations: "العمليات", tracking: "التراكينج" };
 const icons = { crm: UsersThree, marketing: Megaphone, operations: SuitcaseSimple, tracking: MapPin };
 
-function formatDate(value: string) { return new Intl.DateTimeFormat("ar-SA", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh" }).format(new Date(value)); }
+function formatDate(value: string) { return new Intl.DateTimeFormat("ar-SA-u-nu-latn", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Riyadh" }).format(new Date(value)); }
 function RowIcon({ item }: { item: PlatformNotification }) { const Icon = item.severity === "warning" || item.severity === "danger" ? WarningCircle : item.severity === "success" ? CheckCircle : icons[item.system_code] || Info; return <Icon size={22} weight="duotone" />; }
 
 export function NotificationsCenterPage() {

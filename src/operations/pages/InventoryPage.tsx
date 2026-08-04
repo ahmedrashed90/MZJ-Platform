@@ -73,7 +73,7 @@ export function InventoryPage({ archived = false, all = false }: { archived?: bo
 
   return (
     <div className="module-page operations-page operations-inventory-list-page">
-      <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span><button type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />تحديث</button>{meta.permissions.canExport ? <button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button> : null}</div>
+      <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA-u-nu-latn")}</span><button type="button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={17} />تحديث</button>{meta.permissions.canExport ? <button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button> : null}</div>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-filters sticky">

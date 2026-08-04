@@ -28,7 +28,7 @@ export function queryString(values: Record<string, unknown>) {
 
 export function formatOperationsDate(value: unknown) {
   const date = new Date(String(value || ""));
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA") : "—";
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA-u-nu-latn") : "—";
 }
 
 export { exportXlsx as exportExcel, parseDelimitedFile } from "./excel";

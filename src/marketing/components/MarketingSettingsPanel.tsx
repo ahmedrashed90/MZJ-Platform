@@ -87,7 +87,7 @@ function LookupManager({
     <section className="marketing-package-setting-card">
       <header>
         <div><h3>{title}</h3><p>{description}</p></div>
-        <span>{rows.length.toLocaleString("ar-SA")}</span>
+        <span>{rows.length.toLocaleString("ar-SA-u-nu-latn")}</span>
       </header>
       {error ? <div className="connection-banner"><WarningCircle size={17} />{error}</div> : null}
       <div className="marketing-package-setting-form">
@@ -99,7 +99,7 @@ function LookupManager({
       <div className="marketing-package-setting-list">
         {rows.map((row) => (
           <article key={row.id}>
-            <div><strong>{row.name}</strong><small>الترتيب: {row.sort_order.toLocaleString("ar-SA")}</small></div>
+            <div><strong>{row.name}</strong><small>الترتيب: {row.sort_order.toLocaleString("ar-SA-u-nu-latn")}</small></div>
             <div className="marketing-row-actions">
               <button type="button" className="secondary compact-button" disabled={readOnly || busy} onClick={() => setForm({ id: row.id, name: row.name, sortOrder: row.sort_order })}><PencilSimple size={16} />تعديل</button>
               <button type="button" className="danger compact-button" disabled={readOnly || busy} onClick={() => void remove(row)}><Trash size={16} />حذف</button>

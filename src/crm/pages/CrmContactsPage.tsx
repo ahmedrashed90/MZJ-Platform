@@ -144,8 +144,8 @@ type SalesOrderEditDraft = {
 
 const pageSize = 50;
 const salesDepartmentCodes = new Set(["cash_sales", "finance_sales", "wholesale", "wholesale_sales"]);
-const money = new Intl.NumberFormat("ar-SA", { style: "currency", currency: "SAR", maximumFractionDigits: 2 });
-const number = new Intl.NumberFormat("ar-SA");
+const money = new Intl.NumberFormat("ar-SA-u-nu-latn", { style: "currency", currency: "SAR", maximumFractionDigits: 2 });
+const number = new Intl.NumberFormat("ar-SA-u-nu-latn");
 
 function text(value: unknown) {
   return String(value ?? "").trim() || "—";

@@ -112,7 +112,7 @@ type ApprovalVehicle = {
 function formatApprovalDate(value?: string | null) {
   if (!value) return "—";
   const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA") : "—";
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ar-SA-u-nu-latn") : "—";
 }
 
 function DashboardApprovalBadge({ approved }: { approved: boolean }) {
@@ -407,7 +407,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
       <Modal
         open={Boolean(selection)}
         title={title}
-        subtitle={`عدد النتائج: ${total.toLocaleString("ar-SA")}`}
+        subtitle={`عدد النتائج: ${total.toLocaleString("ar-SA-u-nu-latn")}`}
         onClose={onClose}
         className={`wide dashboard-operations-modal ${selection?.mode === "vehicles" || selection?.mode === "shortages" || selection?.mode === "approvals" ? "dashboard-operations-modal-fullscreen" : ""} ${selection?.mode === "approvals" ? "dashboard-approvals-modal" : ""}`.trim()}
       >
@@ -462,7 +462,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
           <>
             <div className="dashboard-shortages-summary">
               <div><strong>التركيبات غير الموجودة في الفرع</strong><span>الرقم المتاح هو إجمالي نفس التركيبة في المستودع وباقي الفروع، مع استبعاد الوكالة والإكسسوارات.</span></div>
-              <b>{total.toLocaleString("ar-SA")}</b>
+              <b>{total.toLocaleString("ar-SA-u-nu-latn")}</b>
             </div>
             <div className="operations-table-scroll dashboard-shortages-table-wrap">
               <table className="operations-table dashboard-shortages-table">
@@ -487,7 +487,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
                 <strong>{selection.title}</strong>
                 <span>اضغط على اسم السيارة أو رقم الهيكل لفتح الموافقة المالية والإدارية مباشرة.</span>
               </div>
-              <b>{total.toLocaleString("ar-SA")}</b>
+              <b>{total.toLocaleString("ar-SA-u-nu-latn")}</b>
             </div>
             <ResizableOperationsTable
               rows={approvalRows}
@@ -507,7 +507,7 @@ export function DashboardOperationsModal({ selection, onClose }: { selection: Da
                 <div>
                   <strong>{row.request_no || "طلب"} · {requestKindLabels[row.request_kind || ""] || "طلب"}</strong>
                   <span>{row.source_location_name || "—"} ← {row.destination_location_name || "—"}</span>
-                  <small>{row.cancelled_at ? "ملغي" : requestStatusLabels[row.status || ""] || row.status || "—"} · {row.requested_by_name || row.creator_name || "—"} · {row.requested_at ? new Date(row.requested_at).toLocaleString("ar-SA") : "—"}</small>
+                  <small>{row.cancelled_at ? "ملغي" : requestStatusLabels[row.status || ""] || row.status || "—"} · {row.requested_by_name || row.creator_name || "—"} · {row.requested_at ? new Date(row.requested_at).toLocaleString("ar-SA-u-nu-latn") : "—"}</small>
                 </div>
                 <button type="button" onClick={() => setDetail(row)}>تفاصيل</button>
               </article>

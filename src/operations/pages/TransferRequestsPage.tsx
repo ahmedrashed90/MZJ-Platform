@@ -237,7 +237,7 @@ export function TransferRequestsPage() {
           ) : (
             <div className="operations-selection-table-wrap">
               <div className="operations-selection-summary">
-                <strong>{selectedCars.length.toLocaleString("ar-SA")} سيارة داخل الطلب</strong>
+                <strong>{selectedCars.length.toLocaleString("ar-SA-u-nu-latn")} سيارة داخل الطلب</strong>
                 <span>{destination ? <>المكان المستهدف: <b>{destination.name}</b></> : "حدد المكان المستهدف"}</span>
               </div>
               <ResizableOperationsTable<VehicleRow>
@@ -328,7 +328,7 @@ export function TransferRequestsPage() {
             </div>
 
             <div className="operations-request-vehicles-table-wrap">
-              <h3>سيارات الطلب <span>{selected.vehicles.length.toLocaleString("ar-SA")}</span></h3>
+              <h3>سيارات الطلب <span>{selected.vehicles.length.toLocaleString("ar-SA-u-nu-latn")}</span></h3>
               <ResizableOperationsTable<TransferVehicle>
                 rows={selected.vehicles}
                 columns={detailColumns}

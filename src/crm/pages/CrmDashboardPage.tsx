@@ -267,6 +267,12 @@ export function CrmDashboardPage() {
     ];
   }, [statuses, leads, department]);
 
+  const configuredDashboardReportCards = useMemo(() => {
+    const byKey = new Map(dashboardReportCards.map((card) => [card.key, card]));
+    const configured = reportSummary?.quality?.summary_cards || dashboardReportCards.map((card) => card.key);
+    return configured.map((key) => byKey.get(key as typeof dashboardReportCards[number]["key"])).filter(Boolean) as Array<typeof dashboardReportCards[number]>;
+  }, [reportSummary]);
+
   const summary = useMemo(() => {
     const newCount = leads.filter((lead) => leadStatus(lead) === "عميل جديد").length;
     const unread = leads.reduce((sum, lead) => sum + Math.max(Number(lead.unread_count || 0), leadHasUnreadMessage(lead) ? 1 : 0), 0);
@@ -316,18 +322,18 @@ export function CrmDashboardPage() {
 
       {department === "service" ? (
         <section className="crm-dashboard-summary-grid">
-          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("إجمالي العملاء", "كل العملاء الظاهرين في القسم الحالي", () => true)}><span className="icon"><UsersThree size={23} /></span><div><small>إجمالي العملاء</small><strong>{summary.total.toLocaleString("ar-SA")}</strong></div></button>
-          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الجدد", "العملاء الموجودون في حالة عميل جديد", (lead) => leadStatus(lead) === "عميل جديد")}><span className="icon"><UserPlus size={23} /></span><div><small>عملاء جدد</small><strong>{summary.newCount.toLocaleString("ar-SA")}</strong></div></button>
-          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("الرسائل غير المقروءة", "العملاء الذين لديهم رسائل واردة لم يفتحها المندوب بعد", leadHasUnreadMessage)}><span className="icon"><ChatCircleDots size={23} /></span><div><small>رسائل غير مقروءة</small><strong>{summary.unread.toLocaleString("ar-SA")}</strong></div></button>
-          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الموزعون", "العملاء المرتبطون بمندوب أو مسؤول", (lead) => Boolean(lead.assigned_to || lead.assigned_name))}><span className="icon"><PhoneCall size={23} /></span><div><small>عملاء موزعون</small><strong>{summary.assigned.toLocaleString("ar-SA")}</strong></div></button>
-          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("مكتمل / تم البيع", "العملاء الموجودون في الحالات المكتملة أو تم البيع", (lead) => ["تم البيع", "تم الانتهاء"].includes(leadStatus(lead)))}><span className="icon"><CheckCircle size={23} /></span><div><small>مكتمل / تم البيع</small><strong>{summary.completed.toLocaleString("ar-SA")}</strong></div></button>
+          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("إجمالي العملاء", "كل العملاء الظاهرين في القسم الحالي", () => true)}><span className="icon"><UsersThree size={23} /></span><div><small>إجمالي العملاء</small><strong>{summary.total.toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الجدد", "العملاء الموجودون في حالة عميل جديد", (lead) => leadStatus(lead) === "عميل جديد")}><span className="icon"><UserPlus size={23} /></span><div><small>عملاء جدد</small><strong>{summary.newCount.toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("الرسائل غير المقروءة", "العملاء الذين لديهم رسائل واردة لم يفتحها المندوب بعد", leadHasUnreadMessage)}><span className="icon"><ChatCircleDots size={23} /></span><div><small>رسائل غير مقروءة</small><strong>{summary.unread.toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("العملاء الموزعون", "العملاء المرتبطون بمندوب أو مسؤول", (lead) => Boolean(lead.assigned_to || lead.assigned_name))}><span className="icon"><PhoneCall size={23} /></span><div><small>عملاء موزعون</small><strong>{summary.assigned.toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+          <button type="button" className="crm-dashboard-summary-card" onClick={() => openSummary("مكتمل / تم البيع", "العملاء الموجودون في الحالات المكتملة أو تم البيع", (lead) => ["تم البيع", "تم الانتهاء"].includes(leadStatus(lead)))}><span className="icon"><CheckCircle size={23} /></span><div><small>مكتمل / تم البيع</small><strong>{summary.completed.toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
         </section>
       ) : (
         <section className="crm-report-summary crm-report-summary-eight">
-          {dashboardReportCards.map((card) => (
+          {configuredDashboardReportCards.map((card) => (
             <article key={card.key}>
               <span>{card.label}</span>
-              <strong>{Number(reportSummary?.totals?.[card.field] || 0).toLocaleString("ar-SA")}{card.suffix}</strong>
+              <strong>{Number(reportSummary?.totals?.[card.field] || 0).toLocaleString("ar-SA-u-nu-latn")}{card.suffix}</strong>
             </article>
           ))}
         </section>
@@ -343,7 +349,7 @@ export function CrmDashboardPage() {
           <option value="">كل المناديب</option>
           {visibleAgents.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}
         </select>
-        <div className="crm-toolbar-summary"><UsersThree size={19} /><strong>{leads.length.toLocaleString("ar-SA")}</strong><span>عميل ظاهر</span></div>
+        <div className="crm-toolbar-summary"><UsersThree size={19} /><strong>{leads.length.toLocaleString("ar-SA-u-nu-latn")}</strong><span>عميل ظاهر</span></div>
       </div>
 
       {error ? <div className="crm-alert error">{error}</div> : null}
@@ -355,7 +361,7 @@ export function CrmDashboardPage() {
             <section className={`crm-status-column ${group.unread_messages ? "crm-unread-status-column" : ""} ${isDangerStatusColumn(department, String(group.value || group.label)) ? "crm-danger-status-column" : ""}`} key={group.id}>
               <header>
                 <div><h2>{group.label}</h2></div>
-                <strong>{group.leads.length.toLocaleString("ar-SA")}</strong>
+                <strong>{group.leads.length.toLocaleString("ar-SA-u-nu-latn")}</strong>
               </header>
               <div className="crm-status-cards">
                 {group.leads.map((lead) => (
@@ -395,7 +401,7 @@ export function CrmDashboardPage() {
               {summaryView.leads.map((lead) => (
                 <button type="button" key={lead.id} className="crm-dashboard-summary-lead" onClick={() => { setSummaryView(null); openLead(lead); }}>
                   <div><strong>{lead.customer_name || "عميل"}</strong><span>{leadStatus(lead)} · {sourceLabel(lead.source_code, lead.source_name)}</span><small>{lead.phone || lead.phone_normalized || "بدون رقم جوال"}{lead.preview_text ? ` · ${lead.preview_text}` : ""}</small></div>
-                  <div className="crm-dashboard-summary-lead-meta">{leadHasUnreadMessage(lead) ? <b>{Math.max(1, Number(lead.unread_count || 0)).toLocaleString("ar-SA")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at)}</time></div>
+                  <div className="crm-dashboard-summary-lead-meta">{leadHasUnreadMessage(lead) ? <b>{Math.max(1, Number(lead.unread_count || 0)).toLocaleString("ar-SA-u-nu-latn")}</b> : null}<time>{formatDate(lead.last_message_at || lead.updated_at)}</time></div>
                 </button>
               ))}
               {!summaryView.leads.length ? <div className="crm-empty-state">لا يوجد عملاء داخل هذا الكارت</div> : null}

@@ -192,7 +192,7 @@ export function PublishPrepPage() {
       await load();
       setPublishResults(results);
       if (failed.length) {
-        setError(`تعذر نشر ${failed.length.toLocaleString("ar-SA")} عنصر. سبب كل خطأ ظاهر بالتفصيل أدناه.`);
+        setError(`تعذر نشر ${failed.length.toLocaleString("ar-SA-u-nu-latn")} عنصر. سبب كل خطأ ظاهر بالتفصيل أدناه.`);
       } else {
         setMessage("تم النشر بنجاح على كل المنصات المحددة");
       }
@@ -302,7 +302,7 @@ export function PublishPrepPage() {
       {!loading && !filtered.length ? <div className="marketing-empty"><PaperPlaneTilt size={38} />لا توجد تاسكات تجهيز نشر مطابقة.</div> : null}
     </section>
 
-    {canPublishNow && selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد <strong>{selectedIds.length.toLocaleString("ar-SA")}</strong> تاسك</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={18} />نشر المحدد الآن</button></div> : null}
+    {canPublishNow && selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد <strong>{selectedIds.length.toLocaleString("ar-SA-u-nu-latn")}</strong> تاسك</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={18} />نشر المحدد الآن</button></div> : null}
 
     <Modal open={Boolean(editing)} title="تعديل تجهيز النشر" subtitle={editing ? `${editing.source_name || ""} — ${editing.creative_name || ""}` : undefined} onClose={() => setEditing(null)} className="marketing-publish-edit-modal" footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={18} />حفظ تجهيز النشر</button></>}>
       {editing ? <div className="marketing-publish-edit-workspace">

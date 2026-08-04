@@ -6714,3 +6714,19 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .operations-check-option-icon { width: 29px; height: 29px; flex-basis: 29px; }
   .operations-check-edit-card > label { grid-template-columns: 1fr; gap: 5px; }
 }
+
+/* CRM report indicator formulas */
+.crm-quality-settings-intro h2 { margin:0 0 7px; font-size:18px; font-weight:950; }
+.crm-quality-settings-intro p { margin:0; color:var(--muted); font-size:11px; font-weight:700; line-height:1.8; }
+.crm-quality-definition-card,.crm-quality-formula-card { border:1px solid #e1c8bc; border-radius:18px; background:#fffdfb; }
+.crm-quality-definition-card > header,.crm-quality-formula-card > header { padding-bottom:12px; border-bottom:1px solid #f0e1da; }
+.crm-quality-definition-card > header h2,.crm-quality-formula-card > header h2 { margin:0 0 7px; color:#4b281f; font-size:18px; font-weight:950; }
+.crm-quality-definition-card > header p,.crm-quality-formula-card > header p { margin:0; color:#9a7468; font-size:11px; font-weight:700; line-height:1.7; }
+.crm-quality-mode-field { margin-top:14px; }
+.crm-quality-mode-field select { min-height:45px; border-radius:12px; background:#fff; }
+.crm-quality-status-grid { grid-template-columns:repeat(2,minmax(0,1fr)); max-height:300px; overflow:auto; padding:8px; border:1px solid #ead7cd; border-radius:14px; background:#fff; scrollbar-gutter:stable; }
+.crm-quality-status-grid label { min-height:43px; padding:8px 12px; border-color:#ead3c7; border-radius:12px; background:#fffaf7; font-size:11px; font-weight:750; }
+.crm-quality-status-grid input[type="checkbox"] { width:18px; height:18px; flex:0 0 auto; accent-color:#9b4f3d; }
+@media (max-width:800px) {
+  .crm-quality-status-grid { grid-template-columns:1fr; }
+}

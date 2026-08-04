@@ -120,7 +120,7 @@ export function FreshMarketingImportModal({
         {resolved ? (
           <>
             <div className="marketing-fresh-import-summary">
-              {summaryCards.map(([label, value]) => <article key={String(label)}><span>{label}</span><strong>{Number(value).toLocaleString("ar-SA")}</strong></article>)}
+              {summaryCards.map(([label, value]) => <article key={String(label)}><span>{label}</span><strong>{Number(value).toLocaleString("ar-SA-u-nu-latn")}</strong></article>)}
             </div>
 
             {resolved.errors.length ? (

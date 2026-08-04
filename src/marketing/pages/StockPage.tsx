@@ -71,7 +71,7 @@ function formatPhotographyDate(value: string | null | undefined) {
   if (!match) return "—";
   const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   if (!Number.isFinite(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory", {
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -433,7 +433,7 @@ export function StockPage() {
                       <td>{row.destination_location_name || "—"}</td>
                       <td>{row.requested_by_name || "—"}</td>
                       <td>{marketingDate(row.requested_at, true)}</td>
-                      <td>{row.vehicles.length.toLocaleString("ar-SA")}</td>
+                      <td>{row.vehicles.length.toLocaleString("ar-SA-u-nu-latn")}</td>
                       <td><button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedRequest(row)}>عرض ومتابعة</button></td>
                     </tr>
                   )) : <tr><td colSpan={9}>لا توجد طلبات في هذا التبويب.</td></tr>}
@@ -507,7 +507,7 @@ export function StockPage() {
       <Modal
         open={requestOpen}
         title="إنشاء طلب تصوير"
-        subtitle={selectedCars.length ? `${selectedCars.length.toLocaleString("ar-SA")} سيارة داخل الطلب` : undefined}
+        subtitle={selectedCars.length ? `${selectedCars.length.toLocaleString("ar-SA-u-nu-latn")} سيارة داخل الطلب` : undefined}
         onClose={closeRequest}
         className="operations-request-detail-modal marketing-photo-request-modal"
         footer={(
@@ -560,7 +560,7 @@ export function StockPage() {
           ) : (
             <div className="operations-selection-table-wrap">
               <div className="operations-selection-summary">
-                <strong>{selectedCars.length.toLocaleString("ar-SA")} سيارة داخل الطلب</strong>
+                <strong>{selectedCars.length.toLocaleString("ar-SA-u-nu-latn")} سيارة داخل الطلب</strong>
                 <span>{destination ? <>المكان المستهدف: <b>{destination.name}</b></> : "حدد المكان المستهدف"}</span>
               </div>
               <ResizableOperationsTable<GroupedCar>

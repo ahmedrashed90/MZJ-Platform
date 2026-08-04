@@ -25,7 +25,7 @@ export function ReceiptCalendarPage() {
           <article key={event.id} className="marketing-calendar-event receipt" style={{ borderInlineStartColor: event.user_color || undefined }}>
             <div className="marketing-calendar-event-head">
               <span>{event.source_type === "agenda" ? "أجندة" : "حملة"}</span>
-              <time>{new Date(event.received_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}</time>
+              <time>{new Date(event.received_at).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" })}</time>
             </div>
             <strong>{event.source_name || "—"}</strong>
             <p>{event.creative_name || "كرييتيف غير محدد"}</p>

@@ -9,7 +9,7 @@ import { clean, normalizeSaudiPhone, publicTrackingUrl } from "../_tracking-util
 
 function formatMoney(value: unknown) {
   const number = Number(value || 0);
-  return number.toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return number.toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function requestOrigin(request: VercelRequest) {

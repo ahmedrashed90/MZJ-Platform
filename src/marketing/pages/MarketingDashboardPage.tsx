@@ -295,7 +295,7 @@ export function MarketingDashboardPage() {
   return <MarketingPage
     title="الداش بورد"
     description="متابعة المطلوب وجاهزية الحملات والأجندات داخل سيستم التسويق."
-    actions={<button type="button" className="marketing-completed-tasks-trigger" onClick={() => setCompletedOpen(true)}><ListChecks size={20} weight="duotone" /><span>التاسكات المنتهية</span><b>{(data.completed || []).length.toLocaleString("ar-SA")}</b></button>}
+    actions={<button type="button" className="marketing-completed-tasks-trigger" onClick={() => setCompletedOpen(true)}><ListChecks size={20} weight="duotone" /><span>التاسكات المنتهية</span><b>{(data.completed || []).length.toLocaleString("ar-SA-u-nu-latn")}</b></button>}
   >
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
     {loading ? <div className="marketing-empty">جاري تحميل الداش بورد...</div> : <div className="marketing-kanban marketing-dashboard-workflow">
@@ -409,7 +409,7 @@ export function MarketingDashboardPage() {
     <Modal open={completedOpen} title="التاسكات المنتهية" subtitle="كل التاسكات التي تم إنهاؤها يدويًا بعد وصولها إلى 100%." onClose={() => setCompletedOpen(false)} className="marketing-completed-tasks-modal">
       <div className="marketing-completed-tasks-content">
         <label className="marketing-completed-tasks-search"><MagnifyingGlass size={19} /><input value={completedSearch} onChange={(event) => setCompletedSearch(event.target.value)} placeholder="بحث باسم الحملة أو التاسك أو المسؤول..." /></label>
-        <div className="marketing-completed-tasks-summary"><span>إجمالي التاسكات المنتهية</span><strong>{(data.completed || []).length.toLocaleString("ar-SA")}</strong></div>
+        <div className="marketing-completed-tasks-summary"><span>إجمالي التاسكات المنتهية</span><strong>{(data.completed || []).length.toLocaleString("ar-SA-u-nu-latn")}</strong></div>
         <div className="marketing-completed-tasks-list">
           {completedTasks.length ? completedTasks.map((task: any) => <button type="button" key={task.id} onClick={() => { setCompletedOpen(false); setTaskId(task.id); }}>
             <div className="marketing-completed-task-title"><CheckCircle size={21} weight="fill" /><span><strong>{task.creative_name || task.title || "تاسك"}</strong><small>{task.source_name || task.campaign_code || "—"}</small></span></div>
@@ -417,7 +417,7 @@ export function MarketingDashboardPage() {
               <span><small>القسم</small><strong>{task.department_name || "—"}</strong></span>
               <span><small>المسؤول</small><strong>{task.assigned_name || "—"}</strong></span>
               <span><small>أنهى التاسك</small><strong>{task.completed_by_name || "—"}</strong></span>
-              <span><small>تاريخ الإنهاء</small><strong>{task.completed_at ? new Date(task.completed_at).toLocaleString("ar-SA") : "—"}</strong></span>
+              <span><small>تاريخ الإنهاء</small><strong>{task.completed_at ? new Date(task.completed_at).toLocaleString("ar-SA-u-nu-latn") : "—"}</strong></span>
             </div>
           </button>) : <div className="marketing-empty small">لا توجد تاسكات منتهية مطابقة للبحث.</div>}
         </div>

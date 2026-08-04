@@ -2611,7 +2611,7 @@ async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user
     const rows=await tx<any[]>`select id::text from operations.vehicles where id in ${tx(vehicleIds)} and is_deleted=false and archived_at is null for update`;
     if(rows.length!==vehicleIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
     await tx`update operations.vehicles set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1 where id in ${tx(vehicleIds)} and coalesce(photographed,false)=false`;
-    return{ok:true,message:vehicleIds.length===1?"تم تحديث السيارة إلى تم التصوير":`تم تحديث ${vehicleIds.length.toLocaleString("ar-SA")} سيارة إلى تم التصوير`};
+    return{ok:true,message:vehicleIds.length===1?"تم تحديث السيارة إلى تم التصوير":`تم تحديث ${vehicleIds.length.toLocaleString("ar-SA-u-nu-latn")} سيارة إلى تم التصوير`};
   });
 }
 

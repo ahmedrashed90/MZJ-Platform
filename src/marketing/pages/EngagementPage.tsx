@@ -95,7 +95,7 @@ const EMPTY_SUMMARY: EngagementSummary = {
   shareEvents: 0,
 };
 
-function count(value: unknown) { return Number(value || 0).toLocaleString("ar-SA"); }
+function count(value: unknown) { return Number(value || 0).toLocaleString("ar-SA-u-nu-latn"); }
 function platformLabel(platform: string) { return marketingResultPlatformLabel(platform); }
 function sourceLabel(platform: string) {
   if (platform === "facebook") return "بوست فيس بوك";

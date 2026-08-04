@@ -177,7 +177,7 @@ export function CrmManualLeadsPage() {
 
       {tab === "list" ? (
         <section className="crm-panel crm-list-panel crm-manual-list-panel">
-          <header><h2>العملاء المسجلة</h2><span>{total.toLocaleString("ar-SA")} سجل</span></header>
+          <header><h2>العملاء المسجلة</h2><span>{total.toLocaleString("ar-SA-u-nu-latn")} سجل</span></header>
           <div className="crm-toolbar compact">
             <label className="crm-search-box"><MagnifyingGlass size={17} /><input value={q} onChange={(event) => { setQ(event.target.value); setPage(1); }} placeholder="بحث بالاسم أو الرقم" /></label>
             <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">كل الحالات</option><option value="pending">بانتظار موافقة الإدارة</option><option value="approved">تمت الموافقة</option><option value="rejected">مرفوض</option></select>
