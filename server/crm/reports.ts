@@ -53,6 +53,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const detailKind = clean(request.query.detailKind);
   const detailValue = clean(request.query.detailValue);
   const detailQ = clean(request.query.detailQ);
+  const detailStatus = clean(request.query.detailStatus);
   const detailPage = boundedInt(request.query.detailPage, 1, 1, 100000);
   const detailPageSize = boundedInt(request.query.detailPageSize, 100, 10, 200);
   const summaryOnly = ["1", "true", "yes"].includes(clean(request.query.summaryOnly).toLowerCase());
@@ -137,8 +138,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const filtersSql = sql`
     ${scopeSql}
-    and (${from || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-    and (${to || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+    and (${from || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+    and (${to || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     and (
       ${department || null}::text is null
       or (${department || null}='call_center' and l.call_center_assigned_to is not null)
@@ -198,8 +199,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
           where coalesce(so.is_cancelled,false)=false
             and coalesce(so.platform_user_id::text,'__none__')=${detailValue}
             and coalesce(so.platform_department_code,primary_department.code,'')<>'call_center'
-            and (${from || null}::date is null or coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date)>=${from || null}::date)
-            and (${to || null}::date is null or coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date)<=${to || null}::date)
+            and (${from || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date>=${from || null}::date)
+            and (${to || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date<=${to || null}::date)
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
@@ -246,7 +247,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
               when l.status_label='تم البيع' and not l.has_active_erp_order then greatest(coalesce(l.sold_quantity,1),1)
               else null
             end::int as sold_quantity,
-            l.registered_at,l.created_at,greatest(l.updated_at,s.last_sale_at) as updated_at,
+            coalesce(s.last_sale_at,l.sold_at) as sold_at,l.registered_at,l.created_at,coalesce(l.updated_at,l.created_at) as updated_at,
             coalesce(s.assigned_name,l.report_assigned_name) as assigned_name,
             l.call_center_assigned_to::text,l.report_call_center_name as call_center_name,
             coalesce(s.branch_name,l.report_branch_name) as branch_name,l.catalog_source_name,l.source_report_group,
@@ -258,6 +259,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         )
         select result_rows.*,(count(*) over())::int as total_count
         from result_rows
+        where (${detailStatus || null}::text is null or result_rows.status_label=${detailStatus || null})
         order by last_sale_at desc nulls last,coalesce(registered_at,created_at) desc,updated_at desc
         limit ${detailPageSize} offset ${detailOffset}
       `;
@@ -285,6 +287,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where l.is_deleted=false
         and ${filtersSql}
         and (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.status_note,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${detailQ ? `%${detailQ}%` : null})
+        and (${detailStatus || null}::text is null or l.status_label=${detailStatus || null})
         and ${detailMatch}
     `;
     const detailRows = await sql<any[]>`
@@ -299,6 +302,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where l.is_deleted=false
         and ${filtersSql}
         and (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.status_note,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${detailQ ? `%${detailQ}%` : null})
+        and (${detailStatus || null}::text is null or l.status_label=${detailStatus || null})
         and ${detailMatch}
       order by coalesce(l.registered_at,l.created_at) desc,l.updated_at desc
       limit ${detailPageSize} offset ${detailOffset}
@@ -360,8 +364,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
     ) vehicle_stats on true
     where coalesce(so.is_cancelled,false)=false
-      and (${from || null}::date is null or coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) >= ${from || null}::date)
-      and (${to || null}::date is null or coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) <= ${to || null}::date)
+      and (${from || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+      and (${to || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)

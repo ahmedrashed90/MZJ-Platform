@@ -24,6 +24,9 @@ function canManageSalesOrders(user: any) {
   return canPurgeContact(user);
 }
 
+const salesDepartmentCodes = new Set(["cash_sales", "finance_sales", "wholesale", "wholesale_sales"]);
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function dateOrNull(value: unknown, label: string) {
   const normalized = clean(value);
   if (!normalized) return null;
@@ -366,6 +369,7 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
   if (!contactId || !orderId) return response.status(400).json({ ok: false, error: "بيانات طلب البيع غير مكتملة" });
   if (!(await canAccessContact(contactId, user))) return response.status(404).json({ ok: false, error: "جهة الاتصال غير موجودة أو لا توجد صلاحية لتعديلها" });
 
+  let salespersonId: string;
   let orderDate: string | null;
   let deliveryDate: string | null;
   let subtotalBeforeTax: number;
@@ -375,6 +379,8 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
   let vehicleUpdates: Array<{ id: string; qty: number; unitPrice: number; itemValue: number; totalInclVat: number }>;
   try {
     const orderInput = body.order && typeof body.order === "object" ? body.order : {};
+    salespersonId = clean(orderInput.salespersonId ?? orderInput.salesperson_id ?? body.salespersonId ?? body.salesperson_id);
+    if (!uuidPattern.test(salespersonId)) throw new Error("اختر المندوب المسؤول عن طلب البيع");
     orderDate = dateOrNull(orderInput.orderDate ?? orderInput.order_date, "تاريخ الطلب");
     deliveryDate = dateOrNull(orderInput.deliveryDate ?? orderInput.delivery_date, "تاريخ التسليم");
     subtotalBeforeTax = nonNegativeNumber(orderInput.subtotalBeforeTax ?? orderInput.subtotal_before_tax, "القيمة قبل الضريبة");
@@ -394,6 +400,56 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
   }
 
   const sql = getSql();
+  const [salesperson] = await sql<any[]>`
+    select
+      u.id::text,u.full_name,
+      coalesce(crm_department.code,global_department.code) as department_code,
+      coalesce(crm_department.name,global_department.name) as department_name,
+      coalesce(crm_branch.code,global_branch.code) as branch_code,
+      coalesce(crm_branch.name,global_branch.name) as branch_name
+    from core.users u
+    left join lateral (
+      select d.code,d.name
+      from core.user_system_departments usd
+      join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+      where usd.user_id=u.id and usd.system_code='crm'
+      order by usd.is_primary desc,d.created_at,d.code
+      limit 1
+    ) crm_department on true
+    left join lateral (
+      select d.code,d.name
+      from core.user_departments ud
+      join core.departments d on d.id=ud.department_id and d.is_active=true
+      where ud.user_id=u.id and d.code in ('cash_sales','finance_sales','wholesale','wholesale_sales')
+      order by d.created_at,d.code
+      limit 1
+    ) global_department on true
+    left join lateral (
+      select b.code,b.name
+      from core.user_system_branches usb
+      join core.branches b on b.id=usb.branch_id and b.is_active=true
+      where usb.user_id=u.id and usb.system_code='crm'
+      order by usb.is_primary desc,b.sort_order,b.name
+      limit 1
+    ) crm_branch on true
+    left join lateral (
+      select b.code,b.name
+      from core.user_branches ub
+      join core.branches b on b.id=ub.branch_id and b.is_active=true
+      where ub.user_id=u.id
+      order by b.sort_order,b.name
+      limit 1
+    ) global_branch on true
+    where u.id=${salespersonId}::uuid and u.is_active=true and coalesce(u.can_receive_leads,true)=true
+    limit 1
+  `;
+  if (!salesperson || !salesDepartmentCodes.has(clean(salesperson.department_code))) {
+    return response.status(400).json({ ok: false, error: "المستخدم المحدد ليس مندوب مبيعات فعالًا داخل CRM" });
+  }
+  const salespersonDepartmentCode = clean(salesperson.department_code);
+  const salespersonBranchCode = ["wholesale", "wholesale_sales"].includes(salespersonDepartmentCode) ? null : clean(salesperson.branch_code) || null;
+  const salespersonBranchName = salespersonBranchCode ? clean(salesperson.branch_name) || salespersonBranchCode : null;
+
   const result = await sql.begin(async (tx: any) => {
     const [beforeOrder] = await tx<any[]>`
       select so.*,so.id::text,so.crm_lead_id::text
@@ -416,6 +472,13 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
 
     const [afterOrder] = await tx<any[]>`
       update integrations.erpnext_sales_orders set
+        platform_user_id=${salesperson.id}::uuid,
+        platform_user_name=${salesperson.full_name},
+        platform_department_code=${salespersonDepartmentCode},
+        platform_department_name=${clean(salesperson.department_name) || salespersonDepartmentCode},
+        platform_branch_code=${salespersonBranchCode},
+        platform_branch_name=${salespersonBranchName},
+        user_link_status='linked',
         order_date=${orderDate}::date,
         delivery_date=${deliveryDate}::date,
         subtotal_before_tax=${subtotalBeforeTax},

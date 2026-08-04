@@ -3546,6 +3546,9 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-report-section-metrics b { display:block; color:var(--ink); font-size:20px; font-weight:900; }
 .crm-report-customers-toolbar { display:flex; align-items:center; gap:10px; }
 .crm-report-customers-toolbar .crm-search-box { flex:1; }
+.crm-report-status-filter { min-width:190px; display:grid; gap:4px; }
+.crm-report-status-filter>span { color:var(--muted); font-size:9px; font-weight:850; }
+.crm-report-status-filter select { width:100%; min-height:42px; }
 .crm-report-customers-toolbar .crm-secondary-button { flex:0 0 auto; white-space:nowrap; }
 
 
@@ -3554,6 +3557,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .crm-report-section-metrics { justify-content:stretch; }
   .crm-report-section-metrics span { flex:1; min-width:0; }
   .crm-report-customers-toolbar { align-items:stretch; flex-direction:column; }
+  .crm-report-status-filter { width:100%; min-width:0; }
 }
 
 /* Dashboard and operations refinements v1.16.1 */

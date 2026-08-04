@@ -118,6 +118,7 @@ export function CrmReportsPage() {
   const [data, setData] = useState<any | null>(null);
   const [popup, setPopup] = useState<ReportRow | null>(null);
   const [popupQ, setPopupQ] = useState("");
+  const [popupStatus, setPopupStatus] = useState("");
   const [popupRows, setPopupRows] = useState<any[]>([]);
   const [popupTotal, setPopupTotal] = useState(0);
   const [popupPage, setPopupPage] = useState(1);
@@ -142,7 +143,7 @@ export function CrmReportsPage() {
     if (!popup) return;
     const timer = window.setTimeout(() => void loadPopup(), 180);
     return () => window.clearTimeout(timer);
-  }, [popup, popupQ, popupPage, filters]);
+  }, [popup, popupQ, popupStatus, popupPage, filters]);
 
   async function load() {
     setLoading(true);
@@ -160,7 +161,7 @@ export function CrmReportsPage() {
     if (!popup) return;
     setPopupLoading(true);
     try {
-      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailPage: popupPage, detailPageSize: popupPageSize })}`);
+      const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: popupPage, detailPageSize: popupPageSize })}`);
       setPopupRows(result.rows || []);
       setPopupTotal(Number(result.total || 0));
     } catch (error) {
@@ -175,6 +176,7 @@ export function CrmReportsPage() {
   function openPopup(row: ReportRow) {
     setPopup(row);
     setPopupQ("");
+    setPopupStatus("");
     setPopupPage(1);
     setPopupRows([]);
     setPopupTotal(0);
@@ -228,7 +230,7 @@ export function CrmReportsPage() {
       let page = 1;
       let total = 0;
       do {
-        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailPage: page, detailPageSize: 200 })}`);
+        const result = await crmFetch<{ ok: boolean; rows: any[]; total: number }>(`/api/crm/reports${queryString({ ...filters, detailKind: popup.detailKind, detailValue: popup.detailValue, detailQ: popupQ, detailStatus: popupStatus, detailPage: page, detailPageSize: 200 })}`);
         const pageRows = result.rows || [];
         allRows.push(...pageRows);
         total = Number(result.total || 0);
@@ -236,9 +238,9 @@ export function CrmReportsPage() {
         page += 1;
       } while (allRows.length < total && page <= 500);
 
-      const rowsHtml = allRows.map((row) => `<tr><td>${htmlEscape(row.customer_name || "—")}</td><td>${htmlEscape(row.phone || row.phone_normalized || "—")}</td><td>${htmlEscape(row.car_name || "—")}</td><td>${htmlEscape(sourceLabel(row.source_code, row.source_name))}</td><td>${htmlEscape(row.branch_name || row.branch_code || "—")}</td><td>${htmlEscape(row.status_label || "—")}</td><td>${htmlEscape(row.sold_quantity ?? "—")}</td><td>${htmlEscape(row.status_note || row.notes || "—")}</td><td>${htmlEscape(formatDate(row.registered_at || row.created_at))}</td><td>${htmlEscape(formatDate(row.updated_at))}</td></tr>`).join("");
+      const rowsHtml = allRows.map((row) => `<tr><td>${htmlEscape(row.customer_name || "—")}</td><td>${htmlEscape(row.phone || row.phone_normalized || "—")}</td><td>${htmlEscape(row.car_name || "—")}</td><td>${htmlEscape(sourceLabel(row.source_code, row.source_name))}</td><td>${htmlEscape(row.branch_name || row.branch_code || "—")}</td><td>${htmlEscape(row.status_label || "—")}</td><td>${htmlEscape(row.sold_quantity ?? "—")}</td><td>${htmlEscape(row.status_note || row.notes || "—")}</td><td>${htmlEscape(formatDate(row.sold_at))}</td><td>${htmlEscape(formatDate(row.registered_at || row.created_at))}</td><td>${htmlEscape(formatDate(row.updated_at))}</td></tr>`).join("");
       win.document.open();
-      win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير عملاء - ${htmlEscape(popup.name)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Tajawal,Arial;color:#38231d;font-size:11px;font-weight:700}h1{margin:0 0 6px;font-size:23px}p{margin:0 0 16px;color:#6d554d}table{width:100%;border-collapse:collapse}th,td{border:1px solid #dbc8bd;padding:7px;text-align:right;vertical-align:top}th{background:#f5e8df;font-weight:800}td:first-child{font-weight:800}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><h1>تقرير عملاء: ${htmlEscape(popup.name)}</h1><p>إجمالي العملاء: ${total.toLocaleString("ar-SA")} — الفترة: ${htmlEscape(filters.from || "—")} إلى ${htmlEscape(filters.to || "—")}${popupQ ? ` — البحث: ${htmlEscape(popupQ)}` : ""}</p><table><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>عدد المباع</th><th>التحديثات</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="10">لا توجد نتائج</td></tr>'}</tbody></table><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
+      win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير عملاء - ${htmlEscape(popup.name)}</title><style>@page{size:A4 landscape;margin:10mm}body{font-family:Tajawal,Arial;color:#38231d;font-size:11px;font-weight:700}h1{margin:0 0 6px;font-size:23px}p{margin:0 0 16px;color:#6d554d}table{width:100%;border-collapse:collapse}th,td{border:1px solid #dbc8bd;padding:7px;text-align:right;vertical-align:top}th{background:#f5e8df;font-weight:800}td:first-child{font-weight:800}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}</style></head><body><h1>تقرير عملاء: ${htmlEscape(popup.name)}</h1><p>إجمالي العملاء: ${total.toLocaleString("ar-SA")} — الفترة: ${htmlEscape(filters.from || "—")} إلى ${htmlEscape(filters.to || "—")}${popupStatus ? ` — الحالة: ${htmlEscape(popupStatus)}` : ""}${popupQ ? ` — البحث: ${htmlEscape(popupQ)}` : ""}</p><table><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>عدد المباع</th><th>التحديثات</th><th>تاريخ تم البيع</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="11">لا توجد نتائج</td></tr>'}</tbody></table><script>window.onload=()=>setTimeout(()=>window.print(),250)<\/script></body></html>`);
       win.document.close();
     } catch (error) {
       win.close();
@@ -247,6 +249,19 @@ export function CrmReportsPage() {
       setPopupPdfLoading(false);
     }
   }
+
+  const reportStatuses = useMemo(() => {
+    const seen = new Set<string>();
+    const labels: string[] = [];
+    for (const status of meta?.statuses || []) {
+      const label = String(status.label || status.value || "").trim();
+      if (!label || status.is_active === false || seen.has(label)) continue;
+      seen.add(label);
+      labels.push(label);
+    }
+    if (!seen.has("تم البيع")) labels.push("تم البيع");
+    return labels;
+  }, [meta]);
 
   const configuredCards = (data?.quality?.summary_cards || Object.keys(summaryCards)).filter((key: string) => key in summaryCards);
 
@@ -268,7 +283,7 @@ export function CrmReportsPage() {
         </header>
         <div className="crm-report-filter-blocks">
           <section className="crm-report-filter-block">
-            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>تاريخ تسجيل العميل داخل التقرير</small></div></div>
+            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>النتائج حسب تاريخ آخر تحديث للعميل</small></div></div>
             <div className="crm-report-filter-fields two-columns">
               <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
               <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
@@ -336,8 +351,8 @@ export function CrmReportsPage() {
         <div className="crm-modal-backdrop" onMouseDown={() => setPopup(null)}>
           <div className="crm-modal-card report-customers-modal" onMouseDown={(event) => event.stopPropagation()}>
             <header><div><h2>تقرير عملاء: {popup.name}</h2><p>عدد النتائج: {popupTotal.toLocaleString("ar-SA")}</p></div><button className="crm-icon-button" onClick={() => setPopup(null)}><X size={18} /></button></header>
-            <div className="crm-toolbar compact crm-report-customers-toolbar"><label className="crm-search-box wide"><MagnifyingGlass size={17} /><input value={popupQ} onChange={(event) => { setPopupQ(event.target.value); setPopupPage(1); }} placeholder="اكتب حالة أو ملاحظة أو اسم عميل" /></label><button type="button" className="crm-secondary-button" disabled={popupLoading || popupPdfLoading} onClick={() => void exportPopupPdf()}><FilePdf size={17} />{popupPdfLoading ? "جاري تجهيز PDF..." : "تصدير PDF"}</button></div>
-            <div className="crm-table-shell popup-table"><table className="crm-table"><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>عدد المباع</th><th>التحديثات</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>{popupRows.map((row: any) => <tr key={row.id}><td><strong className="crm-report-customer-name">{row.customer_name || "—"}</strong></td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.car_name || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{row.status_label || "—"}</td><td>{row.sold_quantity ?? "—"}</td><td>{row.status_note || row.notes || "—"}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}{!popupLoading && !popupRows.length ? <tr><td colSpan={10}><div className="crm-empty-state">لا توجد نتائج</div></td></tr> : null}</tbody></table></div>
+            <div className="crm-toolbar compact crm-report-customers-toolbar"><label className="crm-search-box wide"><MagnifyingGlass size={17} /><input value={popupQ} onChange={(event) => { setPopupQ(event.target.value); setPopupPage(1); }} placeholder="اكتب حالة أو ملاحظة أو اسم عميل" /></label><label className="crm-report-status-filter"><span>الحالة</span><select value={popupStatus} onChange={(event) => { setPopupStatus(event.target.value); setPopupPage(1); }}><option value="">كل الحالات</option>{reportStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><button type="button" className="crm-secondary-button" disabled={popupLoading || popupPdfLoading} onClick={() => void exportPopupPdf()}><FilePdf size={17} />{popupPdfLoading ? "جاري تجهيز PDF..." : "تصدير PDF"}</button></div>
+            <div className="crm-table-shell popup-table"><table className="crm-table"><thead><tr><th>اسم العميل</th><th>الجوال</th><th>السيارة</th><th>المصدر</th><th>الفرع</th><th>الحالة</th><th>عدد المباع</th><th>التحديثات</th><th>تاريخ تم البيع</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead><tbody>{popupRows.map((row: any) => <tr key={row.id}><td><strong className="crm-report-customer-name">{row.customer_name || "—"}</strong></td><td>{row.phone || row.phone_normalized || "—"}</td><td>{row.car_name || "—"}</td><td>{sourceLabel(row.source_code, row.source_name)}</td><td>{row.branch_name || row.branch_code || "—"}</td><td>{row.status_label || "—"}</td><td>{row.sold_quantity ?? "—"}</td><td>{row.status_note || row.notes || "—"}</td><td>{formatDate(row.sold_at)}</td><td>{formatDate(row.registered_at || row.created_at)}</td><td>{formatDate(row.updated_at)}</td></tr>)}{!popupLoading && !popupRows.length ? <tr><td colSpan={11}><div className="crm-empty-state">لا توجد نتائج</div></td></tr> : null}</tbody></table></div>
             <div className="crm-form-actions"><button className="crm-secondary-button" disabled={popupLoading || popupPage <= 1} onClick={() => setPopupPage((current) => Math.max(1, current - 1))}>السابق</button><span>{popupLoading ? "جاري التحميل..." : `صفحة ${popupPage} من ${Math.max(1, Math.ceil(popupTotal / popupPageSize))}`}</span><button className="crm-secondary-button" disabled={popupLoading || popupPage * popupPageSize >= popupTotal} onClick={() => setPopupPage((current) => current + 1)}>التالي</button></div>
           </div>
         </div>

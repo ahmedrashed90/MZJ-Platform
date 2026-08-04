@@ -30,7 +30,8 @@ assert(databasePage.includes("تاريخ تم البيع") && databasePage.inclu
 assert(leads.includes("soldAtFieldProvided") && leads.includes("sold_at=${nextSoldAt}::timestamptz"), "lead update does not persist sold date");
 assert(leads.includes('statusChanged && input.statusLabel === "تم البيع"'), "new manual sales do not receive an automatic sold date");
 assert(dashboard.includes("coalesce(l.sold_at,l.registered_at,l.created_at)"), "CRM dashboard sold date filtering is missing");
-assert(reports.includes("coalesce(l.sold_at,l.registered_at,l.created_at)"), "CRM reports sold date filtering is missing");
+assert(reports.includes("(coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date"), "CRM reports must filter by the latest customer update date");
+assert(reports.includes("coalesce(s.last_sale_at,l.sold_at) as sold_at") && reports.includes("l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.sold_at"), "CRM customer reports do not expose the sold date");
 assert(unifiedDashboard.includes("scoped_manual_sold") && unifiedDashboard.includes("coalesce(l.sold_at,l.registered_at,l.created_at)"), "unified dashboard manual sold-date aggregation is missing");
 assert(!kpi.includes("calculated_sales") && !kpi.includes("coalesce(l.sold_at,l.updated_at,l.created_at)"), "KPI sales must stay independent from CRM sold-date aggregation");
 assert(erpSync.includes("sold_at=${saleAt}::timestamptz"), "ERP sales do not persist their actual sale date");

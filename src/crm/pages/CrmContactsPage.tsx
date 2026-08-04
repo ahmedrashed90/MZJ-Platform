@@ -26,6 +26,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentLabel, formatDate, queryString } from "../api";
 import { sourceLabel } from "../sourceCatalog";
+import type { CrmMeta, CrmUserOption } from "../types";
 
 type ContactRow = {
   id: string;
@@ -76,6 +77,7 @@ type SalesOrder = {
   erp_sales_person?: string | null;
   order_date?: string | null;
   delivery_date?: string | null;
+  platform_user_id?: string | null;
   platform_user_name?: string | null;
   platform_department_name?: string | null;
   platform_department_code?: string | null;
@@ -130,6 +132,7 @@ type SalesOrderVehicleDraft = {
 };
 
 type SalesOrderEditDraft = {
+  salespersonId: string;
   orderDate: string;
   deliveryDate: string;
   subtotalBeforeTax: string;
@@ -140,6 +143,7 @@ type SalesOrderEditDraft = {
 };
 
 const pageSize = 50;
+const salesDepartmentCodes = new Set(["cash_sales", "finance_sales", "wholesale", "wholesale_sales"]);
 const money = new Intl.NumberFormat("ar-SA", { style: "currency", currency: "SAR", maximumFractionDigits: 2 });
 const number = new Intl.NumberFormat("ar-SA");
 
@@ -155,6 +159,18 @@ function dateInput(value: unknown) {
 function numberInput(value: unknown) {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? String(parsed) : "0";
+}
+
+function isSalesperson(user: CrmUserOption) {
+  const primary = String(user.primary_department_code || "").trim();
+  const departments = Array.isArray(user.department_codes) ? user.department_codes : [];
+  return user.can_receive_leads !== false && (salesDepartmentCodes.has(primary) || (!primary && departments.some((code) => salesDepartmentCodes.has(code))));
+}
+
+function salespersonOptionLabel(user: CrmUserOption) {
+  const department = user.primary_department_name || user.departments?.[0] || "";
+  const branch = user.primary_branch_name || user.branches?.[0] || "";
+  return [user.full_name, department, branch].filter(Boolean).join(" - ");
 }
 
 function latestLead(profile: ContactProfile | null) {
@@ -188,6 +204,9 @@ export function CrmContactsPage() {
   const [orderDraft, setOrderDraft] = useState<SalesOrderEditDraft | null>(null);
   const [orderEditError, setOrderEditError] = useState("");
   const [savingOrder, setSavingOrder] = useState(false);
+  const [salesUsers, setSalesUsers] = useState<CrmUserOption[] | null>(null);
+  const [salesUsersLoading, setSalesUsersLoading] = useState(false);
+  const [salesUsersError, setSalesUsersError] = useState("");
   const [deletingOrder, setDeletingOrder] = useState<SalesOrder | null>(null);
   const [deleteOrderConfirmation, setDeleteOrderConfirmation] = useState("");
   const [deleteOrderError, setDeleteOrderError] = useState("");
@@ -293,6 +312,21 @@ export function CrmContactsPage() {
     setSearchParams(next, { replace: true });
   }
 
+  async function loadSalesUsers(force = false) {
+    if (!force && (salesUsers !== null || salesUsersLoading)) return;
+    setSalesUsersLoading(true);
+    setSalesUsersError("");
+    try {
+      const result = await crmFetch<CrmMeta>("/api/crm/meta");
+      setSalesUsers((result.users || []).filter(isSalesperson).sort((a, b) => a.full_name.localeCompare(b.full_name, "ar")));
+    } catch (failure) {
+      setSalesUsers(null);
+      setSalesUsersError(failure instanceof Error ? failure.message : "تعذر تحميل قائمة المناديب");
+    } finally {
+      setSalesUsersLoading(false);
+    }
+  }
+
   async function purgeContact() {
     if (!profile) return;
     const confirmation = confirmPhone.trim();
@@ -324,7 +358,9 @@ export function CrmContactsPage() {
   function openOrderEditor(order: SalesOrder) {
     setEditingOrder(order);
     setOrderEditError("");
+    setSalesUsersError("");
     setOrderDraft({
+      salespersonId: String(order.platform_user_id || ""),
       orderDate: dateInput(order.order_date),
       deliveryDate: dateInput(order.delivery_date),
       subtotalBeforeTax: numberInput(order.subtotal_before_tax),
@@ -340,6 +376,7 @@ export function CrmContactsPage() {
         totalInclVat: numberInput(vehicle.totalInclVat),
       })),
     });
+    void loadSalesUsers();
   }
 
   function updateOrderDraft(field: keyof Omit<SalesOrderEditDraft, "vehicles">, value: string) {
@@ -357,6 +394,10 @@ export function CrmContactsPage() {
 
   async function saveSalesOrder() {
     if (!profile || !editingOrder || !orderDraft) return;
+    if (!orderDraft.salespersonId) {
+      setOrderEditError("اختر المندوب المسؤول عن طلب البيع");
+      return;
+    }
     setSavingOrder(true);
     setOrderEditError("");
     try {
@@ -367,6 +408,7 @@ export function CrmContactsPage() {
           contactId: profile.contact.id,
           orderId: editingOrder.id,
           order: {
+            salespersonId: orderDraft.salespersonId,
             orderDate: orderDraft.orderDate,
             deliveryDate: orderDraft.deliveryDate,
             subtotalBeforeTax: orderDraft.subtotalBeforeTax,
@@ -560,7 +602,9 @@ export function CrmContactsPage() {
       <div className="crm-modal-card crm-sales-order-edit-modal" onMouseDown={(event) => event.stopPropagation()}>
         <header><div><h2>تعديل طلب البيع</h2><p dir="ltr">{editingOrder.sales_order_no}</p></div><button className="crm-icon-button" type="button" onClick={() => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); }}><X size={18} /></button></header>
         {orderEditError ? <div className="crm-alert error">{orderEditError}</div> : null}
+        {salesUsersError ? <div className="crm-alert error">{salesUsersError}<button type="button" className="crm-secondary-button compact" onClick={() => void loadSalesUsers(true)}>إعادة المحاولة</button></div> : null}
         <div className="crm-sales-order-edit-grid">
+          <label className="crm-form-label"><span>المندوب</span><select value={orderDraft.salespersonId} disabled={salesUsersLoading} onChange={(event) => updateOrderDraft("salespersonId", event.target.value)}><option value="">{salesUsersLoading ? "جاري تحميل المناديب..." : "اختر المندوب"}</option>{editingOrder.platform_user_id && !salesUsers?.some((item) => item.id === editingOrder.platform_user_id) ? <option value={editingOrder.platform_user_id}>{editingOrder.platform_user_name || "المندوب الحالي"}</option> : null}{(salesUsers || []).map((item) => <option key={item.id} value={item.id}>{salespersonOptionLabel(item)}</option>)}</select></label>
           <label className="crm-form-label"><span>تاريخ الطلب</span><input type="date" value={orderDraft.orderDate} onChange={(event) => updateOrderDraft("orderDate", event.target.value)} /></label>
           <label className="crm-form-label"><span>تاريخ التسليم</span><input type="date" value={orderDraft.deliveryDate} onChange={(event) => updateOrderDraft("deliveryDate", event.target.value)} /></label>
           <label className="crm-form-label"><span>القيمة قبل الضريبة</span><input type="number" min="0" step="0.01" value={orderDraft.subtotalBeforeTax} onChange={(event) => updateOrderDraft("subtotalBeforeTax", event.target.value)} /></label>
@@ -580,7 +624,7 @@ export function CrmContactsPage() {
             </div>
           </article>)}
         </section> : null}
-        <div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); }}>إلغاء</button><button type="button" className="crm-primary-button" disabled={savingOrder} onClick={() => void saveSalesOrder()}><CheckCircle size={17} />{savingOrder ? "جاري الحفظ..." : "حفظ التعديل"}</button></div>
+        <div className="crm-modal-actions"><button type="button" className="crm-secondary-button" onClick={() => { setEditingOrder(null); setOrderDraft(null); setOrderEditError(""); }}>إلغاء</button><button type="button" className="crm-primary-button" disabled={savingOrder || salesUsersLoading} onClick={() => void saveSalesOrder()}><CheckCircle size={17} />{savingOrder ? "جاري الحفظ..." : "حفظ التعديل"}</button></div>
       </div>
     </div> : null}
 
