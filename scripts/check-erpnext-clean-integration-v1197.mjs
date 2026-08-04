@@ -143,10 +143,14 @@ assert.throws(
 );
 
 const syncSource = fs.readFileSync("server/_erpnext-sales-order-sync.ts", "utf8");
-const approvalLookup = syncSource.indexOf("const [activeApproval]");
-const approvalClose = syncSource.indexOf("'all','cancelled'", approvalLookup);
+const approvalLookup = syncSource.indexOf("const approvalsToDelete");
+const approvalEventsDelete = syncSource.indexOf("delete from operations.approval_events", approvalLookup);
+const approvalDelete = syncSource.indexOf("delete from operations.vehicle_approvals", approvalEventsDelete);
 const deliveredGuard = syncSource.indexOf('if (vehicle.archived_at || clean(vehicle.status_code) === "delivered")', approvalLookup);
-assert.ok(approvalLookup >= 0 && approvalClose > approvalLookup && deliveredGuard > approvalClose, "يجب إغلاق دورة الموافقات قبل الحفاظ على حالة السيارة المسلمة أو المؤرشفة");
+assert.ok(
+  approvalLookup >= 0 && approvalEventsDelete > approvalLookup && approvalDelete > approvalEventsDelete && deliveredGuard > approvalDelete,
+  "يجب مسح دورة الموافقات المرتبطة بالطلب الملغي قبل الحفاظ على حالة السيارة المسلمة أو المؤرشفة",
+);
 
 const operationsGate = syncSource.indexOf('const canApplyOperationsLink = eligibleStatus && !order.is_cancelled;');
 const crmGate = syncSource.indexOf('const canApplyCrmLink = canApplyOperationsLink');

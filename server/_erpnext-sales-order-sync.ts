@@ -433,6 +433,8 @@ async function linkCrmCustomer(input: {
               paymentType: existing.payment_type || null,
               assignedTo: existing.assigned_to || null,
               responsibleName: existing.responsible_name_snapshot || null,
+              soldQuantity: existing.sold_quantity || null,
+              soldAt: existing.sold_at || null,
               currentRequestId: existing.current_request_id || null,
               request: previousRequest || null,
             })},
@@ -805,7 +807,7 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
       sold_quantity=case
         when ${soldQuantity}>0 then ${soldQuantity}
         when status_label='تم البيع' then greatest(coalesce(sold_quantity,1),1)
-        else 0
+        else null
       end,
       sold_at=case when ${soldQuantity}>0 then coalesce(${sales?.last_sale_at || null}::timestamptz,sold_at) else sold_at end,
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
@@ -877,16 +879,7 @@ export async function cancelErpNextSalesOrder(input: {
       };
     }
 
-    if (order.is_cancelled) {
-      return {
-        found: true,
-        alreadyCancelled: true,
-        integrationOrderId: order.id,
-        trackingCancelled: order.tracking_order_id ? 1 : 0,
-        operations: { linked: 0, returnedToAvailable: 0, preserved: 0 },
-        crm: { status: "already_cancelled", leadId: order.crm_lead_id || null, restored: false },
-      };
-    }
+    const alreadyCancelled = Boolean(order.is_cancelled);
 
     const actorId = clean(input.actor?.id) || order.platform_user_id || null;
     const actorName = clean(input.actor?.name) || "NEXT ERP Integration";
@@ -895,21 +888,32 @@ export async function cancelErpNextSalesOrder(input: {
     [order] = await tx<any[]>`
       update integrations.erpnext_sales_orders set
         erp_status=coalesce(nullif(${normalized.erpStatus},''),'Cancelled'),erp_event=${normalized.erpEvent||"sales_order.cancelled"},
-        is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},source_payload=${tx.json(normalized.rawBody)},updated_at=now()
+        is_cancelled=true,cancelled_at=coalesce(cancelled_at,now()),cancellation_reason=${cancellationReason},
+        source_payload=${tx.json(normalized.rawBody)},updated_at=now()
       where id=${order.id}::uuid
       returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
     `;
 
-    const trackingRows = crmOnly ? [] : await tx<any[]>`
-      update tracking.orders set
-        is_cancelled=true,cancelled_at=now(),cancellation_reason=${cancellationReason},cancellation_source='next_erp',updated_at=now()
+    const trackingTargets = crmOnly ? [] : await tx<any[]>`
+      select id::text
+      from tracking.orders
       where coalesce(is_deleted,false)=false and (
         id=${order.tracking_order_id||null}::uuid
         or source_instance_key=${order.source_instance_key}
         or source_identity=${order.source_instance_key}
       )
-      returning id::text
+      for update
     `;
+    const trackingTargetIds = trackingTargets.map((row: any) => clean(row.id)).filter(Boolean);
+    let trackingRows: any[] = [];
+    if (trackingTargetIds.length) {
+      await tx`delete from tracking.sms_messages where order_id in ${tx(trackingTargetIds)}`;
+      trackingRows = await tx<any[]>`
+        delete from tracking.orders
+        where id in ${tx(trackingTargetIds)}
+        returning id::text
+      `;
+    }
 
     const salesVehicles = crmOnly ? [] : await tx<any[]>`
       select sov.*,sov.id::text,sov.operations_vehicle_id::text,sov.tracking_vehicle_id::text
@@ -963,30 +967,30 @@ export async function cancelErpNextSalesOrder(input: {
       `;
       if (!vehicle) continue;
 
-      const [activeApproval] = await tx<any[]>`
-        select *,id::text from operations.vehicle_approvals
-        where vehicle_id=${vehicle.id}::uuid and is_active=true
-        order by cycle_no desc limit 1 for update
-      `;
-
-      // إلغاء طلب البيع يغلق دورة الموافقات النشطة كسجل ملغي حتى لو كانت
-      // السيارة مسلمة أو مؤرشفة. حالة السيارة نفسها تظل محفوظة في الحالتين.
-      if (activeApproval) {
-        const beforeApproval = { ...activeApproval };
-        const [closedApproval] = await tx<any[]>`
-          update operations.vehicle_approvals
-          set is_active=false,pending_delivery=null,updated_at=now()
-          where id=${activeApproval.id}::uuid
-          returning *,id::text
-        `;
-        await tx`
-          insert into operations.approval_events(
-            approval_id,vehicle_id,cycle_no,approval_type,action,note,actor_id,actor_name,actor_role,before_data,after_data
-          ) values(
-            ${closedApproval.id}::uuid,${vehicle.id}::uuid,${closedApproval.cycle_no},'all','cancelled',${cancellationReason},
-            ${actorId}::uuid,${actorName},${actorRole},${tx.json(beforeApproval)},${tx.json(closedApproval)}
+      const approvalsToDelete = await tx<any[]>`
+        select approval.*,approval.id::text
+        from operations.vehicle_approvals approval
+        where approval.vehicle_id=${vehicle.id}::uuid
+          and (
+            approval.is_active=true
+            or exists (
+              select 1
+              from operations.approval_events approval_event
+              where approval_event.approval_id=approval.id
+                and approval_event.action='cancelled'
+                and (
+                  approval_event.note=${cancellationReason}
+                  or coalesce(approval_event.note,'') like ${`%${order.sales_order_no}%`}
+                )
+            )
           )
-        `;
+        order by approval.cycle_no desc,approval.created_at desc
+        for update
+      `;
+      const approvalIds = approvalsToDelete.map((approval: any) => clean(approval.id)).filter(Boolean);
+      if (approvalIds.length) {
+        await tx`delete from operations.approval_events where approval_id in ${tx(approvalIds)}`;
+        await tx`delete from operations.vehicle_approvals where id in ${tx(approvalIds)}`;
       }
 
       if (vehicle.archived_at || clean(vehicle.status_code) === "delivered") {
@@ -1076,12 +1080,17 @@ export async function cancelErpNextSalesOrder(input: {
           const previous = effectivePreviousState as Record<string, any>;
           nextStatus = clean(previous.statusLabel) || "عميل جديد";
           const previousRequestId = clean(previous.currentRequestId);
+          const previousSoldQuantity = Number(previous.soldQuantity) > 0
+            ? Math.max(1, Math.floor(Number(previous.soldQuantity)))
+            : null;
+          const previousSoldAt = previous.soldAt || null;
           await tx`
             update crm.leads set
               status_code=${clean(previous.statusCode)||null},status_label=${nextStatus},department_code=${clean(previous.departmentCode)||lead.department_code||null},
               branch_code=${clean(previous.branchCode)||lead.branch_code||null},service_key=${clean(previous.serviceKey)||lead.service_key||null},
               payment_type=${clean(previous.paymentType)||lead.payment_type||null},assigned_to=${clean(previous.assignedTo)||null}::uuid,
               responsible_name_snapshot=${clean(previous.responsibleName)||null},current_request_id=${previousRequestId||null}::uuid,
+              sold_quantity=${previousSoldQuantity},sold_at=${previousSoldAt}::timestamptz,
               extra_data=${tx.json(extraData)},updated_by=${actorId}::uuid,updated_at=now()
             where id=${lead.id}::uuid
           `;
@@ -1103,8 +1112,8 @@ export async function cancelErpNextSalesOrder(input: {
         } else if (effectiveCreatedByIntegration) {
           nextStatus = "عميل جديد";
           await tx`
-            update crm.leads set status_code=null,status_label='عميل جديد',current_request_id=null,extra_data=${tx.json(extraData)},
-              updated_by=${actorId}::uuid,updated_at=now()
+            update crm.leads set status_code=null,status_label='عميل جديد',current_request_id=null,sold_quantity=null,sold_at=null,
+              extra_data=${tx.json(extraData)},updated_by=${actorId}::uuid,updated_at=now()
             where id=${lead.id}::uuid
           `;
           crm = { status: "created_lead_reopened", leadId: lead.id, restored: true };
@@ -1113,17 +1122,19 @@ export async function cancelErpNextSalesOrder(input: {
           crm = { status: "cancel_recorded", leadId: lead.id, restored: false };
         }
 
-        await tx`
-          insert into crm.lead_events(
-            lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
-            actor_id,actor_name,actor_role,note,details,created_at
-          ) values(
-            ${lead.id}::uuid,'erpnext_sales_order_cancelled',${clean(lead.status_label)||null},${nextStatus||clean(lead.status_label)||null},
-            ${clean(lead.department_code)||null},${clean(lead.department_code)||null},${clean(lead.branch_code)||null},${clean(lead.branch_code)||null},
-            ${actorId}::uuid,${actorName},${actorRole},${cancellationReason},
-            ${tx.json({ salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key, crmStatus: crm.status })},now()
-          )
-        `;
+        if (!alreadyCancelled) {
+          await tx`
+            insert into crm.lead_events(
+              lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
+              actor_id,actor_name,actor_role,note,details,created_at
+            ) values(
+              ${lead.id}::uuid,'erpnext_sales_order_cancelled',${clean(lead.status_label)||null},${nextStatus||clean(lead.status_label)||null},
+              ${clean(lead.department_code)||null},${clean(lead.department_code)||null},${clean(lead.branch_code)||null},${clean(lead.branch_code)||null},
+              ${actorId}::uuid,${actorName},${actorRole},${cancellationReason},
+              ${tx.json({ salesOrderNo: order.sales_order_no, sourceInstanceKey: order.source_instance_key, crmStatus: crm.status })},now()
+            )
+          `;
+        }
       }
     }
 
@@ -1137,7 +1148,7 @@ export async function cancelErpNextSalesOrder(input: {
 
     return {
       found: true,
-      alreadyCancelled: false,
+      alreadyCancelled,
       integrationOrderId: order.id,
       trackingCancelled: trackingRows.length,
       operations: { linked, returnedToAvailable, preserved },
