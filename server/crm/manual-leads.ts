@@ -237,7 +237,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         customer_name=coalesce(nullif(${row.customer_name},''),customer_name),phone=${row.phone},phone_normalized=${row.phone_normalized},
         source_history=coalesce(source_history,'[]'::jsonb) || ${sql.json([{ source: row.source_code, at: new Date().toISOString() }])}::jsonb,
         car_name=coalesce(nullif(${row.car_name},''),car_name),car_category=coalesce(nullif(${row.car_category},''),car_category),car_model=coalesce(nullif(${row.car_model},''),car_model),color=coalesce(nullif(${row.color},''),color),finance_type=coalesce(nullif(${row.finance_type},''),finance_type),location=coalesce(nullif(${row.location},''),location),
-        registered_at=coalesce(${row.registered_at}::timestamptz,registered_at),notes=concat_ws(E'\n',notes,${row.notes || null}),
+        registered_at=coalesce(${row.registered_at}::timestamptz,registered_at),notes=concat_ws(E'\n',notes,${row.notes || null}::text),
         assigned_to=coalesce(${clean(body.assignedTo) || row.requested_assigned_to}::uuid,assigned_to),
         updated_by=${user.id}::uuid,updated_at=now()
       where id=${targetId}::uuid returning id::text
