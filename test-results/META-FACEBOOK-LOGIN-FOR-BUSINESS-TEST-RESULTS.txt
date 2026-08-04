@@ -1,0 +1,26 @@
+Meta Facebook Login for Business — test results
+
+SOURCE
+MZJ-Platform-v1.19.4-Unified-Dashboard-Completed-Tasks-TaskTemplate-CLEAN(1).zip
+
+IMPLEMENTATION
+- META_CONFIG_ID is mandatory for Meta configuration readiness.
+- Meta authorization URL sends config_id.
+- Meta authorization URL does not send scope.
+- Authorization Code flow is explicit with response_type=code.
+- override_default_response_type=true is sent.
+- Existing callback, state binding, token exchange, scope validation, page selection, encryption and revoke flow remain in the canonical implementation.
+
+CHECKS
+PASS - node scripts/check-marketing-platform-connections-rebuild-v1212.mjs (25/25)
+PASS - node scripts/check-api-imports.mjs
+PASS - node --experimental-strip-types --check server/_platform-connections.ts
+PASS - node --experimental-strip-types --check server/marketing/platform-connections.ts
+
+PROJECT REGRESSION NOTES
+- All static project checks that do not import the TypeScript package completed through the project chain.
+- Some unrelated legacy check scripts could not run because node_modules is absent and they import the `typescript` package.
+- Full pnpm typecheck/build was not run because the uploaded source does not contain node_modules.
+
+DEPLOYMENT VALUE
+META_CONFIG_ID=1516332383114076

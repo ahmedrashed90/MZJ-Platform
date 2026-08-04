@@ -1,0 +1,174 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { requireUser } from "../_auth.js";
+import { getSql } from "../_db.js";
+import { primaryRole } from "../_operations-auth.js";
+import { getSystemAccess, hasPermission } from "../_access-control.js";
+import { ensureOperationsSchema } from "../_operations-schema.js";
+import { OperationError, requestId, sendOperationError } from "../_operations-utils.js";
+import { ensureTrackingSchema } from "../_tracking-schema.js";
+import { clean } from "../_tracking-utils.js";
+
+export default async function handler(request: VercelRequest, response: VercelResponse) {
+  const traceId = requestId("tracking-delete");
+  response.setHeader("Cache-Control", "no-store");
+  try {
+    await ensureTrackingSchema();
+    await ensureOperationsSchema();
+    const user = await requireUser(request, response);
+    if (!user) return;
+    const sql = getSql();
+    const access = getSystemAccess(user, "tracking");
+    const unrestricted = access.dataScope === "all";
+    const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch__"];
+
+    if (request.method === "GET") {
+      if (!hasPermission(user, "tracking.delete.view")) {
+        return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية مشاهدة سجل حذف طلبات التراكينج", requestId: traceId });
+      }
+      const deleted = await sql<any[]>`
+        select d.id::text,d.order_internal_id::text,d.sales_order_no,d.customer_name,d.customer_mobile,d.reason,d.deleted_by_name,d.deleted_at,
+          d.source_identity,d.source_fingerprint,d.request_id,d.snapshot->'order'->>'branch' as branch
+        from tracking.deleted_orders d
+        where (${unrestricted}=true or d.snapshot->'order'->>'branch' in ${sql(branchCodes)} or d.deleted_by=${user.id}::uuid)
+        order by d.deleted_at desc limit 250
+      `;
+      return response.status(200).json({ ok: true, deleted, requestId: traceId });
+    }
+
+    if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed", requestId: traceId });
+    const body = typeof request.body === "string" ? JSON.parse(request.body || "{}") : request.body || {};
+    const action = clean(body.action);
+    const actionPermission = action === "delete_deleted_record" ? "tracking.order.deleted.restore" : "tracking.order.delete";
+    if (!hasPermission(user, actionPermission)) {
+      return response.status(403).json({ ok: false, code: "FORBIDDEN", error: "لا توجد لديك صلاحية تنفيذ هذا الإجراء", permission: actionPermission, requestId: traceId });
+    }
+
+    if (action === "delete_deleted_record") {
+      const deletedId = clean(body.deletedId);
+      if (!deletedId) throw new OperationError(400, "VALIDATION_ERROR", "اختر الطلب المحذوف المراد حذفه");
+
+      const removed = await sql.begin(async (tx) => {
+        const [deletedOrder] = await tx<any[]>`
+          select *,id::text,order_internal_id::text
+          from tracking.deleted_orders
+          where id=${deletedId}::uuid
+          for update
+        `;
+        if (!deletedOrder) {
+          throw new OperationError(
+            404,
+            "DELETED_TRACKING_REQUEST_NOT_FOUND",
+            "سجل الطلب المحذوف غير موجود أو تم حذفه مسبقًا",
+          );
+        }
+        const deletedBranch = clean(deletedOrder.snapshot?.order?.branch);
+        if (!unrestricted && !branchCodes.includes(deletedBranch) && clean(deletedOrder.deleted_by) !== user.id) {
+          throw new OperationError(403, "FORBIDDEN", "سجل الطلب خارج نطاق بياناتك");
+        }
+
+        await tx`delete from tracking.deleted_orders where id=${deletedId}::uuid`;
+
+        try {
+          await tx.savepoint(async (auditTx) => {
+            await auditTx`
+              insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+              values (
+                ${user.id}::uuid,'tracking','deleted_order_record_removed','tracking_deleted_order',${deletedOrder.sales_order_no},
+                ${auditTx.json(deletedOrder)},${auditTx.json({ requestId: traceId, sourceIdentity: deletedOrder.source_identity || null })}
+              )
+            `;
+          });
+        } catch (auditError) {
+          console.error("Tracking deleted record audit failed", { traceId, deletedId, auditError });
+        }
+
+        return {
+          deletedId,
+          orderNo: deletedOrder.sales_order_no,
+          sourceIdentity: deletedOrder.source_identity || null,
+        };
+      });
+
+      return response.status(200).json({
+        ok: true,
+        message: "تم حذف سجل الطلب المحذوف، ويمكن استقبال نفس الطلب من NEXT ERP مرة أخرى.",
+        requestId: traceId,
+        ...removed,
+      });
+    }
+
+    if (action !== "delete") throw new OperationError(400, "VALIDATION_ERROR", "الإجراء غير مدعوم");
+
+    const orderId = clean(body.orderId);
+    const confirmation = clean(body.confirmation);
+    const reason = clean(body.reason);
+    if (!orderId || !reason) throw new OperationError(400, "VALIDATION_ERROR", "اختر الطلب واكتب سبب الحذف");
+
+    const result = await sql.begin(async (tx) => {
+      const [order] = await tx<any[]>`
+        select *,id::text from tracking.orders
+        where id=${orderId}::uuid and coalesce(is_deleted,false)=false
+        for update
+      `;
+      if (!order) throw new OperationError(404, "TRACKING_REQUEST_NOT_FOUND", "الطلب غير موجود أو تم حذفه مسبقًا");
+      const assignedToUser = Boolean((await tx<any[]>`select 1 from tracking.stage_events where order_id=${orderId}::uuid and actor_id=${user.id}::uuid limit 1`)[0]);
+      if (!unrestricted && !branchCodes.includes(clean(order.branch)) && !assignedToUser) throw new OperationError(403, "FORBIDDEN", "الطلب خارج نطاق بياناتك");
+      if (confirmation !== order.sales_order_no) throw new OperationError(400, "VALIDATION_ERROR", "اكتب رقم الطلب كاملًا لتأكيد الحذف");
+
+      const vehicles = await tx<any[]>`select *,id::text,vehicle_id::text from tracking.order_vehicles where order_id=${orderId}::uuid order by created_at`;
+      const stages = await tx<any[]>`
+        select vs.*,vs.id::text,vs.vehicle_id::text,s.code,s.name,s.sort_order
+        from tracking.vehicle_stages vs join tracking.order_vehicles v on v.id=vs.vehicle_id join tracking.stages s on s.id=vs.stage_id
+        where v.order_id=${orderId}::uuid order by v.created_at,s.sort_order
+      `;
+      const events = await tx<any[]>`select * from tracking.stage_events where order_id=${orderId}::uuid order by created_at`;
+      const sms = await tx<any[]>`select * from tracking.sms_messages where order_id=${orderId}::uuid order by queued_at`;
+      const snapshot = { order, vehicles, stages, events, sms };
+
+      await tx`
+        insert into tracking.deleted_orders(
+          order_internal_id,sales_order_no,customer_name,customer_mobile,reason,snapshot,deleted_by,deleted_by_name,deleted_by_email,deleted_by_role,
+          source_identity,source_fingerprint,request_id
+        ) values (
+          ${orderId}::uuid,${order.sales_order_no},${order.customer_name},${order.customer_mobile},${reason},${tx.json(snapshot)},${user.id}::uuid,
+          ${user.fullName},${user.email},${primaryRole(user)},${order.source_identity||null},${order.source_fingerprint||null},${traceId}
+        )
+      `;
+      for (const vehicle of vehicles) {
+        try {
+          await tx.savepoint(async (eventTx) => {
+            await eventTx`
+              insert into operations.event_outbox(event_type,entity_type,entity_id,vehicle_id,vin,actor_id,actor_name,title,description,metadata)
+              values ('tracking.request.deleted','tracking_order',${orderId},${vehicle.vehicle_id||null},${vehicle.vin||null},${user.id}::uuid,${user.fullName},'تم مسح طلب تراكينج',${order.sales_order_no},${eventTx.json({ orderId, orderNo: order.sales_order_no, reason, requestId: traceId })})
+            `;
+          });
+        } catch (outboxError) {
+          console.error('Tracking delete outbox failed', { traceId, vin: vehicle.vin, outboxError });
+        }
+      }
+      await tx`delete from tracking.orders where id=${orderId}::uuid`;
+      try {
+        await tx.savepoint(async (auditTx) => {
+          await auditTx`
+            insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,before_data,after_data)
+            values (${user.id}::uuid,'tracking','order_deleted','tracking_order',${order.sales_order_no},${auditTx.json(snapshot)},${auditTx.json({ reason, requestId: traceId, sourceIdentity: order.source_identity })})
+          `;
+        });
+      } catch (auditError) {
+        console.error('Tracking delete audit failed', { traceId, auditError });
+      }
+      return { vins: vehicles.map((vehicle) => vehicle.vin).filter(Boolean), vehiclesCount: vehicles.length };
+    });
+
+    return response.status(200).json({
+      ok: true,
+      message: "تم مسح طلب التراكينج وفك ارتباط السيارات من المخزون بنجاح.",
+      requestId: traceId,
+      ...result,
+    });
+  } catch (error) {
+    console.error("Tracking delete failed", { traceId, error });
+    if (response.headersSent) return;
+    return sendOperationError(response, error, traceId);
+  }
+}
