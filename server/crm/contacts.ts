@@ -462,9 +462,10 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
     if (beforeOrder.is_cancelled) return { cancelled: true, beforeOrder };
 
     const beforeVehicles = await tx<any[]>`
-      select *,id::text from integrations.erpnext_sales_order_vehicles
-      where sales_order_id=${orderId}::uuid
-      order by created_at,id
+      select sov.*,sov.id::text
+      from integrations.erpnext_sales_order_vehicles sov
+      where sov.sales_order_id=${orderId}::uuid
+      order by sov.created_at,sov.id
       for update
     `;
     const allowedVehicleIds = new Set(beforeVehicles.map((vehicle: any) => clean(vehicle.id)));
@@ -502,9 +503,10 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
       `;
     }
     const afterVehicles = await tx<any[]>`
-      select *,id::text from integrations.erpnext_sales_order_vehicles
-      where sales_order_id=${orderId}::uuid
-      order by created_at,id
+      select sov.*,sov.id::text
+      from integrations.erpnext_sales_order_vehicles sov
+      where sov.sales_order_id=${orderId}::uuid
+      order by sov.created_at,sov.id
     `;
     return { beforeOrder, beforeVehicles, afterOrder, afterVehicles };
   });

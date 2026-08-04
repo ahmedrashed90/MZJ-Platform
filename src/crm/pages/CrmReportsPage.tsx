@@ -283,7 +283,7 @@ export function CrmReportsPage() {
         </header>
         <div className="crm-report-filter-blocks">
           <section className="crm-report-filter-block">
-            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>النتائج حسب تاريخ آخر تحديث للعميل</small></div></div>
+            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>تم البيع حسب تاريخ تم البيع، وباقي الحالات حسب آخر تحديث</small></div></div>
             <div className="crm-report-filter-fields two-columns">
               <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
               <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>

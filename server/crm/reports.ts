@@ -136,10 +136,22 @@ export default async function handler(request: VercelRequest, response: VercelRe
     )
   `;
 
+  const reportDateSql = sql`
+    (
+      case
+        when l.status_label='تم البيع' then (l.sold_at at time zone 'Asia/Riyadh')::date
+        else (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date
+      end
+    )
+  `;
+  const salesOrderDateSql = sql`
+    (coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) at time zone 'Asia/Riyadh')::date
+  `;
+
   const filtersSql = sql`
     ${scopeSql}
-    and (${from || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-    and (${to || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+    and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
+    and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
     and (
       ${department || null}::text is null
       or (${department || null}='call_center' and l.call_center_assigned_to is not null)
@@ -199,8 +211,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
           where coalesce(so.is_cancelled,false)=false
             and coalesce(so.platform_user_id::text,'__none__')=${detailValue}
             and coalesce(so.platform_department_code,primary_department.code,'')<>'call_center'
-            and (${from || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date>=${from || null}::date)
-            and (${to || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date<=${to || null}::date)
+            and (${from || null}::date is null or ${salesOrderDateSql}>=${from || null}::date)
+            and (${to || null}::date is null or ${salesOrderDateSql}<=${to || null}::date)
             and (
               ${scope.all}::boolean
               or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
@@ -364,8 +376,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
     ) vehicle_stats on true
     where coalesce(so.is_cancelled,false)=false
-      and (${from || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-      and (${to || null}::date is null or (coalesce(l.updated_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+      and (${from || null}::date is null or ${salesOrderDateSql} >= ${from || null}::date)
+      and (${to || null}::date is null or ${salesOrderDateSql} <= ${to || null}::date)
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
