@@ -253,7 +253,7 @@ export function MovementHistoryPage() {
 
   return (
     <div className="module-page operations-page operations-history-page">
-      <div className="operations-header-actions page-top-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span>{meta.permissions.canExport ? <><button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button><button type="button" className="operations-pdf-button" onClick={() => void exportPdfA3()} disabled={loading}><FilePdf size={17} />تصدير PDF</button></> : null}</div>
+      <header className="module-page-head"><div><h1>سجل الحركات</h1><p>عرض الحركات الفعلية المسجلة لكل سيارة مع الفلاتر والتصدير وتغيير عرض الأعمدة بالسحب.</p></div><div className="operations-header-actions"><span className="operations-count">{total.toLocaleString("ar-SA")}</span>{meta.permissions.canExport ? <><button type="button" onClick={() => void exportAll()} disabled={loading}><FileXls size={17} />تصدير Excel</button><button type="button" className="operations-pdf-button" onClick={() => void exportPdfA3()} disabled={loading}><FilePdf size={17} />تصدير PDF</button></> : null}</div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       <section className="panel operations-data-panel">
         <div className="operations-history-filters">

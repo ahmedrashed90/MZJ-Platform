@@ -80,8 +80,6 @@ function parseScenes(value: unknown): Scene[] {
 
   const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
   const marker = /^(?:(?:slide|scene)\s*\d+|(?:سلايد|المشهد|مشهد)\s*\d+|\d+\s*[-–.)])/i;
-  if (!lines.some((line) => marker.test(line))) return [];
-
   const blocks: string[][] = [];
   let current: string[] = [];
 
@@ -299,7 +297,7 @@ export function TaskTemplatePresentation({
           <small>البيانات</small>
           <p>{scene.body}</p>
         </article>)}</div>
-        : <div className={`marketing-template-scenes-empty ${text(data.mainScript) ? "has-script" : ""}`}>{text(data.mainScript) || "لا توجد بيانات داخل السكريبت الأساسي."}</div>}
+        : <div className="marketing-template-scenes-empty">لا توجد بيانات مشاهد داخل السكريبت الأساسي.</div>}
       {editable && scriptEditorOpen ? <div className="marketing-template-script-editor"><AutoTextarea value={data.mainScript || ""} ariaLabel="السكريبت الأساسي" minHeight={180} onChange={(next) => onDataChange?.("mainScript", next)} /></div> : null}
       {reviewNote("mainScript")}
     </section>

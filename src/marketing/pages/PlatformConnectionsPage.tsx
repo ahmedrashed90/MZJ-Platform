@@ -1,23 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise,
-  Baby,
-  Bell,
-  ChartBar,
-  Code,
-  Copyright,
-  Eye,
-  Globe,
-  ListBullets,
-  PlayCircle,
-  Tag,
-  TextAlignRight,
   CheckCircle,
   ClockCounterClockwise,
   Copy,
   FacebookLogo,
-  FloppyDisk,
-  GearSix,
   InstagramLogo,
   LinkBreak,
   LinkSimple,
@@ -28,14 +15,6 @@ import {
   WarningCircle,
   YoutubeLogo,
 } from "@phosphor-icons/react";
-import { Modal } from "../../components/Modal";
-import {
-  YOUTUBE_CATEGORY_FALLBACKS,
-  YOUTUBE_PUBLISH_DEFAULTS,
-  normalizeYouTubePublishSettings,
-  type YouTubeOptionItem,
-  type YouTubePublishSettings,
-} from "../../../shared/youtube-publishing";
 import { marketingDate, marketingFetch } from "../api";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 
@@ -83,7 +62,6 @@ type ProviderConnection = {
     instagram?: { id?: string; username?: string; name?: string; profilePictureUrl?: string } | null;
   }>;
   assets: Record<string, ConnectionAsset | null>;
-  publishSettings?: YouTubePublishSettings;
 };
 type ConnectionEvent = {
   id: string;
@@ -96,14 +74,6 @@ type ConnectionEvent = {
   details: Record<string, unknown>;
 };
 type ConnectionsPayload = { ok: true; canManage: boolean; providers: ProviderConnection[]; events: ConnectionEvent[] };
-type YouTubePublishOptionsPayload = {
-  ok: true;
-  connected: boolean;
-  settings: YouTubePublishSettings;
-  categories: YouTubeOptionItem[];
-  playlists: Array<YouTubeOptionItem & { privacyStatus?: string }>;
-};
-
 type ZohoConnectionStatus = {
   configured: boolean;
   connected: boolean;
@@ -126,7 +96,6 @@ const actionLabels: Record<string, string> = {
   validated: "فحص الاتصال",
   disconnected: "فصل الربط",
   oauth_cancelled: "إلغاء الربط المعلق",
-  settings_saved: "حفظ إعدادات النشر",
 };
 
 function statusText(provider: ProviderConnection) {
@@ -149,18 +118,13 @@ function providerIcon(provider: ProviderCode, size = 28) {
   return <span className="marketing-meta-icons"><FacebookLogo size={size} weight="fill" /><InstagramLogo size={size} weight="fill" /></span>;
 }
 
-export function PlatformConnectionsPage({ embedded = false }: { embedded?: boolean }) {
+export function PlatformConnectionsPage() {
   const [payload, setPayload] = useState<ConnectionsPayload | null>(null);
   const [zoho, setZoho] = useState<ZohoConnectionStatus | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState<ProviderCode | "page" | "zoho" | "all" | "">("all");
   const [selectedPageId, setSelectedPageId] = useState("");
-  const [youtubeSettingsOpen, setYoutubeSettingsOpen] = useState(false);
-  const [youtubeSettingsLoading, setYoutubeSettingsLoading] = useState(false);
-  const [youtubeSettings, setYoutubeSettings] = useState<YouTubePublishSettings>(YOUTUBE_PUBLISH_DEFAULTS);
-  const [youtubeCategories, setYoutubeCategories] = useState<YouTubeOptionItem[]>(YOUTUBE_CATEGORY_FALLBACKS);
-  const [youtubePlaylists, setYoutubePlaylists] = useState<Array<YouTubeOptionItem & { privacyStatus?: string }>>([]);
 
   const load = useCallback(async () => {
     try {
@@ -305,49 +269,7 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
     catch { setError("تعذر نسخ الرابط"); }
   }
 
-  async function openYouTubeSettings(provider: ProviderConnection) {
-    setYoutubeSettings(normalizeYouTubePublishSettings(provider.publishSettings));
-    setYoutubeCategories(YOUTUBE_CATEGORY_FALLBACKS);
-    setYoutubePlaylists([]);
-    setYoutubeSettingsOpen(true);
-    setYoutubeSettingsLoading(true);
-    setError("");
-    try {
-      const result = await marketingFetch<YouTubePublishOptionsPayload>("/api/marketing/platform-connections", {
-        method: "POST",
-        body: JSON.stringify({ action: "youtube_publish_options" }),
-      });
-      setYoutubeSettings(normalizeYouTubePublishSettings(result.settings));
-      setYoutubeCategories(result.categories.length ? result.categories : YOUTUBE_CATEGORY_FALLBACKS);
-      setYoutubePlaylists(result.playlists || []);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل إعدادات نشر YouTube");
-    } finally {
-      setYoutubeSettingsLoading(false);
-    }
-  }
-
-  async function saveYouTubeSettings() {
-    setYoutubeSettingsLoading(true);
-    setError("");
-    setMessage("");
-    try {
-      const result = await marketingFetch<{ message: string; settings: YouTubePublishSettings }>("/api/marketing/platform-connections", {
-        method: "POST",
-        body: JSON.stringify({ action: "save_youtube_publish_settings", settings: youtubeSettings }),
-      });
-      setYoutubeSettings(normalizeYouTubePublishSettings(result.settings));
-      setMessage(result.message);
-      setYoutubeSettingsOpen(false);
-      await load();
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر حفظ إعدادات نشر YouTube");
-    } finally {
-      setYoutubeSettingsLoading(false);
-    }
-  }
-
-  const page = (
+  return (
     <MarketingPage
       title="ربط المنصات"
       description="ربط رسمي عبر OAuth. أسرار التطبيق وRefresh Token تُحفظ مشفرة داخل PostgreSQL، والمنصة هي التي ترفع الملفات إلى Zoho WorkDrive."
@@ -362,26 +284,26 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
         <div><LinkBreak size={23} weight="duotone" /><span><strong>فصل حقيقي</strong><small>Revoke ثم حذف التوكنات من PostgreSQL</small></span></div>
       </section>
 
-      <div className="marketing-connections-grid marketing-connections-grid-rebuilt">
-        {payload?.canManage ? (
-          <article className={`marketing-connection-card rebuilt ${zoho?.connected ? "connected" : zoho?.configured ? "disconnected" : "warning"}`}>
-            <header className="marketing-connection-card-head">
-              <div className="marketing-provider-logo"><UploadSimple size={28} weight="duotone" /></div>
-              <div className="marketing-provider-title"><h2>Zoho WorkDrive</h2><span className={`marketing-connection-status ${zoho?.connected ? "connected" : "disconnected"}`}>{zoho?.connected ? <CheckCircle size={15} weight="fill" /> : <WarningCircle size={15} weight="fill" />}{zoho?.connected ? "متصل" : zoho?.configured ? "غير متصل" : "الإعداد غير مكتمل"}</span></div>
-            </header>
-            {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_PUBLISH_ROOT_FOLDER_ID</p></div></div> : null}
-            <div className="marketing-connection-data rebuilt-data">
-              <div><small>حساب النشر</small><strong>{zoho?.accountEmail || "marketing@mzjcars.com"}</strong></div>
-              <div><small>مركز البيانات</small><strong>Zoho السعودية</strong></div>
-              <div><small>آخر تحقق</small><strong>{formatDate(zoho?.lastVerifiedAt)}</strong></div>
-              <div><small>فولدر النشر</small><strong dir="ltr">{zoho?.rootFolderId || "—"}</strong></div>
-            </div>
-            {zoho?.lastError ? <p className="marketing-connection-error"><WarningCircle size={16} />{zoho.lastError}</p> : null}
-            <footer className="marketing-connection-actions"><button type="button" className="primary" onClick={connectZoho} disabled={loading === "zoho" || !zoho?.configured}>{loading === "zoho" ? <SpinnerGap className="marketing-spin" size={17} /> : <LinkSimple size={17} />}{zoho?.connected ? "إعادة ربط Zoho" : "ربط Zoho"}</button></footer>
-            <div className="marketing-callback-row"><span>Callback URL</span><code dir="ltr">https://mzj-platform.vercel.app/api/integrations/zoho/callback</code><button type="button" className="secondary compact-button" onClick={() => void copyRedirect("https://mzj-platform.vercel.app/api/integrations/zoho/callback")} title="نسخ"><Copy size={15} /></button></div>
-          </article>
-        ) : null}
+      {payload?.canManage ? <section className="marketing-connections-grid marketing-connections-grid-rebuilt">
+        <article className={`marketing-connection-card rebuilt ${zoho?.connected ? "connected" : zoho?.configured ? "disconnected" : "warning"}`}>
+          <header className="marketing-connection-card-head">
+            <div className="marketing-provider-logo"><UploadSimple size={28} weight="duotone" /></div>
+            <div className="marketing-provider-title"><h2>Zoho WorkDrive</h2><span className={`marketing-connection-status ${zoho?.connected ? "connected" : "disconnected"}`}>{zoho?.connected ? <CheckCircle size={15} weight="fill" /> : <WarningCircle size={15} weight="fill" />}{zoho?.connected ? "متصل" : zoho?.configured ? "غير متصل" : "الإعداد غير مكتمل"}</span></div>
+          </header>
+          {!zoho?.configured ? <div className="marketing-connection-config-warning"><WarningCircle size={20} /><div><strong>أكمل متغيرات Zoho</strong><p>ZOHO_CLIENT_ID • ZOHO_CLIENT_SECRET • ZOHO_PUBLISH_ROOT_FOLDER_ID</p></div></div> : null}
+          <div className="marketing-connection-data rebuilt-data">
+            <div><small>حساب النشر</small><strong>{zoho?.accountEmail || "marketing@mzjcars.com"}</strong></div>
+            <div><small>مركز البيانات</small><strong>Zoho السعودية</strong></div>
+            <div><small>آخر تحقق</small><strong>{formatDate(zoho?.lastVerifiedAt)}</strong></div>
+            <div><small>فولدر النشر</small><strong dir="ltr">{zoho?.rootFolderId || "—"}</strong></div>
+          </div>
+          {zoho?.lastError ? <p className="marketing-connection-error"><WarningCircle size={16} />{zoho.lastError}</p> : null}
+          <footer className="marketing-connection-actions"><button type="button" className="primary" onClick={connectZoho} disabled={loading === "zoho" || !zoho?.configured}>{loading === "zoho" ? <SpinnerGap className="marketing-spin" size={17} /> : <LinkSimple size={17} />}{zoho?.connected ? "إعادة ربط Zoho" : "ربط Zoho"}</button></footer>
+          <div className="marketing-callback-row"><span>Callback URL</span><code dir="ltr">https://mzj-platform.vercel.app/api/integrations/zoho/callback</code><button type="button" className="secondary compact-button" onClick={() => void copyRedirect("https://mzj-platform.vercel.app/api/integrations/zoho/callback")} title="نسخ"><Copy size={15} /></button></div>
+        </article>
+      </section> : null}
 
+      <div className="marketing-connections-grid marketing-connections-grid-rebuilt">
         {providers.map((provider) => {
           const busy = loading === provider.provider;
           const metaFacebook = provider.provider === "meta" ? provider.assets.facebook : null;
@@ -419,7 +341,6 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
 
               <footer className="marketing-connection-actions">
                 {payload?.canManage ? <button type="button" className="primary" onClick={() => void connect(provider.provider)} disabled={busy || !provider.configured}>{busy ? <SpinnerGap className="marketing-spin" size={17} /> : <LinkSimple size={17} />}{provider.requiresSelection ? "إعادة بدء الربط" : provider.connected || provider.status === "reauthorization_required" ? "إعادة الربط" : "ربط"}</button> : null}
-                {payload?.canManage && provider.provider === "youtube" ? <button type="button" className="secondary" onClick={() => void openYouTubeSettings(provider)} disabled={busy}><GearSix size={17} />إعدادات النشر</button> : null}
                 {payload?.canManage && provider.connected ? <button type="button" className="secondary" onClick={() => void validate(provider.provider)} disabled={busy}><ArrowClockwise size={17} />فحص الربط</button> : null}
                 {payload?.canManage && (provider.connected || provider.tokenStored) ? <button type="button" className="danger" onClick={() => void disconnect(provider.provider)} disabled={busy}><LinkBreak size={17} />فصل الربط</button> : null}
               </footer>
@@ -450,130 +371,6 @@ export function PlatformConnectionsPage({ embedded = false }: { embedded?: boole
         <header><div><ClockCounterClockwise size={22} /><span><h2>سجل ربط المنصات</h2><p>آخر عمليات الربط والفحص والفصل بدون تسجيل أي توكنات.</p></span></div></header>
         {payload?.events.length ? <div className="marketing-connection-events">{payload.events.map((event) => <article key={event.id}><div className={`marketing-event-icon ${event.status}`}>{event.status === "success" ? <CheckCircle size={18} weight="fill" /> : <WarningCircle size={18} weight="fill" />}</div><div><strong>{actionLabels[event.action] || event.action} — {providerLabels[event.provider]}</strong><span>{event.accountName || "بدون اسم حساب"} • بواسطة {event.userName}</span></div><time>{formatDate(event.createdAtIso)}</time></article>)}</div> : <p className="marketing-empty-state">لا توجد عمليات ربط مسجلة بعد.</p>}
       </section>
-
-      <Modal
-        open={youtubeSettingsOpen}
-        title="إعدادات نشر YouTube"
-        subtitle="حدّد القيم الافتراضية التي ستظهر تلقائيًا عند تجهيز فيديو جديد."
-        onClose={() => !youtubeSettingsLoading && setYoutubeSettingsOpen(false)}
-        className="marketing-youtube-settings-modal"
-        footer={<>
-          <button type="button" className="secondary" onClick={() => setYoutubeSettingsOpen(false)} disabled={youtubeSettingsLoading}>إلغاء</button>
-          <button type="button" className="primary" onClick={() => void saveYouTubeSettings()} disabled={youtubeSettingsLoading}>{youtubeSettingsLoading ? <SpinnerGap className="marketing-spin" size={17} /> : <FloppyDisk size={17} />}حفظ إعدادات YouTube</button>
-        </>}
-      >
-        <div className="marketing-youtube-settings-form">
-          <div className="marketing-youtube-settings-hero">
-            <span className="marketing-youtube-settings-hero-icon"><YoutubeLogo size={32} weight="fill" /></span>
-            <div>
-              <strong>الإعدادات الافتراضية للقناة</strong>
-              <p>تُستخدم هذه القيم تلقائيًا داخل تجهيز النشر، مع إمكانية تعديلها بشكل مستقل لكل فيديو.</p>
-            </div>
-            <span className="marketing-youtube-settings-badge">تُطبّق تلقائيًا</span>
-          </div>
-
-          <section className="marketing-youtube-settings-section">
-            <header className="marketing-youtube-settings-section-head">
-              <span><Eye size={21} weight="duotone" /></span>
-              <div><h3>الظهور وبيانات الفيديو</h3><p>حدّد طريقة ظهور الفيديو وتصنيفه والبيانات الأساسية المستخدمة عند التجهيز.</p></div>
-            </header>
-
-            <div className="marketing-youtube-field marketing-youtube-field-full">
-              <span className="marketing-youtube-field-label"><Globe size={17} />حالة الظهور الافتراضية</span>
-              <div className="marketing-youtube-privacy-options">
-                <label className={youtubeSettings.privacyStatus === "unlisted" ? "selected" : ""}>
-                  <input type="radio" name="youtube-default-privacy" value="unlisted" checked={youtubeSettings.privacyStatus === "unlisted"} onChange={() => setYoutubeSettings({ ...youtubeSettings, privacyStatus: "unlisted" })} />
-                  <span><Eye size={20} /><strong>غير مدرج</strong><small>يظهر فقط لمن لديه الرابط</small></span>
-                </label>
-                <label className={youtubeSettings.privacyStatus === "private" ? "selected" : ""}>
-                  <input type="radio" name="youtube-default-privacy" value="private" checked={youtubeSettings.privacyStatus === "private"} onChange={() => setYoutubeSettings({ ...youtubeSettings, privacyStatus: "private" })} />
-                  <span><ShieldCheck size={20} /><strong>خاص</strong><small>لا يظهر إلا للحساب المالك</small></span>
-                </label>
-                <label className={youtubeSettings.privacyStatus === "public" ? "selected" : ""}>
-                  <input type="radio" name="youtube-default-privacy" value="public" checked={youtubeSettings.privacyStatus === "public"} onChange={() => setYoutubeSettings({ ...youtubeSettings, privacyStatus: "public" })} />
-                  <span><YoutubeLogo size={20} /><strong>عام</strong><small>متاح للجميع على YouTube</small></span>
-                </label>
-              </div>
-            </div>
-
-            <div className="marketing-youtube-settings-grid">
-              <label className="marketing-youtube-field">
-                <span className="marketing-youtube-field-label"><ListBullets size={17} />تصنيف الفيديو</span>
-                <select value={youtubeSettings.categoryId} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, categoryId: event.target.value })}>{youtubeCategories.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
-                <small>التصنيف الافتراضي الذي يرسله النظام إلى YouTube.</small>
-              </label>
-              <label className="marketing-youtube-field">
-                <span className="marketing-youtube-field-label"><PlayCircle size={17} />قائمة التشغيل الافتراضية</span>
-                <select value={youtubeSettings.defaultPlaylistId} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultPlaylistId: event.target.value })}><option value="">بدون قائمة تشغيل</option>{youtubePlaylists.map((item) => <option key={item.id} value={item.id}>{item.title}{item.privacyStatus ? ` — ${item.privacyStatus}` : ""}</option>)}</select>
-                <small>يمكن ترك الفيديو بدون قائمة تشغيل وتحديدها لاحقًا.</small>
-              </label>
-              <label className="marketing-youtube-field">
-                <span className="marketing-youtube-field-label"><Globe size={17} />اللغة الافتراضية</span>
-                <input dir="ltr" value={youtubeSettings.defaultLanguage} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultLanguage: event.target.value })} placeholder="ar" />
-                <small>رمز اللغة مثل ar أو en.</small>
-              </label>
-              <label className="marketing-youtube-field">
-                <span className="marketing-youtube-field-label"><Copyright size={17} />الترخيص الافتراضي</span>
-                <select value={youtubeSettings.license} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, license: event.target.value as YouTubePublishSettings["license"] })}><option value="youtube">ترخيص YouTube القياسي</option><option value="creativeCommon">Creative Commons</option></select>
-                <small>نوع الترخيص المستخدم عند رفع الفيديو.</small>
-              </label>
-              <label className="marketing-youtube-field marketing-youtube-field-full">
-                <span className="marketing-youtube-field-label"><Baby size={17} />هل المحتوى مخصص للأطفال؟</span>
-                <select value={youtubeSettings.madeForKids ? "true" : "false"} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, madeForKids: event.target.value === "true" })}><option value="false">لا، المحتوى غير مخصص للأطفال</option><option value="true">نعم، المحتوى مخصص للأطفال</option></select>
-                <small>هذا الاختيار يؤثر على بعض خصائص الفيديو والتفاعل وفق سياسات YouTube.</small>
-              </label>
-            </div>
-          </section>
-
-          <section className="marketing-youtube-settings-section">
-            <header className="marketing-youtube-settings-section-head">
-              <span><Bell size={21} weight="duotone" /></span>
-              <div><h3>خيارات النشر الافتراضية</h3><p>فعّل الخيارات التي تريد تطبيقها تلقائيًا، ويمكن تغييرها من تاسك تجهيز النشر.</p></div>
-            </header>
-            <div className="marketing-youtube-toggle-grid">
-              <label className={youtubeSettings.notifySubscribers ? "active" : ""}>
-                <input type="checkbox" checked={youtubeSettings.notifySubscribers} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, notifySubscribers: event.target.checked })} />
-                <span className="marketing-youtube-toggle-icon"><Bell size={20} /></span>
-                <span className="marketing-youtube-toggle-copy"><strong>إشعار المشتركين</strong><small>إرسال إشعار للمشتركين عند نشر الفيديو.</small></span>
-                <span className="marketing-youtube-switch" aria-hidden="true"><i /></span>
-              </label>
-              <label className={youtubeSettings.embeddable ? "active" : ""}>
-                <input type="checkbox" checked={youtubeSettings.embeddable} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, embeddable: event.target.checked })} />
-                <span className="marketing-youtube-toggle-icon"><Code size={20} /></span>
-                <span className="marketing-youtube-toggle-copy"><strong>السماح بالتضمين</strong><small>السماح بعرض الفيديو داخل المواقع الخارجية.</small></span>
-                <span className="marketing-youtube-switch" aria-hidden="true"><i /></span>
-              </label>
-              <label className={youtubeSettings.publicStatsViewable ? "active" : ""}>
-                <input type="checkbox" checked={youtubeSettings.publicStatsViewable} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, publicStatsViewable: event.target.checked })} />
-                <span className="marketing-youtube-toggle-icon"><ChartBar size={20} /></span>
-                <span className="marketing-youtube-toggle-copy"><strong>إظهار الإحصاءات العامة</strong><small>إظهار أرقام المشاهدة والتفاعل للمشاهدين.</small></span>
-                <span className="marketing-youtube-switch" aria-hidden="true"><i /></span>
-              </label>
-            </div>
-          </section>
-
-          <section className="marketing-youtube-settings-section">
-            <header className="marketing-youtube-settings-section-head">
-              <span><TextAlignRight size={21} weight="duotone" /></span>
-              <div><h3>النصوص الافتراضية</h3><p>أضف الكلمات والوصف الثابت ليتم إدراجهما تلقائيًا عند تجهيز الفيديو.</p></div>
-            </header>
-            <div className="marketing-youtube-copy-grid">
-              <label className="marketing-youtube-field">
-                <span className="marketing-youtube-field-label"><Tag size={17} />الكلمات المفتاحية الافتراضية</span>
-                <textarea rows={6} value={youtubeSettings.defaultTags.join("، ")} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, defaultTags: event.target.value.split(/[،,\n]+/).map((item) => item.trim()).filter(Boolean) })} placeholder="MZJ، سيارات، عروض" />
-                <small>افصل بين الكلمات بفاصلة عربية أو إنجليزية.</small>
-              </label>
-              <label className="marketing-youtube-field">
-                <span className="marketing-youtube-field-label"><TextAlignRight size={17} />قالب الوصف الثابت</span>
-                <textarea rows={6} value={youtubeSettings.descriptionTemplate} onChange={(event) => setYoutubeSettings({ ...youtubeSettings, descriptionTemplate: event.target.value })} placeholder="اكتب النص الثابت الذي يضاف أسفل وصف الفيديو" />
-                <small>يُضاف هذا النص أسفل وصف كل فيديو ويمكن تعديله قبل النشر.</small>
-              </label>
-            </div>
-          </section>
-        </div>
-      </Modal>
     </MarketingPage>
   );
-
-  return embedded ? <div className="marketing-platform-connections-embedded">{page}</div> : page;
 }

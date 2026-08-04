@@ -63,8 +63,8 @@ export function TrackingDeletePage() {
   }
 
   return (
-    <div className="module-page tracking-delete-page" aria-label="حذف طلبات التتبع">
-      <div className="page-top-actions"><button type="button" className="tracking-refresh-button" onClick={() => void loadDeleted()} disabled={loading || Boolean(deletingId)}>تحديث</button></div>
+    <div className="module-page tracking-delete-page">
+      <header className="module-page-head"><div><h1>حذف طلبات التتبع — سجل الحذف</h1><p>تنفيذ حذف طلب التتبع يتم من داخل تفاصيل الطلب، ويمكن حذف سجله من هنا للسماح باستقباله مرة أخرى من NEXT ERP.</p></div><button type="button" className="tracking-refresh-button" onClick={() => void loadDeleted()} disabled={loading || Boolean(deletingId)}>تحديث</button></header>
       {error ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>{error}</span></div> : null}
       {!error && !loading ? <div className="success-banner tracking-success-banner"><CheckCircle size={20} weight="fill" /><span>حذف سجل الطلب من الطلبات المحذوفة يسمح باستقبال نفس الطلب من NEXT ERP مرة أخرى.</span></div> : null}
       <section className="panel tracking-deleted-log-panel">

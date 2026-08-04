@@ -20,12 +20,11 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
-import { useSearchParams } from "react-router-dom";
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { Modal } from "../../components/Modal";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
-import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel, trackingBranchLabel } from "../api";
+import { trackingFetch, trackingQuery, formatTrackingDate, formatTrackingMoney, trackingStatusLabel } from "../api";
 import type { TrackingCounts, TrackingOrderDetail, TrackingOrderRow, TrackingStage, TrackingVehicle } from "../types";
 
 type ListResponse = { ok: boolean; orders: TrackingOrderRow[]; counts: TrackingCounts };
@@ -42,9 +41,6 @@ function visibleVin(vehicle: TrackingVehicle) {
 
 export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: boolean }) {
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
-  const requestedOrderId = String(searchParams.get("order") || "").trim();
-  const requestedOrderRef = useRef("");
   const [orders, setOrders] = useState<TrackingOrderRow[]>([]);
   const [counts, setCounts] = useState<TrackingCounts>({ total: 0, not_started: 0, in_progress: 0, completed: 0, archived: 0 });
   const [search, setSearch] = useState("");
@@ -98,12 +94,6 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   }
 
   useEffect(() => { setStatus(""); void loadOrders("", ""); }, [archivedOnly]);
-
-  useEffect(() => {
-    if (!requestedOrderId || requestedOrderRef.current === requestedOrderId) return;
-    requestedOrderRef.current = requestedOrderId;
-    void openOrder(requestedOrderId);
-  }, [requestedOrderId]);
 
   const activeVehicle = useMemo(
     () => selected?.vehicles.find((vehicle) => vehicle.id === activeVehicleId) || selected?.vehicles[0] || null,
@@ -221,10 +211,16 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
   return (
     <div className="module-page tracking-orders-page">
-      <div className="page-top-actions"><button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>
-        <ArrowClockwise size={18} className={loading ? "spin" : ""} />
-        تحديث
-      </button></div>
+      <header className="module-page-head tracking-page-head">
+        <div>
+          <h1>{archivedOnly ? "أرشيف طلبات التراكينج" : "طلبات التراكينج"}</h1>
+          <p>{archivedOnly ? "الطلبات المنتهية التي تم نقلها إلى الأرشيف." : "طلبات البيع والسيارات ومراحل التنفيذ وروابط تتبع العميل من داخل المنصة."}</p>
+        </div>
+        <button type="button" className="tracking-refresh-button" onClick={() => void loadOrders()} disabled={loading}>
+          <ArrowClockwise size={18} className={loading ? "spin" : ""} />
+          تحديث
+        </button>
+      </header>
 
       {error ? <div className="connection-banner"><WarningCircle size={20} weight="fill" /><span>{error}</span></div> : null}
       {message ? <div className="success-banner tracking-success-banner"><CheckCircle size={20} weight="fill" /><span>{message}</span></div> : null}
@@ -271,7 +267,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                   <tr key={order.id} onClick={() => void openOrder(order.id)}>
                     <td><button type="button" className="tracking-order-link">{order.sales_order_no}</button><small>{order.vins || "لا يوجد رقم هيكل"}</small></td>
                     <td><strong>{order.customer_name || "—"}</strong><small>{order.customer_mobile || "—"}</small></td>
-                    <td>{trackingBranchLabel(order.branch)}</td>
+                    <td>{order.branch || "—"}</td>
                     <td>{order.vehicles_count}</td>
                     <td><div className="tracking-mini-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
                     <td><span className={`tracking-status ${order.is_cancelled ? "cancelled" : order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived, order.is_cancelled)}</span></td>
@@ -319,7 +315,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
               <section className="tracking-order-info-grid">
                 <div><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
                 <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
-                <div><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
+                <div><MapPin size={18} /><span><small>الفرع</small><strong>{selected.branch || "—"}</strong></span></div>
                 <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
                 <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
                 <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>

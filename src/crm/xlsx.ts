@@ -1,29 +1,7 @@
 type WorksheetRow = Record<string, unknown>;
 
-const MAX_EXCEL_CELL_TEXT = 32767;
-
-function sanitizeXmlText(value: unknown) {
-  const source = String(value ?? "").replace(/_x000D_/gi, " ");
-  let output = "";
-  for (let index = 0; index < source.length && output.length < MAX_EXCEL_CELL_TEXT; index += 1) {
-    const code = source.charCodeAt(index);
-    if (code === 0x09 || code === 0x0a || code === 0x0d || (code >= 0x20 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd)) {
-      output += source[index];
-      continue;
-    }
-    if (code >= 0xd800 && code <= 0xdbff && index + 1 < source.length) {
-      const low = source.charCodeAt(index + 1);
-      if (low >= 0xdc00 && low <= 0xdfff) {
-        output += source[index] + source[index + 1];
-        index += 1;
-      }
-    }
-  }
-  return output.slice(0, MAX_EXCEL_CELL_TEXT);
-}
-
 function xmlEscape(value: unknown) {
-  return sanitizeXmlText(value)
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -32,9 +10,8 @@ function xmlEscape(value: unknown) {
 }
 
 function safeSpreadsheetText(value: unknown) {
-  const text = sanitizeXmlText(value);
-  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
-  return safe.slice(0, MAX_EXCEL_CELL_TEXT);
+  const text = String(value ?? "");
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
 function columnName(index: number) {
@@ -124,39 +101,24 @@ function zipStore(files: Array<{ name: string; content: string }>) {
   return concat([...localParts, centralDirectory, end]);
 }
 
-function worksheetHeaders(rows: WorksheetRow[], columns?: string[]) {
-  const requested = Array.isArray(columns) ? columns : [];
-  const source = requested.length ? requested : rows.flatMap((row) => Object.keys(row));
-  const unique = [...new Set(source.map((header) => sanitizeXmlText(header).trim()).filter(Boolean))];
-  return unique.length ? unique : ["البيانات"];
-}
-
-function worksheetCellXml(reference: string, raw: unknown, styleIndex: number) {
-  if (typeof raw === "number" && Number.isFinite(raw)) return `<c r="${reference}" s="${styleIndex}"><v>${raw}</v></c>`;
-  if (typeof raw === "boolean") return `<c r="${reference}" t="b" s="${styleIndex}"><v>${raw ? 1 : 0}</v></c>`;
-  return `<c r="${reference}" t="inlineStr" s="${styleIndex}"><is><t xml:space="preserve">${xmlEscape(safeSpreadsheetText(raw))}</t></is></c>`;
-}
-
-export function buildXlsxBytes(rows: WorksheetRow[], sheetName = "تقرير CRM", columns?: string[]) {
-  const headers = worksheetHeaders(rows, columns);
-  const safeSheetName = sanitizeXmlText(sheetName).replace(/[\\/?*\[\]:]/g, " ").slice(0, 31).trim() || "Sheet1";
-  const headerCells = headers.map((header, columnIndex) => worksheetCellXml(`${columnName(columnIndex)}1`, header, 1)).join("");
-  const dataRows = rows.map((row, rowIndex) => {
-    const excelRow = rowIndex + 2;
-    const cells = headers.map((header, columnIndex) => worksheetCellXml(`${columnName(columnIndex)}${excelRow}`, row[header], 0)).join("");
-    return `<row r="${excelRow}">${cells}</row>`;
+export function downloadXlsx(filename: string, rows: WorksheetRow[], sheetName = "تقرير CRM") {
+  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const safeSheetName = sheetName.replace(/[\\/?*\[\]:]/g, " ").slice(0, 31) || "Sheet1";
+  const allRows = [Object.fromEntries(headers.map((header) => [header, header])), ...rows];
+  const rowXml = allRows.map((row, rowIndex) => {
+    const cells = headers.map((header, columnIndex) => {
+      const ref = `${columnName(columnIndex)}${rowIndex + 1}`;
+      const raw = row[header];
+      if (rowIndex > 0 && typeof raw === "number" && Number.isFinite(raw)) return `<c r="${ref}" s="${rowIndex === 0 ? 1 : 0}"><v>${raw}</v></c>`;
+      const text = safeSpreadsheetText(raw);
+      return `<c r="${ref}" t="inlineStr" s="${rowIndex === 0 ? 1 : 0}"><is><t xml:space="preserve">${xmlEscape(text)}</t></is></c>`;
+    }).join("");
+    return `<row r="${rowIndex + 1}">${cells}</row>`;
   }).join("");
-  const rowXml = `<row r="1" ht="23" customHeight="1">${headerCells}</row>${dataRows}`;
   const widths = headers.map((header, index) => {
-    const max = Math.max(
-      sanitizeXmlText(header).length,
-      ...rows.slice(0, 500).map((row) => safeSpreadsheetText(row[header]).length),
-    );
+    const max = Math.max(String(header).length, ...rows.slice(0, 500).map((row) => String(row[header] ?? "").length));
     return `<col min="${index + 1}" max="${index + 1}" width="${Math.min(45, Math.max(12, max + 2))}" customWidth="1"/>`;
   }).join("");
-  const lastColumn = columnName(headers.length - 1);
-  const lastRow = Math.max(1, rows.length + 1);
-  const dimension = `A1:${lastColumn}${lastRow}`;
 
   const files = [
     {
@@ -169,7 +131,7 @@ export function buildXlsxBytes(rows: WorksheetRow[], sheetName = "تقرير CRM
     },
     {
       name: "xl/workbook.xml",
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr/><bookViews><workbookView activeTab="0" firstSheet="0"/></bookViews><sheets><sheet name="${xmlEscape(safeSheetName)}" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029"/></workbook>`,
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(safeSheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
     },
     {
       name: "xl/_rels/workbook.xml.rels",
@@ -177,26 +139,21 @@ export function buildXlsxBytes(rows: WorksheetRow[], sheetName = "تقرير CRM
     },
     {
       name: "xl/styles.xml",
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Tajawal"/><family val="2"/></font><font><b/><sz val="11"/><name val="Tajawal"/><family val="2"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Tajawal"/></font><font><b/><sz val="11"/><name val="Tajawal"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
     },
     {
       name: "xl/worksheets/sheet1.xml",
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><outlinePr summaryBelow="1" summaryRight="1"/><pageSetUpPr/></sheetPr><dimension ref="${dimension}"/><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A1" sqref="A1"/></sheetView></sheetViews><sheetFormatPr baseColWidth="8" defaultRowHeight="20"/><cols>${widths}</cols><sheetData>${rowXml}</sheetData><autoFilter ref="${dimension}"/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>`,
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${widths}</cols><sheetData>${rowXml}</sheetData><autoFilter ref="A1:${columnName(Math.max(0, headers.length - 1))}${Math.max(1, rows.length + 1)}"/></worksheet>`,
     },
   ];
 
-  return zipStore(files);
-}
-
-export function downloadXlsx(filename: string, rows: WorksheetRow[], sheetName = "تقرير CRM", columns?: string[]) {
-  const bytes = buildXlsxBytes(rows, sheetName, columns);
+  const bytes = zipStore(files);
   const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url;
+  link.href = URL.createObjectURL(blob);
   link.download = filename.toLowerCase().endsWith(".xlsx") ? filename : `${filename}.xlsx`;
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  URL.revokeObjectURL(link.href);
 }

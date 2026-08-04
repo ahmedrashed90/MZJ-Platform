@@ -4,8 +4,6 @@ import {
   CaretDown,
   CaretUp,
   CheckCircle,
-  Eye,
-  EyeSlash,
   FileXls,
   FloppyDisk,
   LinkSimple,
@@ -51,7 +49,7 @@ const tabGroups = [
 type Tab = typeof tabs[number]["key"];
 type Props = { embedded?: boolean; readOnly?: boolean };
 
-const blankStatus = { id: "", departmentCode: "cash", label: "", value: "", sortOrder: 10, isActive: true, showOnDashboard: true };
+const blankStatus = { id: "", departmentCode: "cash", label: "", value: "", sortOrder: 10, isActive: true };
 const blankCustomerField = { id: "", fieldKey: "", label: "", fieldType: "text", sortOrder: 10, departmentKeys: [] as string[], isActive: true, isRequired: false, includeInCompletion: false, optionsText: "", isSystem: false, isLocked: false };
 const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", reportGroup: "other", allowFreeText: false, isActive: true };
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "manual", externalId: "", departments: [] as string[], isActive: true };
@@ -365,9 +363,17 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
   return (
     <div className={`crm-page crm-admin-page ${embedded ? "embedded" : ""}`}>
-      <div className="page-top-actions">
-        <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : embedded ? "تحديث البيانات" : "إعادة تحميل"}</button>
-      </div>
+      {!embedded ? (
+        <header className="crm-page-head">
+          <div><h1>إعدادات CRM</h1><p>كل الإعدادات التشغيلية في مكان واحد بدون تعديل السورس.</p></div>
+          <button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />إعادة تحميل</button>
+        </header>
+      ) : (
+        <div className="crm-settings-toolbar">
+          <div><span>إدارة CRM</span><h2>إعدادات العملاء والمبيعات</h2><p>كل إعدادات التشغيل والتواصل والتقارير مرتبة في مجموعات واضحة.</p></div>
+          <button className="crm-secondary-button" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />{loading ? "جاري التحديث" : "تحديث البيانات"}</button>
+        </div>
+      )}
 
       <section className="crm-settings-navigation" aria-label="تبويبات إعدادات CRM">
         {tabGroups.map((group) => {
@@ -401,7 +407,6 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
                 <label><span>قيمة الحالة</span><input value={statusForm.value} onChange={(event) => setStatusForm((current) => ({ ...current, value: event.target.value }))} /></label>
                 <label><span>ترتيب الظهور</span><input type="number" value={statusForm.sortOrder} onChange={(event) => setStatusForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={statusForm.isActive} onChange={(event) => setStatusForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>نشطة</span></label>
-                <label className="crm-switch-row"><input type="checkbox" checked={statusForm.showOnDashboard} onChange={(event) => setStatusForm((current) => ({ ...current, showOnDashboard: event.target.checked }))} /><span>ظاهرة في الداش بورد</span></label>
               </div>
               <div className="crm-form-actions"><button className="crm-secondary-button" onClick={() => setStatusForm(blankStatus)}>جديد</button><button className="crm-primary-button" onClick={async () => { const id = statusForm.id || `${statusForm.departmentCode}-${Date.now()}`; if (await save("status", { ...statusForm, id })) setStatusForm(blankStatus); }}><FloppyDisk size={18} />حفظ الحالة</button></div>
             </section>
@@ -409,11 +414,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
           list={(
             <section className="crm-panel crm-list-panel crm-settings-full-table">
               <header><h2>الحالات المسجلة</h2><span>{data.statuses.length}</span></header>
-              <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>القسم</th><th>اسم الكارت</th><th>قيمة الحالة</th><th>الترتيب</th><th>الحالة</th><th>الظهور</th><th>إجراءات</th></tr></thead><tbody>{data.statuses.map((row: any) => {
-                const shown = row.show_on_dashboard !== false;
-                const statusPayload = { id: row.id, departmentCode: row.department_code, label: row.label, value: row.value, sortOrder: row.sort_order, isActive: row.is_active, showOnDashboard: shown };
-                return <tr key={row.id}><td>{departmentLabel(row.department_code)}</td><td>{row.label}</td><td>{row.value}</td><td>{row.sort_order}</td><td>{row.is_active ? "نشطة" : "موقوفة"}</td><td>{shown ? "ظاهر" : "مخفي"}</td><td><div className="crm-row-actions"><button title={shown ? "إخفاء من الداش بورد" : "إظهار في الداش بورد"} aria-label={shown ? "إخفاء من الداش بورد" : "إظهار في الداش بورد"} onClick={() => void save("status", { ...statusPayload, showOnDashboard: !shown })}>{shown ? <EyeSlash size={16} /> : <Eye size={16} />}</button><button onClick={() => setStatusForm(statusPayload)}><PencilSimple size={16} /></button><button onClick={() => void remove("status", row.id)}><Trash size={16} /></button></div></td></tr>;
-              })}</tbody></table></div>
+              <div className="crm-table-shell"><table className="crm-table"><thead><tr><th>القسم</th><th>اسم الكارت</th><th>قيمة الحالة</th><th>الترتيب</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>{data.statuses.map((row: any) => <tr key={row.id}><td>{departmentLabel(row.department_code)}</td><td>{row.label}</td><td>{row.value}</td><td>{row.sort_order}</td><td>{row.is_active ? "نشطة" : "موقوفة"}</td><td><div className="crm-row-actions"><button onClick={() => setStatusForm({ id: row.id, departmentCode: row.department_code, label: row.label, value: row.value, sortOrder: row.sort_order, isActive: row.is_active })}><PencilSimple size={16} /></button><button onClick={() => void remove("status", row.id)}><Trash size={16} /></button></div></td></tr>)}</tbody></table></div>
             </section>
           )}
         />

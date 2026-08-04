@@ -14,8 +14,6 @@ export type DashboardData = {
     openServiceConversations: NullableNumber;
     noAnswerCustomers: NullableNumber;
     sold: NullableNumber;
-    cashSold: NullableNumber;
-    financeSold: NullableNumber;
     cashSales: NullableNumber;
     financeSales: NullableNumber;
     customerService: NullableNumber;
@@ -34,7 +32,6 @@ export type DashboardData = {
   };
   marketing: {
     campaigns: NullableNumber;
-    agendas: NullableNumber;
     scheduled: NullableNumber;
     delayed: NullableNumber;
   };

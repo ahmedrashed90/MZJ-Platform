@@ -1,19 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, UploadSimple, WarningCircle, X, XCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import type { MarketingMeta } from "../types";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
-import {
-  YOUTUBE_CATEGORY_FALLBACKS,
-  YOUTUBE_PUBLISH_DEFAULTS,
-  normalizeYouTubePublishOptions,
-  normalizeYouTubePublishSettings,
-  type YouTubeOptionItem,
-  type YouTubePublishSettings,
-} from "../../../shared/youtube-publishing";
 
 function rowPlatforms(row: any) {
   return Array.isArray(row?.platforms) ? row.platforms : [];
@@ -50,21 +42,16 @@ export function PublishPrepPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const [youtubeDefaults, setYoutubeDefaults] = useState<YouTubePublishSettings>(YOUTUBE_PUBLISH_DEFAULTS);
-  const [youtubeCategories, setYoutubeCategories] = useState<YouTubeOptionItem[]>(YOUTUBE_CATEGORY_FALLBACKS);
-  const [youtubePlaylists, setYoutubePlaylists] = useState<Array<YouTubeOptionItem & { privacyStatus?: string }>>([]);
-  const [youtubeOptionsLoading, setYoutubeOptionsLoading] = useState(false);
 
   async function load() {
     setLoading(true);
     setError("");
     try {
       const [tasks, info] = await Promise.all([
-        marketingFetch<{ rows: any[]; youtubeDefaults?: YouTubePublishSettings }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
+        marketingFetch<{ rows: any[] }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
         marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`),
       ]);
       setRows(tasks.rows);
-      setYoutubeDefaults(normalizeYouTubePublishSettings(tasks.youtubeDefaults));
       setMeta(info);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "تعذر تحميل تجهيز النشر");
@@ -75,37 +62,6 @@ export function PublishPrepPage() {
 
   useEffect(() => { void load(); }, []);
 
-  function youtubePlatformId() {
-    return meta?.platforms.find((platform) => String(platform.code || "").toLowerCase() === "youtube")?.id || "";
-  }
-
-  function includesYouTube(row: any) {
-    const platformId = youtubePlatformId();
-    return Boolean(platformId && rowPlatforms(row).some((platform: any) => platform.platformId === platformId));
-  }
-
-  async function loadYouTubeOptions() {
-    setYoutubeOptionsLoading(true);
-    try {
-      const result = await marketingFetch<{ settings: YouTubePublishSettings; categories: YouTubeOptionItem[]; playlists: Array<YouTubeOptionItem & { privacyStatus?: string }> }>(`/api/marketing${marketingQuery({ resource: "youtube_publish_options" })}`);
-      const defaults = normalizeYouTubePublishSettings(result.settings);
-      setYoutubeDefaults(defaults);
-      setYoutubeCategories(result.categories?.length ? result.categories : YOUTUBE_CATEGORY_FALLBACKS);
-      setYoutubePlaylists(result.playlists || []);
-      setEditing((current: any) => current ? {
-        ...current,
-        youtubeOptions: normalizeYouTubePublishOptions(current.youtubeOptions, defaults, {
-          title: current.youtube_title_seed || current.creative_name,
-          description: [current.caption, current.hashtags].filter(Boolean).join("\n\n"),
-        }),
-      } : current);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تحميل خيارات YouTube");
-    } finally {
-      setYoutubeOptionsLoading(false);
-    }
-  }
-
   function missing(row: any) {
     const values: string[] = [];
     const platforms = rowPlatforms(row);
@@ -115,7 +71,6 @@ export function PublishPrepPage() {
     if (!row.publish_date) values.push("تاريخ النشر");
     if (!platforms.length) values.push("المنصة");
     else if (platforms.some((platform: any) => !Array.isArray(platform.postTypeIds) || !platform.postTypeIds.length)) values.push("نوع النشر لكل منصة");
-    if (includesYouTube(row) && !String(row.youtube_options?.title || "").trim()) values.push("عنوان YouTube");
     return values;
   }
 
@@ -154,7 +109,7 @@ export function PublishPrepPage() {
     try {
       const result = await marketingFetch<{ message: string }>("/api/marketing", {
         method: "POST",
-        body: JSON.stringify({ action: "save_publish_prep", id: editing.id, taskId: editing.task_id || "", platforms: editing.platforms || [], publishDate: String(editing.publish_date || "").slice(0, 10), caption: editing.caption, hashtags: editing.hashtags, youtubeOptions: editing.youtubeOptions }),
+        body: JSON.stringify({ action: "save_publish_prep", id: editing.id, taskId: editing.task_id || "", platforms: editing.platforms || [], publishDate: String(editing.publish_date || "").slice(0, 10), caption: editing.caption, hashtags: editing.hashtags }),
       });
       setMessage(result.message);
       setEditing(null);
@@ -213,16 +168,7 @@ export function PublishPrepPage() {
   }
 
   function startEdit(row: any) {
-    setEditing({
-      ...row,
-      publish_date: String(row.publish_date || "").slice(0, 10),
-      platforms: rowPlatforms(row).map((platform: any) => ({ platformId: platform.platformId, postTypeIds: [...(platform.postTypeIds || [])] })),
-      youtubeOptions: normalizeYouTubePublishOptions(row.youtube_options, youtubeDefaults, {
-        title: row.youtube_title_seed || row.creative_name,
-        description: [row.caption, row.hashtags].filter(Boolean).join("\n\n"),
-      }),
-    });
-    void loadYouTubeOptions();
+    setEditing({ ...row, publish_date: String(row.publish_date || "").slice(0, 10), platforms: rowPlatforms(row).map((platform: any) => ({ platformId: platform.platformId, postTypeIds: [...(platform.postTypeIds || [])] })) });
   }
 
   return <MarketingPage title="تجهيز النشر" description="التاسكات التنفيذية فقط: راجع الملف والمنصات والنصوص. تاريخ النشر مرجع للجدول ولا يمنع استخدام نشر الآن في أي وقت.">
@@ -281,9 +227,7 @@ export function PublishPrepPage() {
           <div className="marketing-publish-platforms">{rowPlatforms(row).length ? rowPlatforms(row).map((platform: any) => {
             const platformName = meta?.platforms.find((item) => item.id === platform.platformId)?.name || platform.platformName || "منصة";
             const types = (platform.postTypeIds || []).map((id: string) => meta?.postTypes.find((item) => item.id === id)?.name).filter(Boolean);
-            const isYoutube = meta?.platforms.find((item) => item.id === platform.platformId)?.code?.toLowerCase() === "youtube";
-            const privacyLabel = row.youtube_options?.privacyStatus === "public" ? "عام" : row.youtube_options?.privacyStatus === "private" ? "خاص" : "غير مدرج";
-            return <div key={platform.platformId}><strong>{platformName}</strong><span className={isYoutube ? "marketing-youtube-platform-summary" : undefined}>{types.join("، ") || "لم يحدد نوع نشر"}{isYoutube ? ` • ${privacyLabel}` : ""}</span></div>;
+            return <div key={platform.platformId}><strong>{platformName}</strong><span>{types.join("، ") || "لم يحدد نوع نشر"}</span></div>;
           }) : <span className="marketing-publish-no-platform">لم يتم تحديد منصات</span>}</div>
 
           <div className="marketing-publish-list-readiness">
@@ -315,25 +259,6 @@ export function PublishPrepPage() {
           </article>;
         })}</div></section>
         <section className="marketing-publish-edit-section"><header><div><h3>تاريخ ومحتوى النشر</h3><p>التاريخ يظهر في الجدول كموعد مخطط، لكن زر نشر الآن يعمل في أي وقت بعد اكتمال البيانات.</p></div></header><div className="marketing-form-grid marketing-publish-content-grid"><label><span>تاريخ النشر</span><input type="date" value={editing.publish_date || ""} onChange={(event) => setEditing({ ...editing, publish_date: event.target.value })} /></label><label className="full"><span>Caption</span><textarea rows={7} value={editing.caption || ""} onChange={(event) => setEditing({ ...editing, caption: event.target.value })} /></label><label className="full"><span>Hashtag</span><textarea rows={5} value={editing.hashtags || ""} onChange={(event) => setEditing({ ...editing, hashtags: event.target.value })} /></label></div></section>
-        {includesYouTube(editing) ? <section className="marketing-publish-edit-section marketing-youtube-publish-section">
-          <header><span><YoutubeLogo size={24} weight="fill" /></span><div><h3>إعدادات فيديو YouTube</h3><p>تم تحميل الإعدادات الافتراضية للقناة، ويمكن تخصيص هذا الفيديو فقط قبل النشر.</p></div>{youtubeOptionsLoading ? <SpinnerGap className="marketing-spin" size={19} /> : null}</header>
-          <div className="marketing-form-grid">
-            <label className="full"><span>عنوان الفيديو</span><input maxLength={100} value={editing.youtubeOptions?.title || ""} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, title: event.target.value } })} placeholder="عنوان واضح للفيديو" /><small>{String(editing.youtubeOptions?.title || "").length}/100</small></label>
-            <label className="full"><span>وصف الفيديو</span><textarea rows={6} value={editing.youtubeOptions?.description || ""} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, description: event.target.value } })} /></label>
-            <label className="full"><span>الكلمات المفتاحية</span><textarea rows={3} value={(editing.youtubeOptions?.tags || []).join("، ")} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, tags: event.target.value.split(/[،,\n]+/).map((item) => item.trim()).filter(Boolean) } })} placeholder="سيارات، MZJ، عروض" /></label>
-            <label><span>حالة الظهور</span><select value={editing.youtubeOptions?.privacyStatus || "unlisted"} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, privacyStatus: event.target.value } })}><option value="unlisted">غير مدرج — بالرابط فقط</option><option value="private">خاص</option><option value="public">عام</option></select></label>
-            <label><span>تصنيف الفيديو</span><select value={editing.youtubeOptions?.categoryId || "2"} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, categoryId: event.target.value } })}>{youtubeCategories.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-            <label><span>قائمة التشغيل</span><select value={editing.youtubeOptions?.playlistId || ""} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, playlistId: event.target.value } })}><option value="">بدون قائمة تشغيل</option>{youtubePlaylists.map((item) => <option key={item.id} value={item.id}>{item.title}{item.privacyStatus ? ` — ${item.privacyStatus}` : ""}</option>)}</select></label>
-            <label><span>لغة الفيديو</span><input dir="ltr" value={editing.youtubeOptions?.defaultLanguage || "ar"} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, defaultLanguage: event.target.value } })} /></label>
-            <label><span>الترخيص</span><select value={editing.youtubeOptions?.license || "youtube"} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, license: event.target.value } })}><option value="youtube">ترخيص YouTube القياسي</option><option value="creativeCommon">Creative Commons</option></select></label>
-            <label><span>مخصص للأطفال</span><select value={editing.youtubeOptions?.madeForKids ? "true" : "false"} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, madeForKids: event.target.value === "true" } })}><option value="false">لا</option><option value="true">نعم</option></select></label>
-            <div className="marketing-youtube-task-toggles">
-              <label><input type="checkbox" checked={Boolean(editing.youtubeOptions?.notifySubscribers)} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, notifySubscribers: event.target.checked } })} /><span>إشعار المشتركين</span></label>
-              <label><input type="checkbox" checked={Boolean(editing.youtubeOptions?.embeddable)} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, embeddable: event.target.checked } })} /><span>السماح بالتضمين</span></label>
-              <label><input type="checkbox" checked={Boolean(editing.youtubeOptions?.publicStatsViewable)} onChange={(event) => setEditing({ ...editing, youtubeOptions: { ...editing.youtubeOptions, publicStatsViewable: event.target.checked } })} /><span>إظهار الإحصاءات العامة</span></label>
-            </div>
-          </div>
-        </section> : null}
       </div> : null}
     </Modal>
   </MarketingPage>;

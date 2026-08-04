@@ -36,7 +36,10 @@ export function NotificationsCenterPage() {
 
   return (
     <div className="module-page notifications-center-page">
-      <div className="notifications-unread-summary page-top-actions"><strong>{unread}</strong><span>غير مقروء</span></div>
+      <header className="notifications-center-head">
+        <div><span>مدير النظام</span><h1>مركز الإشعارات</h1><p>جميع إشعارات أنظمة المنصة مع حالة القراءة لكل مستخدم.</p></div>
+        <div><strong>{unread}</strong><span>غير مقروء</span></div>
+      </header>
       <section className="notifications-center-card">
         <div className="notifications-center-toolbar">
           <div className="notifications-system-filter">{systems.map((item) => <button type="button" key={item.code} className={system === item.code ? "active" : ""} onClick={() => setSystem(item.code)}>{item.label}</button>)}</div>

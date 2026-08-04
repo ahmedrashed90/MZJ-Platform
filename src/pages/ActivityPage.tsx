@@ -200,10 +200,13 @@ export function ActivityPage() {
 
   return (
     <div className="module-page activity-page">
-      <div className="activity-head-actions page-top-actions">
-        {canDelete ? <button type="button" className="activity-delete" onClick={() => { setDeleteRange({ dateFrom: applied.dateFrom, dateTo: applied.dateTo }); setDeleteOpen(true); }}><Trash size={18} />مسح سجل النشاط</button> : null}
-        <button type="button" className="activity-refresh" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />تحديث السجل</button>
-      </div>
+      <header className="module-page-head activity-page-head">
+        <div><h1>سجل النشاط</h1><p>سجل مركزي لحركة المستخدمين والإجراءات والتغييرات داخل جميع أنظمة المنصة.</p></div>
+        <div className="activity-head-actions">
+          {canDelete ? <button type="button" className="activity-delete" onClick={() => { setDeleteRange({ dateFrom: applied.dateFrom, dateTo: applied.dateTo }); setDeleteOpen(true); }}><Trash size={18} />مسح سجل النشاط</button> : null}
+          <button type="button" className="activity-refresh" onClick={() => void load()} disabled={loading}><ArrowClockwise size={18} />تحديث السجل</button>
+        </div>
+      </header>
 
       <section className="activity-stats">
         <article><span><Pulse size={22} /></span><div><small>نشاطات اليوم</small><strong>{stats.today.toLocaleString("ar-SA")}</strong><p>كل الإجراءات المسجلة منذ بداية اليوم</p></div></article>

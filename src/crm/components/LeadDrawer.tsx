@@ -37,8 +37,6 @@ type CustomerForm = {
   departmentCode: string;
   branchCode: string;
   paymentType: string;
-  assignedTo: string;
-  callCenterAssignedTo: string;
   values: Record<string, string>;
   customFields: Record<string, string>;
 };
@@ -48,12 +46,6 @@ const fallbackFinanceOptions = [
   { value: "general", label: "عام 45%" },
   { value: "rate55", label: "55%" },
   { value: "realEstate", label: "عقاري 65%" },
-];
-
-const databaseDepartmentOptions = [
-  { value: "cash_sales", label: "مبيعات الكاش", serviceKey: "cash" as ServiceKey },
-  { value: "finance_sales", label: "مبيعات التمويل", serviceKey: "finance" as ServiceKey },
-  { value: "customer_service", label: "خدمة العملاء", serviceKey: "service" as ServiceKey },
 ];
 
 const fallbackFields: CrmCustomerField[] = [
@@ -79,40 +71,6 @@ const fallbackFields: CrmCustomerField[] = [
 
 function value(input: unknown) {
   return input == null ? "" : String(input);
-}
-
-function comparableValue(input: unknown) {
-  return input == null ? "" : String(input).trim();
-}
-
-function comparableDate(input: unknown) {
-  const raw = comparableValue(input);
-  if (!raw) return "";
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
-}
-
-function riyadhDateInput(input: unknown = new Date()) {
-  const raw = input instanceof Date ? input.toISOString() : comparableValue(input);
-  if (!raw) return "";
-  const parsed = input instanceof Date ? input : new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return raw.slice(0, 10);
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Riyadh",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(parsed);
-  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
-
-function addChangedField(payload: Record<string, unknown>, key: string, next: unknown, previous: unknown) {
-  if (comparableValue(next) !== comparableValue(previous)) payload[key] = next;
-}
-
-function addChangedDateField(payload: Record<string, unknown>, key: string, next: unknown, previous: unknown) {
-  if (comparableDate(next) !== comparableDate(previous)) payload[key] = next || null;
 }
 
 function isOutboundMessage(message: CrmMessage) {
@@ -175,7 +133,6 @@ function leadCoreValues(lead: CrmLead, serviceKey: ServiceKey) {
     color: value(lead.color),
     finance_type: value(lead.finance_type) || (serviceKey === "finance" ? "general" : ""),
     sold_quantity: value(lead.sold_quantity || 1),
-    sold_at: lead.sold_at ? riyadhDateInput(lead.sold_at) : "",
     notes: value(lead.notes),
   };
 }
@@ -229,8 +186,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       departmentCode: value(lead.department_code) || departmentCodeFor(serviceKey),
       branchCode: value(lead.branch_code) || branchCodeFor(serviceKey),
       paymentType: value(lead.payment_type) || paymentTypeFor(serviceKey),
-      assignedTo: value(lead.assigned_to),
-      callCenterAssignedTo: value(lead.call_center_assigned_to),
       values: leadCoreValues(lead, serviceKey),
       customFields: Object.fromEntries(Object.entries(extra).map(([key, raw]) => [key, value(raw)])),
     });
@@ -312,42 +267,12 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     .filter((item) => item.department_code === department && item.is_active !== false)
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department]);
 
-  const editableBranches = useMemo(() => {
-    const branches = meta?.branches || [];
-    const departmentCode = form?.departmentCode || departmentCodeFor(department);
-    const userBranchCodes = new Set((meta?.users || [])
-      .filter((user) => user.department_codes.includes(departmentCode))
-      .flatMap((user) => user.branch_codes || []));
-    const currentBranch = form?.branchCode || "";
-    const matching = branches.filter((branch) => {
-      if (userBranchCodes.size) return userBranchCodes.has(branch.code) || branch.code === currentBranch;
-      if (department === "finance") return branch.code === "online" || branch.code === currentBranch;
-      if (department === "service") return branch.code === "customer_service" || branch.code === currentBranch;
-      return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
-    });
-    return matching.length ? matching : branches;
-  }, [meta?.branches, meta?.users, form?.departmentCode, form?.branchCode, department]);
-
-  const editableAgents = useMemo(() => {
-    const departmentCode = form?.departmentCode || departmentCodeFor(department);
-    const matching = (meta?.users || []).filter((user) => user.department_codes.includes(departmentCode));
-    const current = (meta?.users || []).find((user) => user.id === form?.assignedTo);
-    return current && !matching.some((user) => user.id === current.id) ? [current, ...matching] : matching;
-  }, [meta?.users, form?.departmentCode, form?.assignedTo, department]);
-
-  const editableCallCenterUsers = useMemo(() => {
-    const matching = (meta?.users || []).filter((user) => user.department_codes.includes("call_center"));
-    const current = (meta?.users || []).find((user) => user.id === form?.callCenterAssignedTo);
-    return current && !matching.some((user) => user.id === current.id) ? [current, ...matching] : matching;
-  }, [meta?.users, form?.callCenterAssignedTo]);
-
   const configuredFields = useMemo(() => {
     const source = meta?.customerFields?.length ? meta.customerFields : fallbackFields;
     return source.filter((field) => field.is_active !== false && (!field.department_keys?.length || field.department_keys.includes(department)))
-      .filter((field) => showConversation || !["status_label", "department_code", "department_transfer"].includes(field.field_key))
       .filter((field) => field.field_key !== "follow_up_at" || isPostponed(form?.values.status_label))
       .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-  }, [meta?.customerFields, department, form?.values.status_label, showConversation]);
+  }, [meta?.customerFields, department, form?.values.status_label]);
 
   function renderTemplateInComposer(template: { content?: string | null } | undefined, sourceForm: CustomerForm | null = form) {
     if (!template?.content || !sourceForm) return "";
@@ -442,7 +367,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
           ...activeForm.values,
           status_label: next,
           sold_quantity: next === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
-          sold_at: next === "تم البيع" ? (activeForm.values.sold_at || riyadhDateInput()) : activeForm.values.sold_at,
         },
       };
       setForm(nextForm);
@@ -474,105 +398,36 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     };
   }
 
-  function changeDatabaseDepartment(nextDepartmentCode: string) {
-    setForm((current) => {
-      if (!current) return current;
-      const option = databaseDepartmentOptions.find((item) => item.value === nextDepartmentCode) || databaseDepartmentOptions[0];
-      const nextServiceKey = option.serviceKey;
-      const nextStatuses = (meta?.statuses || [])
-        .filter((item) => item.department_code === nextServiceKey && item.is_active !== false)
-        .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
-      const statusStillValid = nextStatuses.some((item) => item.value === current.values.status_label);
-      const departmentUsers = (meta?.users || []).filter((user) => user.department_codes.includes(nextDepartmentCode));
-      const allowedBranchCodes = new Set(departmentUsers.flatMap((user) => user.branch_codes || []));
-      const candidateBranches = (meta?.branches || []).filter((branch) => {
-        if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code);
-        if (nextServiceKey === "finance") return branch.code === "online";
-        if (nextServiceKey === "service") return branch.code === "customer_service";
-        return !["online", "customer_service"].includes(branch.code);
-      });
-      const currentBranchIsValid = candidateBranches.some((branch) => branch.code === current.branchCode);
-      const nextBranchCode = currentBranchIsValid
-        ? current.branchCode
-        : branchCodeFor(nextServiceKey) || candidateBranches[0]?.code || "";
-      const currentAgentIsValid = departmentUsers.some((user) => user.id === current.assignedTo);
-      return {
-        ...current,
-        serviceKey: nextServiceKey,
-        departmentCode: nextDepartmentCode,
-        branchCode: nextBranchCode,
-        paymentType: paymentTypeFor(nextServiceKey),
-        assignedTo: currentAgentIsValid ? current.assignedTo : "",
-        values: {
-          ...current.values,
-          department_code: nextDepartmentCode,
-          status_label: statusStillValid ? current.values.status_label : (nextStatuses.find((item) => item.value === "عميل جديد")?.value || nextStatuses[0]?.value || "عميل جديد"),
-          follow_up_at: statusStillValid && isPostponed(current.values.status_label) ? current.values.follow_up_at : "",
-          finance_type: nextServiceKey === "finance" ? (current.values.finance_type || "general") : current.values.finance_type,
-        },
-      };
-    });
-  }
-
   async function saveLead() {
-    const currentLead = lead;
-    if (!currentLead) return;
     setSaving(true);
     setNotice("");
     try {
-      const originalServiceKey = departmentKeyFromCode(currentLead.department_code || currentLead.service_key) as ServiceKey;
-      const originalValues = leadCoreValues(currentLead, originalServiceKey);
-      const originalDepartmentCode = value(currentLead.department_code) || departmentCodeFor(originalServiceKey);
-      const originalBranchCode = value(currentLead.branch_code) || branchCodeFor(originalServiceKey);
-      const originalPaymentType = value(currentLead.payment_type) || paymentTypeFor(originalServiceKey);
-      const payload: Record<string, unknown> = { id: activeForm.id };
-      if (!showConversation) payload.databaseEdit = true;
-
-      addChangedField(payload, "customerName", activeForm.values.customer_name, originalValues.customer_name);
-      addChangedField(payload, "phone", activeForm.values.phone, originalValues.phone);
-      addChangedField(payload, "sourceCode", activeForm.values.source_code, originalValues.source_code);
-      addChangedField(payload, "serviceKey", activeForm.serviceKey, originalServiceKey);
-      addChangedField(payload, "departmentCode", activeForm.departmentCode, originalDepartmentCode);
-      addChangedField(payload, "branchCode", activeForm.branchCode, originalBranchCode);
-      addChangedField(payload, "statusLabel", activeForm.values.status_label, originalValues.status_label);
-      addChangedField(payload, "paymentType", activeForm.paymentType, originalPaymentType);
-      addChangedDateField(payload, "followUpAt", activeForm.values.follow_up_at, originalValues.follow_up_at);
-      addChangedField(payload, "age", activeForm.values.age, originalValues.age);
-      addChangedField(payload, "salary", activeForm.values.salary, originalValues.salary);
-      addChangedField(payload, "obligation", activeForm.values.obligation, originalValues.obligation);
-      addChangedField(payload, "salaryBank", activeForm.values.salary_bank, originalValues.salary_bank);
-      addChangedField(payload, "location", activeForm.values.location, originalValues.location);
-      addChangedField(payload, "carType", activeForm.values.car_type, originalValues.car_type);
-      addChangedField(payload, "carCategory", activeForm.values.car_category, originalValues.car_category);
-      addChangedField(payload, "carModel", activeForm.values.car_model, originalValues.car_model);
-      addChangedField(payload, "color", activeForm.values.color, originalValues.color);
-      addChangedField(payload, "financeType", activeForm.values.finance_type, originalValues.finance_type);
-
-      if (!showConversation) {
-        addChangedField(payload, "assignedTo", activeForm.assignedTo || null, value(currentLead.assigned_to) || null);
-        addChangedField(payload, "callCenterAssignedTo", activeForm.callCenterAssignedTo || null, value(currentLead.call_center_assigned_to) || null);
-        if (activeForm.values.status_label === "تم البيع") {
-          addChangedDateField(payload, "soldAt", activeForm.values.sold_at, originalValues.sold_at);
-        }
-      }
-
-      if (activeForm.values.status_label === "تم البيع") {
-        addChangedField(payload, "soldQuantity", Math.max(1, Math.floor(Number(activeForm.values.sold_quantity || 1))), originalValues.sold_quantity || "1");
-      }
-
-      const originalCustomFields = currentLead.extra_data && typeof currentLead.extra_data === "object" ? currentLead.extra_data : {};
-      const customFields = Object.fromEntries(
-        Object.entries(activeForm.customFields).filter(([key, next]) => comparableValue(next) !== comparableValue(originalCustomFields[key])),
-      );
-      if (Object.keys(customFields).length) payload.customFields = customFields;
-      if (noteDraft.trim()) payload.newNote = noteDraft.trim();
-
-      const changedKeys = Object.keys(payload).filter((key) => !["id", "databaseEdit"].includes(key));
-      if (!changedKeys.length) {
-        setNotice("لا توجد تغييرات لحفظها");
-        return;
-      }
-
+      const payload = {
+        id: activeForm.id,
+        customerName: activeForm.values.customer_name,
+        phone: activeForm.values.phone,
+        sourceCode: activeForm.values.source_code,
+        serviceKey: activeForm.serviceKey,
+        departmentCode: activeForm.departmentCode,
+        branchCode: activeForm.branchCode,
+        statusLabel: activeForm.values.status_label,
+        paymentType: activeForm.paymentType,
+        followUpAt: activeForm.values.follow_up_at || null,
+        age: activeForm.values.age,
+        salary: activeForm.values.salary,
+        obligation: activeForm.values.obligation,
+        salaryBank: activeForm.values.salary_bank,
+        location: activeForm.values.location,
+        carType: activeForm.values.car_type,
+        carCategory: activeForm.values.car_category,
+        carName: activeForm.values.car_type,
+        carModel: activeForm.values.car_model,
+        color: activeForm.values.color,
+        financeType: activeForm.values.finance_type,
+        soldQuantity: activeForm.values.status_label === "تم البيع" ? Math.max(1, Math.floor(Number(activeForm.values.sold_quantity || 1))) : undefined,
+        newNote: noteDraft.trim(),
+        customFields: activeForm.customFields,
+      };
       const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
       setForm((current) => current ? { ...current, values: { ...current.values, notes: value(result.row.notes) } } : current);
       setNoteDraft("");
@@ -773,31 +628,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
           <section className="crm-drawer-details crm-customer-details-panel">
             <header className="crm-customer-details-title"><h3>بيانات العميل</h3><span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span></header>
-            {!showConversation ? (
-              <section className="crm-database-edit-routing" aria-label="تعديل بيانات توزيع العميل">
-                <header><div><strong>بيانات التوزيع والحالة</strong><span>الحفظ يحدّث نفس العميل الحالي ولا ينشئ عميلاً جديدًا.</span></div></header>
-                <div className="crm-database-edit-routing-grid">
-                  <label><span>القسم</span><select value={activeForm.departmentCode} onChange={(event) => changeDatabaseDepartment(event.target.value)}>{databaseDepartmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-                  <label><span>الفرع</span><select value={activeForm.branchCode} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="">بدون فرع</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
-                  <label><span>الدفع</span><select value={activeForm.paymentType} onChange={(event) => setForm((current) => current ? { ...current, paymentType: event.target.value } : current)}><option value="كاش">كاش</option><option value="تمويل">تمويل</option><option value="خدمة عملاء">خدمة عملاء</option></select></label>
-                  <label><span>الحالة</span><select value={activeForm.values.status_label} onChange={(event) => {
-                    const nextStatus = event.target.value;
-                    setForm((current) => current ? {
-                      ...current,
-                      values: {
-                        ...current.values,
-                        status_label: nextStatus,
-                        follow_up_at: isPostponed(nextStatus) ? current.values.follow_up_at : "",
-                        sold_at: nextStatus === "تم البيع" ? (current.values.sold_at || riyadhDateInput()) : current.values.sold_at,
-                      },
-                    } : current);
-                  }}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
-                  {activeForm.values.status_label === "تم البيع" ? <label className="crm-sold-at-field"><span>تاريخ تم البيع</span><input type="date" value={activeForm.values.sold_at || ""} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_at: event.target.value } } : current)} /></label> : null}
-                  <label><span>المسؤول</span><select value={activeForm.assignedTo} onChange={(event) => setForm((current) => current ? { ...current, assignedTo: event.target.value } : current)}><option value="">غير موزع</option>{editableAgents.map((user) => <option key={user.id} value={user.id}>{user.full_name}{user.branches.length ? ` - ${user.branches.join("، ")}` : ""}</option>)}</select></label>
-                  <label><span>الكول سنتر</span><select value={activeForm.callCenterAssignedTo} onChange={(event) => setForm((current) => current ? { ...current, callCenterAssignedTo: event.target.value } : current)}><option value="">بدون كول سنتر</option>{editableCallCenterUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
-                </div>
-              </section>
-            ) : null}
             <div className="crm-form-grid">
               {configuredFields.map(renderField)}
               {activeForm.values.status_label === "تم البيع" && (department === "cash" || department === "finance") ? (

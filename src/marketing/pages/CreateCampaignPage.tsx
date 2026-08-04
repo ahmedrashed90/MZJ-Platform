@@ -3,16 +3,14 @@ import { getJSZip } from "../zip";
 import { CalendarBlank, CheckCircle, CurrencyCircleDollar, FolderOpen, Plus, Trash } from "@phosphor-icons/react";
 import { marketingFetch, marketingLocalDateKey, marketingQuery } from "../api";
 import { CreativeEditor, newCreativeDraft } from "../components/CreativeEditor";
-import { CreativeMultiPicker } from "../components/CreativeMultiPicker";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
-import { compactExecutionFolderCreation } from "../executionFolders";
-import type { CreativeDraft, ExecutionFolderCreation, MarketingMeta, RawFolderRequest, RawFolderResult } from "../types";
+import type { CreativeDraft, MarketingMeta } from "../types";
 
 const emptyMeta: MarketingMeta = { ok: true, users: [], departments: [], contentDepartmentId: "", actions: [], creativeTypes: [], campaignTypes: [], platforms: [], postTypes: [], funnels: [], cars: [], connections: [], permissions: { effective: [] } };
 const steps = ["بيانات الحملة", "الكرييتيف", "الميزانية", "جدول النشر", "المراجعة والإنشاء"];
-type Budget = { id: string; funnelId: string; creativeTempIds: string[]; adsCount: number; contentGoal: string; expectedGoal: string; platformAmounts: Array<{ platformId: string; amount: number }> };
-type Schedule = { id: string; date: string; creativeTempIds: string[]; platforms: Array<{ platformId: string; postTypeIds: string[] }> };
+type Budget = { id: string; funnelId: string; creativeTempId: string; adsCount: number; contentGoal: string; expectedGoal: string; platformAmounts: Array<{ platformId: string; amount: number }> };
+type Schedule = { id: string; date: string; creativeTempId: string; platforms: Array<{ platformId: string; postTypeIds: string[] }> };
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 function validateCreativeTaskFlow(creative: CreativeDraft, meta: MarketingMeta) {
@@ -56,7 +54,6 @@ export function CreateCampaignPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [executionFolders, setExecutionFolders] = useState<ExecutionFolderCreation | null>(null);
 
   useEffect(() => { marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`).then(setMeta).catch((failure) => setError(failure instanceof Error ? failure.message : "تعذر تحميل الإعدادات")); }, []);
   async function campaignTypeChanged(id: string) {
@@ -66,23 +63,10 @@ export function CreateCampaignPage() {
     catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر توليد كود الحملة"); }
   }
   function updateCreative(index: number, value: CreativeDraft) { setCreatives((current) => current.map((item, itemIndex) => itemIndex === index ? value : item)); }
-  function deleteCreative(index: number) {
-    const removedId = creatives[index]?.tempId;
-    setCreatives((current) => current.filter((_, itemIndex) => itemIndex !== index));
-    if (!removedId) return;
-    setBudgets((current) => current.map((item) => ({ ...item, creativeTempIds: item.creativeTempIds.filter((id) => id !== removedId) })));
-    setSchedule((current) => current.map((item) => ({ ...item, creativeTempIds: item.creativeTempIds.filter((id) => id !== removedId) })));
-  }
   function creativeName(tempId: string) { const creative = creatives.find((item) => item.tempId === tempId); return meta.creativeTypes.find((item) => item.id === creative?.creativeTypeId)?.name || "—"; }
-  const creativePickerItems = useMemo(() => creatives.map((creative, index) => ({ id: creative.tempId, name: creativeName(creative.tempId), code: `كرييتيف ${index + 1}` })), [creatives, meta.creativeTypes]);
-  function creativeNames(tempIds: string[]) { return tempIds.map(creativeName).filter((name) => name !== "—").join("، ") || "—"; }
   function platformName(id: string) { return meta.platforms.find((item) => item.id === id)?.name || "—"; }
-  function budgetTotal(item: Budget) {
-    const platformTotal = item.platformAmounts.reduce((sum, platform) => sum + Number(platform.amount || 0), 0);
-    const creativeCount = Math.max(1, new Set(item.creativeTempIds.filter(Boolean)).size);
-    return platformTotal * creativeCount;
-  }
-  const totalBudget = useMemo(() => budgets.reduce((sum, item) => sum + budgetTotal(item), 0), [budgets]);
+  const totalBudget = useMemo(() => budgets.reduce((sum, item) => sum + item.platformAmounts.reduce((part, platform) => part + Number(platform.amount || 0), 0), 0), [budgets]);
+  function budgetTotal(item: Budget) { return item.platformAmounts.reduce((sum, platform) => sum + Number(platform.amount || 0), 0); }
   function schedulePostCount(item: Schedule) { return item.platforms.reduce((sum, platform) => sum + platform.postTypeIds.length, 0); }
   function scheduleDateLabel(date: string) {
     if (!date) return "لم يتم تحديد اليوم";
@@ -97,36 +81,6 @@ export function CreateCampaignPage() {
     creative.optionalAssignments.forEach((group) => group.assignments.forEach((assignment) => assignment.contentUserIds.forEach((contentId) => rows.push({ day: "", creative: creativeLabel, department: meta.departments.find((item) => item.id === group.departmentId)?.name, user: user(assignment.userId), contentUser: user(contentId), dueOn: assignment.dueOn, note: assignment.note }))));
     return rows;
   }), [creatives, meta]);
-  const rawFolderPayload = useMemo<RawFolderRequest>(() => ({
-    monthKey: form.publishStart.slice(0, 7),
-    campaignCode: form.campaignCode,
-    campaignFolderName: `${form.campaignCode}-${form.name}`,
-    campaignDisplayName: form.name,
-    driveLetter: "Z:",
-    remoteRoot: "/var/www/mzj-raw",
-    creatives: creatives.map((creative, index) => {
-      const executionAssignments = [
-        ...creative.primaryAssignments,
-        ...creative.optionalAssignments.flatMap((group) => group.assignments),
-      ];
-      const users = [...new Map(executionAssignments.map((assignment) => {
-        const name = meta.users.find((item) => item.id === assignment.userId)?.full_name
-          || meta.users.find((item) => item.id === assignment.userId)?.fullName
-          || assignment.userId;
-        return [assignment.userId, { uid: assignment.userId, name }] as const;
-      })).values()];
-      return {
-        name: creativeName(creative.tempId),
-        folderName: `${String(index + 1).padStart(2, "0")}-${creativeName(creative.tempId)}`,
-        creativeInstanceId: creative.tempId,
-        creativeIndex: index + 1,
-        cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })),
-        users,
-      };
-    }),
-  }), [form.publishStart, form.campaignCode, form.name, creatives, meta.users, meta.creativeTypes]);
-  const rawFolderPlanKey = useMemo(() => JSON.stringify(rawFolderPayload), [rawFolderPayload]);
-  useEffect(() => { setExecutionFolders(null); }, [rawFolderPlanKey]);
 
   function validateCurrent() {
     if (step === 0 && (!form.campaignTypeId || !form.campaignCode || !form.name || !form.publishStart || !form.publishEnd)) return "أكمل بيانات الحملة الأساسية";
@@ -137,27 +91,24 @@ export function CreateCampaignPage() {
         if (issue) return issue;
       }
     }
-    if (step === 2 && budgets.some((item) => !item.creativeTempIds.length)) return "اختر كرييتيفًا واحدًا على الأقل لكل بند ميزانية";
-    if (step === 3 && schedule.some((item) => !item.creativeTempIds.length)) return "اختر كرييتيفًا واحدًا على الأقل لكل يوم نشر";
     return "";
   }
   function next() { const issue = validateCurrent(); if (issue) { setError(issue); return; } setError(""); setStep((current) => Math.min(4, current + 1)); }
   async function create() {
     setLoading(true); setError(""); setMessage("");
     try {
-      const result = await marketingFetch<{ message: string; id: string; code: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_campaign", ...form, creatives, budgets, schedule, executionFolders }) });
+      const result = await marketingFetch<{ message: string; id: string; code: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_campaign", ...form, creatives, budgets, schedule }) });
       setMessage(`${result.message} — ${result.code}`);
-      setStep(0); setForm({ campaignDate: marketingLocalDateKey(), publishStart: "", publishEnd: "", campaignTypeId: "", campaignCode: "", name: "", objective: "", requiredFromContent: "" }); setCreatives([newCreativeDraft()]); setBudgets([]); setSchedule([]); setExecutionFolders(null);
+      setStep(0); setForm({ campaignDate: marketingLocalDateKey(), publishStart: "", publishEnd: "", campaignTypeId: "", campaignCode: "", name: "", objective: "", requiredFromContent: "" }); setCreatives([newCreativeDraft()]); setBudgets([]); setSchedule([]);
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر إنشاء الحملة"); }
     finally { setLoading(false); }
   }
   async function createRawFolders() {
-    setLoading(true); setError(""); setExecutionFolders(null);
+    setLoading(true); setError("");
     try {
-      const result = await marketingFetch<RawFolderResult>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_raw_folders", payload: rawFolderPayload }) });
-      if (result.ok === false || !result.rawFolders || !Object.keys(result.rawFolders).length) throw new Error(result.message || "لم يرجع السيرفر مسارات فولدرات الخام");
-      setExecutionFolders(compactExecutionFolderCreation(rawFolderPayload, result));
-      setMessage(result.message || "تم إنشاء فولدرات الخام وربط مساراتها بالتاسكات التنفيذية");
+      const payload = { monthKey: form.publishStart.slice(0, 7), campaignCode: form.campaignCode, campaignFolderName: `${form.campaignCode}-${form.name}`, creatives: creatives.map((creative, index) => ({ name: creativeName(creative.tempId), folderName: `${String(index + 1).padStart(2, "0")}-${creativeName(creative.tempId)}`, creativeInstanceId: creative.tempId, creativeIndex: index + 1, cars: creative.cars.map((car) => ({ id: car.id, name: `${car.car_name || "سيارة"}-${car.exterior_color || ""}-${car.interior_color || ""}` })), users: [...creative.primaryAssignments, ...creative.optionalAssignments.flatMap((group) => group.assignments)].map((assignment) => ({ uid: assignment.userId, name: meta.users.find((item) => item.id === assignment.userId)?.full_name || assignment.userId })) })) };
+      const result = await marketingFetch<{ message?: string }>("/api/marketing", { method: "POST", body: JSON.stringify({ action: "create_raw_folders", payload }) });
+      setMessage(result.message || "تم إنشاء فولدرات الخام");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر إنشاء فولدرات الخام"); }
     finally { setLoading(false); }
   }
@@ -171,7 +122,7 @@ export function CreateCampaignPage() {
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}{message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
     <section className="panel marketing-wizard-panel">
       {step === 0 ? <div className="marketing-form-grid"><label><span>تاريخ الحملة</span><input type="date" value={form.campaignDate} readOnly /></label><label><span>بداية النشر</span><input type="date" value={form.publishStart} onChange={(event) => setForm({ ...form, publishStart: event.target.value })} /></label><label><span>نهاية النشر</span><input type="date" value={form.publishEnd} min={form.publishStart} onChange={(event) => setForm({ ...form, publishEnd: event.target.value })} /></label><label><span>نوع الحملة</span><select value={form.campaignTypeId} onChange={(event) => void campaignTypeChanged(event.target.value)}><option value="">اختر نوع الحملة</option>{meta.campaignTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>كود الحملة</span><input value={form.campaignCode} readOnly /></label><label><span>اسم الحملة</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="full"><span>هدف الحملة</span><textarea rows={3} value={form.objective} onChange={(event) => setForm({ ...form, objective: event.target.value })} /></label><label className="full"><span>المطلوب من كاتب المحتوى</span><textarea rows={4} value={form.requiredFromContent} onChange={(event) => setForm({ ...form, requiredFromContent: event.target.value })} /></label></div> : null}
-      {step === 1 ? <div className="marketing-creatives-list">{creatives.map((creative, index) => <CreativeEditor key={creative.tempId} value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary onChange={(value) => updateCreative(index, value)} onDelete={() => deleteCreative(index)} />)}<button type="button" className="marketing-add-block" onClick={() => setCreatives((current) => [...current, newCreativeDraft()])}><Plus size={18} />إضافة كرييتيف</button></div> : null}
+      {step === 1 ? <div className="marketing-creatives-list">{creatives.map((creative, index) => <CreativeEditor key={creative.tempId} value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary onChange={(value) => updateCreative(index, value)} onDelete={() => setCreatives((current) => current.filter((_, itemIndex) => itemIndex !== index))} />)}<button type="button" className="marketing-add-block" onClick={() => setCreatives((current) => [...current, newCreativeDraft()])}><Plus size={18} />إضافة كرييتيف</button></div> : null}
       {step === 2 ? <div className="marketing-budget-list marketing-campaign-budget-step">
         <div className="marketing-campaign-step-head">
           <div className="marketing-campaign-step-icon"><CurrencyCircleDollar size={25} weight="duotone" /></div>
@@ -184,7 +135,7 @@ export function CreateCampaignPage() {
           </header>
           <div className="marketing-budget-fields">
             <label><span>Funnel</span><select value={budget.funnelId} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, funnelId: event.target.value } : item))}><option value="">اختر Funnel</option>{meta.funnels.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-            <div className="marketing-multi-field"><CreativeMultiPicker label="المنتج / الكرييتيف" hint="يمكن ربط بند الميزانية بأكثر من كرييتيف" items={creativePickerItems} value={budget.creativeTempIds} onChange={(creativeTempIds) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, creativeTempIds } : item))} /></div>
+            <label><span>المنتج / الكرييتيف</span><select value={budget.creativeTempId} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, creativeTempId: event.target.value } : item))}><option value="">اختر الكرييتيف</option>{creatives.map((item) => <option key={item.tempId} value={item.tempId}>{creativeName(item.tempId)}</option>)}</select></label>
             <label><span>عدد الإعلانات</span><input type="number" min={1} value={budget.adsCount} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, adsCount: Number(event.target.value) || 1 } : item))} /></label>
             <label><span>هدف المحتوى</span><input value={budget.contentGoal} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, contentGoal: event.target.value } : item))} /></label>
             <label><span>الهدف المتوقع</span><input value={budget.expectedGoal} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, expectedGoal: event.target.value } : item))} /></label>
@@ -200,7 +151,7 @@ export function CreateCampaignPage() {
           </div>
           <footer className="marketing-budget-card-total"><span>إجمالي بند الميزانية</span><strong>{budgetTotal(budget).toLocaleString("ar-SA")} ر.س</strong></footer>
         </article>) : <div className="marketing-campaign-empty-state"><CurrencyCircleDollar size={30} weight="duotone" /><strong>لا توجد بنود ميزانية حتى الآن</strong><span>أضف بندًا لبدء توزيع الميزانية على المنصات.</span></div>}
-        <button type="button" className="marketing-add-block marketing-add-budget" onClick={() => setBudgets((current) => [...current, { id: uid(), funnelId: "", creativeTempIds: [], adsCount: 1, contentGoal: "", expectedGoal: "", platformAmounts: [] }])}><Plus size={18} />إضافة بند ميزانية</button>
+        <button type="button" className="marketing-add-block marketing-add-budget" onClick={() => setBudgets((current) => [...current, { id: uid(), funnelId: "", creativeTempId: "", adsCount: 1, contentGoal: "", expectedGoal: "", platformAmounts: [] }])}><Plus size={18} />إضافة بند ميزانية</button>
         <div className="marketing-total-budget"><span>إجمالي الميزانية الكلي</span><strong>{totalBudget.toLocaleString("ar-SA")} ر.س</strong></div>
       </div> : null}
       {step === 3 ? <div className="marketing-schedule-list marketing-campaign-schedule-step">
@@ -223,7 +174,7 @@ export function CreateCampaignPage() {
               </header>
               <div className="marketing-schedule-fields">
                 <label><span>اليوم</span><input type="date" min={form.publishStart} max={form.publishEnd} value={item.date} onChange={(event) => setSchedule((current) => current.map((part) => part.id === item.id ? { ...part, date: event.target.value } : part))} /></label>
-                <div className="marketing-multi-field"><CreativeMultiPicker label="المنتج / الكرييتيف" hint="يمكن اختيار أكثر من كرييتيف لنفس اليوم" items={creativePickerItems} value={item.creativeTempIds} onChange={(creativeTempIds) => setSchedule((current) => current.map((part) => part.id === item.id ? { ...part, creativeTempIds } : part))} /></div>
+                <label><span>المنتج / الكرييتيف</span><select value={item.creativeTempId} onChange={(event) => setSchedule((current) => current.map((part) => part.id === item.id ? { ...part, creativeTempId: event.target.value } : part))}><option value="">اختر الكرييتيف</option>{creatives.map((creative) => <option key={creative.tempId} value={creative.tempId}>{creativeName(creative.tempId)}</option>)}</select></label>
               </div>
               <div className="marketing-schedule-platforms">
                 {meta.platforms.map((platform) => {
@@ -235,11 +186,11 @@ export function CreateCampaignPage() {
                 })}
               </div>
             </article>) : <div className="marketing-campaign-empty-state"><CalendarBlank size={30} weight="duotone" /><strong>لا توجد أيام نشر مضافة</strong><span>أضف يومًا ثم اختر الكرييتيف والمنصات وأنواع النشر.</span></div>}
-            <button type="button" className="marketing-add-block marketing-add-schedule" onClick={() => setSchedule((current) => [...current, { id: uid(), date: form.publishStart, creativeTempIds: [], platforms: [] }])}><Plus size={18} />إضافة لليوم</button>
+            <button type="button" className="marketing-add-block marketing-add-schedule" onClick={() => setSchedule((current) => [...current, { id: uid(), date: form.publishStart, creativeTempId: "", platforms: [] }])}><Plus size={18} />إضافة لليوم</button>
           </div>
         </div>
       </div> : null}
-      {step === 4 ? <div className="marketing-review"><div className="marketing-review-grid"><article><small>اسم الحملة</small><strong>{form.name}</strong></article><article><small>كود الحملة</small><strong>{form.campaignCode}</strong></article><article><small>الفترة</small><strong>{form.publishStart} — {form.publishEnd}</strong></article><article><small>الكرييتيفات</small><strong>{creatives.length}</strong></article><article><small>Task Templates</small><strong>{creatives.reduce((sum, item) => sum + item.contentAssignments.length, 0)}</strong></article><article><small>العلاقات</small><strong>{relations.length}</strong></article><article><small>بنود الميزانية</small><strong>{budgets.length}</strong></article><article><small>إجمالي الميزانية</small><strong>{totalBudget.toLocaleString("ar-SA")} ر.س</strong></article><article><small>جدول النشر</small><strong>{schedule.length}</strong></article></div><div className="marketing-review-table"><table><thead><tr><th>اليوم</th><th>الكرييتيف</th><th>المنصات</th></tr></thead><tbody>{schedule.map((item) => <tr key={item.id}><td>{item.date}</td><td>{creativeNames(item.creativeTempIds)}</td><td>{item.platforms.map((platform) => platformName(platform.platformId)).join("، ")}</td></tr>)}</tbody></table></div><div className="marketing-inline-actions"><button type="button" className="secondary" onClick={() => void createRawFolders()} disabled={loading}><FolderOpen size={17} />إنشاء فولدرات الخام</button><button type="button" className="secondary" onClick={() => void downloadRelationsZip()}>تحميل شيتات العلاقات ZIP</button><button type="button" className="primary" onClick={() => void create()} disabled={loading}><CheckCircle size={17} />{loading ? "جاري إنشاء الحملة..." : "إنشاء الحملة"}</button></div></div> : null}
+      {step === 4 ? <div className="marketing-review"><div className="marketing-review-grid"><article><small>اسم الحملة</small><strong>{form.name}</strong></article><article><small>كود الحملة</small><strong>{form.campaignCode}</strong></article><article><small>الفترة</small><strong>{form.publishStart} — {form.publishEnd}</strong></article><article><small>الكرييتيفات</small><strong>{creatives.length}</strong></article><article><small>Task Templates</small><strong>{creatives.reduce((sum, item) => sum + item.contentAssignments.length, 0)}</strong></article><article><small>العلاقات</small><strong>{relations.length}</strong></article><article><small>بنود الميزانية</small><strong>{budgets.length}</strong></article><article><small>إجمالي الميزانية</small><strong>{totalBudget.toLocaleString("ar-SA")} ر.س</strong></article><article><small>جدول النشر</small><strong>{schedule.length}</strong></article></div><div className="marketing-review-table"><table><thead><tr><th>اليوم</th><th>الكرييتيف</th><th>المنصات</th></tr></thead><tbody>{schedule.map((item) => <tr key={item.id}><td>{item.date}</td><td>{creativeName(item.creativeTempId)}</td><td>{item.platforms.map((platform) => platformName(platform.platformId)).join("، ")}</td></tr>)}</tbody></table></div><div className="marketing-inline-actions"><button type="button" className="secondary" onClick={() => void createRawFolders()} disabled={loading}><FolderOpen size={17} />إنشاء فولدرات الخام</button><button type="button" className="secondary" onClick={() => void downloadRelationsZip()}>تحميل شيتات العلاقات ZIP</button><button type="button" className="primary" onClick={() => void create()} disabled={loading}><CheckCircle size={17} />{loading ? "جاري إنشاء الحملة..." : "إنشاء الحملة"}</button></div></div> : null}
       <footer className="marketing-wizard-footer">{step > 0 ? <button type="button" className="secondary" onClick={() => setStep((current) => current - 1)}>السابق</button> : <span />}{step < 4 ? <button type="button" className="primary" onClick={next}>التالي</button> : null}</footer>
     </section>
   </MarketingPage>;

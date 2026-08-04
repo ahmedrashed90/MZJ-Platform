@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Archive, Car, CheckCircle, MapPin, WarningCircle } from "@phosphor-icons/react";
-import { formatTrackingDate, formatTrackingMoney, trackingFetch, trackingBranchLabel } from "../api";
+import { formatTrackingDate, formatTrackingMoney, trackingFetch } from "../api";
 import type { PublicTrackingOrder, TrackingVehicle } from "../types";
 
 function visibleVin(vehicle: TrackingVehicle) {
@@ -66,7 +66,7 @@ export function PublicTrackingPage() {
               <div className="public-info-grid">
                 <div><small>رقم الطلب</small><strong>{order.sales_order_no}</strong></div>
                 <div><small>اسم العميل</small><strong>{order.customer_name || "—"}</strong></div>
-                <div><small>الفرع</small><strong>{trackingBranchLabel(order.branch)}</strong></div>
+                <div><small>الفرع</small><strong>{order.branch || "—"}</strong></div>
                 <div><small>تاريخ الطلب</small><strong>{formatTrackingDate(order.order_date, false)}</strong></div>
                 <div><small>عدد السيارات</small><strong>{order.vehicles.length}</strong></div>
                 <div><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(order.total_incl_vat)}</strong></div>

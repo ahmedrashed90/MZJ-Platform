@@ -7,7 +7,6 @@ import {
   DownloadSimple,
   FileArrowUp,
   FloppyDisk,
-  FolderOpen,
   ShieldCheck,
   WarningCircle,
   XCircle,
@@ -115,46 +114,6 @@ function carsText(cars: unknown) {
 
 function DetailItem({ label, value, wide = false }: { label: string; value: unknown; wide?: boolean }) {
   return <article className={wide ? "wide" : ""}><small>{label}</small><strong>{String(value || "—")}</strong></article>;
-}
-
-type TaskExecutionFolders = {
-  linked?: boolean;
-  rawWindowsPath?: string;
-  outputWindowsPath?: string;
-  userOutputWindowsPath?: string;
-  rawFolderUrl?: string;
-  outputFolderUrl?: string;
-  userOutputFolderUrl?: string;
-};
-
-function taskExecutionFolders(value: unknown): TaskExecutionFolders | null {
-  if (!value) return null;
-  if (typeof value === "string") {
-    try { return taskExecutionFolders(JSON.parse(value)); } catch { return null; }
-  }
-  if (typeof value !== "object" || Array.isArray(value)) return null;
-  const folders = value as TaskExecutionFolders;
-  if (!folders.linked || !folders.rawWindowsPath || !(folders.userOutputWindowsPath || folders.outputWindowsPath)) return null;
-  return folders;
-}
-
-function normalizeExecutionWindowsPath(path: unknown) {
-  let value = String(path || "").trim().replace(/^['"]+|['"]+$/g, "");
-  try { value = decodeURIComponent(value); } catch { /* keep stored path */ }
-  value = value.replace(/^file:\/+/i, "").replace(/\//g, "\\").replace(/\\+$/g, "");
-  return /^[a-z]:\\/i.test(value) ? value : "";
-}
-
-function openExecutionFolder(path: unknown, fallbackUrl: unknown) {
-  const windowsPath = normalizeExecutionWindowsPath(path);
-  if (windowsPath) {
-    // Keep the protocol launch inside the user's click and do not send a trailing
-    // backslash; quoted Explorer arguments ending with a slash can open Documents.
-    window.location.href = `mzjfolder://open?path=${encodeURIComponent(windowsPath)}`;
-    return;
-  }
-  const url = String(fallbackUrl || "").trim();
-  if (url) window.open(url, "_blank", "noopener,noreferrer");
 }
 
 
@@ -369,7 +328,6 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const finalUploadLoadedBytes = finalUpload?.files.reduce((sum, item) => sum + Math.min(item.loaded, item.size), 0) || 0;
   const finalUploadPercent = finalUploadTotalBytes ? Math.round((finalUploadLoadedBytes / finalUploadTotalBytes) * 100) : 0;
   const activeFinalUploadFile = finalUpload?.files.find((item) => item.status === "uploading" || item.status === "verifying") || null;
-  const executionFolders = task?.task_kind === "execution" ? taskExecutionFolders(task.execution_folders) : null;
 
   function selectReviewField(key: string) {
     if (!canReview) return;
@@ -444,16 +402,6 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <DetailItem label="المطلوب من كاتب المحتوى" value={task.required_from_content} wide />
           </div>
           <div className="marketing-task-progress"><span>نسبة الإنجاز</span><ProgressBar value={Number(task.progress || 0)} /></div>
-        </section> : null}
-
-        {executionFolders ? <section className="marketing-task-section marketing-execution-folders-section">
-          <div className="marketing-task-section-heading">
-            <div><h3><FolderOpen size={21} />ملفات التنفيذ</h3><p>فتح فولدر الخام للكرييتيف أو فولدر التسليم الخاص بك مباشرة.</p></div>
-          </div>
-          <div className="marketing-inline-actions">
-            <button type="button" className="secondary" title={executionFolders.rawWindowsPath} onClick={() => openExecutionFolder(executionFolders.rawWindowsPath, executionFolders.rawFolderUrl)}><FolderOpen size={18} />فتح فولدر RAW</button>
-            <button type="button" className="secondary" title={executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath} onClick={() => openExecutionFolder(executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath, executionFolders.userOutputFolderUrl || executionFolders.outputFolderUrl)}><FolderOpen size={18} />فتح فولدر OUTPUT</button>
-          </div>
         </section> : null}
 
         {task.task_kind === "task_template" ? <>

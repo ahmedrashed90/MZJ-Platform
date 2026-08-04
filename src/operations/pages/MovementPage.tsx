@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Car, CheckCircle, Trash, WarningCircle, XCircle } from "@phosphor-icons/react";
+import { ArrowRight, Car, Trash, WarningCircle } from "@phosphor-icons/react";
 import { OperationsVehiclePicker } from "../components/OperationsVehiclePicker";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "../components/ResizableOperationsTable";
 import { operationsFetch, queryString } from "../api";
@@ -49,7 +49,7 @@ export function MovementPage() {
       note: "",
       stateNote: row.state_note || "",
       shortageNote: row.shortage_note || "",
-      checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "ok", note: "" }])),
+      checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "unknown", note: "" }])),
     }]);
     setSearch("");
     setResults([]);
@@ -96,10 +96,7 @@ export function MovementPage() {
             note: item.note,
             stateNote: item.stateNote,
             shortageNote: item.shortageNote,
-            checks: item.location_code === "agency" ? meta.checkItems.map((check) => {
-              const value = item.checks[check.code] || { status: "ok", note: "" };
-              return { itemCode: check.code, status: value.status, note: value.note };
-            }) : [],
+            checks: item.location_code === "agency" ? Object.entries(item.checks).map(([itemCode, value]: [string, { status: string; note: string }]) => ({ itemCode, status: value.status, note: value.note })) : [],
           })),
         }),
       });
@@ -116,21 +113,18 @@ export function MovementPage() {
 
   return (
     <div className="module-page operations-page operations-movement-page">
+      <header className="module-page-head"><div><h1>الحركة</h1><p>تحريك سيارة أو عدة سيارات إلى مكان وحالة جديدين داخل عملية واحدة، مع حفظ سجل مستقل لكل سيارة.</p></div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 
       <section className="panel operations-movement-panel">
         <div className="operations-movement-controls">
-          <div className="operations-movement-search">
-            <OperationsVehiclePicker search={search} results={results} placeholder="ابحث برقم الهيكل أو السيارة أو البيان" onSearchChange={setSearch} onSelect={add} />
-          </div>
-          <div className="operations-movement-targets" aria-label="بيانات الحركة الجديدة">
-            <label className="operations-control-field"><span>المكان الجديد</span><select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
-          </div>
+          <OperationsVehiclePicker search={search} results={results} placeholder="ابحث برقم الهيكل أو السيارة أو البيان" onSearchChange={setSearch} onSelect={add} />
+          <label className="operations-control-field"><span>المكان الجديد</span><select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}><option value="">اختر المكان</option>{meta.locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label className="operations-control-field"><span>الحالة الجديدة</span><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)}>{statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
         </div>
 
-        <label className="operations-field operations-general-note"><span>حجز - نواقص - تحديد مكان</span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="اكتب الحجز أو النواقص أو تحديد المكان" /></label>
+        <label className="operations-field operations-general-note"><span>ملاحظات عامة للحركة</span><textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} placeholder="ملاحظة اختيارية تطبق على الحركة" /></label>
 
         {!selected.length ? (
           <div className="operations-empty-state"><Car size={42} weight="duotone" /><strong>لم يتم اختيار سيارات</strong><span>ابحث عن السيارة وأضفها، ثم حدد المكان والحالة الجديدة.</span></div>
@@ -152,35 +146,11 @@ export function MovementPage() {
                 <summary>تشيك الوكالة للسيارة <b dir="ltr">{item.vin}</b></summary>
                 <div className="operations-check-editor">
                   {meta.checkItems.map((check) => {
-                    const checkValue = item.checks[check.code] || { status: "ok", note: "" };
+                    const checkValue = item.checks[check.code] || { status: "unknown", note: "" };
                     return (
                       <article key={check.code} className={`operations-check-edit-card status-${checkValue.status}`}>
-                        <header>
-                          <strong>{check.name}</strong>
-                          <span className="operations-check-state">
-                            {checkValue.status === "ok" ? <><CheckCircle size={15} weight="fill" />صح</> : checkValue.status === "missing" ? <><XCircle size={15} weight="fill" />غلط</> : "لم يتم التحديد"}
-                          </span>
-                        </header>
-                        <div className="operations-check-binary" role="group" aria-label={`حالة ${check.name}`}>
-                          <button
-                            type="button"
-                            className={`operations-check-binary-option ok${checkValue.status === "ok" ? " active" : ""}`}
-                            aria-pressed={checkValue.status === "ok"}
-                            onClick={() => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: "ok" } } })}
-                          >
-                            <span className="operations-check-option-icon" aria-hidden="true"><CheckCircle size={22} weight={checkValue.status === "ok" ? "fill" : "regular"} /></span>
-                            <span className="operations-check-option-copy"><b>صح</b><small>الحالة سليمة</small></span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`operations-check-binary-option missing${checkValue.status === "missing" ? " active" : ""}`}
-                            aria-pressed={checkValue.status === "missing"}
-                            onClick={() => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: "missing" } } })}
-                          >
-                            <span className="operations-check-option-icon" aria-hidden="true"><XCircle size={22} weight={checkValue.status === "missing" ? "fill" : "regular"} /></span>
-                            <span className="operations-check-option-copy"><b>غلط</b><small>توجد ملاحظة</small></span>
-                          </button>
-                        </div>
+                        <header><strong>{check.name}</strong><span>{checkValue.status === "ok" ? "موجود" : checkValue.status === "missing" ? "ناقص" : "غير محدد"}</span></header>
+                        <label><span>الحالة</span><select value={checkValue.status} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, status: event.target.value } } })}><option value="unknown">غير محدد</option><option value="ok">موجود</option><option value="missing">ناقص</option></select></label>
                         <label><span>الملاحظة</span><input placeholder="اكتب ملاحظة اختيارية" value={checkValue.note} onChange={(event) => patch(item.id, { checks: { ...item.checks, [check.code]: { ...checkValue, note: event.target.value } } })} /></label>
                       </article>
                     );

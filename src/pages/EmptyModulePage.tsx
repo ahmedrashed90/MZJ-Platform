@@ -3,6 +3,12 @@ import { Database, PlugsConnected } from "@phosphor-icons/react";
 export function EmptyModulePage({ title, description }: { title: string; description: string }) {
   return (
     <div className="module-page">
+      <header className="module-page-head">
+        <div>
+          <h1>{title}</h1>
+          <p>{description}</p>
+        </div>
+      </header>
       <section className="module-empty">
         <div>
           <PlugsConnected size={48} weight="duotone" />

@@ -85,7 +85,7 @@ export function CrmInboxAgentPage() {
 
   return (
     <div className="crm-page inbox-agent-page">
-      <div className="page-top-actions"><button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button></div>
+      <header className="crm-page-head"><div><h1>وكيل صندوق الوارد</h1><p>وكيل مركزي داخل المنصة يراقب تأخر الرد البشري على كل القنوات المفعلة، ويرد ويصعّد وفق الإعدادات.</p></div><button className="crm-secondary-button" onClick={() => void load()}><ArrowClockwise size={18} />تحديث</button></header>
       <div className="crm-agent-status-grid"><div className={`crm-agent-status ${settings.enabled ? "on" : "off"}`}><Robot size={30} weight="duotone" /><span>حالة الوكيل</span><strong>{settings.enabled ? "مفعل" : "متوقف"}</strong></div><div><span>أول رد بعد</span><strong>{settings.firstDelaySeconds}</strong><small>بالثواني</small></div><div><span>مديرو التصعيد</span><strong>{managers.filter((m) => m.is_active).length}</strong><small>مدير مفعّل</small></div><div><span>إجراءات اليوم</span><strong>{logsToday}</strong><small>ردود وتصعيدات</small></div><div><span>وكيل السوشيال</span><strong>{settings.socialEnabled ? "مفعل" : "متوقف"}</strong><small>{settings.socialPlatforms.join("، ") || "لا توجد منصات"}</small></div></div>
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       <div className="crm-department-tabs"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}>الإعدادات العامة</button><button className={tab === "replies" ? "active" : ""} onClick={() => setTab("replies")}>الردود</button><button className={tab === "logs" ? "active" : ""} onClick={() => setTab("logs")}>السجل</button></div>

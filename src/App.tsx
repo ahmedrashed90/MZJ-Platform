@@ -36,6 +36,7 @@ const CreateCampaignPage = lazy(() => import("./marketing/pages/CreateCampaignPa
 const CreateAgendaPage = lazy(() => import("./marketing/pages/CreateAgendaPage").then((module) => ({ default: module.CreateAgendaPage })));
 const MarketingDatabasePage = lazy(() => import("./marketing/pages/MarketingDatabasePage").then((module) => ({ default: module.MarketingDatabasePage })));
 const PackagesPage = lazy(() => import("./marketing/pages/PackagesPage").then((module) => ({ default: module.PackagesPage })));
+const PlatformConnectionsPage = lazy(() => import("./marketing/pages/PlatformConnectionsPage").then((module) => ({ default: module.PlatformConnectionsPage })));
 const PublishPrepPage = lazy(() => import("./marketing/pages/PublishPrepPage").then((module) => ({ default: module.PublishPrepPage })));
 const EngagementPage = lazy(() => import("./marketing/pages/EngagementPage").then((module) => ({ default: module.EngagementPage })));
 const MonitoringPage = lazy(() => import("./marketing/pages/MonitoringPage").then((module) => ({ default: module.MonitoringPage })));
@@ -109,7 +110,7 @@ function PlatformRoutes() {
             <Route path="create-agenda" element={<PermissionGuard permission="marketing.create_agenda.view"><CreateAgendaPage /></PermissionGuard>} />
             <Route path="database" element={<PermissionGuard permission="marketing.database.view"><MarketingDatabasePage /></PermissionGuard>} />
             <Route path="packages" element={<PermissionGuard permission="marketing.packages.view"><PackagesPage /></PermissionGuard>} />
-            <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><Navigate to="/settings?section=marketing&tab=platforms" replace /></PermissionGuard>} />
+            <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><PlatformConnectionsPage /></PermissionGuard>} />
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
             <Route path="engagement" element={<PermissionGuard permission="marketing.publish_prep.view"><EngagementPage /></PermissionGuard>} />
             <Route path="monitoring" element={<PermissionGuard permission="marketing.monitoring.view"><MonitoringPage /></PermissionGuard>} />

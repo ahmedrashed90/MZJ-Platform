@@ -19,8 +19,7 @@ expect("src/operations/components/MovementHistoryTable.tsx", "إداري الع�
 expect("src/operations/stateNote.ts", "replace(/^مباع\\s+تحت\\s+التسليم", "legacy archive note cleanup");
 expect("server/crm/reports.ts", "reportSoldQuantity", "canonical CRM sold quantity metric");
 expect("server/crm/reports.ts", "return total + reportSoldQuantity(lead.sold_quantity)", "CRM report totals match customer sold quantities");
-expect("server/crm/kpi.ts", "const salesCount = days.reduce", "manager-entered KPI sales count");
-if (read("server/crm/kpi.ts").includes("tracking.order_vehicles")) throw new Error("KPI sales must not be calculated from tracking vehicles");
+expect("server/crm/kpi.ts", "tracking.order_vehicles", "vehicle-aware KPI sales count");
 
 const soldMetric = (rows) => rows.reduce((total, lead) => {
   if (lead.status !== "تم البيع") return total;

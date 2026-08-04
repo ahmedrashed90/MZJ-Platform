@@ -23,10 +23,10 @@ expect(
   marketing.includes("set is_content=(id=${contentDepartmentIdValue}::uuid)")
     && marketing.includes("replace(lower(btrim(cd.name)), ' ', '') in ('قسمالمحتوى'")
 );
-const explicitContentTaskCreationCount = marketing.match(/const contentId = contentDepartmentId\(meta\);/g)?.length || 0;
 expect(
-  "Campaign, agenda, and post-creation creative task flows use the explicit content department ID",
-  explicitContentTaskCreationCount >= 3
+  "Campaign and agenda task creation use the explicit content department ID",
+  marketing.includes("const contentId = contentDepartmentId(meta);")
+    && marketing.match(/const contentId = contentDepartmentId\(meta\);/g)?.length === 2
 );
 expect(
   "Creative editor selects content users by contentDepartmentId before any compatibility fallback",

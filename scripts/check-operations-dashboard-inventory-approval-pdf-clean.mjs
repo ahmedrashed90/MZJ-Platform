@@ -65,13 +65,11 @@ expect(
     && dashboardPage.includes("آخر ملاحظات الموافقات"),
 );
 expect(
-  "Approval popup opens directly from the vehicle and contains complete notes, actors, dates, and approval actions",
+  "Approval popup contains complete notes, actors, dates, vehicle details, and a full detail view",
   ["financial_note", "administrative_note", "financial_approved_by_name", "administrative_approved_by_name", "status_name", "state_note", "shortage_note"].every((field) => operationsApi.includes(field))
     && dashboardModal.includes("الملاحظة المالية")
     && dashboardModal.includes("الملاحظة الإدارية")
-    && dashboardModal.includes("dashboard-approval-vehicle-button")
-    && dashboardModal.includes("فتح الموافقات المالية والإدارية")
-    && !dashboardModal.includes('label: "التفاصيل"')
+    && dashboardModal.includes("عرض كامل")
     && dashboardModal.includes("dashboard-approval-detail-modal")
     && styles.includes("dashboard-approval-detail-content"),
 );

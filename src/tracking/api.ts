@@ -46,17 +46,3 @@ export function trackingStatusLabel(status?: string | null, isArchived = false, 
   if (status === "in_progress") return "تحت الإجراء";
   return "لم يبدأ";
 }
-
-const TRACKING_BRANCH_LABELS: Record<string, string> = {
-  hall: "فرع الصالة",
-  multaqa: "فرع الملتقى",
-  qadisiyah: "فرع القادسية",
-  online: "فرع الاونلاين",
-  customer_service: "خدمة العملاء",
-  call_center_branch: "الكول سنتر",
-};
-
-export function trackingBranchLabel(value?: string | null) {
-  const branch = String(value || "").trim();
-  return TRACKING_BRANCH_LABELS[branch] || branch || "—";
-}

@@ -63,6 +63,7 @@ export function VehicleManagementPage() {
 
   return (
     <div className="module-page operations-page">
+      <header className="module-page-head"><div><h1>إدارة السيارات</h1><p>إضافة وتعديل البيانات الأساسية واستيراد المخزون بثلاثة أوضاع آمنة.</p></div></header>
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}{message ? <div className="operations-alert success">{message}</div> : null}
       <div className="operations-management-grid">
         <section className="panel operations-form-panel">

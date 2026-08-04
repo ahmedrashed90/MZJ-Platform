@@ -27,6 +27,11 @@ function RequestIcon({ kind, size = 23 }: { kind: string; size?: number }) {
   return kind === "photography" ? <Camera size={size} /> : <Truck size={size} />;
 }
 
+function formatPhotographyDate(value?: string | null) {
+  const date = new Date(String(value || ""));
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString("ar-SA") : "—";
+}
+
 export function TransferRequestsPage() {
   const { meta } = useOperations();
   const [tab, setTab] = useState<"create" | "active" | "completed">("create");
@@ -200,6 +205,13 @@ export function TransferRequestsPage() {
 
   return (
     <div className="module-page operations-page operations-transfer-page">
+      <header className="module-page-head">
+        <div>
+          <h1>الطلبات</h1>
+          <p>إنشاء طلبات النقل ومتابعة طلبات النقل والتصوير خلال المراحل الأربع بين المكان المصدر والمكان المستهدف.</p>
+        </div>
+      </header>
+
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
       {message ? <div className="operations-alert success">{message}</div> : null}
 
@@ -276,7 +288,7 @@ export function TransferRequestsPage() {
                 <div className="operations-request-copy">
                   <b>{row.request_no} · {requestKindLabels[row.request_kind] || row.request_kind}</b>
                   <span>{row.source_location_name || "—"} <ArrowRight size={14} /> {row.destination_location_name || "—"}</span>
-                  <small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}</small>
+                  <small>{row.requested_by_name || "—"} · {formatOperationsDate(row.requested_at)}{row.request_kind === "photography" ? ` · تاريخ التصوير: ${formatPhotographyDate(row.photography_date)}` : ""}</small>
                 </div>
                 <span className={`operations-status status-${row.status}`}>{row.cancelled_at ? "ملغي" : stageLabels[row.status] || row.status}</span>
                 <strong>{row.vehicles_count}</strong>
@@ -300,6 +312,7 @@ export function TransferRequestsPage() {
               <div><small>المكان المصدر</small><strong>{selected.source_location_name || "—"}</strong></div>
               <div><small>المكان المستهدف</small><strong>{selected.destination_location_name || "—"}</strong></div>
               <div><small>الحالة الحالية</small><strong>{selected.cancelled_at ? "ملغي" : stageLabels[selected.status] || selected.status}</strong></div>
+              {selected.request_kind === "photography" ? <div><small>تاريخ التصوير</small><strong>{formatPhotographyDate(selected.photography_date)}</strong></div> : null}
               <div><small>المنشئ</small><strong>{selected.requested_by_name || "—"}</strong></div>
               <div><small>تاريخ الإنشاء</small><strong>{formatOperationsDate(selected.requested_at)}</strong></div>
             </div>

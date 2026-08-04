@@ -52,6 +52,7 @@ alter table operations.transfer_requests add column if not exists status text no
 alter table operations.transfer_requests add column if not exists requested_by uuid references core.users(id);
 alter table operations.transfer_requests add column if not exists requested_at timestamptz not null default now();
 alter table operations.transfer_requests add column if not exists completed_at timestamptz;
+alter table operations.transfer_requests add column if not exists photography_date date;
 alter table operations.transfer_requests add column if not exists request_kind text not null default 'transfer';
 alter table operations.transfer_requests add column if not exists source_branch_code text;
 alter table operations.transfer_requests add column if not exists destination_branch_code text;
@@ -105,8 +106,6 @@ end $$;
 create table if not exists operations.event_outbox (
   id uuid primary key default gen_random_uuid(),
   event_type text not null,
-  aggregate_type text,
-  aggregate_id text,
   system_code text not null default 'operations',
   entity_type text,
   entity_id text,
@@ -126,8 +125,6 @@ create table if not exists operations.event_outbox (
   processed_at timestamptz
 );
 alter table operations.event_outbox add column if not exists event_type text;
-alter table operations.event_outbox add column if not exists aggregate_type text;
-alter table operations.event_outbox add column if not exists aggregate_id text;
 alter table operations.event_outbox add column if not exists system_code text not null default 'operations';
 alter table operations.event_outbox add column if not exists entity_type text;
 alter table operations.event_outbox add column if not exists entity_id text;

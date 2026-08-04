@@ -8,7 +8,7 @@ const packageJson = JSON.parse(read("package.json"));
 const versionParts = String(packageJson.version || "0.0.0").split(".").map(Number);
 if (versionParts[0] < 1 || (versionParts[0] === 1 && versionParts[1] < 17)) throw new Error("ERPNext unified link check failed: package version must be 1.17.0 or newer");
 expect("api/index.ts", '"integrations/erpnext/sales-order"', "single ERPNext endpoint");
-expect("server/integrations/erpnext-sales-order.ts", "ingestTrackingOrder({ ...payload, branch: trackingBranchCode || payload.branch })", "canonical tracking ingest with platform branch routing");
+expect("server/integrations/erpnext-sales-order.ts", "ingestTrackingOrder(payload)", "canonical tracking ingest");
 expect("server/integrations/erpnext-sales-order.ts", "syncErpNextSalesOrder", "unified CRM/operations sync");
 expect("server/_erpnext-sales-order-normalizer.ts", 'integrationSource: "erpnext-webhook"');
 expect("server/_erpnext-sales-order-normalizer.ts", '"serial_no"', "VIN field alias");
@@ -16,7 +16,7 @@ expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerName = 
 expect("server/_erpnext-sales-order-normalizer.ts", 'const actualCustomerPhone = alternateCustomer.name ? alternateCustomer.phone');
 expect("server/_erpnext-sales-order-sync.ts", '=== "to deliver and bill"', "only approved ERP status");
 reject("server/_erpnext-sales-order-sync.ts", '=== "completed"', "Completed status automation");
-expect("server/_erpnext-sales-order-sync.ts", "resolveErpNextPlatformUser(normalized.erpUserId)", "email-only user resolution");
+expect("server/_erpnext-sales-order-sync.ts", "resolvePlatformUser(normalized.erpUserId)", "email-only user resolution");
 reject("server/_erpnext-sales-order-sync.ts", "next_erp_branch", "legacy ERP branch user mapping");
 reject("server/_erpnext-sales-order-sync.ts", "branch_mismatch", "ERP branch matching gate");
 expect("server/_erpnext-sales-order-sync.ts", "if (!existing)", "create CRM customer when phone is not registered");

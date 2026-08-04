@@ -51,7 +51,7 @@ assert(integrationProcessor.includes("markCrmLeadUnread"), "integration messages
 assert(schema.includes("car_category") && schema.includes("'الفئة'") && schema.includes("include_in_completion"), "car category migration/completion definition is missing");
 assert(leadsServer.includes("carCategory") && leadsServer.includes("car_category"), "car category save mapping is missing");
 assert(dashboardServer.includes("l.car_category"), "car category is missing from dashboard data");
-assert(drawer.includes('field_key: "car_category"') && drawer.includes('label: "الفئة"') && drawer.includes('addChangedField(payload, "carCategory", activeForm.values.car_category'), "car category field is missing from customer data UI");
+assert(drawer.includes('label: "الفئة"') && drawer.includes("carCategory: activeForm.values.car_category"), "car category field is missing from customer data UI");
 
 const example = [
   { id: "read-a", unread: false, order: 0 },
