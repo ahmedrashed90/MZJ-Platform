@@ -440,6 +440,7 @@ alter table operations.transfer_requests alter column status set default 'create
 alter table operations.transfer_requests add column if not exists requested_by uuid references core.users(id);
 alter table operations.transfer_requests add column if not exists requested_at timestamptz not null default now();
 alter table operations.transfer_requests add column if not exists completed_at timestamptz;
+alter table operations.transfer_requests add column if not exists photography_date date;
 alter table operations.transfer_requests add column if not exists request_kind text not null default 'transfer';
 alter table operations.transfer_requests add column if not exists source_branch_code text;
 alter table operations.transfer_requests add column if not exists destination_branch_code text;

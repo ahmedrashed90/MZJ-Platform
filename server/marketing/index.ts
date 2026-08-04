@@ -2565,7 +2565,7 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
-      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.note,r.cancelled_at,
+      select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.photography_date,r.note,r.cancelled_at,
         sl.name as source_location_name,dl.name as destination_location_name,
         (r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
         coalesce((
@@ -2618,8 +2618,10 @@ async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user
 async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const vehicles=arrayValue(body.vehicles).map((item:any)=>({vehicleId:clean(item.vehicleId),note:clean(item.note)})).filter((item:any)=>item.vehicleId);
   const destinationLocationId=clean(body.destinationLocationId);
+  const photographyDate=isoDate(body.photographyDate);
   if(!vehicles.length)throw new Error("اختر سيارة واحدة على الأقل");
   if(!destinationLocationId)throw new Error("اختر المكان المستهدف");
+  if(!photographyDate)throw new Error("اختر تاريخ التصوير");
   const uniqueIds=[...new Set(vehicles.map((item:any)=>item.vehicleId))];
   if(uniqueIds.length!==vehicles.length)throw new Error("لا يمكن اختيار السيارة نفسها أكثر من مرة");
   return sql.begin(async tx=>{
@@ -2644,12 +2646,12 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
     const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;
     const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;
     const[request]=await tx<any[]>`
-      insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,note)
-      values(${requestNo},'marketing','photography','photography',${source.location_id},${destinationLocationId}::uuid,'created',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${clean(body.note)||null})
+      insert into operations.transfer_requests(request_no,department_code,transfer_type,request_kind,source_location_id,destination_location_id,status,requested_by,requested_by_name,requested_by_role,requested_by_branch,source_branch_code,destination_branch_code,photography_date,note)
+      values(${requestNo},'marketing','photography','photography',${source.location_id},${destinationLocationId}::uuid,'created',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${source.branch_code||source.location_code||null},${destination.branch_code||destination.code||null},${photographyDate}::date,${clean(body.note)||null})
       returning *,id::text
     `;
     for(const car of cars)await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${car.id}::uuid,${car.location_id},${car.status_code},${car.itemNote||null})`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,vehicles}))})`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,photographyDate,vehicles}))})`;
     return{ok:true,request,message:"تم إنشاء طلب التصوير"};
   });
 }

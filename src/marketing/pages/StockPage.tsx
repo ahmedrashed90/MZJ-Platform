@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Camera, CheckCircle, MagnifyingGlass, Trash, WarningCircle } from "@phosphor-icons/react";
+import { ArrowRight, CalendarBlank, Camera, CaretDown, CheckCircle, MagnifyingGlass, Trash, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { OperationsVehiclePicker } from "../../operations/components/OperationsVehiclePicker";
 import { ResizableOperationsTable, type ResizableOperationsColumn } from "../../operations/components/ResizableOperationsTable";
@@ -33,6 +33,7 @@ type PhotoRequestRow = {
   requested_at: string;
   completed_at?: string | null;
   cancelled_at?: string | null;
+  photography_date?: string | null;
   note?: string | null;
   source_location_name?: string | null;
   destination_location_name?: string | null;
@@ -63,6 +64,20 @@ const requestStatusLabels: Record<string, string> = {
   vehicle_received: "تم استلام السيارة",
   completed: "تم الانتهاء",
 };
+
+function formatPhotographyDate(value: string | null | undefined) {
+  const normalized = String(value || "").slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) return "—";
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (!Number.isFinite(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
+}
 
 function toVehicleRow(row: GroupedCar): VehicleRow {
   return {
@@ -107,6 +122,7 @@ export function StockPage() {
   const [pickerSearch, setPickerSearch] = useState("");
   const [selectedCars, setSelectedCars] = useState<GroupedCar[]>([]);
   const [destinationLocationId, setDestinationLocationId] = useState("");
+  const [photographyDate, setPhotographyDate] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [requestNote, setRequestNote] = useState("");
   const [error, setError] = useState("");
@@ -244,6 +260,7 @@ export function StockPage() {
   function openRequest(row: GroupedCar) {
     setSelectedCars([row]);
     setDestinationLocationId("");
+    setPhotographyDate("");
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
@@ -261,6 +278,7 @@ export function StockPage() {
     setRequestOpen(false);
     setSelectedCars([]);
     setDestinationLocationId("");
+    setPhotographyDate("");
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
@@ -312,7 +330,7 @@ export function StockPage() {
   }
 
   async function createRequest() {
-    if (!selectedCars.length || !destinationLocationId) return;
+    if (!selectedCars.length || !destinationLocationId || !photographyDate) return;
     setBusy(true);
     setError("");
     setMessage("");
@@ -322,6 +340,7 @@ export function StockPage() {
         body: JSON.stringify({
           action: "create_photo_request",
           destinationLocationId,
+          photographyDate,
           note: requestNote,
           vehicles: selectedCars.map((row) => ({ vehicleId: row.id, note: notes[row.id] || "" })),
         }),
@@ -403,12 +422,13 @@ export function StockPage() {
           <section className="marketing-card">
             <div className="marketing-table-wrap">
               <table>
-                <thead><tr><th>رقم الطلب</th><th>الحالة</th><th>المكان المصدر</th><th>المكان المستهدف</th><th>المنشئ</th><th>تاريخ الإنشاء</th><th>السيارات</th><th>الإجراء</th></tr></thead>
+                <thead><tr><th>رقم الطلب</th><th>الحالة</th><th>تاريخ التصوير</th><th>المكان المصدر</th><th>المكان المستهدف</th><th>المنشئ</th><th>تاريخ الإنشاء</th><th>السيارات</th><th>الإجراء</th></tr></thead>
                 <tbody>
                   {visibleRequests.length ? visibleRequests.map((row) => (
                     <tr key={row.id}>
                       <td><strong>{row.request_no}</strong></td>
                       <td><span className={`marketing-status ${row.status === "completed" ? "success" : "warning"}`}>{row.cancelled_at ? "ملغي" : requestStatusLabels[row.status] || row.status}</span></td>
+                      <td>{formatPhotographyDate(row.photography_date)}</td>
                       <td>{row.source_location_name || "—"}</td>
                       <td>{row.destination_location_name || "—"}</td>
                       <td>{row.requested_by_name || "—"}</td>
@@ -416,7 +436,7 @@ export function StockPage() {
                       <td>{row.vehicles.length.toLocaleString("ar-SA")}</td>
                       <td><button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedRequest(row)}>عرض ومتابعة</button></td>
                     </tr>
-                  )) : <tr><td colSpan={8}>لا توجد طلبات في هذا التبويب.</td></tr>}
+                  )) : <tr><td colSpan={9}>لا توجد طلبات في هذا التبويب.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -435,6 +455,7 @@ export function StockPage() {
           <div className="operations-transfer-detail">
             <div className="operations-request-summary-grid">
               <div><small>الحالة الحالية</small><strong>{selectedRequest.cancelled_at ? "ملغي" : requestStatusLabels[selectedRequest.status] || selectedRequest.status}</strong></div>
+              <div><small>تاريخ التصوير</small><strong>{formatPhotographyDate(selectedRequest.photography_date)}</strong></div>
               <div><small>المكان المصدر</small><strong>{selectedRequest.source_location_name || "—"}</strong></div>
               <div><small>المكان المستهدف</small><strong>{selectedRequest.destination_location_name || "—"}</strong></div>
               <div><small>المنشئ</small><strong>{selectedRequest.requested_by_name || "—"}</strong></div>
@@ -492,7 +513,7 @@ export function StockPage() {
         footer={(
           <>
             <button type="button" className="secondary" disabled={busy} onClick={closeRequest}>إلغاء</button>
-            <button type="button" className="primary" disabled={busy || !selectedCars.length || !destinationLocationId || selectedCars.some((row) => Boolean(row.active_transfer_requests))} onClick={() => void createRequest()}>
+            <button type="button" className="primary" disabled={busy || !selectedCars.length || !destinationLocationId || !photographyDate || selectedCars.some((row) => Boolean(row.active_transfer_requests))} onClick={() => void createRequest()}>
               <Camera size={18} />{busy ? "جاري الإنشاء..." : "إنشاء طلب التصوير"}
             </button>
           </>
@@ -513,6 +534,24 @@ export function StockPage() {
                 <option value="">اختر المكان</option>
                 {(data?.locations || []).filter((item) => item.id !== selectedSourceLocationId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
+            </label>
+            <label className="operations-control-field marketing-photo-date-field">
+              <span>تاريخ التصوير</span>
+              <span className={`marketing-photo-date-control${photographyDate ? " has-value" : ""}`}>
+                <CalendarBlank size={20} weight="duotone" />
+                <span className="marketing-photo-date-copy">
+                  <strong>{photographyDate ? formatPhotographyDate(photographyDate) : "اختر تاريخ التصوير"}</strong>
+                  <small>{photographyDate ? "اضغط لتغيير التاريخ" : "اضغط لفتح التقويم"}</small>
+                </span>
+                <CaretDown size={16} />
+                <input
+                  type="date"
+                  value={photographyDate}
+                  onChange={(event) => setPhotographyDate(event.target.value)}
+                  aria-label="تاريخ التصوير"
+                  required
+                />
+              </span>
             </label>
           </div>
 

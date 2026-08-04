@@ -186,6 +186,110 @@ function notificationDateTime(value: unknown) {
   }).format(date);
 }
 
+function notificationDateOnly(value: unknown) {
+  const normalized = clean(value).slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) return normalized;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12));
+  if (!Number.isFinite(date.getTime())) return normalized;
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Asia/Riyadh",
+  }).format(date);
+}
+
+function operationsRequestVehicleDetailLines(input: unknown) {
+  const vehicles = Array.isArray(input) ? input : [];
+  return vehicles.flatMap((vehicle: any, index: number) => {
+    const vehicleTitle = [
+      clean(vehicle?.vin),
+      clean(vehicle?.carName || vehicle?.car_name),
+      clean(vehicle?.statement),
+      clean(vehicle?.modelYear || vehicle?.model_year) ? `موديل ${clean(vehicle?.modelYear || vehicle?.model_year)}` : "",
+      clean(vehicle?.exteriorColor || vehicle?.exterior_color) ? `خارجي ${clean(vehicle?.exteriorColor || vehicle?.exterior_color)}` : "",
+      clean(vehicle?.interiorColor || vehicle?.interior_color) ? `داخلي ${clean(vehicle?.interiorColor || vehicle?.interior_color)}` : "",
+    ].filter(Boolean).join(" - ");
+    return [
+      detailLine(`السيارة ${index + 1}`, vehicleTitle),
+      detailLine(`ملاحظة السيارة ${index + 1}`, vehicle?.itemNote || vehicle?.item_note || vehicle?.note),
+    ].filter(Boolean);
+  });
+}
+
+async function loadOperationsRequestNotificationDetails(sql: ReturnType<typeof getSql>, requestId: string) {
+  if (!requestId || !validUuid(requestId)) return null;
+  const [request] = await sql<any[]>`
+    select r.id::text,r.request_no,r.request_kind,r.status,r.photography_date::text,r.note,r.cancellation_reason,
+      r.requested_by::text,r.requested_by_name,r.requested_by_role,r.requested_by_branch,r.requested_at,r.completed_at,r.cancelled_at,
+      r.source_branch_code,r.destination_branch_code,sl.name as source_location_name,dl.name as destination_location_name,
+      coalesce((
+        select json_agg(json_build_object(
+          'vehicleId',v.id::text,
+          'vin',v.vin,
+          'carName',v.car_name,
+          'statement',v.statement,
+          'modelYear',v.model_year,
+          'exteriorColor',v.exterior_color,
+          'interiorColor',v.interior_color,
+          'itemNote',rv.item_note,
+          'sourceStatus',rv.source_status
+        ) order by v.vin)
+        from operations.transfer_request_vehicles rv
+        join operations.vehicles v on v.id=rv.vehicle_id
+        where rv.transfer_request_id=r.id
+      ),'[]'::json) as vehicles,
+      coalesce((
+        select json_build_object(
+          'stage',e.stage,
+          'action',e.action,
+          'note',e.note,
+          'actorName',e.actor_name,
+          'actorRole',e.actor_role,
+          'actorBranch',e.actor_branch,
+          'createdAt',e.created_at
+        )
+        from operations.transfer_request_events e
+        where e.transfer_request_id=r.id
+        order by e.created_at desc,e.id desc
+        limit 1
+      ),'{}'::json) as latest_event
+    from operations.transfer_requests r
+    left join operations.locations sl on sl.id=r.source_location_id
+    left join operations.locations dl on dl.id=r.destination_location_id
+    where r.id=${requestId}::uuid
+    limit 1
+  `;
+  return request || null;
+}
+
+function photographyRequestNotificationBody(request: any, actionLabel: string, responsibleName: string, note?: unknown) {
+  const vehicles = Array.isArray(request?.vehicles) ? request.vehicles : [];
+  const latestEvent = request?.latest_event && typeof request.latest_event === "object" ? request.latest_event : {};
+  return joinDetails([
+    detailLine("رقم الطلب", request?.request_no),
+    detailLine("نوع الطلب", "طلب تصوير"),
+    detailLine("الإجراء", actionLabel),
+    detailLine("المرحلة الحالية", operationsRequestStageLabel(request?.status)),
+    detailLine("تاريخ التصوير", notificationDateOnly(request?.photography_date)),
+    detailPath("مسار الطلب", request?.source_location_name, request?.destination_location_name),
+    detailCount("عدد السيارات", vehicles.length),
+    ...operationsRequestVehicleDetailLines(vehicles),
+    detailLine("ملاحظات الطلب", note || latestEvent?.note || request?.cancellation_reason || request?.note),
+    detailLine("منشئ الطلب", request?.requested_by_name),
+    detailLine("صفة منشئ الطلب", request?.requested_by_role),
+    detailLine("فرع منشئ الطلب", request?.requested_by_branch),
+    detailLine("تاريخ إنشاء الطلب", notificationDateTime(request?.requested_at)),
+    detailLine("منفذ آخر إجراء", latestEvent?.actorName),
+    detailLine("صفة منفذ آخر إجراء", latestEvent?.actorRole),
+    detailLine("فرع منفذ آخر إجراء", latestEvent?.actorBranch),
+    detailLine("وقت آخر إجراء", notificationDateTime(latestEvent?.createdAt)),
+    detailLine("المسؤول عن الإجراء الحالي", responsibleName),
+  ]);
+}
+
 function providerPostIdFromPublishResult(platform: unknown, input: unknown) {
   const result = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, any> : {};
   const publish = result.publish && typeof result.publish === "object" && !Array.isArray(result.publish) ? result.publish as Record<string, any> : {};
@@ -495,6 +599,71 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
   const sql = getSql();
   const id = clean(result?.id || body?.id || body?.sourceId || body?.taskId || body?.templateId);
   const actor = { actorId: user.id, actorName: user.fullName };
+
+  if (action === "create_photo_request" || action === "complete_photo_request") {
+    const requestId = clean(result?.request?.id || body?.id);
+    const request = await loadOperationsRequestNotificationDetails(sql, requestId);
+    if (!request || clean(request.request_kind) !== "photography") return;
+    const completed = action === "complete_photo_request";
+    const title = completed ? "تم إنهاء طلب التصوير" : "تم إنشاء طلب تصوير جديد";
+    await createNotification({
+      systemCode: "operations",
+      eventType: completed ? "photography_request_completed" : "photography_request_created",
+      title,
+      body: photographyRequestNotificationBody(request, completed ? "تم الانتهاء من طلب التصوير" : "إنشاء طلب التصوير", user.fullName, body?.note),
+      entityType: "photography_request",
+      entityId: requestId,
+      actionUrl: "/operations/transfers",
+      severity: "success",
+      branchCodes: [request.source_branch_code, request.destination_branch_code],
+      ...actor,
+      metadata: {
+        responsibleName: user.fullName,
+        requestNo: clean(request.request_no),
+        requestKind: "photography",
+        photographyDate: clean(request.photography_date),
+        currentStage: clean(request.status),
+        vehiclesCount: Array.isArray(request.vehicles) ? request.vehicles.length : 0,
+      },
+      dedupeKey: notificationDedupe(completed ? "photography-request-completed" : "photography-request-created", requestId, completed ? request.completed_at || request.status : request.requested_at),
+    });
+    return;
+  }
+
+  if (action === "mark_stock_photographed") {
+    const vehicleIds = values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : []);
+    if (!vehicleIds.length) return;
+    const vehicles = await sql<any[]>`
+      select v.id::text,v.vin,v.car_name as "carName",v.statement,v.model_year as "modelYear",
+        v.exterior_color as "exteriorColor",v.interior_color as "interiorColor",l.name as location_name,l.branch_code,l.code as location_code
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.id in ${sql(vehicleIds)}
+      order by v.vin
+    `;
+    await createNotification({
+      systemCode: "marketing",
+      eventType: "vehicle_photography_status_updated",
+      title: vehicles.length === 1 ? "تم تحديث السيارة إلى تم التصوير" : "تم تحديث السيارات إلى تم التصوير",
+      body: joinDetails([
+        detailLine("الإجراء", "تحديث حالة التصوير إلى تم التصوير"),
+        detailCount("عدد السيارات", vehicles.length),
+        ...operationsRequestVehicleDetailLines(vehicles),
+        ...vehicles.map((vehicle: any, index: number) => detailLine(`مكان السيارة ${index + 1}`, vehicle.location_name)),
+        detailLine("المسؤول عن الإجراء", user.fullName),
+      ]),
+      entityType: "vehicle_photography_status",
+      entityId: vehicleIds[0],
+      actionUrl: "/marketing/stock",
+      severity: "success",
+      branchCodes: values(vehicles.flatMap((vehicle: any) => [vehicle.branch_code, vehicle.location_code])),
+      ...actor,
+      metadata: { responsibleName: user.fullName, vehicleIds },
+      dedupeKey: notificationDedupe("vehicle-photography-status", vehicleIds.join(","), Date.now()),
+    });
+    return;
+  }
+
   if (action === "publish_now") {
     const successfulRows = Array.isArray(result?.results)
       ? result.results.filter((item: any) => item?.ok && validUuid(clean(item?.id)))
@@ -943,18 +1112,7 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
 
   const requestId = item.type === "request" ? id : clean(body?.requestId || body?.id);
   if (requestId && validUuid(requestId)) {
-    [requestSummary] = await sql<any[]>`
-      select r.id::text,r.request_no,r.request_kind,r.status,r.cancellation_reason,r.note,
-        sl.name as source_location_name,dl.name as destination_location_name,
-        r.source_branch_code,r.destination_branch_code,
-        count(rv.vehicle_id)::int as vehicles_count
-      from operations.transfer_requests r
-      left join operations.locations sl on sl.id=r.source_location_id
-      left join operations.locations dl on dl.id=r.destination_location_id
-      left join operations.transfer_request_vehicles rv on rv.transfer_request_id=r.id
-      where r.id=${requestId}::uuid
-      group by r.id,sl.name,dl.name
-    `;
+    requestSummary = await loadOperationsRequestNotificationDetails(sql, requestId);
     branchCodes = values([branchCodes[0], branchCodes[1], requestSummary?.source_branch_code, requestSummary?.destination_branch_code]);
   }
 
@@ -985,22 +1143,35 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
       : transferAction === "cancel"
         ? "إلغاء الطلب"
         : "تحديث المرحلة";
+    const isPhotographyRequest = clean(requestSummary?.request_kind) === "photography";
+    const currentStageLabel = operationsRequestStageLabel(requestSummary?.status || (action === "create_transfer" ? "created" : ""));
     title = action === "create_transfer"
       ? `تم إنشاء ${operationsRequestKindLabel(requestSummary?.request_kind)}`
       : transferAction === "cancel"
         ? `تم إلغاء ${operationsRequestKindLabel(requestSummary?.request_kind)}`
         : transferAction === "delete"
           ? `تم حذف ${operationsRequestKindLabel(requestSummary?.request_kind)}`
-          : `تم تحديث مرحلة ${operationsRequestKindLabel(requestSummary?.request_kind)}`;
+          : isPhotographyRequest
+            ? `تم تحديث مرحلة طلب التصوير: ${currentStageLabel}`
+            : `تم تحديث مرحلة ${operationsRequestKindLabel(requestSummary?.request_kind)}`;
+    const requestVehicles = Array.isArray(requestSummary?.vehicles) ? requestSummary.vehicles : [];
     bodyText = joinDetails([
       detailLine("رقم الطلب", requestSummary?.request_no),
       detailLine("نوع الطلب", operationsRequestKindLabel(requestSummary?.request_kind)),
-      detailLine("الإجراء", action === "create_transfer" ? "إنشاء الطلب" : actionLabel),
-      detailLine("المرحلة الحالية", operationsRequestStageLabel(requestSummary?.status || (action === "create_transfer" ? "created" : ""))),
+      detailLine("الإجراء", action === "create_transfer" ? "إنشاء الطلب" : isPhotographyRequest && transferAction !== "cancel" && transferAction !== "delete" ? `تنفيذ مرحلة ${currentStageLabel}` : actionLabel),
+      detailLine("المرحلة الحالية", currentStageLabel),
+      ...(isPhotographyRequest ? [detailLine("تاريخ التصوير", notificationDateOnly(requestSummary?.photography_date))] : []),
       detailPath("المسار", requestSummary?.source_location_name, requestSummary?.destination_location_name),
-      detailCount("عدد السيارات", requestSummary?.vehicles_count || values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : []).length),
-      detailLine(transferAction === "cancel" ? "سبب الإلغاء" : "ملاحظة", clean(body?.reason) || clean(body?.note) || clean(requestSummary?.note)),
-      detailLine("بواسطة", user.fullName),
+      detailCount("عدد السيارات", requestVehicles.length || values(Array.isArray(body?.vehicleIds) ? body.vehicleIds : []).length),
+      ...(isPhotographyRequest ? operationsRequestVehicleDetailLines(requestVehicles) : []),
+      ...(isPhotographyRequest ? [
+        detailLine("منشئ طلب التصوير", requestSummary?.requested_by_name),
+        detailLine("صفة منشئ الطلب", requestSummary?.requested_by_role),
+        detailLine("فرع منشئ الطلب", requestSummary?.requested_by_branch),
+        detailLine("تاريخ إنشاء الطلب", notificationDateTime(requestSummary?.requested_at)),
+      ] : []),
+      detailLine(transferAction === "cancel" ? "سبب الإلغاء" : "ملاحظة", clean(body?.reason) || clean(body?.note) || clean(requestSummary?.cancellation_reason) || clean(requestSummary?.note)),
+      detailLine("المسؤول عن الإجراء", user.fullName),
     ]);
   } else if (action === "approval_action") {
     const approvalType = clean(body?.approvalType);
@@ -1056,6 +1227,12 @@ export async function emitOperationsNotification(user: PermissionUser, action: s
     severity: item.severity,
     branchCodes,
     ...actor,
+    metadata: {
+      responsibleName: user.fullName,
+      requestKind: clean(requestSummary?.request_kind),
+      requestNo: clean(requestSummary?.request_no),
+      photographyDate: clean(requestSummary?.photography_date),
+    },
     dedupeKey: notificationDedupe(`operations-${item.event}`, id || requestId || vehicleId, clean(body?.workflowAction || body?.transferAction || body?.status || body?.newStatus || body?.approvalAction), Date.now()),
   });
 }

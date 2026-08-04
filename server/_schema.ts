@@ -301,7 +301,8 @@ create table if not exists operations.transfer_requests (
   status text not null,
   requested_by uuid references core.users(id),
   requested_at timestamptz not null default now(),
-  completed_at timestamptz
+  completed_at timestamptz,
+  photography_date date
 );
 
 create table if not exists operations.transfer_request_vehicles (

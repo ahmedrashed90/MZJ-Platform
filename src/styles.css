@@ -2542,6 +2542,42 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .operations-control-field select:focus,
 .operations-selection-table input:focus { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(198,95,60,.08); }
 
+.marketing-photo-request-create .operations-transfer-controls {
+  grid-template-columns: minmax(360px,1.65fr) minmax(190px,.72fr) minmax(230px,.88fr);
+}
+.marketing-photo-date-control {
+  position: relative;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 24px minmax(0,1fr) 18px;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: #8b7770;
+  cursor: pointer;
+  transition: border-color .16s ease,box-shadow .16s ease,background .16s ease;
+}
+.marketing-photo-date-control:hover { border-color: var(--line-strong); background: #fffdfc; }
+.marketing-photo-date-control:focus-within { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(198,95,60,.08); }
+.marketing-photo-date-control.has-value { color: var(--brand); }
+.marketing-photo-date-copy { min-width: 0; display: grid; gap: 1px; }
+.marketing-photo-date-copy strong { overflow: hidden; color: #4f3932; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.marketing-photo-date-copy small { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.marketing-photo-date-control > input[type="date"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.marketing-photo-date-control > input[type="date"]::-webkit-calendar-picker-indicator { width: 100%; height: 100%; cursor: pointer; }
+
 .operations-vehicle-picker { position: relative; min-width: 0; }
 .operations-vehicle-picker-input { min-height: 44px; }
 .operations-vehicle-picker-results {
@@ -2777,6 +2813,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 @media (max-width: 1100px) {
   .operations-movement-controls,
   .operations-transfer-controls { grid-template-columns: 1fr 1fr; }
+  .marketing-photo-request-create .operations-transfer-controls { grid-template-columns: 1fr 1fr; }
   .operations-movement-controls .operations-vehicle-picker,
   .operations-transfer-controls .operations-vehicle-picker { grid-column: 1 / -1; }
   .operations-request-summary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
@@ -2785,6 +2822,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 @media (max-width: 760px) {
   .operations-movement-controls,
   .operations-transfer-controls,
+  .marketing-photo-request-create .operations-transfer-controls,
   .operations-request-summary-grid,
   .operations-transfer-stage-timeline { grid-template-columns: 1fr; }
   .operations-movement-controls .operations-vehicle-picker,
