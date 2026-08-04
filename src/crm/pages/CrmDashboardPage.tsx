@@ -4,6 +4,7 @@ import {
   ArrowClockwise,
   ChatCircleDots,
   CheckCircle,
+  CaretDown,
   MagnifyingGlass,
   PhoneCall,
   UserPlus,
@@ -115,6 +116,7 @@ export function CrmDashboardPage() {
   const [statuses, setStatuses] = useState<CrmStatus[]>([]);
   const [leads, setLeads] = useState<CrmLead[]>([]);
   const [selected, setSelected] = useState<CrmLead | null>(null);
+  const [expandedStatusId, setExpandedStatusId] = useState("");
   const [reportSummary, setReportSummary] = useState<DashboardReportSummary | null>(null);
   const [summaryView, setSummaryView] = useState<{ title: string; subtitle: string; leads: CrmLead[] } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -128,6 +130,7 @@ export function CrmDashboardPage() {
     setBranch("");
     setAgent("");
     setSelected(null);
+    setExpandedStatusId("");
     setReportSummary(null);
     openedRequestedLead.current = "";
     try { window.sessionStorage.setItem(departmentStorageKey, requestedDepartment); } catch {}
@@ -212,6 +215,7 @@ export function CrmDashboardPage() {
     setBranch("");
     setAgent("");
     setSelected(null);
+    setExpandedStatusId("");
     setReportSummary(null);
     openedRequestedLead.current = "";
     try { window.sessionStorage.setItem(departmentStorageKey, nextDepartment); } catch {}
@@ -351,11 +355,24 @@ export function CrmDashboardPage() {
 
       {!loading ? (
         <div className="crm-board crm-board-five">
-          {groups.map((group) => (
-            <section className={`crm-status-column ${group.unread_messages ? "crm-unread-status-column" : ""} ${isDangerStatusColumn(department, String(group.value || group.label)) ? "crm-danger-status-column" : ""}`} key={group.id}>
+          {groups.map((group) => {
+            const groupId = String(group.id);
+            const expanded = expandedStatusId === groupId;
+            return (
+            <section className={`crm-status-column ${expanded ? "is-expanded" : "is-collapsed"} ${group.unread_messages ? "crm-unread-status-column" : ""} ${isDangerStatusColumn(department, String(group.value || group.label)) ? "crm-danger-status-column" : ""}`} key={group.id}>
               <header>
-                <div><h2>{group.label}</h2></div>
-                <strong>{group.leads.length.toLocaleString("ar-SA")}</strong>
+                <button
+                  type="button"
+                  className="crm-status-toggle"
+                  aria-expanded={expanded}
+                  onClick={() => {
+                    if (!window.matchMedia("(max-width: 620px)").matches) return;
+                    setExpandedStatusId((current) => current === groupId ? "" : groupId);
+                  }}
+                >
+                  <div><CaretDown className="crm-status-toggle-icon" size={18} weight="bold" /><h2>{group.label}</h2></div>
+                  <strong>{group.leads.length.toLocaleString("ar-SA")}</strong>
+                </button>
               </header>
               <div className="crm-status-cards">
                 {group.leads.map((lead) => (
@@ -383,7 +400,8 @@ export function CrmDashboardPage() {
                 {!group.leads.length ? <div className="crm-column-empty">لا يوجد عملاء</div> : null}
               </div>
             </section>
-          ))}
+            );
+          })}
         </div>
       ) : null}
 

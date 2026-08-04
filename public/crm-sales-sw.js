@@ -1,4 +1,4 @@
-const VERSION = "mzj-crm-sales-app-v2";
+const VERSION = "mzj-crm-sales-app-v3";
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));

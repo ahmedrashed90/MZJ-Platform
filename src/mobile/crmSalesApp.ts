@@ -2,10 +2,6 @@ const CRM_SALES_APP_CLASS = "mzj-crm-sales-app";
 const CRM_SALES_APP_QUERY = "crmSalesApp";
 const CRM_SALES_APP_SESSION_KEY = "mzj.crmSalesApp.active";
 
-function isIosStandalone() {
-  return Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
-}
-
 function queryRequestsCrmSalesApp() {
   return new URLSearchParams(window.location.search).get(CRM_SALES_APP_QUERY) === "1";
 }
@@ -20,10 +16,7 @@ function sessionRequestsCrmSalesApp() {
 
 export function isCrmSalesAppMode() {
   if (typeof window === "undefined") return false;
-  return queryRequestsCrmSalesApp()
-    || sessionRequestsCrmSalesApp()
-    || isIosStandalone()
-    || window.matchMedia("(display-mode: standalone)").matches;
+  return queryRequestsCrmSalesApp() || sessionRequestsCrmSalesApp();
 }
 
 export function applyCrmSalesAppEnvironment() {
@@ -33,7 +26,7 @@ export function applyCrmSalesAppEnvironment() {
     try {
       window.sessionStorage.setItem(CRM_SALES_APP_SESSION_KEY, "1");
     } catch {
-      // تستمر النسخة في العمل عبر query أو standalone حتى لو التخزين غير متاح.
+      // يستمر وضع التطبيق عبر query حتى لو التخزين غير متاح.
     }
   }
 
@@ -47,7 +40,6 @@ export function applyCrmSalesAppEnvironment() {
 
   applyModeClass();
   updateViewportHeight();
-  window.matchMedia("(display-mode: standalone)").addEventListener?.("change", applyModeClass);
   window.visualViewport?.addEventListener("resize", updateViewportHeight);
   window.addEventListener("resize", updateViewportHeight, { passive: true });
   window.addEventListener("orientationchange", updateViewportHeight, { passive: true });
