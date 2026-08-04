@@ -4,9 +4,6 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
 import "./styles.css";
-import { applyCrmSalesAppEnvironment } from "./mobile/crmSalesApp";
-
-applyCrmSalesAppEnvironment();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -282,6 +282,29 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
             </tbody>
           </table>
         </div>
+
+        <div className="tracking-mobile-order-list">
+          {!loading && orders.length === 0 ? <div className="tracking-mobile-empty">لا توجد طلبات مطابقة</div> : null}
+          {orders.map((order) => {
+            const percent = progress(order);
+            return (
+              <button type="button" className="tracking-mobile-order-card" key={order.id} onClick={() => void openOrder(order.id)}>
+                <header>
+                  <div><strong>{order.sales_order_no}</strong><small>{order.customer_name || "—"}</small></div>
+                  <span className={`tracking-status ${order.is_cancelled ? "cancelled" : order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived, order.is_cancelled)}</span>
+                </header>
+                <div className="tracking-mobile-order-meta">
+                  <span><b>الجوال</b>{order.customer_mobile || "—"}</span>
+                  <span><b>الفرع</b>{trackingBranchLabel(order.branch)}</span>
+                  <span><b>السيارات</b>{order.vehicles_count}</span>
+                  <span><b>آخر تحديث</b>{formatTrackingDate(order.updated_at)}</span>
+                </div>
+                <div className="tracking-mobile-order-progress"><div><span style={{ width: `${percent}%` }} /></div><b>{percent}%</b></div>
+                <small className="tracking-mobile-order-vins">{order.vins || "لا يوجد رقم هيكل"}</small>
+              </button>
+            );
+          })}
+        </div>
         {loading ? <div className="tracking-loading">جاري تحميل طلبات التتبع...</div> : null}
       </section>
 

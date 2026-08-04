@@ -12,7 +12,6 @@ import {
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
-import { isCrmSalesAppMode } from "../mobile/crmSalesApp";
 
 const items = [
   { href: "/crm", label: "الداش بورد", icon: Gauge, end: true, permission: "crm.dashboard.view" },
@@ -28,9 +27,7 @@ const items = [
 
 export function CrmLayout() {
   const { user } = useAuth();
-  const crmSalesApp = isCrmSalesAppMode();
-  const allowedAppPaths = new Set(["/crm", "/crm/manual-leads"]);
-  const visibleItems = items.filter((item) => hasPermission(user, item.permission) && (!crmSalesApp || allowedAppPaths.has(item.href)));
+  const visibleItems = items.filter((item) => hasPermission(user, item.permission));
   return (
     <section className="crm-module">
       <nav className="crm-system-nav" aria-label="صفحات CRM">

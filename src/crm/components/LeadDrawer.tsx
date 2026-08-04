@@ -594,12 +594,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   async function changeConversationStatus(nextStatus: string) {
     if (!nextStatus || nextStatus === activeForm.values.status_label || savingStatus) return;
-    const previousForm = activeForm;
+    const previousStatus = activeForm.values.status_label;
+    const previousFollowUpAt = activeForm.values.follow_up_at;
+    const previousSoldAt = activeForm.values.sold_at;
     const nextForm: CustomerForm = {
       ...activeForm,
       values: {
         ...activeForm.values,
         status_label: nextStatus,
+        follow_up_at: isPostponed(nextStatus) ? activeForm.values.follow_up_at : "",
         sold_quantity: nextStatus === "تم البيع" ? (activeForm.values.sold_quantity || "1") : activeForm.values.sold_quantity,
         sold_at: nextStatus === "تم البيع" ? (activeForm.values.sold_at || riyadhDateInput()) : activeForm.values.sold_at,
       },
@@ -611,6 +614,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setStatusNotice("");
     try {
       const payload: Record<string, unknown> = { id: nextForm.id, statusLabel: nextStatus };
+      if (!isPostponed(nextStatus) && previousFollowUpAt) payload.followUpAt = null;
       if (nextStatus === "تم البيع") {
         payload.soldQuantity = Math.max(1, Math.floor(Number(nextForm.values.sold_quantity || 1)));
       }
@@ -620,6 +624,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         values: {
           ...current.values,
           status_label: value(result.row.status_label || nextStatus),
+          follow_up_at: result.row.follow_up_at ? comparableDate(result.row.follow_up_at) : current.values.follow_up_at,
           sold_quantity: value(result.row.sold_quantity || current.values.sold_quantity || "1"),
           sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at) : current.values.sold_at,
         },
@@ -627,8 +632,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       onSaved(result.row);
       setStatusNotice("تم تحديث حالة العميل");
     } catch (error) {
-      setForm(previousForm);
-      applyStatusTemplate(previousForm);
+      setForm((current) => current ? {
+        ...current,
+        values: {
+          ...current.values,
+          status_label: previousStatus,
+          follow_up_at: previousFollowUpAt,
+          sold_at: previousSoldAt,
+        },
+      } : current);
       setStatusNotice(error instanceof Error ? error.message : "تعذر تحديث حالة العميل");
     } finally {
       setSavingStatus(false);
@@ -799,7 +811,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
             <div className="crm-customer-title"><span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span><div><span>تعديل بيانات العميل</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div></div>
           )}
           <div className="crm-customer-head-meta"><span><b>المسؤول:</b> {lead.assigned_name || "غير موزع"}</span>{department === "finance" ? <span><b>الكول سنتر:</b> {lead.call_center_name || "غير موزع"}</span> : null}<span><CalendarBlank size={14} /><b>دخول السيستم:</b> {formatDate(lead.registered_at || lead.created_at)}</span></div>
-          <button className="crm-icon-button" type="button" onClick={onClose}><X size={21} /></button>
+          <button className="crm-icon-button" type="button" onClick={onClose} aria-label="إغلاق"><X size={21} /></button>
         </header>
 
         <div className={`crm-drawer-grid crm-customer-workspace-grid ${showConversation ? "" : "crm-edit-customer-grid"}`}>
