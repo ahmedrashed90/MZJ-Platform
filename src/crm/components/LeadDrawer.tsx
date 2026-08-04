@@ -811,23 +811,29 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
             <div className="crm-customer-title"><span className="crm-customer-avatar"><UserCircle size={34} weight="duotone" /></span><div><span>تعديل بيانات العميل</span><h2>{lead.customer_name || "عميل"}</h2><p><Phone size={14} /> {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</p></div></div>
           )}
           <div className="crm-customer-head-meta"><span><b>المسؤول:</b> {lead.assigned_name || "غير موزع"}</span>{department === "finance" ? <span><b>الكول سنتر:</b> {lead.call_center_name || "غير موزع"}</span> : null}<span><CalendarBlank size={14} /><b>دخول السيستم:</b> {formatDate(lead.registered_at || lead.created_at)}</span></div>
-          <button className="crm-icon-button" type="button" onClick={onClose} aria-label="إغلاق"><X size={21} /></button>
+          <button className="crm-icon-button crm-customer-workspace-close" type="button" onClick={onClose} aria-label="إغلاق"><X size={21} /></button>
         </header>
 
         <div className={`crm-drawer-grid crm-customer-workspace-grid ${showConversation ? "" : "crm-edit-customer-grid"}`}>
           {showConversation ? <section className="crm-conversation-panel crm-customer-conversation">
-            <header>
-              <div className="crm-conversation-route"><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div>
-              <div className="crm-conversation-header-actions">
-                <label className="crm-conversation-status-control">
-                  <span>تغيير الحالة</span>
-                  <select value={activeForm.values.status_label} disabled={savingStatus} onChange={(event) => void changeConversationStatus(event.target.value)}>
-                    {activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}
-                    {statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}
-                  </select>
-                </label>
-                <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)} aria-label="تحديث المحادثة"><ArrowClockwise size={18} /></button>
-                {statusNotice ? <small className={`crm-conversation-status-notice ${statusNotice.includes("تعذر") || statusNotice.includes("لا توجد صلاحية") ? "error" : ""}`}>{statusNotice}</small> : null}
+            <header className="crm-conversation-toolbar">
+              <div className="crm-mobile-workspace-nav">
+                <button className="crm-mobile-drawer-back" type="button" onClick={onClose}><ArrowRight size={18} />رجوع</button>
+                <button className="crm-mobile-open-details" type="button" onClick={() => setMobilePanel("details")}><UserCircle size={18} />بيانات العميل</button>
+              </div>
+              <div className="crm-conversation-header-content">
+                <div className="crm-conversation-route"><span>المحادثة</span><strong>{policy.routeLabel}</strong><small>{policy.reason}</small></div>
+                <div className="crm-conversation-header-actions">
+                  <label className="crm-conversation-status-control">
+                    <span>تغيير الحالة</span>
+                    <select value={activeForm.values.status_label} disabled={savingStatus} onChange={(event) => void changeConversationStatus(event.target.value)}>
+                      {activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}
+                      {statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}
+                    </select>
+                  </label>
+                  <button className="crm-icon-button" type="button" onClick={() => void loadConversation(lead.id, conversationId, false)} aria-label="تحديث المحادثة"><ArrowClockwise size={18} /></button>
+                  {statusNotice ? <small className={`crm-conversation-status-notice ${statusNotice.includes("تعذر") || statusNotice.includes("لا توجد صلاحية") ? "error" : ""}`}>{statusNotice}</small> : null}
+                </div>
               </div>
             </header>
             <div className="crm-messages-list" ref={messagesListRef}>
@@ -846,19 +852,30 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                   if (!editedTextStillMatchesTemplate(rendered, nextText)) setSelectedTemplate("");
                 }
               }} placeholder={selectedTemplate ? "راجع القالب واستكمل المتغيرات الظاهرة، أو اكتب نصًا مختلفًا ليُرسل كنص حر" : "اكتب رسالتك هنا... Enter للإرسال و Shift + Enter لسطر جديد"} rows={9} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <div className="crm-composer-attachments">
+              <div className="crm-composer-actions">
+                <div className="crm-composer-attachments">
                 <label className="crm-attachment-button" title="إرفاق صورة أو فيديو أو PDF"><Paperclip size={19} /><span>{pendingFile ? pendingFile.name : "مرفق"}</span><input type="file" accept="image/*,video/*,.pdf,application/pdf" onChange={(event) => setPendingFile(event.target.files?.[0] || null)} /></label>
               </div>
-              <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+                <button type="button" disabled={sending || (!messageText.trim() && !selectedTemplate && !pendingFile)} onClick={() => void sendMessage()}><PaperPlaneTilt size={18} />{sending ? "جاري الإرسال..." : "إرسال"}</button>
+              </div>
             </div>
           </section> : null}
 
           <section className="crm-drawer-details crm-customer-details-panel">
             <header className="crm-customer-details-title">
-              {showConversation ? <button className="crm-mobile-back-to-chat" type="button" onClick={() => setMobilePanel("conversation")}><ArrowRight size={18} />المحادثة</button> : null}
-              <h3>بيانات العميل</h3>
-              <span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span>
+              <div className="crm-customer-details-nav">
+                {showConversation ? <button className="crm-mobile-back-to-chat" type="button" onClick={() => setMobilePanel("conversation")}><ArrowRight size={18} />العودة للمحادثة</button> : <button className="crm-mobile-back-to-chat" type="button" onClick={onClose}><ArrowRight size={18} />رجوع</button>}
+              </div>
+              <div className="crm-customer-details-heading">
+                <div><span>ملف العميل</span><h3>بيانات العميل</h3></div>
+                <span className="crm-customer-department-pill">{departmentLabel(form.departmentCode)}</span>
+              </div>
             </header>
+            <section className="crm-customer-details-summary" aria-label="ملخص بيانات العميل">
+              <div className="crm-customer-summary-main"><span className="crm-customer-summary-avatar"><UserCircle size={30} weight="duotone" /></span><div><small>العميل</small><strong>{activeForm.values.customer_name || lead.customer_name || "عميل"}</strong><span><Phone size={13} /> {activeForm.values.phone || lead.phone || lead.phone_normalized || "بدون رقم جوال"}</span></div></div>
+              <div className="crm-customer-summary-meta"><span><b>الحالة الحالية</b>{activeForm.values.status_label || "غير محدد"}</span><span><b>المسؤول</b>{lead.assigned_name || "غير موزع"}</span></div>
+            </section>
+            <div className="crm-customer-details-form-shell">
             {!showConversation ? (
               <section className="crm-database-edit-routing" aria-label="تعديل بيانات توزيع العميل">
                 <header><div><strong>بيانات التوزيع والحالة</strong><span>الحفظ يحدّث نفس العميل الحالي ولا ينشئ عميلاً جديدًا.</span></div></header>
@@ -893,6 +910,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
             {department === "finance" ? credit?.amount == null ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
             <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>
+            </div>
           </section>
         </div>
       </aside>
