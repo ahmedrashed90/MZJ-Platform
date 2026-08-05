@@ -4,6 +4,7 @@ import { audit, clean, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { normalizeCustomerFieldOptions } from "../_crm-customer-fields.js";
+import { CrmBulkReallocationError, executeFinanceToCashReallocation, previewFinanceToCashReallocation } from "../_crm-bulk-reallocation.js";
 
 function stringList(value: unknown) {
   return Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
@@ -129,6 +130,36 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const body = parseBody(request);
   const section = clean(body.section);
   const action = clean(body.action || (request.method === "DELETE" ? "delete" : "save"));
+
+  if (section === "bulk_cash_reallocation") {
+    if (!hasPermission(user, "platform.superadmin") || !hasPermission(user, "crm.customer.bulk_transfer")) {
+      return response.status(403).json({ ok: false, error: "النقل الجماعي متاح لمدير النظام فقط" });
+    }
+    try {
+      if (action === "preview") {
+        const preview = await previewFinanceToCashReallocation(body.agentIds);
+        return response.status(200).json({ ok: true, preview });
+      }
+      if (action === "execute") {
+        const result = await executeFinanceToCashReallocation({
+          agentIds: body.agentIds,
+          expectedLeadCount: body.expectedLeadCount,
+          actor: user,
+        });
+        return response.status(200).json({
+          ok: true,
+          ...result,
+          message: `تم نقل وتوزيع ${result.total} عميل بالتساوي على مناديب مبيعات الكاش`,
+        });
+      }
+      return response.status(400).json({ ok: false, error: "عملية النقل الجماعي غير معروفة" });
+    } catch (error) {
+      if (error instanceof CrmBulkReallocationError) {
+        return response.status(error.status).json({ ok: false, code: error.code, error: error.message });
+      }
+      throw error;
+    }
+  }
 
   if (section === "status") {
     const id = clean(body.id);

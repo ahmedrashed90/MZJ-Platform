@@ -3,6 +3,8 @@ import { calculateLeadCompletion, clean, departmentKey, requireCrmUser, sourceLa
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions } from "../_crm-customer-fields.js";
 
+const CRM_DASHBOARD_VISIBLE_LIMIT = 5000;
+
 function validDate(value: unknown) {
   const text = clean(value);
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
@@ -93,7 +95,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (${status || null}::text is null or l.status_label = ${status || null})
       and (${q || null}::text is null or concat_ws(' ', l.customer_name, l.phone, l.phone_normalized, l.car_name, l.car_category, l.source_name, l.campaign_name) ilike ${q ? `%${q}%` : null})
     order by coalesce(greatest(l.last_message_at,c.last_message_at), l.updated_at, l.created_at) desc
-    limit 1000
+    limit ${CRM_DASHBOARD_VISIBLE_LIMIT}
   `;
 
   for (const row of rows) {

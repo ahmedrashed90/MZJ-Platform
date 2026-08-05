@@ -147,6 +147,11 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const canExecuteDataReview = hasPermission(user, "crm.data_review.execute");
   const canManageRouting = hasPermission(user, "crm.routing.manage");
   const canManageAutomation = hasPermission(user, "crm.automation.manage");
+  const canManageBulkReallocation = !readOnly
+    && hasPermission(user, "platform.superadmin")
+    && hasPermission(user, "settings.crm.manage")
+    && hasPermission(user, "crm.customer.bulk_transfer")
+    && canManageRouting;
   const visibleTabs = tabs.filter((item) => item.key !== "data_review" || canViewDataReview);
   const [tab, setTab] = useState<Tab>("automation");
   const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [], kpiSectionPermissions: { speedUserIds: [], efficiencyUserIds: [] } });
@@ -166,6 +171,10 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncingMersal, setSyncingMersal] = useState(false);
+  const [bulkAgentIds, setBulkAgentIds] = useState<string[]>([]);
+  const [bulkPreview, setBulkPreview] = useState<any | null>(null);
+  const [bulkConfirmCount, setBulkConfirmCount] = useState("");
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   useEffect(() => { void load(); }, []);
   useEffect(() => {
@@ -298,6 +307,66 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
     }
   }
 
+  function updateBulkAgentIds(next: string[]) {
+    setBulkAgentIds(next);
+    setBulkPreview(null);
+    setBulkConfirmCount("");
+  }
+
+  async function previewBulkReallocation() {
+    if (!bulkAgentIds.length) {
+      setNotice("اختر مناديب مبيعات الكاش قبل المعاينة");
+      return;
+    }
+    setBulkLoading(true);
+    setNotice("");
+    try {
+      const result = await crmFetch<any>("/api/crm/settings", {
+        method: "POST",
+        body: JSON.stringify({ section: "bulk_cash_reallocation", action: "preview", agentIds: bulkAgentIds }),
+      });
+      setBulkPreview(result.preview);
+      setBulkConfirmCount("");
+      setNotice(`المعاينة جاهزة: ${Number(result.preview?.total || 0).toLocaleString("ar-SA-u-nu-latn")} عميل سيتم توزيعهم بالتساوي.`);
+    } catch (error) {
+      setBulkPreview(null);
+      setNotice(error instanceof Error ? error.message : "تعذر إعداد معاينة النقل الجماعي");
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
+  async function executeBulkReallocation() {
+    const total = Number(bulkPreview?.total || 0);
+    if (!bulkPreview || bulkConfirmCount.trim() !== String(total)) {
+      setNotice("اكتب عدد العملاء الظاهر في المعاينة لتأكيد التنفيذ");
+      return;
+    }
+    if (!window.confirm(`سيتم نقل ${total.toLocaleString("ar-SA-u-nu-latn")} عميل بالكامل من مبيعات التمويل إلى مبيعات الكاش وتغيير حالتهم إلى عميل جديد. هل تريد التنفيذ؟`)) return;
+    setBulkLoading(true);
+    setNotice("");
+    try {
+      const result = await crmFetch<any>("/api/crm/settings", {
+        method: "POST",
+        body: JSON.stringify({
+          section: "bulk_cash_reallocation",
+          action: "execute",
+          agentIds: bulkAgentIds,
+          expectedLeadCount: total,
+        }),
+      });
+      setNotice(result.message || "تم النقل والتوزيع الجماعي بنجاح");
+      setBulkAgentIds([]);
+      setBulkPreview(null);
+      setBulkConfirmCount("");
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تنفيذ النقل الجماعي");
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
   const allStatusValues = useMemo(() => [...new Set((data.statuses || []).map((row: any) => row.value))] as string[], [data.statuses]);
   const endpointSources = useMemo(() => {
     const map = new Map<string, { code: string; name: string }>();
@@ -326,6 +395,14 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
     eligibleUsers: (data.assignmentUsers || []).filter((row: any) => row.is_active && row.can_receive_leads).length,
     loggedAssignments: (data.assignmentLogs || []).length,
   }), [data.assignmentRules, data.assignmentUsers, data.assignmentLogs]);
+
+  const bulkCashAgents = useMemo(() => (data.assignmentUsers || [])
+    .filter((row: any) => row.is_active && row.can_receive_leads)
+    .filter((row: any) => (row.department_codes || []).includes("cash_sales"))
+    .filter((row: any) => (row.branch_codes || []).length > 0)
+    .sort((left: any, right: any) => String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar")), [data.assignmentUsers]);
+
+  const allBulkCashAgentsSelected = bulkCashAgents.length > 0 && bulkCashAgents.every((row: any) => bulkAgentIds.includes(row.id));
 
   function toggleQuality(key: keyof typeof quality, status: string) {
     setQuality((current) => ({ ...current, [key]: toggleList(current[key] as string[], status) }));
@@ -649,6 +726,56 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
             <article><UsersThree size={24} weight="duotone" /><span>الموظفون المتاحون</span><strong>{distributionSummary.eligibleUsers}</strong></article>
             <article><CheckCircle size={24} weight="duotone" /><span>آخر عمليات مسجلة</span><strong>{distributionSummary.loggedAssignments}</strong></article>
           </section>
+
+          {canManageBulkReallocation ? (
+            <section className="crm-panel crm-bulk-reallocation-panel">
+              <header className="crm-bulk-reallocation-head">
+                <div><h2>النقل والتوزيع الجماعي</h2><p>نقل كل العملاء الموجودين في مبيعات التمويل إلى مبيعات الكاش، وتوزيعهم بالتساوي على المناديب المختارين.</p></div>
+                <span>مدير النظام فقط</span>
+              </header>
+
+              <div className="crm-bulk-reallocation-route">
+                <article><small>القسم الحالي</small><strong>مبيعات التمويل</strong><span>كل العملاء النشطين داخل تبويب التمويل</span></article>
+                <b>←</b>
+                <article><small>القسم الجديد</small><strong>مبيعات الكاش</strong><span>الحالة الجديدة: عميل جديد</span></article>
+                <b>←</b>
+                <article><small>طريقة التوزيع</small><strong>بالتساوي</strong><span>الفرق بين أي مندوبين لا يزيد عن عميل واحد</span></article>
+              </div>
+
+              <div className="crm-bulk-agent-picker">
+                <header>
+                  <div><strong>مناديب الكاش المستهدفون</strong><span>{bulkAgentIds.length} من {bulkCashAgents.length}</span></div>
+                  <button type="button" onClick={() => updateBulkAgentIds(allBulkCashAgentsSelected ? [] : bulkCashAgents.map((row: any) => row.id))}>{allBulkCashAgentsSelected ? "إلغاء اختيار الكل" : "اختيار كل المناديب"}</button>
+                </header>
+                <div className="crm-bulk-agent-grid">
+                  {bulkCashAgents.map((row: any) => (
+                    <label key={row.id} className={bulkAgentIds.includes(row.id) ? "selected" : ""}>
+                      <input type="checkbox" checked={bulkAgentIds.includes(row.id)} onChange={() => updateBulkAgentIds(toggleList(bulkAgentIds, row.id))} />
+                      <span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ")}</small></span>
+                    </label>
+                  ))}
+                </div>
+                {!bulkCashAgents.length ? <div className="crm-empty-state">لا يوجد مناديب كاش نشطون مربوطون بفرع ومسموح لهم باستقبال العملاء.</div> : null}
+              </div>
+
+              <div className="crm-bulk-reallocation-actions">
+                <button type="button" className="crm-secondary-button" disabled={bulkLoading || !bulkAgentIds.length} onClick={() => void previewBulkReallocation()}><ArrowClockwise size={18} />{bulkLoading ? "جاري المراجعة..." : "معاينة التوزيع"}</button>
+              </div>
+
+              {bulkPreview ? (
+                <div className="crm-bulk-preview">
+                  <div className="crm-bulk-preview-total"><small>إجمالي العملاء الجاهزين للنقل</small><strong>{Number(bulkPreview.total || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><span>سيتم نقل ملكية العميل والمحادثات والطلب المفتوح للمندوب الجديد، وإلغاء ارتباط موظف التمويل والكول سنتر القديم.</span></div>
+                  <div className="crm-bulk-preview-grid">
+                    {(bulkPreview.agents || []).map((row: any) => <article key={row.id}><span><strong>{row.fullName}</strong><small>{row.branchName}</small></span><b>{Number(row.customerCount || 0).toLocaleString("ar-SA-u-nu-latn")} عميل</b></article>)}
+                  </div>
+                  <div className="crm-bulk-confirmation">
+                    <label><span>اكتب العدد <b>{Number(bulkPreview.total || 0).toLocaleString("ar-SA-u-nu-latn")}</b> للتأكيد</span><input inputMode="numeric" value={bulkConfirmCount} onChange={(event) => setBulkConfirmCount(event.target.value.replace(/[^0-9]/g, ""))} placeholder={String(bulkPreview.total || 0)} /></label>
+                    <button type="button" className="crm-primary-button" disabled={bulkLoading || bulkConfirmCount.trim() !== String(Number(bulkPreview.total || 0)) || Number(bulkPreview.total || 0) <= 0} onClick={() => void executeBulkReallocation()}><Shuffle size={18} />{bulkLoading ? "جاري التنفيذ..." : "نقل وتوزيع العملاء الآن"}</button>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
 
           <section className="crm-panel crm-form-panel crm-distribution-editor">
             <header><div><h2>{ruleForm.id ? "تعديل قاعدة توزيع" : "إنشاء قاعدة توزيع"}</h2><p>حدد نطاق القاعدة ثم اختر الموظفين ورتبهم حسب أولوية الدور في التوزيع.</p></div></header>
