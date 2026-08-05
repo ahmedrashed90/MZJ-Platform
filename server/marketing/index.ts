@@ -2046,6 +2046,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     ) fm on true
     where t.task_kind in ('execution','manual_publish')
       and t.is_deleted=false
+      and t.publish_prep_removed_at is null
       and (
         (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
         or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
@@ -2141,7 +2142,7 @@ async function activePublishTask(sql:ReturnType<typeof getSql>,taskId:string,all
     from marketing.tasks t
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
-    where t.id=${taskId}::uuid and t.task_kind in ${sql(allowedKinds)} and t.is_deleted=false
+    where t.id=${taskId}::uuid and t.task_kind in ${sql(allowedKinds)} and t.is_deleted=false and t.publish_prep_removed_at is null
       and (
         (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
         or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
@@ -2341,6 +2342,33 @@ async function discardManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,
     await tx`delete from marketing.creatives where id=${task.creative_id}::uuid and not exists(select 1 from marketing.tasks where creative_id=${task.creative_id}::uuid) and not exists(select 1 from marketing.publish_schedule where creative_id=${task.creative_id}::uuid)`;
   });
   return{ok:true,message:"تم إلغاء مسودة النشر اليدوي"};
+}
+
+async function removePublishPrepEntry(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لمسح تجهيز النشر");
+  const taskId=clean(body.taskId);
+  if(!taskId)throw new Error("تجهيز النشر المطلوب غير محدد");
+  const[task]=await sql<any[]>`
+    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.task_kind,t.assigned_to::text,t.publish_prep_removed_at
+    from marketing.tasks t
+    where t.id=${taskId}::uuid and t.task_kind in ('execution','manual_publish') and t.is_deleted=false
+    limit 1
+  `;
+  if(!task)throw new Error("تجهيز النشر غير موجود");
+  if(task.publish_prep_removed_at)return{ok:true,message:"تم مسح تجهيز النشر من القائمة مسبقًا"};
+  await assertPublishEntryAccess(sql,user,{...task,task_id:task.id});
+  await sql`
+    update marketing.tasks
+    set publish_prep_removed_at=now(),publish_prep_removed_by=${user.id}::uuid,updated_at=now()
+    where id=${taskId}::uuid and publish_prep_removed_at is null
+  `;
+  return{
+    ok:true,
+    taskId,
+    message:task.task_kind==='manual_publish'
+      ?"تم مسح النشر اليدوي من صفحة تجهيز النشر"
+      :"تم مسح التاسك من صفحة تجهيز النشر دون تغيير الحملة أو الأجندة",
+  };
 }
 
 async function graphRequest(path:string,method:"GET"|"POST",token:string,params:Record<string,any>={}){const version=clean(process.env.META_GRAPH_VERSION)||"v25.0";const url=new URL(`https://graph.facebook.com/${version}${path}`);const body=new URLSearchParams();for(const[key,value]of Object.entries(params)){if(value===undefined||value===null||value==='')continue;const text=typeof value==='object'?JSON.stringify(value):String(value);if(method==='GET')url.searchParams.set(key,text);else body.set(key,text);}if(method==='GET')url.searchParams.set('access_token',token);else body.set('access_token',token);const response=await fetch(url.toString(),{method,body:method==='POST'?body:undefined});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.error)throw new Error(payload.error?.message||`Meta API error ${response.status}`);return payload;}
@@ -2558,20 +2586,22 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
     const[schedule]=await sql<any[]>`
       select s.*,s.id::text,p.code as platform_code,p.name as platform_name,pt.name as post_type_name,
         coalesce(direct_task.final_file_id,fallback_task.final_file_id)::text as final_file_id,
-        coalesce(direct_task.final_media_group_id,fallback_task.final_media_group_id)::text as final_media_group_id
+        coalesce(direct_task.final_media_group_id,fallback_task.final_media_group_id)::text as final_media_group_id,
+        direct_task.publish_prep_removed_at
       from marketing.publish_schedule s
       join marketing.platforms p on p.id=s.platform_id
       left join marketing.platform_post_types pt on pt.id=s.post_type_id
       left join marketing.tasks direct_task on direct_task.id=s.task_id
       left join lateral(
         select x.final_file_id,x.final_media_group_id from marketing.tasks x
-        where s.task_id is null and x.creative_id=s.creative_id and x.task_kind='execution' and (x.final_file_id is not null or x.final_media_group_id is not null) and x.is_deleted=false
+        where s.task_id is null and x.creative_id=s.creative_id and x.task_kind='execution' and (x.final_file_id is not null or x.final_media_group_id is not null) and x.is_deleted=false and x.publish_prep_removed_at is null
         order by x.updated_at desc limit 1
       )fallback_task on true
       where s.id=${id}::uuid
     `;
     if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود",platformName:"منصة غير معروفة",postTypeName:""});continue;}
     try{
+      if(schedule.publish_prep_removed_at)throw new Error("تم مسح تجهيز النشر من القائمة ولا يمكن نشره");
       await assertPublishEntryAccess(sql,user,schedule);
       const result=await publishScheduleItem(sql,schedule,user);
       results.push({id,ok:true,result,platform:schedule.platform_code,platformName:schedule.platform_name,postTypeName:schedule.post_type_name});
@@ -3014,6 +3044,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='create_manual_publish_entry')result=await createManualPublishEntry(sql,body,user);
     else if(action==='discard_manual_publish_entry')result=await discardManualPublishEntry(sql,body,user);
+    else if(action==='remove_publish_prep_entry')result=await removePublishPrepEntry(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
     else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.engagement.subscribe'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}

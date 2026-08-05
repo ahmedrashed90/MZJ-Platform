@@ -373,6 +373,8 @@ alter table marketing.tasks add column if not exists final_file_id uuid referenc
 alter table marketing.tasks add column if not exists approved_template_data jsonb not null default '{}'::jsonb;
 alter table marketing.tasks add column if not exists execution_folders jsonb not null default '{}'::jsonb;
 alter table marketing.tasks add column if not exists is_deleted boolean not null default false;
+alter table marketing.tasks add column if not exists publish_prep_removed_at timestamptz;
+alter table marketing.tasks add column if not exists publish_prep_removed_by uuid references core.users(id) on delete set null;
 
 update marketing.campaigns set name=coalesce(nullif(name,''),'حملة') where name is null or name='';
 update marketing.campaigns set status=coalesce(nullif(status,''),'required') where status is null or status='';
@@ -646,6 +648,7 @@ create index if not exists marketing_campaigns_status_idx on marketing.campaigns
 create index if not exists marketing_agendas_status_idx on marketing.agendas(status,archived_at,created_at desc);
 create index if not exists marketing_tasks_source_idx on marketing.tasks(source_type,source_id,status,is_deleted);
 create index if not exists marketing_tasks_assigned_idx on marketing.tasks(assigned_to,status,is_deleted);
+create index if not exists marketing_tasks_publish_prep_visible_idx on marketing.tasks(task_kind,created_at) where is_deleted=false and publish_prep_removed_at is null;
 create index if not exists marketing_templates_source_idx on marketing.task_templates(source_type,source_id,status);
 create index if not exists marketing_schedule_date_idx on marketing.publish_schedule(publish_date,status);
 create index if not exists marketing_schedule_group_idx on marketing.publish_schedule(group_id);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, Trash, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { createMarketingFinalUploadCancellation, downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFinalFiles, type MarketingFinalUploadCancellation, type MarketingFinalUploadProgress } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
@@ -493,6 +493,32 @@ export function PublishPrepPage() {
     if (includesYouTube(row)) void loadYouTubeOptions();
   }
 
+  async function removePublishPrepRow(row: any) {
+    if (!canManagePrep || loading) return;
+    const label = row.task_kind === "manual_publish" ? "النشر اليدوي" : "التاسك";
+    const confirmation = row.task_kind === "manual_publish"
+      ? "سيتم مسح النشر اليدوي من صفحة تجهيز النشر. هل تريد المتابعة؟"
+      : "سيتم مسح التاسك من صفحة تجهيز النشر فقط دون تغيير الحملة أو الأجندة أو ملفاتها. هل تريد المتابعة؟";
+    if (!window.confirm(confirmation)) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "remove_publish_prep_entry", taskId: row.task_id }),
+      });
+      setSelectedIds((current) => current.filter((id) => id !== row.id));
+      setEditing((current: any) => current?.task_id === row.task_id ? null : current);
+      setMessage(result.message || `تم مسح ${label} من تجهيز النشر`);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : `تعذر مسح ${label} من تجهيز النشر`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function selectManualCreativeType(creativeTypeId: string) {
     const creativeType = meta?.creativeTypes.find((item) => item.id === creativeTypeId);
     setManual((current) => ({
@@ -608,6 +634,7 @@ export function PublishPrepPage() {
 
             <div className="marketing-publish-list-actions">
               {canManagePrep ? <button type="button" className="secondary" onClick={() => startEdit(row)}><PencilSimple size={18} />تعديل</button> : null}
+              {canManagePrep ? <button type="button" className="danger" disabled={loading} onClick={() => void removePublishPrepRow(row)}><Trash size={18} />مسح</button> : null}
               {canPublishNow ? <button type="button" className="primary" disabled={!canPublish(row) || loading} onClick={() => void publish([row.id])}><PaperPlaneTilt size={18} />نشر الآن</button> : null}
               {canPublishNow ? <label className="marketing-select-task-v2"><input type="checkbox" checked={selected} disabled={!canPublish(row)} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...new Set([...current, row.id])] : current.filter((id) => id !== row.id))} /><span>تحديد</span></label> : null}
             </div>

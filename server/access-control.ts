@@ -230,7 +230,11 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
   const canReceiveTasks = bool(input.canReceiveTasks);
   const roleIds = array(body.roleIds);
   const systems = Array.isArray(body.systems) ? body.systems.filter((item: any) => validSystem(item?.systemCode)) : [];
-  const overrides = Array.isArray(body.overrides) ? body.overrides.filter((item: any) => clean(item?.permissionCode) && ["allow", "deny"].includes(clean(item?.effect))) : [];
+  const requestedOverrides = Array.isArray(body.overrides) ? body.overrides.filter((item: any) => clean(item?.permissionCode) && ["allow", "deny"].includes(clean(item?.effect))) : [];
+  const enabledSystems = systems.filter((item: any) => bool(item.isEnabled)).map((item: any) => clean(item.systemCode));
+  const overrideMap = new Map<string, any>(requestedOverrides.map((item: any) => [clean(item.permissionCode), item]));
+  for (const systemCode of enabledSystems) overrideMap.set(`system.${systemCode}.access`, { permissionCode: `system.${systemCode}.access`, effect: "allow" });
+  const overrides = [...overrideMap.values()];
   const reason = clean(body.reason) || null;
   if (!fullName) throw Object.assign(new Error("اسم المستخدم مطلوب"), { status: 400 });
   if (!email && !mobile) throw Object.assign(new Error("البريد أو رقم الجوال مطلوب"), { status: 400 });
@@ -273,7 +277,6 @@ async function saveUser(request: VercelRequest, actor: PermissionUser, body: Rec
     throw Object.assign(new Error("لا توجد صلاحية لتعديل أدوار المستخدم أو نطاقه أو صلاحياته"), { status: 403 });
   }
 
-  const enabledSystems = systems.filter((item: any) => bool(item.isEnabled)).map((item: any) => clean(item.systemCode));
   const allowCodes = overrides.filter((item: any) => clean(item.effect) === "allow").map((item: any) => clean(item.permissionCode));
   const systemRoleIds = systems.map((item: any) => clean(item.roleId)).filter(Boolean);
   if (requestedAccessChanged && !await actorCanGrant(actor, allowCodes, [...new Set([...roleIds, ...systemRoleIds])], enabledSystems)) {

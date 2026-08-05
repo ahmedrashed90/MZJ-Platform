@@ -243,7 +243,20 @@ export function UsersPermissionsPanel() {
   }
 
   function updateSystem(patch: Partial<UserSystemForm>) {
-    setForm((current) => ({ ...current, systems: current.systems.map((item) => item.systemCode === systemTab ? { ...item, ...patch } : item) }));
+    setForm((current) => {
+      const next: UserForm = {
+        ...current,
+        systems: current.systems.map((item) => item.systemCode === systemTab ? { ...item, ...patch } : item),
+      };
+      if (typeof patch.isEnabled === "boolean") {
+        const accessPermission = `system.${systemTab}.access`;
+        next.overrides = {
+          ...current.overrides,
+          [accessPermission]: patch.isEnabled ? "allow" : current.overrides[accessPermission] === "allow" ? "inherit" : current.overrides[accessPermission],
+        };
+      }
+      return next;
+    });
   }
   async function saveUser() {
     setSaving(true); setError(""); setMessage("");

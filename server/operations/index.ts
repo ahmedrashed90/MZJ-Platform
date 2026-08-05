@@ -1567,6 +1567,21 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
 }
 
 
+async function salesOrderFollowupIdentity(
+  sql: ReturnType<typeof getSql>,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  const access = getSystemAccess(user, "operations");
+  const salesRepresentative = user.roleCodes.includes("sales_user")
+    || (!hasPermission(user, "operations.inventory.view") && !hasPermission(user, "operations.all.view") && !hasPermission(user, "operations.manage.view"));
+  const ownOrdersOnly = salesRepresentative || ["self", "assigned", "created_by_me", "workflow_assigned"].includes(access.dataScope);
+  if (!ownOrdersOnly) return { ownOrdersOnly: false, nextErpUserId: "" };
+  const[profile]=await sql<any[]>`select next_erp_user_id from core.users where id=${user.id}::uuid and is_active=true`;
+  const nextErpUserId=clean(profile?.next_erp_user_id).toLowerCase();
+  if(!nextErpUserId)throw new OperationError(403,"NEXT_ERP_USER_ID_REQUIRED","يجب تسجيل NEXT ERP User ID للمندوب من صفحة المستخدمين والصلاحيات");
+  return { ownOrdersOnly: true, nextErpUserId };
+}
+
 async function listSalesOrderFollowup(
   sql: ReturnType<typeof getSql>,
   request: VercelRequest,
@@ -1583,6 +1598,7 @@ async function listSalesOrderFollowup(
   const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch_access__"];
   const allowedStatuses = access.vehicleStatusCodes?.length ? access.vehicleStatusCodes : ["__all_statuses__"];
   const unrestrictedStatuses = !access.vehicleStatusCodes?.length;
+  const { ownOrdersOnly, nextErpUserId } = await salesOrderFollowupIdentity(sql,user);
 
   const scopedRows = sql`
     select
@@ -1608,6 +1624,7 @@ async function listSalesOrderFollowup(
       o.sales_followup_completed_at,
       o.sales_followup_completed_by::text,
       o.sales_followup_completed_by_name,
+      erp_order.erp_user_id,
       coalesce(stage_status.stage_3_completed,false) as stage_3_completed,
       coalesce(stage_status.stage_4_completed,false) as stage_4_completed,
       coalesce(stage_status.stage_5_completed,false) as stage_5_completed,
@@ -1636,6 +1653,17 @@ async function listSalesOrderFollowup(
       limit 1
     ) vehicle_match on true
     left join lateral (
+      select so.erp_user_id,so.platform_user_id::text
+      from integrations.erpnext_sales_orders so
+      where coalesce(so.is_cancelled,false)=false
+        and (
+          so.tracking_order_id=o.id
+          or (nullif(trim(so.sales_order_no),'') is not null and trim(so.sales_order_no)=trim(o.sales_order_no))
+        )
+      order by case when so.tracking_order_id=o.id then 0 else 1 end,so.updated_at desc
+      limit 1
+    ) erp_order on true
+    left join lateral (
       select
         bool_or(vs.status='completed') filter (where st.sort_order=3) as stage_3_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=4) as stage_4_completed,
@@ -1651,6 +1679,7 @@ async function listSalesOrderFollowup(
     ) stage_status on true
     where coalesce(o.is_deleted,false)=false
       and coalesce(o.is_cancelled,false)=false
+      and (${ownOrdersOnly}=false or lower(trim(coalesce(erp_order.erp_user_id,'')))=${nextErpUserId})
       and ((${completedOnly}=true and o.sales_followup_completed_at is not null) or (${completedOnly}=false and o.sales_followup_completed_at is null))
       and (
         ${unrestricted}=true
@@ -1749,12 +1778,22 @@ async function completeSalesOrderFollowup(
   const access = getSystemAccess(user, "operations");
   const unrestricted = access.dataScope === "all";
   const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch_access__"];
+  const { ownOrdersOnly, nextErpUserId } = await salesOrderFollowupIdentity(sql,user);
   const [order] = await sql<any[]>`
     select o.id::text,o.sales_order_no,o.sales_followup_completed_at
     from tracking.orders o
     where o.id=${trackingOrderId}::uuid
       and coalesce(o.is_deleted,false)=false
       and coalesce(o.is_cancelled,false)=false
+      and (
+        ${ownOrdersOnly}=false
+        or exists (
+          select 1 from integrations.erpnext_sales_orders own_so
+          where coalesce(own_so.is_cancelled,false)=false
+            and (own_so.tracking_order_id=o.id or trim(coalesce(own_so.sales_order_no,''))=trim(coalesce(o.sales_order_no,'')))
+            and lower(trim(coalesce(own_so.erp_user_id,'')))=${nextErpUserId}
+        )
+      )
       and (
         ${unrestricted}=true
         or coalesce(o.branch,'') in ${sql(branchCodes)}

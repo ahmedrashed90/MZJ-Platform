@@ -3,6 +3,7 @@ import { ChartBar, Database, Gear, House, MapPin, Megaphone, Pulse, Question, Si
 import { useAuth } from "../auth/AuthContext";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canOpenSettings, hasPermission } from "../systemAccess";
+import { firstAllowedPage } from "../../shared/access-control";
 
 const items = [
   { href: "/", label: "الداش بورد", icon: House, permission: "platform.dashboard.view" },
@@ -28,13 +29,14 @@ export function Sidebar() {
   const { user, logout } = useAuth();
   const systemAllowed: Record<string, boolean> = { crm: canAccessCrm(user), marketing: canAccessMarketing(user), operations: canAccessOperations(user), tracking: canAccessTracking(user) };
   const visibleItems = items.filter((item) => "permission" in item ? hasPermission(user, item.permission) : systemAllowed[item.system]);
+  const resolvedItems = visibleItems.map((item) => "system" in item ? { ...item, href: firstAllowedPage(user, item.system) } : item);
   const visibleSupport = supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));
   const fullName = user?.fullName?.trim() || "مستخدم المنصة";
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
 
   return <aside className="sidebar">
     <div className="brand-block"><img src="/logo.png" alt="MZJ" /><span>مجموعة محمد بن ذعار العجمي</span></div>
-    <nav className="sidebar-nav" aria-label="القائمة الرئيسية"><div className="nav-group">{visibleItems.map((item) => <Item key={item.href} {...item} />)}</div><div className="nav-separator" /><div className="nav-group">{visibleSupport.map((item) => <Item key={item.href} {...item} />)}</div></nav>
+    <nav className="sidebar-nav" aria-label="القائمة الرئيسية"><div className="nav-group">{resolvedItems.map((item) => <Item key={`${item.label}-${item.href}`} {...item} />)}</div><div className="nav-separator" /><div className="nav-group">{visibleSupport.map((item) => <Item key={item.href} {...item} />)}</div></nav>
     <div className="sidebar-account" aria-label="الحساب">
       <div className="account-avatar" aria-hidden="true">{fullName.slice(0, 1)}</div>
       <div className="account-details">
