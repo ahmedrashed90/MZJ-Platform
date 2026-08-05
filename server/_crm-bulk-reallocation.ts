@@ -268,7 +268,7 @@ export async function executeFinanceToCashReallocation(input: {
           l.branch_code,item.branch_code,${input.actor.id}::uuid,${input.actor.fullName},${input.actor.roles.join("، ") || null},
           'نقل جماعي متساوٍ من مبيعات التمويل إلى مبيعات الكاش',
           jsonb_build_object(
-            'runId',${runId},
+            'runId',${runId}::uuid,
             'distributionMode','equal',
             'previousAssignedTo',l.assigned_to,
             'previousCallCenterAssignedTo',l.call_center_assigned_to,
@@ -302,7 +302,7 @@ export async function executeFinanceToCashReallocation(input: {
           l.department_code,${TARGET_DEPARTMENT_CODE},l.branch_code,item.branch_code,
           ${input.actor.id}::uuid,${input.actor.fullName},'user',
           'نقل جماعي متساوٍ من مبيعات التمويل إلى مبيعات الكاش',
-          jsonb_build_object('runId',${runId},'distributionMode','equal','previousCallCenterAssignedTo',l.call_center_assigned_to)
+          jsonb_build_object('runId',${runId}::uuid,'distributionMode','equal','previousCallCenterAssignedTo',l.call_center_assigned_to)
         from assignments item
         join crm.leads l on l.id=item.lead_id
         left join core.users previous_owner on previous_owner.id=l.assigned_to
