@@ -6859,18 +6859,56 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .tracking-overview-card { padding: 16px; }
 .tracking-overview-card .tracking-section-heading { margin-bottom: 12px; }
+.tracking-order-summary-card {
+  background: linear-gradient(145deg,#fff 0%,#fffbf8 100%);
+}
+.tracking-order-summary-card .tracking-section-heading {
+  padding-bottom: 11px;
+  border-bottom: 1px solid #f0e3dd;
+}
 .tracking-order-summary-card .tracking-order-info-grid {
-  grid-template-columns: repeat(3,minmax(0,1fr));
+  grid-template-columns: repeat(2,minmax(0,1fr));
   gap: 10px;
 }
-.tracking-order-summary-card .tracking-order-info-grid > div {
-  min-height: 72px;
-  padding: 12px;
-  border-radius: 12px;
-  background: #fffdfb;
+.tracking-order-summary-card .tracking-order-info-item {
+  min-height: 68px;
+  padding: 12px 13px;
+  border-radius: 13px;
+  background: #fff;
+  border-color: #eee1db;
+  align-items: center;
+  box-shadow: 0 3px 10px rgba(94,55,42,.025);
 }
-.tracking-order-summary-card .tracking-order-info-grid > div:nth-child(1) { grid-column: span 2; }
-.tracking-order-summary-card .tracking-order-info-grid > div:nth-child(6) { grid-column: span 2; }
+.tracking-order-summary-card .tracking-order-info-item > svg {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #fff3ed;
+  color: var(--brand-2);
+  margin: 0;
+}
+.tracking-order-summary-card .tracking-order-info-item span { min-width: 0; }
+.tracking-order-summary-card .tracking-order-info-item small { font-size: 10px; font-weight: 700; }
+.tracking-order-summary-card .tracking-order-info-item strong { font-size: 14px; line-height: 1.55; }
+.tracking-order-summary-card .tracking-order-customer { grid-column: 1 / -1; }
+.tracking-order-summary-card .tracking-order-customer strong { font-size: 16px; }
+.tracking-order-summary-card .tracking-order-total {
+  grid-column: 1 / -1;
+  min-height: 76px;
+  border-color: #efc8b8;
+  background: linear-gradient(135deg,#fff7f2,#fffdfb);
+}
+.tracking-order-summary-card .tracking-order-total > svg {
+  background: #f7dfd4;
+  color: var(--brand);
+}
+.tracking-order-summary-card .tracking-order-total strong {
+  color: var(--brand);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
 .tracking-vehicle-summary-card .tracking-vehicle-tabs {
   display: grid;
   grid-template-columns: repeat(auto-fit,minmax(115px,1fr));
@@ -6967,8 +7005,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .tracking-detail-drawer { width: 100vw; height: 100vh; border-radius: 0; border: 0; }
   .tracking-detail-header,.tracking-detail-actions,.tracking-detail-body { padding-left: 14px; padding-right: 14px; }
   .tracking-order-summary-card .tracking-order-info-grid { grid-template-columns: 1fr; }
-  .tracking-order-summary-card .tracking-order-info-grid > div:nth-child(1),
-  .tracking-order-summary-card .tracking-order-info-grid > div:nth-child(6) { grid-column: auto; }
+  .tracking-order-summary-card .tracking-order-customer,
+  .tracking-order-summary-card .tracking-order-total { grid-column: auto; }
   .tracking-vehicle-summary-card .tracking-car-details { grid-template-columns: 1fr 1fr; }
   .tracking-vehicle-summary-card .tracking-car-name { grid-column: 1 / -1; }
   .tracking-stages-section .tracking-stage-list { grid-template-columns: 1fr; }

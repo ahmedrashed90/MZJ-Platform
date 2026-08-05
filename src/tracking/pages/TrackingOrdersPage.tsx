@@ -324,14 +324,12 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                 <section className="tracking-overview-card tracking-order-summary-card">
                   <div className="tracking-section-heading"><div><User size={20} /><h3>ملخص الطلب</h3></div></div>
                   <div className="tracking-order-info-grid">
-                    <div><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
-                    <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
-                    <div><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
-                    <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
-                    <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
-                    <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
-                    <div><CurrencyCircleDollar size={18} /><span><small>الدفعة المقدمة</small><strong>{formatTrackingMoney(selected.advance_paid)}</strong></span></div>
-                    <div><CurrencyCircleDollar size={18} /><span><small>المتبقي</small><strong>{formatTrackingMoney(Math.max(0, Number(selected.total_incl_vat || 0) - Number(selected.advance_paid || 0)))}</strong></span></div>
+                    <div className="tracking-order-info-item tracking-order-customer"><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
+                    <div className="tracking-order-info-item"><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
+                    <div className="tracking-order-info-item"><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
+                    <div className="tracking-order-info-item"><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
+                    <div className="tracking-order-info-item"><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
+                    <div className="tracking-order-info-item tracking-order-total"><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
                   </div>
                 </section>
 
