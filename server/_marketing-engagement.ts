@@ -2,7 +2,7 @@ import { getSql } from "./_db.js";
 import { ensureCrmSchema } from "./_crm-schema.js";
 import { ensureMarketingSchema } from "./_marketing-schema.js";
 import { classifyConversationService, ensureContactIdentity } from "./_crm-lifecycle.js";
-import { decryptPlatformToken } from "./_platform-connections.js";
+import { decryptPlatformToken, getYouTubeAccessToken } from "./_platform-connections.js";
 import type { SessionUser } from "./_auth.js";
 import { emitSocialEngagementLeadNotification } from "./_notifications.js";
 
@@ -410,40 +410,67 @@ function subscriptionFailure(error: any) {
   };
 }
 
+function platformDisplayName(platform: string) {
+  if (platform === "facebook") return "Facebook";
+  if (platform === "instagram") return "Instagram";
+  if (platform === "youtube") return "YouTube";
+  if (platform === "tiktok") return "TikTok";
+  if (platform === "snapchat") return "Snapchat";
+  return platform;
+}
+
 function publishedIds(platform: string, resultInput: unknown) {
   const result = asObject(resultInput);
-  if (platform === "facebook") {
-    const publish = asObject(result.publish);
-    const providerPostId = clean(result.post_id || publish.post_id || publish.id || result.id);
-    const providerMediaId = clean(result.id || asArray(result.uploads)[0]?.id || providerPostId);
-    return { providerPostId, providerMediaId };
-  }
   const publish = asObject(result.publish);
-  const providerPostId = clean(publish.id || result.id);
-  const providerMediaId = providerPostId;
-  return { providerPostId, providerMediaId };
+  if (platform === "facebook") {
+    const providerPostId = clean(result.post_id || publish.post_id || publish.id || result.video_id || result.id);
+    const providerMediaId = clean(result.video_id || result.id || asArray(result.uploads)[0]?.id || providerPostId);
+    const permalink = clean(result.permalink_url || publish.permalink_url || result.url);
+    return { providerPostId, providerMediaId, permalink };
+  }
+  if (platform === "instagram") {
+    const providerPostId = clean(publish.id || result.id);
+    const providerMediaId = providerPostId;
+    const permalink = clean(result.permalink || publish.permalink || result.url);
+    return { providerPostId, providerMediaId, permalink };
+  }
+  if (platform === "youtube") {
+    const video = asObject(result.video);
+    const providerPostId = clean(result.id || video.id);
+    const providerMediaId = providerPostId;
+    const permalink = clean(result.url) || (providerPostId ? `https://www.youtube.com/watch?v=${encodeURIComponent(providerPostId)}` : "");
+    return { providerPostId, providerMediaId, permalink };
+  }
+  const providerPostId = clean(result.id || publish.id || result.post_id || result.video_id);
+  const providerMediaId = clean(result.media_id || result.video_id || providerPostId);
+  const permalink = clean(result.permalink || result.permalink_url || result.url || publish.permalink);
+  return { providerPostId, providerMediaId, permalink };
 }
 
 export async function recordPublishedPost(sql: ReturnType<typeof getSql>, schedule: any, result: unknown) {
-  const platform = clean(schedule.platform_code || schedule.platform);
-  if (!['facebook','instagram'].includes(platform)) return null;
-  const { providerPostId, providerMediaId } = publishedIds(platform, result);
+  const platform = resultPlatform(schedule.platform_code || schedule.platform);
+  if (!platform) return null;
+  const { providerPostId, providerMediaId, permalink } = publishedIds(platform, result);
   if (!providerPostId) throw new Error("لم ترجع المنصة معرف المنشور بعد نجاح النشر");
   const [connection] = await sql<any[]>`
     select platform,page_id,ig_user_id,account_id from marketing.platform_connections where platform=${platform} and connected=true limit 1
   `;
-  const accountId = platform === "facebook" ? clean(connection?.page_id || connection?.account_id) : clean(connection?.ig_user_id || connection?.account_id);
-  if (!accountId) throw new Error(`حساب ${platform === 'facebook' ? 'Facebook' : 'Instagram'} غير مكتمل`);
+  const accountId = platform === "facebook"
+    ? clean(connection?.page_id || connection?.account_id)
+    : platform === "instagram"
+      ? clean(connection?.ig_user_id || connection?.account_id)
+      : clean(connection?.account_id);
+  if (!accountId) throw new Error(`حساب ${platformDisplayName(platform)} غير مكتمل`);
   const [row] = await sql<any[]>`
     insert into marketing.published_posts(
-      schedule_id,source_type,source_id,creative_id,task_id,platform,account_id,provider_post_id,provider_media_id,post_type_name,published_at,raw_metrics
+      schedule_id,source_type,source_id,creative_id,task_id,platform,account_id,provider_post_id,provider_media_id,permalink,post_type_name,published_at,raw_metrics
     ) values(
       ${schedule.id}::uuid,${schedule.source_type},${schedule.source_id}::uuid,${schedule.creative_id || null}::uuid,${schedule.task_id || null}::uuid,
-      ${platform},${accountId},${providerPostId},${providerMediaId || null},${clean(schedule.post_type_name) || null},now(),${sql.json({ publishResult: result } as any)}
+      ${platform},${accountId},${providerPostId},${providerMediaId || null},${permalink || null},${clean(schedule.post_type_name) || null},now(),${sql.json({ publishResult: result } as any)}
     ) on conflict(schedule_id) do update set
       platform=excluded.platform,account_id=excluded.account_id,provider_post_id=excluded.provider_post_id,provider_media_id=excluded.provider_media_id,
-      post_type_name=excluded.post_type_name,published_at=excluded.published_at,sync_status='pending',sync_error=null,
-      raw_metrics=coalesce(marketing.published_posts.raw_metrics,'{}'::jsonb)||excluded.raw_metrics,updated_at=now()
+      permalink=coalesce(excluded.permalink,marketing.published_posts.permalink),post_type_name=excluded.post_type_name,published_at=excluded.published_at,
+      sync_status='pending',sync_error=null,raw_metrics=coalesce(marketing.published_posts.raw_metrics,'{}'::jsonb)||excluded.raw_metrics,updated_at=now()
     returning *,id::text,schedule_id::text,source_id::text,creative_id::text,task_id::text
   `;
   return row;
@@ -456,7 +483,7 @@ export async function backfillPublishedPosts(sql: ReturnType<typeof getSql>) {
     join marketing.platforms p on p.id=s.platform_id
     left join marketing.platform_post_types pt on pt.id=s.post_type_id
     left join marketing.published_posts pp on pp.schedule_id=s.id
-    where s.status='published' and pp.id is null and p.code in ('facebook','instagram') and coalesce(s.publish_result,'{}'::jsonb)<>'{}'::jsonb
+    where s.status='published' and pp.id is null and p.code in ('facebook','instagram','tiktok','snapchat','youtube') and coalesce(s.publish_result,'{}'::jsonb)<>'{}'::jsonb
     order by s.published_at
   `;
   let created = 0;
@@ -525,53 +552,88 @@ async function repairStoredEngagementSources(sql: ReturnType<typeof getSql>) {
 
 async function platformConnection(sql: ReturnType<typeof getSql>, platform: string) {
   const [connection] = await sql<any[]>`select * from marketing.platform_connections where platform=${platform} and connected=true limit 1`;
-  if (!connection) throw new Error(`ربط ${platform === 'facebook' ? 'Facebook' : 'Instagram'} غير متاح`);
+  if (!connection) throw new Error(`ربط ${platformDisplayName(platform)} غير متاح`);
   const token = decryptPlatformToken(connection.page_access_token_encrypted || connection.access_token_encrypted || connection.user_access_token_encrypted);
-  if (!token) throw new Error(`توكن ${platform === 'facebook' ? 'Facebook' : 'Instagram'} غير متاح`);
+  if (!token) throw new Error(`توكن ${platformDisplayName(platform)} غير متاح`);
   return { connection, token };
+}
+
+async function youtubeVideoStatistics(sql: ReturnType<typeof getSql>, post: any) {
+  const { accessToken } = await getYouTubeAccessToken(sql);
+  const videoId = clean(post.provider_media_id || post.provider_post_id);
+  if (!videoId) throw new Error("معرف فيديو YouTube غير موجود");
+  const url = new URL("https://www.googleapis.com/youtube/v3/videos");
+  url.searchParams.set("part", "statistics,snippet,status");
+  url.searchParams.set("id", videoId);
+  const response = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.error) throw new Error(clean(payload?.error?.message) || `تعذر تحديث أرقام YouTube (${response.status})`);
+  const video = asArray(payload?.items)[0];
+  if (!video) throw new Error("فيديو YouTube غير متاح للحساب المربوط");
+  return { payload, videoId, video };
 }
 
 async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
   try {
-    const { token } = await platformConnection(sql, post.platform);
     let payload: any;
-    let likes = 0, comments = 0, shares = 0, saves = 0, views = 0, reach = 0;
+    let likes = numberValue(post.likes_count), comments = numberValue(post.comments_count), shares = numberValue(post.shares_count);
+    let saves = numberValue(post.saves_count), views = numberValue(post.views_count), reach = numberValue(post.reach_count);
     let permalink = clean(post.permalink);
-    if (post.platform === 'facebook') {
-      payload = await graphRequest(`/${encodeURIComponent(post.provider_post_id)}`, 'GET', token, {
-        fields: 'id,permalink_url,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares',
+    let syncStatus: "pending" | "synced" = "synced";
+    let syncError = "";
+
+    if (post.platform === "facebook") {
+      const { token } = await platformConnection(sql, post.platform);
+      payload = await graphRequest(`/${encodeURIComponent(post.provider_post_id)}`, "GET", token, {
+        fields: "id,permalink_url,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares",
       });
       likes = numberValue(payload?.reactions?.summary?.total_count);
       comments = numberValue(payload?.comments?.summary?.total_count);
       shares = numberValue(payload?.shares?.count);
       permalink = clean(payload?.permalink_url || permalink);
-    } else {
-      payload = await graphRequest(`/${encodeURIComponent(post.provider_media_id || post.provider_post_id)}`, 'GET', token, {
-        fields: 'id,permalink,like_count,comments_count,media_type,timestamp',
+    } else if (post.platform === "instagram") {
+      const { token } = await platformConnection(sql, post.platform);
+      payload = await graphRequest(`/${encodeURIComponent(post.provider_media_id || post.provider_post_id)}`, "GET", token, {
+        fields: "id,permalink,like_count,comments_count,media_type,timestamp",
       });
       likes = numberValue(payload?.like_count);
       comments = numberValue(payload?.comments_count);
       permalink = clean(payload?.permalink || permalink);
       try {
-        const insight = await graphRequest(`/${encodeURIComponent(post.provider_media_id || post.provider_post_id)}/insights`, 'GET', token, {
-          metric: 'reach,views,saved,shares',
+        const insight = await graphRequest(`/${encodeURIComponent(post.provider_media_id || post.provider_post_id)}/insights`, "GET", token, {
+          metric: "reach,views,saved,shares",
         });
         for (const metric of asArray(insight?.data)) {
           const value = numberValue(asArray(metric?.values)[0]?.value ?? metric?.value);
-          if (metric?.name === 'reach') reach = value;
-          if (metric?.name === 'views') views = value;
-          if (metric?.name === 'saved') saves = value;
-          if (metric?.name === 'shares') shares = value;
+          if (metric?.name === "reach") reach = value;
+          if (metric?.name === "views") views = value;
+          if (metric?.name === "saved") saves = value;
+          if (metric?.name === "shares") shares = value;
         }
         payload = { ...payload, insights: insight };
       } catch (error: any) {
         payload = { ...payload, insightsWarning: clean(error?.message) };
       }
+    } else if (post.platform === "youtube") {
+      const youtube = await youtubeVideoStatistics(sql, post);
+      payload = youtube.payload;
+      likes = numberValue(youtube.video?.statistics?.likeCount);
+      comments = numberValue(youtube.video?.statistics?.commentCount);
+      views = numberValue(youtube.video?.statistics?.viewCount);
+      shares = 0;
+      saves = 0;
+      reach = 0;
+      permalink = `https://www.youtube.com/watch?v=${encodeURIComponent(youtube.videoId)}`;
+    } else {
+      payload = { warning: `تحديث الأرقام التلقائي لمنصة ${platformDisplayName(post.platform)} غير مفعّل بعد` };
+      syncStatus = "pending";
+      syncError = clean(payload.warning);
     }
+
     await sql.begin(async tx => {
       await tx`
         update marketing.published_posts set permalink=${permalink || null},likes_count=${likes},comments_count=${comments},shares_count=${shares},
-          saves_count=${saves},views_count=${views},reach_count=${reach},last_synced_at=now(),sync_status='synced',sync_error=null,
+          saves_count=${saves},views_count=${views},reach_count=${reach},last_synced_at=now(),sync_status=${syncStatus},sync_error=${syncError || null},
           raw_metrics=coalesce(raw_metrics,'{}'::jsonb)||${tx.json({ latest: payload } as any)}::jsonb,updated_at=now()
         where id=${post.id}::uuid
       `;
@@ -582,9 +644,9 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
           shares_count=excluded.shares_count,saves_count=excluded.saves_count,views_count=excluded.views_count,reach_count=excluded.reach_count,updated_at=now()
       `;
     });
-    return { id: post.id, ok: true };
+    return { id: post.id, ok: true, skipped: syncStatus === "pending" };
   } catch (error: any) {
-    const message = clean(error?.message) || 'تعذر تحديث التفاعل';
+    const message = clean(error?.message) || "تعذر تحديث التفاعل";
     await sql`update marketing.published_posts set last_synced_at=now(),sync_status='failed',sync_error=${message},updated_at=now() where id=${post.id}::uuid`;
     return { id: post.id, ok: false, error: message };
   }

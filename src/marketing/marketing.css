@@ -201,7 +201,8 @@
 .marketing-package-form label,
 .marketing-filter-bar label,
 .marketing-settings-panel label,
-.marketing-publish-edit-modal label {
+.marketing-publish-edit-modal label,
+.marketing-manual-publish-panel label {
   display: grid;
   gap: 6px;
   color: #6f625c;
@@ -229,7 +230,10 @@
 .marketing-settings-panel textarea,
 .marketing-publish-edit-modal input,
 .marketing-publish-edit-modal select,
-.marketing-publish-edit-modal textarea {
+.marketing-publish-edit-modal textarea,
+.marketing-manual-publish-panel input,
+.marketing-manual-publish-panel select,
+.marketing-manual-publish-panel textarea {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--line-strong);
@@ -257,7 +261,10 @@
 .marketing-settings-panel textarea:focus,
 .marketing-publish-edit-modal input:focus,
 .marketing-publish-edit-modal select:focus,
-.marketing-publish-edit-modal textarea:focus { border-color: #d89a7f; box-shadow: 0 0 0 3px rgba(198,95,60,.08); }
+.marketing-publish-edit-modal textarea:focus,
+.marketing-manual-publish-panel input:focus,
+.marketing-manual-publish-panel select:focus,
+.marketing-manual-publish-panel textarea:focus { border-color: #d89a7f; box-shadow: 0 0 0 3px rgba(198,95,60,.08); }
 .marketing-card select[multiple] { min-height: 130px; }
 
 .marketing-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
@@ -2199,6 +2206,43 @@
 .marketing-package-setting-list small { color: var(--muted); }
 
 /* Publish preparation */
+.marketing-publish-view-tabs {
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid #e3d7d3;
+  border-radius: 14px;
+  background: #f8f3f1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.marketing-publish-view-tabs button {
+  min-height: 39px;
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #806d67;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.marketing-publish-view-tabs button.active { background: #fff; color: #65392f; box-shadow: 0 3px 12px rgba(70,36,29,.1); }
+.marketing-publish-view-tabs button:disabled { cursor: not-allowed; opacity: .45; }
+.marketing-manual-publish-panel { padding: 17px; display: grid; gap: 14px; }
+.marketing-manual-publish-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.marketing-manual-publish-panel > header h3 { margin: 0 0 4px; }
+.marketing-manual-publish-panel > header p { margin: 0; color: var(--muted); font-size: 11px; }
+.marketing-manual-publish-panel > header > span { width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center; border-radius: 13px; color: var(--brand); background: #fff0ea; }
+.marketing-manual-publish-selectors { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fdfaf8; }
+.marketing-manual-publish-workspace { display: grid; gap: 14px; }
+.marketing-manual-publish-footer { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 13px; background: #fffaf8; }
+.marketing-manual-publish-footer > div { display: flex; align-items: center; gap: 8px; color: #7d665e; font-size: 12px; font-weight: 800; }
+.marketing-manual-publish-footer > div svg { color: var(--brand); flex: 0 0 auto; }
+.marketing-manual-publish-footer button { min-width: 190px; }
 .marketing-publish-overview { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 11px; }
 .marketing-publish-overview article { min-height: 88px; padding: 14px; border: 1px solid var(--line); border-radius: 15px; background: #fff; box-shadow: 0 8px 22px rgba(81,44,34,.05); display: flex; align-items: center; gap: 11px; }
 .marketing-publish-overview article > span { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: var(--brand); background: #fff1eb; }
@@ -2465,6 +2509,7 @@
 @media (max-width: 1200px) {
   .marketing-detail-actions-top { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-publish-overview { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .marketing-manual-publish-selectors { grid-template-columns: 1fr; }
   .marketing-publish-toolbar { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-publish-search { grid-column: 1/-1; }
   .marketing-publish-list-row { grid-template-columns: repeat(3,minmax(0,1fr)); }
@@ -2491,6 +2536,7 @@
   .marketing-detail-actions-top,
   .marketing-publish-overview,
   .marketing-publish-toolbar,
+  .marketing-manual-publish-selectors,
   .marketing-publish-edit-summary,
   .marketing-publish-platform-editor,
   .marketing-monitor-kpis,
@@ -2516,6 +2562,10 @@
   .marketing-agenda-task-flow { grid-template-columns: 1fr; }
   .marketing-agenda-task-flow > i { transform: rotate(-90deg); }
   .marketing-publish-content-grid { grid-template-columns: 1fr; }
+  .marketing-publish-view-tabs { width: 100%; overflow-x: auto; }
+  .marketing-publish-view-tabs button { flex: 1 0 auto; }
+  .marketing-manual-publish-footer { align-items: stretch; flex-direction: column; }
+  .marketing-manual-publish-footer button { width: 100%; min-width: 0; }
   .marketing-package-options { grid-template-columns: 1fr; }
 }
 
@@ -3252,6 +3302,24 @@
 .marketing-platform-mini.instagram {
   background: #fff0f6;
   color: #bd2e6b;
+}
+
+.marketing-platform-chip.youtube,
+.marketing-platform-mini.youtube {
+  background: #fff0f0;
+  color: #c62828;
+}
+
+.marketing-platform-chip.tiktok,
+.marketing-platform-mini.tiktok {
+  background: #f0f0f2;
+  color: #25252a;
+}
+
+.marketing-platform-chip.snapchat,
+.marketing-platform-mini.snapchat {
+  background: #fff8c7;
+  color: #6b5b00;
 }
 
 .marketing-sync-status {

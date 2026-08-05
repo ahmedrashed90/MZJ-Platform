@@ -16,6 +16,7 @@ import {
   publicPlatformConnection,
 } from "../_platform-connections.js";
 import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.js";
+import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
@@ -2058,24 +2059,47 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   if(!executionTask)throw new Error("التاسك التنفيذي المرتبط غير موجود في قسم النشر");
   await assertMarketingEntityAccess(sql,user,clean(executionTask.source_type),clean(executionTask.source_id));
   if(!publishDate)throw new Error("تاريخ النشر مطلوب");
+
   const normalizedPlatforms=platforms.map((platform:any)=>({
     platformId:clean(platform?.platformId),
     postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
   })).filter((platform:any)=>platform.platformId);
   if(normalizedPlatforms.some((platform:any)=>!platform.postTypeIds.length))throw new Error("حدد نوع نشر لكل منصة مختارة");
-  const requestedPlatformIds=[...new Set(normalizedPlatforms.map((platform:any)=>platform.platformId))];
-  const platformRows=requestedPlatformIds.length?await sql<any[]>`select id::text,lower(code) as code from marketing.platforms where id in ${sql(requestedPlatformIds)} and is_active=true`:[];
-  const platformCodeById=new Map(platformRows.map((platform:any)=>[clean(platform.id),clean(platform.code)]));
-  if(platformRows.length!==requestedPlatformIds.length)throw new Error("إحدى منصات النشر غير موجودة أو غير مفعلة");
-  const combinations=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId,platformCode:platformCodeById.get(platform.platformId)||""})));
-  if(!combinations.length){
+
+  const requestedPairs=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId})));
+  if(!requestedPairs.length){
     const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);
-    if(platformId&&postTypeId){
-      const[legacyPlatform]=await sql<any[]>`select id::text,lower(code) as code from marketing.platforms where id=${platformId}::uuid and is_active=true`;
-      if(legacyPlatform)combinations.push({platformId,postTypeId,platformCode:clean(legacyPlatform.code)});
-    }
+    if(platformId&&postTypeId)requestedPairs.push({platformId,postTypeId});
   }
-  if(!combinations.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+  const uniquePairKeys=new Set<string>();
+  const uniquePairs=requestedPairs.filter((item:any)=>{
+    const key=`${item.platformId}:${item.postTypeId}`;
+    if(uniquePairKeys.has(key))return false;
+    uniquePairKeys.add(key);
+    return true;
+  });
+  if(!uniquePairs.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+
+  const requestedPostTypeIds=[...new Set(uniquePairs.map((item:any)=>item.postTypeId))];
+  const postTypeRows=await sql<any[]>`
+    select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,lower(p.code) as platform_code
+    from marketing.platform_post_types pt
+    join marketing.platforms p on p.id=pt.platform_id and p.is_active=true
+    where pt.id in ${sql(requestedPostTypeIds)} and pt.is_active=true
+  `;
+  const postTypeById=new Map(postTypeRows.map((row:any)=>[clean(row.id),row]));
+  const combinations=uniquePairs.map((item:any)=>{
+    const postType=postTypeById.get(item.postTypeId);
+    if(!postType||clean(postType.platform_id)!==item.platformId)throw new Error("نوع النشر المحدد لا يتبع المنصة المختارة أو غير مفعّل");
+    return{
+      platformId:item.platformId,
+      postTypeId:item.postTypeId,
+      platformCode:clean(postType.platform_code),
+      postTypeName:clean(postType.name),
+      publishFormat:normalizeMarketingPublishFormat(postType.name),
+    };
+  });
+
   const youtubeSelected=combinations.some((item:any)=>item.platformCode==='youtube');
   const youtubeDefaults=await getYouTubePublishSettings(sql);
   const youtubeOptions=normalizeYouTubePublishOptions(body.youtubeOptions,youtubeDefaults,{
@@ -2089,12 +2113,16 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     if(youtubeOptions.tags.join(',').length>500)throw new Error("كلمات YouTube المفتاحية تتجاوز 500 حرف");
     if(!youtubeOptions.categoryId)throw new Error("تصنيف فيديو YouTube مطلوب");
   }
+
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
   await sql.begin(async tx=>{
     await tx`delete from marketing.publish_schedule where group_id=${groupId}::uuid`;
+    const youtubePublishOptions={youtube:youtubeOptions};
     for(const item of combinations){
-      const publishOptions=item.platformCode==='youtube'?{youtube:youtubeOptions}:{};
+      const publishOptions=item.platformCode==='youtube'
+        ?{...youtubePublishOptions,format:item.publishFormat}
+        :{format:item.publishFormat};
       await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,publish_options,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},${tx.json(dbJson(publishOptions))},'waiting')`;
     }
   });
@@ -2119,8 +2147,37 @@ async function graphFileRequest(path:string,token:string,file:{bytes:Uint8Array;
   return payload;
 }
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
-function normalizePostType(value:unknown){const text=clean(value).toLowerCase();if(text.includes('story')||text.includes('ستوري'))return'story';if(text.includes('reel')||text.includes('short')||text.includes('ريل'))return'reel';if(text.includes('photo')||text.includes('image')||text.includes('بوست صور')||text.includes('صورة'))return'photo_post';return text;}
-async function uploadFacebookStoryVideo(uploadUrl:string,token:string,mediaUrl:string){const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});const payload=await response.json().catch(()=>({}));if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو Story على Facebook (${response.status})`);return payload;}
+async function uploadFacebookHostedVideo(uploadUrl:string,token:string,mediaUrl:string,kind:string){
+  const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});
+  const payload=await response.json().catch(()=>({}));
+  if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو ${kind} على Facebook (${response.status})`);
+  return payload;
+}
+async function publishFacebookReel(pageId:string,token:string,mediaUrl:string,caption:string){
+  const start=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'start'});
+  const videoId=clean(start.video_id||start.id),uploadUrl=clean(start.upload_url||start.uploadUrl);
+  if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع Reel على Facebook");
+  const upload=await uploadFacebookHostedVideo(uploadUrl,token,mediaUrl,'Reel');
+  const publish=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'finish',video_id:videoId,video_state:'PUBLISHED',description:caption});
+  return{start,upload,publish,video_id:videoId};
+}
+function assertPublishMedia(platform:string,format:MarketingPublishFormat,files:any[]){
+  const videos=files.filter(looksVideo),images=files.filter((file:any)=>!looksVideo(file));
+  if(format==='story'&&files.length!==1)throw new Error("الستوري يجب أن يحتوي على ملف واحد فقط");
+  if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
+  if(publishFormatRequiresVideo(format)&&(files.length!==1||videos.length!==1))throw new Error("نوع النشر المحدد يتطلب ملف فيديو واحدًا فقط");
+  if(publishFormatRequiresImages(format)&&videos.length)throw new Error("نوع النشر المحدد يقبل صورًا فقط");
+  if(format==='carousel'&&images.length<2)throw new Error("Carousel يتطلب صورتين على الأقل");
+  if(platform==='instagram'&&format==='post'&&videos.length)throw new Error("بوست Instagram يقبل الصور فقط. اختر Reel لنشر الفيديو");
+  if(platform==='youtube'&&(files.length!==1||videos.length!==1))throw new Error("نشر YouTube يتطلب ملف فيديو واحدًا فقط");
+}
+function youtubeOptionsForFormat(options:any,format:MarketingPublishFormat){
+  if(format!=='short')return options;
+  const marker=/#shorts\b/i;
+  const title=clean(options.title);
+  const description=clean(options.description);
+  return{...options,description:marker.test(`${title} ${description}`)?description:[description,'#Shorts'].filter(Boolean).join("\n\n")};
+}
 async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule:any){
   if(clean(schedule.final_media_group_id)){
     const[group]=await sql<any[]>`select file_count,status from marketing.final_media_groups where id=${schedule.final_media_group_id}::uuid`;
@@ -2195,48 +2252,54 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   if(!conn||!conn.connected)throw new Error(`منصة ${schedule.platform_name||schedule.platform_code} غير مربوطة`);
   const files=await finalMediaFilesForSchedule(sql,schedule);
   if(!files.length)throw new Error("الملف النهائي غير موجود");
-  const videos=files.filter(looksVideo);
-  if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
-  const file=files[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),postType=normalizePostType(schedule.post_type_name);
-  const multipleImages=files.length>1;
-  if(multipleImages&&(postType==='story'||postType==='reel'))throw new Error("نوع النشر المحدد لا يقبل مجموعة صور. اختر Carousel أو منشور صور");
+  const publishOptions=objectValue(schedule.publish_options);
+  const publishFormat=normalizeMarketingPublishFormat(publishOptions.format||schedule.post_type_name);
+  assertPublishMedia(clean(schedule.platform_code),publishFormat,files);
+  const file=files[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),multipleImages=files.length>1;
   let result:any;
+
   if(schedule.platform_code==='facebook'){
     const pageId=clean(conn.page_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
-    if(postType==='story'){
+    if(publishFormat==='story'){
       if(looksVideo(file)){
         const mediaUrl=await finalMediaDeliveryUrl(sql,file);
         const start=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'start'});
-        const videoId=start.video_id||start.id,uploadUrl=start.upload_url||start.uploadUrl;
+        const videoId=clean(start.video_id||start.id),uploadUrl=clean(start.upload_url||start.uploadUrl);
         if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع فيديو Story على Facebook");
-        const upload=await uploadFacebookStoryVideo(uploadUrl,token,mediaUrl);
-        const finish=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'finish',video_id:videoId});
-        result={start,upload,publish:finish};
+        const upload=await uploadFacebookHostedVideo(uploadUrl,token,mediaUrl,'Story');
+        const publish=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'finish',video_id:videoId});
+        result={start,upload,publish,video_id:videoId};
       }else{
         const binary=await finalMediaBinary(sql,file);
         const photo=await graphFileRequest(`/${pageId}/photos`,token,binary,{published:false});
-        const photoId=photo.id||photo.photo_id;
+        const photoId=clean(photo.id||photo.photo_id);
         if(!photoId)throw new Error("تعذر رفع صورة Story على Facebook");
         const publish=await graphRequest(`/${pageId}/photo_stories`,'POST',token,{photo_id:photoId});
         result={upload:photo,publish};
       }
-    }else if(looksVideo(file)){
-      const mediaUrl=await finalMediaDeliveryUrl(sql,file);
-      result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:mediaUrl,description:caption});
-    }else if(multipleImages){
-      const uploads=[];
-      for(const imageFile of files){
-        const binary=await finalMediaBinary(sql,imageFile);
-        uploads.push(await graphFileRequest(`/${pageId}/photos`,token,binary,{published:false}));
+    }else if(publishFormat==='reel'||publishFormat==='short'){
+      result=await publishFacebookReel(pageId,token,await finalMediaDeliveryUrl(sql,file),caption);
+    }else if(publishFormat==='video'){
+      result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:await finalMediaDeliveryUrl(sql,file),description:caption});
+    }else if(publishFormat==='photo_post'||publishFormat==='carousel'||multipleImages){
+      if(multipleImages){
+        const uploads=[];
+        for(const imageFile of files){
+          const binary=await finalMediaBinary(sql,imageFile);
+          uploads.push(await graphFileRequest(`/${pageId}/photos`,token,binary,{published:false}));
+        }
+        const mediaIds=uploads.map((item:any)=>clean(item.id||item.photo_id)).filter(Boolean);
+        if(mediaIds.length!==files.length)throw new Error("تعذر تجهيز كل صور المنشور على Facebook");
+        const publish=await graphRequest(`/${pageId}/feed`,'POST',token,{message:caption,attached_media:mediaIds.map((media_fbid:string)=>({media_fbid}))});
+        result={uploads,publish};
+      }else{
+        result=await graphFileRequest(`/${pageId}/photos`,token,await finalMediaBinary(sql,file),{caption,published:true});
       }
-      const mediaIds=uploads.map((item:any)=>clean(item.id||item.photo_id)).filter(Boolean);
-      if(mediaIds.length!==files.length)throw new Error("تعذر تجهيز كل صور المنشور على Facebook");
-      const publish=await graphRequest(`/${pageId}/feed`,'POST',token,{message:caption,attached_media:mediaIds.map((media_fbid:string)=>({media_fbid}))});
-      result={uploads,publish};
+    }else if(looksVideo(file)){
+      result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:await finalMediaDeliveryUrl(sql,file),description:caption});
     }else{
-      const binary=await finalMediaBinary(sql,file);
-      result=await graphFileRequest(`/${pageId}/photos`,token,binary,{caption,published:true});
+      result=await graphFileRequest(`/${pageId}/photos`,token,await finalMediaBinary(sql,file),{caption,published:true});
     }
   }else if(schedule.platform_code==='instagram'){
     const igId=clean(conn.ig_user_id||conn.account_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
@@ -2244,7 +2307,21 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
     const mediaUrls=[];
     for(const mediaFile of files)mediaUrls.push(await finalMediaDeliveryUrl(sql,mediaFile));
     const mediaUrl=mediaUrls[0];
-    if(multipleImages){
+    if(publishFormat==='story'){
+      const params:any={media_type:'STORIES'};
+      if(looksVideo(file))params.video_url=mediaUrl;else params.image_url=mediaUrl;
+      const container=await graphRequest(`/${igId}/media`,'POST',token,params);
+      const creationId=clean(container.id||container.creation_id);
+      if(!creationId)throw new Error("تعذر إنشاء Story على Instagram");
+      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
+      result={create:container,publish};
+    }else if(publishFormat==='reel'||publishFormat==='short'||publishFormat==='video'){
+      const container=await graphRequest(`/${igId}/media`,'POST',token,{caption,video_url:mediaUrl,media_type:'REELS',share_to_feed:true});
+      const creationId=clean(container.id||container.creation_id);
+      if(!creationId)throw new Error("تعذر إنشاء Reel على Instagram");
+      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
+      result={create:container,publish};
+    }else if(multipleImages){
       const children=[];
       for(const url of mediaUrls){
         const child=await graphRequest(`/${igId}/media`,'POST',token,{image_url:url,is_carousel_item:true});
@@ -2253,29 +2330,21 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
         children.push(childId);
       }
       const container=await graphRequest(`/${igId}/media`,'POST',token,{media_type:'CAROUSEL',children:children.join(','),caption});
-      const creationId=container.id||container.creation_id;
+      const creationId=clean(container.id||container.creation_id);
       if(!creationId)throw new Error("تعذر إنشاء Carousel على Instagram");
       const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
       result={children,create:container,publish};
     }else{
-      const params:any={caption};
-      if(postType==='story'){
-        params.media_type='STORIES';
-        if(looksVideo(file))params.video_url=mediaUrl;else params.image_url=mediaUrl;
-      }else if(looksVideo(file)||postType==='reel'){
-        params.video_url=mediaUrl;params.media_type='REELS';params.share_to_feed=true;
-      }else params.image_url=mediaUrl;
-      const container=await graphRequest(`/${igId}/media`,'POST',token,params);
-      const creationId=container.id||container.creation_id;
-      if(!creationId)throw new Error("تعذر إنشاء ملف النشر على Instagram");
+      const container=await graphRequest(`/${igId}/media`,'POST',token,{caption,image_url:mediaUrl});
+      const creationId=clean(container.id||container.creation_id);
+      if(!creationId)throw new Error("تعذر إنشاء بوست صور على Instagram");
       const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
       result={create:container,publish};
     }
   }else if(schedule.platform_code==='youtube'){
-    if(files.length!==1||!looksVideo(file))throw new Error("نشر YouTube يتطلب ملف فيديو واحدًا فقط");
+    if(!['video','short','post'].includes(publishFormat))throw new Error("YouTube يقبل فيديو أو Shorts فقط");
     const youtubeDefaults=await getYouTubePublishSettings(sql);
-    const publishOptions=objectValue(schedule.publish_options);
-    const youtubeOptions=normalizeYouTubePublishOptions(publishOptions.youtube,youtubeDefaults,{title:clean(schedule.caption),description:caption});
+    const youtubeOptions=youtubeOptionsForFormat(normalizeYouTubePublishOptions(publishOptions.youtube,youtubeDefaults,{title:clean(schedule.caption),description:caption}),publishFormat);
     if(!youtubeOptions.title)throw new Error("عنوان فيديو YouTube مطلوب");
     if([...youtubeOptions.title].length>100)throw new Error("عنوان YouTube يجب ألا يتجاوز 100 حرف");
     if(Buffer.byteLength(youtubeOptions.description,'utf8')>5000)throw new Error("وصف YouTube يجب ألا يتجاوز 5000 بايت");
@@ -2284,6 +2353,8 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
     if(!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(youtubeOptions.defaultLanguage))throw new Error("لغة فيديو YouTube غير صالحة");
     result=await publishYouTubeVideo(sql,file,youtubeOptions);
   }else throw new Error("المنصة غير مدعومة");
+
+  result={...objectValue(result),publishFormat,postTypeName:clean(schedule.post_type_name)};
   await sql.begin(async tx=>{
     await tx`update marketing.publish_schedule set status='published',published_at=now(),publish_result=${tx.json(dbJson(result))},updated_at=now() where id=${schedule.id}::uuid`;
     await tx`insert into marketing.publish_logs(schedule_id,platform,status,result,published_by) values(${schedule.id}::uuid,${schedule.platform_code},'published',${tx.json(dbJson(result))},${user.id}::uuid)`;

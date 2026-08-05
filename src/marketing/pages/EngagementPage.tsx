@@ -13,8 +13,10 @@ import {
   LinkSimple,
   MagnifyingGlass,
   ShareNetwork,
+  TiktokLogo,
   Trash,
   UsersThree,
+  YoutubeLogo,
   XCircle,
 } from "@phosphor-icons/react";
 import { useAuth } from "../../auth/AuthContext";
@@ -100,11 +102,16 @@ function platformLabel(platform: string) { return marketingResultPlatformLabel(p
 function sourceLabel(platform: string) {
   if (platform === "facebook") return "بوست فيس بوك";
   if (platform === "instagram") return "بوست انستجرام";
+  if (platform === "youtube") return "فيديو YouTube";
+  if (platform === "tiktok") return "منشور TikTok";
+  if (platform === "snapchat") return "منشور Snapchat";
   return marketingResultSourceLabel(platform);
 }
 function platformIcon(platform: string, size: number) {
   if (platform === "facebook") return <FacebookLogo size={size} weight="fill" />;
   if (platform === "instagram") return <InstagramLogo size={size} weight="fill" />;
+  if (platform === "youtube") return <YoutubeLogo size={size} weight="fill" />;
+  if (platform === "tiktok") return <TiktokLogo size={size} weight="fill" />;
   return null;
 }
 function engagementLabel(kind: string) {
@@ -339,14 +346,14 @@ export function EngagementPage() {
           </header>
           <div className="marketing-engagement-control-panel">
             <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف، العميل أو نص التعليق" /></div>
-            <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
+            <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
             <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>البحث والمنصة والحالة ونوع التفاعل تعمل على نفس بيانات الحملات والأجندات.</small></div>
           </div>
           <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>الحملة / الأجندة</th><th>الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
             {rows.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
               <td><span className={`marketing-platform-chip ${row.platform}`}>{platformIcon(row.platform, 17)}{platformLabel(row.platform)}</span></td>
               <td><b>{row.source_name}</b><small>{row.task_name}</small></td>
-              <td>{row.creative_name}</td>
+              <td><b>{row.creative_name}</b><small>{row.post_type_name || "نوع النشر غير مسجل"}</small></td>
               <td>{marketingDate(row.published_at, true)}</td>
               <td>{count(row.likes_count)}</td><td>{count(row.comments_count)}</td><td>{count(row.shares_count)}</td><td>{count(row.reach_count)}</td>
               <td><span className={`marketing-sync-status ${row.sync_status}`}>{row.sync_status === "synced" ? "محدث" : row.sync_status === "failed" ? "فشل" : "بانتظار التحديث"}</span>{row.sync_error ? <details className="marketing-error-compact"><summary>عرض سبب الفشل</summary><p>{row.sync_error}</p></details> : null}</td>
@@ -406,10 +413,10 @@ export function EngagementPage() {
         </section>
 
         <section className="panel marketing-engagement-panel marketing-results-panel">
-          <header><div><h3>{view === "campaigns" ? "نتائج الحملات" : "نتائج الأجندات"}</h3><p>تجميع موحد لنتائج Facebook وInstagram وتجهيز TikTok وSnapchat من نفس مصدر البيانات.</p></div></header>
+          <header><div><h3>{view === "campaigns" ? "نتائج الحملات" : "نتائج الأجندات"}</h3><p>تجميع موحد لنتائج Facebook وInstagram وYouTube وتجهيز TikTok وSnapchat من نفس مصدر البيانات.</p></div></header>
           <div className="marketing-engagement-control-panel marketing-results-control-panel">
             <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`بحث باسم ${view === "campaigns" ? "الحملة" : "الأجندة"} أو الكود أو الكرييتيف`} /></div>
-            <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
+            <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
             <div className="marketing-engagement-filter-note"><strong>أرقام موحدة</strong><small>نفس النتائج تظهر داخل قاعدة البيانات بدون حسابات منفصلة أو تكرار.</small></div>
           </div>
           <div className="marketing-result-list-wrap"><table className="marketing-result-list-table"><thead><tr><th>{view === "campaigns" ? "الحملة" : "الأجندة"}</th><th>الفترة</th><th>المنشورات</th><th>المشاهدات</th><th>التفاعلات</th><th>عملاء CRM</th><th>تم البيع</th><th>أفضل منصة</th><th>أفضل كرييتيف</th><th>التفاصيل</th></tr></thead><tbody>

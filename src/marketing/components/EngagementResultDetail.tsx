@@ -28,7 +28,7 @@ type Props = {
   platforms?: readonly MarketingResultPlatform[];
 };
 
-const DEFAULT_RESULT_PLATFORMS: readonly MarketingResultPlatform[] = ["facebook", "instagram", "tiktok", "snapchat"];
+const DEFAULT_RESULT_PLATFORMS: readonly MarketingResultPlatform[] = ["facebook", "instagram", "youtube", "tiktok", "snapchat"];
 
 function syncLabel(status: string) {
   if (status === "synced") return "محدث";
