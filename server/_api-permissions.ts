@@ -69,7 +69,6 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
 function operationsRequirement(request: VercelRequest): ApiPermissionRequirement {
   const method = request.method || "GET";
   const resource = clean(request.query.resource) || "meta";
-  const payload = body(request);
   if (method === "GET") {
     const map: Record<string, string> = {
       meta: "system.operations.access", vehicles: "operations.inventory.view", vehicle: "operations.vehicle.view",
@@ -78,6 +77,7 @@ function operationsRequirement(request: VercelRequest): ApiPermissionRequirement
     };
     return req(map[resource] || "system.operations.access", "operations", resource, "view");
   }
+  const payload = body(request);
   const action = clean(payload.action);
   const map: Record<string, string> = {
     create_vehicle: "operations.vehicle.create", update_vehicle: "operations.vehicle.edit", delete_vehicle: "operations.vehicle.delete",
