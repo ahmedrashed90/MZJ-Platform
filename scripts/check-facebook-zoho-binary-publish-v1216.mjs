@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 const marketingApi = fs.readFileSync("server/marketing/index.ts", "utf8");
+const instagramPublisher = fs.readFileSync("server/_instagram-publisher.ts", "utf8");
 
 const facebookBlock = marketingApi.split("if(schedule.platform_code==='facebook')")[1]?.split("}else if(schedule.platform_code==='instagram')")[0] || "";
 const checks = [
@@ -9,7 +10,7 @@ const checks = [
   ["single Facebook image is uploaded as binary", facebookBlock.includes("const binary=await finalMediaBinary(sql,file)") && facebookBlock.includes("{caption,published:true}")],
   ["Facebook carousel uploads every ordered image as binary", facebookBlock.includes("for(const imageFile of files)") && facebookBlock.includes("{published:false}") && facebookBlock.includes("attached_media")],
   ["Facebook image branches no longer send the private Zoho URL", !facebookBlock.includes("{url:mediaUrl") && !facebookBlock.includes("for(const url of mediaUrls)")],
-  ["Instagram publishing flow remains separate", marketingApi.includes("const mediaUrls=[]") && marketingApi.includes("image_url:url") && marketingApi.includes("media_publish")],
+  ["Instagram publishing flow remains separate", marketingApi.includes("publishInstagramContent") && instagramPublisher.includes("image_url") && instagramPublisher.includes("media_publish")],
 ];
 
 let passed = 0;

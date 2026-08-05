@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 const read = (path) => fs.readFileSync(path, "utf8");
 const publishApi = read("server/marketing/index.ts");
+const instagramPublisher = read("server/_instagram-publisher.ts");
 const engagementApi = read("server/_marketing-engagement.ts");
 const publishPage = read("src/marketing/pages/PublishPrepPage.tsx");
 const engagementPage = read("src/marketing/pages/EngagementPage.tsx");
@@ -15,9 +16,9 @@ const checks = [
   ["post type is verified against its selected platform", publishApi.includes("نوع النشر المحدد لا يتبع المنصة المختارة أو غير مفعّل") && publishApi.includes("clean(postType.platform_id)!==item.platformId")],
   ["Facebook Reel uses the Reel publishing endpoint", publishApi.includes("/${pageId}/video_reels") && publishApi.includes("upload_phase:'start'") && publishApi.includes("video_state:'PUBLISHED'")],
   ["Facebook Story uses the dedicated Story endpoints", publishApi.includes("/${pageId}/video_stories") && publishApi.includes("/${pageId}/photo_stories")],
-  ["Instagram Story is published as STORIES", publishApi.includes("media_type:'STORIES'")],
-  ["Instagram Reel is published as REELS", publishApi.includes("media_type:'REELS'") && publishApi.includes("share_to_feed:true")],
-  ["Instagram multi-image post is published as CAROUSEL", publishApi.includes("media_type:'CAROUSEL'") && publishApi.includes("is_carousel_item:true")],
+  ["Instagram Story is published as STORIES", instagramPublisher.includes('media_type: \"STORIES\"')],
+  ["Instagram Reel is published as REELS", instagramPublisher.includes('media_type: \"REELS\"') && instagramPublisher.includes("share_to_feed: true")],
+  ["Instagram multi-image post is published as CAROUSEL", instagramPublisher.includes('media_type: \"CAROUSEL\"') && instagramPublisher.includes("is_carousel_item: true")],
   ["Instagram photo post cannot silently become a Reel", publishModel.includes("بوست Instagram يقبل الصور فقط. اختر Reel لنشر الفيديو")],
   ["YouTube Shorts selection is kept in publish metadata", publishApi.includes("youtubeOptionsForFormat") && publishApi.includes("#Shorts") && publishApi.includes("publishFormat,postTypeName")],
   ["successful publishing records every supported platform for engagement", engagementApi.includes("const platform = resultPlatform") && engagementApi.includes("recordPublishedPost") && engagementApi.includes("'facebook','instagram','tiktok','snapchat','youtube'")],

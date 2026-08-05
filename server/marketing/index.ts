@@ -18,6 +18,7 @@ import {
 import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.js";
 import { normalizeMarketingPublishFormat, resolveMarketingPublishFormat, validateMarketingPublishMedia, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
+import { publishInstagramContent } from "../_instagram-publisher.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
@@ -2424,43 +2425,15 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   }else if(schedule.platform_code==='instagram'){
     const igId=clean(conn.ig_user_id||conn.account_id),token=decryptPlatformToken(conn.page_access_token_encrypted||conn.access_token_encrypted||conn.user_access_token_encrypted);
     if(!igId||!token)throw new Error("بيانات Instagram غير مكتملة");
-    const mediaUrls=[];
-    for(const mediaFile of files)mediaUrls.push(await finalMediaDeliveryUrl(sql,mediaFile));
-    const mediaUrl=mediaUrls[0];
-    if(publishFormat==='story'){
-      const params:any={media_type:'STORIES'};
-      if(looksVideo(file))params.video_url=mediaUrl;else params.image_url=mediaUrl;
-      const container=await graphRequest(`/${igId}/media`,'POST',token,params);
-      const creationId=clean(container.id||container.creation_id);
-      if(!creationId)throw new Error("تعذر إنشاء Story على Instagram");
-      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
-      result={create:container,publish};
-    }else if(publishFormat==='reel'||publishFormat==='short'||publishFormat==='video'){
-      const container=await graphRequest(`/${igId}/media`,'POST',token,{caption,video_url:mediaUrl,media_type:'REELS',share_to_feed:true});
-      const creationId=clean(container.id||container.creation_id);
-      if(!creationId)throw new Error("تعذر إنشاء Reel على Instagram");
-      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
-      result={create:container,publish};
-    }else if(multipleImages){
-      const children=[];
-      for(const url of mediaUrls){
-        const child=await graphRequest(`/${igId}/media`,'POST',token,{image_url:url,is_carousel_item:true});
-        const childId=clean(child.id||child.creation_id);
-        if(!childId)throw new Error("تعذر تجهيز إحدى صور Carousel على Instagram");
-        children.push(childId);
-      }
-      const container=await graphRequest(`/${igId}/media`,'POST',token,{media_type:'CAROUSEL',children:children.join(','),caption});
-      const creationId=clean(container.id||container.creation_id);
-      if(!creationId)throw new Error("تعذر إنشاء Carousel على Instagram");
-      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
-      result={children,create:container,publish};
-    }else{
-      const container=await graphRequest(`/${igId}/media`,'POST',token,{caption,image_url:mediaUrl});
-      const creationId=clean(container.id||container.creation_id);
-      if(!creationId)throw new Error("تعذر إنشاء بوست صور على Instagram");
-      const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
-      result={create:container,publish};
-    }
+    const media=[];
+    for(const mediaFile of files)media.push({url:await finalMediaDeliveryUrl(sql,mediaFile),isVideo:looksVideo(mediaFile)});
+    result=await publishInstagramContent({
+      instagramUserId:igId,
+      accessToken:token,
+      publishFormat,
+      caption,
+      media,
+    });
   }else if(schedule.platform_code==='youtube'){
     if(!['video','short','post'].includes(publishFormat))throw new Error("YouTube يقبل فيديو أو Shorts فقط");
     const youtubeDefaults=await getYouTubePublishSettings(sql);
