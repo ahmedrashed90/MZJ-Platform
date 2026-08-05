@@ -1756,7 +1756,7 @@ async function completeSalesOrderFollowup(
       )
     limit 1
   `;
-  if (!order) throw new OperationError(404, "NOT_FOUND", "طلب البيع غير موجود أو غير متاح ضمن صلاحياتك");
+  if (!order) throw new OperationError(404, "TRACKING_REQUEST_NOT_FOUND", "طلب البيع غير موجود أو غير متاح ضمن صلاحياتك");
   if (order.sales_followup_completed_at) {
     return { ok: true, alreadyCompleted: true, trackingOrderId: order.id, salesOrderNo: order.sales_order_no };
   }
