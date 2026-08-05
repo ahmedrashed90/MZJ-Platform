@@ -57,6 +57,38 @@ const summaryCards = {
   sales: { label: "جودة المبيعات", field: "salesQuality", suffix: "%" },
 } as const;
 
+type SummaryCardKey = keyof typeof summaryCards;
+type SummaryCardTone = "blue" | "green" | "amber" | "red";
+
+function monthDateRange(value: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || month < 1 || month > 12) return null;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { from: `${value}-01`, to: `${value}-${String(lastDay).padStart(2, "0")}` };
+}
+
+function summaryMetricPercentage(key: SummaryCardKey, value: number, total: number) {
+  if (key === "marketing" || key === "sales") return Math.max(0, Math.min(100, value));
+  if (key === "total") return total > 0 ? 100 : 0;
+  return total > 0 ? Math.max(0, Math.min(100, (value / total) * 100)) : 0;
+}
+
+function summaryCardTone(key: SummaryCardKey, value: number, total: number): SummaryCardTone {
+  if (key === "total") return "blue";
+  const percentage = summaryMetricPercentage(key, value, total);
+  if (key === "notContacted" || key === "waste" || key === "potential" || key === "delayed") {
+    if (percentage <= 10) return "green";
+    if (percentage <= 25) return "amber";
+    return "red";
+  }
+  if (percentage >= 70) return "green";
+  if (percentage >= 40) return "amber";
+  return "red";
+}
+
 function htmlEscape(value: unknown) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
@@ -115,6 +147,7 @@ function reportExportRows(section: ReportSection) {
 export function CrmReportsPage() {
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [filters, setFilters] = useState(emptyFilters);
+  const [selectedMonth, setSelectedMonth] = useState("");
   const [data, setData] = useState<any | null>(null);
   const [popup, setPopup] = useState<ReportRow | null>(null);
   const [popupQ, setPopupQ] = useState("");
@@ -195,6 +228,22 @@ export function CrmReportsPage() {
 
   function setFilter(key: keyof typeof emptyFilters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function setReportMonth(value: string) {
+    setSelectedMonth(value);
+    const range = monthDateRange(value);
+    setFilters((current) => ({ ...current, from: range?.from || "", to: range?.to || "" }));
+  }
+
+  function setCustomReportDate(key: "from" | "to", value: string) {
+    setSelectedMonth("");
+    setFilter(key, value);
+  }
+
+  function clearReportFilters() {
+    setSelectedMonth("");
+    setFilters(emptyFilters);
   }
 
   function exportAll() {
@@ -279,14 +328,15 @@ export function CrmReportsPage() {
             <span className="crm-report-filter-title-icon"><FunnelSimple size={24} weight="duotone" /></span>
             <div><h2>فلاتر التقارير</h2><p>حدد نطاق التقرير بدقة؛ كل مجموعة مستقلة وواضحة مثل نموذج تقييم المناديب.</p></div>
           </div>
-          <button type="button" className="crm-secondary-button" onClick={() => setFilters(emptyFilters)}>مسح الفلاتر</button>
+          <button type="button" className="crm-secondary-button" onClick={clearReportFilters}>مسح الفلاتر</button>
         </header>
         <div className="crm-report-filter-blocks">
           <section className="crm-report-filter-block">
             <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>تم البيع حسب تاريخ تم البيع، وباقي الحالات حسب آخر تحديث</small></div></div>
-            <div className="crm-report-filter-fields two-columns">
-              <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setFilter("from", event.target.value)} /></label>
-              <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setFilter("to", event.target.value)} /></label>
+            <div className="crm-report-filter-fields three-columns">
+              <label><span>اختيار شهر</span><input type="month" value={selectedMonth} onChange={(event) => setReportMonth(event.target.value)} /></label>
+              <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setCustomReportDate("from", event.target.value)} /></label>
+              <label><span>إلى تاريخ</span><input type="date" value={filters.to} onChange={(event) => setCustomReportDate("to", event.target.value)} /></label>
             </div>
           </section>
           <section className="crm-report-filter-block">
@@ -314,10 +364,13 @@ export function CrmReportsPage() {
       {notice ? <div className="crm-inline-notice">{notice}</div> : null}
       {loading ? <div className="crm-loading-panel">جاري تحميل التقارير...</div> : null}
 
-      {data ? <section className="crm-report-summary crm-report-summary-eight">
-        {configuredCards.map((key: keyof typeof summaryCards) => {
+      {data ? <section className="crm-report-summary crm-report-summary-eight" aria-label="ملخص مؤشرات تقارير CRM">
+        {configuredCards.map((key: SummaryCardKey) => {
           const card = summaryCards[key];
-          return <article key={key}><span>{card.label}</span><strong>{data.totals?.[card.field] ?? 0}{card.suffix}</strong></article>;
+          const value = Number(data.totals?.[card.field] ?? 0);
+          const total = Number(data.totals?.total ?? 0);
+          const tone = summaryCardTone(key, value, total);
+          return <article key={key} data-tone={tone}><span>{card.label}</span><strong>{value}{card.suffix}</strong></article>;
         })}
       </section> : null}
 

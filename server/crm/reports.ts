@@ -537,7 +537,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         department: context ? [...context.departments].sort((a, b) => a.localeCompare(b, "ar")).join("، ") : "غير محدد",
         branch: context ? [...context.branches].sort((a, b) => a.localeCompare(b, "ar")).join("، ") || "بدون فرع" : "بدون فرع",
       };
-    });
+    })
+    .sort((a, b) => Number(b.sold || 0) - Number(a.sold || 0) || Number(b.total || 0) - Number(a.total || 0) || a.name.localeCompare(b.name, "ar"));
 
   const serviceRows = leads.filter((row) => row.department_code === "customer_service");
   const serviceFacts = salesFacts.filter((fact) => fact.department_code === "customer_service");
