@@ -51,7 +51,7 @@ export function PublicTrackingPage() {
       <div className="public-tracking-shell">
         <header className="public-tracking-brand">
           <img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" />
-          <div><h1>تتبع طلبك</h1><p>مع مجموعة محمد بن ذعار العجمي للسيارات… أنت نجم الطريق ⭐</p></div>
+          <div><h1>تتبع طلبك</h1><p>مع مجموعة محمد بن ذعار العجمي للسيارات… تاريخ تثق به</p></div>
         </header>
 
 
