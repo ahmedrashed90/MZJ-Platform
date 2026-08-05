@@ -16,7 +16,7 @@ import {
   publicPlatformConnection,
 } from "../_platform-connections.js";
 import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.js";
-import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
+import { normalizeMarketingPublishFormat, resolveMarketingPublishFormat, validateMarketingPublishMedia, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
@@ -242,7 +242,7 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
     sql<any[]>`select c.id::text,c.name,c.short_code,c.primary_department_id::text,cd.name as primary_department_name,c.is_active from marketing.creative_types c left join core.departments cd on cd.id=c.primary_department_id and cd.system_code='marketing' where c.is_active=true order by c.name`,
     sql<any[]>`select id::text,name,short_code,code_prefix,sequence_value,is_active from marketing.campaign_types where is_active=true order by name`,
     sql<any[]>`select id::text,code,name,is_active from marketing.platforms where is_active=true order by name`,
-    sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height from marketing.platform_post_types p where p.is_active=true order by p.name`,
+    sql<any[]>`select p.id::text,p.platform_id::text,p.name,p.width,p.height,p.publish_format from marketing.platform_post_types p where p.is_active=true order by p.name`,
     sql<any[]>`select id::text,name,active,source,created_at from marketing.funnels where active=true order by created_at`,
   ]);
   const connections = await sql<any[]>`select * from marketing.platform_connections order by platform`;
@@ -1535,7 +1535,28 @@ async function saveDepartment(sql: ReturnType<typeof getSql>, body: any, user: S
 async function saveAssignmentAction(sql: ReturnType<typeof getSql>, body:any){const id=clean(body.id),departmentId=clean(body.departmentId),name=clean(body.name),percentage=numberValue(body.percentage);if(!departmentId||!name)throw new Error("بيانات إجراء التكليف غير مكتملة");const [sum]=await sql<any[]>`select coalesce(sum(percentage),0)::float as total from marketing.assignment_actions where department_id=${departmentId}::uuid and is_active=true and (${id}='' or id<>nullif(${id},'')::uuid)`;if(Number(sum?.total||0)+percentage>100.001)throw new Error("مجموع نسب إجراءات القسم لا يمكن أن يتجاوز 100%");const [row]=id?await sql<any[]>`update marketing.assignment_actions set department_id=${departmentId}::uuid,name=${name},percentage=${percentage},admin_only=${bool(body.adminOnly)},sort_order=${numberValue(body.sortOrder)},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.assignment_actions(department_id,name,percentage,admin_only,sort_order) values(${departmentId}::uuid,${name},${percentage},${bool(body.adminOnly)},${numberValue(body.sortOrder)}) returning *,id::text`;return{ok:true,row,message:"تم حفظ إجراء التكليف"};}
 async function saveCreativeType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),departmentId=clean(body.primaryDepartmentId);if(!name||!shortCode||!departmentId)throw new Error("بيانات الكرييتيف غير مكتملة");const[row]=id?await sql<any[]>`update marketing.creative_types set name=${name},short_code=${shortCode},primary_department_id=${departmentId}::uuid,updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.creative_types(name,short_code,primary_department_id) values(${name},${shortCode},${departmentId}::uuid) returning *,id::text`;return{ok:true,row,message:"تم حفظ الكرييتيف"};}
 async function saveCampaignType(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),shortCode=safeCode(body.shortCode),prefix=safeCode(body.codePrefix);if(!name||!shortCode||!prefix)throw new Error("بيانات نوع الحملة غير مكتملة");const[row]=id?await sql<any[]>`update marketing.campaign_types set name=${name},short_code=${shortCode},code_prefix=${prefix},updated_at=now() where id=${id}::uuid returning *,id::text`:await sql<any[]>`insert into marketing.campaign_types(name,short_code,code_prefix) values(${name},${shortCode},${prefix}) returning *,id::text`;return{ok:true,row,message:"تم حفظ نوع الحملة"};}
-async function savePlatform(sql:ReturnType<typeof getSql>,body:any){const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);if(!name||!code)throw new Error("اسم المنصة مطلوب");return sql.begin(async(tx)=>{const[row]=id?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`:await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;for(const item of postTypes){const postName=clean(item.name);if(!postName)continue;await tx`insert into marketing.platform_post_types(platform_id,name,width,height,is_active) values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},true) on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now()`;}return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};});}
+async function savePlatform(sql:ReturnType<typeof getSql>,body:any){
+  const id=clean(body.id),name=clean(body.name),code=safeCode(body.code||name).toLowerCase(),postTypes=arrayValue(body.postTypes);
+  if(!name||!code)throw new Error("اسم المنصة مطلوب");
+  return sql.begin(async(tx)=>{
+    const[row]=id
+      ?await tx<any[]>`update marketing.platforms set name=${name},code=${code},updated_at=now() where id=${id}::uuid returning *,id::text`
+      :await tx<any[]>`insert into marketing.platforms(name,code) values(${name},${code}) returning *,id::text`;
+    await tx`update marketing.platform_post_types set is_active=false,updated_at=now() where platform_id=${row.id}::uuid`;
+    for(const item of postTypes){
+      const postName=clean(item.name);
+      if(!postName)continue;
+      const publishFormat=resolveMarketingPublishFormat(code,postName);
+      await tx`
+        insert into marketing.platform_post_types(platform_id,name,width,height,publish_format,is_active)
+        values(${row.id}::uuid,${postName},${numberValue(item.width)||null},${numberValue(item.height)||null},${publishFormat},true)
+        on conflict(platform_id,name) do update
+        set width=excluded.width,height=excluded.height,publish_format=excluded.publish_format,is_active=true,updated_at=now()
+      `;
+    }
+    return{ok:true,row,message:"تم حفظ المنصة وأنواع النشر"};
+  });
+}
 async function packageSettings(sql:ReturnType<typeof getSql>){
   const[categories,salesTypes]=await Promise.all([
     sql<any[]>`select id::text,name,sort_order from marketing.package_categories where is_active=true order by sort_order,name`,
@@ -1686,6 +1707,9 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     name:clean(item?.name)||`file-${index+1}`,
     mimeType:clean(item?.mimeType)||"application/octet-stream",
     size:Math.max(0,numberValue(item?.size)),
+    width:Math.max(0,Math.round(numberValue(item?.width))),
+    height:Math.max(0,Math.round(numberValue(item?.height))),
+    durationSeconds:Math.max(0,numberValue(item?.durationSeconds)),
     orderIndex:index,
   }));
   if(!requested.length)throw new Error("اختر الملف النهائي أولًا");
@@ -1709,8 +1733,8 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     `;
     for(const item of requested){
       const[file]=await tx<any[]>`
-        insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider,final_media_group_id,order_index)
-        values(${`zoho:${groupRow.id}:${globalThis.crypto.randomUUID()}`},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'zoho',${groupRow.id}::uuid,${item.orderIndex})
+        insert into marketing.files(storage_key,original_name,mime_type,file_size,media_width,media_height,duration_seconds,category,source_type,source_id,task_id,status,uploaded_by,storage_provider,final_media_group_id,order_index)
+        values(${`zoho:${groupRow.id}:${globalThis.crypto.randomUUID()}`},${item.name},${item.mimeType},${item.size},${item.width||null},${item.height||null},${item.durationSeconds||null},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'zoho',${groupRow.id}::uuid,${item.orderIndex})
         returning id::text
       `;
       const ticket=createOpaqueTicket(),uploadId=`proxy-${globalThis.crypto.randomUUID()}`;
@@ -1947,6 +1971,10 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       t.final_file_id::text,
       t.final_media_group_id::text,
       coalesce(fm.primary_name,f.original_name) as final_file_name,
+      f.media_width as final_file_width,
+      f.media_height as final_file_height,
+      f.duration_seconds::float as final_file_duration_seconds,
+      f.mime_type as final_file_mime_type,
       coalesce(fm.file_count,case when f.id is null then 0 else 1 end)::int as final_file_count,
       coalesce(fm.files,'[]'::jsonb) as final_files,
       t.department_id::text,
@@ -2018,7 +2046,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
     left join marketing.files f on f.id=t.final_file_id
     left join lateral (
       select count(*)::int as file_count,min(gf.original_name) filter(where gf.order_index=0) as primary_name,
-        jsonb_agg(jsonb_build_object('id',gf.id::text,'name',gf.original_name,'mimeType',gf.mime_type,'size',gf.file_size,'orderIndex',gf.order_index) order by gf.order_index,gf.created_at) as files
+        jsonb_agg(jsonb_build_object('id',gf.id::text,'name',gf.original_name,'mimeType',gf.mime_type,'size',gf.file_size,'width',gf.media_width,'height',gf.media_height,'durationSeconds',gf.duration_seconds::float,'orderIndex',gf.order_index) order by gf.order_index,gf.created_at) as files
       from marketing.files gf
       where t.final_media_group_id is not null and gf.final_media_group_id=t.final_media_group_id and gf.status='ready'
     ) fm on true
@@ -2038,6 +2066,137 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
   `;
   return{ok:true,rows,youtubeDefaults:await getYouTubePublishSettings(sql)};
 }
+async function resolvePublishCombinations(sql:ReturnType<typeof getSql>,platformInput:unknown,fallback?:{platformId?:unknown;postTypeId?:unknown}){
+  const normalizedPlatforms=arrayValue<any>(platformInput).map((platform:any)=>({
+    platformId:clean(platform?.platformId),
+    postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
+  })).filter((platform:any)=>platform.platformId);
+  if(normalizedPlatforms.some((platform:any)=>!platform.postTypeIds.length))throw new Error("حدد نوع نشر لكل منصة مختارة");
+
+  const requestedPairs=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId})));
+  if(!requestedPairs.length){
+    const platformId=clean(fallback?.platformId),postTypeId=clean(fallback?.postTypeId);
+    if(platformId&&postTypeId)requestedPairs.push({platformId,postTypeId});
+  }
+  const uniquePairKeys=new Set<string>();
+  const uniquePairs=requestedPairs.filter((item:any)=>{
+    const key=`${item.platformId}:${item.postTypeId}`;
+    if(uniquePairKeys.has(key))return false;
+    uniquePairKeys.add(key);
+    return true;
+  });
+  if(!uniquePairs.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+
+  const requestedPostTypeIds=[...new Set(uniquePairs.map((item:any)=>item.postTypeId))];
+  const postTypeRows=await sql<any[]>`
+    select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,pt.publish_format,lower(p.code) as platform_code
+    from marketing.platform_post_types pt
+    join marketing.platforms p on p.id=pt.platform_id and p.is_active=true
+    where pt.id in ${sql(requestedPostTypeIds)} and pt.is_active=true
+  `;
+  const postTypeById=new Map(postTypeRows.map((row:any)=>[clean(row.id),row]));
+  const combinations=uniquePairs.map((item:any)=>{
+    const postType=postTypeById.get(item.postTypeId);
+    if(!postType||clean(postType.platform_id)!==item.platformId)throw new Error("نوع النشر المحدد لا يتبع المنصة المختارة أو غير مفعّل");
+    return{
+      platformId:item.platformId,
+      postTypeId:item.postTypeId,
+      platformCode:clean(postType.platform_code),
+      postTypeName:clean(postType.name),
+      publishFormat:normalizeMarketingPublishFormat(postType.publish_format||resolveMarketingPublishFormat(postType.platform_code,postType.name)),
+      width:numberValue(postType.width)||null,
+      height:numberValue(postType.height)||null,
+    };
+  });
+  return{normalizedPlatforms,combinations};
+}
+
+function assertMediaMatchesPublishCombinations(combinations:any[],files:any[]){
+  const mediaErrors=combinations.flatMap((item:any)=>validateMarketingPublishMedia({
+    platformCode:item.platformCode,
+    postTypeName:item.postTypeName,
+    format:item.publishFormat,
+    width:item.width,
+    height:item.height,
+  },files));
+  if(mediaErrors.length)throw new Error([...new Set(mediaErrors)].join(" | "));
+}
+
+async function createManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
+  if(!hasPermission(user,"marketing.task.final_file.upload"))throw new Error("لا توجد صلاحية لرفع ملف النشر اليدوي");
+  const sourceType=clean(body.sourceType)==='agenda'?'agenda':'campaign';
+  const sourceName=clean(body.sourceName),creativeName=clean(body.creativeName),publishDate=isoDate(body.publishDate);
+  const caption=clean(body.caption),hashtags=clean(body.hashtags),platforms=arrayValue(body.platforms);
+  if(!sourceName)throw new Error(sourceType==='agenda'?"اسم الأجندة الجديدة مطلوب":"اسم الحملة الجديدة مطلوب");
+  if(!creativeName)throw new Error("اسم الكرييتيف الجديد مطلوب");
+  if(!publishDate)throw new Error("موعد النشر مطلوب");
+  if(!caption)throw new Error("الكابشن مطلوب");
+  if(!hashtags)throw new Error("الهاشتاج مطلوب");
+  const{normalizedPlatforms,combinations}=await resolvePublishCombinations(sql,platforms);
+  const mediaFiles=arrayValue<any>(body.files);
+  if(!mediaFiles.length)throw new Error("ملف النشر اليدوي مطلوب");
+  assertMediaMatchesPublishCombinations(combinations,mediaFiles);
+  const uniqueToken=globalThis.crypto.randomUUID().replaceAll('-','').slice(0,12).toUpperCase();
+  const startAt=`${publishDate}T00:00:00Z`,endAt=`${publishDate}T23:59:59Z`,dueAt=`${publishDate}T12:00:00Z`;
+  const templateData={
+    proposedName:creativeName,
+    goal:"نشر يدوي",
+    mainMessage:caption||creativeName,
+    hook:creativeName,
+    mainScript:caption||creativeName,
+    cta:"تفاعل مع المنشور",
+    caption,
+    hashtags,
+  };
+  return sql.begin(async tx=>{
+    const[department]=await tx<any[]>`
+      select md.id::text,cd.code
+      from core.user_system_departments usd
+      join marketing.departments md on md.id=usd.department_id and md.is_active=true
+      join core.departments cd on cd.id=md.id and cd.system_code='marketing' and cd.is_active=true
+      where usd.user_id=${user.id}::uuid and usd.system_code='marketing'
+      order by usd.is_primary desc,cd.name
+      limit 1
+    `;
+    let sourceId='';
+    let sourceCode='';
+    if(sourceType==='agenda'){
+      const[agenda]=await tx<any[]>`
+        insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by)
+        values(${sourceName},${publishDate.slice(0,7)},${publishDate},${publishDate},'required',${tx.json(dbJson({manualPublish:true,createdFrom:'publish_prep'}))},0,${user.id}::uuid)
+        returning id::text
+      `;
+      sourceId=agenda.id;
+      sourceCode=`MAN-AGENDA-${uniqueToken}`;
+    }else{
+      sourceCode=`MAN-${publishDate.replaceAll('-','')}-${uniqueToken}`;
+      const[campaign]=await tx<any[]>`
+        insert into marketing.campaigns(campaign_code,name,campaign_type,objective,status,campaign_date,publish_start,publish_end,starts_at,ends_at,due_at,required_from_content,payload,progress,created_by)
+        values(${sourceCode},${sourceName},'نشر يدوي','نشر يدوي','required',${publishDate},${publishDate},${publishDate},${startAt},${endAt},${endAt},${caption||null},${tx.json(dbJson({manualPublish:true,createdFrom:'publish_prep'}))},0,${user.id}::uuid)
+        returning id::text
+      `;
+      sourceId=campaign.id;
+    }
+    const[creative]=await tx<any[]>`
+      insert into marketing.creatives(campaign_id,agenda_id,creative_type,quantity,status,instance_code,name,primary_department_id,platform_assignments,schedule_day,notes)
+      values(${sourceType==='campaign'?tx`${sourceId}::uuid`:null},${sourceType==='agenda'?tx`${sourceId}::uuid`:null},'نشر يدوي',1,'required',${`MAN-${uniqueToken.slice(0,8)}`},${creativeName},${department?.id?tx`${department.id}::uuid`:null},${tx.json(dbJson(normalizedPlatforms))},${publishDate},${tx.json(dbJson({manualPublish:true,caption,hashtags}))})
+      returning id::text
+    `;
+    const[template]=await tx<any[]>`
+      insert into marketing.task_templates(source_type,source_id,creative_id,content_user_id,task_no,status,progress,due_on,template_data,approved_data,received_at,reviewed_by,reviewed_at)
+      values(${sourceType},${sourceId}::uuid,${creative.id}::uuid,${user.id}::uuid,${`MANUAL_${uniqueToken}`},'approved',100,${publishDate},${tx.json(dbJson(templateData))},${tx.json(dbJson(templateData))},now(),${user.id}::uuid,now())
+      returning id::text
+    `;
+    const[task]=await tx<any[]>`
+      insert into marketing.tasks(campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,assigned_to,paired_content_user_id,task_template_id,task_kind,title,status,due_at,progress,received_at,note,approved_template_data)
+      values(${sourceType==='campaign'?tx`${sourceId}::uuid`:null},${sourceType==='agenda'?tx`${sourceId}::uuid`:null},${sourceType},${sourceId}::uuid,${creative.id}::uuid,'manual_publish',null,${user.id}::uuid,${user.id}::uuid,${template.id}::uuid,'execution',${`نشر يدوي - ${creativeName}`},'required',${dueAt},0,now(),'تم إنشاؤه من تبويب النشر اليدوي',${tx.json(dbJson(templateData))})
+      returning id::text
+    `;
+    return{ok:true,id:sourceId,sourceType,sourceId,creativeId:creative.id,taskId:task.id,message:"تم إنشاء سجل النشر اليدوي داخل السيستم"};
+  });
+}
+
 async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
   const id=clean(body.id),requestedTaskId=clean(body.taskId),publishDate=isoDate(body.publishDate),platforms=arrayValue(body.platforms);
@@ -2045,7 +2204,7 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   const taskId=requestedTaskId||clean(current?.task_id);
   if(!taskId)throw new Error("التاسك التنفيذي المرتبط غير موجود");
   const[executionTask]=await sql<any[]>`
-    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text
+    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.final_file_id::text,t.final_media_group_id::text
     from marketing.tasks t
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
@@ -2060,45 +2219,9 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   await assertMarketingEntityAccess(sql,user,clean(executionTask.source_type),clean(executionTask.source_id));
   if(!publishDate)throw new Error("تاريخ النشر مطلوب");
 
-  const normalizedPlatforms=platforms.map((platform:any)=>({
-    platformId:clean(platform?.platformId),
-    postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
-  })).filter((platform:any)=>platform.platformId);
-  if(normalizedPlatforms.some((platform:any)=>!platform.postTypeIds.length))throw new Error("حدد نوع نشر لكل منصة مختارة");
-
-  const requestedPairs=normalizedPlatforms.flatMap((platform:any)=>platform.postTypeIds.map((postTypeId:string)=>({platformId:platform.platformId,postTypeId})));
-  if(!requestedPairs.length){
-    const platformId=clean(body.platformId),postTypeId=clean(body.postTypeId);
-    if(platformId&&postTypeId)requestedPairs.push({platformId,postTypeId});
-  }
-  const uniquePairKeys=new Set<string>();
-  const uniquePairs=requestedPairs.filter((item:any)=>{
-    const key=`${item.platformId}:${item.postTypeId}`;
-    if(uniquePairKeys.has(key))return false;
-    uniquePairKeys.add(key);
-    return true;
-  });
-  if(!uniquePairs.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
-
-  const requestedPostTypeIds=[...new Set(uniquePairs.map((item:any)=>item.postTypeId))];
-  const postTypeRows=await sql<any[]>`
-    select pt.id::text,pt.platform_id::text,pt.name,pt.width,pt.height,lower(p.code) as platform_code
-    from marketing.platform_post_types pt
-    join marketing.platforms p on p.id=pt.platform_id and p.is_active=true
-    where pt.id in ${sql(requestedPostTypeIds)} and pt.is_active=true
-  `;
-  const postTypeById=new Map(postTypeRows.map((row:any)=>[clean(row.id),row]));
-  const combinations=uniquePairs.map((item:any)=>{
-    const postType=postTypeById.get(item.postTypeId);
-    if(!postType||clean(postType.platform_id)!==item.platformId)throw new Error("نوع النشر المحدد لا يتبع المنصة المختارة أو غير مفعّل");
-    return{
-      platformId:item.platformId,
-      postTypeId:item.postTypeId,
-      platformCode:clean(postType.platform_code),
-      postTypeName:clean(postType.name),
-      publishFormat:normalizeMarketingPublishFormat(postType.name),
-    };
-  });
+  const{combinations}=await resolvePublishCombinations(sql,platforms,{platformId:body.platformId,postTypeId:body.postTypeId});
+  const mediaFiles=await finalMediaFilesForSchedule(sql,executionTask);
+  if(mediaFiles.length)assertMediaMatchesPublishCombinations(combinations,mediaFiles);
 
   const youtubeSelected=combinations.some((item:any)=>item.platformCode==='youtube');
   const youtubeDefaults=await getYouTubePublishSettings(sql);
@@ -2120,9 +2243,10 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     await tx`delete from marketing.publish_schedule where group_id=${groupId}::uuid`;
     const youtubePublishOptions={youtube:youtubeOptions};
     for(const item of combinations){
+      const mediaTarget={format:item.publishFormat,requiredWidth:item.width,requiredHeight:item.height};
       const publishOptions=item.platformCode==='youtube'
-        ?{...youtubePublishOptions,format:item.publishFormat}
-        :{format:item.publishFormat};
+        ?{...youtubePublishOptions,...mediaTarget}
+        :mediaTarget;
       await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,publish_options,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},${tx.json(dbJson(publishOptions))},'waiting')`;
     }
   });
@@ -2161,15 +2285,9 @@ async function publishFacebookReel(pageId:string,token:string,mediaUrl:string,ca
   const publish=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'finish',video_id:videoId,video_state:'PUBLISHED',description:caption});
   return{start,upload,publish,video_id:videoId};
 }
-function assertPublishMedia(platform:string,format:MarketingPublishFormat,files:any[]){
-  const videos=files.filter(looksVideo),images=files.filter((file:any)=>!looksVideo(file));
-  if(format==='story'&&files.length!==1)throw new Error("الستوري يجب أن يحتوي على ملف واحد فقط");
-  if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
-  if(publishFormatRequiresVideo(format)&&(files.length!==1||videos.length!==1))throw new Error("نوع النشر المحدد يتطلب ملف فيديو واحدًا فقط");
-  if(publishFormatRequiresImages(format)&&videos.length)throw new Error("نوع النشر المحدد يقبل صورًا فقط");
-  if(format==='carousel'&&images.length<2)throw new Error("Carousel يتطلب صورتين على الأقل");
-  if(platform==='instagram'&&format==='post'&&videos.length)throw new Error("بوست Instagram يقبل الصور فقط. اختر Reel لنشر الفيديو");
-  if(platform==='youtube'&&(files.length!==1||videos.length!==1))throw new Error("نشر YouTube يتطلب ملف فيديو واحدًا فقط");
+function assertPublishMedia(target:{platformCode:string;postTypeName:string;format:MarketingPublishFormat;width?:number|null;height?:number|null},files:any[]){
+  const errors=validateMarketingPublishMedia(target,files);
+  if(errors.length)throw new Error(errors.join(" | "));
 }
 function youtubeOptionsForFormat(options:any,format:MarketingPublishFormat){
   if(format!=='short')return options;
@@ -2253,8 +2371,10 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
   const files=await finalMediaFilesForSchedule(sql,schedule);
   if(!files.length)throw new Error("الملف النهائي غير موجود");
   const publishOptions=objectValue(schedule.publish_options);
-  const publishFormat=normalizeMarketingPublishFormat(publishOptions.format||schedule.post_type_name);
-  assertPublishMedia(clean(schedule.platform_code),publishFormat,files);
+  const publishFormat=normalizeMarketingPublishFormat(publishOptions.format||schedule.post_type_format||resolveMarketingPublishFormat(schedule.platform_code,schedule.post_type_name));
+  const requiredWidth=numberValue(publishOptions.requiredWidth||schedule.post_type_width)||null;
+  const requiredHeight=numberValue(publishOptions.requiredHeight||schedule.post_type_height)||null;
+  assertPublishMedia({platformCode:clean(schedule.platform_code),postTypeName:clean(schedule.post_type_name),format:publishFormat,width:requiredWidth,height:requiredHeight},files);
   const file=files[0],caption=[clean(schedule.caption),clean(schedule.hashtags)].filter(Boolean).join("\n\n"),multipleImages=files.length>1;
   let result:any;
 
@@ -2369,7 +2489,7 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
   const results=[];
   for(const id of ids){
     const[schedule]=await sql<any[]>`
-      select s.*,s.id::text,p.code as platform_code,p.name as platform_name,pt.name as post_type_name,
+      select s.*,s.id::text,p.code as platform_code,p.name as platform_name,pt.name as post_type_name,pt.width as post_type_width,pt.height as post_type_height,pt.publish_format as post_type_format,
         coalesce(direct_task.final_file_id,fallback_task.final_file_id)::text as final_file_id,
         coalesce(direct_task.final_media_group_id,fallback_task.final_media_group_id)::text as final_media_group_id
       from marketing.publish_schedule s
@@ -2824,6 +2944,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
+    else if(action==='create_manual_publish_entry')result=await createManualPublishEntry(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}

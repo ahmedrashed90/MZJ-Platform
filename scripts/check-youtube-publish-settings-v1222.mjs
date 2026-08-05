@@ -12,6 +12,7 @@ const check = (label, condition) => {
 
 const schema = read('server/_marketing-schema.ts');
 const migration = read('database/migrations/20260731_youtube_publish_settings.sql');
+const platformTypeMigration = read('database/migrations/20260805_marketing_platform_publish_types_manual_entry_v1227.sql');
 const shared = read('shared/youtube-publishing.ts');
 const connections = read('server/_platform-connections.ts');
 const connectionsApi = read('server/marketing/platform-connections.ts');
@@ -23,7 +24,7 @@ const css = read('src/marketing/marketing.css');
 check('YouTube defaults have one canonical shared model', shared.includes('YOUTUBE_PUBLISH_DEFAULTS') && shared.includes('normalizeYouTubePublishSettings') && shared.includes('normalizeYouTubePublishOptions'));
 check('platform publishing defaults are stored in PostgreSQL', schema.includes('marketing.platform_publish_settings') && migration.includes('marketing.platform_publish_settings'));
 check('per-task YouTube options are stored on publish schedule', schema.includes('publish_options jsonb') && publishApi.includes("publish_options->'youtube'") && publishApi.includes("{youtube:youtubeOptions}"));
-check('legacy privacy values are no longer treated as YouTube post types', schema.includes("('فيديو',1920,1080),('Shorts',1080,1920)") && schema.includes("'عام','غير مدرج','خاص','public','unlisted','private'"));
+check('legacy privacy and Reel/Short values are no longer treated as YouTube post types', platformTypeMigration.includes("('youtube','Shorts',1080,1920,'short')") && platformTypeMigration.includes("('youtube','فيديو',1920,1080,'video')") && platformTypeMigration.includes("set is_active=false") && !platformTypeMigration.includes("('youtube','ريل/Short'"));
 check('YouTube settings API supports load and save', connectionsApi.includes('youtube_publish_options') && connectionsApi.includes('save_youtube_publish_settings'));
 check('YouTube category and playlist choices come from the connected channel', connections.includes('/youtube/v3/videoCategories') && connections.includes('/youtube/v3/playlists') && connections.includes('mine'));
 check('expired YouTube access tokens are refreshed before settings options load', connections.includes('getYouTubeAccessToken') && connections.includes('refreshYouTubeToken') && connections.includes('tokenNearExpiry'));

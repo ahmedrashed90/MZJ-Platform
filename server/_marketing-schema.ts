@@ -85,11 +85,16 @@ create table if not exists marketing.platform_post_types (
   name text not null,
   width integer,
   height integer,
+  publish_format text not null default 'post',
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(platform_id,name)
 );
+
+alter table marketing.platform_post_types add column if not exists publish_format text not null default 'post';
+alter table marketing.platform_post_types drop constraint if exists platform_post_types_publish_format_check;
+alter table marketing.platform_post_types add constraint platform_post_types_publish_format_check check(publish_format in ('story','reel','short','photo_post','carousel','video','post'));
 
 create table if not exists marketing.funnels (
   id uuid primary key default gen_random_uuid(),
@@ -286,6 +291,9 @@ create table if not exists marketing.files (
   original_name text not null,
   mime_type text,
   file_size bigint,
+  media_width integer,
+  media_height integer,
+  duration_seconds numeric(12,3),
   category text not null,
   source_type text,
   source_id uuid,
@@ -464,19 +472,6 @@ create table if not exists marketing.platform_publish_settings (
 insert into marketing.platform_publish_settings(platform,settings)
 values('youtube','{"privacyStatus":"unlisted","madeForKids":false,"categoryId":"2","defaultLanguage":"ar","defaultPlaylistId":"","notifySubscribers":true,"embeddable":true,"license":"youtube","publicStatsViewable":true,"defaultTags":[],"descriptionTemplate":""}'::jsonb)
 on conflict(platform) do nothing;
-
-insert into marketing.platform_post_types(platform_id,name,width,height,is_active)
-select p.id,seed.name,seed.width,seed.height,true
-from marketing.platforms p
-cross join (values ('فيديو',1920,1080),('Shorts',1080,1920)) as seed(name,width,height)
-where lower(p.code)='youtube'
-on conflict(platform_id,name) do update set width=excluded.width,height=excluded.height,is_active=true,updated_at=now();
-
-update marketing.platform_post_types pt
-set is_active=false,updated_at=now()
-from marketing.platforms p
-where p.id=pt.platform_id and lower(p.code)='youtube'
-  and lower(btrim(pt.name)) in ('عام','غير مدرج','خاص','public','unlisted','private');
 
 create table if not exists marketing.platform_connections (
   platform text primary key,
@@ -903,6 +898,9 @@ create table if not exists marketing.final_media_groups (
 create index if not exists marketing_final_media_groups_task_idx on marketing.final_media_groups(task_id,is_active,created_at desc);
 
 alter table marketing.tasks add column if not exists final_media_group_id uuid references marketing.final_media_groups(id) on delete set null;
+alter table marketing.files add column if not exists media_width integer;
+alter table marketing.files add column if not exists media_height integer;
+alter table marketing.files add column if not exists duration_seconds numeric(12,3);
 alter table marketing.files add column if not exists storage_provider text not null default 'r2';
 alter table marketing.files add column if not exists external_id text;
 alter table marketing.files add column if not exists external_parent_id text;
@@ -1041,6 +1039,57 @@ create table if not exists marketing.data_migrations (
   applied_at timestamptz not null default now(),
   details jsonb not null default '{}'::jsonb
 );
+
+do $marketing_platform_publish_types_v1227$
+begin
+  if not exists (
+    select 1 from marketing.data_migrations where migration_key='20260805_marketing_platform_publish_types_v1227'
+  ) then
+    insert into marketing.platform_post_types(platform_id,name,width,height,publish_format,is_active)
+    select p.id,seed.name,seed.width,seed.height,seed.publish_format,true
+    from marketing.platforms p
+    join (values
+      ('instagram','بوست صور',1080,1080,'photo_post'),
+      ('instagram','ريل',1080,1920,'reel'),
+      ('instagram','ستوري',1080,1920,'story'),
+      ('tiktok','ريل/فيديو',1080,1920,'video'),
+      ('tiktok','ستوري',1080,1920,'story'),
+      ('snapchat','Spotlight',1080,1920,'short'),
+      ('snapchat','Story',1080,1920,'story'),
+      ('facebook','بوست صور',1080,1080,'photo_post'),
+      ('facebook','ريل',1080,1920,'reel'),
+      ('facebook','ستوري',1080,1920,'story'),
+      ('linkedin','بوست',1080,1080,'photo_post'),
+      ('linkedin','فيديو',1080,1920,'video'),
+      ('youtube','Shorts',1080,1920,'short'),
+      ('youtube','فيديو',1920,1080,'video')
+    ) as seed(platform_code,name,width,height,publish_format) on lower(p.code)=seed.platform_code
+    on conflict(platform_id,name) do update
+      set width=excluded.width,height=excluded.height,publish_format=excluded.publish_format,is_active=true,updated_at=now();
+
+    update marketing.platform_post_types pt
+    set is_active=false,updated_at=now()
+    from marketing.platforms p
+    where p.id=pt.platform_id
+      and lower(p.code) in ('instagram','tiktok','snapchat','facebook','linkedin','youtube')
+      and not exists (
+        select 1
+        from (values
+          ('instagram','بوست صور'),('instagram','ريل'),('instagram','ستوري'),
+          ('tiktok','ريل/فيديو'),('tiktok','ستوري'),
+          ('snapchat','Spotlight'),('snapchat','Story'),
+          ('facebook','بوست صور'),('facebook','ريل'),('facebook','ستوري'),
+          ('linkedin','بوست'),('linkedin','فيديو'),
+          ('youtube','Shorts'),('youtube','فيديو')
+        ) as allowed(platform_code,name)
+        where allowed.platform_code=lower(p.code) and lower(btrim(allowed.name))=lower(btrim(pt.name))
+      );
+
+    insert into marketing.data_migrations(migration_key,details)
+    values('20260805_marketing_platform_publish_types_v1227','{"platforms":["instagram","tiktok","snapchat","facebook","linkedin","youtube"],"manual_publish":"new_source"}'::jsonb);
+  end if;
+end
+$marketing_platform_publish_types_v1227$;
 
 create table if not exists marketing.engagement_snapshots (
   id bigserial primary key,
