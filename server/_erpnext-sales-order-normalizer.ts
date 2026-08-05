@@ -354,8 +354,14 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
-  const explicitGrandTotal = numberValue(pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal"]));
-  const explicitAdvancePaid = numberValue(pick(doc, ["advance_paid", "base_advance_paid", "AdvancePaid"]));
+  const explicitGrandTotal = numberValue(
+    pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal", "grandTotal"])
+      ?? pick(body, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal", "grandTotal"]),
+  );
+  const explicitAdvancePaid = numberValue(
+    pick(doc, ["advance_paid", "base_advance_paid", "AdvancePaid", "advancePaid"])
+      ?? pick(body, ["advance_paid", "base_advance_paid", "AdvancePaid", "advancePaid"]),
+  );
   const payloads: NormalizedErpNextSalesOrder["payloads"] = [];
   const warnings: NormalizedErpNextSalesOrder["warnings"] = [];
 

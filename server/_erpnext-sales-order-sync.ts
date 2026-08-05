@@ -1171,7 +1171,9 @@ export async function updateErpNextSalesOrderAmounts(input: {
   const { normalized } = input;
   const totalInclVat = numberValue(normalized.grandTotal);
   const advancePaid = numberValue(normalized.advancePaid);
-  const remainingAmount = Math.max(0, Number((totalInclVat - advancePaid).toFixed(2)));
+  const remainingAmount = advancePaid > 0
+    ? Math.max(0, Number((totalInclVat - advancePaid).toFixed(2)))
+    : 0;
   const sql = getSql();
 
   return sql.begin(async (tx: any) => {

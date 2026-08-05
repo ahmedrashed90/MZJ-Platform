@@ -1600,7 +1600,11 @@ async function listSalesOrderFollowup(
       vehicle_match.status_code as operations_status_code,
       coalesce(o.total_incl_vat,0)::numeric(14,2) as total_incl_vat,
       coalesce(o.advance_paid,0)::numeric(14,2) as advance_paid,
-      (coalesce(o.total_incl_vat,0)-coalesce(o.advance_paid,0))::numeric(14,2) as remaining_amount,
+      (case
+        when coalesce(o.advance_paid,0)>0
+          then greatest(coalesce(o.total_incl_vat,0)-coalesce(o.advance_paid,0),0)
+        else 0
+      end)::numeric(14,2) as remaining_amount,
       o.sales_followup_completed_at,
       o.sales_followup_completed_by::text,
       o.sales_followup_completed_by_name,
