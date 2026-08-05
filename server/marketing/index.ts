@@ -2702,7 +2702,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='package_settings')return response.status(200).json(await packageSettings(sql));
       if(resource==='publish_prep')return response.status(200).json(await publishPrep(sql,user));
       if(resource==='youtube_publish_options')return response.status(200).json(await loadYouTubePublishOptions(sql));
-      if(resource==='engagement'){if(!hasPermission(user,'marketing.publish_prep.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});return response.status(200).json(await engagementData(sql));}
+      if(resource==='engagement'){if(!hasPermission(user,'marketing.engagement.view'))return response.status(403).json({ok:false,error:'لا توجد صلاحية لعرض تفاعل النشر'});const payload=await engagementData(sql);return response.status(200).json({...payload,webhook:{...payload.webhook,callbackUrl:hasPermission(user,'marketing.engagement.webhook.view')?payload.webhook.callbackUrl:'',verifyTokenConfigured:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.verifyTokenConfigured:false,subscriptionResults:hasPermission(user,'marketing.engagement.status.view')?payload.webhook.subscriptionResults:[]}});}
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));
@@ -2742,8 +2742,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
-    else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
-    else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.connections.manage'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
+    else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
+    else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.engagement.subscribe'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}
     else if(action==='manage_engagement_item'){
       if(!hasPermission(user,'marketing.publish.now'))throw new Error('لا توجد صلاحية لإدارة تفاعل النشر');
       if(clean(body.operation)==='delete_customer'&&!hasPermission(user,'crm.customer.delete'))throw new Error('لا توجد صلاحية لمسح عميل CRM');

@@ -61,6 +61,7 @@ export type TrackingOrderRow = {
   subtotal_before_tax?: number | string | null;
   tax_value?: number | string | null;
   total_incl_vat?: number | string | null;
+  advance_paid?: number | string | null;
   registration_fee?: number | string | null;
   vehicles_count: number;
   completed_stages: number;
@@ -117,6 +118,7 @@ export type PublicTrackingOrder = {
   subtotal_before_tax?: number | string | null;
   tax_value?: number | string | null;
   total_incl_vat?: number | string | null;
+  advance_paid?: number | string | null;
   registration_fee?: number | string | null;
   status: TrackingStatus;
   is_archived?: boolean;

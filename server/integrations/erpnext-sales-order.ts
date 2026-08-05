@@ -4,7 +4,7 @@ import {
   ErpNextSalesOrderError,
   normalizeErpNextSalesOrder,
 } from "../_erpnext-sales-order-normalizer.js";
-import { cancelErpNextSalesOrder, resolveErpNextPlatformUser, syncErpNextSalesOrder } from "../_erpnext-sales-order-sync.js";
+import { cancelErpNextSalesOrder, resolveErpNextPlatformUser, syncErpNextSalesOrder, updateErpNextSalesOrderAmounts } from "../_erpnext-sales-order-sync.js";
 import { resolveErpNextTrackingBranchCode } from "../_erpnext-branch-routing.js";
 import { clean } from "../_tracking-utils.js";
 import { ingestTrackingOrder, TrackingIngestError } from "./tracking-orders.js";
@@ -57,6 +57,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
         erpStatus: normalized.erpStatus,
         cancellation,
         warnings: cancellation.warnings,
+      });
+    }
+
+    if (normalized.isUpdateAfterSubmit) {
+      const update = await updateErpNextSalesOrderAmounts({ normalized });
+      if (!update.found) {
+        return response.status(404).json({
+          ok: false,
+          error: `لم يتم العثور على طلب ${normalized.orderNo} داخل المنصة لتحديث المبالغ`,
+          orderNo: normalized.orderNo,
+        });
+      }
+      return response.status(200).json({
+        ok: true,
+        message: `تم تحديث المبالغ لنفس طلب ${normalized.orderNo} دون إنشاء طلب جديد`,
+        orderNo: normalized.orderNo,
+        event: normalized.erpEvent,
+        update,
       });
     }
 

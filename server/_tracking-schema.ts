@@ -24,6 +24,7 @@ alter table tracking.orders add column if not exists assigned_to uuid references
 alter table tracking.orders add column if not exists subtotal_before_tax numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists tax_value numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists total_incl_vat numeric(14,2) not null default 0;
+alter table tracking.orders add column if not exists advance_paid numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists registration_fee numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists source text;
 alter table tracking.orders add column if not exists source_payload jsonb not null default '{}'::jsonb;

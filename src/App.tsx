@@ -50,6 +50,7 @@ const VehicleManagementPage = lazy(() => import("./operations/pages/VehicleManag
 const MovementPage = lazy(() => import("./operations/pages/MovementPage").then((module) => ({ default: module.MovementPage })));
 const TransferRequestsPage = lazy(() => import("./operations/pages/TransferRequestsPage").then((module) => ({ default: module.TransferRequestsPage })));
 const ApprovalsPage = lazy(() => import("./operations/pages/ApprovalsPage").then((module) => ({ default: module.ApprovalsPage })));
+const SalesOrdersFollowupPage = lazy(() => import("./operations/pages/SalesOrdersFollowupPage").then((module) => ({ default: module.SalesOrdersFollowupPage })));
 const MovementHistoryPage = lazy(() => import("./operations/pages/MovementHistoryPage").then((module) => ({ default: module.MovementHistoryPage })));
 
 
@@ -111,7 +112,7 @@ function PlatformRoutes() {
             <Route path="packages" element={<PermissionGuard permission="marketing.packages.view"><PackagesPage /></PermissionGuard>} />
             <Route path="platforms" element={<PermissionGuard permission="marketing.platforms.view"><Navigate to="/settings?section=marketing&tab=platforms" replace /></PermissionGuard>} />
             <Route path="publish-prep" element={<PermissionGuard permission="marketing.publish_prep.view"><PublishPrepPage /></PermissionGuard>} />
-            <Route path="engagement" element={<PermissionGuard permission="marketing.publish_prep.view"><EngagementPage /></PermissionGuard>} />
+            <Route path="engagement" element={<PermissionGuard permission="marketing.engagement.view"><EngagementPage /></PermissionGuard>} />
             <Route path="monitoring" element={<PermissionGuard permission="marketing.monitoring.view"><MonitoringPage /></PermissionGuard>} />
             <Route path="calendar" element={<PermissionGuard permission="marketing.calendar.view"><MarketingCalendarPage /></PermissionGuard>} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
@@ -126,6 +127,7 @@ function PlatformRoutes() {
             <Route path="transfers" element={<PermissionGuard permission="operations.transfers.view"><TransferRequestsPage /></PermissionGuard>} />
             <Route path="photography" element={<Navigate to="/operations/transfers" replace />} />
             <Route path="approvals" element={<PermissionGuard permission="operations.approvals.view"><ApprovalsPage /></PermissionGuard>} />
+            <Route path="sales-orders" element={<PermissionGuard permission="operations.sales_orders_followup.view"><SalesOrdersFollowupPage /></PermissionGuard>} />
             <Route path="all" element={<PermissionGuard permission="operations.all.view"><InventoryPage all /></PermissionGuard>} />
             <Route path="movements" element={<PermissionGuard permission="operations.movements.view"><MovementHistoryPage /></PermissionGuard>} />
             <Route path="archive" element={<PermissionGuard permission="operations.archive.view"><InventoryPage archived /></PermissionGuard>} />

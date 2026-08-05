@@ -4,7 +4,7 @@
 {% set sales_rep_email = doc.get('custom_sales_person_email') or doc.get('sales_person_email') or (frappe.db.get_value('Employee', sales_employee, 'user_id') if sales_employee else '') or (frappe.db.get_value('Employee', sales_employee, 'company_email') if sales_employee else '') or (frappe.db.get_value('Employee', sales_employee, 'personal_email') if sales_employee else '') or '' %}
 
 {
-  "event": "sales_order.submitted",
+  "event": "sales_order.updated_after_submit",
   "doc": {
     "name": {{ (doc.name or '') | tojson }},
     "creation": {{ (doc.creation or '') | tojson }},

@@ -117,7 +117,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const orders = await sql<any[]>`
       select
         o.id::text,o.sales_order_no,o.customer_name,o.customer_mobile,o.branch,o.order_date,o.delivery_date,o.sales_person,
-        o.status,o.tracking_token,o.is_archived,o.is_cancelled,o.cancelled_at,o.cancellation_reason,o.subtotal_before_tax,o.tax_value,o.total_incl_vat,o.registration_fee,o.created_at,o.updated_at,
+        o.status,o.tracking_token,o.is_archived,o.is_cancelled,o.cancelled_at,o.cancellation_reason,o.subtotal_before_tax,o.tax_value,o.total_incl_vat,o.advance_paid,o.registration_fee,o.created_at,o.updated_at,
         count(distinct v.id)::int as vehicles_count,
         count(vs.id)::int as total_stages,
         count(vs.id) filter (where vs.status='completed')::int as completed_stages,

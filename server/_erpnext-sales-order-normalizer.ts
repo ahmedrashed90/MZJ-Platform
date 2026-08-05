@@ -42,6 +42,9 @@ export type NormalizedErpNextSalesOrder = {
   erpCreatedAt: string;
   sourceInstanceKey: string;
   isCancellation: boolean;
+  isUpdateAfterSubmit: boolean;
+  grandTotal: number;
+  advancePaid: number;
   erpSalesPerson: string;
   erpUserId: string;
   erpCustomerId: string;
@@ -269,10 +272,19 @@ function normalizedInstanceTimestamp(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? text.replace(/\s+/g, "_") : parsed.toISOString();
 }
 
+function normalizedEventName(event: unknown) {
+  return clean(event).toLowerCase().replace(/[\s._-]+/g, "");
+}
+
 function cancellationEvent(event: unknown, status: unknown, docstatus: unknown) {
-  const eventText = clean(event).toLowerCase().replace(/[\s._-]+/g, "");
+  const eventText = normalizedEventName(event);
   const statusText = clean(status).toLowerCase().replace(/[\s._-]+/g, "");
   return eventText.includes("cancel") || statusText === "cancelled" || statusText === "canceled" || Number(docstatus) === 2;
+}
+
+function updateAfterSubmitEvent(event: unknown) {
+  const eventText = normalizedEventName(event);
+  return eventText === "salesorderupdatedaftersubmit" || eventText.includes("updateaftersubmit");
 }
 
 export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSalesOrder {
@@ -295,15 +307,16 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
   const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
   const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
+  const isUpdateAfterSubmit = updateAfterSubmitEvent(erpEvent);
 
   const rawItems = resolveItems(doc, body);
-  if (!rawItems.length && !isCancellation) {
+  if (!rawItems.length && !isCancellation && !isUpdateAfterSubmit) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على جدول Items في طلب ${orderNo}`);
   }
 
   const feeItems = rawItems.filter(isRegistrationFeeItem);
   const vehicleItems = rawItems.filter((item) => !isRegistrationFeeItem(item));
-  if (!vehicleItems.length && !isCancellation) {
+  if (!vehicleItems.length && !isCancellation && !isUpdateAfterSubmit) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على صف سيارة داخل طلب ${orderNo}`);
   }
 
@@ -342,6 +355,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
   const explicitGrandTotal = numberValue(pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal"]));
+  const explicitAdvancePaid = numberValue(pick(doc, ["advance_paid", "base_advance_paid", "AdvancePaid"]));
   const payloads: NormalizedErpNextSalesOrder["payloads"] = [];
   const warnings: NormalizedErpNextSalesOrder["warnings"] = [];
 
@@ -432,6 +446,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
           const currentRate = percentRate(pick(current, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || taxMeta.rate;
           return sum + (directTaxAmount(current) || currentSubtotal * currentRate / 100);
         }, 0)).toFixed(2)),
+        advancePaid: explicitAdvancePaid,
         taxCode: taxMeta.code,
         taxName: taxMeta.name,
         taxRate: itemRate,
@@ -465,6 +480,9 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     erpCreatedAt,
     sourceInstanceKey,
     isCancellation,
+    isUpdateAfterSubmit,
+    grandTotal: explicitGrandTotal,
+    advancePaid: explicitAdvancePaid,
     erpSalesPerson: salesPerson,
     erpUserId,
     erpCustomerId,

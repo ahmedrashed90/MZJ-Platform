@@ -157,6 +157,7 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
       subtotal: numberValue(totals.subtotalBeforeTax),
       tax: numberValue(totals.carTaxValue),
       total: numberValue(totals.grandTotal || totals.carTotalInclVAT),
+      advancePaid: numberValue(totals.advancePaid || totals.advance_paid),
       registrationFee: numberValue(totals.registrationFee),
     };
 
@@ -167,7 +168,7 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
           customer_vat=coalesce(${orderValues.customerVat},customer_vat),branch=coalesce(${orderValues.branch},branch),order_date=coalesce(${orderValues.orderDate},order_date),
           delivery_date=coalesce(${orderValues.deliveryDate},delivery_date),sales_person=coalesce(${orderValues.salesPerson},sales_person),
           subtotal_before_tax=greatest(subtotal_before_tax,${orderValues.subtotal}),tax_value=greatest(tax_value,${orderValues.tax}),
-          total_incl_vat=greatest(total_incl_vat,${orderValues.total}),registration_fee=greatest(registration_fee,${orderValues.registrationFee}),
+          total_incl_vat=greatest(total_incl_vat,${orderValues.total}),advance_paid=${orderValues.advancePaid},registration_fee=greatest(registration_fee,${orderValues.registrationFee}),
           source=${source.integrationSource},source_payload=${tx.json(body)},source_updated_at=now(),source_identity=coalesce(source_identity,${source.sourceIdentity}),
           source_instance_key=coalesce(nullif(${source.sourceInstanceKey||""},''),source_instance_key),
           erp_created_at=coalesce(${source.erpCreatedAt||null}::timestamptz,erp_created_at),
@@ -181,11 +182,11 @@ export async function ingestTrackingOrder(body: any): Promise<TrackingIngestResu
       [order] = await tx<any[]>`
         insert into tracking.orders(
           sales_order_no,customer_name,customer_mobile,customer_vat,branch,order_date,delivery_date,sales_person,
-          subtotal_before_tax,tax_value,total_incl_vat,registration_fee,source,source_payload,source_updated_at,is_deleted,
+          subtotal_before_tax,tax_value,total_incl_vat,advance_paid,registration_fee,source,source_payload,source_updated_at,is_deleted,
           source_identity,source_instance_key,erp_created_at,source_fingerprint,source_sheet_id,source_sheet_name,source_row_number,source_message_id,source_original_id,updated_at
         ) values (
           ${orderNo},${orderValues.customerName},${orderValues.customerPhone},${orderValues.customerVat},${orderValues.branch},${orderValues.orderDate},${orderValues.deliveryDate},${orderValues.salesPerson},
-          ${orderValues.subtotal},${orderValues.tax},${orderValues.total},${orderValues.registrationFee},${source.integrationSource},${tx.json(body)},now(),false,
+          ${orderValues.subtotal},${orderValues.tax},${orderValues.total},${orderValues.advancePaid},${orderValues.registrationFee},${source.integrationSource},${tx.json(body)},now(),false,
           ${source.sourceIdentity},${source.sourceInstanceKey||null},${source.erpCreatedAt||null}::timestamptz,${source.sourceFingerprint},${source.sourceSheetId||null},${source.sourceSheetName||null},${source.sourceRowNumber||null},${source.sourceMessageId||null},${source.sourceOriginalId||null},now()
         ) returning *,id::text
       `;

@@ -86,6 +86,7 @@ export type VehicleDetail = VehicleRow & {
     subtotal_before_tax?: number | string | null;
     tax_value?: number | string | null;
     total_incl_vat?: number | string | null;
+    advance_paid?: number | string | null;
     registration_fee?: number | string | null;
     user_link_status?: string | null;
     crm_link_status?: string | null;
@@ -156,4 +157,41 @@ export type TransferRow = {
     actor_branch?: string | null;
     created_at: string;
   }>;
+};
+
+export type SalesOrderFollowupRow = {
+  tracking_order_id: string;
+  tracking_vehicle_id: string;
+  sales_order_no: string;
+  customer_name?: string | null;
+  branch?: string | null;
+  vin?: string | null;
+  normalized_vin?: string | null;
+  operations_vehicle_id?: string | null;
+  location_code?: string | null;
+  location_name?: string | null;
+  location_branch_code?: string | null;
+  operations_status_code?: string | null;
+  total_incl_vat: number | string;
+  advance_paid: number | string;
+  remaining_amount: number | string;
+  stage_6_completed: boolean;
+  financial_approved: boolean;
+  administrative_approved: boolean;
+  stage_10_completed: boolean;
+  updated_at?: string | null;
+};
+
+export type SalesOrdersFollowupResponse = {
+  ok: boolean;
+  rows: SalesOrderFollowupRow[];
+  summary: {
+    total: number;
+    pending_settlement: number;
+    pending_financial: number;
+    pending_administrative: number;
+    delivered: number;
+  };
+  branches: Array<{ code: string; name: string }>;
+  pagination: { page: number; pageSize: number; total: number; pages: number };
 };

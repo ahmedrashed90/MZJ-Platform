@@ -48,6 +48,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       subtotal_before_tax: order.subtotal_before_tax,
       tax_value: order.tax_value,
       total_incl_vat: order.total_incl_vat,
+      advance_paid: order.advance_paid,
       registration_fee: order.registration_fee,
       status: order.status,
       is_archived: order.is_archived,

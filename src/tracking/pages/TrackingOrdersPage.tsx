@@ -323,6 +323,8 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                 <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
                 <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
                 <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
+                <div><CurrencyCircleDollar size={18} /><span><small>الدفعة المقدمة</small><strong>{formatTrackingMoney(selected.advance_paid)}</strong></span></div>
+                <div><CurrencyCircleDollar size={18} /><span><small>المتبقي</small><strong>{formatTrackingMoney(Math.max(0, Number(selected.total_incl_vat || 0) - Number(selected.advance_paid || 0)))}</strong></span></div>
               </section>
 
               {selected.is_archived ? (

@@ -562,6 +562,7 @@ async function upsertSalesOrderRecord(input: {
   const subtotalBeforeTax = numberValue(firstTotals.subtotalBeforeTax);
   const taxValue = normalized.payloads.reduce((sum, payload) => sum + numberValue(payload.totals?.carTaxValue), 0);
   const totalInclVat = numberValue(firstTotals.grandTotal || firstTotals.carTotalInclVAT);
+  const advancePaid = numberValue(firstTotals.advancePaid ?? normalized.advancePaid);
   const registrationFee = normalized.payloads.reduce((sum, payload) => sum + numberValue(payload.totals?.registrationFee), 0);
   const sql = getSql();
 
@@ -596,7 +597,7 @@ async function upsertSalesOrderRecord(input: {
           platform_user_name=${mapping?.full_name||null},platform_department_code=${mapping?.department_code||null},
           platform_department_name=${mapping?.department_name||null},platform_branch_code=${mapping?.branch_code||null},
           platform_branch_name=${mapping?.branch_name||null},tracking_order_id=coalesce(${trackingOrderId||null}::uuid,tracking_order_id),
-          subtotal_before_tax=${subtotalBeforeTax},tax_value=${taxValue},total_incl_vat=${totalInclVat},registration_fee=${registrationFee},
+          subtotal_before_tax=${subtotalBeforeTax},tax_value=${taxValue},total_incl_vat=${totalInclVat},advance_paid=${advancePaid},registration_fee=${registrationFee},
           user_link_status=${userStatus},warnings=${tx.json(warnings)},source_payload=${tx.json(normalized.rawBody)},received_at=now(),updated_at=now()
         where id=${row.id}::uuid
         returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
@@ -610,7 +611,7 @@ async function upsertSalesOrderRecord(input: {
         sales_order_no,source_instance_key,erp_created_at,erp_status,erp_event,erp_sales_person,accounting_customer_name,actual_customer_name,actual_customer_phone,
         actual_customer_phone_normalized,customer_vat,order_date,delivery_date,erp_user_id,erp_branch,
         platform_user_id,platform_user_name,platform_department_code,platform_department_name,platform_branch_code,platform_branch_name,
-        tracking_order_id,subtotal_before_tax,tax_value,total_incl_vat,registration_fee,user_link_status,warnings,source_payload,received_at,updated_at
+        tracking_order_id,subtotal_before_tax,tax_value,total_incl_vat,advance_paid,registration_fee,user_link_status,warnings,source_payload,received_at,updated_at
       ) values(
         ${normalized.orderNo},${normalized.sourceInstanceKey},${normalized.erpCreatedAt === "legacy" ? null : normalized.erpCreatedAt}::timestamptz,
         ${normalized.erpStatus||null},${normalized.erpEvent||null},${normalized.erpSalesPerson||null},${normalized.accountingCustomerName||null},
@@ -618,7 +619,7 @@ async function upsertSalesOrderRecord(input: {
         ${normalized.customerVat||null},${dateValue(normalized.orderDate)},${dateValue(normalized.deliveryDate)},${normalized.erpUserId||null},${normalized.erpBranch||null},
         ${mapping?.id||null}::uuid,${mapping?.full_name||null},${mapping?.department_code||null},${mapping?.department_name||null},
         ${mapping?.branch_code||null},${mapping?.branch_name||null},${trackingOrderId||null}::uuid,
-        ${subtotalBeforeTax},${taxValue},${totalInclVat},${registrationFee},${userStatus},${tx.json(warnings)},${tx.json(normalized.rawBody)},now(),now()
+        ${subtotalBeforeTax},${taxValue},${totalInclVat},${advancePaid},${registrationFee},${userStatus},${tx.json(warnings)},${tx.json(normalized.rawBody)},now(),now()
       ) returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
     `;
     await syncTrackingOrderAssignment(tx, trackingOrderId || row.tracking_order_id, mapping);
@@ -1158,6 +1159,102 @@ export async function cancelErpNextSalesOrder(input: {
 
   if ((result as any)?.crm?.leadId) await refreshCrmLeadSalesSnapshot((result as any).crm.leadId);
   return { ...result, warnings: uniqueWarnings(warnings) };
+}
+
+
+export async function updateErpNextSalesOrderAmounts(input: {
+  normalized: NormalizedErpNextSalesOrder;
+}) {
+  await ensureTrackingSchema();
+  await ensureErpNextSalesOrderSchema();
+
+  const { normalized } = input;
+  const totalInclVat = numberValue(normalized.grandTotal);
+  const advancePaid = numberValue(normalized.advancePaid);
+  const remainingAmount = Math.max(0, Number((totalInclVat - advancePaid).toFixed(2)));
+  const sql = getSql();
+
+  return sql.begin(async (tx: any) => {
+    let [integrationOrder] = await tx<any[]>`
+      select *,id::text,tracking_order_id::text
+      from integrations.erpnext_sales_orders
+      where source_instance_key=${normalized.sourceInstanceKey}
+        and coalesce(is_cancelled,false)=false
+      order by updated_at desc
+      limit 1 for update
+    `;
+
+    if (!integrationOrder) {
+      [integrationOrder] = await tx<any[]>`
+        select *,id::text,tracking_order_id::text
+        from integrations.erpnext_sales_orders
+        where sales_order_no=${normalized.orderNo}
+          and coalesce(is_cancelled,false)=false
+        order by received_at desc,updated_at desc
+        limit 1 for update
+      `;
+    }
+
+    let trackingOrderId = clean(integrationOrder?.tracking_order_id);
+    if (!trackingOrderId) {
+      const [trackingOrder] = await tx<any[]>`
+        select id::text
+        from tracking.orders
+        where sales_order_no=${normalized.orderNo}
+          and coalesce(is_deleted,false)=false
+          and coalesce(is_cancelled,false)=false
+        order by
+          case when source_instance_key=${normalized.sourceInstanceKey} then 0 else 1 end,
+          updated_at desc
+        limit 1 for update
+      `;
+      trackingOrderId = clean(trackingOrder?.id);
+    }
+
+    if (!integrationOrder && !trackingOrderId) {
+      return {
+        found: false,
+        orderNo: normalized.orderNo,
+        totalInclVat,
+        advancePaid,
+        remainingAmount,
+      };
+    }
+
+    if (integrationOrder) {
+      await tx`
+        update integrations.erpnext_sales_orders set
+          erp_event=${normalized.erpEvent||null},
+          erp_status=coalesce(nullif(${normalized.erpStatus},''),erp_status),
+          total_incl_vat=${totalInclVat},
+          advance_paid=${advancePaid},
+          source_payload=${tx.json(normalized.rawBody)},
+          received_at=now(),updated_at=now()
+        where id=${integrationOrder.id}::uuid
+      `;
+    }
+
+    if (trackingOrderId) {
+      await tx`
+        update tracking.orders set
+          total_incl_vat=${totalInclVat},
+          advance_paid=${advancePaid},
+          source_payload=${tx.json(normalized.rawBody)},
+          source_updated_at=now(),updated_at=now()
+        where id=${trackingOrderId}::uuid
+      `;
+    }
+
+    return {
+      found: true,
+      integrationOrderId: clean(integrationOrder?.id) || null,
+      trackingOrderId: trackingOrderId || null,
+      orderNo: normalized.orderNo,
+      totalInclVat,
+      advancePaid,
+      remainingAmount,
+    };
+  });
 }
 
 export async function syncErpNextSalesOrder(input: {

@@ -148,9 +148,11 @@ export function EngagementPage() {
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
   const [engagementStatus, setEngagementStatus] = useState<RecordStatus>("active");
   const [engagementKind, setEngagementKind] = useState<EngagementKind>("");
-  const canRefresh = hasPermission(user, "marketing.publish.now");
+  const canRefresh = hasPermission(user, "marketing.engagement.refresh");
   const canManage = hasPermission(user, "marketing.publish.now");
-  const canManageWebhook = hasPermission(user, "marketing.connections.manage");
+  const canSubscribeWebhook = hasPermission(user, "marketing.engagement.subscribe");
+  const canViewWebhookStatus = hasPermission(user, "marketing.engagement.status.view");
+  const canViewWebhookUrl = hasPermission(user, "marketing.engagement.webhook.view");
   const canDeleteCustomer = hasPermission(user, "crm.customer.delete");
 
   async function load() {
@@ -301,9 +303,9 @@ export function EngagementPage() {
     title="تفاعل النشر"
     description="متابعة المنشورات والتفاعلات ونتائج الحملات والأجندات وتحويل الحسابات المتاحة تلقائيًا إلى عملاء CRM."
     actions={<div className="marketing-engagement-actions">
-      {canManageWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التفاعلات</button> : null}
-      {data ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التفاعلات</button> : null}
-      {data ? <button type="button" className="secondary-button" onClick={() => setWebhookOpen(true)}><LinkSimple size={18} /> رابط Webhook</button> : null}
+      {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التفاعلات</button> : null}
+      {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التفاعلات</button> : null}
+      {data && canViewWebhookUrl ? <button type="button" className="secondary-button" onClick={() => setWebhookOpen(true)}><LinkSimple size={18} /> رابط Webhook</button> : null}
       {canRefresh ? <button type="button" className="primary-button" disabled={loading} onClick={refresh}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> تحديث الأرقام الآن</button> : null}
     </div>}
   >

@@ -12,6 +12,7 @@ const tabs = [
   ["/operations/movement", "الحركة", "operations.movement.view"],
   ["/operations/transfers", "الطلبات", "operations.transfers.view"],
   ["/operations/approvals", "الموافقات", "operations.approvals.view"],
+  ["/operations/sales-orders", "متابعة طلبات البيع", "operations.sales_orders_followup.view"],
   ["/operations/movements", "سجل الحركات", "operations.movements.view"],
   ["/operations/archive", "الأرشيف", "operations.archive.view"],
 ] as const;

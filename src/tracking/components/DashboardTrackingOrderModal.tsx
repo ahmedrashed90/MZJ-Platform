@@ -66,6 +66,8 @@ export function DashboardTrackingOrderModal({
             <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(order.order_date, false)}</strong></span></div>
             <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(order.delivery_date, false)}</strong></span></div>
             <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(order.total_incl_vat)}</strong></span></div>
+            <div><CurrencyCircleDollar size={18} /><span><small>الدفعة المقدمة</small><strong>{formatTrackingMoney(order.advance_paid)}</strong></span></div>
+            <div><CurrencyCircleDollar size={18} /><span><small>المتبقي</small><strong>{formatTrackingMoney(Math.max(0, Number(order.total_incl_vat || 0) - Number(order.advance_paid || 0)))}</strong></span></div>
           </section>
 
           <section className="tracking-vehicle-section dashboard-tracking-vehicle-section">

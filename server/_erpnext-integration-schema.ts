@@ -54,6 +54,7 @@ create table if not exists integrations.erpnext_sales_orders (
   subtotal_before_tax numeric(14,2) not null default 0,
   tax_value numeric(14,2) not null default 0,
   total_incl_vat numeric(14,2) not null default 0,
+  advance_paid numeric(14,2) not null default 0,
   registration_fee numeric(14,2) not null default 0,
   user_link_status text not null default 'pending',
   crm_link_status text not null default 'pending',
@@ -95,6 +96,7 @@ alter table integrations.erpnext_sales_orders add column if not exists tracking_
 alter table integrations.erpnext_sales_orders add column if not exists subtotal_before_tax numeric(14,2) not null default 0;
 alter table integrations.erpnext_sales_orders add column if not exists tax_value numeric(14,2) not null default 0;
 alter table integrations.erpnext_sales_orders add column if not exists total_incl_vat numeric(14,2) not null default 0;
+alter table integrations.erpnext_sales_orders add column if not exists advance_paid numeric(14,2) not null default 0;
 alter table integrations.erpnext_sales_orders add column if not exists registration_fee numeric(14,2) not null default 0;
 alter table integrations.erpnext_sales_orders add column if not exists user_link_status text not null default 'pending';
 alter table integrations.erpnext_sales_orders add column if not exists crm_link_status text not null default 'pending';

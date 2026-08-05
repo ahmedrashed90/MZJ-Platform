@@ -1566,6 +1566,159 @@ async function importVehicles(sql: ReturnType<typeof getSql>, body: Record<strin
   });
 }
 
+
+async function listSalesOrderFollowup(
+  sql: ReturnType<typeof getSql>,
+  request: VercelRequest,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  const search = clean(request.query.search);
+  const status = clean(request.query.status);
+  const branch = clean(request.query.branch);
+  const { page, pageSize, offset } = pageValues(request);
+  const pattern = `%${search}%`;
+  const access = getSystemAccess(user, "operations");
+  const unrestricted = access.dataScope === "all";
+  const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch_access__"];
+  const allowedStatuses = access.vehicleStatusCodes?.length ? access.vehicleStatusCodes : ["__all_statuses__"];
+  const unrestrictedStatuses = !access.vehicleStatusCodes?.length;
+
+  const scopedRows = sql`
+    select
+      o.id::text as tracking_order_id,
+      tv.id::text as tracking_vehicle_id,
+      o.sales_order_no,
+      o.customer_name,
+      o.branch,
+      tv.vin,
+      coalesce(nullif(trim(tv.vin),''),'') as normalized_vin,
+      vehicle_match.id::text as operations_vehicle_id,
+      vehicle_match.location_code,
+      vehicle_match.location_name,
+      vehicle_match.location_branch_code,
+      vehicle_match.status_code as operations_status_code,
+      coalesce(o.total_incl_vat,0)::numeric(14,2) as total_incl_vat,
+      coalesce(o.advance_paid,0)::numeric(14,2) as advance_paid,
+      greatest(coalesce(o.total_incl_vat,0)-coalesce(o.advance_paid,0),0)::numeric(14,2) as remaining_amount,
+      coalesce(stage_6.completed,false) as stage_6_completed,
+      coalesce(approval.financial_approved,false) as financial_approved,
+      coalesce(approval.administrative_approved,false) as administrative_approved,
+      coalesce(stage_10.completed,false) as stage_10_completed,
+      greatest(o.updated_at,tv.updated_at,coalesce(approval.updated_at,o.updated_at)) as updated_at
+    from tracking.orders o
+    join tracking.order_vehicles tv on tv.order_id=o.id
+    left join lateral (
+      select
+        v.id,v.status_code,l.code as location_code,l.name as location_name,l.branch_code as location_branch_code,v.updated_at
+      from operations.vehicles v
+      left join operations.locations l on l.id=v.location_id
+      where v.is_deleted=false
+        and (
+          v.id=tv.vehicle_id
+          or (
+            tv.vehicle_id is null
+            and nullif(trim(tv.vin),'') is not null
+            and upper(trim(v.vin))=upper(trim(tv.vin))
+          )
+        )
+      order by case when v.id=tv.vehicle_id then 0 else 1 end,v.updated_at desc
+      limit 1
+    ) vehicle_match on true
+    left join lateral (
+      select bool_or(vs.status='completed') as completed
+      from tracking.vehicle_stages vs
+      join tracking.stages st on st.id=vs.stage_id
+      where vs.vehicle_id=tv.id and st.sort_order=6
+    ) stage_6 on true
+    left join lateral (
+      select bool_or(vs.status='completed') as completed
+      from tracking.vehicle_stages vs
+      join tracking.stages st on st.id=vs.stage_id
+      where vs.vehicle_id=tv.id and st.sort_order=10
+    ) stage_10 on true
+    left join lateral (
+      select va.financial_approved,va.administrative_approved,va.updated_at
+      from operations.vehicle_approvals va
+      where va.vehicle_id=vehicle_match.id
+      order by case when coalesce(va.is_active,false) then 0 else 1 end,coalesce(va.cycle_no,1) desc,va.updated_at desc
+      limit 1
+    ) approval on true
+    where coalesce(o.is_deleted,false)=false
+      and coalesce(o.is_cancelled,false)=false
+      and (
+        ${unrestricted}=true
+        or coalesce(o.branch,'') in ${sql(branchCodes)}
+        or coalesce(vehicle_match.location_code,'') in ${sql(branchCodes)}
+        or coalesce(vehicle_match.location_branch_code,'') in ${sql(branchCodes)}
+      )
+      and (${unrestrictedStatuses}=true or vehicle_match.id is null or vehicle_match.status_code in ${sql(allowedStatuses)})
+      and (
+        ${search}=''
+        or o.sales_order_no ilike ${pattern}
+        or coalesce(o.customer_name,'') ilike ${pattern}
+        or coalesce(tv.vin,'') ilike ${pattern}
+      )
+      and (
+        ${branch}=''
+        or coalesce(o.branch,'')=${branch}
+        or coalesce(vehicle_match.location_code,'')=${branch}
+        or coalesce(vehicle_match.location_branch_code,'')=${branch}
+      )
+  `;
+
+  const statusClause = status === "pending_settlement" ? sql`stage_6_completed=false`
+    : status === "pending_financial" ? sql`financial_approved=false`
+      : status === "pending_administrative" ? sql`administrative_approved=false`
+        : status === "delivered" ? sql`stage_10_completed=true`
+          : status === "pending_delivery" ? sql`stage_10_completed=false`
+            : status === "completed" ? sql`stage_6_completed=true and financial_approved=true and administrative_approved=true and stage_10_completed=true`
+              : sql`true`;
+
+  const [summaryRows, countRows, rows] = await Promise.all([
+    sql<any[]>`
+      with scoped as (${scopedRows})
+      select
+        count(*)::int as total,
+        count(*) filter (where stage_6_completed=false)::int as pending_settlement,
+        count(*) filter (where financial_approved=false)::int as pending_financial,
+        count(*) filter (where administrative_approved=false)::int as pending_administrative,
+        count(*) filter (where stage_10_completed=true)::int as delivered
+      from scoped
+    `,
+    sql<any[]>`with scoped as (${scopedRows}) select count(*)::int as total from scoped where ${statusClause}`,
+    sql<any[]>`
+      with scoped as (${scopedRows})
+      select * from scoped
+      where ${statusClause}
+      order by updated_at desc,sales_order_no desc,tracking_vehicle_id
+      limit ${pageSize} offset ${offset}
+    `,
+  ]);
+
+  const summary = summaryRows[0] || {};
+  const total = Number(countRows[0]?.total || 0);
+  const branchMap = new Map<string, string>();
+  for (const row of rows) {
+    const code = clean(row.location_code || row.location_branch_code || row.branch);
+    const name = clean(row.location_name || row.branch);
+    if (code && !branchMap.has(code)) branchMap.set(code, name || code);
+  }
+
+  return {
+    ok: true,
+    rows,
+    summary: {
+      total: Number(summary.total || 0),
+      pending_settlement: Number(summary.pending_settlement || 0),
+      pending_financial: Number(summary.pending_financial || 0),
+      pending_administrative: Number(summary.pending_administrative || 0),
+      delivered: Number(summary.delivered || 0),
+    },
+    branches: [...branchMap.entries()].map(([code, name]) => ({ code, name })),
+    pagination: { page, pageSize, total, pages: Math.max(1, Math.ceil(total / pageSize)) },
+  };
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const traceId = requestId("ops");
   response.setHeader("Cache-Control", "no-store");
@@ -1585,6 +1738,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (resource === "movements") return response.status(200).json(await listMovements(sql, request, user));
       if (resource === "transfers") return response.status(200).json(await listTransfers(sql, request, user));
       if (resource === "approvals") return response.status(200).json(await listApprovals(sql, request, user));
+      if (resource === "sales_orders_followup") {
+        if (!requireOperationsPermission(user, "operations.sales_orders_followup.view", response)) return;
+        return response.status(200).json(await listSalesOrderFollowup(sql, request, user));
+      }
       if (resource === "dashboard_vehicles") return response.status(200).json(await dashboardVehicles(sql, request, user));
       if (resource === "dashboard_shortages") return response.status(200).json(await dashboardShortages(sql, request, user));
       if (resource === "dashboard_requests") return response.status(200).json(await dashboardRequests(sql, request, user));

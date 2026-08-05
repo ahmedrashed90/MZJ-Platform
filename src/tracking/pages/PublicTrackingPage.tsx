@@ -70,6 +70,8 @@ export function PublicTrackingPage() {
                 <div><small>تاريخ الطلب</small><strong>{formatTrackingDate(order.order_date, false)}</strong></div>
                 <div><small>عدد السيارات</small><strong>{order.vehicles.length}</strong></div>
                 <div><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(order.total_incl_vat)}</strong></div>
+                <div><small>الدفعة المقدمة</small><strong>{formatTrackingMoney(order.advance_paid)}</strong></div>
+                <div><small>المتبقي</small><strong>{formatTrackingMoney(Math.max(0, Number(order.total_incl_vat || 0) - Number(order.advance_paid || 0)))}</strong></div>
               </div>
             </section>
 

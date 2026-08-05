@@ -73,7 +73,7 @@ function operationsRequirement(request: VercelRequest): ApiPermissionRequirement
   if (method === "GET") {
     const map: Record<string, string> = {
       meta: "system.operations.access", vehicles: "operations.inventory.view", vehicle: "operations.vehicle.view",
-      movements: "operations.movements.view", transfers: "operations.transfers.view", approvals: "operations.approvals.view",
+      movements: "operations.movements.view", transfers: "operations.transfers.view", approvals: "operations.approvals.view", sales_orders_followup: "operations.sales_orders_followup.view",
       dashboard_vehicles: "operations.inventory.view", dashboard_requests: "operations.transfers.view", dashboard_shortages: "operations.inventory.view",
     };
     return req(map[resource] || "system.operations.access", "operations", resource, "view");
@@ -107,7 +107,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (method === "GET") {
     const map: Record<string, string> = {
       meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
-      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.publish_prep.view", monitoring: "marketing.monitoring.view",
+      task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", monitoring: "marketing.monitoring.view",
       calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", attendance: "marketing.attendance.view", stock: "marketing.stock.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
     };
@@ -118,7 +118,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     create_campaign: "marketing.campaign.create", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access", complete_task: "system.marketing.access",
     attach_final_file: "marketing.task.final_file.upload", prepare_final_upload: "marketing.task.final_file.upload", upload_final_file_proxy: "marketing.task.final_file.upload", cancel_final_upload: "marketing.task.final_file.upload", attach_final_media_group: "marketing.task.final_file.upload",
-    move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.publish.now", subscribe_engagement_webhooks: "marketing.connections.manage", manage_engagement_item: "marketing.publish.now",
+    move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.engagement.refresh", subscribe_engagement_webhooks: "marketing.engagement.subscribe", manage_engagement_item: "marketing.publish.now",
     archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
     create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",

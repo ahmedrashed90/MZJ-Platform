@@ -26,7 +26,7 @@ const links = [
   { to: "/marketing/database", label: "قاعدة البيانات", icon: Database, permission: "marketing.database.view" },
   { to: "/marketing/packages", label: "إدارة الباقات", icon: Package, permission: "marketing.packages.view" },
   { to: "/marketing/publish-prep", label: "تجهيز النشر", icon: PaperPlaneTilt, permission: "marketing.publish_prep.view" },
-  { to: "/marketing/engagement", label: "تفاعل النشر", icon: ChatCircleDots, permission: "marketing.publish_prep.view" },
+  { to: "/marketing/engagement", label: "تفاعل النشر", icon: ChatCircleDots, permission: "marketing.engagement.view" },
   { to: "/marketing/monitoring", label: "المتابعة", icon: ChartLineUp, permission: "marketing.monitoring.view" },
   { to: "/marketing/calendar", label: "التقويم", icon: CalendarBlank, permission: "marketing.calendar.view" },
   { to: "/marketing/receipt-calendar", label: "تقويم الاستلام", icon: CalendarCheck, permission: "marketing.receipt_calendar.view" },
