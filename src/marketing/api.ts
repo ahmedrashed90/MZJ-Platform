@@ -29,56 +29,6 @@ export function marketingDate(value: unknown, withTime = false) {
   return withTime ? date.toLocaleString("ar-SA-u-nu-latn") : date.toLocaleDateString("ar-SA-u-nu-latn");
 }
 
-export type MarketingMediaMetadata = {
-  width: number;
-  height: number;
-  durationSeconds: number | null;
-};
-
-export function readMarketingMediaMetadata(file: File): Promise<MarketingMediaMetadata> {
-  const isVideo = file.type.startsWith("video/") || /\.(mp4|mov|m4v|webm)$/i.test(file.name);
-  const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(file.name);
-  if (!isVideo && !isImage) return Promise.reject(new Error(`الملف ${file.name} ليس صورة أو فيديو صالحًا للنشر`));
-  const objectUrl = URL.createObjectURL(file);
-  if (isVideo) {
-    return new Promise<MarketingMediaMetadata>((resolve, reject) => {
-      const video = document.createElement("video");
-      video.preload = "metadata";
-      video.muted = true;
-      let timer = 0;
-      const cleanup = () => { window.clearTimeout(timer); URL.revokeObjectURL(objectUrl); video.removeAttribute("src"); video.load(); };
-      timer = window.setTimeout(() => { cleanup(); reject(new Error(`تعذر قراءة أبعاد ومدة الفيديو ${file.name}`)); }, 15000);
-      video.onerror = () => { cleanup(); reject(new Error(`تعذر قراءة أبعاد ومدة الفيديو ${file.name}`)); };
-      video.onloadedmetadata = () => {
-        const width = Math.round(video.videoWidth || 0), height = Math.round(video.videoHeight || 0);
-        const durationSeconds = Number.isFinite(video.duration) && video.duration > 0 ? Number(video.duration.toFixed(3)) : null;
-        cleanup();
-        if (!width || !height) return reject(new Error(`تعذر قراءة أبعاد الفيديو ${file.name}`));
-        resolve({ width, height, durationSeconds });
-      };
-      video.src = objectUrl;
-    });
-  }
-  return new Promise<MarketingMediaMetadata>((resolve, reject) => {
-    const image = new Image();
-    let timer = 0;
-    const cleanup = () => { window.clearTimeout(timer); URL.revokeObjectURL(objectUrl); image.src = ""; };
-    timer = window.setTimeout(() => { cleanup(); reject(new Error(`تعذر قراءة أبعاد الصورة ${file.name}`)); }, 15000);
-    image.onerror = () => { cleanup(); reject(new Error(`تعذر قراءة أبعاد الصورة ${file.name}`)); };
-    image.onload = () => {
-      const width = Math.round(image.naturalWidth || 0), height = Math.round(image.naturalHeight || 0);
-      cleanup();
-      if (!width || !height) return reject(new Error(`تعذر قراءة أبعاد الصورة ${file.name}`));
-      resolve({ width, height, durationSeconds: null });
-    };
-    image.src = objectUrl;
-  });
-}
-
-export async function readMarketingMediaMetadataList(files: File[]) {
-  return Promise.all(files.map((file) => readMarketingMediaMetadata(file)));
-}
-
 export async function uploadMarketingFile(input: {
   file: File;
   category: string;
@@ -274,12 +224,10 @@ export async function uploadMarketingFinalFiles(input: {
   sourceType?: string;
   sourceId?: string;
   taskId: string;
-  metadata?: MarketingMediaMetadata[];
   cancellation?: MarketingFinalUploadCancellation;
   onProgress?: (progress: MarketingFinalUploadProgress) => void;
 }) {
   if (!input.files.length) throw new Error("اختر الملف النهائي أولًا");
-  const metadata = input.metadata?.length === input.files.length ? input.metadata : await readMarketingMediaMetadataList(input.files);
   const cancellation = input.cancellation || createMarketingFinalUploadCancellation();
   const prepared = await marketingFetch<{
     groupId: string;
@@ -300,7 +248,7 @@ export async function uploadMarketingFinalFiles(input: {
       taskId: input.taskId,
       sourceType: input.sourceType,
       sourceId: input.sourceId,
-      files: input.files.map((file, index) => ({ name: file.name, mimeType: file.type || "application/octet-stream", size: file.size, width: metadata[index]?.width || 0, height: metadata[index]?.height || 0, durationSeconds: metadata[index]?.durationSeconds || null })),
+      files: input.files.map((file) => ({ name: file.name, mimeType: file.type || "application/octet-stream", size: file.size })),
     }),
   });
   cancellation.groupId = prepared.groupId;

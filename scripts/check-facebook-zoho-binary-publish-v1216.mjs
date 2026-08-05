@@ -7,10 +7,10 @@ const facebookBlock = marketingApi.split("if(schedule.platform_code==='facebook'
 const checks = [
   ["Zoho image content is downloaded from the Saudi binary download endpoint", marketingApi.includes("/v1/workdrive/download/${encodeURIComponent(externalId)}") && marketingApi.includes("Authorization:`Zoho-oauthtoken ${runtime.accessToken}`")],
   ["Facebook photo upload uses multipart source instead of a Zoho URL", marketingApi.includes("async function graphFileRequest") && marketingApi.includes("form.append('source'") && facebookBlock.includes("graphFileRequest(`/${pageId}/photos`")],
-  ["single Facebook image is uploaded as binary", facebookBlock.includes("const binary=await finalMediaBinary(sql,file)") && facebookBlock.includes("{caption,published:true}")],
+  ["single Facebook image is uploaded as binary", facebookBlock.includes("graphFileRequest(`/${pageId}/photos`,token,await finalMediaBinary(sql,file),{caption,published:true})")],
   ["Facebook carousel uploads every ordered image as binary", facebookBlock.includes("for(const imageFile of files)") && facebookBlock.includes("{published:false}") && facebookBlock.includes("attached_media")],
   ["Facebook image branches no longer send the private Zoho URL", !facebookBlock.includes("{url:mediaUrl") && !facebookBlock.includes("for(const url of mediaUrls)")],
-  ["Instagram publishing flow remains separate", marketingApi.includes("publishInstagramContent") && instagramPublisher.includes("image_url") && instagramPublisher.includes("media_publish")],
+  ["Instagram publishing flow remains separate", marketingApi.includes("publishInstagramContent") && instagramPublisher.includes("publishSingleImage") && instagramPublisher.includes("publishCarousel") && instagramPublisher.includes("media_publish")],
 ];
 
 let passed = 0;

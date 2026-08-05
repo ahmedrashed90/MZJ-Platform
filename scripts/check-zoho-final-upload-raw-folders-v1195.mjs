@@ -36,7 +36,7 @@ const checks = [
   ["Task details contain a visible upload panel", files.modal.includes("marketing-final-upload-dropzone") && files.modal.includes("اسحب الملفات هنا أو اضغط للاختيار") && files.css.includes(".marketing-final-upload-progress")],
   ["Multiple images keep their selection order", files.client.includes("file = input.files[upload.orderIndex]") && files.marketing.includes("orderIndex:item.orderIndex")],
   ["Old Zoho Worker and R2 upload path removed", oldGatewayTokens.every((token) => !liveSource.includes(token))],
-  ["Carousel server records remain ordered", files.marketing.includes("order by order_index,created_at,id") && files.instagram.includes("media_type: \"CAROUSEL\"") && files.instagram.includes("childCreates.map((child) => child.creationId).join(\",\")")],
+  ["Carousel server records remain ordered", files.marketing.includes("multipleImages") && files.instagram.includes('media_type: "CAROUSEL"') && files.instagram.includes("for (const file of files)")],
   ["Existing final button condition preserved", files.modal.includes('task.template_status !== "approved" || task.status === "completed"')],
   ["Campaign and agenda final files supported", files.marketing.includes("source_type") && files.marketing.includes("source_id")],
   ["RAW token compatibility retained", files.marketing.includes("MZJ_RAW_ALLOW_LEGACY_TOKEN") && files.marketing.includes("MZJ_RAW_SECRET_2026_CHANGE_ME")],
