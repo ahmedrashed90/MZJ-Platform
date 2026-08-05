@@ -40,7 +40,7 @@ check('webhook signature HMAC', webhook.includes('x-hub-signature-256') && webho
 check('raw webhook body parser disabled', apiWebhook.includes('bodyParser: false'));
 check('dedicated webhook rewrite', vercel.includes('/api/integrations/meta/engagement-webhook'));
 check('required Meta comment permissions', connections.includes('pages_manage_metadata') && connections.includes('instagram_manage_comments'));
-check('central API permissions mapped', permissions.includes('refresh_engagement: "marketing.publish.now"') && permissions.includes('subscribe_engagement_webhooks: "marketing.connections.manage"'));
+check('central API permissions mapped', permissions.includes('refresh_engagement: "marketing.engagement.refresh"') && permissions.includes('subscribe_engagement_webhooks: "marketing.engagement.subscribe"'));
 check('engagement page uses unified event list', page.includes('data?.engagements') && page.includes('التفاعلات والعملاء'));
 check('new engagement navigation', layout.includes('/marketing/engagement'));
 check('new engagement route', app.includes('EngagementPage') && app.includes('path="engagement"'));
