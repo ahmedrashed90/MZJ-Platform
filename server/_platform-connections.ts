@@ -363,8 +363,18 @@ function metaScopes() {
   return [...new Set([...parseScopes(process.env.META_SCOPES || ""), ...required])];
 }
 function tiktokScopes() { return parseScopes(process.env.TIKTOK_SCOPES || "user.info.basic,video.upload,video.publish"); }
+const YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+const YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
+const YOUTUBE_PLAYLIST_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
+function youtubeRequiredScopes() {
+  return [YOUTUBE_UPLOAD_SCOPE, YOUTUBE_READONLY_SCOPE];
+}
 function youtubeScopes() {
-  return parseScopes(process.env.YOUTUBE_SCOPES || "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly");
+  return [...new Set([
+    ...parseScopes(process.env.YOUTUBE_SCOPES || ""),
+    ...youtubeRequiredScopes(),
+    YOUTUBE_PLAYLIST_SCOPE,
+  ])];
 }
 
 export async function startPlatformOAuth(sql: Sql, user: SessionUser, request: VercelRequest, providerValue: unknown) {
@@ -676,7 +686,7 @@ export async function getYouTubeAccessToken(sql: Sql) {
   const [row] = await sql<ConnectionRow[]>`select * from marketing.platform_connections where platform='youtube'`;
   if (!row?.connected || !row.access_token_encrypted) throw new Error("اربط قناة YouTube أولًا");
   const scopes = array(row.scopes).map(clean).filter(Boolean);
-  assertScopes(scopes, youtubeScopes(), "YouTube");
+  assertScopes(scopes, youtubeRequiredScopes(), "YouTube");
   let accessToken = decryptPlatformToken(row.access_token_encrypted);
   if (tokenNearExpiry(row.token_expires_at, 5)) {
     const refreshToken = row.refresh_token_encrypted ? decryptPlatformToken(row.refresh_token_encrypted) : "";
@@ -883,7 +893,7 @@ export async function validatePlatformConnection(sql: Sql, user: SessionUser, re
     let accessToken = decryptPlatformToken(row.access_token_encrypted);
     const refreshToken = row.refresh_token_encrypted ? decryptPlatformToken(row.refresh_token_encrypted) : "";
     const storedScopes = array(row.scopes).map(clean).filter(Boolean);
-    assertScopes(storedScopes, youtubeScopes(), "YouTube");
+    assertScopes(storedScopes, youtubeRequiredScopes(), "YouTube");
     let token: any = { access_token: accessToken, refresh_token: refreshToken, scope: storedScopes.join(" ") };
     if (tokenNearExpiry(row.token_expires_at)) {
       if (!refreshToken) throw new Error("Refresh Token الخاص بـYouTube غير موجود");

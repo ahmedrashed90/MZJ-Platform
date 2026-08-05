@@ -16,6 +16,7 @@ import {
   publicPlatformConnection,
 } from "../_platform-connections.js";
 import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.js";
+import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, parseZohoUploadResult, ticketHash } from "../_zoho-workdrive.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
@@ -2270,6 +2271,18 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
       const publish=await graphRequest(`/${igId}/media_publish`,'POST',token,{creation_id:creationId});
       result={create:container,publish};
     }
+  }else if(schedule.platform_code==='youtube'){
+    if(files.length!==1||!looksVideo(file))throw new Error("نشر YouTube يتطلب ملف فيديو واحدًا فقط");
+    const youtubeDefaults=await getYouTubePublishSettings(sql);
+    const publishOptions=objectValue(schedule.publish_options);
+    const youtubeOptions=normalizeYouTubePublishOptions(publishOptions.youtube,youtubeDefaults,{title:clean(schedule.caption),description:caption});
+    if(!youtubeOptions.title)throw new Error("عنوان فيديو YouTube مطلوب");
+    if([...youtubeOptions.title].length>100)throw new Error("عنوان YouTube يجب ألا يتجاوز 100 حرف");
+    if(Buffer.byteLength(youtubeOptions.description,'utf8')>5000)throw new Error("وصف YouTube يجب ألا يتجاوز 5000 بايت");
+    if(youtubeOptions.tags.join(',').length>500)throw new Error("كلمات YouTube المفتاحية تتجاوز 500 حرف");
+    if(!youtubeOptions.categoryId)throw new Error("تصنيف فيديو YouTube مطلوب");
+    if(!/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(youtubeOptions.defaultLanguage))throw new Error("لغة فيديو YouTube غير صالحة");
+    result=await publishYouTubeVideo(sql,file,youtubeOptions);
   }else throw new Error("المنصة غير مدعومة");
   await sql.begin(async tx=>{
     await tx`update marketing.publish_schedule set status='published',published_at=now(),publish_result=${tx.json(dbJson(result))},updated_at=now() where id=${schedule.id}::uuid`;
