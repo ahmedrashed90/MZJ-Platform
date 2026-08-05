@@ -18,16 +18,7 @@ import {
 } from "../../../shared/youtube-publishing";
 
 type PublishPrepView = "tasks" | "manual";
-type ManualPublishSource = {
-  source_type: "campaign" | "agenda";
-  id: string;
-  name: string;
-  code?: string | null;
-  publish_start?: string | null;
-  publish_end?: string | null;
-};
 type ManualPublishDraft = {
-  sourceKey: string;
   creativeTypeId: string;
   platforms: PlatformAssignment[];
   publishDate: string;
@@ -72,7 +63,6 @@ function statusClass(value: string) {
 
 function createManualDraft(defaults: YouTubePublishSettings): ManualPublishDraft {
   return {
-    sourceKey: "",
     creativeTypeId: "",
     platforms: [],
     publishDate: "",
@@ -87,12 +77,6 @@ function copyPlatforms(value: unknown): PlatformAssignment[] {
     platformId: String(platform?.platformId || ""),
     postTypeIds: Array.isArray(platform?.postTypeIds) ? [...platform.postTypeIds] : [],
   })).filter((platform) => platform.platformId);
-}
-
-function parseManualSourceKey(value: string) {
-  const separator = value.indexOf(":");
-  if (separator < 1) return { sourceType: "", sourceId: "" };
-  return { sourceType: value.slice(0, separator), sourceId: value.slice(separator + 1) };
 }
 
 function isVideoFile(file: File) {
@@ -221,7 +205,6 @@ export function PublishPrepPage() {
   const canManagePrep = hasPermission(user, "marketing.publish_prep.manage");
   const canPublishNow = hasPermission(user, "marketing.publish.now");
   const [rows, setRows] = useState<any[]>([]);
-  const [manualSources, setManualSources] = useState<ManualPublishSource[]>([]);
   const [meta, setMeta] = useState<MarketingMeta | null>(null);
   const [view, setView] = useState<PublishPrepView>("tasks");
   const [manual, setManual] = useState<ManualPublishDraft>(() => createManualDraft(YOUTUBE_PUBLISH_DEFAULTS));
@@ -245,12 +228,11 @@ export function PublishPrepPage() {
     setError("");
     try {
       const [tasks, info] = await Promise.all([
-        marketingFetch<{ rows: any[]; manualSources?: ManualPublishSource[]; youtubeDefaults?: YouTubePublishSettings }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
+        marketingFetch<{ rows: any[]; youtubeDefaults?: YouTubePublishSettings }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
         marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`),
       ]);
       const defaults = normalizeYouTubePublishSettings(tasks.youtubeDefaults);
       setRows(tasks.rows);
-      setManualSources(Array.isArray(tasks.manualSources) ? tasks.manualSources : []);
       setYoutubeDefaults(defaults);
       setManual((current) => ({ ...current, youtubeOptions: normalizeYouTubePublishOptions(current.youtubeOptions, defaults) }));
       setMeta(info);
@@ -350,17 +332,11 @@ export function PublishPrepPage() {
     files: rows.filter((row) => row.final_file_id || Number(row.final_file_count || 0) > 0).length,
   }), [rows, meta]);
 
-  const manualSelectedSource = useMemo(() => {
-    const { sourceType, sourceId } = parseManualSourceKey(manual.sourceKey);
-    return manualSources.find((item) => item.source_type === sourceType && item.id === sourceId) || null;
-  }, [manualSources, manual.sourceKey]);
-
   const manualSelectedCreativeType = useMemo(() => meta?.creativeTypes.find((item) => item.id === manual.creativeTypeId) || null, [meta, manual.creativeTypeId]);
   const manualFileError = useMemo(() => manualMediaValidation(manualFiles, manual.platforms, meta), [manualFiles, manual.platforms, meta]);
 
   const manualMissing = useMemo(() => {
     const values: string[] = [];
-    if (!manual.sourceKey || !manualSelectedSource) values.push("الحملة أو الأجندة");
     if (!manual.creativeTypeId || !manualSelectedCreativeType) values.push("نوع الكرييتيف");
     if (!manualFiles.length) values.push("الملف أو الملفات");
     if (manualFileError) values.push(manualFileError);
@@ -371,7 +347,7 @@ export function PublishPrepPage() {
     else if (manual.platforms.some((platform) => !platform.postTypeIds.length)) values.push("نوع النشر لكل منصة");
     if (selectionsIncludeYouTube(manual.platforms) && !manual.youtubeOptions.title.trim()) values.push("عنوان YouTube");
     return values;
-  }, [manual, manualSelectedSource, manualSelectedCreativeType, manualFiles, manualFileError, meta]);
+  }, [manual, manualSelectedCreativeType, manualFiles, manualFileError, meta]);
 
   async function save() {
     if (!editing) return;
@@ -406,11 +382,10 @@ export function PublishPrepPage() {
       setError("لا توجد صلاحية لإدارة تجهيز النشر");
       return;
     }
-    if (!manualSelectedSource || !manualSelectedCreativeType || manualMissing.length) {
+    if (!manualSelectedCreativeType || manualMissing.length) {
       setError(`أكمل بيانات النشر اليدوي: ${manualMissing.join("، ")}`);
       return;
     }
-    const { sourceType, sourceId } = parseManualSourceKey(manual.sourceKey);
     const cancellation = createMarketingFinalUploadCancellation();
     manualUploadControlRef.current = cancellation;
     setManualUpload({ active: true, files: manualFiles.map((file) => ({ name: file.name, size: file.size, loaded: 0, percent: 0, status: "pending" })) });
@@ -424,8 +399,6 @@ export function PublishPrepPage() {
         method: "POST",
         body: JSON.stringify({
           action: "create_manual_publish_entry",
-          sourceType,
-          sourceId,
           creativeTypeId: manual.creativeTypeId,
           files: manualFiles.map((file) => ({ name: file.name, mimeType: file.type || "application/octet-stream", size: file.size })),
           platforms: manual.platforms,
@@ -438,8 +411,6 @@ export function PublishPrepPage() {
       taskId = created.taskId;
       await uploadMarketingFinalFiles({
         files: manualFiles,
-        sourceType,
-        sourceId,
         taskId,
         cancellation,
         onProgress: updateManualUpload,
@@ -522,18 +493,6 @@ export function PublishPrepPage() {
     if (includesYouTube(row)) void loadYouTubeOptions();
   }
 
-  function selectManualSource(nextSourceKey: string) {
-    const { sourceType, sourceId } = parseManualSourceKey(nextSourceKey);
-    const selectedSource = manualSources.find((item) => item.source_type === sourceType && item.id === sourceId);
-    setManual({
-      ...createManualDraft(youtubeDefaults),
-      sourceKey: nextSourceKey,
-      publishDate: String(selectedSource?.publish_start || "").slice(0, 10),
-    });
-    setManualFiles([]);
-    setManualUpload(null);
-  }
-
   function selectManualCreativeType(creativeTypeId: string) {
     const creativeType = meta?.creativeTypes.find((item) => item.id === creativeTypeId);
     setManual((current) => ({
@@ -574,7 +533,7 @@ export function PublishPrepPage() {
     setManualUpload(null);
   }
 
-  return <MarketingPage title="تجهيز النشر" description="راجع تجهيز التاسكات، أو أنشئ نشرًا يدويًا جديدًا باختيار الحملة أو الأجندة ونوع الكرييتيف والملفات مباشرة من جهازك.">
+  return <MarketingPage title="تجهيز النشر" description="راجع تجهيز التاسكات، أو أنشئ نشرًا يدويًا مستقلًا باختيار نوع الكرييتيف والملفات مباشرة من جهازك.">
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
     {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
@@ -659,15 +618,14 @@ export function PublishPrepPage() {
 
       {canPublishNow && selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد <strong>{selectedIds.length.toLocaleString("ar-SA-u-nu-latn")}</strong> تجهيز</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={18} />نشر المحدد الآن</button></div> : null}
     </> : <section className="panel marketing-manual-publish-panel">
-      <header><div><h3>تجهيز نشر يدوي جديد</h3><p>اختر الحملة أو الأجندة ونوع الكرييتيف من إعدادات النظام، ثم ارفع الملفات من جهازك وحدد المنصات وأنواع النشر.</p></div><span><PaperPlaneTilt size={22} /></span></header>
+      <header><div><h3>تجهيز نشر يدوي جديد</h3><p>اختر نوع الكرييتيف من قائمة الكرييتيفات في إعدادات سيستم التسويق، ثم ارفع الملفات من جهازك وحدد المنصات وأنواع النشر.</p></div><span><PaperPlaneTilt size={22} /></span></header>
       <div className="marketing-manual-publish-selectors">
-        <label><span>الحملة أو الأجندة</span><select value={manual.sourceKey} onChange={(event) => selectManualSource(event.target.value)} disabled={loading}><option value="">اختر الحملة أو الأجندة</option>{manualSources.map((source) => <option key={`${source.source_type}:${source.id}`} value={`${source.source_type}:${source.id}`}>{source.source_type === "agenda" ? "أجندة" : "حملة"} — {source.name}{source.code ? ` (${source.code})` : ""}</option>)}</select></label>
-        <label><span>نوع الكرييتيف</span><select value={manual.creativeTypeId} disabled={!manual.sourceKey || loading} onChange={(event) => selectManualCreativeType(event.target.value)}><option value="">اختر نوع الكرييتيف من النظام</option>{(meta?.creativeTypes || []).map((creativeType) => <option key={creativeType.id} value={creativeType.id}>{creativeType.name}{creativeType.short_code ? ` — ${creativeType.short_code}` : ""}</option>)}</select></label>
+        <label className="full"><span>نوع الكرييتيف</span><select value={manual.creativeTypeId} disabled={loading} onChange={(event) => selectManualCreativeType(event.target.value)}><option value="">اختر نوع الكرييتيف من قائمة الكرييتيفات</option>{(meta?.creativeTypes || []).map((creativeType) => <option key={creativeType.id} value={creativeType.id}>{creativeType.name}{creativeType.short_code ? ` — ${creativeType.short_code}` : ""}</option>)}</select></label>
       </div>
 
-      {manualSelectedSource && manualSelectedCreativeType ? <div className="marketing-manual-publish-workspace">
+      {manualSelectedCreativeType ? <div className="marketing-manual-publish-workspace">
         <section className="marketing-publish-edit-summary">
-          <div><small>الحملة / الأجندة</small><strong>{manualSelectedSource.name}</strong></div>
+          <div><small>نوع النشر</small><strong>نشر يدوي مستقل</strong></div>
           <div><small>نوع الكرييتيف</small><strong>{manualSelectedCreativeType.name}</strong></div>
           <div><small>مصدر الملف</small><strong>اختيار يدوي من الجهاز</strong></div>
           <div><small>عدد الملفات</small><strong>{manualFiles.length ? `${manualFiles.length.toLocaleString("ar-SA-u-nu-latn")} ملف` : "لم يتم الاختيار"}</strong></div>
@@ -707,12 +665,12 @@ export function PublishPrepPage() {
           <div>{manualMissing.length ? <><WarningCircle size={18} /><span>ناقص: {manualMissing.join("، ")}</span></> : <><CheckCircle size={18} /><span>بيانات النشر اليدوي والملفات مكتملة</span></>}</div>
           <button type="button" className="primary" disabled={loading || Boolean(manualMissing.length)} onClick={() => void saveManual()}>{loading ? <SpinnerGap className="marketing-spin" size={18} /> : <CheckCircle size={18} />}إنشاء ورفع تجهيز النشر</button>
         </footer>
-      </div> : <div className="marketing-empty"><PaperPlaneTilt size={38} />اختر الحملة أو الأجندة ونوع الكرييتيف لبدء نشر يدوي جديد.</div>}
+      </div> : <div className="marketing-empty"><PaperPlaneTilt size={38} />اختر نوع الكرييتيف من قائمة الكرييتيفات لبدء نشر يدوي جديد.</div>}
     </section>}
 
     <Modal open={Boolean(editing)} title={editing?.task_kind === "manual_publish" ? "تعديل النشر اليدوي" : "تعديل تجهيز النشر"} subtitle={editing ? `${editing.source_name || ""} — ${editing.creative_name || ""}` : undefined} onClose={() => setEditing(null)} className="marketing-publish-edit-modal" footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={18} />حفظ تجهيز النشر</button></>}>
       {editing ? <div className="marketing-publish-edit-workspace">
-        <section className="marketing-publish-edit-summary"><div><small>الحملة / الأجندة</small><strong>{editing.source_name || "—"}</strong></div><div><small>الكرييتيف</small><strong>{editing.creative_name || "—"}</strong></div><div><small>المسؤول</small><strong>{editing.assigned_name || "—"}</strong></div><div><small>القسم</small><strong>{editing.department_name || "—"}</strong></div></section>
+        <section className="marketing-publish-edit-summary"><div><small>{editing.task_kind === "manual_publish" ? "نوع النشر" : "الحملة / الأجندة"}</small><strong>{editing.source_name || "—"}</strong></div><div><small>الكرييتيف</small><strong>{editing.creative_name || "—"}</strong></div><div><small>المسؤول</small><strong>{editing.assigned_name || "—"}</strong></div><div><small>القسم</small><strong>{editing.department_name || "—"}</strong></div></section>
         <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>اختر المنصات المطلوبة ثم حدد أنواع النشر داخل كل منصة.</p></div></header><PlatformEditor meta={meta} value={editing.platforms || []} onChange={(platforms) => setEditing({ ...editing, platforms })} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
         <section className="marketing-publish-edit-section"><header><div><h3>تاريخ ومحتوى النشر</h3><p>تاريخ النشر مرجع للجدول كموعد مخطط، لكن زر نشر الآن يعمل في أي وقت بعد اكتمال البيانات.</p></div></header><div className="marketing-form-grid marketing-publish-content-grid"><label><span>تاريخ النشر</span><input type="date" value={editing.publish_date || ""} onChange={(event) => setEditing({ ...editing, publish_date: event.target.value })} /></label><label className="full"><span>Caption</span><textarea rows={7} value={editing.caption || ""} onChange={(event) => setEditing({ ...editing, caption: event.target.value })} /></label><label className="full"><span>Hashtag</span><textarea rows={5} value={editing.hashtags || ""} onChange={(event) => setEditing({ ...editing, hashtags: event.target.value })} /></label></div></section>
         {selectionsIncludeYouTube(editing.platforms || []) ? <YouTubeOptionsFields value={editing.youtubeOptions} onChange={(youtubeOptions) => setEditing({ ...editing, youtubeOptions })} categories={youtubeCategories} playlists={youtubePlaylists} loading={youtubeOptionsLoading} /> : null}

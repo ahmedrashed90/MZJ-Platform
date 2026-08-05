@@ -429,7 +429,7 @@ on conflict do nothing;
 create table if not exists marketing.publish_schedule (
   id uuid primary key default gen_random_uuid(),
   group_id uuid not null default gen_random_uuid(),
-  source_type text not null check(source_type in ('campaign','agenda')),
+  source_type text not null check(source_type in ('campaign','agenda','manual')),
   source_id uuid not null,
   creative_id uuid references marketing.creatives(id) on delete cascade,
   task_id uuid references marketing.tasks(id) on delete cascade,
@@ -451,6 +451,8 @@ alter table marketing.publish_schedule alter column group_id set default gen_ran
 alter table marketing.publish_schedule alter column group_id set not null;
 alter table marketing.publish_schedule add column if not exists task_id uuid references marketing.tasks(id) on delete cascade;
 alter table marketing.publish_schedule add column if not exists publish_options jsonb not null default '{}'::jsonb;
+alter table marketing.publish_schedule drop constraint if exists publish_schedule_source_type_check;
+alter table marketing.publish_schedule add constraint publish_schedule_source_type_check check(source_type in ('campaign','agenda','manual'));
 
 create table if not exists marketing.platform_publish_settings (
   platform text primary key,
@@ -934,7 +936,7 @@ create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing
 create table if not exists marketing.published_posts (
   id uuid primary key default gen_random_uuid(),
   schedule_id uuid not null unique references marketing.publish_schedule(id) on delete cascade,
-  source_type text not null check(source_type in ('campaign','agenda')),
+  source_type text not null check(source_type in ('campaign','agenda','manual')),
   source_id uuid not null,
   creative_id uuid references marketing.creatives(id) on delete set null,
   task_id uuid references marketing.tasks(id) on delete set null,
@@ -967,6 +969,8 @@ alter table marketing.published_posts add column if not exists is_deleted boolea
 alter table marketing.published_posts add column if not exists deleted_at timestamptz;
 alter table marketing.published_posts add column if not exists deleted_by uuid references core.users(id);
 create index if not exists marketing_published_posts_active_idx on marketing.published_posts(published_at desc) where is_deleted=false;
+alter table marketing.published_posts drop constraint if exists published_posts_source_type_check;
+alter table marketing.published_posts add constraint published_posts_source_type_check check(source_type in ('campaign','agenda','manual'));
 alter table marketing.published_posts drop constraint if exists published_posts_platform_check;
 alter table marketing.published_posts add constraint published_posts_platform_check check(platform in ('facebook','instagram','tiktok','snapchat','youtube'));
 

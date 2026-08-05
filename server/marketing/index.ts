@@ -1146,6 +1146,7 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
 }
 
 async function recalculateProgress(sql: any, sourceType: string, sourceId: string) {
+  if (sourceType === "manual") return;
   const rows = await sql<any[]>`
     select coalesce(t.department_id::text,'content') as department_id,avg(t.progress)::float as progress
     from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
@@ -1925,51 +1926,6 @@ async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:Session
   return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'r2'}};
 }
 
-async function manualPublishSources(sql:ReturnType<typeof getSql>,user:SessionUser){
-  const access=marketingAccess(user);
-  const unrestricted=access.dataScope==='all';
-  const createdByMe=access.dataScope==='created_by_me';
-  const departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope);
-  const departmentCodes=marketingDepartmentCodes(user);
-  const rows=await sql<any[]>`
-    select 'campaign' as source_type,c.id::text,c.name,c.campaign_code as code,c.publish_start,c.publish_end,c.status,c.created_at
-    from marketing.campaigns c
-    where c.is_deleted=false and c.archived_at is null and (
-      ${unrestricted}=true
-      or (${createdByMe}=true and c.created_by=${user.id}::uuid)
-      or exists(
-        select 1 from marketing.tasks t
-        where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and (
-          t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
-          or (${departmentScoped}=true and exists(
-            select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id
-            where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}
-          ))
-        )
-      )
-    )
-    union all
-    select 'agenda',a.id::text,a.name,a.month_key,a.publish_start,a.publish_end,a.status,a.created_at
-    from marketing.agendas a
-    where a.archived_at is null and (
-      ${unrestricted}=true
-      or (${createdByMe}=true and a.created_by=${user.id}::uuid)
-      or exists(
-        select 1 from marketing.tasks t
-        where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and (
-          t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
-          or (${departmentScoped}=true and exists(
-            select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id
-            where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}
-          ))
-        )
-      )
-    )
-    order by created_at desc,name
-  `;
-  return rows;
-}
-
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user),createdByMe=access.dataScope==='created_by_me';
   const rows=await sql<any[]>`
@@ -2008,7 +1964,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       coalesce(platform_data.platforms,'[]'::jsonb) as platforms,
       c.name as creative_name,
       c.instance_code,
-      coalesce(cam.name,ag.name) as source_name,
+      coalesce(cam.name,ag.name,case when t.source_type='manual' then 'نشر يدوي' end) as source_name,
       t.progress::float,
       t.final_file_id::text,
       t.final_media_group_id::text,
@@ -2093,6 +2049,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       and (
         (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
         or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+        or (t.source_type='manual' and t.task_kind='manual_publish')
       )
       and (
         ${unrestricted}=true
@@ -2102,7 +2059,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       )
     order by coalesce(schedule_row.publish_date,t.due_at::date,cam.publish_start,ag.publish_start),t.created_at,t.id
   `;
-  return{ok:true,rows,manualSources:await manualPublishSources(sql,user),youtubeDefaults:await getYouTubePublishSettings(sql)};
+  return{ok:true,rows,youtubeDefaults:await getYouTubePublishSettings(sql)};
 }
 type PublishScheduleCombination={
   platformId:string;
@@ -2188,10 +2145,20 @@ async function activePublishTask(sql:ReturnType<typeof getSql>,taskId:string,all
       and (
         (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
         or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+        or (t.source_type='manual' and t.task_kind='manual_publish')
       )
     limit 1
   `;
   return task;
+}
+
+async function assertPublishEntryAccess(sql:ReturnType<typeof getSql>,user:SessionUser,entry:any){
+  if(clean(entry?.source_type)==='manual'){
+    const taskId=clean(entry?.task_id||entry?.id);
+    if(!taskId||!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية للوصول إلى هذا النشر اليدوي");
+    return;
+  }
+  await assertMarketingEntityAccess(sql,user,clean(entry?.source_type),clean(entry?.source_id));
 }
 
 async function replacePublishScheduleGroup(tx:any,input:{
@@ -2259,7 +2226,7 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   if(!taskId)throw new Error("التاسك التنفيذي المرتبط غير موجود");
   const publishTask=await activePublishTask(sql,taskId,['execution','manual_publish']);
   if(!publishTask)throw new Error("تجهيز النشر المرتبط غير موجود أو لم يعد متاحًا");
-  await assertMarketingEntityAccess(sql,user,clean(publishTask.source_type),clean(publishTask.source_id));
+  await assertPublishEntryAccess(sql,user,publishTask);
   const request=await normalizePublishScheduleRequest(sql,body);
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
@@ -2276,12 +2243,8 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
 
 async function createManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإنشاء نشر يدوي");
-  const sourceType=clean(body.sourceType);
-  const sourceId=clean(body.sourceId);
   const creativeTypeId=clean(body.creativeTypeId);
-  if(!['campaign','agenda'].includes(sourceType)||!sourceId)throw new Error("اختر الحملة أو الأجندة");
-  if(!creativeTypeId)throw new Error("اختر نوع الكرييتيف");
-  await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
+  if(!creativeTypeId)throw new Error("اختر نوع الكرييتيف من قائمة الكرييتيفات");
   const request=await normalizePublishScheduleRequest(sql,body);
   const files=manualPublishFileDescriptors(body.files);
   validateManualPublishFiles(files,request.combinations);
@@ -2290,75 +2253,67 @@ async function createManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,u
   if(!hashtags)throw new Error("الهاشتاج مطلوب");
 
   return sql.begin(async tx=>{
-    const[source]=sourceType==='campaign'
-      ?await tx<any[]>`select id::text,name,campaign_code as code from marketing.campaigns where id=${sourceId}::uuid and is_deleted=false and archived_at is null for update`
-      :await tx<any[]>`select id::text,name,month_key as code from marketing.agendas where id=${sourceId}::uuid and archived_at is null for update`;
-    if(!source)throw new Error(sourceType==='campaign'?"الحملة غير موجودة":"الأجندة غير موجودة");
     const[creativeType]=await tx<any[]>`
       select c.id::text,c.name,c.short_code,c.primary_department_id::text
       from marketing.creative_types c
       where c.id=${creativeTypeId}::uuid and c.is_active=true
     `;
     if(!creativeType)throw new Error("نوع الكرييتيف غير موجود أو غير مفعّل");
-    const[sequence]=sourceType==='campaign'
-      ?await tx<any[]>`select count(*)::int+1 as value from marketing.creatives where campaign_id=${sourceId}::uuid`
-      :await tx<any[]>`select count(*)::int+1 as value from marketing.creatives where agenda_id=${sourceId}::uuid`;
-    const creativeIndex=Number(sequence?.value||1);
-    const instanceCode=`${safeCode(creativeType.short_code)||'MAN'}${String(creativeIndex).padStart(2,'0')}`;
+    const[ids]=await tx<any[]>`select gen_random_uuid()::text as creative_id,gen_random_uuid()::text as task_id,gen_random_uuid()::text as group_id`;
+    if(!ids?.creative_id||!ids?.task_id||!ids?.group_id)throw new Error("تعذر إنشاء سجل النشر اليدوي");
+    const sourceId=clean(ids.creative_id);
+    const instanceCode=`MAN-${safeCode(creativeType.short_code)||'CREATIVE'}-${sourceId.replace(/-/g,'').slice(0,6).toUpperCase()}`;
     const manualNotes={
       manualPublish:true,
+      standalone:true,
       createdBy:user.id,
       createdAt:new Date().toISOString(),
       caption,
       hashtags,
-      sourceLabel:source.name,
+      sourceLabel:'نشر يدوي',
     };
-    const[creative]=await tx<any[]>`
+    await tx`
       insert into marketing.creatives(
-        campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,
+        id,campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,
         primary_department_id,platform_assignments,schedule_day,notes
       ) values(
-        ${sourceType==='campaign'?tx`${sourceId}::uuid`:null},
-        ${sourceType==='agenda'?tx`${sourceId}::uuid`:null},
-        ${creativeType.name},${creativeTypeId}::uuid,1,'publishing',${instanceCode},${creativeType.name},
+        ${ids.creative_id}::uuid,null,null,${creativeType.name},${creativeTypeId}::uuid,1,'publishing',${instanceCode},${creativeType.name},
         ${creativeType.primary_department_id?tx`${creativeType.primary_department_id}::uuid`:null},
         ${tx.json(dbJson(request.normalizedPlatforms))},${request.publishDate},${tx.json(dbJson(manualNotes))}
-      ) returning id::text
+      )
     `;
     const taskData={
       manualPublish:true,
+      standalone:true,
       caption,
       hashtags,
       manualFiles:files.map((file)=>({name:file.name,mimeType:file.mimeType,size:file.size,orderIndex:file.orderIndex})),
     };
-    const[task]=await tx<any[]>`
+    await tx`
       insert into marketing.tasks(
-        campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,
+        id,campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,
         assigned_to,task_kind,title,status,due_at,progress,received_at,completed_at,completed_by,
         note,approved_template_data
       ) values(
-        ${sourceType==='campaign'?tx`${sourceId}::uuid`:null},
-        ${sourceType==='agenda'?tx`${sourceId}::uuid`:null},
-        ${sourceType},${sourceId}::uuid,${creative.id}::uuid,'publishing',
+        ${ids.task_id}::uuid,null,null,'manual',${sourceId}::uuid,${ids.creative_id}::uuid,'publishing',
         ${creativeType.primary_department_id?tx`${creativeType.primary_department_id}::uuid`:null},
         ${user.id}::uuid,'manual_publish',${`${creativeType.name} - نشر يدوي`},'completed',${request.publishDate},100,
-        now(),now(),${user.id}::uuid,'تم إنشاؤه من شاشة النشر اليدوي',${tx.json(dbJson(taskData))}
-      ) returning id::text
+        now(),now(),${user.id}::uuid,'تم إنشاؤه من شاشة النشر اليدوي المستقل',${tx.json(dbJson(taskData))}
+      )
     `;
-    const[group]=await tx<any[]>`select gen_random_uuid()::text as id`;
-    if(!group?.id)throw new Error("تعذر إنشاء مجموعة تجهيز النشر اليدوي");
-    await replacePublishScheduleGroup(tx,{groupId:group.id,task:{...task,source_type:sourceType,source_id:sourceId,creative_id:creative.id},request,caption,hashtags});
+    const task={id:ids.task_id,source_type:'manual',source_id:sourceId,creative_id:ids.creative_id};
+    await replacePublishScheduleGroup(tx,{groupId:ids.group_id,task,request,caption,hashtags});
     return{
       ok:true,
-      id:group.id,
-      groupId:group.id,
-      taskId:task.id,
-      creativeId:creative.id,
-      sourceType,
+      id:ids.group_id,
+      groupId:ids.group_id,
+      taskId:ids.task_id,
+      creativeId:ids.creative_id,
+      sourceType:'manual',
       sourceId,
-      sourceName:source.name,
+      sourceName:'نشر يدوي',
       creativeTypeName:creativeType.name,
-      message:"تم إنشاء تجهيز النشر اليدوي وجارٍ رفع الملفات",
+      message:"تم إنشاء تجهيز النشر اليدوي المستقل وجارٍ رفع الملفات",
     };
   });
 }
@@ -2373,7 +2328,7 @@ async function discardManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,
     where id=${taskId}::uuid and task_kind='manual_publish' and is_deleted=false
   `;
   if(!task)return{ok:true,message:"تم إلغاء مسودة النشر اليدوي مسبقًا"};
-  await assertMarketingEntityAccess(sql,user,clean(task.source_type),clean(task.source_id));
+  await assertPublishEntryAccess(sql,user,{...task,task_id:task.id});
   const[published]=await sql<any[]>`select 1 from marketing.publish_schedule where task_id=${taskId}::uuid and status='published' limit 1`;
   if(published)throw new Error("لا يمكن إلغاء نشر يدوي تم نشره بالفعل");
   await sql.begin(async tx=>{
@@ -2618,7 +2573,7 @@ async function publishNow(sql:ReturnType<typeof getSql>,body:any,user:SessionUse
     `;
     if(!schedule){results.push({id,ok:false,error:"تاسك النشر غير موجود",platformName:"منصة غير معروفة",postTypeName:""});continue;}
     try{
-      await assertMarketingEntityAccess(sql,user,clean(schedule.source_type),clean(schedule.source_id));
+      await assertPublishEntryAccess(sql,user,schedule);
       const result=await publishScheduleItem(sql,schedule,user);
       results.push({id,ok:true,result,platform:schedule.platform_code,platformName:schedule.platform_name,postTypeName:schedule.post_type_name});
     }catch(error:any){
