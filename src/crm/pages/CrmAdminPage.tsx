@@ -154,7 +154,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
     && canManageRouting;
   const visibleTabs = tabs.filter((item) => item.key !== "data_review" || canViewDataReview);
   const [tab, setTab] = useState<Tab>("automation");
-  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [], kpiSectionPermissions: { speedUserIds: [], efficiencyUserIds: [] } });
+  const [data, setData] = useState<any>({ statuses: [], customerFields: [], sources: [], templates: [], mappings: [], endpoints: [], branches: [], quality: null, automaticTemplateSettings: null, assignmentRules: [], assignmentLogs: [], assignmentUsers: [], bulkCashAgents: [], kpiSectionPermissions: { speedUserIds: [], efficiencyUserIds: [] } });
   const [statusForm, setStatusForm] = useState(blankStatus);
   const [customerFieldForm, setCustomerFieldForm] = useState(blankCustomerField);
   const [sourceForm, setSourceForm] = useState(blankSource);
@@ -342,7 +342,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       setNotice("اكتب عدد العملاء الظاهر في المعاينة لتأكيد التنفيذ");
       return;
     }
-    if (!window.confirm(`سيتم نقل ${total.toLocaleString("ar-SA-u-nu-latn")} عميل بالكامل من مبيعات التمويل إلى مبيعات الكاش وتغيير حالتهم إلى عميل جديد. هل تريد التنفيذ؟`)) return;
+    if (!window.confirm(`سيتم نقل ${total.toLocaleString("ar-SA-u-nu-latn")} عميل بالكامل من مبيعات التمويل إلى مبيعات الكاش مع تثبيت حالتهم على عميل جديد. هل تريد التنفيذ؟`)) return;
     setBulkLoading(true);
     setNotice("");
     try {
@@ -396,11 +396,9 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
     loggedAssignments: (data.assignmentLogs || []).length,
   }), [data.assignmentRules, data.assignmentUsers, data.assignmentLogs]);
 
-  const bulkCashAgents = useMemo(() => (data.assignmentUsers || [])
-    .filter((row: any) => row.is_active && row.can_receive_leads)
-    .filter((row: any) => (row.department_codes || []).includes("cash_sales"))
-    .filter((row: any) => (row.branch_codes || []).length > 0)
-    .sort((left: any, right: any) => String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar")), [data.assignmentUsers]);
+  const bulkCashAgents = useMemo(() => (data.bulkCashAgents || [])
+    .slice()
+    .sort((left: any, right: any) => String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar")), [data.bulkCashAgents]);
 
   const allBulkCashAgentsSelected = bulkCashAgents.length > 0 && bulkCashAgents.every((row: any) => bulkAgentIds.includes(row.id));
 
@@ -730,12 +728,12 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
           {canManageBulkReallocation ? (
             <section className="crm-panel crm-bulk-reallocation-panel">
               <header className="crm-bulk-reallocation-head">
-                <div><h2>النقل والتوزيع الجماعي</h2><p>نقل كل العملاء الموجودين في مبيعات التمويل إلى مبيعات الكاش، وتوزيعهم بالتساوي على المناديب المختارين.</p></div>
+                <div><h2>النقل والتوزيع الجماعي</h2><p>نقل عملاء مبيعات التمويل بحالة عميل جديد فقط إلى مبيعات الكاش، وتوزيعهم بالتساوي على المناديب المختارين.</p></div>
                 <span>مدير النظام فقط</span>
               </header>
 
               <div className="crm-bulk-reallocation-route">
-                <article><small>القسم الحالي</small><strong>مبيعات التمويل</strong><span>كل العملاء النشطين داخل تبويب التمويل</span></article>
+                <article><small>القسم الحالي</small><strong>مبيعات التمويل</strong><span>فقط العملاء بحالة عميل جديد</span></article>
                 <b>←</b>
                 <article><small>القسم الجديد</small><strong>مبيعات الكاش</strong><span>الحالة الجديدة: عميل جديد</span></article>
                 <b>←</b>
@@ -751,7 +749,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
                   {bulkCashAgents.map((row: any) => (
                     <label key={row.id} className={bulkAgentIds.includes(row.id) ? "selected" : ""}>
                       <input type="checkbox" checked={bulkAgentIds.includes(row.id)} onChange={() => updateBulkAgentIds(toggleList(bulkAgentIds, row.id))} />
-                      <span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ")}</small></span>
+                      <span><strong>{row.full_name}</strong><small>{row.branch_name || row.branch_code}</small></span>
                     </label>
                   ))}
                 </div>
@@ -764,7 +762,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
               {bulkPreview ? (
                 <div className="crm-bulk-preview">
-                  <div className="crm-bulk-preview-total"><small>إجمالي العملاء الجاهزين للنقل</small><strong>{Number(bulkPreview.total || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><span>سيتم نقل ملكية العميل والمحادثات والطلب المفتوح للمندوب الجديد، وإلغاء ارتباط موظف التمويل والكول سنتر القديم.</span></div>
+                  <div className="crm-bulk-preview-total"><small>إجمالي عملاء التمويل بحالة عميل جديد الجاهزين للنقل</small><strong>{Number(bulkPreview.total || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><span>سيتم نقل ملكية العميل والمحادثات والطلب المفتوح للمندوب الجديد، وإلغاء ارتباط موظف التمويل والكول سنتر القديم.</span></div>
                   <div className="crm-bulk-preview-grid">
                     {(bulkPreview.agents || []).map((row: any) => <article key={row.id}><span><strong>{row.fullName}</strong><small>{row.branchName}</small></span><b>{Number(row.customerCount || 0).toLocaleString("ar-SA-u-nu-latn")} عميل</b></article>)}
                   </div>

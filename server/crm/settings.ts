@@ -4,7 +4,7 @@ import { audit, clean, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { normalizeCustomerFieldOptions } from "../_crm-customer-fields.js";
-import { CrmBulkReallocationError, executeFinanceToCashReallocation, previewFinanceToCashReallocation } from "../_crm-bulk-reallocation.js";
+import { CrmBulkReallocationError, executeFinanceToCashReallocation, listCashReallocationAgents, previewFinanceToCashReallocation } from "../_crm-bulk-reallocation.js";
 
 function stringList(value: unknown) {
   return Array.isArray(value) ? value.map(clean).filter(Boolean) : [];
@@ -16,9 +16,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const requiredPermission = request.method === "GET" ? "settings.crm.view" : "settings.crm.manage";
   if (!hasPermission(user, requiredPermission)) return response.status(403).json({ ok: false, error: "لا توجد صلاحية لإعدادات CRM" });
   const sql = getSql();
+  const canManageBulkReallocation = hasPermission(user, "platform.superadmin")
+    && hasPermission(user, "settings.crm.manage")
+    && hasPermission(user, "crm.customer.bulk_transfer")
+    && hasPermission(user, "crm.routing.manage");
 
   if (request.method === "GET") {
-    const [statuses, templates, mappings, quality, automaticTemplateSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers, kpiSectionPermissionRows] = await Promise.all([
+    const [statuses, templates, mappings, quality, automaticTemplateSettings, endpoints, branches, sources, customerFields, assignmentRules, assignmentLogs, assignmentUsers, kpiSectionPermissionRows, bulkCashAgents] = await Promise.all([
       sql`select * from crm.dashboard_statuses order by department_code,sort_order`,
       sql`select *,id::text,created_by::text from crm.message_templates order by updated_at desc`,
       sql`
@@ -95,6 +99,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         where u.is_active=true
         order by p.section_code,u.full_name
       `,
+      canManageBulkReallocation ? listCashReallocationAgents() : Promise.resolve([]),
     ]);
 
     const rules = (assignmentRules as any[]).map((rule) => {
@@ -118,6 +123,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       assignmentRules: rules,
       assignmentLogs,
       assignmentUsers,
+      bulkCashAgents,
       kpiSectionPermissions: {
         speedUserIds: (kpiSectionPermissionRows as any[]).filter((row) => row.section_code === "speed").map((row) => row.user_id),
         efficiencyUserIds: (kpiSectionPermissionRows as any[]).filter((row) => row.section_code === "efficiency").map((row) => row.user_id),
@@ -132,7 +138,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const action = clean(body.action || (request.method === "DELETE" ? "delete" : "save"));
 
   if (section === "bulk_cash_reallocation") {
-    if (!hasPermission(user, "platform.superadmin") || !hasPermission(user, "crm.customer.bulk_transfer")) {
+    if (!canManageBulkReallocation) {
       return response.status(403).json({ ok: false, error: "النقل الجماعي متاح لمدير النظام فقط" });
     }
     try {
@@ -149,7 +155,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         return response.status(200).json({
           ok: true,
           ...result,
-          message: `تم نقل وتوزيع ${result.total} عميل بالتساوي على مناديب مبيعات الكاش`,
+          message: `تم نقل وتوزيع ${result.total} عميل من مبيعات التمويل بحالة عميل جديد بالتساوي على مناديب مبيعات الكاش`,
         });
       }
       return response.status(400).json({ ok: false, error: "عملية النقل الجماعي غير معروفة" });

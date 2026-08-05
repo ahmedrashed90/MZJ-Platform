@@ -4,6 +4,7 @@ import { audit } from "./_crm-utils.js";
 import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 
 const FINANCE_DEPARTMENT_CODES = ["finance_sales", "call_center"];
+const ELIGIBLE_STATUS_LABEL = "عميل جديد";
 const TARGET_DEPARTMENT_CODE = "cash_sales";
 const TARGET_SERVICE_KEY = "cash";
 const TARGET_STATUS_LABEL = "عميل جديد";
@@ -11,6 +12,13 @@ const TARGET_PAYMENT_TYPE = "كاش";
 const BULK_REALLOCATION_LOCK = "crm:finance-to-cash-equal-reallocation";
 
 type SqlClient = ReturnType<typeof getSql>;
+
+type CashAgentRow = {
+  id: string;
+  full_name: string;
+  branch_code: string | null;
+  branch_name: string | null;
+};
 
 type CashAgent = {
   id: string;
@@ -57,17 +65,8 @@ export function equalAllocationCounts(total: number, agentCount: number) {
   return Array.from({ length: agentCount }, (_, index) => base + (index < remainder ? 1 : 0));
 }
 
-async function loadCashAgents(sql: SqlClient, rawAgentIds: unknown): Promise<CashAgent[]> {
-  const agentIds = uniqueIds(rawAgentIds);
-  if (!agentIds.length) {
-    throw new CrmBulkReallocationError(400, "CASH_AGENTS_REQUIRED", "اختر مندوبًا واحدًا على الأقل من مناديب مبيعات الكاش");
-  }
-
-  const rows = await sql<CashAgent[]>`
-    with requested as (
-      select agent_id, position
-      from unnest(${agentIds}::uuid[]) with ordinality as selected(agent_id, position)
-    )
+async function loadEligibleCashAgentRows(sql: SqlClient): Promise<CashAgentRow[]> {
+  return sql<CashAgentRow[]>`
     select
       u.id::text,
       u.full_name,
@@ -107,8 +106,7 @@ async function loadCashAgents(sql: SqlClient, rawAgentIds: unknown): Promise<Cas
           limit 1
         )
       ) as branch_name
-    from requested
-    join core.users u on u.id=requested.agent_id
+    from core.users u
     where u.is_active=true
       and u.can_receive_leads=true
       and (
@@ -125,31 +123,53 @@ async function loadCashAgents(sql: SqlClient, rawAgentIds: unknown): Promise<Cas
           where ud.user_id=u.id and d.code=${TARGET_DEPARTMENT_CODE}
         )
       )
-    order by requested.position
+    order by u.full_name,u.id
   `;
+}
 
-  if (rows.length !== agentIds.length) {
+function normalizeCashAgent(row: CashAgentRow): CashAgent | null {
+  const branchCode = String(row.branch_code || "").trim();
+  if (!branchCode) return null;
+  return {
+    id: row.id,
+    full_name: row.full_name,
+    branch_code: branchCode,
+    branch_name: String(row.branch_name || branchCode),
+  };
+}
+
+export async function listCashReallocationAgents() {
+  const rows = await loadEligibleCashAgentRows(getSql());
+  return rows.map(normalizeCashAgent).filter((row): row is CashAgent => Boolean(row));
+}
+
+async function loadCashAgents(sql: SqlClient, rawAgentIds: unknown): Promise<CashAgent[]> {
+  const agentIds = uniqueIds(rawAgentIds);
+  if (!agentIds.length) {
+    throw new CrmBulkReallocationError(400, "CASH_AGENTS_REQUIRED", "اختر مندوبًا واحدًا على الأقل من مناديب مبيعات الكاش");
+  }
+
+  const eligibleRows = await loadEligibleCashAgentRows(sql);
+  const eligibleById = new Map(eligibleRows.map((row) => [row.id, row]));
+  const requestedRows = agentIds.map((id) => eligibleById.get(id)).filter((row): row is CashAgentRow => Boolean(row));
+  if (requestedRows.length !== agentIds.length) {
     throw new CrmBulkReallocationError(400, "INVALID_CASH_AGENT", "أحد المستخدمين المختارين غير نشط أو غير تابع لمبيعات الكاش أو غير مسموح له باستقبال العملاء");
   }
 
-  const withoutBranch = rows.filter((row) => !String(row.branch_code || "").trim());
+  const withoutBranch = requestedRows.filter((row) => !String(row.branch_code || "").trim());
   if (withoutBranch.length) {
     throw new CrmBulkReallocationError(400, "CASH_AGENT_BRANCH_REQUIRED", `اربط فرع CRM أساسي بالمندوب: ${withoutBranch.map((row) => row.full_name).join("، ")}`);
   }
 
-  return rows.map((row) => ({
-    ...row,
-    branch_code: String(row.branch_code),
-    branch_name: String(row.branch_name || row.branch_code),
-  }));
+  return requestedRows.map((row) => normalizeCashAgent(row) as CashAgent);
 }
-
 async function financeLeadCount(sql: SqlClient) {
   const [row] = await sql<{ count: number }[]>`
     select count(*)::int as count
     from crm.leads
     where is_deleted=false
       and department_code=any(${FINANCE_DEPARTMENT_CODES}::text[])
+      and btrim(coalesce(status_label,''))=${ELIGIBLE_STATUS_LABEL}
   `;
   return Number(row?.count || 0);
 }
@@ -159,6 +179,7 @@ function previewPayload(total: number, agents: CashAgent[]) {
   return {
     total,
     sourceDepartmentCodes: FINANCE_DEPARTMENT_CODES,
+    sourceStatusLabel: ELIGIBLE_STATUS_LABEL,
     targetDepartmentCode: TARGET_DEPARTMENT_CODE,
     targetStatusLabel: TARGET_STATUS_LABEL,
     distributionMode: "equal",
@@ -205,6 +226,7 @@ export async function executeFinanceToCashReallocation(input: {
         from crm.leads l
         where l.is_deleted=false
           and l.department_code=any(${FINANCE_DEPARTMENT_CODES}::text[])
+          and btrim(coalesce(l.status_label,''))=${ELIGIBLE_STATUS_LABEL}
         order by coalesce(l.registered_at,l.created_at),l.id
         for update of l
       ` as FinanceLead[];
@@ -213,7 +235,7 @@ export async function executeFinanceToCashReallocation(input: {
         throw new CrmBulkReallocationError(409, "LEAD_COUNT_CHANGED", `عدد العملاء تغير من ${expectedLeadCount} إلى ${leads.length}. اعمل معاينة جديدة قبل التنفيذ`);
       }
       if (!leads.length) {
-        throw new CrmBulkReallocationError(409, "NO_FINANCE_LEADS", "لا يوجد عملاء حاليًا داخل مبيعات التمويل لنقلهم");
+        throw new CrmBulkReallocationError(409, "NO_ELIGIBLE_FINANCE_LEADS", "لا يوجد عملاء في مبيعات التمويل بحالة عميل جديد لنقلهم");
       }
 
       const assignedAgentIds: string[] = [];
@@ -408,6 +430,7 @@ export async function executeFinanceToCashReallocation(input: {
       runId: result.runId,
       total: result.total,
       sourceDepartmentCodes: FINANCE_DEPARTMENT_CODES,
+      sourceStatusLabel: ELIGIBLE_STATUS_LABEL,
       targetDepartmentCode: TARGET_DEPARTMENT_CODE,
       targetStatusLabel: TARGET_STATUS_LABEL,
       distributionMode: "equal",
