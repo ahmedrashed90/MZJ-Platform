@@ -546,6 +546,34 @@ on conflict(id) do update set version=greatest(core.access_control_schema_state.
 `;
 
 
+const REQUIRED_PAGE_PERMISSION_CATALOG_SQL = String.raw`
+insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
+('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
+('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true)
+on conflict(system_code,code) do update set
+  name_ar=excluded.name_ar,
+  route=excluded.route,
+  sort_order=excluded.sort_order,
+  is_active=true,
+  updated_at=now();
+
+insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values
+('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','التحكم في فتح صفحة متابعة طلبات البيع داخل سيستم العمليات','page',false,865,true),
+('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true)
+on conflict(code) do update set
+  name=excluded.name,
+  system_code=excluded.system_code,
+  page_code=excluded.page_code,
+  action_code=excluded.action_code,
+  name_ar=excluded.name_ar,
+  description_ar=excluded.description_ar,
+  category=excluded.category,
+  is_sensitive=excluded.is_sensitive,
+  sort_order=excluded.sort_order,
+  is_active=true;
+`;
+
+
 const ACCESS_CONTROL_SCHEMA_VERSION = 1192;
 let accessControlSchemaPromise: Promise<void> | null = null;
 
@@ -568,6 +596,51 @@ async function accessControlSchemaReady() {
   return Number(state?.version || 0) >= ACCESS_CONTROL_SCHEMA_VERSION;
 }
 
+
+async function requiredPagePermissionCatalogReady() {
+  const sql = getSql();
+  const [state] = await sql<{ ready: boolean }[]>`
+    select
+      exists(
+        select 1 from core.system_pages
+        where system_code='operations' and code='sales_orders_followup' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='operations.sales_orders_followup.view'
+          and system_code='operations'
+          and page_code='sales_orders_followup'
+          and is_active=true
+      )
+      and exists(
+        select 1 from core.system_pages
+        where system_code='marketing' and code='engagement' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='marketing.engagement.view'
+          and system_code='marketing'
+          and page_code='engagement'
+          and is_active=true
+      ) as ready
+  `;
+  return Boolean(state?.ready);
+}
+
+async function ensureRequiredPagePermissionCatalog() {
+  if (await requiredPagePermissionCatalogReady()) return;
+  await withDatabaseAdvisoryLock(
+    "mzj:access-control-required-page-permissions:v1",
+    async () => {
+      if (await requiredPagePermissionCatalogReady()) return;
+      await runSqlScript(REQUIRED_PAGE_PERMISSION_CATALOG_SQL);
+      if (!(await requiredPagePermissionCatalogReady())) {
+        throw new Error("ACCESS_CONTROL_REQUIRED_PAGE_PERMISSIONS_NOT_READY");
+      }
+    },
+  );
+}
+
 /**
  * Ensures the centralized access-control schema exists before authentication uses it.
  * The readiness check is cheap; the full idempotent migration runs only when required.
@@ -576,17 +649,19 @@ async function accessControlSchemaReady() {
 export function ensureAccessControlSchema() {
   if (!accessControlSchemaPromise) {
     accessControlSchemaPromise = (async () => {
-      if (await accessControlSchemaReady()) return;
-      await withDatabaseAdvisoryLock(
-        `mzj:access-control-schema:${ACCESS_CONTROL_SCHEMA_VERSION}`,
-        async () => {
-          if (await accessControlSchemaReady()) return;
-          await runSqlScript(ACCESS_CONTROL_SQL);
-          if (!(await accessControlSchemaReady())) {
-            throw new Error("ACCESS_CONTROL_SCHEMA_NOT_READY");
-          }
-        },
-      );
+      if (!(await accessControlSchemaReady())) {
+        await withDatabaseAdvisoryLock(
+          `mzj:access-control-schema:${ACCESS_CONTROL_SCHEMA_VERSION}`,
+          async () => {
+            if (await accessControlSchemaReady()) return;
+            await runSqlScript(ACCESS_CONTROL_SQL);
+            if (!(await accessControlSchemaReady())) {
+              throw new Error("ACCESS_CONTROL_SCHEMA_NOT_READY");
+            }
+          },
+        );
+      }
+      await ensureRequiredPagePermissionCatalog();
     })().catch((error) => {
       accessControlSchemaPromise = null;
       throw error;

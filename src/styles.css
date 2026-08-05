@@ -6812,15 +6812,16 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 
 /* Tracking order details — consolidated professional layout */
-.tracking-detail-backdrop { padding: 10px; align-items: stretch; }
+.tracking-detail-backdrop { padding: 0; align-items: stretch; }
 .tracking-detail-drawer {
-  width: min(1480px, calc(100vw - 20px));
-  height: calc(100vh - 20px);
-  margin: 0 auto;
-  border: 1px solid #eadbd5;
-  border-radius: 22px;
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
   background: #fffdfc;
-  box-shadow: 0 28px 80px rgba(57,31,24,.24);
+  box-shadow: none;
 }
 .tracking-detail-header {
   min-height: 92px;
@@ -6837,6 +6838,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .tracking-detail-actions button { min-height: 42px; border-radius: 11px; padding-inline: 18px; font-weight: 800; }
 .tracking-detail-body {
+  min-height: 0;
   padding: 18px 28px 26px;
   gap: 14px;
   background: #fffdfc;
@@ -6887,6 +6889,14 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 }
 .tracking-vehicle-summary-card .tracking-car-details > div { min-height: 64px; padding: 10px; }
 .tracking-vehicle-summary-card .tracking-car-name { grid-column: span 2; }
+.tracking-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0,2.15fr) minmax(330px,.85fr);
+  gap: 14px;
+  align-items: start;
+}
+.tracking-workspace-grid .tracking-stages-section { grid-column: 1; min-width: 0; }
+.tracking-workspace-grid .tracking-history-section { grid-column: 2; min-width: 0; align-self: start; }
 .tracking-stages-section { padding: 16px; }
 .tracking-stages-section .tracking-stages-heading { margin: 0 0 9px; }
 .tracking-stage-progress { height: 4px; background: #e9f3eb; border-radius: 999px; overflow: hidden; margin-bottom: 12px; }
@@ -6934,16 +6944,23 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .tracking-history-toggle-meta b { min-width: 30px; height: 27px; border-radius: 999px; background: #f5ece8; display: grid; place-items: center; color: var(--brand); font-size: 11px; }
 .tracking-history-section.open .tracking-history-toggle { border-bottom: 1px solid #f0e8e4; }
 .tracking-history-section .tracking-history-list {
-  grid-template-columns: repeat(2,minmax(0,1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
+  max-height: 500px;
+  overflow: auto;
   padding: 12px;
+  scrollbar-width: thin;
 }
 .tracking-history-section .tracking-history-list > div { min-height: 58px; }
 
 @media (max-width: 1180px) {
   .tracking-overview-grid { grid-template-columns: 1fr; }
+  .tracking-workspace-grid { grid-template-columns: 1fr; }
+  .tracking-workspace-grid .tracking-stages-section,
+  .tracking-workspace-grid .tracking-history-section { grid-column: 1; }
   .tracking-stages-section .tracking-stage-list { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .tracking-stages-section .tracking-stage-card { min-height: 132px; }
+  .tracking-history-section .tracking-history-list { grid-template-columns: repeat(2,minmax(0,1fr)); max-height: 360px; }
 }
 @media (max-width: 760px) {
   .tracking-detail-backdrop { padding: 0; }
