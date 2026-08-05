@@ -27,9 +27,9 @@ const checks = [
   ["Engagement page can filter and identify YouTube", engagementPage.includes('<option value="youtube">YouTube</option>') && engagementPage.includes("YoutubeLogo") && engagementPage.includes('if (platform === "youtube") return "فيديو YouTube"')],
   ["campaign and agenda result details include YouTube", resultDetail.includes('["facebook", "instagram", "youtube", "tiktok", "snapchat"]')],
   ["publish preparation has a dedicated manual publishing tab", publishPage.includes('type PublishPrepView = "tasks" | "manual"') && publishPage.includes("النشر اليدوي") && publishPage.includes("تجهيز نشر يدوي")],
-  ["manual publishing selects campaign or agenda and creative", publishPage.includes("الحملة أو الأجندة") && publishPage.includes("اختر الكرييتيف") && publishPage.includes("manualSources") && publishPage.includes("manualTaskRows")],
-  ["manual publishing captures platforms, type, date, caption and hashtags", publishPage.includes("المنصات وأنواع النشر") && publishPage.includes("موعد النشر") && publishPage.includes("Caption") && publishPage.includes("Hashtag")],
-  ["manual publishing reuses the canonical save flow", publishPage.includes('action: "save_publish_prep"') && publishPage.includes("saveManual")],
+  ["manual publishing selects campaign or agenda and a system creative type", publishPage.includes("الحملة أو الأجندة") && publishPage.includes("اختر نوع الكرييتيف من النظام") && publishPage.includes("manualSources") && !publishPage.includes("manualTaskRows")],
+  ["manual publishing captures files, platforms, type, date, caption and hashtags", publishPage.includes('type="file"') && publishPage.includes("multiple") && publishPage.includes("المنصات وأنواع النشر") && publishPage.includes("موعد النشر") && publishPage.includes("Caption") && publishPage.includes("Hashtag")],
+  ["manual publishing uses the canonical create and final-media upload flow", publishPage.includes('action: "create_manual_publish_entry"') && publishPage.includes("uploadMarketingFinalFiles") && publishPage.includes("saveManual")],
   ["manual publishing styles stay scoped to publish preparation", css.includes(".marketing-manual-publish-panel") && css.includes(".marketing-publish-view-tabs")],
 ];
 

@@ -54,6 +54,8 @@ const ACTION_LABELS: Record<string, string> = {
   upload_template: "رفع Task Template",
   review_template: "مراجعة Task Template",
   save_publish_prep: "حفظ تجهيز النشر",
+  create_manual_publish_entry: "إنشاء نشر يدوي",
+  discard_manual_publish_entry: "إلغاء مسودة نشر يدوي",
   archive_entity: "أرشفة سجل",
   delete_entity: "حذف سجل",
   permission_denied: "رفض صلاحية",

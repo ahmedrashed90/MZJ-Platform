@@ -2243,6 +2243,31 @@
 .marketing-manual-publish-footer > div { display: flex; align-items: center; gap: 8px; color: #7d665e; font-size: 12px; font-weight: 800; }
 .marketing-manual-publish-footer > div svg { color: var(--brand); flex: 0 0 auto; }
 .marketing-manual-publish-footer button { min-width: 190px; }
+.marketing-manual-media-section { display: grid; gap: 12px; }
+.marketing-manual-media-picker { min-height: 128px; padding: 20px; border: 1.5px dashed #dcb5a5; border-radius: 15px; background: linear-gradient(135deg,#fffaf8,#fff); display: grid !important; justify-items: center; align-content: center; gap: 7px !important; text-align: center; cursor: pointer; color: #76554b; }
+.marketing-manual-media-picker:hover { border-color: var(--brand); background: #fff7f3; }
+.marketing-manual-media-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.marketing-manual-media-picker svg { color: var(--brand); }
+.marketing-manual-media-picker strong { color: #5f352c; font-size: 14px; }
+.marketing-manual-media-picker span { max-width: 720px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.marketing-manual-media-list { display: grid; gap: 8px; }
+.marketing-manual-media-list article { min-width: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: 12px; background: #fff; display: grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 10px; align-items: center; }
+.marketing-manual-media-list article > b { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: var(--brand); background: #fff0ea; font-size: 11px; }
+.marketing-manual-media-list article > div:nth-child(2) { min-width: 0; display: grid; gap: 4px; }
+.marketing-manual-media-list article strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.marketing-manual-media-list article small { color: var(--muted); font-size: 10px; }
+.marketing-manual-media-order { display: flex; gap: 5px; }
+.marketing-manual-media-order button { width: 32px; height: 32px; padding: 0; border: 1px solid var(--line-strong); border-radius: 9px; display: grid; place-items: center; background: #fff; color: #6e5047; cursor: pointer; font: inherit; font-weight: 900; }
+.marketing-manual-media-order button:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+.marketing-manual-media-order button.danger { color: #b33e3e; }
+.marketing-manual-media-order button:disabled { opacity: .35; cursor: not-allowed; }
+.marketing-manual-media-empty { min-height: 58px; padding: 12px; border: 1px dashed var(--line-strong); border-radius: 11px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.marketing-manual-media-error { padding: 10px 12px; border: 1px solid #f0c3bd; border-radius: 10px; display: flex; align-items: center; gap: 8px; color: #a43d36; background: #fff4f2; font-size: 11px; font-weight: 800; }
+.marketing-manual-upload-progress { height: 5px; overflow: hidden; border-radius: 999px; background: #f1e3dd; }
+.marketing-manual-upload-progress span { display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width .18s ease; }
+.marketing-manual-upload-status { padding: 10px 12px; border: 1px solid #ecd3c8; border-radius: 11px; background: #fff9f6; display: flex; align-items: center; gap: 9px; color: #70483d; font-size: 11px; font-weight: 800; }
+.marketing-manual-upload-status span { flex: 1; }
+.marketing-manual-upload-status button { min-width: 100px; }
 .marketing-publish-overview { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 11px; }
 .marketing-publish-overview article { min-height: 88px; padding: 14px; border: 1px solid var(--line); border-radius: 15px; background: #fff; box-shadow: 0 8px 22px rgba(81,44,34,.05); display: flex; align-items: center; gap: 11px; }
 .marketing-publish-overview article > span { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: var(--brand); background: #fff1eb; }
@@ -2566,6 +2591,10 @@
   .marketing-publish-view-tabs button { flex: 1 0 auto; }
   .marketing-manual-publish-footer { align-items: stretch; flex-direction: column; }
   .marketing-manual-publish-footer button { width: 100%; min-width: 0; }
+  .marketing-manual-media-list article { grid-template-columns: 36px minmax(0,1fr); }
+  .marketing-manual-media-order { grid-column: 1/-1; justify-content: flex-end; }
+  .marketing-manual-upload-status { align-items: stretch; flex-wrap: wrap; }
+  .marketing-manual-upload-status button { width: 100%; }
   .marketing-package-options { grid-template-columns: 1fr; }
 }
 

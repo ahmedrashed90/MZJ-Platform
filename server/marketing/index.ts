@@ -123,16 +123,21 @@ async function requireTaskTemplateUploadAccess(sql: ReturnType<typeof getSql>, u
 }
 
 async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
-  if (!hasPermission(user, "marketing.task.final_file.upload")) throw new Error("لا توجد صلاحية لرفع الملف النهائي");
+  if (!taskId) throw new Error("رقم التاسك مطلوب");
   const [task] = await sql<any[]>`
-    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,tt.status as template_status
+    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,
+      t.approved_template_data,tt.status as template_status
     from marketing.tasks t
     left join marketing.task_templates tt on tt.id=t.task_template_id
     where t.id=${taskId}::uuid and t.is_deleted=false
   `;
   if (!task) throw new Error("التاسك غير موجود");
+  const isManualPublish = task.task_kind === "manual_publish";
+  const permission = isManualPublish ? "marketing.publish_prep.manage" : "marketing.task.final_file.upload";
+  if (!hasPermission(user, permission)) throw new Error(isManualPublish ? "لا توجد صلاحية لإنشاء نشر يدوي" : "لا توجد صلاحية لرفع الملف النهائي");
   if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
   if (task.task_kind === "execution" && task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
+  if (!isManualPublish && task.task_kind !== "execution") throw new Error("رفع الملف النهائي غير متاح لهذا النوع من التاسكات");
   return task;
 }
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
@@ -1143,7 +1148,7 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
 async function recalculateProgress(sql: any, sourceType: string, sourceId: string) {
   const rows = await sql<any[]>`
     select coalesce(t.department_id::text,'content') as department_id,avg(t.progress)::float as progress
-    from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
+    from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
     group by coalesce(t.department_id::text,'content')
   `;
   const [completion] = await sql<any[]>`
@@ -1154,7 +1159,7 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
         (t.task_kind='execution' and t.progress>=100 and t.status='completed' and t.completed_at is not null)
       )::int as ready
     from marketing.tasks t
-    where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false
+    where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
   `;
   const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
   const readyForPublishing = Number(completion?.total || 0) > 0 && Number(completion?.total || 0) === Number(completion?.ready || 0);
@@ -1273,7 +1278,7 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files f on f.id=t.final_file_id
-    where t.is_deleted=false and ${liveSourceFilter} and ${taskFilter}
+    where t.is_deleted=false and t.task_kind in ('task_template','execution') and ${liveSourceFilter} and ${taskFilter}
     order by t.received_at nulls first,t.due_at nulls last,t.created_at
   `;
   const entities = await sql<any[]>`
@@ -1313,8 +1318,8 @@ async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
   const departmentCodes = marketingDepartmentCodes(user);
   const rows = await sql<any[]>`
     select 'campaign' as source_type,c.id::text,c.campaign_date as record_date,c.campaign_code as code,c.name,coalesce(ct.name,c.campaign_type) as type,c.objective,c.publish_start,c.publish_end,c.status,c.progress::float,c.archived_at,c.created_at,
-      (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false) as tasks_count,
-      (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.progress>=100 and t.is_deleted=false) as completed_count,
+      (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and t.task_kind in ('task_template','execution')) as tasks_count,
+      (select count(*)::int from marketing.tasks t where t.source_type='campaign' and t.source_id=c.id and t.progress>=100 and t.is_deleted=false and t.task_kind in ('task_template','execution')) as completed_count,
       c.result_file_id::text,coalesce(jsonb_array_length(c.links),0)::int as links_count
     from marketing.campaigns c left join marketing.campaign_types ct on ct.id=c.campaign_type_id
     where c.is_deleted=false and (
@@ -1326,8 +1331,8 @@ async function databaseRows(sql: ReturnType<typeof getSql>, user: SessionUser) {
     )
     union all
     select 'agenda',a.id::text,a.created_at::date,a.month_key,a.name,'أجندة',null,a.publish_start,a.publish_end,a.status,a.progress::float,a.archived_at,a.created_at,
-      (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false),
-      (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.progress>=100 and t.is_deleted=false),
+      (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and t.task_kind in ('task_template','execution')),
+      (select count(*)::int from marketing.tasks t where t.source_type='agenda' and t.source_id=a.id and t.progress>=100 and t.is_deleted=false and t.task_kind in ('task_template','execution')),
       a.result_file_id::text,coalesce(jsonb_array_length(a.links),0)::int
     from marketing.agendas a
     where ${unrestricted}=true or (${createdByMe}=true and a.created_by=${user.id}::uuid)
@@ -1348,7 +1353,7 @@ async function entityDetail(sql: ReturnType<typeof getSql>, sourceType: string, 
   if (!entity) throw new Error("السجل غير موجود");
   const [creatives,tasks,budgets,schedule,reviewHistory,files,engagementResultsPayload] = await Promise.all([
     sql<any[]>`select c.*,c.id::text,c.campaign_id::text,c.agenda_id::text,c.creative_type_id::text,c.primary_department_id::text,ct.name as creative_type_name,d.name as primary_department_name from marketing.creatives c left join marketing.creative_types ct on ct.id=c.creative_type_id left join marketing.departments d on d.id=c.primary_department_id where (${sourceType}='campaign' and c.campaign_id=${id}::uuid) or (${sourceType}='agenda' and c.agenda_id=${id}::uuid) order by c.created_at`,
-    sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false order by d.name,u.full_name`,
+    sql<any[]>`select t.*,t.id::text,t.source_id::text,t.department_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.task_template_id::text,u.full_name as assigned_name,cu.full_name as content_user_name,d.name as department_name,c.name as creative_name,tt.status as template_status,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,ff.original_name as final_file_name from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id where t.source_type=${sourceType} and t.source_id=${id}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution') order by d.name,u.full_name`,
     sourceType === "campaign" ? sql<any[]>`
       select b.*,b.id::text,b.funnel_id::text,b.creative_id::text,f.name as funnel_name,c.name as creative_name,
         coalesce((
@@ -1669,6 +1674,7 @@ async function completeTask(sql:ReturnType<typeof getSql>,body:any,user:SessionU
 async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId),fileId=clean(body.fileId);
   const task=await requireFinalFileUploadAccess(sql,user,taskId);
+  if(task.task_kind==='manual_publish')throw new Error("ملفات النشر اليدوي تُرفع كمجموعة مرتبة من شاشة تجهيز النشر");
   const[file]=await sql<any[]>`select id::text,category,task_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
   if(!file||file.category!=="final-file"||file.task_id!==taskId||file.status!=="ready")throw new Error("الملف النهائي غير صالح أو غير مرتبط بهذا التكليف");
   if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لاستخدام هذا الملف");
@@ -1698,6 +1704,16 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
   if(videoCount&&requested.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. الصور يمكن رفعها ككاروسيل مرتب");
   if(requested.some((item)=>item.size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
   if(requested.some((item)=>item.size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
+  if(task.task_kind==='manual_publish'){
+    const expected=arrayValue<any>(task.approved_template_data?.manualFiles);
+    const sameFiles=expected.length===requested.length&&expected.every((item:any,index:number)=>{
+      const actual=requested[index];
+      return clean(item?.name)===actual.name
+        && clean(item?.mimeType||'application/octet-stream')===actual.mimeType
+        && Math.max(0,numberValue(item?.size))===actual.size;
+    });
+    if(expected.length&&!sameFiles)throw new Error("الملفات المختارة لا تطابق ملفات النشر اليدوي المحفوظة. أعد إنشاء التجهيز بالملفات الحالية");
+  }
   const mediaKind=videoCount?'video':requested.length>1?'carousel':'image';
   const runtime=await getZohoRuntime(sql);
   const uploads:any[]=[];
@@ -1848,8 +1864,12 @@ async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user
     await tx`update marketing.final_media_groups set is_active=false,updated_at=now() where task_id=${taskId}::uuid and id<>${groupId}::uuid`;
     await tx`update marketing.final_media_groups set is_active=true,status='ready',updated_at=now() where id=${groupId}::uuid`;
     await tx`update marketing.tasks set final_media_group_id=${groupId}::uuid,final_file_id=${firstFileId}::uuid,updated_at=now() where id=${taskId}::uuid`;
-    const[count]=await tx<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and is_active=true`;
-    if(Number(count?.count||0)===0)await tx`update marketing.tasks set progress=100,status='ready_to_complete',completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
+    if(task.task_kind==='manual_publish'){
+      await tx`update marketing.tasks set progress=100,status='completed',completed_at=coalesce(completed_at,now()),completed_by=coalesce(completed_by,${user.id}::uuid),updated_at=now() where id=${taskId}::uuid`;
+    }else{
+      const[count]=await tx<any[]>`select count(*)::int as count from marketing.assignment_actions where department_id=(select department_id from marketing.tasks where id=${taskId}::uuid) and is_active=true`;
+      if(Number(count?.count||0)===0)await tx`update marketing.tasks set progress=100,status='ready_to_complete',completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
+    }
   });
   await recalculateProgress(sql,task.source_type,task.source_id);
   return{ok:true,message:files.length>1?`تم رفع ${files.length} صور نهائية بالترتيب على Zoho WorkDrive`:`تم رفع الملف النهائي على Zoho WorkDrive`,groupId,files};
@@ -1903,6 +1923,51 @@ async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:Session
   }
   if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
   return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'r2'}};
+}
+
+async function manualPublishSources(sql:ReturnType<typeof getSql>,user:SessionUser){
+  const access=marketingAccess(user);
+  const unrestricted=access.dataScope==='all';
+  const createdByMe=access.dataScope==='created_by_me';
+  const departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope);
+  const departmentCodes=marketingDepartmentCodes(user);
+  const rows=await sql<any[]>`
+    select 'campaign' as source_type,c.id::text,c.name,c.campaign_code as code,c.publish_start,c.publish_end,c.status,c.created_at
+    from marketing.campaigns c
+    where c.is_deleted=false and c.archived_at is null and (
+      ${unrestricted}=true
+      or (${createdByMe}=true and c.created_by=${user.id}::uuid)
+      or exists(
+        select 1 from marketing.tasks t
+        where t.source_type='campaign' and t.source_id=c.id and t.is_deleted=false and (
+          t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+          or (${departmentScoped}=true and exists(
+            select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id
+            where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}
+          ))
+        )
+      )
+    )
+    union all
+    select 'agenda',a.id::text,a.name,a.month_key,a.publish_start,a.publish_end,a.status,a.created_at
+    from marketing.agendas a
+    where a.archived_at is null and (
+      ${unrestricted}=true
+      or (${createdByMe}=true and a.created_by=${user.id}::uuid)
+      or exists(
+        select 1 from marketing.tasks t
+        where t.source_type='agenda' and t.source_id=a.id and t.is_deleted=false and (
+          t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid
+          or (${departmentScoped}=true and exists(
+            select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id
+            where ud.user_id in(t.assigned_to,t.paired_content_user_id) and d.code in ${sql(departmentCodes)}
+          ))
+        )
+      )
+    )
+    order by created_at desc,name
+  `;
+  return rows;
 }
 
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
@@ -2023,7 +2088,7 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       from marketing.files gf
       where t.final_media_group_id is not null and gf.final_media_group_id=t.final_media_group_id and gf.status='ready'
     ) fm on true
-    where t.task_kind='execution'
+    where t.task_kind in ('execution','manual_publish')
       and t.is_deleted=false
       and (
         (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
@@ -2037,31 +2102,27 @@ async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
       )
     order by coalesce(schedule_row.publish_date,t.due_at::date,cam.publish_start,ag.publish_start),t.created_at,t.id
   `;
-  return{ok:true,rows,youtubeDefaults:await getYouTubePublishSettings(sql)};
+  return{ok:true,rows,manualSources:await manualPublishSources(sql,user),youtubeDefaults:await getYouTubePublishSettings(sql)};
 }
-async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
-  const id=clean(body.id),requestedTaskId=clean(body.taskId),publishDate=isoDate(body.publishDate),platforms=arrayValue(body.platforms);
-  const[current]=id?await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by updated_at desc,created_at desc limit 1`:[];
-  const taskId=requestedTaskId||clean(current?.task_id);
-  if(!taskId)throw new Error("التاسك التنفيذي المرتبط غير موجود");
-  const[executionTask]=await sql<any[]>`
-    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text
-    from marketing.tasks t
-    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
-    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
-    where t.id=${taskId}::uuid and t.task_kind='execution' and t.is_deleted=false
-      and (
-        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
-        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
-      )
-    limit 1
-  `;
-  if(!executionTask)throw new Error("التاسك التنفيذي المرتبط غير موجود في قسم النشر");
-  await assertMarketingEntityAccess(sql,user,clean(executionTask.source_type),clean(executionTask.source_id));
-  if(!publishDate)throw new Error("تاريخ النشر مطلوب");
+type PublishScheduleCombination={
+  platformId:string;
+  postTypeId:string;
+  platformCode:string;
+  postTypeName:string;
+  publishFormat:MarketingPublishFormat;
+};
 
-  const normalizedPlatforms=platforms.map((platform:any)=>({
+type NormalizedPublishScheduleRequest={
+  publishDate:string;
+  normalizedPlatforms:Array<{platformId:string;postTypeIds:string[]}>;
+  combinations:PublishScheduleCombination[];
+  youtubeOptions:ReturnType<typeof normalizeYouTubePublishOptions>;
+};
+
+async function normalizePublishScheduleRequest(sql:ReturnType<typeof getSql>,body:any):Promise<NormalizedPublishScheduleRequest>{
+  const publishDate=isoDate(body.publishDate);
+  if(!publishDate)throw new Error("تاريخ النشر مطلوب");
+  const normalizedPlatforms=arrayValue(body.platforms).map((platform:any)=>({
     platformId:clean(platform?.platformId),
     postTypeIds:[...new Set(arrayValue<string>(platform?.postTypeIds).map(clean).filter(Boolean))],
   })).filter((platform:any)=>platform.platformId);
@@ -2079,7 +2140,7 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     uniquePairKeys.add(key);
     return true;
   });
-  if(!uniquePairs.length)throw new Error("اختر منصة ونوع نشر واحد على الأقل");
+  if(!uniquePairs.length)throw new Error("اختر منصة ونوع نشر واحدًا على الأقل");
 
   const requestedPostTypeIds=[...new Set(uniquePairs.map((item:any)=>item.postTypeId))];
   const postTypeRows=await sql<any[]>`
@@ -2098,10 +2159,10 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
       platformCode:clean(postType.platform_code),
       postTypeName:clean(postType.name),
       publishFormat:normalizeMarketingPublishFormat(postType.name),
-    };
+    } as PublishScheduleCombination;
   });
 
-  const youtubeSelected=combinations.some((item:any)=>item.platformCode==='youtube');
+  const youtubeSelected=combinations.some((item)=>item.platformCode==='youtube');
   const youtubeDefaults=await getYouTubePublishSettings(sql);
   const youtubeOptions=normalizeYouTubePublishOptions(body.youtubeOptions,youtubeDefaults,{
     title:clean(body.youtubeTitle)||clean(body.caption),
@@ -2114,20 +2175,217 @@ async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     if(youtubeOptions.tags.join(',').length>500)throw new Error("كلمات YouTube المفتاحية تتجاوز 500 حرف");
     if(!youtubeOptions.categoryId)throw new Error("تصنيف فيديو YouTube مطلوب");
   }
+  return{publishDate,normalizedPlatforms,combinations,youtubeOptions};
+}
 
+async function activePublishTask(sql:ReturnType<typeof getSql>,taskId:string,allowedKinds:string[]){
+  const[task]=await sql<any[]>`
+    select t.id::text,t.source_type,t.source_id::text,t.creative_id::text,t.task_kind,t.assigned_to::text
+    from marketing.tasks t
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    where t.id=${taskId}::uuid and t.task_kind in ${sql(allowedKinds)} and t.is_deleted=false
+      and (
+        (t.source_type='campaign' and cam.id is not null and cam.is_deleted=false and cam.archived_at is null)
+        or (t.source_type='agenda' and ag.id is not null and ag.archived_at is null)
+      )
+    limit 1
+  `;
+  return task;
+}
+
+async function replacePublishScheduleGroup(tx:any,input:{
+  groupId:string;
+  task:any;
+  request:NormalizedPublishScheduleRequest;
+  caption:string;
+  hashtags:string;
+}){
+  await tx`delete from marketing.publish_schedule where group_id=${input.groupId}::uuid`;
+  const youtubePublishOptions={youtube:input.request.youtubeOptions};
+  for(const item of input.request.combinations){
+    const publishOptions=item.platformCode==='youtube'
+      ?{...youtubePublishOptions,format:item.publishFormat}
+      :{format:item.publishFormat};
+    await tx`
+      insert into marketing.publish_schedule(
+        group_id,source_type,source_id,creative_id,task_id,publish_date,
+        platform_id,post_type_id,caption,hashtags,publish_options,status
+      ) values(
+        ${input.groupId}::uuid,${input.task.source_type},${input.task.source_id}::uuid,
+        ${input.task.creative_id}::uuid,${input.task.id}::uuid,${input.request.publishDate},
+        ${item.platformId}::uuid,${item.postTypeId}::uuid,${input.caption||null},${input.hashtags||null},
+        ${tx.json(dbJson(publishOptions))},'waiting'
+      )
+    `;
+  }
+}
+
+function manualPublishFileDescriptors(value:unknown){
+  return arrayValue<any>(value).map((item,index)=>({
+    name:clean(item?.name)||`file-${index+1}`,
+    original_name:clean(item?.name)||`file-${index+1}`,
+    mimeType:clean(item?.mimeType)||'application/octet-stream',
+    mime_type:clean(item?.mimeType)||'application/octet-stream',
+    size:Math.max(0,numberValue(item?.size)),
+    file_size:Math.max(0,numberValue(item?.size)),
+    orderIndex:index,
+  }));
+}
+
+function validateManualPublishFiles(files:any[],combinations:PublishScheduleCombination[]){
+  if(!files.length)throw new Error("اختر ملفًا واحدًا على الأقل للنشر اليدوي");
+  if(files.length>30)throw new Error("الحد الأقصى 30 صورة داخل دفعة النشر الواحدة");
+  const isVideo=(item:any)=>looksVideo(item);
+  const isImage=(item:any)=>item.mime_type.startsWith('image/')||/\.(jpe?g|png|webp|gif|heic|heif)$/i.test(item.original_name);
+  if(files.some((item)=>!isVideo(item)&&!isImage(item)))throw new Error("ملفات النشر اليدوي يجب أن تكون صورًا أو فيديو");
+  const videoCount=files.filter(isVideo).length;
+  if(videoCount&&files.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. بوست الصور والستوري يدعمان عدة صور بالترتيب");
+  if(files.some((item)=>item.file_size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
+  if(files.some((item)=>item.file_size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
+  for(const item of combinations){
+    assertPublishMedia(item.platformCode,item.publishFormat,files);
+    if(item.platformCode==='instagram'&&['photo_post','carousel','post'].includes(item.publishFormat)&&files.length>10){
+      throw new Error("بوست الصور المتعدد على Instagram يدعم حتى 10 صور في المنشور الواحد");
+    }
+  }
+}
+
+async function savePublishPrep(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإدارة تجهيز النشر");
+  const id=clean(body.id),requestedTaskId=clean(body.taskId);
+  const[current]=id?await sql<any[]>`select * from marketing.publish_schedule where group_id=${id}::uuid or id=${id}::uuid order by updated_at desc,created_at desc limit 1`:[];
+  const taskId=requestedTaskId||clean(current?.task_id);
+  if(!taskId)throw new Error("التاسك التنفيذي المرتبط غير موجود");
+  const publishTask=await activePublishTask(sql,taskId,['execution','manual_publish']);
+  if(!publishTask)throw new Error("تجهيز النشر المرتبط غير موجود أو لم يعد متاحًا");
+  await assertMarketingEntityAccess(sql,user,clean(publishTask.source_type),clean(publishTask.source_id));
+  const request=await normalizePublishScheduleRequest(sql,body);
   const groupId=clean(current?.group_id)||clean((await sql<any[]>`select gen_random_uuid()::text as id`)[0]?.id);
   if(!groupId)throw new Error("تعذر إنشاء مجموعة تجهيز النشر");
+  const caption=clean(body.caption),hashtags=clean(body.hashtags);
   await sql.begin(async tx=>{
-    await tx`delete from marketing.publish_schedule where group_id=${groupId}::uuid`;
-    const youtubePublishOptions={youtube:youtubeOptions};
-    for(const item of combinations){
-      const publishOptions=item.platformCode==='youtube'
-        ?{...youtubePublishOptions,format:item.publishFormat}
-        :{format:item.publishFormat};
-      await tx`insert into marketing.publish_schedule(group_id,source_type,source_id,creative_id,task_id,publish_date,platform_id,post_type_id,caption,hashtags,publish_options,status) values(${groupId}::uuid,${executionTask.source_type},${executionTask.source_id}::uuid,${executionTask.creative_id}::uuid,${executionTask.id}::uuid,${publishDate},${item.platformId}::uuid,${item.postTypeId}::uuid,${clean(body.caption)||null},${clean(body.hashtags)||null},${tx.json(dbJson(publishOptions))},'waiting')`;
+    await replacePublishScheduleGroup(tx,{groupId,task:publishTask,request,caption,hashtags});
+    if(publishTask.task_kind==='manual_publish'){
+      await tx`update marketing.tasks set due_at=${request.publishDate},approved_template_data=coalesce(approved_template_data,'{}'::jsonb)||${tx.json(dbJson({caption,hashtags}))},updated_at=now() where id=${publishTask.id}::uuid`;
+      await tx`update marketing.creatives set platform_assignments=${tx.json(dbJson(request.normalizedPlatforms))},schedule_day=${request.publishDate},updated_at=now() where id=${publishTask.creative_id}::uuid`;
     }
   });
-  return{ok:true,message:"تم حفظ تجهيز النشر"};
+  return{ok:true,message:publishTask.task_kind==='manual_publish'?"تم تحديث تجهيز النشر اليدوي":"تم حفظ تجهيز النشر"};
+}
+
+async function createManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإنشاء نشر يدوي");
+  const sourceType=clean(body.sourceType);
+  const sourceId=clean(body.sourceId);
+  const creativeTypeId=clean(body.creativeTypeId);
+  if(!['campaign','agenda'].includes(sourceType)||!sourceId)throw new Error("اختر الحملة أو الأجندة");
+  if(!creativeTypeId)throw new Error("اختر نوع الكرييتيف");
+  await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
+  const request=await normalizePublishScheduleRequest(sql,body);
+  const files=manualPublishFileDescriptors(body.files);
+  validateManualPublishFiles(files,request.combinations);
+  const caption=clean(body.caption),hashtags=clean(body.hashtags);
+  if(!caption)throw new Error("الكابشن مطلوب");
+  if(!hashtags)throw new Error("الهاشتاج مطلوب");
+
+  return sql.begin(async tx=>{
+    const[source]=sourceType==='campaign'
+      ?await tx<any[]>`select id::text,name,campaign_code as code from marketing.campaigns where id=${sourceId}::uuid and is_deleted=false and archived_at is null for update`
+      :await tx<any[]>`select id::text,name,month_key as code from marketing.agendas where id=${sourceId}::uuid and archived_at is null for update`;
+    if(!source)throw new Error(sourceType==='campaign'?"الحملة غير موجودة":"الأجندة غير موجودة");
+    const[creativeType]=await tx<any[]>`
+      select c.id::text,c.name,c.short_code,c.primary_department_id::text
+      from marketing.creative_types c
+      where c.id=${creativeTypeId}::uuid and c.is_active=true
+    `;
+    if(!creativeType)throw new Error("نوع الكرييتيف غير موجود أو غير مفعّل");
+    const[sequence]=sourceType==='campaign'
+      ?await tx<any[]>`select count(*)::int+1 as value from marketing.creatives where campaign_id=${sourceId}::uuid`
+      :await tx<any[]>`select count(*)::int+1 as value from marketing.creatives where agenda_id=${sourceId}::uuid`;
+    const creativeIndex=Number(sequence?.value||1);
+    const instanceCode=`${safeCode(creativeType.short_code)||'MAN'}${String(creativeIndex).padStart(2,'0')}`;
+    const manualNotes={
+      manualPublish:true,
+      createdBy:user.id,
+      createdAt:new Date().toISOString(),
+      caption,
+      hashtags,
+      sourceLabel:source.name,
+    };
+    const[creative]=await tx<any[]>`
+      insert into marketing.creatives(
+        campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,
+        primary_department_id,platform_assignments,schedule_day,notes
+      ) values(
+        ${sourceType==='campaign'?tx`${sourceId}::uuid`:null},
+        ${sourceType==='agenda'?tx`${sourceId}::uuid`:null},
+        ${creativeType.name},${creativeTypeId}::uuid,1,'publishing',${instanceCode},${creativeType.name},
+        ${creativeType.primary_department_id?tx`${creativeType.primary_department_id}::uuid`:null},
+        ${tx.json(dbJson(request.normalizedPlatforms))},${request.publishDate},${tx.json(dbJson(manualNotes))}
+      ) returning id::text
+    `;
+    const taskData={
+      manualPublish:true,
+      caption,
+      hashtags,
+      manualFiles:files.map((file)=>({name:file.name,mimeType:file.mimeType,size:file.size,orderIndex:file.orderIndex})),
+    };
+    const[task]=await tx<any[]>`
+      insert into marketing.tasks(
+        campaign_id,agenda_id,source_type,source_id,creative_id,department_code,department_id,
+        assigned_to,task_kind,title,status,due_at,progress,received_at,completed_at,completed_by,
+        note,approved_template_data
+      ) values(
+        ${sourceType==='campaign'?tx`${sourceId}::uuid`:null},
+        ${sourceType==='agenda'?tx`${sourceId}::uuid`:null},
+        ${sourceType},${sourceId}::uuid,${creative.id}::uuid,'publishing',
+        ${creativeType.primary_department_id?tx`${creativeType.primary_department_id}::uuid`:null},
+        ${user.id}::uuid,'manual_publish',${`${creativeType.name} - نشر يدوي`},'completed',${request.publishDate},100,
+        now(),now(),${user.id}::uuid,'تم إنشاؤه من شاشة النشر اليدوي',${tx.json(dbJson(taskData))}
+      ) returning id::text
+    `;
+    const[group]=await tx<any[]>`select gen_random_uuid()::text as id`;
+    if(!group?.id)throw new Error("تعذر إنشاء مجموعة تجهيز النشر اليدوي");
+    await replacePublishScheduleGroup(tx,{groupId:group.id,task:{...task,source_type:sourceType,source_id:sourceId,creative_id:creative.id},request,caption,hashtags});
+    return{
+      ok:true,
+      id:group.id,
+      groupId:group.id,
+      taskId:task.id,
+      creativeId:creative.id,
+      sourceType,
+      sourceId,
+      sourceName:source.name,
+      creativeTypeName:creativeType.name,
+      message:"تم إنشاء تجهيز النشر اليدوي وجارٍ رفع الملفات",
+    };
+  });
+}
+
+async function discardManualPublishEntry(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.publish_prep.manage"))throw new Error("لا توجد صلاحية لإلغاء النشر اليدوي");
+  const taskId=clean(body.taskId);
+  if(!taskId)return{ok:true,message:"لا توجد مسودة نشر يدوي لإلغائها"};
+  const[task]=await sql<any[]>`
+    select id::text,source_type,source_id::text,creative_id::text,assigned_to::text
+    from marketing.tasks
+    where id=${taskId}::uuid and task_kind='manual_publish' and is_deleted=false
+  `;
+  if(!task)return{ok:true,message:"تم إلغاء مسودة النشر اليدوي مسبقًا"};
+  await assertMarketingEntityAccess(sql,user,clean(task.source_type),clean(task.source_id));
+  const[published]=await sql<any[]>`select 1 from marketing.publish_schedule where task_id=${taskId}::uuid and status='published' limit 1`;
+  if(published)throw new Error("لا يمكن إلغاء نشر يدوي تم نشره بالفعل");
+  await sql.begin(async tx=>{
+    await tx`delete from marketing.publish_logs where schedule_id in(select id from marketing.publish_schedule where task_id=${taskId}::uuid)`;
+    await tx`delete from marketing.publish_schedule where task_id=${taskId}::uuid`;
+    await tx`delete from marketing.zoho_upload_tickets where task_id=${taskId}::uuid`;
+    await tx`delete from marketing.files where task_id=${taskId}::uuid`;
+    await tx`delete from marketing.final_media_groups where task_id=${taskId}::uuid`;
+    await tx`delete from marketing.tasks where id=${taskId}::uuid`;
+    await tx`delete from marketing.creatives where id=${task.creative_id}::uuid and not exists(select 1 from marketing.tasks where creative_id=${task.creative_id}::uuid) and not exists(select 1 from marketing.publish_schedule where creative_id=${task.creative_id}::uuid)`;
+  });
+  return{ok:true,message:"تم إلغاء مسودة النشر اليدوي"};
 }
 
 async function graphRequest(path:string,method:"GET"|"POST",token:string,params:Record<string,any>={}){const version=clean(process.env.META_GRAPH_VERSION)||"v25.0";const url=new URL(`https://graph.facebook.com/${version}${path}`);const body=new URLSearchParams();for(const[key,value]of Object.entries(params)){if(value===undefined||value===null||value==='')continue;const text=typeof value==='object'?JSON.stringify(value):String(value);if(method==='GET')url.searchParams.set(key,text);else body.set(key,text);}if(method==='GET')url.searchParams.set('access_token',token);else body.set('access_token',token);const response=await fetch(url.toString(),{method,body:method==='POST'?body:undefined});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.error)throw new Error(payload.error?.message||`Meta API error ${response.status}`);return payload;}
@@ -2393,7 +2651,7 @@ async function monitoring(sql:ReturnType<typeof getSql>,user:SessionUser){
     ))
   )`;
   const accessTaskFilter=unrestricted?sql`true`:sql`(t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or (${departmentScoped}=true and exists(select 1 from core.user_departments ud join core.departments cd on cd.id=ud.department_id where ud.user_id in(t.assigned_to,t.paired_content_user_id) and cd.code in ${sql(departmentCodes)})) or (${createdByMe}=true and (exists(select 1 from marketing.campaigns c where t.source_type='campaign' and c.id=t.source_id and c.created_by=${user.id}::uuid) or exists(select 1 from marketing.agendas a where t.source_type='agenda' and a.id=t.source_id and a.created_by=${user.id}::uuid))))`;
-  const taskFilter=sql`(${liveSourceFilter} and ${accessTaskFilter})`;
+  const taskFilter=sql`(t.task_kind in ('task_template','execution') and ${liveSourceFilter} and ${accessTaskFilter})`;
   const[totals,statuses,delayed,employees,departments,entities]=await Promise.all([
     sql<any[]>`with visible_tasks as(select t.* from marketing.tasks t where t.is_deleted=false and ${taskFilter}) select count(distinct source_id) filter(where source_type='campaign')::int as campaigns,count(distinct source_id) filter(where source_type='campaign' and status<>'archived')::int as active_campaigns,count(distinct source_id) filter(where source_type='agenda')::int as agendas,count(*)::int as tasks,count(*) filter(where due_at<now() and progress<100)::int as delayed,count(*) filter(where progress=0)::int as waiting,count(*) filter(where progress>0 and progress<100)::int as active,coalesce(avg(progress),0)::float as progress from visible_tasks`,
     sql<any[]>`select t.status,count(*)::int as count from marketing.tasks t where t.is_deleted=false and ${taskFilter} group by t.status order by count(*) desc`,
@@ -2422,7 +2680,7 @@ async function calendarData(sql:ReturnType<typeof getSql>,user:SessionUser){
       u.full_name as assigned_name,
       coalesce(uc.color,'#6c3329') as user_color
     from marketing.publish_schedule s
-    join marketing.tasks t on t.id=s.task_id and t.task_kind='execution' and t.is_deleted=false
+    join marketing.tasks t on t.id=s.task_id and t.task_kind in ('execution','manual_publish') and t.is_deleted=false
     left join marketing.platforms p on p.id=s.platform_id
     left join marketing.platform_post_types pt on pt.id=s.post_type_id
     left join marketing.creatives c on c.id=s.creative_id
@@ -2800,6 +3058,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
+    else if(action==='create_manual_publish_entry')result=await createManualPublishEntry(sql,body,user);
+    else if(action==='discard_manual_publish_entry')result=await discardManualPublishEntry(sql,body,user);
     else if(action==='publish_now')result=await publishNow(sql,body,user);
     else if(action==='refresh_engagement'){if(!hasPermission(user,'marketing.engagement.refresh'))throw new Error('لا توجد صلاحية لتحديث تفاعل النشر');result=await refreshEngagementMetrics(sql,arrayValue<string>(body.ids).map(clean).filter(Boolean));}
     else if(action==='subscribe_engagement_webhooks'){if(!hasPermission(user,'marketing.engagement.subscribe'))throw new Error('لا توجد صلاحية لتفعيل استقبال التفاعلات');await backfillPublishedPosts(sql);result=await subscribeMetaEngagementWebhooks(sql);}

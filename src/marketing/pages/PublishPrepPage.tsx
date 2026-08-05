@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
-import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery } from "../api";
+import { createMarketingFinalUploadCancellation, downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFinalFiles, type MarketingFinalUploadCancellation, type MarketingFinalUploadProgress } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import type { MarketingMeta, PlatformAssignment } from "../types";
 import { useAuth } from "../../auth/AuthContext";
 import { hasPermission } from "../../systemAccess";
+import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo } from "../../../shared/marketing-publishing";
 import {
   YOUTUBE_CATEGORY_FALLBACKS,
   YOUTUBE_PUBLISH_DEFAULTS,
@@ -17,14 +18,34 @@ import {
 } from "../../../shared/youtube-publishing";
 
 type PublishPrepView = "tasks" | "manual";
+type ManualPublishSource = {
+  source_type: "campaign" | "agenda";
+  id: string;
+  name: string;
+  code?: string | null;
+  publish_start?: string | null;
+  publish_end?: string | null;
+};
 type ManualPublishDraft = {
   sourceKey: string;
-  taskId: string;
+  creativeTypeId: string;
   platforms: PlatformAssignment[];
   publishDate: string;
   caption: string;
   hashtags: string;
   youtubeOptions: YouTubePublishOptions;
+};
+type ManualUploadFileState = {
+  name: string;
+  size: number;
+  loaded: number;
+  percent: number;
+  status: MarketingFinalUploadProgress["status"];
+  detail?: string;
+};
+type ManualUploadState = {
+  active: boolean;
+  files: ManualUploadFileState[];
 };
 
 function rowPlatforms(row: any): PlatformAssignment[] {
@@ -49,14 +70,10 @@ function statusClass(value: string) {
   return "waiting";
 }
 
-function sourceKey(row: any) {
-  return `${String(row?.source_type || "")}:${String(row?.source_id || "")}`;
-}
-
 function createManualDraft(defaults: YouTubePublishSettings): ManualPublishDraft {
   return {
     sourceKey: "",
-    taskId: "",
+    creativeTypeId: "",
     platforms: [],
     publishDate: "",
     caption: "",
@@ -70,6 +87,49 @@ function copyPlatforms(value: unknown): PlatformAssignment[] {
     platformId: String(platform?.platformId || ""),
     postTypeIds: Array.isArray(platform?.postTypeIds) ? [...platform.postTypeIds] : [],
   })).filter((platform) => platform.platformId);
+}
+
+function parseManualSourceKey(value: string) {
+  const separator = value.indexOf(":");
+  if (separator < 1) return { sourceType: "", sourceId: "" };
+  return { sourceType: value.slice(0, separator), sourceId: value.slice(separator + 1) };
+}
+
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/") || /\.(mp4|mov|m4v|webm)$/i.test(file.name);
+}
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|heic|heif)$/i.test(file.name);
+}
+
+function fileSizeLabel(size: number) {
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024)).toLocaleString("ar-SA-u-nu-latn")} KB`;
+  return `${(size / (1024 * 1024)).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 1 })} MB`;
+}
+
+function manualMediaValidation(files: File[], platforms: PlatformAssignment[], meta: MarketingMeta | null) {
+  if (!files.length) return "";
+  if (files.length > 30) return "الحد الأقصى 30 صورة داخل دفعة النشر الواحدة";
+  if (files.some((file) => !isImageFile(file) && !isVideoFile(file))) return "الملفات المختارة يجب أن تكون صورًا أو فيديو";
+  if (files.some((file) => file.size <= 0)) return "يوجد ملف فارغ ضمن الاختيار";
+  const videos = files.filter(isVideoFile);
+  if (videos.length > 1 || (videos.length && files.length > 1)) return "الفيديو أو الريل يُرفع كملف واحد فقط، بينما بوست الصور والستوري يدعمان عدة صور";
+  for (const selection of platforms) {
+    const platform = meta?.platforms.find((item) => item.id === selection.platformId);
+    const platformCode = String(platform?.code || "").toLowerCase();
+    for (const postTypeId of selection.postTypeIds) {
+      const postType = meta?.postTypes.find((item) => item.id === postTypeId);
+      const format = normalizeMarketingPublishFormat(postType?.name);
+      if (publishFormatRequiresVideo(format) && (files.length !== 1 || videos.length !== 1)) return `${postType?.name || "نوع النشر"} يتطلب ملف فيديو واحدًا فقط`;
+      if (publishFormatRequiresImages(format) && videos.length) return `${postType?.name || "نوع النشر"} يقبل الصور فقط`;
+      if (format === "carousel" && files.length < 2) return "Carousel يتطلب صورتين على الأقل";
+      if (platformCode === "instagram" && format === "post" && videos.length) return "بوست Instagram يقبل الصور فقط؛ اختر Reel لنشر الفيديو";
+      if (platformCode === "instagram" && ["photo_post", "carousel", "post"].includes(format) && files.length > 10) return "بوست الصور المتعدد على Instagram يدعم حتى 10 صور";
+      if (platformCode === "youtube" && (files.length !== 1 || videos.length !== 1)) return "نشر YouTube يتطلب ملف فيديو واحدًا فقط";
+    }
+  }
+  return "";
 }
 
 function PlatformEditor({
@@ -161,9 +221,13 @@ export function PublishPrepPage() {
   const canManagePrep = hasPermission(user, "marketing.publish_prep.manage");
   const canPublishNow = hasPermission(user, "marketing.publish.now");
   const [rows, setRows] = useState<any[]>([]);
+  const [manualSources, setManualSources] = useState<ManualPublishSource[]>([]);
   const [meta, setMeta] = useState<MarketingMeta | null>(null);
   const [view, setView] = useState<PublishPrepView>("tasks");
   const [manual, setManual] = useState<ManualPublishDraft>(() => createManualDraft(YOUTUBE_PUBLISH_DEFAULTS));
+  const [manualFiles, setManualFiles] = useState<File[]>([]);
+  const [manualUpload, setManualUpload] = useState<ManualUploadState | null>(null);
+  const manualUploadControlRef = useRef<MarketingFinalUploadCancellation | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editing, setEditing] = useState<any>(null);
   const [filters, setFilters] = useState({ search: "", status: "", platform: "", department: "" });
@@ -181,11 +245,12 @@ export function PublishPrepPage() {
     setError("");
     try {
       const [tasks, info] = await Promise.all([
-        marketingFetch<{ rows: any[]; youtubeDefaults?: YouTubePublishSettings }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
+        marketingFetch<{ rows: any[]; manualSources?: ManualPublishSource[]; youtubeDefaults?: YouTubePublishSettings }>(`/api/marketing${marketingQuery({ resource: "publish_prep" })}`),
         marketingFetch<MarketingMeta>(`/api/marketing${marketingQuery({ resource: "meta" })}`),
       ]);
       const defaults = normalizeYouTubePublishSettings(tasks.youtubeDefaults);
       setRows(tasks.rows);
+      setManualSources(Array.isArray(tasks.manualSources) ? tasks.manualSources : []);
       setYoutubeDefaults(defaults);
       setManual((current) => ({ ...current, youtubeOptions: normalizeYouTubePublishOptions(current.youtubeOptions, defaults) }));
       setMeta(info);
@@ -228,11 +293,11 @@ export function PublishPrepPage() {
         }),
       } : current);
       setManual((current) => {
-        const selectedRow = rows.find((row) => row.task_id === current.taskId);
+        const creativeType = meta?.creativeTypes.find((item) => item.id === current.creativeTypeId);
         return {
           ...current,
           youtubeOptions: normalizeYouTubePublishOptions(current.youtubeOptions, defaults, {
-            title: selectedRow?.youtube_title_seed || selectedRow?.creative_name,
+            title: creativeType?.name,
             description: [current.caption, current.hashtags].filter(Boolean).join("\n\n"),
           }),
         };
@@ -285,24 +350,20 @@ export function PublishPrepPage() {
     files: rows.filter((row) => row.final_file_id || Number(row.final_file_count || 0) > 0).length,
   }), [rows, meta]);
 
-  const manualSources = useMemo(() => {
-    const values = new Map<string, { key: string; sourceType: string; sourceId: string; sourceName: string }>();
-    for (const row of rows) {
-      const key = sourceKey(row);
-      if (!row.source_id || values.has(key)) continue;
-      values.set(key, { key, sourceType: row.source_type, sourceId: row.source_id, sourceName: row.source_name || "—" });
-    }
-    return [...values.values()].sort((a, b) => a.sourceName.localeCompare(b.sourceName, "ar"));
-  }, [rows]);
+  const manualSelectedSource = useMemo(() => {
+    const { sourceType, sourceId } = parseManualSourceKey(manual.sourceKey);
+    return manualSources.find((item) => item.source_type === sourceType && item.id === sourceId) || null;
+  }, [manualSources, manual.sourceKey]);
 
-  const manualTaskRows = useMemo(() => rows.filter((row) => sourceKey(row) === manual.sourceKey), [rows, manual.sourceKey]);
-  const manualSelectedRow = useMemo(() => rows.find((row) => row.task_id === manual.taskId) || null, [rows, manual.taskId]);
+  const manualSelectedCreativeType = useMemo(() => meta?.creativeTypes.find((item) => item.id === manual.creativeTypeId) || null, [meta, manual.creativeTypeId]);
+  const manualFileError = useMemo(() => manualMediaValidation(manualFiles, manual.platforms, meta), [manualFiles, manual.platforms, meta]);
 
   const manualMissing = useMemo(() => {
     const values: string[] = [];
-    if (!manual.sourceKey) values.push("الحملة أو الأجندة");
-    if (!manual.taskId || !manualSelectedRow) values.push("الكرييتيف");
-    if (manualSelectedRow && !manualSelectedRow.final_file_id && !Number(manualSelectedRow.final_file_count || 0)) values.push("الملف النهائي");
+    if (!manual.sourceKey || !manualSelectedSource) values.push("الحملة أو الأجندة");
+    if (!manual.creativeTypeId || !manualSelectedCreativeType) values.push("نوع الكرييتيف");
+    if (!manualFiles.length) values.push("الملف أو الملفات");
+    if (manualFileError) values.push(manualFileError);
     if (!manual.publishDate) values.push("موعد النشر");
     if (!manual.caption.trim()) values.push("الكابشن");
     if (!manual.hashtags.trim()) values.push("الهاشتاج");
@@ -310,7 +371,7 @@ export function PublishPrepPage() {
     else if (manual.platforms.some((platform) => !platform.postTypeIds.length)) values.push("نوع النشر لكل منصة");
     if (selectionsIncludeYouTube(manual.platforms) && !manual.youtubeOptions.title.trim()) values.push("عنوان YouTube");
     return values;
-  }, [manual, manualSelectedRow, meta]);
+  }, [manual, manualSelectedSource, manualSelectedCreativeType, manualFiles, manualFileError, meta]);
 
   async function save() {
     if (!editing) return;
@@ -331,25 +392,42 @@ export function PublishPrepPage() {
     }
   }
 
+  function updateManualUpload(progress: MarketingFinalUploadProgress) {
+    setManualUpload((current) => {
+      const files = current?.files?.length
+        ? current.files.map((file, index) => index === progress.fileIndex ? { ...file, loaded: progress.loaded, percent: progress.percent, status: progress.status, detail: progress.detail } : file)
+        : manualFiles.map((file) => ({ name: file.name, size: file.size, loaded: 0, percent: 0, status: "pending" as const }));
+      return { active: !["completed", "cancelled", "error"].includes(progress.status) || files.some((file) => !["completed", "cancelled", "error"].includes(file.status)), files };
+    });
+  }
+
   async function saveManual() {
     if (!canManagePrep) {
       setError("لا توجد صلاحية لإدارة تجهيز النشر");
       return;
     }
-    if (!manualSelectedRow || manualMissing.length) {
+    if (!manualSelectedSource || !manualSelectedCreativeType || manualMissing.length) {
       setError(`أكمل بيانات النشر اليدوي: ${manualMissing.join("، ")}`);
       return;
     }
+    const { sourceType, sourceId } = parseManualSourceKey(manual.sourceKey);
+    const cancellation = createMarketingFinalUploadCancellation();
+    manualUploadControlRef.current = cancellation;
+    setManualUpload({ active: true, files: manualFiles.map((file) => ({ name: file.name, size: file.size, loaded: 0, percent: 0, status: "pending" })) });
     setLoading(true);
     setError("");
     setMessage("");
+    let taskId = "";
+    let uploadAttached = false;
     try {
-      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+      const created = await marketingFetch<{ taskId: string; message: string }>("/api/marketing", {
         method: "POST",
         body: JSON.stringify({
-          action: "save_publish_prep",
-          id: manualSelectedRow.id,
-          taskId: manualSelectedRow.task_id,
+          action: "create_manual_publish_entry",
+          sourceType,
+          sourceId,
+          creativeTypeId: manual.creativeTypeId,
+          files: manualFiles.map((file) => ({ name: file.name, mimeType: file.type || "application/octet-stream", size: file.size })),
           platforms: manual.platforms,
           publishDate: manual.publishDate,
           caption: manual.caption,
@@ -357,11 +435,33 @@ export function PublishPrepPage() {
           youtubeOptions: manual.youtubeOptions,
         }),
       });
-      setMessage(result.message || "تم حفظ النشر اليدوي");
+      taskId = created.taskId;
+      await uploadMarketingFinalFiles({
+        files: manualFiles,
+        sourceType,
+        sourceId,
+        taskId,
+        cancellation,
+        onProgress: updateManualUpload,
+      });
+      uploadAttached = true;
+      setMessage("تم إنشاء النشر اليدوي ورفع الملفات بالترتيب بنجاح");
+      setManual(createManualDraft(youtubeDefaults));
+      setManualFiles([]);
+      setManualUpload(null);
+      setView("tasks");
       await load();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر حفظ النشر اليدوي");
+      if (taskId && !uploadAttached) {
+        await marketingFetch("/api/marketing", {
+          method: "POST",
+          body: JSON.stringify({ action: "discard_manual_publish_entry", taskId }),
+        }).catch(() => undefined);
+      }
+      setError(failure instanceof Error ? failure.message : "تعذر إنشاء النشر اليدوي ورفع الملفات");
     } finally {
+      manualUploadControlRef.current = null;
+      setManualUpload((current) => current ? { ...current, active: false } : current);
       setLoading(false);
     }
   }
@@ -423,32 +523,58 @@ export function PublishPrepPage() {
   }
 
   function selectManualSource(nextSourceKey: string) {
-    setManual({ ...createManualDraft(youtubeDefaults), sourceKey: nextSourceKey });
+    const { sourceType, sourceId } = parseManualSourceKey(nextSourceKey);
+    const selectedSource = manualSources.find((item) => item.source_type === sourceType && item.id === sourceId);
+    setManual({
+      ...createManualDraft(youtubeDefaults),
+      sourceKey: nextSourceKey,
+      publishDate: String(selectedSource?.publish_start || "").slice(0, 10),
+    });
+    setManualFiles([]);
+    setManualUpload(null);
   }
 
-  function selectManualTask(taskId: string) {
-    const row = rows.find((item) => item.task_id === taskId);
-    if (!row) {
-      setManual((current) => ({ ...createManualDraft(youtubeDefaults), sourceKey: current.sourceKey }));
+  function selectManualCreativeType(creativeTypeId: string) {
+    const creativeType = meta?.creativeTypes.find((item) => item.id === creativeTypeId);
+    setManual((current) => ({
+      ...current,
+      creativeTypeId,
+      youtubeOptions: normalizeYouTubePublishOptions(current.youtubeOptions, youtubeDefaults, {
+        title: creativeType?.name,
+        description: [current.caption, current.hashtags].filter(Boolean).join("\n\n"),
+      }),
+    }));
+  }
+
+  function addManualFiles(value: FileList | null) {
+    const selected = Array.from(value || []);
+    if (!selected.length) return;
+    const unique = [...manualFiles, ...selected].filter((file, index, files) => files.findIndex((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified) === index);
+    if (unique.length > 30) {
+      setError("الحد الأقصى 30 صورة داخل دفعة النشر الواحدة");
       return;
     }
-    const next: ManualPublishDraft = {
-      sourceKey: sourceKey(row),
-      taskId: row.task_id,
-      platforms: copyPlatforms(rowPlatforms(row)),
-      publishDate: String(row.publish_date || "").slice(0, 10),
-      caption: String(row.caption || ""),
-      hashtags: String(row.hashtags || ""),
-      youtubeOptions: normalizeYouTubePublishOptions(row.youtube_options, youtubeDefaults, {
-        title: row.youtube_title_seed || row.creative_name,
-        description: [row.caption, row.hashtags].filter(Boolean).join("\n\n"),
-      }),
-    };
-    setManual(next);
-    if (selectionsIncludeYouTube(next.platforms)) void loadYouTubeOptions();
+    setError("");
+    setManualFiles(unique);
+    setManualUpload(null);
   }
 
-  return <MarketingPage title="تجهيز النشر" description="التاسكات التنفيذية فقط: راجع التجهيز الحالي أو أنشئ نشرًا يدويًا للحملات والأجندات مع تحديد المنصة ونوع النشر والموعد والمحتوى.">
+  function moveManualFile(index: number, direction: -1 | 1) {
+    setManualFiles((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function removeManualFile(index: number) {
+    setManualFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+    setManualUpload(null);
+  }
+
+  return <MarketingPage title="تجهيز النشر" description="راجع تجهيز التاسكات، أو أنشئ نشرًا يدويًا جديدًا باختيار الحملة أو الأجندة ونوع الكرييتيف والملفات مباشرة من جهازك.">
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}
     {message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
 
@@ -467,7 +593,7 @@ export function PublishPrepPage() {
 
     {view === "tasks" ? <>
       <section className="marketing-publish-overview">
-        <article><span><Funnel size={21} /></span><div><small>كل التاسكات</small><strong>{stats.all}</strong></div></article>
+        <article><span><Funnel size={21} /></span><div><small>كل التجهيزات</small><strong>{stats.all}</strong></div></article>
         <article className="ready"><span><CheckCircle size={21} /></span><div><small>جاهز للنشر</small><strong>{stats.ready}</strong></div></article>
         <article className="failed"><span><XCircle size={21} /></span><div><small>فشل النشر</small><strong>{stats.failed}</strong></div></article>
         <article className="missing"><span><WarningCircle size={21} /></span><div><small>ناقص</small><strong>{stats.missing}</strong></div></article>
@@ -491,7 +617,7 @@ export function PublishPrepPage() {
           const publishErrors = rowPublishErrors(row);
           return <article key={row.id} className={`marketing-publish-list-row ${statusClass(ready)} ${selected ? "selected" : ""}`}>
             <div className="marketing-publish-list-heading">
-              <div className="marketing-publish-card-statuses"><span className="marketing-publish-task-kind">تاسك تنفيذي</span><span className={`marketing-publish-status ${statusClass(ready)}`}>{ready}</span></div>
+              <div className="marketing-publish-card-statuses"><span className="marketing-publish-task-kind">{row.task_kind === "manual_publish" ? "نشر يدوي" : "تاسك تنفيذي"}</span><span className={`marketing-publish-status ${statusClass(ready)}`}>{ready}</span></div>
               <h3>{row.creative_name || "كرييتيف"}</h3>
               <p>{row.source_name || "—"}</p>
             </div>
@@ -531,36 +657,60 @@ export function PublishPrepPage() {
         {!loading && !filtered.length ? <div className="marketing-empty"><PaperPlaneTilt size={38} />لا توجد تاسكات تجهيز نشر مطابقة.</div> : null}
       </section>
 
-      {canPublishNow && selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد <strong>{selectedIds.length.toLocaleString("ar-SA-u-nu-latn")}</strong> تاسك</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={18} />نشر المحدد الآن</button></div> : null}
+      {canPublishNow && selectedIds.length ? <div className="marketing-bulk-bar"><span>تم تحديد <strong>{selectedIds.length.toLocaleString("ar-SA-u-nu-latn")}</strong> تجهيز</span><button type="button" className="primary" onClick={() => void publish()} disabled={loading}><PaperPlaneTilt size={18} />نشر المحدد الآن</button></div> : null}
     </> : <section className="panel marketing-manual-publish-panel">
-      <header><div><h3>تجهيز نشر يدوي</h3><p>اختر الحملة أو الأجندة، ثم الكرييتيف، وحدد المنصات وأنواع النشر والموعد والكابشن والهاشتاج.</p></div><span><PaperPlaneTilt size={22} /></span></header>
+      <header><div><h3>تجهيز نشر يدوي جديد</h3><p>اختر الحملة أو الأجندة ونوع الكرييتيف من إعدادات النظام، ثم ارفع الملفات من جهازك وحدد المنصات وأنواع النشر.</p></div><span><PaperPlaneTilt size={22} /></span></header>
       <div className="marketing-manual-publish-selectors">
-        <label><span>الحملة أو الأجندة</span><select value={manual.sourceKey} onChange={(event) => selectManualSource(event.target.value)}><option value="">اختر الحملة أو الأجندة</option>{manualSources.map((source) => <option key={source.key} value={source.key}>{source.sourceType === "agenda" ? "أجندة" : "حملة"} — {source.sourceName}</option>)}</select></label>
-        <label><span>الكرييتيف</span><select value={manual.taskId} disabled={!manual.sourceKey} onChange={(event) => selectManualTask(event.target.value)}><option value="">اختر الكرييتيف</option>{manualTaskRows.map((row) => <option key={row.task_id} value={row.task_id}>{row.creative_name || "كرييتيف"}{row.department_name ? ` — ${row.department_name}` : ""}</option>)}</select></label>
+        <label><span>الحملة أو الأجندة</span><select value={manual.sourceKey} onChange={(event) => selectManualSource(event.target.value)} disabled={loading}><option value="">اختر الحملة أو الأجندة</option>{manualSources.map((source) => <option key={`${source.source_type}:${source.id}`} value={`${source.source_type}:${source.id}`}>{source.source_type === "agenda" ? "أجندة" : "حملة"} — {source.name}{source.code ? ` (${source.code})` : ""}</option>)}</select></label>
+        <label><span>نوع الكرييتيف</span><select value={manual.creativeTypeId} disabled={!manual.sourceKey || loading} onChange={(event) => selectManualCreativeType(event.target.value)}><option value="">اختر نوع الكرييتيف من النظام</option>{(meta?.creativeTypes || []).map((creativeType) => <option key={creativeType.id} value={creativeType.id}>{creativeType.name}{creativeType.short_code ? ` — ${creativeType.short_code}` : ""}</option>)}</select></label>
       </div>
 
-      {manualSelectedRow ? <div className="marketing-manual-publish-workspace">
+      {manualSelectedSource && manualSelectedCreativeType ? <div className="marketing-manual-publish-workspace">
         <section className="marketing-publish-edit-summary">
-          <div><small>الحملة / الأجندة</small><strong>{manualSelectedRow.source_name || "—"}</strong></div>
-          <div><small>الكرييتيف</small><strong>{manualSelectedRow.creative_name || "—"}</strong></div>
-          <div><small>المسؤول</small><strong>{manualSelectedRow.assigned_name || "—"}</strong></div>
-          <div><small>الملف النهائي</small><strong>{rowFinalFiles(manualSelectedRow).length ? `${rowFinalFiles(manualSelectedRow).length} ملف` : "غير مرفوع"}</strong></div>
+          <div><small>الحملة / الأجندة</small><strong>{manualSelectedSource.name}</strong></div>
+          <div><small>نوع الكرييتيف</small><strong>{manualSelectedCreativeType.name}</strong></div>
+          <div><small>مصدر الملف</small><strong>اختيار يدوي من الجهاز</strong></div>
+          <div><small>عدد الملفات</small><strong>{manualFiles.length ? `${manualFiles.length.toLocaleString("ar-SA-u-nu-latn")} ملف` : "لم يتم الاختيار"}</strong></div>
         </section>
 
-        <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>نوع النشر المحدد هنا هو الذي يتم تنفيذه على كل منصة.</p></div></header><PlatformEditor meta={meta} value={manual.platforms} onChange={(platforms) => setManual((current) => ({ ...current, platforms }))} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
+        <section className="marketing-publish-edit-section marketing-manual-media-section">
+          <header><div><h3>ملفات النشر</h3><p>بوست الصور والستوري يقبلان عدة صور. ترتيب القائمة هو ترتيب الصور عند النشر.</p></div></header>
+          <label className="marketing-manual-media-picker">
+            <input type="file" accept="image/*,video/*" multiple disabled={loading} onChange={(event) => { addManualFiles(event.target.files); event.currentTarget.value = ""; }} />
+            <UploadSimple size={28} />
+            <strong>اختيار صور أو فيديو من الجهاز</strong>
+            <span>يمكن إضافة عدة صور لبوست الصور أو الستوري، أو اختيار فيديو واحد للريل والفيديو.</span>
+          </label>
+          {manualFiles.length ? <div className="marketing-manual-media-list">{manualFiles.map((file, index) => {
+            const uploadFile = manualUpload?.files[index];
+            return <article key={`${file.name}-${file.lastModified}-${index}`}>
+              <b>{String(index + 1).padStart(2, "0")}</b>
+              <div><strong>{file.name}</strong><small>{isVideoFile(file) ? "فيديو" : "صورة"} • {fileSizeLabel(file.size)}</small>{uploadFile ? <div className="marketing-manual-upload-progress"><span style={{ width: `${Math.max(0, Math.min(100, uploadFile.percent))}%` }} /></div> : null}</div>
+              <div className="marketing-manual-media-order">
+                <button type="button" aria-label="تحريك الملف لأعلى" disabled={loading || index === 0} onClick={() => moveManualFile(index, -1)}>↑</button>
+                <button type="button" aria-label="تحريك الملف لأسفل" disabled={loading || index === manualFiles.length - 1} onClick={() => moveManualFile(index, 1)}>↓</button>
+                <button type="button" className="danger" aria-label="حذف الملف" disabled={loading} onClick={() => removeManualFile(index)}><X size={16} /></button>
+              </div>
+            </article>;
+          })}</div> : <div className="marketing-manual-media-empty"><UploadSimple size={24} />لم يتم اختيار ملفات بعد.</div>}
+          {manualFileError ? <div className="marketing-manual-media-error"><WarningCircle size={18} />{manualFileError}</div> : null}
+          {manualUpload?.active ? <div className="marketing-manual-upload-status"><SpinnerGap className="marketing-spin" size={19} /><span>جارٍ رفع الملفات إلى Zoho WorkDrive بالترتيب...</span><button type="button" className="secondary" onClick={() => manualUploadControlRef.current?.cancel()}>إلغاء الرفع</button></div> : null}
+        </section>
 
-        <section className="marketing-publish-edit-section"><header><div><h3>موعد ومحتوى النشر</h3><p>حدد موعد النشر، ثم اكتب الكابشن والهاشتاج الخاصين بهذا الكرييتيف.</p></div></header><div className="marketing-form-grid marketing-publish-content-grid"><label><span>موعد النشر</span><input type="date" value={manual.publishDate} onChange={(event) => setManual((current) => ({ ...current, publishDate: event.target.value }))} /></label><label className="full"><span>Caption</span><textarea rows={7} value={manual.caption} onChange={(event) => setManual((current) => ({ ...current, caption: event.target.value }))} /></label><label className="full"><span>Hashtag</span><textarea rows={5} value={manual.hashtags} onChange={(event) => setManual((current) => ({ ...current, hashtags: event.target.value }))} /></label></div></section>
+        <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>بوست الصور يُنشر كمنشور متعدد الصور، والستوري تُنشر كإطارات مستقلة بنفس ترتيب الملفات.</p></div></header><PlatformEditor meta={meta} value={manual.platforms} onChange={(platforms) => setManual((current) => ({ ...current, platforms }))} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
+
+        <section className="marketing-publish-edit-section"><header><div><h3>موعد ومحتوى النشر</h3><p>حدد موعد النشر، ثم اكتب الكابشن والهاشتاج الخاصين بهذا النشر اليدوي.</p></div></header><div className="marketing-form-grid marketing-publish-content-grid"><label><span>موعد النشر</span><input type="date" value={manual.publishDate} onChange={(event) => setManual((current) => ({ ...current, publishDate: event.target.value }))} /></label><label className="full"><span>Caption</span><textarea rows={7} value={manual.caption} onChange={(event) => setManual((current) => ({ ...current, caption: event.target.value }))} /></label><label className="full"><span>Hashtag</span><textarea rows={5} value={manual.hashtags} onChange={(event) => setManual((current) => ({ ...current, hashtags: event.target.value }))} /></label></div></section>
 
         {selectionsIncludeYouTube(manual.platforms) ? <YouTubeOptionsFields value={manual.youtubeOptions} onChange={(youtubeOptions) => setManual((current) => ({ ...current, youtubeOptions }))} categories={youtubeCategories} playlists={youtubePlaylists} loading={youtubeOptionsLoading} /> : null}
 
         <footer className="marketing-manual-publish-footer">
-          <div>{manualMissing.length ? <><WarningCircle size={18} /><span>ناقص: {manualMissing.join("، ")}</span></> : <><CheckCircle size={18} /><span>بيانات النشر اليدوي مكتملة</span></>}</div>
-          <button type="button" className="primary" disabled={loading || Boolean(manualMissing.length)} onClick={() => void saveManual()}><CheckCircle size={18} />حفظ تجهيز النشر</button>
+          <div>{manualMissing.length ? <><WarningCircle size={18} /><span>ناقص: {manualMissing.join("، ")}</span></> : <><CheckCircle size={18} /><span>بيانات النشر اليدوي والملفات مكتملة</span></>}</div>
+          <button type="button" className="primary" disabled={loading || Boolean(manualMissing.length)} onClick={() => void saveManual()}>{loading ? <SpinnerGap className="marketing-spin" size={18} /> : <CheckCircle size={18} />}إنشاء ورفع تجهيز النشر</button>
         </footer>
-      </div> : <div className="marketing-empty"><PaperPlaneTilt size={38} />اختر الحملة أو الأجندة ثم الكرييتيف لبدء تجهيز النشر اليدوي.</div>}
+      </div> : <div className="marketing-empty"><PaperPlaneTilt size={38} />اختر الحملة أو الأجندة ونوع الكرييتيف لبدء نشر يدوي جديد.</div>}
     </section>}
 
-    <Modal open={Boolean(editing)} title="تعديل تجهيز النشر" subtitle={editing ? `${editing.source_name || ""} — ${editing.creative_name || ""}` : undefined} onClose={() => setEditing(null)} className="marketing-publish-edit-modal" footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={18} />حفظ تجهيز النشر</button></>}>
+    <Modal open={Boolean(editing)} title={editing?.task_kind === "manual_publish" ? "تعديل النشر اليدوي" : "تعديل تجهيز النشر"} subtitle={editing ? `${editing.source_name || ""} — ${editing.creative_name || ""}` : undefined} onClose={() => setEditing(null)} className="marketing-publish-edit-modal" footer={<><button type="button" className="secondary" onClick={() => setEditing(null)}>إلغاء</button><button type="button" className="primary" onClick={() => void save()} disabled={loading}><CheckCircle size={18} />حفظ تجهيز النشر</button></>}>
       {editing ? <div className="marketing-publish-edit-workspace">
         <section className="marketing-publish-edit-summary"><div><small>الحملة / الأجندة</small><strong>{editing.source_name || "—"}</strong></div><div><small>الكرييتيف</small><strong>{editing.creative_name || "—"}</strong></div><div><small>المسؤول</small><strong>{editing.assigned_name || "—"}</strong></div><div><small>القسم</small><strong>{editing.department_name || "—"}</strong></div></section>
         <section className="marketing-publish-edit-section"><header><div><h3>المنصات وأنواع النشر</h3><p>اختر المنصات المطلوبة ثم حدد أنواع النشر داخل كل منصة.</p></div></header><PlatformEditor meta={meta} value={editing.platforms || []} onChange={(platforms) => setEditing({ ...editing, platforms })} onYouTubeSelected={() => void loadYouTubeOptions()} /></section>
