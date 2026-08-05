@@ -210,19 +210,34 @@ export function StockPage() {
   const pickerRows = useMemo<VehicleRow[]>(() => {
     const term = pickerSearch.trim().toLowerCase();
     if (term.length < 2) return [];
+
+    const compactTerm = term.replace(/\s+/g, "");
+    const matchRank = (row: StockVehicleRow) => {
+      const vin = String(row.vin || "").trim().toLowerCase();
+      const compactVin = vin.replace(/\s+/g, "");
+      if (compactVin === compactTerm) return 0;
+      if (compactVin.startsWith(compactTerm)) return 1;
+      if (compactVin.includes(compactTerm)) return 2;
+      return 3;
+    };
+
     return stockRows
       .filter((row) => {
-        if (selectedCars.some((item) => item.id === row.id)) return false;
-        if (row.active_transfer_requests) return false;
-        if (selectedSourceLocationId && row.location_id !== selectedSourceLocationId) return false;
-        return [row.vin, row.car_name, row.statement, row.model_year, row.exterior_color, row.interior_color, row.location_name]
-          .join(" ")
-          .toLowerCase()
-          .includes(term);
+        const searchable = [
+          row.vin,
+          row.car_name,
+          row.statement,
+          row.model_year,
+          row.exterior_color,
+          row.interior_color,
+          row.location_name,
+        ].join(" ").toLowerCase();
+        const compactVin = String(row.vin || "").toLowerCase().replace(/\s+/g, "");
+        return searchable.includes(term) || compactVin.includes(compactTerm);
       })
-      .slice(0, 20)
+      .sort((left, right) => matchRank(left) - matchRank(right) || String(left.vin || "").localeCompare(String(right.vin || ""), "en"))
       .map(toVehicleRow);
-  }, [stockRows, pickerSearch, selectedCars, selectedSourceLocationId]);
+  }, [stockRows, pickerSearch]);
 
   const requestColumns = useMemo<ResizableOperationsColumn<StockVehicleRow>[]>(() => [
     { key: "vin", label: "رقم الهيكل", width: 170, min: 125, max: 280, value: (row) => row.vin, render: (row) => <strong dir="ltr">{row.vin}</strong> },
@@ -235,6 +250,7 @@ export function StockPage() {
   ], [notes]);
 
   function openRequest(row: StockVehicleRow) {
+    setError("");
     setSelectedCars([row]);
     setDestinationLocationId("");
     setPhotographyDate("");
@@ -247,6 +263,21 @@ export function StockPage() {
   function addRequestCar(vehicle: VehicleRow) {
     const row = stockRows.find((item) => item.id === vehicle.id);
     if (!row) return;
+
+    if (selectedCars.some((item) => item.id === row.id)) {
+      setError(`السيارة ${row.vin} مضافة بالفعل إلى طلب التصوير`);
+      return;
+    }
+    if (row.active_transfer_requests) {
+      setError(`السيارة ${row.vin} مرتبطة بطلب نشط ولا يمكن إضافتها إلى طلب تصوير جديد`);
+      return;
+    }
+    if (selectedSourceLocationId && row.location_id !== selectedSourceLocationId) {
+      setError(`السيارة ${row.vin} موجودة في مكان مصدر مختلف. أنشئ لها طلب تصوير مستقل`);
+      return;
+    }
+
+    setError("");
     setSelectedCars((current) => [...current, row]);
     setPickerSearch("");
   }
@@ -259,6 +290,7 @@ export function StockPage() {
     setNotes({});
     setRequestNote("");
     setPickerSearch("");
+    setError("");
   }
 
   function closeRequest() {
