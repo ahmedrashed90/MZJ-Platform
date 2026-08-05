@@ -4,6 +4,8 @@ import {
   ArrowClockwise,
   ArrowCounterClockwise,
   CalendarBlank,
+  CaretDown,
+  CaretUp,
   Car,
   ChatText,
   CheckCircle,
@@ -60,6 +62,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deleteErrorMessage, setDeleteErrorMessage] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(true);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const canDeleteTracking = hasPermission(user, "tracking.order.delete");
   const canCreateTrackingLink = hasPermission(user, "tracking.link.create");
@@ -316,16 +319,41 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
 
             <div className="tracking-detail-body">
               {selected.is_cancelled ? <div className="connection-banner warning"><WarningCircle size={20} weight="fill" /><span>هذا الطلب ملغي من NEXT ERP. تم إيقاف المراحل ورسائل SMS+ مع الاحتفاظ بالسجل السابق.</span></div> : null}
-              <section className="tracking-order-info-grid">
-                <div><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
-                <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
-                <div><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
-                <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
-                <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
-                <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
-                <div><CurrencyCircleDollar size={18} /><span><small>الدفعة المقدمة</small><strong>{formatTrackingMoney(selected.advance_paid)}</strong></span></div>
-                <div><CurrencyCircleDollar size={18} /><span><small>المتبقي</small><strong>{formatTrackingMoney(Math.max(0, Number(selected.total_incl_vat || 0) - Number(selected.advance_paid || 0)))}</strong></span></div>
-              </section>
+
+              <div className="tracking-overview-grid">
+                <section className="tracking-overview-card tracking-order-summary-card">
+                  <div className="tracking-section-heading"><div><User size={20} /><h3>ملخص الطلب</h3></div></div>
+                  <div className="tracking-order-info-grid">
+                    <div><User size={18} /><span><small>اسم العميل</small><strong>{selected.customer_name || "—"}</strong></span></div>
+                    <div><Phone size={18} /><span><small>رقم الجوال</small><strong>{selected.customer_mobile || "—"}</strong></span></div>
+                    <div><MapPin size={18} /><span><small>الفرع</small><strong>{trackingBranchLabel(selected.branch)}</strong></span></div>
+                    <div><CalendarBlank size={18} /><span><small>تاريخ الطلب</small><strong>{formatTrackingDate(selected.order_date, false)}</strong></span></div>
+                    <div><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
+                    <div><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
+                    <div><CurrencyCircleDollar size={18} /><span><small>الدفعة المقدمة</small><strong>{formatTrackingMoney(selected.advance_paid)}</strong></span></div>
+                    <div><CurrencyCircleDollar size={18} /><span><small>المتبقي</small><strong>{formatTrackingMoney(Math.max(0, Number(selected.total_incl_vat || 0) - Number(selected.advance_paid || 0)))}</strong></span></div>
+                  </div>
+                </section>
+
+                <section className="tracking-overview-card tracking-vehicle-summary-card">
+                  <div className="tracking-section-heading"><div><Car size={20} /><h3>السيارات في الطلب</h3></div><span>{selected.vehicles.length}</span></div>
+                  <div className="tracking-vehicle-tabs">
+                    {selected.vehicles.map((vehicle, index) => (
+                      <button key={vehicle.id} type="button" className={activeVehicle?.id === vehicle.id ? "active" : ""} onClick={() => setActiveVehicleId(vehicle.id)}>
+                        سيارة {index + 1}<small>{visibleVin(vehicle)}</small>
+                      </button>
+                    ))}
+                  </div>
+                  {activeVehicle ? <div className="tracking-car-details">
+                    <div className="tracking-car-name"><small>السيارة</small><strong>{activeVehicle.car_name || [activeVehicle.item_type, activeVehicle.item_category, activeVehicle.item_model].filter(Boolean).join(" ") || "—"}</strong></div>
+                    <div><small>رقم الهيكل</small><strong>{visibleVin(activeVehicle)}</strong></div>
+                    <div><small>اللون الخارجي</small><strong>{activeVehicle.exterior_color || "—"}</strong></div>
+                    <div><small>اللون الداخلي</small><strong>{activeVehicle.interior_color || "—"}</strong></div>
+                    <div><small>الوكيل</small><strong>{activeVehicle.dealer || "—"}</strong></div>
+                    <div><small>إجمالي السيارة</small><strong>{formatTrackingMoney(Number(activeVehicle.total_incl_vat || 0) + Number(activeVehicle.registration_fee || 0))}</strong></div>
+                  </div> : null}
+                </section>
+              </div>
 
               {selected.is_archived ? (
                 <div className="tracking-archived-notice">
@@ -334,58 +362,40 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                 </div>
               ) : null}
 
-              <section className="tracking-vehicle-section">
-                <div className="tracking-section-heading"><div><Car size={20} /><h3>السيارات في الطلب</h3></div><span>{selected.vehicles.length}</span></div>
-                <div className="tracking-vehicle-tabs">
-                  {selected.vehicles.map((vehicle, index) => (
-                    <button key={vehicle.id} type="button" className={activeVehicle?.id === vehicle.id ? "active" : ""} onClick={() => setActiveVehicleId(vehicle.id)}>
-                      سيارة {index + 1}<small>{visibleVin(vehicle)}</small>
-                    </button>
-                  ))}
+              {activeVehicle ? <section className="tracking-stages-section">
+                <div className="tracking-section-heading tracking-stages-heading"><div><CheckCircle size={20} /><h3>مراحل التتبع</h3></div><span>{activeVehicle.stages.filter((stage) => stage.status === "completed").length}/{activeVehicle.stages.length}</span></div>
+                <div className="tracking-stage-progress"><span style={{ width: `${activeVehicle.stages.length ? Math.round((activeVehicle.stages.filter((stage) => stage.status === "completed").length / activeVehicle.stages.length) * 100) : 0}%` }} /></div>
+                <div className="tracking-stage-list">
+                  {activeVehicle.stages.map((stage) => {
+                    const done = stage.status === "completed";
+                    const completeKey = `complete_stage:${activeVehicle.id}:${stage.stage_id}`;
+                    const revertKey = `revert_stage:${activeVehicle.id}:${stage.stage_id}`;
+                    const smsKey = `sms:${activeVehicle.id}:${stage.stage_id}`;
+                    return (
+                      <article key={stage.stage_id} className={`tracking-stage-card ${done ? "done" : ""}`}>
+                        <div className="tracking-stage-number">{done ? <CheckCircle size={20} weight="fill" /> : stage.sort_order}</div>
+                        <div className="tracking-stage-copy">
+                          <h4>{stage.name}</h4>
+                          <p>{stage.description || ""}</p>
+                          <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
+                        </div>
+                        <div className="tracking-stage-actions">
+                          {!selected.is_archived && !selected.is_cancelled && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
+                          {!selected.is_archived && !selected.is_cancelled && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
+                          {!selected.is_archived && !selected.is_cancelled && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className={`sms ${stage.sms_sent ? "sent" : ""}`} onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)} title={stage.sms_sent ? "تم إرسال SMS+ لهذه المرحلة" : "إرسال SMS+"}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
+              </section> : null}
 
-                {activeVehicle ? (
-                  <>
-                    <div className="tracking-car-details">
-                      <div><small>السيارة</small><strong>{activeVehicle.car_name || [activeVehicle.item_type, activeVehicle.item_category, activeVehicle.item_model].filter(Boolean).join(" ") || "—"}</strong></div>
-                      <div><small>رقم الهيكل</small><strong>{visibleVin(activeVehicle)}</strong></div>
-                      <div><small>اللون الخارجي</small><strong>{activeVehicle.exterior_color || "—"}</strong></div>
-                      <div><small>اللون الداخلي</small><strong>{activeVehicle.interior_color || "—"}</strong></div>
-                      <div><small>الوكيل</small><strong>{activeVehicle.dealer || "—"}</strong></div>
-                      <div><small>إجمالي السيارة</small><strong>{formatTrackingMoney(Number(activeVehicle.total_incl_vat || 0) + Number(activeVehicle.registration_fee || 0))}</strong></div>
-                    </div>
-
-                    <div className="tracking-section-heading tracking-stages-heading"><div><CheckCircle size={20} /><h3>مراحل التتبع</h3></div><span>{activeVehicle.stages.filter((stage) => stage.status === "completed").length}/{activeVehicle.stages.length}</span></div>
-                    <div className="tracking-stage-list">
-                      {activeVehicle.stages.map((stage) => {
-                        const done = stage.status === "completed";
-                        const completeKey = `complete_stage:${activeVehicle.id}:${stage.stage_id}`;
-                        const revertKey = `revert_stage:${activeVehicle.id}:${stage.stage_id}`;
-                        const smsKey = `sms:${activeVehicle.id}:${stage.stage_id}`;
-                        return (
-                          <article key={stage.stage_id} className={`tracking-stage-card ${done ? "done" : ""}`}>
-                            <div className="tracking-stage-number">{done ? <CheckCircle size={22} weight="fill" /> : stage.sort_order}</div>
-                            <div className="tracking-stage-copy">
-                              <h4>{stage.name}</h4>
-                              <p>{stage.description || ""}</p>
-                              <small>{done ? `تم في ${formatTrackingDate(stage.completed_at)}${stage.completed_by_name ? ` بواسطة ${stage.completed_by_name}` : ""}` : "لم تُنفذ بعد"}</small>
-                            </div>
-                            <div className="tracking-stage-actions">
-                              {!selected.is_archived && !selected.is_cancelled && !done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.complete`) ? <button type="button" onClick={() => void stageAction("complete_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}>{actionKey === completeKey ? "جاري..." : "تم الانتهاء"}</button> : null}
-                              {!selected.is_archived && !selected.is_cancelled && done && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.rollback`) ? <button type="button" className="secondary" onClick={() => void stageAction("revert_stage", activeVehicle, stage)} disabled={Boolean(actionKey)}><ArrowCounterClockwise size={15} />{actionKey === revertKey ? "جاري..." : "تراجع"}</button> : null}
-                              {!selected.is_archived && !selected.is_cancelled && stage.sms_enabled && canSendTrackingSms && hasPermission(user, `tracking.stage.${String(stage.sort_order).padStart(2, "0")}.sms`) ? <button type="button" className={`sms ${stage.sms_sent ? "sent" : ""}`} onClick={() => void sendSms(activeVehicle, stage)} disabled={Boolean(actionKey)} title={stage.sms_sent ? "تم إرسال SMS+ لهذه المرحلة" : "إرسال SMS+"}><ChatText size={16} />{actionKey === smsKey ? "جاري..." : "SMS+"}</button> : null}
-                            </div>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </>
-                ) : null}
-              </section>
-
-              <section className="tracking-history-section">
-                <div className="tracking-section-heading"><div><Clock size={20} /><h3>سجل الإجراءات</h3></div><span>{selected.events.length}</span></div>
-                <div className="tracking-history-list">
+              <section className={`tracking-history-section ${historyOpen ? "open" : "collapsed"}`}>
+                <button type="button" className="tracking-history-toggle" onClick={() => setHistoryOpen((value) => !value)} aria-expanded={historyOpen}>
+                  <div><Clock size={20} /><span><strong>سجل الإجراءات</strong><small>عرض جميع الإجراءات والتحديثات الخاصة بالطلب</small></span></div>
+                  <span className="tracking-history-toggle-meta"><b>{selected.events.length}</b>{historyOpen ? <CaretUp size={18} /> : <CaretDown size={18} />}</span>
+                </button>
+                {historyOpen ? <div className="tracking-history-list">
                   {selected.events.length === 0 ? <p className="tracking-empty-note">لم يتم تنفيذ أي إجراء حتى الآن.</p> : selected.events.map((event) => (
                     <div key={event.id}>
                       <span className={event.action}>{event.action === "completed" ? "إنهاء" : "تراجع"}</span>
@@ -393,7 +403,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                       <small>{event.actor_name || "مستخدم المنصة"} • {formatTrackingDate(event.created_at)}</small>
                     </div>
                   ))}
-                </div>
+                </div> : null}
               </section>
             </div>
           </aside>
