@@ -119,7 +119,6 @@ export function SalesOrdersFollowupPage() {
     try {
       await operationsFetch(`/api/operations`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "complete_sales_order_followup", trackingOrderId: row.tracking_order_id }),
       });
       await load(page);
