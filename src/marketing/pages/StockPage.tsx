@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, CalendarBlank, Camera, CaretDown, CheckCircle, MagnifyingGlass, Trash, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { OperationsVehiclePicker } from "../../operations/components/OperationsVehiclePicker";
@@ -49,11 +49,8 @@ type StockPayload = {
   locations: MarketingLocation[];
 };
 
-type GroupedCar = StockCar & {
-  quantity: number;
-  vehicleIds: string[];
+type StockVehicleRow = StockCar & {
   usage: any[];
-  locationNames: string[];
 };
 
 const requestStageOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
@@ -79,7 +76,7 @@ function formatPhotographyDate(value: string | null | undefined) {
   }).format(date);
 }
 
-function toVehicleRow(row: GroupedCar): VehicleRow {
+function toVehicleRow(row: StockVehicleRow): VehicleRow {
   return {
     id: row.id,
     vin: row.vin,
@@ -120,7 +117,7 @@ export function StockPage() {
   });
   const [requestOpen, setRequestOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
-  const [selectedCars, setSelectedCars] = useState<GroupedCar[]>([]);
+  const [selectedCars, setSelectedCars] = useState<StockVehicleRow[]>([]);
   const [destinationLocationId, setDestinationLocationId] = useState("");
   const [photographyDate, setPhotographyDate] = useState("");
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -130,6 +127,7 @@ export function StockPage() {
   const [busy, setBusy] = useState(false);
   const [completingRequestId, setCompletingRequestId] = useState("");
   const [markingStockId, setMarkingStockId] = useState("");
+  const photographyDateInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     setError("");
@@ -146,35 +144,14 @@ export function StockPage() {
     void load();
   }, []);
 
-  const grouped = useMemo<GroupedCar[]>(() => {
-    const map = new Map<string, GroupedCar>();
-    for (const car of data?.cars || []) {
-      const key = [car.car_name, car.statement, car.model_year, car.exterior_color, car.interior_color]
-        .map((value) => String(value || "").trim().toLowerCase())
-        .join("|");
-      const existing = map.get(key);
-      const contentUsage = Array.isArray(car.content_usage) ? car.content_usage : [];
-      if (existing) {
-        existing.quantity += 1;
-        existing.vehicleIds.push(car.id);
-        existing.usage.push(...contentUsage);
-        existing.photographed = Boolean(existing.photographed || car.photographed);
-        if (!existing.photographed_at && car.photographed_at) existing.photographed_at = car.photographed_at;
-        if (car.location_name && !existing.locationNames.includes(car.location_name)) existing.locationNames.push(car.location_name);
-      } else {
-        map.set(key, {
-          ...car,
-          quantity: 1,
-          vehicleIds: [car.id],
-          usage: [...contentUsage],
-          locationNames: car.location_name ? [car.location_name] : [],
-        });
-      }
-    }
-    return [...map.values()];
+  const stockRows = useMemo<StockVehicleRow[]>(() => {
+    return (data?.cars || []).map((car) => ({
+      ...car,
+      usage: Array.isArray(car.content_usage) ? [...car.content_usage] : [],
+    }));
   }, [data]);
 
-  const filtered = useMemo(() => grouped.filter((row) => {
+  const filtered = useMemo(() => stockRows.filter((row) => {
     const haystack = [
       row.vin,
       row.car_name,
@@ -193,26 +170,26 @@ export function StockPage() {
     const matchesMonth = !filters.agendaMonth || row.usage.some((item) => String(item?.month || item?.agendaMonth || "").startsWith(filters.agendaMonth));
     const matchesType = !filters.contentType || row.usage.some((item) => String(item?.contentType || item?.creativeType || "") === filters.contentType);
     return matchesSearch && matchesCar && matchesStatement && matchesPhoto && matchesAgenda && matchesMonth && matchesType;
-  }), [grouped, filters]);
+  }), [stockRows, filters]);
 
   const carNames = useMemo(
-    () => [...new Set(grouped.map((item) => item.car_name).filter(Boolean))] as string[],
-    [grouped],
+    () => [...new Set(stockRows.map((item) => item.car_name).filter(Boolean))] as string[],
+    [stockRows],
   );
   const statements = useMemo(
-    () => [...new Set(grouped.map((item) => item.statement).filter(Boolean))] as string[],
-    [grouped],
+    () => [...new Set(stockRows.map((item) => item.statement).filter(Boolean))] as string[],
+    [stockRows],
   );
   const contentTypes = useMemo(
-    () => [...new Set(grouped.flatMap((item) => item.usage.map((usage) => usage?.contentType || usage?.creativeType)).filter(Boolean))] as string[],
-    [grouped],
+    () => [...new Set(stockRows.flatMap((item) => item.usage.map((usage) => usage?.contentType || usage?.creativeType)).filter(Boolean))] as string[],
+    [stockRows],
   );
   const metrics = useMemo(() => ({
-    total: grouped.reduce((sum, row) => sum + row.quantity, 0),
-    notPhotographed: grouped.filter((row) => !row.photographed).reduce((sum, row) => sum + row.quantity, 0),
-    unused: grouped.filter((row) => row.usage.length === 0).reduce((sum, row) => sum + row.quantity, 0),
+    total: stockRows.length,
+    notPhotographed: stockRows.filter((row) => !row.photographed).length,
+    unused: stockRows.filter((row) => row.usage.length === 0).length,
     requests: data?.requests.filter((row) => row.status !== "completed" && !row.cancelled_at).length || 0,
-  }), [grouped, data]);
+  }), [stockRows, data]);
 
   const activeRequests = useMemo(
     () => (data?.requests || []).filter((row) => row.status !== "completed" && !row.cancelled_at),
@@ -233,7 +210,7 @@ export function StockPage() {
   const pickerRows = useMemo<VehicleRow[]>(() => {
     const term = pickerSearch.trim().toLowerCase();
     if (term.length < 2) return [];
-    return grouped
+    return stockRows
       .filter((row) => {
         if (selectedCars.some((item) => item.id === row.id)) return false;
         if (row.active_transfer_requests) return false;
@@ -245,9 +222,9 @@ export function StockPage() {
       })
       .slice(0, 20)
       .map(toVehicleRow);
-  }, [grouped, pickerSearch, selectedCars, selectedSourceLocationId]);
+  }, [stockRows, pickerSearch, selectedCars, selectedSourceLocationId]);
 
-  const requestColumns = useMemo<ResizableOperationsColumn<GroupedCar>[]>(() => [
+  const requestColumns = useMemo<ResizableOperationsColumn<StockVehicleRow>[]>(() => [
     { key: "vin", label: "رقم الهيكل", width: 170, min: 125, max: 280, value: (row) => row.vin, render: (row) => <strong dir="ltr">{row.vin}</strong> },
     { key: "car", label: "السيارة", width: 145, min: 105, max: 280, value: (row) => row.car_name, render: (row) => row.car_name || "—" },
     { key: "statement", label: "البيان", width: 220, min: 145, max: 420, value: (row) => row.statement, render: (row) => row.statement || "—" },
@@ -257,7 +234,7 @@ export function StockPage() {
     { key: "delete", label: "حذف", width: 76, min: 68, max: 100, value: () => "", render: (row) => <button type="button" className="operations-row-delete" onClick={() => setSelectedCars((current) => current.filter((item) => item.id !== row.id))} aria-label={`حذف السيارة ${row.vin}`}><Trash size={17} /></button> },
   ], [notes]);
 
-  function openRequest(row: GroupedCar) {
+  function openRequest(row: StockVehicleRow) {
     setSelectedCars([row]);
     setDestinationLocationId("");
     setPhotographyDate("");
@@ -268,7 +245,7 @@ export function StockPage() {
   }
 
   function addRequestCar(vehicle: VehicleRow) {
-    const row = grouped.find((item) => item.id === vehicle.id);
+    const row = stockRows.find((item) => item.id === vehicle.id);
     if (!row) return;
     setSelectedCars((current) => [...current, row]);
     setPickerSearch("");
@@ -288,7 +265,7 @@ export function StockPage() {
     if (!busy) resetRequest();
   }
 
-  async function markStockPhotographed(row: GroupedCar) {
+  async function markStockPhotographed(row: StockVehicleRow) {
     if (row.photographed || markingStockId) return;
     setMarkingStockId(row.id);
     setError("");
@@ -296,7 +273,7 @@ export function StockPage() {
     try {
       const result = await marketingFetch<{ message: string }>("/api/marketing", {
         method: "POST",
-        body: JSON.stringify({ action: "mark_stock_photographed", vehicleIds: row.vehicleIds }),
+        body: JSON.stringify({ action: "mark_stock_photographed", vehicleIds: [row.id] }),
       });
       setMessage(result.message);
       await load();
@@ -357,6 +334,21 @@ export function StockPage() {
     }
   }
 
+  function openPhotographyDatePicker() {
+    const input = photographyDateInputRef.current;
+    if (!input) return;
+    try {
+      if (typeof input.showPicker === "function") input.showPicker();
+      else {
+        input.focus();
+        input.click();
+      }
+    } catch {
+      input.focus();
+      input.click();
+    }
+  }
+
   return (
     <MarketingPage title="الاستوك" description="مخزون السيارات من سيستم العمليات، استخدام السيارات في المحتوى، وطلبات التصوير.">
       {error ? <MarketingAlert>{error}</MarketingAlert> : null}
@@ -401,8 +393,8 @@ export function StockPage() {
                       <td>{row.model_year || "—"}</td>
                       <td>{row.exterior_color || "—"}</td>
                       <td>{row.interior_color || "—"}</td>
-                      <td>{row.locationNames.join("، ") || "—"}</td>
-                      <td>{row.quantity}</td>
+                      <td>{row.location_name || "—"}</td>
+                      <td>1</td>
                       <td>{row.photographed ? <span className="marketing-status success">تم التصوير</span> : <button type="button" className="marketing-status warning marketing-photo-status-button" disabled={markingStockId === row.id} onClick={() => void markStockPhotographed(row)}>{markingStockId === row.id ? "جاري التحديث..." : "لم يتم التصوير"}</button>}</td>
                       <td>{row.usage.length ? <div className="usage-tags">{row.usage.slice(0, 4).map((item, index) => <span key={index}>{item?.creativeName || item?.contentType || item?.sourceName || "مستخدم"}</span>)}</div> : "غير مستخدمة"}</td>
                     </tr>
@@ -535,16 +527,20 @@ export function StockPage() {
                 {(data?.locations || []).filter((item) => item.id !== selectedSourceLocationId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </label>
-            <label className="operations-control-field marketing-photo-date-field">
+            <div className="operations-control-field marketing-photo-date-field">
               <span>تاريخ التصوير</span>
-              <span className={`marketing-photo-date-control${photographyDate ? " has-value" : ""}`}>
-                <CalendarBlank size={20} weight="duotone" />
-                <span className="marketing-photo-date-copy">
-                  <strong>{photographyDate ? formatPhotographyDate(photographyDate) : "اختر تاريخ التصوير"}</strong>
-                  <small>{photographyDate ? "اضغط لتغيير التاريخ" : "اضغط لفتح التقويم"}</small>
-                </span>
-                <CaretDown size={16} />
+              <span className="marketing-photo-date-field-control">
+                <button type="button" className={`marketing-photo-date-control${photographyDate ? " has-value" : ""}`} onClick={openPhotographyDatePicker}>
+                  <CalendarBlank size={20} weight="duotone" />
+                  <span className="marketing-photo-date-copy">
+                    <strong>{photographyDate ? formatPhotographyDate(photographyDate) : "اختر تاريخ التصوير"}</strong>
+                    <small>{photographyDate ? "اضغط لتغيير التاريخ" : "اضغط لفتح التقويم"}</small>
+                  </span>
+                  <CaretDown size={16} />
+                </button>
                 <input
+                  ref={photographyDateInputRef}
+                  className="marketing-photo-date-native"
                   type="date"
                   value={photographyDate}
                   onChange={(event) => setPhotographyDate(event.target.value)}
@@ -552,7 +548,7 @@ export function StockPage() {
                   required
                 />
               </span>
-            </label>
+            </div>
           </div>
 
           {!selectedCars.length ? (
@@ -563,7 +559,7 @@ export function StockPage() {
                 <strong>{selectedCars.length.toLocaleString("ar-SA-u-nu-latn")} سيارة داخل الطلب</strong>
                 <span>{destination ? <>المكان المستهدف: <b>{destination.name}</b></> : "حدد المكان المستهدف"}</span>
               </div>
-              <ResizableOperationsTable<GroupedCar>
+              <ResizableOperationsTable<StockVehicleRow>
                 rows={selectedCars}
                 columns={requestColumns}
                 rowKey={(row) => row.id}

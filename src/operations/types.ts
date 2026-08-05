@@ -175,9 +175,12 @@ export type SalesOrderFollowupRow = {
   total_incl_vat: number | string;
   advance_paid: number | string;
   remaining_amount: number | string;
+  stage_3_completed: boolean;
+  stage_4_completed: boolean;
+  stage_5_completed: boolean;
   stage_6_completed: boolean;
-  financial_approved: boolean;
-  administrative_approved: boolean;
+  stage_7_completed: boolean;
+  stage_9_completed: boolean;
   stage_10_completed: boolean;
   sales_followup_completed_at?: string | null;
   sales_followup_completed_by?: string | null;
@@ -190,7 +193,7 @@ export type SalesOrdersFollowupResponse = {
   rows: SalesOrderFollowupRow[];
   summary: {
     total: number;
-    pending_settlement: number;
+    pending_card: number;
     pending_financial: number;
     pending_administrative: number;
     delivered: number;

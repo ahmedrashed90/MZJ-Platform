@@ -1604,11 +1604,14 @@ async function listSalesOrderFollowup(
       o.sales_followup_completed_at,
       o.sales_followup_completed_by::text,
       o.sales_followup_completed_by_name,
-      coalesce(stage_6.completed,false) as stage_6_completed,
-      coalesce(approval.financial_approved,false) as financial_approved,
-      coalesce(approval.administrative_approved,false) as administrative_approved,
-      coalesce(stage_10.completed,false) as stage_10_completed,
-      greatest(o.updated_at,tv.updated_at,coalesce(approval.updated_at,o.updated_at)) as updated_at
+      coalesce(stage_status.stage_3_completed,false) as stage_3_completed,
+      coalesce(stage_status.stage_4_completed,false) as stage_4_completed,
+      coalesce(stage_status.stage_5_completed,false) as stage_5_completed,
+      coalesce(stage_status.stage_6_completed,false) as stage_6_completed,
+      coalesce(stage_status.stage_7_completed,false) as stage_7_completed,
+      coalesce(stage_status.stage_9_completed,false) as stage_9_completed,
+      coalesce(stage_status.stage_10_completed,false) as stage_10_completed,
+      greatest(o.updated_at,tv.updated_at,coalesce(stage_status.updated_at,o.updated_at)) as updated_at
     from tracking.orders o
     join tracking.order_vehicles tv on tv.order_id=o.id
     left join lateral (
@@ -1629,24 +1632,19 @@ async function listSalesOrderFollowup(
       limit 1
     ) vehicle_match on true
     left join lateral (
-      select bool_or(vs.status='completed') as completed
+      select
+        bool_or(vs.status='completed') filter (where st.sort_order=3) as stage_3_completed,
+        bool_or(vs.status='completed') filter (where st.sort_order=4) as stage_4_completed,
+        bool_or(vs.status='completed') filter (where st.sort_order=5) as stage_5_completed,
+        bool_or(vs.status='completed') filter (where st.sort_order=6) as stage_6_completed,
+        bool_or(vs.status='completed') filter (where st.sort_order=7) as stage_7_completed,
+        bool_or(vs.status='completed') filter (where st.sort_order=9) as stage_9_completed,
+        bool_or(vs.status='completed') filter (where st.sort_order=10) as stage_10_completed,
+        max(vs.updated_at) as updated_at
       from tracking.vehicle_stages vs
       join tracking.stages st on st.id=vs.stage_id
-      where vs.vehicle_id=tv.id and st.sort_order=6
-    ) stage_6 on true
-    left join lateral (
-      select bool_or(vs.status='completed') as completed
-      from tracking.vehicle_stages vs
-      join tracking.stages st on st.id=vs.stage_id
-      where vs.vehicle_id=tv.id and st.sort_order=10
-    ) stage_10 on true
-    left join lateral (
-      select va.financial_approved,va.administrative_approved,va.updated_at
-      from operations.vehicle_approvals va
-      where va.vehicle_id=vehicle_match.id
-      order by case when coalesce(va.is_active,false) then 0 else 1 end,coalesce(va.cycle_no,1) desc,va.updated_at desc
-      limit 1
-    ) approval on true
+      where vs.vehicle_id=tv.id and st.sort_order in (3,4,5,6,7,9,10)
+    ) stage_status on true
     where coalesce(o.is_deleted,false)=false
       and coalesce(o.is_cancelled,false)=false
       and ((${completedOnly}=true and o.sales_followup_completed_at is not null) or (${completedOnly}=false and o.sales_followup_completed_at is null))
@@ -1671,22 +1669,33 @@ async function listSalesOrderFollowup(
       )
   `;
 
-  const statusClause = status === "pending_settlement" ? sql`stage_6_completed=false`
-    : status === "pending_financial" ? sql`financial_approved=false`
-      : status === "pending_administrative" ? sql`administrative_approved=false`
-        : status === "delivered" ? sql`stage_10_completed=true`
-          : status === "pending_delivery" ? sql`stage_10_completed=false`
-            : status === "completed" ? sql`stage_6_completed=true and financial_approved=true and administrative_approved=true and stage_10_completed=true`
-              : sql`true`;
+  const statusClause = status === "pending_card" ? sql`stage_3_completed=false`
+    : status === "pending_registration" ? sql`stage_4_completed=false`
+      : status === "pending_insurance" ? sql`stage_5_completed=false`
+        : status === "pending_financial" ? sql`stage_6_completed=false`
+          : status === "pending_administrative" ? sql`stage_7_completed=false`
+            : status === "pending_readiness" ? sql`stage_9_completed=false`
+              : status === "delivered" ? sql`stage_10_completed=true`
+                : status === "pending_delivery" ? sql`stage_10_completed=false`
+                  : status === "completed" ? sql`
+                    stage_3_completed=true
+                    and stage_4_completed=true
+                    and stage_5_completed=true
+                    and stage_6_completed=true
+                    and stage_7_completed=true
+                    and stage_9_completed=true
+                    and stage_10_completed=true
+                  `
+                    : sql`true`;
 
   const [summaryRows, countRows, rows] = await Promise.all([
     sql<any[]>`
       with scoped as (${scopedRows})
       select
         count(*)::int as total,
-        count(*) filter (where stage_6_completed=false)::int as pending_settlement,
-        count(*) filter (where financial_approved=false)::int as pending_financial,
-        count(*) filter (where administrative_approved=false)::int as pending_administrative,
+        count(*) filter (where stage_3_completed=false)::int as pending_card,
+        count(*) filter (where stage_6_completed=false)::int as pending_financial,
+        count(*) filter (where stage_7_completed=false)::int as pending_administrative,
         count(*) filter (where stage_10_completed=true)::int as delivered
       from scoped
     `,
@@ -1714,7 +1723,7 @@ async function listSalesOrderFollowup(
     rows,
     summary: {
       total: Number(summary.total || 0),
-      pending_settlement: Number(summary.pending_settlement || 0),
+      pending_card: Number(summary.pending_card || 0),
       pending_financial: Number(summary.pending_financial || 0),
       pending_administrative: Number(summary.pending_administrative || 0),
       delivered: Number(summary.delivered || 0),

@@ -14,9 +14,12 @@ import { useOperations } from "../useOperations";
 
 const statusOptions = [
   ["", "كل الحالات"],
-  ["pending_settlement", "لم يتم استيفاء المبالغ المتبقية"],
+  ["pending_card", "لم يتم إرسال البطاقة"],
+  ["pending_registration", "لم يتم سداد رسوم التسجيل"],
+  ["pending_insurance", "لم يتم التأمين"],
   ["pending_financial", "بانتظار الموافقة المالية"],
   ["pending_administrative", "بانتظار الموافقة الإدارية"],
+  ["pending_readiness", "غير جاهز للاستلام"],
   ["pending_delivery", "لم يتم التسليم"],
   ["delivered", "تم التسليم"],
   ["completed", "مكتمل بالكامل"],
@@ -97,7 +100,7 @@ export function SalesOrdersFollowupPage() {
 
   const summary = payload?.summary || {
     total: 0,
-    pending_settlement: 0,
+    pending_card: 0,
     pending_financial: 0,
     pending_administrative: 0,
     delivered: 0,
@@ -143,7 +146,7 @@ export function SalesOrdersFollowupPage() {
 
       <section className="sales-orders-followup-summary" aria-label="ملخص متابعة طلبات البيع">
         <article><span className="neutral"><ClipboardText size={22} /></span><div><small>إجمالي الطلبات</small><strong>{summary.total.toLocaleString("en-US")}</strong><em>سيارة</em></div></article>
-        <article><span className="warning"><CurrencyCircleDollar size={22} /></span><div><small>بانتظار الاستيفاء</small><strong>{summary.pending_settlement.toLocaleString("en-US")}</strong><em>سيارة</em></div></article>
+        <article><span className="warning"><ClipboardText size={22} /></span><div><small>بانتظار إرسال البطاقة</small><strong>{summary.pending_card.toLocaleString("en-US")}</strong><em>سيارة</em></div></article>
         <article><span className="warning"><CurrencyCircleDollar size={22} /></span><div><small>بانتظار الموافقة المالية</small><strong>{summary.pending_financial.toLocaleString("en-US")}</strong><em>سيارة</em></div></article>
         <article><span className="warning"><WarningCircle size={22} /></span><div><small>بانتظار الموافقة الإدارية</small><strong>{summary.pending_administrative.toLocaleString("en-US")}</strong><em>سيارة</em></div></article>
         <article><span className="success"><CheckCircle size={22} /></span><div><small>تم التسليم</small><strong>{summary.delivered.toLocaleString("en-US")}</strong><em>سيارة</em></div></article>
@@ -190,18 +193,21 @@ export function SalesOrdersFollowupPage() {
                 <th>اسم العميل</th>
                 <th>رقم الهيكل</th>
                 <th>الإجمالي شامل الضريبة</th>
-                <th>الدفعة المقدمة</th>
+                <th>المدفوع</th>
                 <th>المتبقي</th>
-                <th>استيفاء المبالغ المتبقية</th>
+                <th>إرسال البطاقة</th>
+                <th>رسوم التسجيل</th>
+                <th>التأمين</th>
                 <th>الموافقة المالية</th>
                 <th>الموافقة الإدارية</th>
-                <th>إتمام عملية التسليم بنجاح</th>
+                <th>الجاهزية للاستلام</th>
+                <th>تم التسليم</th>
                 <th>الإجراء</th>
               </tr>
             </thead>
             <tbody>
               {loading && !payload ? (
-                <tr><td colSpan={11} className="sales-orders-followup-empty">جاري تحميل طلبات البيع...</td></tr>
+                <tr><td colSpan={14} className="sales-orders-followup-empty">جاري تحميل طلبات البيع...</td></tr>
               ) : payload?.rows.length ? payload.rows.map((row) => (
                 <tr key={row.tracking_vehicle_id}>
                   <td><strong className="sales-orders-followup-order" dir="ltr">{row.sales_order_no}</strong></td>
@@ -210,9 +216,12 @@ export function SalesOrdersFollowupPage() {
                   <td><span className="sales-orders-followup-money">{money(row.total_incl_vat)}</span></td>
                   <td><span className="sales-orders-followup-money">{money(row.advance_paid)}</span></td>
                   <td><span className={`sales-orders-followup-money ${remainingAmount(row) > 0 ? "remaining" : "settled"}`}>{money(remainingAmount(row))}</span></td>
+                  <td><StateBadge done={Boolean(row.stage_3_completed)} /></td>
+                  <td><StateBadge done={Boolean(row.stage_4_completed)} /></td>
+                  <td><StateBadge done={Boolean(row.stage_5_completed)} /></td>
                   <td><StateBadge done={Boolean(row.stage_6_completed)} /></td>
-                  <td><StateBadge done={Boolean(row.financial_approved)} /></td>
-                  <td><StateBadge done={Boolean(row.administrative_approved)} /></td>
+                  <td><StateBadge done={Boolean(row.stage_7_completed)} /></td>
+                  <td><StateBadge done={Boolean(row.stage_9_completed)} /></td>
                   <td><StateBadge done={Boolean(row.stage_10_completed)} /></td>
                   <td>
                     {completedView ? (
@@ -231,7 +240,7 @@ export function SalesOrdersFollowupPage() {
                   </td>
                 </tr>
               )) : (
-                <tr><td colSpan={11} className="sales-orders-followup-empty">لا توجد طلبات مطابقة للفلاتر الحالية</td></tr>
+                <tr><td colSpan={14} className="sales-orders-followup-empty">لا توجد طلبات مطابقة للفلاتر الحالية</td></tr>
               )}
             </tbody>
           </table>

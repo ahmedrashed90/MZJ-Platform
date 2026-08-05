@@ -96,11 +96,25 @@ function riyadhDateKey(value: unknown) {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
-function leadHasDueFollowUp(lead: CrmLead) {
-  if (leadStatus(lead) !== "مؤجل") return false;
+type FollowUpState = "none" | "today" | "overdue";
+
+function leadFollowUpState(lead: CrmLead, department: string): FollowUpState {
+  if (!["cash", "finance"].includes(department) || leadStatus(lead) !== "مؤجل") return "none";
   const followUpDate = riyadhDateKey(lead.follow_up_at);
-  if (!followUpDate) return false;
-  return followUpDate <= riyadhDateKey(new Date());
+  if (!followUpDate) return "none";
+  const today = riyadhDateKey(new Date());
+  if (followUpDate < today) return "overdue";
+  if (followUpDate === today) return "today";
+  return "none";
+}
+
+function leadHasDueFollowUp(lead: CrmLead, department: string) {
+  return leadFollowUpState(lead, department) !== "none";
+}
+
+function followUpPriority(lead: CrmLead, department: string) {
+  const state = leadFollowUpState(lead, department);
+  return state === "overdue" ? 2 : state === "today" ? 1 : 0;
 }
 
 export function CrmDashboardPage() {
@@ -234,9 +248,9 @@ export function CrmDashboardPage() {
       return unreadDifference || Number(originalOrder.get(left.id) || 0) - Number(originalOrder.get(right.id) || 0);
     };
     const byPostponedPriority = (left: CrmLead, right: CrmLead) => {
-      const followUpDifference = Number(leadHasDueFollowUp(right)) - Number(leadHasDueFollowUp(left));
+      const followUpDifference = followUpPriority(right, department) - followUpPriority(left, department);
       if (followUpDifference) return followUpDifference;
-      if (leadHasDueFollowUp(left) && leadHasDueFollowUp(right)) {
+      if (leadHasDueFollowUp(left, department) && leadHasDueFollowUp(right, department)) {
         const dateDifference = riyadhDateKey(left.follow_up_at).localeCompare(riyadhDateKey(right.follow_up_at));
         if (dateDifference) return dateDifference;
       }
@@ -364,28 +378,32 @@ export function CrmDashboardPage() {
                 <strong>{group.leads.length.toLocaleString("ar-SA-u-nu-latn")}</strong>
               </header>
               <div className="crm-status-cards">
-                {group.leads.map((lead) => (
-                  <button
-                    type="button"
-                    key={lead.id}
-                    className={`crm-lead-card ${leadStatus(lead).includes("غير مؤهل") ? "danger" : ""}`}
-                    onClick={() => openLead(lead)}
-                  >
-                    <div className="crm-lead-card-head compact">
-                      <div className="crm-lead-name-block">
-                        <strong>{lead.customer_name || "عميل"}</strong>
-                        <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
+                {group.leads.map((lead) => {
+                  const followUpState = leadFollowUpState(lead, department);
+                  const followUpLabel = followUpState === "today" ? "متابعة اليوم" : followUpState === "overdue" ? "تأخر المتابعة" : "";
+                  return (
+                    <button
+                      type="button"
+                      key={lead.id}
+                      className={`crm-lead-card ${leadStatus(lead).includes("غير مؤهل") ? "danger" : ""}`}
+                      onClick={() => openLead(lead)}
+                    >
+                      <div className="crm-lead-card-head compact">
+                        <div className="crm-lead-name-block">
+                          <strong>{lead.customer_name || "عميل"}</strong>
+                          <small>{sourceLabel(lead.source_code, lead.source_name)} · {lead.phone || lead.phone_normalized || "بدون رقم جوال"}</small>
+                        </div>
+                        <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
+                        {followUpState !== "none" ? <span className={`crm-follow-up-badge ${followUpState}`} aria-label={followUpLabel} title={followUpLabel}>{followUpLabel}</span> : null}
+                        {leadHasUnreadMessage(lead) ? <span className="crm-unread-dot" aria-label="رسالة غير مقروءة" title="رسالة غير مقروءة" /> : null}
                       </div>
-                      <span className="crm-completion-badge">مكتمل {lead.completion_percent ?? 0}%</span>
-                      {leadHasDueFollowUp(lead) ? <span className="crm-follow-up-badge" aria-label="متابعة مستحقة" title="متابعة مستحقة">متابعة</span> : null}
-                      {leadHasUnreadMessage(lead) ? <span className="crm-unread-dot" aria-label="رسالة غير مقروءة" title="رسالة غير مقروءة" /> : null}
-                    </div>
-                    <div className="crm-lead-card-grid compact">
-                      <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
-                    </div>
-                    <footer><span>{lead.car_name || lead.car_type || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
-                  </button>
-                ))}
+                      <div className="crm-lead-card-grid compact">
+                        <span>المسؤول: <b>{lead.assigned_name || "غير موزع"}</b></span>
+                      </div>
+                      <footer><span>{lead.car_name || lead.car_type || "بدون سيارة"}</span><time>{formatDate(lead.last_message_at || lead.updated_at)}</time></footer>
+                    </button>
+                  );
+                })}
                 {!group.leads.length ? <div className="crm-column-empty">لا يوجد عملاء</div> : null}
               </div>
             </section>

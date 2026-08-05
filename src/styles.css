@@ -1265,19 +1265,28 @@ button.small-metric { cursor: pointer; }
   align-self: center;
 }
 .crm-follow-up-badge {
-  min-height: 22px;
-  padding: 3px 8px;
+  min-height: 24px;
+  padding: 4px 9px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #9a4d00;
-  background: #fff1d6;
-  border: 1px solid #f2b45f;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 900;
   line-height: 1;
   white-space: nowrap;
+}
+.crm-follow-up-badge.today {
+  color: #157a3d;
+  background: #eaf8ef;
+  border: 1px solid #80d49c;
+  box-shadow: 0 0 0 2px rgba(21,122,61,.08);
+}
+.crm-follow-up-badge.overdue {
+  color: #b42318;
+  background: #fff0ed;
+  border: 1px solid #f1a59b;
+  box-shadow: 0 0 0 2px rgba(180,35,24,.08);
 }
 .crm-unread-status-column > header { border-bottom-color: rgba(22,163,74,.22); }
 .crm-finance-history-tabs {
@@ -2545,8 +2554,12 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .marketing-photo-request-create .operations-transfer-controls {
   grid-template-columns: minmax(360px,1.65fr) minmax(190px,.72fr) minmax(230px,.88fr);
 }
-.marketing-photo-date-control {
+.marketing-photo-date-field-control {
   position: relative;
+  min-width: 0;
+}
+.marketing-photo-date-control {
+  width: 100%;
   min-height: 48px;
   display: grid;
   grid-template-columns: 24px minmax(0,1fr) 18px;
@@ -2558,25 +2571,28 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   border-radius: 10px;
   background: #fff;
   color: #8b7770;
+  font: inherit;
+  text-align: right;
   cursor: pointer;
   transition: border-color .16s ease,box-shadow .16s ease,background .16s ease;
 }
 .marketing-photo-date-control:hover { border-color: var(--line-strong); background: #fffdfc; }
-.marketing-photo-date-control:focus-within { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(198,95,60,.08); }
+.marketing-photo-date-control:focus-visible { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(198,95,60,.08); outline: 0; }
 .marketing-photo-date-control.has-value { color: var(--brand); }
 .marketing-photo-date-copy { min-width: 0; display: grid; gap: 1px; }
 .marketing-photo-date-copy strong { overflow: hidden; color: #4f3932; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .marketing-photo-date-copy small { color: var(--muted); font-size: 9px; line-height: 1.35; }
-.marketing-photo-date-control > input[type="date"] {
+.marketing-photo-date-native {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
+  inset-inline-end: 8px;
+  bottom: 4px;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
   opacity: 0;
-  cursor: pointer;
+  pointer-events: none;
 }
-.marketing-photo-date-control > input[type="date"]::-webkit-calendar-picker-indicator { width: 100%; height: 100%; cursor: pointer; }
 
 .operations-vehicle-picker { position: relative; min-width: 0; }
 .operations-vehicle-picker-input { min-height: 44px; }
