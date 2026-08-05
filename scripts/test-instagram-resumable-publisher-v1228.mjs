@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import vm from "node:vm";
-import ts from "typescript";
+import { createRequire } from "node:module";
 
-function loadPublisher({ createDownloadUrl = () => "https://download.local/video.mp4" } = {}) {
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
+
+function loadPublisher({ createDownloadUrl = () => "https://download.local/video.mp4", createInstagramImageDeliveryUrl = (file) => `https://mzj.local/api/marketing/instagram-media?file=${file.id}` } = {}) {
   const source = fs.readFileSync("server/_instagram-publisher.ts", "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: {
@@ -17,6 +21,7 @@ function loadPublisher({ createDownloadUrl = () => "https://download.local/video
   const module = { exports: {} };
   const customRequire = (specifier) => {
     if (specifier === "./_media-storage.js") return { createDownloadUrl };
+    if (specifier === "./_instagram-media-delivery.js") return { createInstagramImageDeliveryUrl };
     if (specifier === "./_zoho-workdrive.js") {
       return {
         getZohoFileInfo: async () => ({}),
@@ -43,6 +48,29 @@ function loadPublisher({ createDownloadUrl = () => "https://download.local/video
     fetch: (...args) => globalThis.fetch(...args),
   });
   const wrapper = new vm.Script(`(function(require,module,exports){${output}\n})`, { filename: "_instagram-publisher.cjs" });
+  wrapper.runInContext(context)(customRequire, module, module.exports);
+  return module.exports;
+}
+
+
+function loadImageDelivery({ createDownloadUrl = () => "https://r2.local/image.jpg", getZohoFileInfo = async () => ({ downloadUrl: "https://zoho.local/protected-image" }), getZohoRuntime = async () => ({ uploadDomain: "https://zoho.local", accessToken: "zoho-token" }) } = {}) {
+  const source = fs.readFileSync("server/_instagram-media-delivery.ts", "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
+    fileName: "server/_instagram-media-delivery.ts",
+  }).outputText;
+  const module = { exports: {} };
+  const customRequire = (specifier) => {
+    if (specifier === "node:crypto") return crypto;
+    if (specifier === "./_media-storage.js") return { createDownloadUrl };
+    if (specifier === "./_zoho-workdrive.js") return { getZohoFileInfo, getZohoRuntime };
+    throw new Error(`Unexpected require: ${specifier}`);
+  };
+  const context = vm.createContext({
+    module, exports: module.exports, require: customRequire, process, Buffer, URL, Response, Headers,
+    fetch: (...args) => globalThis.fetch(...args), console,
+  });
+  const wrapper = new vm.Script(`(function(require,module,exports){${output}\n})`, { filename: "_instagram-media-delivery.cjs" });
   wrapper.runInContext(context)(customRequire, module, module.exports);
   return module.exports;
 }
@@ -92,7 +120,6 @@ async function testBinaryReelFlow() {
     caption: "Test caption",
     format: "reel",
     files: [{ storage_provider: "r2", storage_key: "video.mp4", original_name: "video.mp4", mime_type: "video/mp4", file_size: 16 }],
-    resolvePublicUrl: async () => { throw new Error("Reel must not use a public URL"); },
   });
 
   assert.equal(result.uploadMode, "resumable_binary");
@@ -116,7 +143,7 @@ async function testOrderedMultiImageStories() {
       const params = new URLSearchParams(init.body);
       assert.equal(params.get("media_type"), "STORIES");
       containerIndex += 1;
-      assert.equal(params.get("image_url"), `https://images.local/${containerIndex}.jpg`);
+      assert.equal(params.get("image_url"), `https://mzj.local/api/marketing/instagram-media?file=image-${containerIndex}`);
       return Response.json({ id: `story-container-${containerIndex}` });
     }
     const match = url.match(/story-container-(\d+)\?/);
@@ -126,17 +153,15 @@ async function testOrderedMultiImageStories() {
 
   const { publishInstagramContent } = loadPublisher();
   const files = [
-    { original_name: "1.jpg", mime_type: "image/jpeg" },
-    { original_name: "2.jpg", mime_type: "image/jpeg" },
+    { id: "image-1", original_name: "1.jpg", mime_type: "image/jpeg" },
+    { id: "image-2", original_name: "2.jpg", mime_type: "image/jpeg" },
   ];
-  let resolved = 0;
   const result = await publishInstagramContent({}, {
     igId: "178900000000000",
     token: "meta-token",
     caption: "",
     format: "story",
     files,
-    resolvePublicUrl: async () => `https://images.local/${++resolved}.jpg`,
   });
 
   assert.deepEqual(published, ["story-container-1", "story-container-2"]);
@@ -144,6 +169,46 @@ async function testOrderedMultiImageStories() {
   assert.equal(result.stories.length, 2);
 }
 
+async function testSignedProtectedImageDelivery() {
+  const previousBaseUrl = process.env.MZJ_PUBLIC_BASE_URL;
+  const previousKey = process.env.MZJ_TOKEN_ENCRYPTION_KEY;
+  process.env.MZJ_PUBLIC_BASE_URL = "https://mzj-platform.test";
+  process.env.MZJ_TOKEN_ENCRYPTION_KEY = "test-signing-key-that-is-longer-than-thirty-two-characters";
+  try {
+    const delivery = loadImageDelivery();
+    const fileId = "11111111-1111-4111-8111-111111111111";
+    const url = new URL(delivery.createInstagramImageDeliveryUrl({ id: fileId, original_name: "story.jpg" }, 1800));
+    assert.equal(url.origin, "https://mzj-platform.test");
+    assert.equal(url.pathname, "/api/marketing/instagram-media");
+    const verified = delivery.verifyInstagramImageDeliveryQuery(Object.fromEntries(url.searchParams));
+    assert.equal(verified.ok, true);
+    assert.equal(verified.fileId, fileId);
+    const tampered = delivery.verifyInstagramImageDeliveryQuery({
+      file: fileId, expires: url.searchParams.get("expires"), signature: `${url.searchParams.get("signature")}x`,
+    });
+    assert.equal(tampered.ok, false);
+
+    globalThis.fetch = async (input, init = {}) => {
+      assert.equal(String(input), "https://zoho.local/protected-image");
+      assert.equal(init.headers.Authorization, "Zoho-oauthtoken zoho-token");
+      return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43]), {
+        status: 200, headers: { "content-type": "image/jpeg" },
+      });
+    };
+    const sql = async () => [{
+      id: fileId, status: "ready", storage_provider: "zoho", external_id: "zoho-file-1",
+      original_name: "story.jpg", mime_type: "image/jpeg",
+    }];
+    const image = await delivery.loadInstagramImage(sql, fileId);
+    assert.equal(image.contentType, "image/jpeg");
+    assert.equal(image.bytes.length, 6);
+  } finally {
+    if (previousBaseUrl === undefined) delete process.env.MZJ_PUBLIC_BASE_URL; else process.env.MZJ_PUBLIC_BASE_URL = previousBaseUrl;
+    if (previousKey === undefined) delete process.env.MZJ_TOKEN_ENCRYPTION_KEY; else process.env.MZJ_TOKEN_ENCRYPTION_KEY = previousKey;
+  }
+}
+
 await testBinaryReelFlow();
 await testOrderedMultiImageStories();
-console.log("Instagram resumable publisher behavior tests: 2/2 passed");
+await testSignedProtectedImageDelivery();
+console.log("Instagram publishing behavior tests: 3/3 passed");

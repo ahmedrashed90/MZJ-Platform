@@ -46,6 +46,7 @@ import zohoIntegrationHandler from "../server/integrations/zoho.js";
 import operationsHandler from "../server/operations/index.js";
 import marketingHandler from "../server/marketing/index.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
+import instagramMediaHandler from "../server/marketing/instagram-media.js";
 import activityHandler from "../server/activity.js";
 import notificationsHandler from "../server/notifications.js";
 import notificationSettingsHandler from "../server/notification-settings.js";
@@ -104,6 +105,7 @@ const routes = new Map<string, ApiHandler>([
   ["integrations/erpnext/serial-no-status", erpNextVehicleStatusIntegrationHandler],
   ["operations", operationsHandler],
   ["marketing", marketingHandler],
+  ["marketing/instagram-media", instagramMediaHandler],
   ["marketing/platform-connections", platformConnectionsHandler],
   ["marketing/platform-connections/callback/meta", platformConnectionCallback("meta")],
   ["marketing/platform-connections/callback/tiktok", platformConnectionCallback("tiktok")],

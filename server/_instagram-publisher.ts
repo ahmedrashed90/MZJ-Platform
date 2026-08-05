@@ -1,10 +1,10 @@
 import type { getSql } from "./_db.js";
 import { createDownloadUrl } from "./_media-storage.js";
+import { createInstagramImageDeliveryUrl } from "./_instagram-media-delivery.js";
 import { getZohoFileInfo, getZohoRuntime } from "./_zoho-workdrive.js";
 import type { MarketingPublishFormat } from "../shared/marketing-publishing.js";
 
 type Sql = ReturnType<typeof getSql>;
-type PublicUrlResolver = (file: any) => Promise<string>;
 type InstagramGraphMethod = "GET" | "POST";
 type InstagramMediaType = "REELS" | "STORIES";
 
@@ -14,7 +14,6 @@ type InstagramPublishInput = {
   caption: string;
   format: MarketingPublishFormat;
   files: any[];
-  resolvePublicUrl: PublicUrlResolver;
 };
 
 type VideoUploadSource = {
@@ -240,7 +239,8 @@ async function publishVideo(
   return { create, upload, ready, publish, creationId, fileName: source.fileName, uploadMode: "resumable_binary" };
 }
 
-async function publishImageStory(igId: string, token: string, imageUrl: string, label: string) {
+async function publishImageStory(igId: string, token: string, file: any, label: string) {
+  const imageUrl = createInstagramImageDeliveryUrl(file);
   const create = await graphRequest(`/${igId}/media`, "POST", token, { media_type: "STORIES", image_url: imageUrl });
   const creationId = clean(create?.id || create?.creation_id);
   if (!creationId) throw new Error(`تعذر إنشاء ${label} على Instagram`);
@@ -248,7 +248,8 @@ async function publishImageStory(igId: string, token: string, imageUrl: string, 
   return { create, ready, publish, creationId };
 }
 
-async function publishSingleImage(igId: string, token: string, caption: string, imageUrl: string) {
+async function publishSingleImage(igId: string, token: string, caption: string, file: any) {
+  const imageUrl = createInstagramImageDeliveryUrl(file);
   const create = await graphRequest(`/${igId}/media`, "POST", token, { caption, image_url: imageUrl });
   const creationId = clean(create?.id || create?.creation_id);
   if (!creationId) throw new Error("تعذر إنشاء بوست صور على Instagram");
@@ -256,11 +257,11 @@ async function publishSingleImage(igId: string, token: string, caption: string, 
   return { create, ready, publish, creationId };
 }
 
-async function publishCarousel(igId: string, token: string, caption: string, files: any[], resolvePublicUrl: PublicUrlResolver) {
+async function publishCarousel(igId: string, token: string, caption: string, files: any[]) {
   if (files.length < 2 || files.length > 10) throw new Error("Carousel على Instagram يتطلب من صورتين إلى 10 صور");
   const children: Array<{ create: any; ready: any; creationId: string }> = [];
   for (const file of files) {
-    const imageUrl = await resolvePublicUrl(file);
+    const imageUrl = createInstagramImageDeliveryUrl(file);
     const create = await graphRequest(`/${igId}/media`, "POST", token, { image_url: imageUrl, is_carousel_item: true });
     const creationId = clean(create?.id || create?.creation_id);
     if (!creationId) throw new Error("تعذر تجهيز إحدى صور Carousel على Instagram");
@@ -297,7 +298,7 @@ export async function publishInstagramContent(sql: Sql, input: InstagramPublishI
           label,
         }));
       } else {
-        stories.push(await publishImageStory(input.igId, input.token, await input.resolvePublicUrl(file), label));
+        stories.push(await publishImageStory(input.igId, input.token, file, label));
       }
     }
     const first = stories[0] || {};
@@ -316,6 +317,6 @@ export async function publishInstagramContent(sql: Sql, input: InstagramPublishI
     });
   }
 
-  if (files.length > 1) return publishCarousel(input.igId, input.token, input.caption, files, input.resolvePublicUrl);
-  return publishSingleImage(input.igId, input.token, input.caption, await input.resolvePublicUrl(files[0]));
+  if (files.length > 1) return publishCarousel(input.igId, input.token, input.caption, files);
+  return publishSingleImage(input.igId, input.token, input.caption, files[0]);
 }

@@ -2527,7 +2527,6 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
       caption,
       format:publishFormat,
       files,
-      resolvePublicUrl:(mediaFile:any)=>finalMediaDeliveryUrl(sql,mediaFile),
     });
   }else if(schedule.platform_code==='youtube'){
     if(!['video','short','post'].includes(publishFormat))throw new Error("YouTube يقبل فيديو أو Shorts فقط");

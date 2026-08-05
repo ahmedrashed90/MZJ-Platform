@@ -172,6 +172,7 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
   if (route === "activity" && request.method === "GET") return req("platform.activity.view", "core", "activity", "view");
   if (route.startsWith("crm/")) return crmRequirement(route, request);
   if (route === "operations") return operationsRequirement(request);
+  if (route === "marketing/instagram-media") return null;
   if (route === "marketing") return marketingRequirement(request);
   if (route === "marketing/platform-connections") return req(request.method === "GET" ? "marketing.platforms.view" : "marketing.connections.manage", "marketing", "platforms", request.method === "GET" ? "view" : "manage");
   if (route.startsWith("marketing/platform-connections/callback/")) return null;
