@@ -9,6 +9,7 @@ import { createNotification, notificationDedupe } from "./_notifications.js";
 import { clean, dateValue, numberValue } from "./_tracking-utils.js";
 import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
 import type { ErpNextVehiclePayload, NormalizedErpNextSalesOrder } from "./_erpnext-sales-order-normalizer.js";
+import type { NormalizedErpNextPaymentEntry } from "./_erpnext-payment-entry-normalizer.js";
 
 export type PlatformUserMapping = {
   id: string;
@@ -1255,6 +1256,123 @@ export async function updateErpNextSalesOrderAmounts(input: {
       totalInclVat,
       advancePaid,
       remainingAmount,
+    };
+  });
+}
+
+export async function updateErpNextSalesOrdersFromPaymentEntry(input: {
+  normalized: NormalizedErpNextPaymentEntry;
+}) {
+  await ensureTrackingSchema();
+  await ensureErpNextSalesOrderSchema();
+
+  const { normalized } = input;
+  if (!normalized.salesOrders.length) {
+    return {
+      entryNo: normalized.entryNo,
+      event: normalized.erpEvent,
+      processed: 0,
+      updated: [],
+      missing: [],
+    };
+  }
+
+  const sql = getSql();
+  return sql.begin(async (tx: any) => {
+    const updated: Array<{
+      orderNo: string;
+      integrationOrderId: string | null;
+      trackingOrderId: string | null;
+      totalInclVat: number;
+      advancePaid: number;
+      remainingAmount: number;
+    }> = [];
+    const missing: string[] = [];
+
+    for (const salesOrder of normalized.salesOrders) {
+      let [integrationOrder] = await tx<any[]>`
+        select *,id::text,tracking_order_id::text
+        from integrations.erpnext_sales_orders
+        where sales_order_no=${salesOrder.orderNo}
+          and coalesce(is_cancelled,false)=false
+        order by received_at desc,updated_at desc
+        limit 1 for update
+      `;
+
+      let trackingOrderId = clean(integrationOrder?.tracking_order_id);
+      let trackingOrder: any = null;
+      if (trackingOrderId) {
+        [trackingOrder] = await tx<any[]>`
+          select *,id::text
+          from tracking.orders
+          where id=${trackingOrderId}::uuid
+            and coalesce(is_deleted,false)=false
+            and coalesce(is_cancelled,false)=false
+          limit 1 for update
+        `;
+        if (!trackingOrder) trackingOrderId = "";
+      }
+      if (!trackingOrderId) {
+        [trackingOrder] = await tx<any[]>`
+          select *,id::text
+          from tracking.orders
+          where sales_order_no=${salesOrder.orderNo}
+            and coalesce(is_deleted,false)=false
+            and coalesce(is_cancelled,false)=false
+          order by updated_at desc
+          limit 1 for update
+        `;
+        trackingOrderId = clean(trackingOrder?.id);
+      }
+
+      if (!integrationOrder && !trackingOrderId) {
+        missing.push(salesOrder.orderNo);
+        continue;
+      }
+
+      const storedTotal = numberValue(integrationOrder?.total_incl_vat ?? trackingOrder?.total_incl_vat);
+      const totalInclVat = salesOrder.grandTotal > 0 ? salesOrder.grandTotal : storedTotal;
+      const advancePaid = numberValue(salesOrder.advancePaid);
+      const remainingAmount = advancePaid > 0
+        ? Math.max(0, Number((totalInclVat - advancePaid).toFixed(2)))
+        : 0;
+
+      if (integrationOrder) {
+        await tx`
+          update integrations.erpnext_sales_orders set
+            total_incl_vat=${totalInclVat},
+            advance_paid=${advancePaid},
+            received_at=now(),updated_at=now()
+          where id=${integrationOrder.id}::uuid
+        `;
+      }
+
+      if (trackingOrderId) {
+        await tx`
+          update tracking.orders set
+            total_incl_vat=${totalInclVat},
+            advance_paid=${advancePaid},
+            source_updated_at=now(),updated_at=now()
+          where id=${trackingOrderId}::uuid
+        `;
+      }
+
+      updated.push({
+        orderNo: salesOrder.orderNo,
+        integrationOrderId: clean(integrationOrder?.id) || null,
+        trackingOrderId: trackingOrderId || null,
+        totalInclVat,
+        advancePaid,
+        remainingAmount,
+      });
+    }
+
+    return {
+      entryNo: normalized.entryNo,
+      event: normalized.erpEvent,
+      processed: normalized.salesOrders.length,
+      updated,
+      missing,
     };
   });
 }

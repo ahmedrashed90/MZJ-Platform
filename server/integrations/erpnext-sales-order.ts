@@ -4,7 +4,18 @@ import {
   ErpNextSalesOrderError,
   normalizeErpNextSalesOrder,
 } from "../_erpnext-sales-order-normalizer.js";
-import { cancelErpNextSalesOrder, resolveErpNextPlatformUser, syncErpNextSalesOrder, updateErpNextSalesOrderAmounts } from "../_erpnext-sales-order-sync.js";
+import {
+  ErpNextPaymentEntryError,
+  isErpNextPaymentEntryEvent,
+  normalizeErpNextPaymentEntry,
+} from "../_erpnext-payment-entry-normalizer.js";
+import {
+  cancelErpNextSalesOrder,
+  resolveErpNextPlatformUser,
+  syncErpNextSalesOrder,
+  updateErpNextSalesOrderAmounts,
+  updateErpNextSalesOrdersFromPaymentEntry,
+} from "../_erpnext-sales-order-sync.js";
 import { resolveErpNextTrackingBranchCode } from "../_erpnext-branch-routing.js";
 import { clean } from "../_tracking-utils.js";
 import { ingestTrackingOrder, TrackingIngestError } from "./tracking-orders.js";
@@ -42,6 +53,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   try {
+    if (isErpNextPaymentEntryEvent(body)) {
+      const normalizedPayment = normalizeErpNextPaymentEntry(body);
+      const paymentUpdate = await updateErpNextSalesOrdersFromPaymentEntry({ normalized: normalizedPayment });
+      return response.status(200).json({
+        ok: true,
+        message: normalizedPayment.salesOrders.length
+          ? `تم تحديث المبالغ للطلبات المرتبطة بسند الدفع ${normalizedPayment.entryNo} دون إنشاء طلبات جديدة`
+          : `تم استلام سند الدفع ${normalizedPayment.entryNo} ولا يحتوي على مرجع Sales Order`,
+        entryNo: normalizedPayment.entryNo,
+        event: normalizedPayment.erpEvent,
+        paymentUpdate,
+      });
+    }
+
     const normalized = normalizeErpNextSalesOrder(body);
     if (normalized.isCancellation) {
       const cancellation = await cancelErpNextSalesOrder({ normalized });
@@ -104,7 +129,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       results,
     });
   } catch (error) {
-    if (error instanceof ErpNextSalesOrderError || error instanceof TrackingIngestError) {
+    if (error instanceof ErpNextSalesOrderError || error instanceof ErpNextPaymentEntryError || error instanceof TrackingIngestError) {
       return response.status(error.status).json({ ok: false, error: error.message });
     }
     console.error("ERPNext sales order webhook failed", { error });
