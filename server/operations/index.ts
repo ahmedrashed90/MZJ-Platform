@@ -1575,6 +1575,7 @@ async function listSalesOrderFollowup(
   const search = clean(request.query.search);
   const status = clean(request.query.status);
   const branch = clean(request.query.branch);
+  const completedOnly = clean(request.query.completed).toLowerCase() === "true";
   const { page, pageSize, offset } = pageValues(request);
   const pattern = `%${search}%`;
   const access = getSystemAccess(user, "operations");
@@ -1599,7 +1600,10 @@ async function listSalesOrderFollowup(
       vehicle_match.status_code as operations_status_code,
       coalesce(o.total_incl_vat,0)::numeric(14,2) as total_incl_vat,
       coalesce(o.advance_paid,0)::numeric(14,2) as advance_paid,
-      greatest(coalesce(o.total_incl_vat,0)-coalesce(o.advance_paid,0),0)::numeric(14,2) as remaining_amount,
+      (coalesce(o.total_incl_vat,0)-coalesce(o.advance_paid,0))::numeric(14,2) as remaining_amount,
+      o.sales_followup_completed_at,
+      o.sales_followup_completed_by::text,
+      o.sales_followup_completed_by_name,
       coalesce(stage_6.completed,false) as stage_6_completed,
       coalesce(approval.financial_approved,false) as financial_approved,
       coalesce(approval.administrative_approved,false) as administrative_approved,
@@ -1645,6 +1649,7 @@ async function listSalesOrderFollowup(
     ) approval on true
     where coalesce(o.is_deleted,false)=false
       and coalesce(o.is_cancelled,false)=false
+      and ((${completedOnly}=true and o.sales_followup_completed_at is not null) or (${completedOnly}=false and o.sales_followup_completed_at is null))
       and (
         ${unrestricted}=true
         or coalesce(o.branch,'') in ${sql(branchCodes)}
@@ -1719,6 +1724,69 @@ async function listSalesOrderFollowup(
   };
 }
 
+
+async function completeSalesOrderFollowup(
+  sql: ReturnType<typeof getSql>,
+  body: Record<string, unknown>,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+) {
+  const trackingOrderId = clean(body.trackingOrderId);
+  if (!trackingOrderId) throw new OperationError(400, "VALIDATION_ERROR", "معرف طلب التراكينج مطلوب");
+
+  const access = getSystemAccess(user, "operations");
+  const unrestricted = access.dataScope === "all";
+  const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch_access__"];
+  const [order] = await sql<any[]>`
+    select o.id::text,o.sales_order_no,o.sales_followup_completed_at
+    from tracking.orders o
+    where o.id=${trackingOrderId}::uuid
+      and coalesce(o.is_deleted,false)=false
+      and coalesce(o.is_cancelled,false)=false
+      and (
+        ${unrestricted}=true
+        or coalesce(o.branch,'') in ${sql(branchCodes)}
+        or exists (
+          select 1
+          from tracking.order_vehicles tv
+          left join operations.vehicles v on v.id=tv.vehicle_id or (tv.vehicle_id is null and upper(trim(v.vin))=upper(trim(tv.vin)))
+          left join operations.locations l on l.id=v.location_id
+          where tv.order_id=o.id
+            and (coalesce(l.code,'') in ${sql(branchCodes)} or coalesce(l.branch_code,'') in ${sql(branchCodes)})
+        )
+      )
+    limit 1
+  `;
+  if (!order) throw new OperationError(404, "NOT_FOUND", "طلب البيع غير موجود أو غير متاح ضمن صلاحياتك");
+  if (order.sales_followup_completed_at) {
+    return { ok: true, alreadyCompleted: true, trackingOrderId: order.id, salesOrderNo: order.sales_order_no };
+  }
+
+  const who = actor(user);
+  const [updated] = await sql<any[]>`
+    update tracking.orders set
+      sales_followup_completed_at=now(),
+      sales_followup_completed_by=${who.id}::uuid,
+      sales_followup_completed_by_name=${who.name},
+      updated_at=now()
+    where id=${trackingOrderId}::uuid
+      and sales_followup_completed_at is null
+    returning id::text,sales_order_no,sales_followup_completed_at,sales_followup_completed_by::text,sales_followup_completed_by_name
+  `;
+
+  if (!updated) {
+    return { ok: true, alreadyCompleted: true, trackingOrderId: order.id, salesOrderNo: order.sales_order_no };
+  }
+
+  return {
+    ok: true,
+    alreadyCompleted: false,
+    trackingOrderId: updated.id,
+    salesOrderNo: updated.sales_order_no,
+    completedAt: updated.sales_followup_completed_at,
+    completedBy: updated.sales_followup_completed_by_name || who.name,
+  };
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   const traceId = requestId("ops");
   response.setHeader("Cache-Control", "no-store");
@@ -1780,6 +1848,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else if (action === "import_vehicles") {
       if (!requireOperationsPermission(user, "operations.vehicle.import", response)) return;
       result = await importVehicles(sql, body, user);
+    } else if (action === "complete_sales_order_followup") {
+      if (!requireOperationsPermission(user, "operations.sales_orders_followup.view", response)) return;
+      result = await completeSalesOrderFollowup(sql, body, user);
     } else {
       throw new OperationError(400, "VALIDATION_ERROR", "الإجراء غير مدعوم");
     }

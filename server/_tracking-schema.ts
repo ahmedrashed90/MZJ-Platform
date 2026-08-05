@@ -25,6 +25,9 @@ alter table tracking.orders add column if not exists subtotal_before_tax numeric
 alter table tracking.orders add column if not exists tax_value numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists total_incl_vat numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists advance_paid numeric(14,2) not null default 0;
+alter table tracking.orders add column if not exists sales_followup_completed_at timestamptz;
+alter table tracking.orders add column if not exists sales_followup_completed_by uuid references core.users(id) on delete set null;
+alter table tracking.orders add column if not exists sales_followup_completed_by_name text;
 alter table tracking.orders add column if not exists registration_fee numeric(14,2) not null default 0;
 alter table tracking.orders add column if not exists source text;
 alter table tracking.orders add column if not exists source_payload jsonb not null default '{}'::jsonb;
@@ -46,6 +49,7 @@ alter table tracking.orders add column if not exists erp_created_at timestamptz;
 create index if not exists tracking_orders_cancelled_idx on tracking.orders(is_cancelled,cancelled_at desc);
 create index if not exists tracking_orders_source_instance_idx on tracking.orders(source_instance_key);
 create index if not exists tracking_orders_assigned_to_idx on tracking.orders(assigned_to,updated_at desc);
+create index if not exists tracking_orders_sales_followup_completed_idx on tracking.orders(sales_followup_completed_at,updated_at desc);
 
 do $tracking_assignee_backfill$
 begin

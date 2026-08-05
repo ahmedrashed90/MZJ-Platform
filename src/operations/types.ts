@@ -179,6 +179,9 @@ export type SalesOrderFollowupRow = {
   financial_approved: boolean;
   administrative_approved: boolean;
   stage_10_completed: boolean;
+  sales_followup_completed_at?: string | null;
+  sales_followup_completed_by?: string | null;
+  sales_followup_completed_by_name?: string | null;
   updated_at?: string | null;
 };
 

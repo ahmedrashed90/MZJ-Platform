@@ -49,9 +49,11 @@ export function SalesOrdersFollowupPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [branch, setBranch] = useState("");
+  const [completedView, setCompletedView] = useState(false);
   const [page, setPage] = useState(1);
   const [payload, setPayload] = useState<SalesOrdersFollowupResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [savingId, setSavingId] = useState("");
   const [error, setError] = useState("");
 
   async function load(targetPage = page) {
@@ -64,6 +66,7 @@ export function SalesOrdersFollowupPage() {
           search,
           status,
           branch,
+          completed: completedView,
           page: targetPage,
           pageSize: 25,
         })}`,
@@ -80,7 +83,7 @@ export function SalesOrdersFollowupPage() {
   useEffect(() => {
     setPage(1);
     void load(1);
-  }, [search, status, branch]);
+  }, [search, status, branch, completedView]);
 
   const branches = useMemo(() => {
     const values = new Map<string, string>();
@@ -105,6 +108,28 @@ export function SalesOrdersFollowupPage() {
     setSearch(searchInput.trim());
   }
 
+  function remainingAmount(row: SalesOrderFollowupRow) {
+    return Number(row.total_incl_vat || 0) - Number(row.advance_paid || 0);
+  }
+
+  async function markCompleted(row: SalesOrderFollowupRow) {
+    if (savingId) return;
+    setSavingId(row.tracking_order_id);
+    setError("");
+    try {
+      await operationsFetch(`/api/operations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "complete_sales_order_followup", trackingOrderId: row.tracking_order_id }),
+      });
+      await load(page);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر نقل الطلب إلى الطلبات المكتملة");
+    } finally {
+      setSavingId("");
+    }
+  }
+
   return (
     <div className="module-page operations-page sales-orders-followup-page">
       <header className="sales-orders-followup-heading">
@@ -126,6 +151,10 @@ export function SalesOrdersFollowupPage() {
       </section>
 
       <section className="panel sales-orders-followup-panel">
+        <div className="sales-orders-followup-tabs" role="tablist" aria-label="حالة متابعة طلبات البيع">
+          <button type="button" className={!completedView ? "active" : ""} onClick={() => setCompletedView(false)}>الطلبات غير المكتملة</button>
+          <button type="button" className={completedView ? "active" : ""} onClick={() => setCompletedView(true)}>الطلبات المكتملة</button>
+        </div>
         <form className="sales-orders-followup-toolbar" onSubmit={submitSearch}>
           <label className="sales-orders-followup-search">
             <MagnifyingGlass size={19} />
@@ -164,15 +193,16 @@ export function SalesOrdersFollowupPage() {
                 <th>الإجمالي شامل الضريبة</th>
                 <th>الدفعة المقدمة</th>
                 <th>المتبقي</th>
-                <th>استيفاء المبالغ المتبقية (خاص بالعميل)</th>
+                <th>استيفاء المبالغ المتبقية</th>
                 <th>الموافقة المالية</th>
                 <th>الموافقة الإدارية</th>
                 <th>إتمام عملية التسليم بنجاح</th>
+                <th>الإجراء</th>
               </tr>
             </thead>
             <tbody>
               {loading && !payload ? (
-                <tr><td colSpan={10} className="sales-orders-followup-empty">جاري تحميل طلبات البيع...</td></tr>
+                <tr><td colSpan={11} className="sales-orders-followup-empty">جاري تحميل طلبات البيع...</td></tr>
               ) : payload?.rows.length ? payload.rows.map((row) => (
                 <tr key={row.tracking_vehicle_id}>
                   <td><strong className="sales-orders-followup-order" dir="ltr">{row.sales_order_no}</strong></td>
@@ -180,14 +210,29 @@ export function SalesOrdersFollowupPage() {
                   <td><strong className="sales-orders-followup-vin" dir="ltr">{visibleVin(row)}</strong></td>
                   <td><span className="sales-orders-followup-money">{money(row.total_incl_vat)}</span></td>
                   <td><span className="sales-orders-followup-money">{money(row.advance_paid)}</span></td>
-                  <td><span className={`sales-orders-followup-money ${Number(row.remaining_amount || 0) > 0 ? "remaining" : "settled"}`}>{money(row.remaining_amount)}</span></td>
+                  <td><span className={`sales-orders-followup-money ${remainingAmount(row) > 0 ? "remaining" : "settled"}`}>{money(remainingAmount(row))}</span></td>
                   <td><StateBadge done={Boolean(row.stage_6_completed)} /></td>
                   <td><StateBadge done={Boolean(row.financial_approved)} /></td>
                   <td><StateBadge done={Boolean(row.administrative_approved)} /></td>
                   <td><StateBadge done={Boolean(row.stage_10_completed)} /></td>
+                  <td>
+                    {completedView ? (
+                      <span className="sales-orders-followup-completed-label"><CheckCircle size={16} weight="fill" />مكتمل</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="sales-orders-followup-complete-button"
+                        disabled={Boolean(savingId)}
+                        onClick={() => void markCompleted(row)}
+                      >
+                        <CheckCircle size={16} weight="fill" />
+                        {savingId === row.tracking_order_id ? "جاري النقل..." : "مكتمل"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               )) : (
-                <tr><td colSpan={10} className="sales-orders-followup-empty">لا توجد طلبات مطابقة للفلاتر الحالية</td></tr>
+                <tr><td colSpan={11} className="sales-orders-followup-empty">لا توجد طلبات مطابقة للفلاتر الحالية</td></tr>
               )}
             </tbody>
           </table>
