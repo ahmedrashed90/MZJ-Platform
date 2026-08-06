@@ -5,10 +5,12 @@ const api = read("server/crm/reports.ts");
 const page = read("src/crm/pages/CrmReportsPage.tsx");
 
 const checks = [
-  ["CRM reports read manual quantities from independent sales transactions", api.includes("from crm.sales_transactions st") && api.includes("greatest(coalesce(st.quantity,1),1)::int as quantity")],
-  ["CRM reports keep ERP Sales Orders as independent sales facts", api.includes("from integrations.erpnext_sales_orders so") && api.includes("coalesce(vehicle_stats.quantity,1)::int as quantity")],
-  ["Sold totals sum every sale fact quantity in the selected period", api.includes("facts.reduce((total, fact) => total + Math.max(1, Number(fact.quantity || 1)), 0)")],
-  ["Representative drill-down combines ERP and manual sale rows", api.includes("agent_sale_rows as (") && api.includes("union all") && api.includes("from crm.sales_transactions st")],
+  ["CRM reports use sales_transactions as the single sold-fact source", api.includes("const salesFacts = await sql") && api.includes("from crm.sales_transactions st")],
+  ["CRM reports do not add ERP orders as a second sold-fact source", !api.includes("const erpSalesFacts = await sql") && !api.includes("const salesFacts = [...erpSalesFacts")],
+  ["Sold totals sum transaction quantities only", api.includes("const soldCount = facts.reduce((total, fact) => total + Math.max(1, Number(fact.quantity || 1)), 0);")],
+  ["Sold totals do not fall back to lead sold_quantity", !api.includes("return total + reportSoldQuantity(lead.sold_quantity)")],
+  ["Representative facts use transaction assignment", api.includes('(fact) => fact.assigned_to || "__none__"') && api.includes('(fact) => fact.assigned_name || "غير موزع"')],
+  ["Representative drill-down reads sales_transactions only", api.includes("agent_sale_rows as (") && api.includes("coalesce(st.assigned_to::text,'__none__')=${detailValue}") && !/agent_sale_rows as \([\s\S]*?union all[\s\S]*?agent_sales as \(/.test(api)],
   ["Customer report modal displays sold quantity", page.includes("<th>عدد المباع</th>") && page.includes('{row.sold_quantity ?? "—"}')],
   ["Customer report PDF displays sold quantity", page.includes('htmlEscape(row.sold_quantity ?? "—")') && page.includes('<th>عدد المباع</th><th>التحديثات</th>')],
 ];
