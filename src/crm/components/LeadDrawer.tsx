@@ -201,6 +201,7 @@ function editedTextStillMatchesTemplate(renderedTemplate: string, editedText: st
 
 export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "workspace" }: Props) {
   const showConversation = mode !== "edit";
+  const showSalesHistory = mode === "edit";
   const [form, setForm] = useState<CustomerForm | null>(null);
   const [messages, setMessages] = useState<CrmMessage[]>(emptyMessages);
   const [conversationId, setConversationId] = useState("");
@@ -252,7 +253,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setSalesHistory([]);
     setNewSaleDate(riyadhDateInput());
     setNewSaleQuantity("1");
-    void loadSalesHistory(lead.id);
+    if (showSalesHistory) void loadSalesHistory(lead.id);
     if (showConversation) {
       void loadConversation(lead.id, lead.conversation_id || "", false);
       const readLead = {
@@ -271,7 +272,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
         body: JSON.stringify({ action: "mark_read", leadId: lead.id, conversationId: lead.conversation_id }),
       }).catch((failure) => console.warn("تعذر حفظ قراءة محادثة العميل", failure));
     }
-  }, [lead?.id, showConversation]);
+  }, [lead?.id, showConversation, showSalesHistory]);
 
   useEscapeToClose(Boolean(lead), onClose);
 
@@ -861,7 +862,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 <label className="crm-sold-quantity-field"><span>عدد المباع <b className="crm-required-mark"> *</b></span><input type="number" min="1" step="1" value={activeForm.values.sold_quantity || "1"} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_quantity: String(Math.max(1, Math.floor(Number(event.target.value || 1)))) } } : current)} /></label>
               ) : null}
             </div>
-            {department !== "service" ? (
+            {showSalesHistory && department !== "service" ? (
               <section className="crm-sales-history-panel" aria-label="سجل مبيعات العميل">
                 <header>
                   <div><strong>سجل المبيعات</strong><span>كل شراء يُحفظ كعملية مستقلة ولا يستبدل المبيعات السابقة.</span></div>
