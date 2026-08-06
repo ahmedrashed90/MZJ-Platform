@@ -71,6 +71,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       effective.department_code as report_department_code,
       effective.branch_code as report_branch_code,
       coalesce(sales.full_name,erp.platform_user_name,l.responsible_name_snapshot) as report_assigned_name,
+      l.assigned_to as current_assigned_to,
+      l.department_code as current_department_code,
+      l.branch_code as current_branch_code,
+      coalesce(current_sales.full_name,l.responsible_name_snapshot) as current_assigned_name,
+      current_branch.name as current_branch_name,
+      (coalesce(l.department_code,'')='call_center') as current_assigned_is_call_center,
       cc.full_name as report_call_center_name,
       branch_row.name as report_branch_name,
       src.name as catalog_source_name,
@@ -122,6 +128,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         end as branch_code
     ) effective on true
     left join core.users sales on sales.id=actor.user_id
+    left join core.users current_sales on current_sales.id=l.assigned_to
+    left join core.branches current_branch on current_branch.code=l.branch_code
     left join core.users cc on cc.id=l.call_center_assigned_to
     left join core.branches branch_row on branch_row.code=effective.branch_code
     left join core.sources src on src.code=l.source_code
@@ -131,8 +139,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     (
       ${scope.all}::boolean
       or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-      or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.report_assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-      or (l.report_department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.report_branch_code=any(${scope.branchCodes}::text[])))
+      or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.current_assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+      or (l.current_department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.current_branch_code=any(${scope.branchCodes}::text[])))
     )
   `;
 
@@ -188,13 +196,26 @@ export default async function handler(request: VercelRequest, response: VercelRe
     )
   `;
 
+  const currentLeadDepartmentFilterSql = sql`
+    (
+      ${department || null}::text is null
+      or (${department || null}='cash' and l.current_department_code in ('cash_sales','wholesale','wholesale_sales'))
+      or (${department || null}='finance' and l.current_department_code in ('finance_sales','call_center'))
+      or (${department || null}='service' and l.current_department_code='customer_service')
+      or (${department || null}='call_center' and l.call_center_assigned_to is not null)
+      or (${department || null}='wholesale' and l.current_department_code in ('wholesale','wholesale_sales'))
+      or (${department || null} in ('cash_sales','finance_sales','customer_service') and l.current_department_code=${department || null})
+      or l.service_key=${department || null}
+    )
+  `;
+
   const filtersSql = sql`
     ${scopeSql}
     and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
     and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
     and ${leadDepartmentFilterSql}
     and (${branch || null}::text is null or l.report_branch_code=${branch || null})
-    and (${agent || null}::uuid is null or l.report_assigned_to=${agent || null}::uuid)
+    and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
     and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
     and (${source || null}::text is null or l.source_code=${source || null})
     and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${q ? `%${q}%` : null})
@@ -204,9 +225,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!["source", "department_branch", "agent", "service"].includes(detailKind)) return response.status(400).json({ ok: false, error: "نوع تقرير العملاء غير صحيح" });
     const detailOffset = (detailPage - 1) * detailPageSize;
 
-    // Agent drill-down must follow the salesperson saved on every Sales Order, not
-    // only the customer's current owner. Otherwise an old sale disappears from the
-    // first representative as soon as the same customer buys through another one.
+    // Representative drill-down follows the customer's current CRM owner.
+    // Sale history is aggregated per current customer, so transferred customers
+    // disappear from the previous representative and appear for the new one.
     if (detailKind === "agent") {
       const agentDetailRows = await sql<any[]>`
         with effective_leads as (${effectiveLeads}),
@@ -216,47 +237,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
             coalesce(vehicle_stats.quantity,1)::int as quantity,
             coalesce(so.total_incl_vat,0)::float as total_sales_amount,
             so.sales_order_no as reference_no,
-            coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) as sale_at,
-            coalesce(so.platform_user_name,u.full_name,so.erp_sales_person,'غير موزع') as assigned_name,
-            coalesce(so.platform_department_code,primary_department.code,l.department_code) as department_code,
-            case when coalesce(so.platform_department_code,primary_department.code,l.department_code) in ('wholesale','wholesale_sales') then null else coalesce(so.platform_branch_code,primary_branch.code,l.branch_code) end as branch_code,
-            coalesce(so.platform_branch_name,primary_branch.name,so.platform_branch_code,primary_branch.code,l.branch_code,'بدون فرع') as branch_name
+            coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) as sale_at
           from integrations.erpnext_sales_orders so
           join effective_leads l on l.id=so.crm_lead_id and l.is_deleted=false
-          left join core.users u on u.id=so.platform_user_id
-          left join lateral (
-            select d.code,d.name from core.user_system_departments usd
-            join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
-            where usd.user_id=so.platform_user_id and usd.system_code='crm'
-            order by usd.is_primary desc,d.created_at,d.code limit 1
-          ) primary_department on true
-          left join lateral (
-            select b.code,b.name from core.user_system_branches usb
-            join core.branches b on b.id=usb.branch_id and b.is_active=true
-            where usb.user_id=so.platform_user_id and usb.system_code='crm'
-            order by usb.is_primary desc,b.sort_order,b.name limit 1
-          ) primary_branch on true
           left join lateral (
             select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
             from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
           ) vehicle_stats on true
           where coalesce(so.is_cancelled,false)=false
-            and coalesce(so.platform_user_id::text,'__none__')=${detailValue}
-            and coalesce(so.platform_department_code,primary_department.code,'')<>'call_center'
+            and coalesce(l.current_assigned_to::text,'__none__')=${detailValue}
             and (${from || null}::date is null or ${salesOrderDateSql}>=${from || null}::date)
             and (${to || null}::date is null or ${salesOrderDateSql}<=${to || null}::date)
-            and (
-              ${scope.all}::boolean
-              or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-              or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (so.platform_user_id=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-              or (coalesce(so.platform_department_code,primary_department.code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=any(${scope.branchCodes}::text[])))
-            )
-            and ${salesFactDepartmentFilterSql}
-            and (${branch || null}::text is null or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=${branch || null})
-            and (${agent || null}::uuid is null or so.platform_user_id=${agent || null}::uuid)
+            and ${scopeSql}
+            and ${currentLeadDepartmentFilterSql}
+            and (${branch || null}::text is null or l.current_branch_code=${branch || null})
+            and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or l.source_code=${source || null})
-            and (${q || null}::text is null or concat_ws(' ',so.sales_order_no,l.customer_name,l.phone,so.platform_user_name,so.platform_branch_name,so.platform_department_name) ilike ${q ? `%${q}%` : null})
+            and (${q || null}::text is null or concat_ws(' ',so.sales_order_no,l.customer_name,l.phone,l.current_assigned_name,l.current_branch_name,l.current_department_code) ilike ${q ? `%${q}%` : null})
 
           union all
 
@@ -265,32 +263,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
             greatest(coalesce(st.quantity,1),1)::int as quantity,
             coalesce(st.total_amount,0)::float as total_sales_amount,
             st.source_reference as reference_no,
-            st.sale_at,
-            coalesce(st.assigned_name,u.full_name,l.responsible_name_snapshot,'غير موزع') as assigned_name,
-            coalesce(st.department_code,l.department_code) as department_code,
-            case when coalesce(st.department_code,l.department_code) in ('wholesale','wholesale_sales') then null else coalesce(st.branch_code,l.branch_code) end as branch_code,
-            coalesce(b.name,st.branch_code,l.branch_code,'بدون فرع') as branch_name
+            st.sale_at
           from crm.sales_transactions st
           join effective_leads l on l.id=st.lead_id and l.is_deleted=false
-          left join core.users u on u.id=st.assigned_to
-          left join core.branches b on b.code=coalesce(st.branch_code,l.branch_code)
           where coalesce(st.is_cancelled,false)=false
-            and coalesce(st.assigned_to::text,'__none__')=${detailValue}
-            and coalesce(st.department_code,l.department_code,'')<>'call_center'
+            and coalesce(l.current_assigned_to::text,'__none__')=${detailValue}
             and (${from || null}::date is null or ${manualSaleDateSql}>=${from || null}::date)
             and (${to || null}::date is null or ${manualSaleDateSql}<=${to || null}::date)
-            and (
-              ${scope.all}::boolean
-              or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-              or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (st.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
-              or (coalesce(st.department_code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(st.branch_code,l.branch_code)=any(${scope.branchCodes}::text[])))
-            )
-            and ${manualSalesFactDepartmentFilterSql}
-            and (${branch || null}::text is null or coalesce(st.branch_code,l.branch_code)=${branch || null})
-            and (${agent || null}::uuid is null or st.assigned_to=${agent || null}::uuid)
+            and ${scopeSql}
+            and ${currentLeadDepartmentFilterSql}
+            and (${branch || null}::text is null or l.current_branch_code=${branch || null})
+            and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
-            and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,st.department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
+            and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,l.current_assigned_name,l.current_branch_name,l.current_department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
         ),
         agent_sales as (
           select
@@ -298,20 +284,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
             coalesce(sum(quantity),0)::int as sold_quantity,
             coalesce(sum(total_sales_amount),0)::float as total_sales_amount,
             string_agg(distinct reference_no, ', ' order by reference_no) filter(where nullif(reference_no,'') is not null) as sales_order_numbers,
-            max(sale_at) as last_sale_at,
-            (array_agg(assigned_name order by sale_at desc))[1] as assigned_name,
-            (array_agg(department_code order by sale_at desc))[1] as department_code,
-            (array_agg(branch_code order by sale_at desc))[1] as branch_code,
-            (array_agg(branch_name order by sale_at desc))[1] as branch_name
+            max(sale_at) as last_sale_at
           from agent_sale_rows
           group by lead_id
         ),
         current_agent_ids as (
           select l.id
           from effective_leads l
-          where l.is_deleted=false and l.assigned_is_call_center is not true
-            and ${filtersSql}
-            and coalesce(l.report_assigned_to::text,'__none__')=${detailValue}
+          where l.is_deleted=false
+            and coalesce(l.current_assigned_to::text,'__none__')=${detailValue}
+            and ${scopeSql}
+            and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
+            and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
+            and ${currentLeadDepartmentFilterSql}
+            and (${branch || null}::text is null or l.current_branch_code=${branch || null})
+            and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
+            and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
+            and (${source || null}::text is null or l.source_code=${source || null})
+            and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.current_assigned_name,l.report_call_center_name,l.current_branch_name) ilike ${q ? `%${q}%` : null})
         ),
         combined_ids as (
           select id from current_agent_ids
@@ -321,10 +311,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
         result_rows as (
           select
             l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
-            coalesce(s.department_code,l.report_department_code) as department_code,
-            coalesce(s.branch_code,l.report_branch_code) as branch_code,
-            case when s.lead_id is not null then 'تم البيع' else l.status_label end as status_label,
-            l.car_name,l.notes,
+            l.current_department_code as department_code,
+            l.current_branch_code as branch_code,
+            l.status_label,l.car_name,l.notes,
             concat_ws(' · ',nullif(l.status_note,''),case when s.sales_order_numbers is not null then 'طلبات البيع: '||s.sales_order_numbers end) as status_note,
             case
               when s.lead_id is not null then s.sold_quantity
@@ -332,14 +321,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
               else null
             end::int as sold_quantity,
             coalesce(s.last_sale_at,l.sold_at) as sold_at,l.registered_at,l.created_at,coalesce(l.updated_at,l.created_at) as updated_at,
-            coalesce(s.assigned_name,l.report_assigned_name) as assigned_name,
+            l.current_assigned_name as assigned_name,
             l.call_center_assigned_to::text,l.report_call_center_name as call_center_name,
-            coalesce(s.branch_name,l.report_branch_name) as branch_name,l.catalog_source_name,l.source_report_group,
+            l.current_branch_name as branch_name,l.catalog_source_name,l.source_report_group,
             s.sales_order_numbers,s.total_sales_amount,s.last_sale_at
           from combined_ids ids
           join effective_leads l on l.id=ids.id
           left join agent_sales s on s.lead_id=l.id
-          where (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.status_note,coalesce(s.assigned_name,l.report_assigned_name),l.report_call_center_name,coalesce(s.branch_name,l.report_branch_name),s.sales_order_numbers) ilike ${detailQ ? `%${detailQ}%` : null})
+          where (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.status_note,l.current_assigned_name,l.report_call_center_name,l.current_branch_name,s.sales_order_numbers) ilike ${detailQ ? `%${detailQ}%` : null})
         )
         select result_rows.*,(count(*) over())::int as total_count
         from result_rows
@@ -360,7 +349,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       (
         (${detailKind}='source' and l.report_department_code<>'customer_service' and coalesce(l.source_code,'__none__')=${detailValue})
         or (${detailKind}='department_branch' and (coalesce(l.report_department_code,'__none__') || '|' || coalesce(l.report_branch_code,'__none__'))=${detailValue})
-        or (${detailKind}='agent' and coalesce(l.report_assigned_to::text,'__none__')=${detailValue})
+        or (${detailKind}='agent' and coalesce(l.current_assigned_to::text,'__none__')=${detailValue})
         or (${detailKind}='service' and l.report_department_code='customer_service')
       )
     `;
@@ -406,7 +395,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.status_label,l.car_name,l.notes,l.status_note,l.sold_quantity,l.sold_at,l.registered_at,l.created_at,l.updated_at,
       l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
       l.assigned_is_call_center,l.has_active_erp_order,l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
-      l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group
+      l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group,
+      l.current_assigned_to::text,l.current_assigned_name,l.current_department_code,l.current_branch_code,l.current_branch_name,l.current_assigned_is_call_center
     from effective_leads l
     where l.is_deleted=false
       and ${filtersSql}
@@ -430,11 +420,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
       so.platform_user_id::text as assigned_to,
       coalesce(so.platform_user_name,u.full_name,so.erp_sales_person,'غير موزع') as assigned_name,
       coalesce(so.platform_branch_name,primary_branch.name,so.platform_branch_code,primary_branch.code,l.branch_code,'بدون فرع') as branch_name,
+      l.assigned_to::text as current_assigned_to,
+      coalesce(current_sales.full_name,l.responsible_name_snapshot,'غير موزع') as current_assigned_name,
+      l.department_code as current_department_code,
+      l.branch_code as current_branch_code,
+      coalesce(current_branch.name,l.branch_code,'بدون فرع') as current_branch_name,
       (coalesce(so.platform_department_code,primary_department.code,'')='call_center') as assigned_is_call_center
     from integrations.erpnext_sales_orders so
     join crm.leads l on l.id=so.crm_lead_id and l.is_deleted=false
     left join core.sources src on src.code=l.source_code
     left join core.users u on u.id=so.platform_user_id
+    left join core.users current_sales on current_sales.id=l.assigned_to
+    left join core.branches current_branch on current_branch.code=l.branch_code
     left join lateral (
       select d.code,d.name from core.user_system_departments usd join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
       where usd.user_id=so.platform_user_id and usd.system_code='crm' order by usd.is_primary desc,d.created_at,d.code limit 1
@@ -453,12 +450,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (so.platform_user_id=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (coalesce(so.platform_department_code,primary_department.code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=any(${scope.branchCodes}::text[])))
       )
       and ${salesFactDepartmentFilterSql}
       and (${branch || null}::text is null or coalesce(so.platform_branch_code,primary_branch.code,l.branch_code)=${branch || null})
-      and (${agent || null}::uuid is null or so.platform_user_id=${agent || null}::uuid)
+      and (${agent || null}::uuid is null or l.assigned_to=${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
       and (${source || null}::text is null or l.source_code=${source || null})
       and (${q || null}::text is null or concat_ws(' ',so.sales_order_no,l.customer_name,l.phone,so.platform_user_name,so.platform_branch_name,so.platform_department_name) ilike ${q ? `%${q}%` : null})
@@ -477,6 +474,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       st.assigned_to::text as assigned_to,
       coalesce(st.assigned_name,u.full_name,l.responsible_name_snapshot,'غير موزع') as assigned_name,
       coalesce(b.name,st.branch_code,l.branch_code,'بدون فرع') as branch_name,
+      l.assigned_to::text as current_assigned_to,
+      coalesce(current_sales.full_name,l.responsible_name_snapshot,'غير موزع') as current_assigned_name,
+      l.department_code as current_department_code,
+      l.branch_code as current_branch_code,
+      coalesce(current_branch.name,l.branch_code,'بدون فرع') as current_branch_name,
       false as assigned_is_call_center,
       st.sale_at
     from crm.sales_transactions st
@@ -484,18 +486,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.sources src on src.code=coalesce(st.source_code,l.source_code)
     left join core.users u on u.id=st.assigned_to
     left join core.branches b on b.code=coalesce(st.branch_code,l.branch_code)
+    left join core.users current_sales on current_sales.id=l.assigned_to
+    left join core.branches current_branch on current_branch.code=l.branch_code
     where coalesce(st.is_cancelled,false)=false
       and (${from || null}::date is null or ${manualSaleDateSql} >= ${from || null}::date)
       and (${to || null}::date is null or ${manualSaleDateSql} <= ${to || null}::date)
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and ${scope.callCenterOnly}::boolean and l.call_center_assigned_to=${scope.userId}::uuid)
-        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (st.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (coalesce(st.department_code,l.department_code)=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or coalesce(st.branch_code,l.branch_code)=any(${scope.branchCodes}::text[])))
       )
       and ${manualSalesFactDepartmentFilterSql}
       and (${branch || null}::text is null or coalesce(st.branch_code,l.branch_code)=${branch || null})
-      and (${agent || null}::uuid is null or st.assigned_to=${agent || null}::uuid)
+      and (${agent || null}::uuid is null or l.assigned_to=${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
       and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
       and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,st.department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
@@ -522,10 +526,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const factOnlySoldCustomers = factOnlyLeadIds.size;
     const statusCountWithFactOnlySales = (set: Set<string>) => count(set) + (set.has(norm("تم البيع")) ? factOnlySoldCustomers : 0);
     const distinctCustomers = rowLeadIds.size + factOnlySoldCustomers;
-    const soldCount = facts.length
-      ? facts.reduce((total, fact) => total + Math.max(1, Number(fact.quantity || 1)), 0)
-      : rows.reduce((total, lead) => {
-        if (norm(lead.status_label) !== norm("تم البيع") || lead.has_active_erp_order) return total;
+    const factLeadIds = new Set(facts.map((fact) => String(fact.lead_id || "")).filter(Boolean));
+    const soldCount = facts.reduce((total, fact) => total + Math.max(1, Number(fact.quantity || 1)), 0)
+      + rows.reduce((total, lead) => {
+        const leadId = String(lead.id || "");
+        if (factLeadIds.has(leadId) || norm(lead.status_label) !== norm("تم البيع") || lead.has_active_erp_order) return total;
         return total + reportSoldQuantity(lead.sold_quantity);
       }, 0);
     const marketingDen = quality.marketing_denominator_mode === "statuses" ? statusCountWithFactOnlySales(marketingDenStatuses) : distinctCustomers;
@@ -594,22 +599,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const digitalSources = sourceGroup("digital");
   const directSources = sourceGroup("direct");
   const otherSources = sourceGroup("other");
-  const salesRows = reportRows.filter((row) => row.assigned_is_call_center !== true);
-  const salesOnlyFacts = reportFacts;
+  const salesRows = reportRows.filter((row) => row.current_assigned_is_call_center !== true);
+  const salesOnlyFacts = reportFacts.filter((fact) => fact.current_department_code !== "customer_service");
   const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`);
 
   const agentContext = new Map<string, { departments: Set<string>; branches: Set<string> }>();
   const rememberAgentContext = (item: any) => {
-    const key = String(item.assigned_to || "__none__");
+    const key = String(item.current_assigned_to || item.assigned_to || "__none__");
     if (!agentContext.has(key)) agentContext.set(key, { departments: new Set<string>(), branches: new Set<string>() });
     const context = agentContext.get(key)!;
-    if (item.department_code) context.departments.add(departmentLabel(item.department_code));
-    const branchName = item.branch_name || item.branch_code;
+    const departmentCode = item.current_department_code || item.department_code;
+    if (departmentCode) context.departments.add(departmentLabel(departmentCode));
+    const branchName = item.current_branch_name || item.current_branch_code || item.branch_name || item.branch_code;
     if (branchName) context.branches.add(String(branchName));
   };
   salesRows.forEach(rememberAgentContext);
   salesOnlyFacts.forEach(rememberAgentContext);
-  const agents = group(salesRows, salesOnlyFacts, "agent", (row) => row.assigned_to || "__none__", (row) => row.assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع")
+  const agents = group(salesRows, salesOnlyFacts, "agent", (row) => row.current_assigned_to || "__none__", (row) => row.current_assigned_name || "غير موزع", (fact) => fact.current_assigned_to || "__none__", (fact) => fact.current_assigned_name || "غير موزع")
     .map((row) => {
       const context = agentContext.get(String(row.detailValue || "__none__"));
       return {

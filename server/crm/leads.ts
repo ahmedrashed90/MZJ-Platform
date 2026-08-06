@@ -135,7 +135,8 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
       b.name as branch_name, src.name as catalog_source_name,
       coalesce(c.id::text, '') as conversation_id, c.legacy_id as conversation_legacy_id, c.channel_code, c.preview_text,
       greatest(coalesce(l.unread_count,0),coalesce(c.unread_count,0))::int as unread_count,
-      greatest(l.last_message_at,c.last_message_at) as last_message_at
+      greatest(l.last_message_at,c.last_message_at) as last_message_at,
+      coalesce(sale_summary.sold_count,0)::int as sold_count
     from crm.leads l
     left join core.sources src on src.code = l.source_code
     left join core.users sales on sales.id = l.assigned_to
@@ -144,6 +145,25 @@ async function list(request: VercelRequest, response: VercelResponse, user: any)
     left join lateral (
       select * from crm.conversations cx where cx.lead_id = l.id order by cx.last_message_at desc nulls last limit 1
     ) c on true
+    left join lateral (
+      select (
+        coalesce((
+          select sum(greatest(coalesce(st.quantity,1),1))
+          from crm.sales_transactions st
+          where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
+        ),0)
+        + coalesce((
+          select sum(coalesce(vehicle_stats.quantity,1))
+          from integrations.erpnext_sales_orders so
+          left join lateral (
+            select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
+            from integrations.erpnext_sales_order_vehicles sov
+            where sov.sales_order_id=so.id
+          ) vehicle_stats on true
+          where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
+        ),0)
+      )::int as sold_count
+    ) sale_summary on true
     where l.is_deleted = false
       and (
         ${scope.all}::boolean
