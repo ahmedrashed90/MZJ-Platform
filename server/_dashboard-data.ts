@@ -4,6 +4,7 @@ import type { SessionUser } from "./_auth.js";
 import { canAccessSystem } from "../shared/system-access.js";
 import { getSystemAccess } from "./_access-control.js";
 import { getTrackingCountSummary } from "./_tracking-counts.js";
+import { ensureCrmSchema } from "./_crm-schema.js";
 import { operationsApprovalVisibilityScope, operationsRequestAccessScope, operationsRequestHasActiveVehicle } from "./_operations-query-scope.js";
 import { operationsInventoryMetricCondition } from "./_operations-inventory-metrics.js";
 
@@ -53,6 +54,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
 
   if (canAccessSystem(user, "crm")) {
     try {
+      await ensureCrmSchema();
       const crmAccess = getSystemAccess(user, "crm");
       const crmAll = crmAccess.dataScope === "all";
       const crmAssigned = ["self","assigned","created_by_me","workflow_assigned"].includes(crmAccess.dataScope);
@@ -65,11 +67,14 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
             and (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
         ), scoped_manual_sold as (
-          select * from crm.leads l
-          where l.is_deleted=false and l.status_label='تم البيع'
-            and (coalesce(l.sold_at,l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
-            and not exists(select 1 from integrations.erpnext_sales_orders so where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false)
-            and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
+          select
+            coalesce(st.department_code,l.department_code) as department_code,
+            greatest(coalesce(st.quantity,1),1)::int as quantity
+          from crm.sales_transactions st
+          join crm.leads l on l.id=st.lead_id and l.is_deleted=false
+          where coalesce(st.is_cancelled,false)=false
+            and (st.sale_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
+            and (${crmAll}=true or (${crmAssigned}=true and (st.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (coalesce(st.branch_code,l.branch_code) in ${sql(crmBranches)} and coalesce(st.department_code,l.department_code) in ${sql(crmDepartments)}))
         ), scoped_erp_sold as (
           select
             coalesce(nullif(so.platform_department_code,''),sold_lead.department_code) as department_code,
@@ -94,15 +99,15 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
           (
             coalesce((select sum(quantity) from scoped_erp_sold),0)
-            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold),0)
+            + coalesce((select sum(quantity) from scoped_manual_sold),0)
           )::int as sold,
           (
             coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
-            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
+            + coalesce((select sum(quantity) from scoped_manual_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
           )::int as cash_sold,
           (
             coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('finance_sales','call_center')),0)
-            + coalesce((select sum(greatest(coalesce(sold_quantity,1),1)) from scoped_manual_sold where department_code in ('finance_sales','call_center')),0)
+            + coalesce((select sum(quantity) from scoped_manual_sold where department_code in ('finance_sales','call_center')),0)
           )::int as finance_sold,
           count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
           count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,

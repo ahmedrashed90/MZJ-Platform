@@ -18,7 +18,7 @@ import {
 import { useEscapeToClose } from "../../components/useEscapeToClose";
 import { crmFetch, departmentKeyFromCode, departmentLabel, formatDate } from "../api";
 import { messagePolicyForLead, providerStatusLabel, sourceLabel } from "../sourceCatalog";
-import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta } from "../types";
+import type { CrmCustomerField, CrmLead, CrmMessage, CrmMeta, CrmSaleTransaction } from "../types";
 
 type Props = {
   lead: CrmLead | null;
@@ -214,11 +214,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [notice, setNotice] = useState("");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
+  const [salesHistory, setSalesHistory] = useState<CrmSaleTransaction[]>([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [recordingSale, setRecordingSale] = useState(false);
+  const [newSaleDate, setNewSaleDate] = useState(riyadhDateInput());
+  const [newSaleQuantity, setNewSaleQuantity] = useState("1");
   const messagesListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!lead) {
       setForm(null);
+      setSalesHistory([]);
       return;
     }
     const serviceKey = departmentKeyFromCode(lead.department_code || lead.service_key) as ServiceKey;
@@ -243,6 +249,10 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setNotice("");
     setPendingFile(null);
     setMediaUrls({});
+    setSalesHistory([]);
+    setNewSaleDate(riyadhDateInput());
+    setNewSaleQuantity("1");
+    void loadSalesHistory(lead.id);
     if (showConversation) {
       void loadConversation(lead.id, lead.conversation_id || "", false);
       const readLead = {
@@ -264,6 +274,53 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   }, [lead?.id, showConversation]);
 
   useEscapeToClose(Boolean(lead), onClose);
+
+  async function loadSalesHistory(leadId: string, silent = false) {
+    if (!silent) setSalesLoading(true);
+    try {
+      const result = await crmFetch<{ ok: boolean; rows: CrmSaleTransaction[] }>(`/api/crm/sales?leadId=${encodeURIComponent(leadId)}`);
+      setSalesHistory(result.rows || []);
+    } catch (error) {
+      if (!silent) setNotice(error instanceof Error ? error.message : "تعذر تحميل سجل المبيعات");
+    } finally {
+      if (!silent) setSalesLoading(false);
+    }
+  }
+
+  async function recordNewSale() {
+    if (!lead?.id) return;
+    const quantity = Math.max(1, Math.floor(Number(newSaleQuantity || 1)));
+    if (!newSaleDate) {
+      setNotice("اختر تاريخ عملية البيع");
+      return;
+    }
+    setRecordingSale(true);
+    setNotice("");
+    try {
+      const result = await crmFetch<{ ok: boolean; row: CrmLead; sale: CrmSaleTransaction }>("/api/crm/sales", {
+        method: "POST",
+        body: JSON.stringify({ leadId: lead.id, saleAt: newSaleDate, quantity }),
+      });
+      setForm((current) => current ? {
+        ...current,
+        values: {
+          ...current.values,
+          status_label: "تم البيع",
+          sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at) : newSaleDate,
+          sold_quantity: value(result.row.sold_quantity || quantity),
+        },
+      } : current);
+      onSaved(result.row);
+      await loadSalesHistory(lead.id, true);
+      setNewSaleDate(riyadhDateInput());
+      setNewSaleQuantity("1");
+      setNotice("تم تسجيل عملية البيع في سجل مستقل");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تسجيل عملية البيع");
+    } finally {
+      setRecordingSale(false);
+    }
+  }
 
   async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
@@ -804,6 +861,27 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 <label className="crm-sold-quantity-field"><span>عدد المباع <b className="crm-required-mark"> *</b></span><input type="number" min="1" step="1" value={activeForm.values.sold_quantity || "1"} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_quantity: String(Math.max(1, Math.floor(Number(event.target.value || 1)))) } } : current)} /></label>
               ) : null}
             </div>
+            {department !== "service" ? (
+              <section className="crm-sales-history-panel" aria-label="سجل مبيعات العميل">
+                <header>
+                  <div><strong>سجل المبيعات</strong><span>كل شراء يُحفظ كعملية مستقلة ولا يستبدل المبيعات السابقة.</span></div>
+                  <b>{salesHistory.length.toLocaleString("ar-SA-u-nu-latn")} عملية</b>
+                </header>
+                <div className="crm-sales-history-create">
+                  <label><span>تاريخ البيع</span><input type="date" value={newSaleDate} onChange={(event) => setNewSaleDate(event.target.value)} /></label>
+                  <label><span>عدد المباع</span><input type="number" min="1" step="1" value={newSaleQuantity} onChange={(event) => setNewSaleQuantity(String(Math.max(1, Math.floor(Number(event.target.value || 1)))))} /></label>
+                  <button type="button" disabled={recordingSale || !newSaleDate} onClick={() => void recordNewSale()}>{recordingSale ? "جاري التسجيل..." : "تسجيل عملية بيع جديدة"}</button>
+                </div>
+                <div className="crm-sales-history-list">
+                  {salesLoading ? <p>جاري تحميل سجل المبيعات...</p> : salesHistory.length ? salesHistory.map((sale) => (
+                    <article key={sale.id}>
+                      <div><strong>{formatDate(sale.sale_at)}</strong><span>{sale.source_type === "erpnext" ? "Next ERP" : "بيع يدوي"}{sale.reference_no ? ` · ${sale.reference_no}` : ""}</span></div>
+                      <div><b>{Math.max(1, Number(sale.quantity || 1)).toLocaleString("ar-SA-u-nu-latn")} سيارة</b><span>{sale.assigned_name || "غير موزع"} · {sale.branch_name || sale.branch_code || "بدون فرع"}</span></div>
+                    </article>
+                  )) : <p>لا توجد عمليات بيع مسجلة لهذا العميل حتى الآن.</p>}
+                </div>
+              </section>
+            ) : null}
             {department === "finance" ? credit?.amount == null ? <div className="crm-credit-result neutral">الحد الائتماني = أدخل الراتب واختر نوع التمويل</div> : <div className={`crm-credit-result ${credit.qualified ? "good" : "bad"}`}>الحد الائتماني = {Math.round(credit.amount).toLocaleString("ar-SA-u-nu-latn")} ريال - {credit.qualified ? "مؤهل" : "غير مؤهل"}</div> : null}
             {notice ? <div className="crm-inline-notice">{notice}</div> : null}
             <button className="crm-primary-button crm-save-customer-button" type="button" disabled={saving} onClick={() => void saveLead()}>{saving ? "جاري الحفظ..." : "حفظ بيانات العميل"}</button>

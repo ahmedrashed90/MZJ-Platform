@@ -50,7 +50,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       l.notes, l.status_note, l.extra_data, l.completion_percent, l.credit_limit, l.credit_qualified,
       l.dashboard_unread, l.has_unread_message, l.has_unread_messages, l.message_unread, l.is_unread,
       l.last_message_direction, l.last_incoming_message_at, l.dashboard_message_read_at,
-      l.created_at, l.updated_at, l.registered_at, l.sold_at,
+      l.created_at, l.updated_at, l.registered_at, coalesce(period_sale.sale_at,l.sold_at) as sold_at,
       src.name as catalog_source_name,
       l.assigned_to::text, sales.full_name as assigned_name,
       l.call_center_assigned_to::text, cc.full_name as call_center_name,
@@ -69,6 +69,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by c.last_message_at desc nulls last, c.updated_at desc
       limit 1
     ) c on true
+    left join lateral (
+      select max(sales.sale_at) as sale_at
+      from (
+        select st.sale_at
+        from crm.sales_transactions st
+        where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
+        union all
+        select coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) as sale_at
+        from integrations.erpnext_sales_orders so
+        where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
+      ) sales
+      where (${from || null}::date is null or (sales.sale_at at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+        and (${to || null}::date is null or (sales.sale_at at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+    ) period_sale on true
     where l.is_deleted = false
       and (
         ${scope.all}::boolean
@@ -88,8 +102,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
           or (l.department_code='customer_service' and l.status_label in ('تم الانتهاء','تم الإنتهاء'))
         )
       )
-      and (${from || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-      and (${to || null}::date is null or ((case when l.status_label='تم البيع' then coalesce(l.sold_at,l.registered_at,l.created_at) else coalesce(l.registered_at,l.created_at) end) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+      and (
+        l.status_label='تم البيع'
+          and ((${from || null}::date is null and ${to || null}::date is null) or period_sale.sale_at is not null)
+        or l.status_label<>'تم البيع'
+          and (${from || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+          and (${to || null}::date is null or (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+      )
       and (${branch || null}::text is null or l.branch_code = ${branch || null})
       and (${agent || null}::uuid is null or l.assigned_to = ${agent || null}::uuid)
       and (${status || null}::text is null or l.status_label = ${status || null})

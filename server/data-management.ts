@@ -8,6 +8,7 @@ import { attachLeadToContactAndOpenRequest } from "./_crm-lifecycle.js";
 import { calculateLeadCompletion, getCustomerFieldDefinitions } from "./_crm-customer-fields.js";
 import { branchForDepartment, calculateCreditLimit, chooseAssignment, clean, departmentCodeFromKey, sourceLabel } from "./_crm-utils.js";
 import { normalizePhone } from "./_phone-utils.js";
+import { updateLatestManualSale } from "./_crm-sales-history.js";
 
 const BACKUP_FORMAT = "mzj-platform-database-backup";
 const BACKUP_VERSION = 1;
@@ -201,19 +202,17 @@ async function updateExistingSoldCustomers(
         continue;
       }
 
-      const lastUpdate = rowValue(sourceRow, [
-        "آخر تحديث",
-        "اخر تحديث",
-        "تاريخ آخر تحديث",
-        "تاريخ اخر تحديث",
-        "updated at",
-        "last update",
-        "last updated",
+      const explicitSoldAt = rowValue(sourceRow, [
+        "تاريخ تم البيع",
+        "تاريخ البيع",
+        "sold at",
+        "sale date",
+        "sold date",
       ]);
-      const soldDate = parseImportedDate(lastUpdate);
+      const soldDate = parseImportedDate(explicitSoldAt);
       if (!soldDate) {
         result.skipped += 1;
-        result.errors.push({ row: rowNumber, reason: "حالة تم البيع تحتاج تاريخًا صحيحًا في عمود آخر تحديث" });
+        result.errors.push({ row: rowNumber, reason: "حالة تم البيع تحتاج تاريخًا صحيحًا في عمود تاريخ تم البيع؛ عمود آخر تحديث لا يُستخدم للمبيعات" });
         continue;
       }
 
@@ -221,6 +220,25 @@ async function updateExistingSoldCustomers(
       const phone = rowValue(sourceRow, ["رقم الجوال", "الجوال", "رقم الهاتف", "الهاتف", "mobile", "phone", "phone number"]);
       const phoneNormalized = normalizePhone(phone);
       let matches: any[] = [];
+      const customerSelect = sql`
+        select
+          l.id::text,l.status_label,l.sold_at,l.sold_quantity,l.assigned_to::text,l.responsible_name_snapshot,
+          l.department_code,l.branch_code,l.source_code,l.source_name,l.car_name,l.car_category,
+          (l.sold_at at time zone 'Asia/Riyadh')::date::text as sold_date,
+          exists(
+            select 1 from integrations.erpnext_sales_orders so
+            where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
+          ) as has_erp_sale,
+          (
+            select (st.sale_at at time zone 'Asia/Riyadh')::date::text
+            from crm.sales_transactions st
+            where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
+              and st.source_type in ('manual','legacy_backfill','import_backfill')
+            order by st.sale_at desc,st.created_at desc,st.id desc
+            limit 1
+          ) as manual_sold_date
+        from crm.leads l
+      `;
 
       if (internalId) {
         if (!validUuid(internalId)) {
@@ -229,23 +247,19 @@ async function updateExistingSoldCustomers(
           continue;
         }
         matches = await sql<any[]>`
-          select id::text,status_label,sold_at,
-            (sold_at at time zone 'Asia/Riyadh')::date::text as sold_date
-          from crm.leads
-          where id=${internalId}::uuid
-            and department_code=any(${departmentCodes}::text[])
-            and is_deleted=false
+          ${customerSelect}
+          where l.id=${internalId}::uuid
+            and l.department_code=any(${departmentCodes}::text[])
+            and l.is_deleted=false
           limit 1
         `;
       } else if (phoneNormalized) {
         matches = await sql<any[]>`
-          select id::text,status_label,sold_at,
-            (sold_at at time zone 'Asia/Riyadh')::date::text as sold_date
-          from crm.leads
-          where phone_normalized=${phoneNormalized}
-            and department_code=any(${departmentCodes}::text[])
-            and is_deleted=false
-          order by created_at desc,id desc
+          ${customerSelect}
+          where l.phone_normalized=${phoneNormalized}
+            and l.department_code=any(${departmentCodes}::text[])
+            and l.is_deleted=false
+          order by l.created_at desc,l.id desc
           limit 2
         `;
         if (matches.length > 1) {
@@ -270,12 +284,17 @@ async function updateExistingSoldCustomers(
         result.errors.push({ row: rowNumber, reason: "حالة العميل الحالية في النظام ليست تم البيع؛ لم يتم تغيير الحالة" });
         continue;
       }
-      if (clean(existing.sold_date) === soldDate) {
+      if (existing.has_erp_sale) {
+        result.skipped += 1;
+        result.errors.push({ row: rowNumber, reason: "هذا العميل لديه طلب بيع في Next ERP؛ تاريخ العملية يُقرأ من طلب البيع ولا يُعدّل من شيت العملاء" });
+        continue;
+      }
+      if (clean(existing.manual_sold_date) === soldDate) {
         result.unchanged += 1;
         continue;
       }
 
-      const updatedLead = await sql.begin(async (tx) => {
+      const updatedLead = await sql.begin(async (tx: any) => {
         const [updated] = await tx<any[]>`
           update crm.leads
           set sold_at=(${soldDate}::date::timestamp at time zone 'Asia/Riyadh'),
@@ -287,12 +306,30 @@ async function updateExistingSoldCustomers(
           returning id::text
         `;
         if (!updated) return null;
+        await updateLatestManualSale(tx, {
+          leadId: existing.id,
+          saleAt: soldDate,
+          quantity: existing.sold_quantity || 1,
+          assignedTo: existing.assigned_to || null,
+          assignedName: existing.responsible_name_snapshot || null,
+          departmentCode: existing.department_code || null,
+          branchCode: existing.branch_code || null,
+          sourceCode: existing.source_code || null,
+          sourceName: existing.source_name || null,
+          carName: existing.car_name || null,
+          carCategory: existing.car_category || null,
+          createdBy: user.id,
+          updatedBy: user.id,
+          sourceType: "import_backfill",
+          createIfMissing: true,
+          metadata: { recordedFrom: "customer_import", row: rowNumber, department },
+        });
         await tx`
           insert into crm.lead_events(lead_id,event_type,old_status,new_status,actor_id,actor_name,actor_role,note,details)
           values(
             ${existing.id}::uuid,'sold_date_updated','تم البيع','تم البيع',${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},
-            'تحديث تاريخ تم البيع من عمود آخر تحديث في ملف التصدير',
-            ${tx.json({ row: rowNumber, department, previousSoldAt: existing.sold_at || null, soldAt: soldDate, sourceColumn: "آخر تحديث" })}
+            'تحديث آخر عملية بيع من عمود تاريخ تم البيع في ملف العملاء',
+            ${tx.json({ row: rowNumber, department, previousSoldAt: existing.sold_at || null, soldAt: soldDate, sourceColumn: "تاريخ تم البيع" })}
           )
         `;
         return updated;
@@ -309,7 +346,7 @@ async function updateExistingSoldCustomers(
     }
   }
 
-  await auditDataAction(user, "sold_dates_updated_from_export", { department, ...result, errors: result.errors.slice(0, 50) });
+  await auditDataAction(user, "sold_dates_updated_from_explicit_column", { department, ...result, errors: result.errors.slice(0, 50) });
   return response.status(200).json({ ok: true, department, mode: "update_existing", result });
 }
 

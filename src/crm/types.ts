@@ -122,6 +122,25 @@ export type CrmLead = {
   updated_at?: string | null;
 };
 
+export type CrmSaleTransaction = {
+  id: string;
+  transaction_id: string;
+  source_type: "manual" | "erpnext" | string;
+  reference_no?: string | null;
+  sale_at: string;
+  quantity: number;
+  total_amount?: number | null;
+  assigned_to?: string | null;
+  assigned_name?: string | null;
+  department_code?: string | null;
+  branch_code?: string | null;
+  branch_name?: string | null;
+  car_name?: string | null;
+  car_category?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export type CrmConversation = {
   id: string;
   lead_id?: string | null;

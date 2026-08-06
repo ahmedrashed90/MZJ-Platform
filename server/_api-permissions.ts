@@ -26,6 +26,7 @@ function crmRequirement(route: string, request: VercelRequest): ApiPermissionReq
     return req("crm.customer.view", "crm", "database", "update");
   }
   if (route === "crm/history") return req("crm.finance_history.view", "crm", "finance_history", "view");
+  if (route === "crm/sales") return req(method === "GET" ? "crm.customer.view" : "crm.customer.status.update", "crm", "database", method === "GET" ? "sales_history" : "record_sale");
   if (route === "crm/contacts") return method === "DELETE" ? req("crm.contacts.purge", "crm", "contacts", "purge") : req("crm.contacts.view", "crm", "contacts", "view");
   if (route === "crm/manual-leads") {
     if (method === "GET") return req("crm.manual_leads.view", "crm", "manual_leads", "view");

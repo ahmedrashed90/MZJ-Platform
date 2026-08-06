@@ -5,6 +5,7 @@ import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCus
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
 import { requirePermissionForUser } from "../_access-control.js";
+import { insertManualSale, updateLatestManualSale } from "../_crm-sales-history.js";
 
 
 function soldQuantity(value: unknown) {
@@ -220,27 +221,50 @@ async function create(request: VercelRequest, response: VercelResponse, user: an
   const completionPercent = calculateLeadCompletion(input, customerFields);
   const credit = calculateCreditLimit(input.salary, input.obligation, input.financeType);
 
-  const [row] = await sql<any[]>`
-    insert into crm.leads(
-      customer_name, phone, phone_normalized, source_code, source_name, platform_code,
-      service_key, department_code, branch_code, status_code, status_label, payment_type,
-      car_name, car_category, location, age, salary, obligation, salary_bank, car_model, car_type, color,
-      finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
-      assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
-      responsible_name_snapshot, call_center_name_snapshot, sold_quantity, sold_at, completion_percent, credit_limit, credit_qualified
-    ) values (
-      ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
-      ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
-      ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
-      ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${sql.json(input.extraData)},
-      ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
-      ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${input.statusLabel === "تم البيع" ? (input.soldAt || new Date().toISOString()) : null}::timestamptz, ${completionPercent}, ${credit.amount}, ${credit.qualified}
-    ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
-  `;
-  await sql`
-    insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,actor_role,note)
-    values (${row.id}::uuid,'lead_created',${input.statusLabel},${input.departmentCode},${assignment.branchCode || input.branchCode || null},${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},'دخول العميل إلى النظام')
-  `;
+  const initialSoldAt = input.statusLabel === "تم البيع" ? (input.soldAt || new Date().toISOString()) : null;
+  const row = await sql.begin(async (tx: any) => {
+    const [created] = await tx<any[]>`
+      insert into crm.leads(
+        customer_name, phone, phone_normalized, source_code, source_name, platform_code,
+        service_key, department_code, branch_code, status_code, status_label, payment_type,
+        car_name, car_category, location, age, salary, obligation, salary_bank, car_model, car_type, color,
+        finance_type, follow_up_at, campaign_name, campaign_date, notes, status_note, extra_data,
+        assigned_to, call_center_assigned_to, created_by, updated_by, registered_at,
+        responsible_name_snapshot, call_center_name_snapshot, sold_quantity, sold_at, completion_percent, credit_limit, credit_qualified
+      ) values (
+        ${input.customerName}, ${input.phone}, ${input.phoneNormalized}, ${input.sourceCode}, ${input.sourceName}, ${input.platformCode || null},
+        ${input.serviceKey}, ${input.departmentCode}, ${assignment.branchCode || input.branchCode || null}, ${input.statusCode || null}, ${input.statusLabel}, ${input.paymentType},
+        ${input.carName || null}, ${input.carCategory || null}, ${input.location || null}, ${input.age}, ${input.salary}, ${input.obligation}, ${input.salaryBank || null}, ${input.carModel || null}, ${input.carType || null}, ${input.color || null},
+        ${input.financeType || null}, ${input.followUpAt}, ${input.campaignName || null}, ${input.campaignDate}, ${input.notes || null}, ${input.statusNote || null}, ${tx.json(input.extraData)},
+        ${assignment.assignedTo}::uuid, ${callCenter.assignedTo}::uuid, ${user.id}::uuid, ${user.id}::uuid, now(),
+        ${assignment.assignedName || null}, ${callCenter.assignedName || null}, ${input.statusLabel === "تم البيع" ? (input.soldQuantity || 1) : input.soldQuantity}, ${initialSoldAt}::timestamptz, ${completionPercent}, ${credit.amount}, ${credit.qualified}
+      ) returning *, id::text, assigned_to::text, call_center_assigned_to::text
+    `;
+    if (initialSoldAt) {
+      await insertManualSale(tx, {
+        leadId: created.id,
+        saleAt: initialSoldAt,
+        quantity: input.soldQuantity || 1,
+        assignedTo: assignment.assignedTo,
+        assignedName: assignment.assignedName,
+        departmentCode: input.departmentCode,
+        branchCode: assignment.branchCode || input.branchCode || null,
+        sourceCode: input.sourceCode,
+        sourceName: input.sourceName,
+        carName: input.carName || null,
+        carCategory: input.carCategory || null,
+        createdBy: user.id,
+        updatedBy: user.id,
+        sourceType: "manual",
+        metadata: { recordedFrom: "lead_creation" },
+      });
+    }
+    await tx`
+      insert into crm.lead_events(lead_id,event_type,new_status,new_department,new_branch,actor_id,actor_name,actor_role,note)
+      values (${created.id}::uuid,'lead_created',${input.statusLabel},${input.departmentCode},${assignment.branchCode || input.branchCode || null},${user.id}::uuid,${user.fullName},${user.roles.join("، ") || null},'دخول العميل إلى النظام')
+    `;
+    return created;
+  });
   await attachLeadToContactAndOpenRequest({ leadId: row.id, actor: user, classificationMethod: "manual" });
   row.source_name = input.sourceName;
   row.completion_percent = completionPercent;
@@ -483,48 +507,92 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const assignedChanged = clean(before.assigned_to) !== clean(assignedTo);
   const callCenterChanged = clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
 
-  const [row] = await sql<any[]>`
-    update crm.leads set
-      customer_name=${input.customerName || before.customer_name},
-      phone=${input.phone || null},
-      phone_normalized=${input.phoneNormalized || null},
-      source_code=${input.sourceCode || null},
-      source_name=${input.sourceName || null},
-      platform_code=${input.platformCode || null},
-      service_key=${input.serviceKey},
-      department_code=${input.departmentCode},
-      branch_code=${input.branchCode || null},
-      status_code=${input.statusCode || null},
-      status_label=${input.statusLabel},
-      payment_type=${input.paymentType || null},
-      car_name=${input.carName || input.carType || null},
-      car_category=${input.carCategory || null},
-      location=${input.location || null},
-      age=${input.age},
-      salary=${input.salary},
-      obligation=${input.obligation},
-      salary_bank=${input.salaryBank || null},
-      car_model=${input.carModel || null},
-      car_type=${input.carType || input.carName || null},
-      color=${input.color || null},
-      finance_type=${input.financeType || null},
-      follow_up_at=${input.followUpAt},
-      notes=${input.notes || null},
-      extra_data=${sql.json(input.extraData)},
-      completion_percent=${completionPercent},
-      credit_limit=${credit.amount},
-      credit_qualified=${credit.qualified},
-      assigned_to=${assignedTo}::uuid,
-      call_center_assigned_to=${callCenterAssignedTo}::uuid,
-      responsible_name_snapshot=${assignedName || null},
-      call_center_name_snapshot=${callCenterName || null},
-      sold_quantity=${input.soldQuantity},
-      sold_at=${nextSoldAt}::timestamptz,
-      updated_by=${user.id}::uuid,
-      updated_at=now()
-    where id=${id}::uuid
-    returning *, id::text, assigned_to::text, call_center_assigned_to::text
-  `;
+  const soldQuantityChangeRequested = changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
+  const row = await sql.begin(async (tx: any) => {
+    const [updated] = await tx<any[]>`
+      update crm.leads set
+        customer_name=${input.customerName || before.customer_name},
+        phone=${input.phone || null},
+        phone_normalized=${input.phoneNormalized || null},
+        source_code=${input.sourceCode || null},
+        source_name=${input.sourceName || null},
+        platform_code=${input.platformCode || null},
+        service_key=${input.serviceKey},
+        department_code=${input.departmentCode},
+        branch_code=${input.branchCode || null},
+        status_code=${input.statusCode || null},
+        status_label=${input.statusLabel},
+        payment_type=${input.paymentType || null},
+        car_name=${input.carName || input.carType || null},
+        car_category=${input.carCategory || null},
+        location=${input.location || null},
+        age=${input.age},
+        salary=${input.salary},
+        obligation=${input.obligation},
+        salary_bank=${input.salaryBank || null},
+        car_model=${input.carModel || null},
+        car_type=${input.carType || input.carName || null},
+        color=${input.color || null},
+        finance_type=${input.financeType || null},
+        follow_up_at=${input.followUpAt},
+        notes=${input.notes || null},
+        extra_data=${tx.json(input.extraData)},
+        completion_percent=${completionPercent},
+        credit_limit=${credit.amount},
+        credit_qualified=${credit.qualified},
+        assigned_to=${assignedTo}::uuid,
+        call_center_assigned_to=${callCenterAssignedTo}::uuid,
+        responsible_name_snapshot=${assignedName || null},
+        call_center_name_snapshot=${callCenterName || null},
+        sold_quantity=${input.soldQuantity},
+        sold_at=${nextSoldAt}::timestamptz,
+        updated_by=${user.id}::uuid,
+        updated_at=now()
+      where id=${id}::uuid
+      returning *, id::text, assigned_to::text, call_center_assigned_to::text
+    `;
+
+    if (input.statusLabel === "تم البيع" && nextSoldAt) {
+      const [erpState] = await tx<{ has_erp_sale: boolean }[]>`
+        select exists(
+          select 1 from integrations.erpnext_sales_orders so
+          where so.crm_lead_id=${id}::uuid and coalesce(so.is_cancelled,false)=false
+        ) as has_erp_sale
+      `;
+      const saleSnapshot = {
+        leadId: id,
+        saleAt: nextSoldAt,
+        quantity: input.soldQuantity || 1,
+        assignedTo,
+        assignedName,
+        departmentCode: input.departmentCode,
+        branchCode: input.branchCode || null,
+        sourceCode: input.sourceCode,
+        sourceName: input.sourceName,
+        carName: input.carName || input.carType || null,
+        carCategory: input.carCategory || null,
+        createdBy: user.id,
+        updatedBy: user.id,
+      };
+      if (statusChanged && previousStatusLabel !== "تم البيع") {
+        if (!erpState?.has_erp_sale) {
+          await insertManualSale(tx, {
+            ...saleSnapshot,
+            sourceType: "manual",
+            metadata: { recordedFrom: "lead_status_change" },
+          });
+        }
+      } else if (previousStatusLabel === "تم البيع" && (soldDateChangeRequested || soldQuantityChangeRequested)) {
+        await updateLatestManualSale(tx, {
+          ...saleSnapshot,
+          sourceType: "manual",
+          createIfMissing: !erpState?.has_erp_sale,
+          metadata: { recordedFrom: "lead_sale_correction" },
+        });
+      }
+    }
+    return updated;
+  });
 
   let lifecycleResult: any = null;
   if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {

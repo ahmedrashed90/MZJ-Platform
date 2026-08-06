@@ -142,6 +142,42 @@ create table if not exists crm.leads (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create table if not exists crm.sales_transactions (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid not null references crm.leads(id) on delete cascade,
+  source_type text not null default 'manual',
+  source_reference text,
+  sale_at timestamptz not null,
+  quantity integer not null default 1 check (quantity >= 1),
+  total_amount numeric(14,2) not null default 0 check (total_amount >= 0),
+  assigned_to uuid references core.users(id),
+  assigned_name text,
+  department_code text,
+  branch_code text,
+  source_code text,
+  source_name text,
+  car_name text,
+  car_category text,
+  created_by uuid references core.users(id),
+  updated_by uuid references core.users(id),
+  metadata jsonb not null default '{}'::jsonb,
+  is_cancelled boolean not null default false,
+  cancelled_at timestamptz,
+  cancelled_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists crm_sales_transactions_source_reference_unique
+  on crm.sales_transactions(source_type,source_reference)
+  where source_reference is not null;
+create index if not exists crm_sales_transactions_lead_date_idx
+  on crm.sales_transactions(lead_id,sale_at desc)
+  where is_cancelled=false;
+create index if not exists crm_sales_transactions_report_idx
+  on crm.sales_transactions(department_code,branch_code,assigned_to,sale_at desc)
+  where is_cancelled=false;
+
 create unique index if not exists crm_leads_phone_unique on crm.leads(phone_normalized) where phone_normalized is not null and is_deleted = false;
 create index if not exists crm_leads_department_idx on crm.leads(department_code, branch_code, status_label);
 

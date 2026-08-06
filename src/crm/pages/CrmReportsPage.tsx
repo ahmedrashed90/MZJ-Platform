@@ -332,7 +332,7 @@ export function CrmReportsPage() {
         </header>
         <div className="crm-report-filter-blocks">
           <section className="crm-report-filter-block">
-            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>تم البيع حسب تاريخ تم البيع، وباقي الحالات حسب آخر تحديث</small></div></div>
+            <div className="crm-report-filter-block-head"><span><CalendarBlank size={19} /></span><div><strong>الفترة الزمنية</strong><small>المبيعات حسب تاريخ كل عملية بيع، وباقي الحالات حسب آخر تحديث</small></div></div>
             <div className="crm-report-filter-fields three-columns">
               <label><span>اختيار شهر</span><input type="month" value={selectedMonth} onChange={(event) => setReportMonth(event.target.value)} /></label>
               <label><span>من تاريخ</span><input type="date" value={filters.from} onChange={(event) => setCustomReportDate("from", event.target.value)} /></label>

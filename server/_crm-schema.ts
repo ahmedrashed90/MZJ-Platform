@@ -1541,6 +1541,71 @@ on conflict(version) do nothing;
 commit;
 `;
 
+
+const CRM_SALES_HISTORY_20260806_SQL = String.raw`
+create table if not exists crm.sales_transactions (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid not null references crm.leads(id) on delete cascade,
+  source_type text not null default 'manual',
+  source_reference text,
+  sale_at timestamptz not null,
+  quantity integer not null default 1 check (quantity >= 1),
+  total_amount numeric(14,2) not null default 0 check (total_amount >= 0),
+  assigned_to uuid references core.users(id),
+  assigned_name text,
+  department_code text,
+  branch_code text,
+  source_code text,
+  source_name text,
+  car_name text,
+  car_category text,
+  created_by uuid references core.users(id),
+  updated_by uuid references core.users(id),
+  metadata jsonb not null default '{}'::jsonb,
+  is_cancelled boolean not null default false,
+  cancelled_at timestamptz,
+  cancelled_by uuid references core.users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists crm_sales_transactions_source_reference_unique
+  on crm.sales_transactions(source_type,source_reference)
+  where source_reference is not null;
+create index if not exists crm_sales_transactions_lead_date_idx
+  on crm.sales_transactions(lead_id,sale_at desc)
+  where is_cancelled=false;
+create index if not exists crm_sales_transactions_report_idx
+  on crm.sales_transactions(department_code,branch_code,assigned_to,sale_at desc)
+  where is_cancelled=false;
+
+insert into crm.sales_transactions(
+  lead_id,source_type,source_reference,sale_at,quantity,total_amount,
+  assigned_to,assigned_name,department_code,branch_code,source_code,source_name,
+  car_name,car_category,created_by,updated_by,metadata
+)
+select
+  l.id,'legacy_backfill','lead:'||l.id::text,
+  coalesce(l.sold_at,l.updated_at,l.created_at),greatest(coalesce(l.sold_quantity,1),1),0,
+  l.assigned_to,l.responsible_name_snapshot,l.department_code,l.branch_code,l.source_code,l.source_name,
+  l.car_name,l.car_category,l.created_by,l.updated_by,
+  jsonb_build_object('backfilledAt',now(),'reason','initial_sales_history_migration')
+from crm.leads l
+where l.is_deleted=false
+  and l.status_label='تم البيع'
+  and not exists(
+    select 1 from integrations.erpnext_sales_orders so
+    where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
+  )
+  and not exists(
+    select 1 from crm.sales_transactions st
+    where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
+  );
+
+insert into core.schema_migrations(version)
+values('crm-sales-history-20260806')
+on conflict(version) do nothing;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1615,6 +1680,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-report-indicators-settings-20260805'
       `;
       if (!reportIndicatorsAlignmentMigration) await runSqlScript(CRM_REPORT_INDICATORS_ALIGNMENT_20260805_SQL);
+      const [salesHistoryMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-sales-history-20260806'
+      `;
+      if (!salesHistoryMigration) await runSqlScript(CRM_SALES_HISTORY_20260806_SQL);
     })().catch((error) => {
       schemaPromise = null;
       throw error;
