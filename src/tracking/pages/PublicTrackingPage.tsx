@@ -132,7 +132,7 @@ export function PublicTrackingPage() {
           </div>
         ) : null}
 
-        <footer className="public-tracking-footer"><MapPin size={18} /><span>مجموعة محمد ذعار العجمي للسيارات</span></footer>
+        <footer className="public-tracking-footer"><MapPin size={18} /><span>مجموعة محمد ذعار العجمي للسيارات • 920014635</span></footer>
       </div>
     </main>
   );
