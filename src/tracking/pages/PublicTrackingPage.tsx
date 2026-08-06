@@ -51,7 +51,7 @@ export function PublicTrackingPage() {
       <div className="public-tracking-shell">
         <header className="public-tracking-brand">
           <img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" />
-          <div><h1>تتبع طلبك</h1><p>مع مجموعة محمد بن ذعار العجمي للسيارات… تاريخ تثق به</p></div>
+          <div><h1>تتبع طلبك</h1><p>مجموعة محمد ذعار العجمي للسيارات تاريخ تثق به</p></div>
         </header>
 
 
@@ -132,7 +132,7 @@ export function PublicTrackingPage() {
           </div>
         ) : null}
 
-        <footer className="public-tracking-footer"><MapPin size={18} /><span>مجموعة محمد بن ذعار العجمي للسيارات • 920014635</span></footer>
+        <footer className="public-tracking-footer"><MapPin size={18} /><span>مجموعة محمد ذعار العجمي للسيارات</span></footer>
       </div>
     </main>
   );
