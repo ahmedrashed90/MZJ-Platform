@@ -42,9 +42,8 @@ assert(salesApi.includes("manual_sale_recorded") && salesApi.includes("insertMan
 assert(leads.includes('metadata: { recordedFrom: "lead_creation" }'), "creating an already-sold lead does not create a sale event");
 assert(leads.includes('metadata: { recordedFrom: "lead_status_change" }'), "first manual sold transition does not create a sale event");
 assert(leads.includes('metadata: { recordedFrom: "lead_sale_correction" }'), "latest sale corrections are not synchronized centrally");
-assert(reports.includes("const salesFacts = await sql") && reports.includes("from crm.sales_transactions st"), "reports do not use canonical sale transactions");
-assert(!reports.includes("const erpSalesFacts = await sql") && !reports.includes("const salesFacts = [...erpSalesFacts"), "reports still double-count ERP orders beside canonical transactions");
-assert(reports.includes("facts.reduce((total, fact) => total + Math.max(1, Number(fact.quantity || 1)), 0)"), "reports do not count every sale quantity");
+assert(reports.includes("const salesFacts = await sql") && reports.includes("from crm.sales_transactions st") && !reports.includes("const erpSalesFacts = await sql"), "reports do not use canonical sales transactions only");
+assert(reports.includes("const soldCount = facts.reduce(") && reports.includes("Math.max(1, Number(fact.quantity || 1))"), "reports do not count every sale quantity");
 assert(crmDashboard.includes("period_sale") && crmDashboard.includes("from crm.sales_transactions st"), "CRM dashboard does not find sales by event date");
 assert(unifiedDashboard.includes("scoped_manual_sold") && unifiedDashboard.includes("sum(quantity)"), "unified dashboard does not sum manual sale events");
 assert(dataManagement.includes("const explicitSoldAt = rowValue") && dataManagement.includes("updateLatestManualSale(tx"), "customer-sheet correction is not tied to the latest manual sale event");

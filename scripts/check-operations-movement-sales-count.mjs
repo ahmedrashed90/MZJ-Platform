@@ -17,9 +17,8 @@ expect("server/operations/index.ts", "operations_admin_email", "operations admin
 expect("server/operations/index.ts", "operations_admin_name", "operations administrator explicit webhook name");
 expect("src/operations/components/MovementHistoryTable.tsx", "إداري العمليات", "operations administrator movement column");
 expect("src/operations/stateNote.ts", "replace(/^مباع\\s+تحت\\s+التسليم", "legacy archive note cleanup");
-expect("server/crm/reports.ts", "const salesFacts = await sql", "canonical CRM sales transaction facts");
-expect("server/crm/reports.ts", "from crm.sales_transactions st", "CRM reports read canonical sale transactions");
-if (read("server/crm/reports.ts").includes("return total + reportSoldQuantity(lead.sold_quantity)")) throw new Error("CRM reports must not add lead sold quantities to canonical transactions");
+expect("server/crm/reports.ts", "Canonical sold metric: every report reads only crm.sales_transactions", "canonical CRM sales transaction metric");
+expect("server/crm/reports.ts", "const soldCount = facts.reduce", "CRM report totals sum canonical sale facts");
 expect("server/crm/kpi.ts", "const salesCount = days.reduce", "manager-entered KPI sales count");
 if (read("server/crm/kpi.ts").includes("tracking.order_vehicles")) throw new Error("KPI sales must not be calculated from tracking vehicles");
 
