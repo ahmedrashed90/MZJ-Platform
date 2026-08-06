@@ -1,6 +1,7 @@
 import type { getSql } from "./_db.js";
 
 export type CrmSalesSql = ReturnType<typeof getSql>;
+export type CrmSalesMetadata = Parameters<CrmSalesSql["json"]>[0];
 
 export type ManualSaleSnapshot = {
   leadId: string;
@@ -19,7 +20,7 @@ export type ManualSaleSnapshot = {
   updatedBy?: string | null;
   sourceType?: string;
   sourceReference?: string | null;
-  metadata?: Record<string, unknown>;
+  metadata?: CrmSalesMetadata;
 };
 
 function positiveQuantity(value: unknown) {
@@ -54,7 +55,7 @@ export async function insertManualSale(sql: CrmSalesSql, input: ManualSaleSnapsh
       ${input.carCategory || null},
       ${input.createdBy || null}::uuid,
       ${input.updatedBy || input.createdBy || null}::uuid,
-      ${sql.json(input.metadata || {})}
+      ${sql.json(input.metadata ?? {})}
     )
     returning *,id::text,lead_id::text,assigned_to::text,created_by::text,updated_by::text
   `;
@@ -101,7 +102,7 @@ export async function updateLatestManualSale(
       car_name=${input.carName || null},
       car_category=${input.carCategory || null},
       updated_by=${input.updatedBy || input.createdBy || null}::uuid,
-      metadata=coalesce(metadata,'{}'::jsonb)||${sql.json(input.metadata || {})},
+      metadata=coalesce(metadata,'{}'::jsonb)||${sql.json(input.metadata ?? {})},
       updated_at=now()
     where id=${latest.id}::uuid
     returning *,id::text,lead_id::text,assigned_to::text,created_by::text,updated_by::text
