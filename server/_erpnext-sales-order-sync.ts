@@ -791,7 +791,7 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
     select
       coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_quantity,
       coalesce(sum(coalesce(so.total_incl_vat,0)),0)::float as total_sales_amount,
-      max(coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at)) as last_sale_at,
+      max(so.order_date::timestamp at time zone 'Asia/Riyadh') as last_sale_at,
       coalesce(json_agg(so.sales_order_no order by coalesce(so.order_date,so.received_at::date),so.received_at) filter(where so.id is not null),'[]'::json) as sales_orders
     from integrations.erpnext_sales_orders so
     left join lateral (
@@ -811,7 +811,11 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
         when status_label='تم البيع' then greatest(coalesce(sold_quantity,1),1)
         else null
       end,
-      sold_at=case when ${soldQuantity}>0 then coalesce(${sales?.last_sale_at || null}::timestamptz,sold_at) else sold_at end,
+      sold_at=case
+        when ${soldQuantity}>0 and ${sales?.last_sale_at || null}::timestamptz is not null
+          then ${sales?.last_sale_at || null}::timestamptz
+        else sold_at
+      end,
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
         salesOrders,
         erpSalesOrdersCount: salesOrders.length,

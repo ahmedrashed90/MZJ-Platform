@@ -80,7 +80,10 @@ async function listHistory(request: VercelRequest, response: VercelResponse, use
         so.id::text as transaction_id,
         'erpnext'::text as source_type,
         so.sales_order_no as reference_no,
-        coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) as sale_at,
+        coalesce(
+          (so.order_date::timestamp at time zone 'Asia/Riyadh'),
+          l.sold_at
+        ) as sale_at,
         coalesce(vehicle_stats.quantity,1)::int as quantity,
         coalesce(so.total_incl_vat,0)::float as total_amount,
         so.platform_user_id::text as assigned_to,

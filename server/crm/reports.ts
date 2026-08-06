@@ -152,8 +152,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       end
     )
   `;
+  const salesOrderTimestampSql = sql`
+    coalesce(
+      (so.order_date::timestamp at time zone 'Asia/Riyadh'),
+      l.sold_at
+    )
+  `;
   const salesOrderDateSql = sql`
-    (coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) at time zone 'Asia/Riyadh')::date
+    (${salesOrderTimestampSql} at time zone 'Asia/Riyadh')::date
   `;
   const manualSaleDateSql = sql`
     (st.sale_at at time zone 'Asia/Riyadh')::date
@@ -237,7 +243,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             coalesce(vehicle_stats.quantity,1)::int as quantity,
             coalesce(so.total_incl_vat,0)::float as total_sales_amount,
             so.sales_order_no as reference_no,
-            coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) as sale_at
+            ${salesOrderTimestampSql} as sale_at
           from integrations.erpnext_sales_orders so
           join effective_leads l on l.id=so.crm_lead_id and l.is_deleted=false
           left join lateral (
