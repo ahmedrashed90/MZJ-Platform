@@ -106,19 +106,31 @@ async function upsertErpNextSalesTransaction(
     canonicalSalesTransaction: true,
   };
 
-  const [existing] = await tx<any[]>`
+  const existingRows = await tx<any[]>`
     select id::text,source_type
     from crm.sales_transactions
     where source_reference=${normalized.orderNo}
-      and source_type in ('erpnext_sales_order','erp_reconciliation')
-    order by case when source_type='erpnext_sales_order' then 0 else 1 end,updated_at desc,created_at desc
-    limit 1
+      and coalesce(is_cancelled,false)=false
+    order by case when source_type='erpnext_sales_order' then 0 when source_type='erp_reconciliation' then 1 else 2 end,created_at asc,id asc
     for update
   `;
+  const existing = existingRows[0] || null;
 
   if (existing) {
+    if (existingRows.length > 1) {
+      await tx`
+        update crm.sales_transactions set
+          is_cancelled=true,cancelled_at=coalesce(cancelled_at,now()),updated_at=now(),
+          metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({ mergedIntoCanonicalSalesOrder: normalized.orderNo, mergedReason: 'erpnext_sales_order_deduplication' })}::jsonb
+        where source_reference=${normalized.orderNo}
+          and id<>${existing.id}::uuid
+          and coalesce(is_cancelled,false)=false
+      `;
+    }
     const [row] = await tx<any[]>`
       update crm.sales_transactions set
+        source_type='erpnext_sales_order',
+        source_reference=${normalized.orderNo},
         lead_id=${input.leadId}::uuid,
         sale_at=${saleAt}::timestamptz,
         quantity=${quantity},

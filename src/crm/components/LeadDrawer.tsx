@@ -217,9 +217,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [salesHistory, setSalesHistory] = useState<CrmSaleTransaction[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
-  const [recordingSale, setRecordingSale] = useState(false);
-  const [newSaleDate, setNewSaleDate] = useState(riyadhDateInput());
-  const [newSaleQuantity, setNewSaleQuantity] = useState("1");
   const messagesListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -288,41 +285,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     }
   }
 
-  async function recordNewSale() {
-    if (!lead?.id) return;
-    const quantity = Math.max(1, Math.floor(Number(newSaleQuantity || 1)));
-    if (!newSaleDate) {
-      setNotice("اختر تاريخ عملية البيع");
-      return;
-    }
-    setRecordingSale(true);
-    setNotice("");
-    try {
-      const result = await crmFetch<{ ok: boolean; row: CrmLead; sale: CrmSaleTransaction }>("/api/crm/sales", {
-        method: "POST",
-        body: JSON.stringify({ leadId: lead.id, saleAt: newSaleDate, quantity }),
-      });
-      setForm((current) => current ? {
-        ...current,
-        values: {
-          ...current.values,
-          status_label: "تم البيع",
-          sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at) : newSaleDate,
-          sold_quantity: value(result.row.sold_quantity || quantity),
-        },
-      } : current);
-      onSaved(result.row);
-      await loadSalesHistory(lead.id, true);
-      setNewSaleDate(riyadhDateInput());
-      setNewSaleQuantity("1");
-      setNotice("تم تسجيل عملية البيع في سجل مستقل");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "تعذر تسجيل عملية البيع");
-    } finally {
-      setRecordingSale(false);
-    }
-  }
-
   async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
     try {
@@ -368,7 +330,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const department = form?.serviceKey || "cash";
   const statuses = useMemo(() => (meta?.statuses || [])
     .filter((item) => item.department_code === department && item.is_active !== false)
-    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department]);
+    .filter((item) => item.value !== "تم البيع" || activeForm.values.status_label === "تم البيع")
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department, activeForm.values.status_label]);
 
   const editableBranches = useMemo(() => {
     const branches = meta?.branches || [];
@@ -781,7 +744,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   function renderField(field: CrmCustomerField) {
     const currentValue = fieldValue(field);
     const label = <span>{field.label}{field.is_required ? <b className="crm-required-mark"> *</b> : null}</span>;
-    if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} onChange={(event) => setField(field, event.target.value)}>{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
+    if (field.field_type === "status") return <label key={field.id}>{label}<select value={currentValue} disabled={currentValue === "تم البيع"} onChange={(event) => setField(field, event.target.value)}>{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>;
     if (field.field_type === "source") return <label key={field.id}>{label}<select value={currentValue} onChange={(event) => setField(field, event.target.value)}><option value="">غير محدد</option>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>;
     if (field.field_type === "department") return <label key={field.id}>{label}<input value={departmentLabel(activeForm.departmentCode)} readOnly /></label>;
     if (field.field_type === "transfer") return <label key={field.id}>{label}<select value={activeForm.serviceKey} onChange={(event) => setField(field, event.target.value)}><option value="cash">مبيعات الكاش</option><option value="finance">مبيعات التمويل</option><option value="service">خدمة العملاء</option></select></label>;
@@ -838,7 +801,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                   <label><span>القسم</span><select value={activeForm.departmentCode} onChange={(event) => changeDatabaseDepartment(event.target.value)}>{databaseDepartmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
                   <label><span>الفرع</span><select value={activeForm.branchCode} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="">بدون فرع</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
                   <label><span>الدفع</span><select value={activeForm.paymentType} onChange={(event) => setForm((current) => current ? { ...current, paymentType: event.target.value } : current)}><option value="كاش">كاش</option><option value="تمويل">تمويل</option><option value="خدمة عملاء">خدمة عملاء</option></select></label>
-                  <label><span>الحالة</span><select value={activeForm.values.status_label} onChange={(event) => {
+                  <label><span>الحالة</span><select value={activeForm.values.status_label} disabled={activeForm.values.status_label === "تم البيع"} onChange={(event) => {
                     const nextStatus = event.target.value;
                     setForm((current) => current ? {
                       ...current,
@@ -850,7 +813,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                       },
                     } : current);
                   }}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
-                  {activeForm.values.status_label === "تم البيع" ? <label className="crm-sold-at-field"><span>تاريخ تم البيع</span><input type="date" value={activeForm.values.sold_at || ""} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_at: event.target.value } } : current)} /></label> : null}
                   <label><span>المسؤول</span><select value={activeForm.assignedTo} onChange={(event) => setForm((current) => current ? { ...current, assignedTo: event.target.value } : current)}><option value="">غير موزع</option>{editableAgents.map((user) => <option key={user.id} value={user.id}>{user.full_name}{user.branches.length ? ` - ${user.branches.join("، ")}` : ""}</option>)}</select></label>
                   <label><span>الكول سنتر</span><select value={activeForm.callCenterAssignedTo} onChange={(event) => setForm((current) => current ? { ...current, callCenterAssignedTo: event.target.value } : current)}><option value="">بدون كول سنتر</option>{editableCallCenterUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
                 </div>
@@ -858,25 +820,17 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
             ) : null}
             <div className="crm-form-grid">
               {configuredFields.map(renderField)}
-              {activeForm.values.status_label === "تم البيع" && (department === "cash" || department === "finance") ? (
-                <label className="crm-sold-quantity-field"><span>عدد المباع <b className="crm-required-mark"> *</b></span><input type="number" min="1" step="1" value={activeForm.values.sold_quantity || "1"} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_quantity: String(Math.max(1, Math.floor(Number(event.target.value || 1)))) } } : current)} /></label>
-              ) : null}
             </div>
             {showSalesHistory && department !== "service" ? (
               <section className="crm-sales-history-panel" aria-label="سجل مبيعات العميل">
                 <header>
-                  <div><strong>سجل المبيعات</strong><span>كل شراء يُحفظ كعملية مستقلة ولا يستبدل المبيعات السابقة.</span></div>
+                  <div><strong>سجل المبيعات</strong><span>سجل البيع يُنشأ تلقائيًا من طلبات NEXT ERP بعد مطابقة العميل برقم الجوال.</span></div>
                   <b>{salesHistory.length.toLocaleString("ar-SA-u-nu-latn")} عملية</b>
                 </header>
-                <div className="crm-sales-history-create">
-                  <label><span>تاريخ البيع</span><input type="date" value={newSaleDate} onChange={(event) => setNewSaleDate(event.target.value)} /></label>
-                  <label><span>عدد المباع</span><input type="number" min="1" step="1" value={newSaleQuantity} onChange={(event) => setNewSaleQuantity(String(Math.max(1, Math.floor(Number(event.target.value || 1)))))} /></label>
-                  <button type="button" disabled={recordingSale || !newSaleDate} onClick={() => void recordNewSale()}>{recordingSale ? "جاري التسجيل..." : "تسجيل عملية بيع جديدة"}</button>
-                </div>
                 <div className="crm-sales-history-list">
                   {salesLoading ? <p>جاري تحميل سجل المبيعات...</p> : salesHistory.length ? salesHistory.map((sale) => (
                     <article key={sale.id}>
-                      <div><strong>{formatDate(sale.sale_at)}</strong><span>{sale.source_type === "erpnext" ? "Next ERP" : "بيع يدوي"}{sale.reference_no ? ` · ${sale.reference_no}` : ""}</span></div>
+                      <div><strong>{formatDate(sale.sale_at)}</strong><span>{["erpnext","erpnext_sales_order","erp_reconciliation"].includes(sale.source_type) ? "Next ERP" : "سجل تاريخي"}{sale.reference_no ? ` · ${sale.reference_no}` : ""}</span></div>
                       <div><b>{Math.max(1, Number(sale.quantity || 1)).toLocaleString("ar-SA-u-nu-latn")} سيارة</b><span>{sale.assigned_name || "غير موزع"} · {sale.branch_name || sale.branch_code || "بدون فرع"}</span></div>
                     </article>
                   )) : <p>لا توجد عمليات بيع مسجلة لهذا العميل حتى الآن.</p>}
