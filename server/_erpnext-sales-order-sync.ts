@@ -107,11 +107,18 @@ async function upsertErpNextSalesTransaction(
   };
 
   const existingRows = await tx<any[]>`
-    select id::text,source_type
+    select id::text,source_type,coalesce(is_cancelled,false) as is_cancelled
     from crm.sales_transactions
     where source_reference=${normalized.orderNo}
-      and coalesce(is_cancelled,false)=false
-    order by case when source_type='erpnext_sales_order' then 0 when source_type='erp_reconciliation' then 1 else 2 end,created_at asc,id asc
+    order by
+      case
+        when source_type='erpnext_sales_order' then 0
+        when coalesce(is_cancelled,false)=false and source_type='erp_reconciliation' then 1
+        when coalesce(is_cancelled,false)=false then 2
+        when source_type='erp_reconciliation' then 3
+        else 4
+      end,
+      created_at asc,id asc
     for update
   `;
   const existing = existingRows[0] || null;
