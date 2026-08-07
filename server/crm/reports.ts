@@ -233,32 +233,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
         with effective_leads as (${effectiveLeads}),
         agent_sale_rows as (
           select
-            so.crm_lead_id as lead_id,
-            coalesce(vehicle_stats.quantity,1)::int as quantity,
-            coalesce(so.total_incl_vat,0)::float as total_sales_amount,
-            so.sales_order_no as reference_no,
-            ${salesOrderTimestampSql} as sale_at
-          from integrations.erpnext_sales_orders so
-          join effective_leads l on l.id=so.crm_lead_id and l.is_deleted=false
-          left join lateral (
-            select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
-            from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
-          ) vehicle_stats on true
-          where coalesce(so.is_cancelled,false)=false
-            and coalesce(l.current_assigned_to::text,'__none__')=${detailValue}
-            and (${from || null}::date is null or ${salesOrderDateSql}>=${from || null}::date)
-            and (${to || null}::date is null or ${salesOrderDateSql}<=${to || null}::date)
-            and ${scopeSql}
-            and ${currentLeadDepartmentFilterSql}
-            and (${branch || null}::text is null or l.current_branch_code=${branch || null})
-            and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
-            and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-            and (${source || null}::text is null or l.source_code=${source || null})
-            and (${q || null}::text is null or concat_ws(' ',so.sales_order_no,l.customer_name,l.phone,l.current_assigned_name,l.current_branch_name,l.current_department_code) ilike ${q ? `%${q}%` : null})
-
-          union all
-
-          select
             st.lead_id,
             greatest(coalesce(st.quantity,1),1)::int as quantity,
             coalesce(st.total_amount,0)::float as total_sales_amount,
@@ -315,11 +289,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             l.current_branch_code as branch_code,
             l.status_label,l.car_name,l.notes,
             concat_ws(' · ',nullif(l.status_note,''),case when s.sales_order_numbers is not null then 'طلبات البيع: '||s.sales_order_numbers end) as status_note,
-            case
-              when s.lead_id is not null then s.sold_quantity
-              when l.status_label='تم البيع' and not l.has_active_erp_order then greatest(coalesce(l.sold_quantity,1),1)
-              else null
-            end::int as sold_quantity,
+            case when s.lead_id is not null then s.sold_quantity else null end::int as sold_quantity,
             coalesce(s.last_sale_at,l.sold_at) as sold_at,l.registered_at,l.created_at,coalesce(l.updated_at,l.created_at) as updated_at,
             l.current_assigned_name as assigned_name,
             l.call_center_assigned_to::text,l.report_call_center_name as call_center_name,

@@ -66,7 +66,7 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           where l.is_deleted=false
             and (coalesce(l.registered_at,l.created_at) at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and (${crmAll}=true or (${crmAssigned}=true and (l.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (l.branch_code in ${sql(crmBranches)} and l.department_code in ${sql(crmDepartments)}))
-        ), scoped_manual_sold as (
+        ), scoped_sold as (
           select
             coalesce(st.department_code,l.department_code) as department_code,
             greatest(coalesce(st.quantity,1),1)::int as quantity
@@ -75,40 +75,13 @@ export async function getDashboardData(user: SessionUser, range: { from: string;
           where coalesce(st.is_cancelled,false)=false
             and (st.sale_at at time zone 'Asia/Riyadh')::date between ${from}::date and ${to}::date
             and (${crmAll}=true or (${crmAssigned}=true and (st.assigned_to=${user.id}::uuid or l.call_center_assigned_to=${user.id}::uuid or l.created_by=${user.id}::uuid)) or (coalesce(st.branch_code,l.branch_code) in ${sql(crmBranches)} and coalesce(st.department_code,l.department_code) in ${sql(crmDepartments)}))
-        ), scoped_erp_sold as (
-          select
-            coalesce(nullif(so.platform_department_code,''),sold_lead.department_code) as department_code,
-            sum(coalesce(vehicle_stats.quantity,1))::int as quantity
-          from integrations.erpnext_sales_orders so
-          join crm.leads sold_lead on sold_lead.id=so.crm_lead_id and sold_lead.is_deleted=false
-          left join lateral (
-            select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as quantity
-            from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
-          ) vehicle_stats on true
-          where coalesce(so.is_cancelled,false)=false
-            and coalesce(so.order_date,(so.received_at at time zone 'Asia/Riyadh')::date) between ${from}::date and ${to}::date
-            and (
-              ${crmAll}=true
-              or (${crmAssigned}=true and (so.platform_user_id=${user.id}::uuid or sold_lead.call_center_assigned_to=${user.id}::uuid or sold_lead.created_by=${user.id}::uuid))
-              or (coalesce(so.platform_branch_code,sold_lead.branch_code) in ${sql(crmBranches)} and coalesce(so.platform_department_code,sold_lead.department_code) in ${sql(crmDepartments)})
-            )
-          group by coalesce(nullif(so.platform_department_code,''),sold_lead.department_code)
         )
         select
           count(*)::int as total_customers,
           count(*) filter(where status_label='لم يتم الرد')::int as no_answer_customers,
-          (
-            coalesce((select sum(quantity) from scoped_erp_sold),0)
-            + coalesce((select sum(quantity) from scoped_manual_sold),0)
-          )::int as sold,
-          (
-            coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
-            + coalesce((select sum(quantity) from scoped_manual_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)
-          )::int as cash_sold,
-          (
-            coalesce((select sum(quantity) from scoped_erp_sold where department_code in ('finance_sales','call_center')),0)
-            + coalesce((select sum(quantity) from scoped_manual_sold where department_code in ('finance_sales','call_center')),0)
-          )::int as finance_sold,
+          coalesce((select sum(quantity) from scoped_sold),0)::int as sold,
+          coalesce((select sum(quantity) from scoped_sold where department_code in ('cash_sales','wholesale','wholesale_sales')),0)::int as cash_sold,
+          coalesce((select sum(quantity) from scoped_sold where department_code in ('finance_sales','call_center')),0)::int as finance_sold,
           count(*) filter(where department_code in ('cash_sales','wholesale','wholesale_sales'))::int as cash_sales,
           count(*) filter(where department_code in ('finance_sales','call_center'))::int as finance_sales,
           count(*) filter(where department_code='customer_service')::int as customer_service,

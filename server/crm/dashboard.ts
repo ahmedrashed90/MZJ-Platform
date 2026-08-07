@@ -70,18 +70,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 1
     ) c on true
     left join lateral (
-      select max(sales.sale_at) as sale_at
-      from (
-        select st.sale_at
-        from crm.sales_transactions st
-        where st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
-        union all
-        select coalesce(so.order_date::timestamptz,so.erp_created_at,so.received_at) as sale_at
-        from integrations.erpnext_sales_orders so
-        where so.crm_lead_id=l.id and coalesce(so.is_cancelled,false)=false
-      ) sales
-      where (${from || null}::date is null or (sales.sale_at at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
-        and (${to || null}::date is null or (sales.sale_at at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
+      select max(st.sale_at) as sale_at
+      from crm.sales_transactions st
+      where st.lead_id=l.id
+        and coalesce(st.is_cancelled,false)=false
+        and (${from || null}::date is null or (st.sale_at at time zone 'Asia/Riyadh')::date >= ${from || null}::date)
+        and (${to || null}::date is null or (st.sale_at at time zone 'Asia/Riyadh')::date <= ${to || null}::date)
     ) period_sale on true
     where l.is_deleted = false
       and (

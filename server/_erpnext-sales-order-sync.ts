@@ -928,16 +928,17 @@ export async function refreshCrmLeadSalesSnapshot(leadId: string | null | undefi
   const sql = getSql();
   const [sales] = await sql<any[]>`
     select
-      coalesce(sum(coalesce(vehicle_stats.vehicle_qty,1)),0)::int as sold_quantity,
-      coalesce(sum(coalesce(so.total_incl_vat,0)),0)::float as total_sales_amount,
-      max(so.order_date::timestamp at time zone 'Asia/Riyadh') as last_sale_at,
-      coalesce(json_agg(so.sales_order_no order by coalesce(so.order_date,so.received_at::date),so.received_at) filter(where so.id is not null),'[]'::json) as sales_orders
-    from integrations.erpnext_sales_orders so
-    left join lateral (
-      select nullif(sum(greatest(coalesce(sov.qty,1),1)) filter(where coalesce(sov.is_cancelled,false)=false),0)::int as vehicle_qty
-      from integrations.erpnext_sales_order_vehicles sov where sov.sales_order_id=so.id
-    ) vehicle_stats on true
-    where so.crm_lead_id=${clean(leadId)}::uuid and coalesce(so.is_cancelled,false)=false
+      coalesce(sum(greatest(coalesce(st.quantity,1),1)),0)::int as sold_quantity,
+      coalesce(sum(coalesce(st.total_amount,0)),0)::float as total_sales_amount,
+      max(st.sale_at) as last_sale_at,
+      coalesce(
+        json_agg(st.source_reference order by st.sale_at,st.created_at,st.id)
+          filter(where nullif(st.source_reference,'') is not null),
+        '[]'::json
+      ) as sales_orders
+    from crm.sales_transactions st
+    where st.lead_id=${clean(leadId)}::uuid
+      and coalesce(st.is_cancelled,false)=false
   `;
   const soldQuantity = Math.max(0, Number(sales?.sold_quantity || 0));
   const salesOrders: string[] = Array.isArray(sales?.sales_orders)
