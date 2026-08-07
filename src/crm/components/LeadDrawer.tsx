@@ -248,8 +248,6 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
     setPendingFile(null);
     setMediaUrls({});
     setSalesHistory([]);
-    setNewSaleDate(riyadhDateInput());
-    setNewSaleQuantity("1");
     if (showSalesHistory) void loadSalesHistory(lead.id);
     if (showConversation) {
       void loadConversation(lead.id, lead.conversation_id || "", false);
@@ -312,7 +310,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   useEffect(() => {
     if (!showConversation || !lead || !conversationId) return;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadConversation(activeForm.id, conversationId, true);
+      if (document.visibilityState === "visible") void loadConversation(lead.id, conversationId, true);
     }, 5000);
     return () => window.clearInterval(timer);
   }, [lead?.id, conversationId, showConversation]);
@@ -330,8 +328,8 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const department = form?.serviceKey || "cash";
   const statuses = useMemo(() => (meta?.statuses || [])
     .filter((item) => item.department_code === department && item.is_active !== false)
-    .filter((item) => item.value !== "تم البيع" || activeForm.values.status_label === "تم البيع")
-    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department, activeForm.values.status_label]);
+    .filter((item) => item.value !== "تم البيع" || form?.values.status_label === "تم البيع")
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)), [meta, department, form?.values.status_label]);
 
   const editableBranches = useMemo(() => {
     const branches = meta?.branches || [];
