@@ -71,6 +71,116 @@ function dateTimeForOrder(orderDate: string) {
   return normalized ? `${normalized}T12:00:00+03:00` : new Date().toISOString();
 }
 
+function erpSalesOrderQuantity(normalized: NormalizedErpNextSalesOrder) {
+  const quantity = normalized.payloads.reduce((total, payload) => {
+    const parsed = Math.floor(numberValue(payload.item?.qty) || 1);
+    return total + (Number.isFinite(parsed) && parsed >= 1 ? parsed : 1);
+  }, 0);
+  return Math.max(1, quantity);
+}
+
+async function upsertErpNextSalesTransaction(
+  tx: any,
+  input: {
+    orderId: string;
+    leadId: string;
+    normalized: NormalizedErpNextSalesOrder;
+    mapping: PlatformUserMapping;
+    departmentCode: string;
+    branchCode: string | null;
+    firstPayload: ErpNextVehiclePayload;
+  },
+) {
+  const { normalized, mapping, firstPayload } = input;
+  const saleAt = dateTimeForOrder(normalized.orderDate);
+  const quantity = erpSalesOrderQuantity(normalized);
+  const totalAmount = numberValue(normalized.grandTotal);
+  const metadata = {
+    origin: "erpnext-sales-order",
+    integrationOrderId: input.orderId,
+    salesOrderNo: normalized.orderNo,
+    sourceInstanceKey: normalized.sourceInstanceKey,
+    erpCreatedAt: normalized.erpCreatedAt,
+    erpUserId: normalized.erpUserId,
+    erpSalesPerson: normalized.erpSalesPerson,
+    canonicalSalesTransaction: true,
+  };
+
+  const [existing] = await tx<any[]>`
+    select id::text,source_type
+    from crm.sales_transactions
+    where source_reference=${normalized.orderNo}
+      and source_type in ('erpnext_sales_order','erp_reconciliation')
+    order by case when source_type='erpnext_sales_order' then 0 else 1 end,updated_at desc,created_at desc
+    limit 1
+    for update
+  `;
+
+  if (existing) {
+    const [row] = await tx<any[]>`
+      update crm.sales_transactions set
+        lead_id=${input.leadId}::uuid,
+        sale_at=${saleAt}::timestamptz,
+        quantity=${quantity},
+        total_amount=${totalAmount},
+        assigned_to=${mapping.id}::uuid,
+        assigned_name=${mapping.full_name},
+        department_code=${input.departmentCode},
+        branch_code=${input.branchCode},
+        source_code='next_erp',
+        source_name='NEXT ERP',
+        car_name=${clean(firstPayload.item?.type)||null},
+        car_category=${clean(firstPayload.item?.category)||null},
+        updated_by=${mapping.id}::uuid,
+        metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(metadata)}::jsonb,
+        is_cancelled=false,cancelled_at=null,cancelled_by=null,updated_at=now()
+      where id=${existing.id}::uuid
+      returning id::text
+    `;
+    return row;
+  }
+
+  const [row] = await tx<any[]>`
+    insert into crm.sales_transactions(
+      lead_id,source_type,source_reference,sale_at,quantity,total_amount,
+      assigned_to,assigned_name,department_code,branch_code,source_code,source_name,
+      car_name,car_category,created_by,updated_by,metadata,is_cancelled
+    ) values(
+      ${input.leadId}::uuid,'erpnext_sales_order',${normalized.orderNo},${saleAt}::timestamptz,${quantity},${totalAmount},
+      ${mapping.id}::uuid,${mapping.full_name},${input.departmentCode},${input.branchCode},'next_erp','NEXT ERP',
+      ${clean(firstPayload.item?.type)||null},${clean(firstPayload.item?.category)||null},
+      ${mapping.id}::uuid,${mapping.id}::uuid,${tx.json(metadata)},false
+    )
+    on conflict(source_type,source_reference) do update set
+      lead_id=excluded.lead_id,sale_at=excluded.sale_at,quantity=excluded.quantity,total_amount=excluded.total_amount,
+      assigned_to=excluded.assigned_to,assigned_name=excluded.assigned_name,department_code=excluded.department_code,
+      branch_code=excluded.branch_code,source_code=excluded.source_code,source_name=excluded.source_name,
+      car_name=excluded.car_name,car_category=excluded.car_category,updated_by=excluded.updated_by,
+      metadata=coalesce(crm.sales_transactions.metadata,'{}'::jsonb)||excluded.metadata,
+      is_cancelled=false,cancelled_at=null,cancelled_by=null,updated_at=now()
+    returning id::text
+  `;
+  return row;
+}
+
+async function cancelErpNextSalesTransaction(
+  tx: any,
+  input: { salesOrderNo: string; reason: string; actorId?: string | null },
+) {
+  await tx`
+    update crm.sales_transactions set
+      is_cancelled=true,
+      cancelled_at=coalesce(cancelled_at,now()),
+      cancelled_by=coalesce(${clean(input.actorId)||null}::uuid,cancelled_by),
+      updated_by=coalesce(${clean(input.actorId)||null}::uuid,updated_by),
+      metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({ cancellationReason: input.reason, cancelledFrom: 'erpnext-sales-order' })}::jsonb,
+      updated_at=now()
+    where source_reference=${input.salesOrderNo}
+      and source_type in ('erpnext_sales_order','erp_reconciliation')
+      and coalesce(is_cancelled,false)=false
+  `;
+}
+
 function uniqueWarnings(warnings: LinkWarning[]) {
   const seen = new Set<string>();
   return warnings.filter((warning) => {
@@ -517,6 +627,16 @@ async function linkCrmCustomer(input: {
       }
     }
 
+    await upsertErpNextSalesTransaction(tx, {
+      orderId: input.orderId,
+      leadId: lead.id,
+      normalized,
+      mapping,
+      departmentCode,
+      branchCode,
+      firstPayload,
+    });
+
     await tx`
       update integrations.erpnext_sales_orders
       set crm_lead_id=${lead.id}::uuid,crm_link_status=${created ? "created" : "updated"},updated_at=now()
@@ -899,6 +1019,12 @@ export async function cancelErpNextSalesOrder(input: {
       where id=${order.id}::uuid
       returning *,id::text,platform_user_id::text,crm_lead_id::text,tracking_order_id::text
     `;
+
+    await cancelErpNextSalesTransaction(tx, {
+      salesOrderNo: order.sales_order_no || normalized.orderNo,
+      reason: cancellationReason,
+      actorId,
+    });
 
     const trackingTargets = crmOnly ? [] : await tx<any[]>`
       select id::text
