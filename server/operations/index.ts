@@ -1589,13 +1589,16 @@ async function listSalesOrderFollowup(
 ) {
   const search = clean(request.query.search);
   const status = clean(request.query.status);
-  const branch = clean(request.query.branch);
+  const requestedBranch = clean(request.query.branch);
+  const branch = requestedBranch.toLowerCase() === "online" ? "hall" : requestedBranch;
   const completedOnly = clean(request.query.completed).toLowerCase() === "true";
   const { page, pageSize, offset } = pageValues(request);
   const pattern = `%${search}%`;
   const access = getSystemAccess(user, "operations");
   const unrestricted = access.dataScope === "all";
-  const branchCodes = access.branchCodes.length ? access.branchCodes : ["__no_branch_access__"];
+  const branchCodes = access.branchCodes.length
+    ? [...new Set(access.branchCodes.map((code) => clean(code).toLowerCase() === "online" ? "hall" : clean(code)).filter(Boolean))]
+    : ["__no_branch_access__"];
   const allowedStatuses = access.vehicleStatusCodes?.length ? access.vehicleStatusCodes : ["__all_statuses__"];
   const unrestrictedStatuses = !access.vehicleStatusCodes?.length;
   const { ownOrdersOnly, nextErpUserId } = await salesOrderFollowupIdentity(sql,user);
@@ -1718,6 +1721,116 @@ async function listSalesOrderFollowup(
     ) effective_branch on true
     left join lateral (
       select
+        u.id::text as user_id,
+        dep.code as department_code,
+        dep.name as department_name,
+        br.code as branch_code,
+        br.name as branch_name
+      from core.users u
+      left join lateral (
+        select d.code,d.name
+        from core.user_system_departments usd
+        join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+        where usd.user_id=u.id and usd.system_code='crm'
+        order by usd.is_primary desc,d.created_at,d.code
+        limit 1
+      ) dep on true
+      left join lateral (
+        select b.code,b.name
+        from core.user_system_branches usb
+        join core.branches b on b.id=usb.branch_id and b.is_active=true
+        where usb.user_id=u.id and usb.system_code='crm'
+        order by usb.is_primary desc,b.created_at,b.code
+        limit 1
+      ) br on true
+      where u.is_active=true
+        and (
+          u.id::text=coalesce(erp_order.platform_user_id,'')
+          or (
+            nullif(trim(coalesce(erp_order.erp_user_id,'')),'') is not null
+            and lower(trim(coalesce(u.next_erp_user_id,'')))=lower(trim(erp_order.erp_user_id))
+          )
+          or (
+            nullif(trim(coalesce(o.sales_person,'')),'') is not null
+            and lower(trim(u.full_name))=lower(trim(o.sales_person))
+          )
+        )
+      order by
+        case
+          when u.id::text=coalesce(erp_order.platform_user_id,'') then 0
+          when lower(trim(coalesce(u.next_erp_user_id,'')))=lower(trim(coalesce(erp_order.erp_user_id,''))) then 1
+          else 2
+        end,
+        u.full_name
+      limit 1
+    ) sales_rep on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true and (
+        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(b.code,'')) like '%wholesale%'
+        or lower(coalesce(b.code,'')) like '%jumla%'
+        or coalesce(b.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) wholesale_branch on true
+    left join lateral (
+      select
+        case
+          when lower(trim(coalesce(o.branch,''))) in ('online','الاونلاين','الأونلاين','الاون لاين','الأون لاين')
+            or coalesce(o.branch,'') ilike '%الاونلاين%'
+            or coalesce(o.branch,'') ilike '%الأونلاين%'
+            then 'hall'
+          when coalesce(o.branch,'') ilike '%الملتقى%'
+            or lower(trim(coalesce(o.branch,''))) in ('multaqa','meetup')
+            then 'multaqa'
+          when coalesce(o.branch,'') ilike '%الصالة%'
+            or lower(trim(coalesce(o.branch,''))) in ('hall','showroom')
+            then 'hall'
+          when (coalesce(o.branch,'') ilike '%الفرع الرئيسي%' and coalesce(o.branch,'') ilike '%الشفا%')
+            then case
+              when lower(trim(coalesce(sales_rep.branch_code,''))) in ('hall','multaqa') then lower(trim(sales_rep.branch_code))
+              when lower(trim(coalesce(sales_rep.branch_code,'')))='online' then 'hall'
+              when coalesce(sales_rep.branch_name,'') ilike '%الاونلاين%' or coalesce(sales_rep.branch_name,'') ilike '%الأونلاين%' then 'hall'
+              when coalesce(sales_rep.branch_name,'') ilike '%الملتقى%' then 'multaqa'
+              when coalesce(sales_rep.branch_name,'') ilike '%الصالة%' then 'hall'
+              else null
+            end
+          when coalesce(o.branch,'') ilike '%القادسية%'
+            or lower(trim(coalesce(o.branch,''))) in ('qadisiyah','qadisiya')
+            then case
+              when lower(trim(coalesce(sales_rep.department_code,''))) in ('wholesale','wholesale_sales')
+                or coalesce(sales_rep.department_name,'') ilike '%الجملة%'
+                or lower(trim(coalesce(sales_rep.branch_code,''))) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+                or lower(trim(coalesce(sales_rep.branch_code,''))) like '%wholesale%'
+                or lower(trim(coalesce(sales_rep.branch_code,''))) like '%jumla%'
+                or coalesce(sales_rep.branch_name,'') ilike '%الجملة%'
+                then coalesce(nullif(trim(wholesale_branch.code),''),nullif(trim(sales_rep.branch_code),''),'qadisiyah')
+              else 'qadisiyah'
+            end
+          else nullif(trim(o.branch),'')
+        end as code
+    ) tracking_branch on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true
+        and (
+          lower(trim(b.code))=lower(trim(coalesce(tracking_branch.code,'')))
+          or lower(trim(b.name))=lower(trim(coalesce(tracking_branch.code,'')))
+        )
+      order by case when lower(trim(b.code))=lower(trim(coalesce(tracking_branch.code,''))) then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) branch_match on true
+    left join lateral (
+      select
+        coalesce(nullif(trim(branch_match.code),''),nullif(trim(tracking_branch.code),'')) as code,
+        coalesce(nullif(trim(branch_match.name),''),nullif(trim(tracking_branch.code),''),nullif(trim(o.branch),'')) as name
+    ) effective_branch on true
+    left join lateral (
+      select
         bool_or(vs.status='completed') filter (where st.sort_order=3) as stage_3_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=4) as stage_4_completed,
         bool_or(vs.status='completed') filter (where st.sort_order=5) as stage_5_completed,
@@ -1795,6 +1908,10 @@ async function listSalesOrderFollowup(
         select b.code,b.name,b.sort_order
         from core.branches b
         where b.is_active=true
+<<<<<<< Updated upstream
+=======
+          and lower(trim(b.code))<>'online'
+>>>>>>> Stashed changes
           and (${unrestricted}=true or b.code in ${sql(branchCodes)})
         union
         select distinct
@@ -1804,6 +1921,10 @@ async function listSalesOrderFollowup(
         from operations.locations l
         left join core.branches b on b.code=l.branch_code and b.is_active=true
         where l.is_active=true
+<<<<<<< Updated upstream
+=======
+          and lower(trim(coalesce(nullif(l.branch_code,''),l.code)))<>'online'
+>>>>>>> Stashed changes
           and (
             ${unrestricted}=true
             or l.code in ${sql(branchCodes)}
