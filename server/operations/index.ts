@@ -1669,57 +1669,6 @@ async function listSalesOrderFollowup(
       limit 1
     ) erp_order on true
     left join lateral (
-      select b.code,b.name
-      from core.branches b
-      where b.is_active=true
-        and (
-          lower(trim(b.code)) in (
-            lower(trim(coalesce(erp_order.platform_branch_code,''))),
-            lower(trim(coalesce(vehicle_match.location_branch_code,''))),
-            lower(trim(coalesce(vehicle_match.location_code,''))),
-            lower(trim(coalesce(o.branch,'')))
-          )
-          or lower(trim(b.name)) in (
-            lower(trim(coalesce(erp_order.platform_branch_name,''))),
-            lower(trim(coalesce(erp_order.erp_branch,''))),
-            lower(trim(coalesce(vehicle_match.location_name,''))),
-            lower(trim(coalesce(o.branch,'')))
-          )
-        )
-      order by
-        case
-          when lower(trim(b.code))=lower(trim(coalesce(erp_order.platform_branch_code,''))) then 0
-          when lower(trim(b.code))=lower(trim(coalesce(vehicle_match.location_branch_code,''))) then 1
-          when lower(trim(b.code))=lower(trim(coalesce(o.branch,''))) then 2
-          when lower(trim(b.code))=lower(trim(coalesce(vehicle_match.location_code,''))) then 3
-          when lower(trim(b.name))=lower(trim(coalesce(erp_order.platform_branch_name,''))) then 4
-          when lower(trim(b.name))=lower(trim(coalesce(erp_order.erp_branch,''))) then 5
-          when lower(trim(b.name))=lower(trim(coalesce(vehicle_match.location_name,''))) then 6
-          when lower(trim(b.name))=lower(trim(coalesce(o.branch,''))) then 7
-          else 8
-        end,
-        b.sort_order,b.name
-      limit 1
-    ) branch_match on true
-    left join lateral (
-      select
-        coalesce(
-          nullif(trim(branch_match.code),''),
-          nullif(trim(erp_order.platform_branch_code),''),
-          nullif(trim(vehicle_match.location_branch_code),''),
-          nullif(trim(vehicle_match.location_code),''),
-          nullif(trim(o.branch),'')
-        ) as code,
-        coalesce(
-          nullif(trim(branch_match.name),''),
-          nullif(trim(erp_order.platform_branch_name),''),
-          nullif(trim(o.branch),''),
-          nullif(trim(vehicle_match.location_name),''),
-          nullif(trim(vehicle_match.location_branch_code),''),
-          nullif(trim(vehicle_match.location_code),'')
-        ) as name
-    ) effective_branch on true
-    left join lateral (
       select
         u.id::text as user_id,
         dep.code as department_code,
@@ -1908,10 +1857,7 @@ async function listSalesOrderFollowup(
         select b.code,b.name,b.sort_order
         from core.branches b
         where b.is_active=true
-<<<<<<< Updated upstream
-=======
           and lower(trim(b.code))<>'online'
->>>>>>> Stashed changes
           and (${unrestricted}=true or b.code in ${sql(branchCodes)})
         union
         select distinct
@@ -1921,10 +1867,7 @@ async function listSalesOrderFollowup(
         from operations.locations l
         left join core.branches b on b.code=l.branch_code and b.is_active=true
         where l.is_active=true
-<<<<<<< Updated upstream
-=======
           and lower(trim(coalesce(nullif(l.branch_code,''),l.code)))<>'online'
->>>>>>> Stashed changes
           and (
             ${unrestricted}=true
             or l.code in ${sql(branchCodes)}
