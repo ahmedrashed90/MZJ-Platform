@@ -405,8 +405,16 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
       u.id::text,u.full_name,
       coalesce(crm_department.code,global_department.code) as department_code,
       coalesce(crm_department.name,global_department.name) as department_name,
-      coalesce(crm_branch.code,global_branch.code) as branch_code,
-      coalesce(crm_branch.name,global_branch.name) as branch_name
+      case
+        when coalesce(crm_department.code,global_department.code) in ('wholesale','wholesale_sales')
+          then coalesce(crm_branch.code,global_branch.code,wholesale_branch.code)
+        else coalesce(crm_branch.code,global_branch.code)
+      end as branch_code,
+      case
+        when coalesce(crm_department.code,global_department.code) in ('wholesale','wholesale_sales')
+          then coalesce(crm_branch.name,global_branch.name,wholesale_branch.name)
+        else coalesce(crm_branch.name,global_branch.name)
+      end as branch_name
     from core.users u
     left join lateral (
       select d.code,d.name
@@ -440,6 +448,18 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
       order by b.sort_order,b.name
       limit 1
     ) global_branch on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true and (
+        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(b.code,'')) like '%wholesale%'
+        or lower(coalesce(b.code,'')) like '%jumla%'
+        or coalesce(b.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) wholesale_branch on true
     where u.id=${salespersonId}::uuid and u.is_active=true and coalesce(u.can_receive_leads,true)=true
     limit 1
   `;
@@ -447,7 +467,7 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
     return response.status(400).json({ ok: false, error: "المستخدم المحدد ليس مندوب مبيعات فعالًا داخل CRM" });
   }
   const salespersonDepartmentCode = clean(salesperson.department_code);
-  const salespersonBranchCode = ["wholesale", "wholesale_sales"].includes(salespersonDepartmentCode) ? null : clean(salesperson.branch_code) || null;
+  const salespersonBranchCode = clean(salesperson.branch_code) || null;
   const salespersonBranchName = salespersonBranchCode ? clean(salesperson.branch_name) || salespersonBranchCode : null;
 
   const result = await sql.begin(async (tx: any) => {

@@ -64,9 +64,13 @@ function budgetPlatformDetails(item: any) {
 }
 
 function budgetItemTotal(item: any) {
+  const platformDetails = budgetPlatformDetails(item);
+  if (platformDetails.length) {
+    return platformDetails.reduce((sum: number, part: any) => sum + Math.max(0, Number(part?.amount || 0)), 0);
+  }
   const storedTotal = Number(item?.total);
   if (Number.isFinite(storedTotal)) return Math.max(0, storedTotal);
-  return budgetPlatformDetails(item).reduce((sum: number, part: any) => sum + Math.max(0, Number(part?.amount || 0)), 0);
+  return 0;
 }
 
 function budgetCalculatedTotal(item: any) {
@@ -313,8 +317,6 @@ export function MarketingDatabasePage() {
     const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
     return budgetItems.reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0);
   }, [detail]);
-  const budgetPlatformCount = useMemo(() => new Set(budgetOverview.flatMap((item: BudgetOverviewItem) => item.platforms.map((platform: BudgetOverviewPlatform) => platform.id || platform.name))).size, [budgetOverview]);
-  const budgetFunnelCount = useMemo(() => new Set(budgetOverview.map((item: BudgetOverviewItem) => item.funnel).filter((name: string) => name && name !== "—")).size, [budgetOverview]);
 
   async function load() {
     setLoading(true);
@@ -681,37 +683,49 @@ export function MarketingDatabasePage() {
                 </div>
               </div>
 
-              <div className="marketing-budget-overview-summary">
-                <article><span>بنود الميزانية</span><strong>{budgetOverview.length.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
-                <article><span>أنواع Funnel</span><strong>{budgetFunnelCount.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
-                <article><span>المنصات المستخدمة</span><strong>{budgetPlatformCount.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
-              </div>
+              {budgetOverview.length ? <>
+                <div className="marketing-budget-details-table-wrap">
+                  <table className="marketing-budget-details-table">
+                    <thead>
+                      <tr>
+                        <th className="marketing-budget-index-column">م</th>
+                        <th>Funnel</th>
+                        <th>الكرييتيف</th>
+                        <th>المنصات والميزانية</th>
+                        <th>عدد الإعلانات</th>
+                        <th>هدف المحتوى</th>
+                        <th>الهدف المتوقع</th>
+                        <th>إجمالي البند</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {budgetOverview.map((item: BudgetOverviewItem, index: number) => <tr key={item.key}>
+                        <td className="marketing-budget-index-column"><span>{index + 1}</span></td>
+                        <td className="marketing-budget-funnel-cell"><strong>{item.funnel}</strong></td>
+                        <td>
+                          <div className="marketing-budget-creative-names">
+                            {item.creativeNames.map((name: string, nameIndex: number) => <span key={`${name}-${nameIndex}`}>{name}</span>)}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="marketing-budget-platform-lines">
+                            {item.platforms.map((platform: BudgetOverviewPlatform) => <span key={platform.key}><b>{platform.name}</b><strong>{platform.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}
+                          </div>
+                        </td>
+                        <td className="marketing-budget-centered-cell">{item.adsCount.toLocaleString("ar-SA-u-nu-latn")}</td>
+                        <td className="marketing-budget-copy-cell">{item.contentGoal || "—"}</td>
+                        <td className="marketing-budget-copy-cell">{item.expectedGoal || "—"}</td>
+                        <td className="marketing-budget-row-total">{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</td>
+                      </tr>)}
+                    </tbody>
+                  </table>
+                </div>
 
-              {budgetOverview.length ? <div className="marketing-budget-overview-list">
-                {budgetOverview.map((item: BudgetOverviewItem, index: number) => <article className="marketing-budget-overview-card" key={item.key}>
-                  <header>
-                    <div><span>بند الميزانية {index + 1}</span><strong>{item.funnel}</strong></div>
-                    <b>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</b>
-                  </header>
-                  <div className="marketing-budget-overview-creatives">
-                    <span>الكرييتيف</span>
-                    <div>{item.creativeNames.map((name: string, nameIndex: number) => <b key={`${name}-${nameIndex}`}>{name}</b>)}</div>
-                  </div>
-                  <div className="marketing-budget-overview-metrics">
-                    <span><small>عدد الإعلانات</small><strong>{item.adsCount.toLocaleString("ar-SA-u-nu-latn")}</strong></span>
-                    <span><small>هدف المحتوى</small><strong>{item.contentGoal || "—"}</strong></span>
-                    <span><small>الهدف المتوقع</small><strong>{item.expectedGoal || "—"}</strong></span>
-                  </div>
-                  <div className="marketing-budget-overview-platforms">
-                    {item.platforms.map((platform: BudgetOverviewPlatform) => <span key={platform.key}><small>{platform.name}</small><strong>{platform.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}
-                  </div>
-                </article>)}
-              </div> : <div className="marketing-budget-overview-empty"><CurrencyCircleDollar size={34} weight="duotone" /><div><strong>لم يتم إنشاء ميزانية للحملة</strong><span>استخدم زر «إنشاء الميزانية» لإضافة بنود Funnel وربطها بالكرييتيفات والمنصات.</span></div></div>}
-
-              {budgetOverview.length ? <footer className="marketing-budget-overview-totals">
-                <div>{budgetFunnelTotals.map((item) => <span key={item.funnel}><small>إجمالي {item.funnel}</small><strong>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}</div>
-                <b><small>الإجمالي النهائي</small><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></b>
-              </footer> : null}
+                <footer className="marketing-budget-overview-totals marketing-budget-table-totals">
+                  <div>{budgetFunnelTotals.map((item) => <span key={item.funnel}><small>إجمالي {item.funnel}</small><strong>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}</div>
+                  <b><small>الإجمالي النهائي</small><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></b>
+                </footer>
+              </> : <div className="marketing-budget-overview-empty"><CurrencyCircleDollar size={34} weight="duotone" /><div><strong>لم يتم إنشاء ميزانية للحملة</strong><span>استخدم زر «إنشاء الميزانية» لإضافة بنود Funnel وربطها بالكرييتيفات والمنصات.</span></div></div>}
             </section> : null}
           </div>
 

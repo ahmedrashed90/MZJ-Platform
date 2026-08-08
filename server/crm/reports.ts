@@ -55,8 +55,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   /*
    * NEXT ERP sales use the salesperson's primary CRM department/branch as the
-   * reporting identity. This keeps branchless departments (for example wholesale)
-   * visible in reports and prevents broad "allowed departments" memberships from
+   * reporting identity. Wholesale keeps its selected CRM branch, while historic
+   * wholesale rows without a branch resolve to the master wholesale branch. This
+   * prevents broad "allowed departments" memberships from
    * incorrectly classifying a sales manager as a call-center agent.
    */
   const effectiveLeads = sql`
@@ -67,11 +68,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       effective.branch_code as report_branch_code,
       coalesce(sales.full_name,erp.platform_user_name,l.responsible_name_snapshot) as report_assigned_name,
       l.assigned_to as current_assigned_to,
-      l.department_code as current_department_code,
-      l.branch_code as current_branch_code,
+      current_effective.department_code as current_department_code,
+      current_effective.branch_code as current_branch_code,
       coalesce(current_sales.full_name,l.responsible_name_snapshot) as current_assigned_name,
       current_branch.name as current_branch_name,
-      (coalesce(l.department_code,'')='call_center') as current_assigned_is_call_center,
+      (coalesce(current_effective.department_code,'')='call_center') as current_assigned_is_call_center,
       cc.full_name as report_call_center_name,
       branch_row.name as report_branch_name,
       src.name as catalog_source_name,
@@ -106,6 +107,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 1
     ) primary_branch on true
     left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true and (
+        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(b.code,'')) like '%wholesale%'
+        or lower(coalesce(b.code,'')) like '%jumla%'
+        or coalesce(b.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) wholesale_branch on true
+    left join lateral (
       select
         case
           when lower(coalesce(l.source_code,'')) in ('next_erp','next erp') and actor.user_id is not null
@@ -115,16 +128,62 @@ export default async function handler(request: VercelRequest, response: VercelRe
         case
           when lower(coalesce(l.source_code,'')) in ('next_erp','next erp') and actor.user_id is not null
             then case
-              when primary_department.code in ('wholesale','wholesale_sales') then null
-              when primary_department.code is not null then primary_branch.code
-              else erp.platform_branch_code
+              when primary_department.code in ('wholesale','wholesale_sales')
+                then coalesce(nullif(l.branch_code,''),nullif(erp.platform_branch_code,''),primary_branch.code,wholesale_branch.code)
+              when primary_department.code is not null
+                then coalesce(primary_branch.code,nullif(l.branch_code,''),nullif(erp.platform_branch_code,''))
+              else coalesce(nullif(erp.platform_branch_code,''),nullif(l.branch_code,''))
             end
-          else coalesce(l.branch_code,erp.platform_branch_code)
+          else coalesce(nullif(l.branch_code,''),nullif(erp.platform_branch_code,''))
+        end as branch_code
+    ) raw_effective on true
+    left join core.branches raw_effective_branch on raw_effective_branch.code=raw_effective.branch_code
+    left join core.branches raw_current_branch on raw_current_branch.code=l.branch_code
+    left join lateral (
+      select
+        case
+          when raw_effective.department_code in ('wholesale','wholesale_sales')
+            or lower(coalesce(raw_effective.branch_code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+            or lower(coalesce(raw_effective.branch_code,'')) like '%wholesale%'
+            or lower(coalesce(raw_effective.branch_code,'')) like '%jumla%'
+            or coalesce(raw_effective_branch.name,'') ilike '%الجملة%'
+          then 'wholesale'
+          else raw_effective.department_code
+        end as department_code,
+        case
+          when raw_effective.department_code in ('wholesale','wholesale_sales')
+            or lower(coalesce(raw_effective.branch_code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+            or lower(coalesce(raw_effective.branch_code,'')) like '%wholesale%'
+            or lower(coalesce(raw_effective.branch_code,'')) like '%jumla%'
+            or coalesce(raw_effective_branch.name,'') ilike '%الجملة%'
+          then coalesce(raw_effective.branch_code,wholesale_branch.code)
+          else raw_effective.branch_code
         end as branch_code
     ) effective on true
+    left join lateral (
+      select
+        case
+          when l.department_code in ('wholesale','wholesale_sales')
+            or lower(coalesce(l.branch_code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+            or lower(coalesce(l.branch_code,'')) like '%wholesale%'
+            or lower(coalesce(l.branch_code,'')) like '%jumla%'
+            or coalesce(raw_current_branch.name,'') ilike '%الجملة%'
+          then 'wholesale'
+          else l.department_code
+        end as department_code,
+        case
+          when l.department_code in ('wholesale','wholesale_sales')
+            or lower(coalesce(l.branch_code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+            or lower(coalesce(l.branch_code,'')) like '%wholesale%'
+            or lower(coalesce(l.branch_code,'')) like '%jumla%'
+            or coalesce(raw_current_branch.name,'') ilike '%الجملة%'
+          then coalesce(nullif(l.branch_code,''),wholesale_branch.code)
+          else nullif(l.branch_code,'')
+        end as branch_code
+    ) current_effective on true
     left join core.users sales on sales.id=actor.user_id
     left join core.users current_sales on current_sales.id=l.assigned_to
-    left join core.branches current_branch on current_branch.code=l.branch_code
+    left join core.branches current_branch on current_branch.code=current_effective.branch_code
     left join core.users cc on cc.id=l.call_center_assigned_to
     left join core.branches branch_row on branch_row.code=effective.branch_code
     left join core.sources src on src.code=l.source_code
@@ -160,16 +219,77 @@ export default async function handler(request: VercelRequest, response: VercelRe
     (st.sale_at at time zone 'Asia/Riyadh')::date
   `;
   /*
-   * crm.sales_transactions remains the canonical sold source. Some legacy
-   * transactions have an empty branch snapshot, so reports resolve only that
-   * missing branch from the sale representative's primary CRM assignment and
-   * then from the linked lead. The same expression is used for display, scope
-   * and branch filtering to keep filtered and unfiltered sold totals aligned.
+   * crm.sales_transactions remains the canonical sold source. The selected CRM
+   * branch is preserved for wholesale sales. Historic rows stored as cash sales
+   * on the wholesale branch are normalised to the same wholesale identity so the
+   * department/branch report does not split one team into two rows.
    */
+  const wholesaleBranchFallbackSql = sql`
+    (
+      select branch_catalog.code
+      from core.branches branch_catalog
+      where branch_catalog.is_active=true and (
+        lower(coalesce(branch_catalog.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(branch_catalog.code,'')) like '%wholesale%'
+        or lower(coalesce(branch_catalog.code,'')) like '%jumla%'
+        or coalesce(branch_catalog.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(branch_catalog.name,'') ilike '%الجملة%' then 0 else 1 end,branch_catalog.sort_order,branch_catalog.name
+      limit 1
+    )
+  `;
+  const transactionRawDepartmentCodeSql = sql`
+    coalesce(nullif(st.department_code,''),nullif(l.department_code,''))
+  `;
+  const transactionWholesaleIdentitySql = sql`
+    (
+      (${transactionRawDepartmentCodeSql}) in ('wholesale','wholesale_sales')
+      or l.department_code in ('wholesale','wholesale_sales')
+      or lower(coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+      or lower(coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,'')) like '%wholesale%'
+      or lower(coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,'')) like '%jumla%'
+      or exists(
+        select 1
+        from core.branches transaction_branch
+        where transaction_branch.code=coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code)
+          and coalesce(transaction_branch.name,'') ilike '%الجملة%'
+      )
+    )
+  `;
+  const transactionDepartmentCodeSql = sql`
+    case
+      when ${transactionWholesaleIdentitySql} then 'wholesale'
+      else ${transactionRawDepartmentCodeSql}
+    end
+  `;
   const transactionBranchCodeSql = sql`
     case
-      when coalesce(nullif(st.department_code,''),nullif(l.department_code,'')) in ('wholesale','wholesale_sales') then null
+      when ${transactionWholesaleIdentitySql}
+        then coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,${wholesaleBranchFallbackSql})
       else coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))
+    end
+  `;
+  const currentLeadWholesaleIdentitySql = sql`
+    (
+      l.department_code in ('wholesale','wholesale_sales')
+      or lower(coalesce(l.branch_code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+      or lower(coalesce(l.branch_code,'')) like '%wholesale%'
+      or lower(coalesce(l.branch_code,'')) like '%jumla%'
+      or exists(
+        select 1
+        from core.branches current_lead_branch
+        where current_lead_branch.code=l.branch_code
+          and coalesce(current_lead_branch.name,'') ilike '%الجملة%'
+      )
+    )
+  `;
+  const currentLeadDepartmentCodeSql = sql`
+    case when ${currentLeadWholesaleIdentitySql} then 'wholesale' else l.department_code end
+  `;
+  const currentLeadBranchCodeSql = sql`
+    case
+      when ${currentLeadWholesaleIdentitySql} then coalesce(nullif(l.branch_code,''),${wholesaleBranchFallbackSql})
+      else nullif(l.branch_code,'')
     end
   `;
 
@@ -200,12 +320,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const transactionDepartmentFilterSql = sql`
     (
       ${department || null}::text is null
-      or (${department || null}='cash' and st.department_code in ('cash_sales','wholesale','wholesale_sales'))
-      or (${department || null}='finance' and st.department_code in ('finance_sales','call_center'))
-      or (${department || null}='service' and st.department_code='customer_service')
-      or (${department || null}='call_center' and st.department_code='call_center')
-      or (${department || null}='wholesale' and st.department_code in ('wholesale','wholesale_sales'))
-      or (${department || null} in ('cash_sales','finance_sales','customer_service') and st.department_code=${department || null})
+      or (${department || null}='cash' and (${transactionDepartmentCodeSql}) in ('cash_sales','wholesale','wholesale_sales'))
+      or (${department || null}='finance' and (${transactionDepartmentCodeSql}) in ('finance_sales','call_center'))
+      or (${department || null}='service' and (${transactionDepartmentCodeSql})='customer_service')
+      or (${department || null}='call_center' and (${transactionDepartmentCodeSql})='call_center')
+      or (${department || null}='wholesale' and (${transactionDepartmentCodeSql}) in ('wholesale','wholesale_sales'))
+      or (${department || null} in ('cash_sales','finance_sales','customer_service') and (${transactionDepartmentCodeSql})=${department || null})
     )
   `;
 
@@ -418,16 +538,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       coalesce(st.source_code,l.source_code) as source_code,
       coalesce(src.name,st.source_name,l.source_name) as source_name,
       coalesce(src.report_group,'other') as source_report_group,
-      st.department_code as department_code,
+      (${transactionDepartmentCodeSql}) as department_code,
       (${transactionBranchCodeSql}) as branch_code,
       st.assigned_to::text as assigned_to,
       coalesce(st.assigned_name,u.full_name,'غير موزع') as assigned_name,
       coalesce(b.name,(${transactionBranchCodeSql}),'بدون فرع') as branch_name,
       l.assigned_to::text as current_assigned_to,
       coalesce(current_sales.full_name,l.responsible_name_snapshot,'غير موزع') as current_assigned_name,
-      l.department_code as current_department_code,
-      l.branch_code as current_branch_code,
-      coalesce(current_branch.name,l.branch_code,'بدون فرع') as current_branch_name,
+      (${currentLeadDepartmentCodeSql}) as current_department_code,
+      (${currentLeadBranchCodeSql}) as current_branch_code,
+      coalesce(current_branch.name,(${currentLeadBranchCodeSql}),'بدون فرع') as current_branch_name,
       false as assigned_is_call_center,
       st.sale_at
     from crm.sales_transactions st
@@ -444,21 +564,21 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users u on u.id=st.assigned_to
     left join core.branches b on b.code=(${transactionBranchCodeSql})
     left join core.users current_sales on current_sales.id=l.assigned_to
-    left join core.branches current_branch on current_branch.code=l.branch_code
+    left join core.branches current_branch on current_branch.code=(${currentLeadBranchCodeSql})
     where coalesce(st.is_cancelled,false)=false
       and (${from || null}::date is null or ${manualSaleDateSql} >= ${from || null}::date)
       and (${to || null}::date is null or ${manualSaleDateSql} <= ${to || null}::date)
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-        or (st.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
+        or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
       )
       and ${transactionDepartmentFilterSql}
       and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
       and (${agent || null}::uuid is null or st.assigned_to=${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
       and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
-      and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,${transactionBranchCodeSql},st.department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
+      and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,${transactionBranchCodeSql},${transactionDepartmentCodeSql},st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
   `;
 
   const [storedQuality] = await sql<any[]>`select * from crm.report_quality_settings where id='default'`;

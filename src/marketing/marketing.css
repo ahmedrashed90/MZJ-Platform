@@ -2200,57 +2200,56 @@
 .marketing-database-section-heading > strong { flex: 0 0 auto; padding: 10px 14px; border-radius: 12px; color: #276b43; background: #effaf3; border: 1px solid #ccebd5; font-size: 18px; }
 .marketing-database-schedule-budget { grid-template-columns: minmax(0,.78fr) minmax(0,1.22fr); align-items: start; }
 .marketing-budget-overview {
-  gap: 16px;
-  border-color: #e2cfc6;
-  background: linear-gradient(145deg,#fffdfb,#fff9f5);
-  box-shadow: 0 12px 34px rgba(82,45,36,.07);
+  gap: 14px;
+  border-color: #e4d6d0;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(82,45,36,.055);
 }
 .marketing-budget-overview-head {
   display: grid;
-  grid-template-columns: 50px minmax(0,1fr) auto;
+  grid-template-columns: 48px minmax(0,1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 13px;
   padding-bottom: 14px;
-  border-bottom: 1px solid #eadbd4;
+  border-bottom: 1px solid #eee3de;
 }
 .marketing-budget-overview-icon {
-  width: 48px;
-  height: 48px;
+  width: 46px;
+  height: 46px;
   display: grid;
   place-items: center;
-  border-radius: 15px;
+  border-radius: 13px;
   color: #8b422f;
-  background: linear-gradient(145deg,#fff0e9,#f8ded3);
-  border: 1px solid #ebc9ba;
+  background: #fff1eb;
+  border: 1px solid #ebd1c5;
 }
 .marketing-budget-overview-title { min-width: 0; display: grid; gap: 4px; }
 .marketing-budget-overview-title h3 { margin: 0; font-size: 18px; color: var(--ink); }
 .marketing-budget-overview-title p { margin: 0; color: var(--muted); font-size: 10px; font-weight: 750; line-height: 1.65; }
-.marketing-budget-overview-actions { display: flex; align-items: stretch; gap: 8px; }
+.marketing-budget-overview-actions { display: flex; align-items: stretch; gap: 9px; }
 .marketing-budget-overview-actions > span {
-  min-width: 150px;
-  padding: 9px 12px;
-  border: 1px solid #cce4d3;
-  border-radius: 12px;
-  background: #f1faf4;
+  min-width: 162px;
+  padding: 8px 13px;
+  border-inline-start: 3px solid #4d936b;
+  background: #f4faf6;
   display: grid;
+  align-content: center;
   gap: 2px;
-  text-align: center;
 }
-.marketing-budget-overview-actions small { color: #568067; font-size: 8px; font-weight: 900; }
-.marketing-budget-overview-actions strong { color: #246744; font-size: 17px; white-space: nowrap; }
+.marketing-budget-overview-actions small { color: #638271; font-size: 8px; font-weight: 900; }
+.marketing-budget-overview-actions strong { color: #246744; font-size: 18px; white-space: nowrap; }
 .marketing-budget-manage-button {
-  min-height: 52px;
-  padding: 9px 13px;
+  min-height: 50px;
+  padding: 9px 15px;
   border: 1px solid #8b422f;
-  border-radius: 12px;
+  border-radius: 10px;
   color: #fff;
   background: #8b422f;
-  box-shadow: 0 8px 18px rgba(126,58,44,.18);
+  box-shadow: 0 7px 17px rgba(126,58,44,.16);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 7px;
   font: inherit;
   font-size: 11px;
   font-weight: 900;
@@ -2258,110 +2257,310 @@
   white-space: nowrap;
 }
 .marketing-budget-manage-button:hover { transform: translateY(-1px); background: #743629; }
-.marketing-budget-overview-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
-.marketing-budget-overview-summary article {
-  min-height: 67px;
-  padding: 10px 12px;
-  border: 1px solid #eadbd4;
-  border-radius: 12px;
+.marketing-budget-details-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e4d7d1;
+  border-radius: 13px;
   background: #fff;
+}
+.marketing-budget-details-table {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.marketing-budget-details-table th,
+.marketing-budget-details-table td {
+  padding: 12px 11px;
+  border-bottom: 1px solid #eee5e1;
+  border-inline-start: 1px solid #f2ebe8;
+  text-align: right;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.marketing-budget-details-table th:first-child,
+.marketing-budget-details-table td:first-child { border-inline-start: 0; }
+.marketing-budget-details-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: #65463e;
+  background: #f8f1ed;
+  font-size: 9px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.marketing-budget-details-table tbody tr:last-child td { border-bottom: 0; }
+.marketing-budget-details-table tbody tr:hover { background: #fffaf7; }
+.marketing-budget-details-table th:nth-child(2) { width: 105px; }
+.marketing-budget-details-table th:nth-child(3) { width: 185px; }
+.marketing-budget-details-table th:nth-child(4) { width: 220px; }
+.marketing-budget-details-table th:nth-child(5) { width: 92px; }
+.marketing-budget-details-table th:nth-child(6),
+.marketing-budget-details-table th:nth-child(7) { width: 150px; }
+.marketing-budget-details-table th:nth-child(8) { width: 125px; }
+.marketing-budget-index-column { width: 48px; text-align: center !important; }
+.marketing-budget-index-column > span {
+  width: 27px;
+  height: 27px;
+  margin: auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #7d3d30;
+  background: #fff0e9;
+  font-size: 10px;
+  font-weight: 900;
+}
+.marketing-budget-funnel-cell strong { color: #6d382d; font-size: 11px; }
+.marketing-budget-creative-names { display: grid; gap: 5px; }
+.marketing-budget-creative-names span {
+  width: fit-content;
+  max-width: 100%;
+  color: #543f38;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.55;
+}
+.marketing-budget-creative-names span + span { padding-top: 5px; border-top: 1px dashed #eadcd6; }
+.marketing-budget-platform-lines { display: grid; gap: 6px; }
+.marketing-budget-platform-lines > span {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 9px;
+  gap: 12px;
+  min-width: 0;
 }
-.marketing-budget-overview-summary span { color: #856e66; font-size: 9px; font-weight: 850; }
-.marketing-budget-overview-summary strong { color: #6f3428; font-size: 21px; }
-.marketing-budget-overview-list { display: grid; gap: 10px; }
-.marketing-budget-overview-card {
-  overflow: hidden;
-  border: 1px solid #e5d2c9;
-  border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 7px 20px rgba(82,45,36,.045);
-}
-.marketing-budget-overview-card > header {
-  min-height: 58px;
-  padding: 11px 13px;
-  background: #fbf4f0;
-  border-bottom: 1px solid #eadbd4;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.marketing-budget-overview-card > header > div { display: grid; gap: 2px; }
-.marketing-budget-overview-card > header span { color: #987e75; font-size: 8px; font-weight: 850; }
-.marketing-budget-overview-card > header strong { color: #60372f; font-size: 13px; }
-.marketing-budget-overview-card > header > b { padding: 7px 10px; border-radius: 10px; color: #266a46; background: #eff9f2; border: 1px solid #d0e8d7; font-size: 13px; white-space: nowrap; }
-.marketing-budget-overview-creatives { padding: 11px 13px; display: grid; gap: 7px; }
-.marketing-budget-overview-creatives > span { color: #806a62; font-size: 9px; font-weight: 900; }
-.marketing-budget-overview-creatives > div { display: flex; flex-wrap: wrap; gap: 6px; }
-.marketing-budget-overview-creatives b { padding: 5px 8px; border: 1px solid #e8cec2; border-radius: 999px; color: #73392e; background: #fff5f0; font-size: 9px; }
-.marketing-budget-overview-metrics { padding: 0 13px 11px; display: grid; grid-template-columns: .65fr 1fr 1fr; gap: 7px; }
-.marketing-budget-overview-metrics > span { min-width: 0; padding: 8px 9px; border: 1px solid #eee3de; border-radius: 10px; background: #fffdfc; display: grid; gap: 3px; }
-.marketing-budget-overview-metrics small { color: #927c74; font-size: 8px; font-weight: 850; }
-.marketing-budget-overview-metrics strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #59443e; font-size: 10px; }
-.marketing-budget-overview-platforms { padding: 11px 13px; border-top: 1px solid #eee3de; background: #fdfaf8; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
-.marketing-budget-overview-platforms > span { min-width: 0; padding: 8px 9px; border: 1px solid #e7d7d0; border-radius: 10px; background: #fff; display: grid; gap: 3px; }
-.marketing-budget-overview-platforms small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #806a62; font-size: 8px; font-weight: 850; }
-.marketing-budget-overview-platforms strong { color: #6d352a; font-size: 11px; }
-.marketing-budget-overview-empty { min-height: 118px; padding: 18px; border: 1px dashed #d9b9ac; border-radius: 14px; color: #855043; background: #fffaf7; display: flex; align-items: center; justify-content: center; gap: 12px; text-align: right; }
+.marketing-budget-platform-lines > span + span { padding-top: 6px; border-top: 1px dashed #eadfd9; }
+.marketing-budget-platform-lines b { color: #74584f; font-size: 9px; }
+.marketing-budget-platform-lines strong { color: #6d352a; font-size: 10px; white-space: nowrap; }
+.marketing-budget-centered-cell { text-align: center !important; color: #65453d; font-size: 11px; font-weight: 900; }
+.marketing-budget-copy-cell { color: #65504a; font-size: 9px; font-weight: 750; line-height: 1.6; }
+.marketing-budget-row-total { color: #226843; background: #f6fbf7; font-size: 12px; font-weight: 950; white-space: nowrap; }
+.marketing-budget-overview-empty { min-height: 118px; padding: 18px; border: 1px dashed #d9b9ac; border-radius: 13px; color: #855043; background: #fffaf7; display: flex; align-items: center; justify-content: center; gap: 12px; text-align: right; }
 .marketing-budget-overview-empty > div { display: grid; gap: 4px; }
 .marketing-budget-overview-empty strong { color: #61392f; font-size: 13px; }
 .marketing-budget-overview-empty span { color: var(--muted); font-size: 10px; font-weight: 750; }
 .marketing-budget-overview-totals { padding-top: 12px; border-top: 1px solid #eadbd4; display: grid; gap: 9px; }
 .marketing-budget-overview-totals > div { display: flex; flex-wrap: wrap; gap: 7px; }
-.marketing-budget-overview-totals > div > span { padding: 7px 10px; border: 1px solid #ead4ca; border-radius: 10px; background: #fff7f3; display: inline-flex; align-items: center; gap: 7px; }
+.marketing-budget-overview-totals > div > span { padding: 7px 10px; border-bottom: 2px solid #d7b6a9; background: #fffaf7; display: inline-flex; align-items: center; gap: 8px; }
 .marketing-budget-overview-totals small { color: #85685f; font-size: 8px; font-weight: 850; }
 .marketing-budget-overview-totals strong { color: #673428; font-size: 10px; }
-.marketing-budget-overview-totals > b { min-height: 50px; padding: 10px 13px; border: 1px solid #bcdcc7; border-radius: 12px; background: linear-gradient(135deg,#eef9f2,#f8fdf9); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.marketing-budget-overview-totals > b { min-height: 52px; padding: 10px 14px; border-inline-start: 4px solid #4d936b; background: #f1f8f3; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .marketing-budget-overview-totals > b small { color: #4f7d61; font-size: 10px; }
-.marketing-budget-overview-totals > b strong { color: #226843; font-size: 18px; }
+.marketing-budget-overview-totals > b strong { color: #226843; font-size: 19px; }
+.marketing-budget-table-totals { border-top: 0; padding-top: 0; }
 
-.mzj-modal-card.marketing-campaign-budget-modal { width: min(1180px,96vw); max-height: 94vh; }
-.marketing-campaign-budget-manager { display: grid; gap: 15px; }
-.marketing-campaign-budget-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
-.marketing-campaign-budget-summary article { min-height: 76px; padding: 12px 14px; border: 1px solid #e6d7d0; border-radius: 13px; background: #fffaf7; display: grid; gap: 4px; }
-.marketing-campaign-budget-summary span { color: #887169; font-size: 10px; font-weight: 850; }
-.marketing-campaign-budget-summary strong { color: #6f382c; font-size: 22px; }
-.marketing-campaign-budget-summary article.total { border-color: #c7e1cf; background: #f1faf4; }
-.marketing-campaign-budget-summary article.total span { color: #5b8068; }
-.marketing-campaign-budget-summary article.total strong { color: #286a47; }
-.marketing-campaign-budget-error { padding: 11px 13px; border: 1px solid #ecc4bd; border-radius: 11px; color: #a23e35; background: #fff3f1; font-size: 11px; font-weight: 850; }
-.marketing-campaign-budget-list { display: grid; gap: 13px; }
-.marketing-campaign-budget-edit-card { padding: 14px; }
-.marketing-campaign-budget-card-total { margin-inline-start: auto; display: grid !important; justify-items: end; gap: 2px !important; }
+.mzj-modal-card.marketing-campaign-budget-modal-fullscreen {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.marketing-campaign-budget-modal-fullscreen > .mzj-modal-header {
+  padding: 15px 22px;
+  border-bottom: 1px solid #e5d8d2;
+  background: #fff;
+}
+.marketing-campaign-budget-modal-fullscreen > .mzj-modal-body {
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+  background: #f5f2f0;
+}
+.marketing-campaign-budget-modal-fullscreen > .mzj-modal-footer {
+  padding: 11px 22px;
+  border-top: 1px solid #e4d7d1;
+  background: #fff;
+}
+.marketing-campaign-budget-manager {
+  width: min(1600px,100%);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 18px 24px 30px;
+  display: grid;
+  align-content: start;
+  gap: 15px;
+}
+.marketing-campaign-budget-toolbar {
+  display: grid;
+  grid-template-columns: minmax(280px,1fr) auto auto;
+  align-items: center;
+  gap: 18px;
+  padding: 15px 18px;
+  border-bottom: 1px solid #dfd1cb;
+  background: #fff;
+}
+.marketing-campaign-budget-toolbar-copy { min-width: 0; display: flex; align-items: center; gap: 11px; }
+.marketing-campaign-budget-toolbar-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; color: #8b422f; background: #fff0e9; flex: 0 0 auto; }
+.marketing-campaign-budget-toolbar-copy > div { min-width: 0; display: grid; gap: 3px; }
+.marketing-campaign-budget-toolbar-copy strong { color: #54352d; font-size: 14px; }
+.marketing-campaign-budget-toolbar-copy small { color: #8b7871; font-size: 9px; font-weight: 750; }
+.marketing-campaign-budget-inline-summary { display: flex; align-items: center; gap: 0; }
+.marketing-campaign-budget-inline-summary > span { min-width: 76px; padding: 2px 13px; border-inline-start: 1px solid #e8ddd8; display: grid; gap: 2px; text-align: center; }
+.marketing-campaign-budget-inline-summary > span:first-child { border-inline-start: 0; }
+.marketing-campaign-budget-inline-summary small { color: #917d75; font-size: 8px; font-weight: 850; }
+.marketing-campaign-budget-inline-summary b { color: #613a31; font-size: 15px; white-space: nowrap; }
+.marketing-campaign-budget-inline-summary .total b { color: #276a46; }
+.marketing-campaign-budget-add,
+.marketing-campaign-budget-add-bottom,
+.marketing-campaign-budget-empty button {
+  min-height: 42px;
+  padding: 8px 14px;
+  border: 1px solid #8b422f;
+  border-radius: 9px;
+  color: #fff;
+  background: #8b422f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.marketing-campaign-budget-error { padding: 11px 13px; border-inline-start: 4px solid #c55a50; color: #a23e35; background: #fff3f1; font-size: 11px; font-weight: 850; }
+.marketing-campaign-budget-list { display: grid; gap: 14px; }
+.marketing-campaign-budget-edit-row {
+  overflow: hidden;
+  border: 1px solid #ded1cb;
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(76,45,36,.045);
+}
+.marketing-campaign-budget-row-head {
+  min-height: 62px;
+  padding: 11px 18px;
+  border-bottom: 1px solid #eee4df;
+  background: #fbf8f6;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.marketing-campaign-budget-row-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.marketing-campaign-budget-row-title > span { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; color: #7b3b2f; background: #fff0e9; font-size: 10px; font-weight: 950; flex: 0 0 auto; }
+.marketing-campaign-budget-row-title > div { min-width: 0; display: grid; gap: 2px; }
+.marketing-campaign-budget-row-title small { color: #9a8178; font-size: 8px; font-weight: 850; }
+.marketing-campaign-budget-row-title strong { color: #57372f; font-size: 13px; }
+.marketing-campaign-budget-card-total { margin-inline-start: auto; padding-inline-start: 18px; border-inline-start: 1px solid #e8ddd8; display: grid !important; justify-items: end; gap: 2px !important; }
 .marketing-campaign-budget-card-total small { color: #8b756d; font-size: 8px; font-weight: 850; }
-.marketing-campaign-budget-card-total b { color: #276a46; font-size: 14px; }
-.marketing-campaign-budget-fields { grid-template-columns: repeat(4,minmax(0,1fr)); }
-.marketing-campaign-budget-creative-picker { padding: 12px; border: 1px solid #eadbd4; border-radius: 13px; background: #fffaf7; }
-.marketing-campaign-budget-empty { min-height: 150px; padding: 24px; border: 1px dashed #d7b5a7; border-radius: 15px; color: #835042; background: #fffaf7; display: grid; place-items: center; align-content: center; gap: 5px; text-align: center; }
+.marketing-campaign-budget-card-total b { color: #276a46; font-size: 15px; }
+.marketing-campaign-budget-primary-fields {
+  padding: 18px 20px 12px;
+  display: grid;
+  grid-template-columns: minmax(260px,.72fr) minmax(420px,1.28fr);
+  align-items: start;
+  gap: 22px;
+}
+.marketing-campaign-budget-creative-picker { min-width: 0; padding: 0; border: 0; background: transparent; }
+.marketing-campaign-budget-modal .marketing-campaign-budget-creative-picker .marketing-creative-multi-picker { padding: 0; border: 0; background: transparent; }
+.marketing-campaign-budget-simple-fields {
+  padding: 4px 20px 18px;
+  display: grid;
+  grid-template-columns: minmax(130px,.45fr) minmax(220px,1fr) minmax(220px,1fr);
+  align-items: end;
+  gap: 16px;
+}
+.marketing-campaign-budget-simple-fields label { min-width: 0; display: grid; gap: 6px; }
+.marketing-campaign-budget-simple-fields label > span { color: #664940; font-size: 9px; font-weight: 900; }
+.marketing-campaign-budget-simple-fields input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 11px;
+  border: 1px solid #d9cbc5;
+  border-radius: 9px;
+  background: #fff;
+  color: #49342e;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  box-shadow: none;
+}
+.marketing-campaign-budget-simple-fields input:focus { outline: 0; border-color: #a95f4b; box-shadow: 0 0 0 3px rgba(169,95,75,.09); }
+.marketing-campaign-budget-platform-editor { padding: 0 20px 20px; display: grid; gap: 10px; }
+.marketing-campaign-budget-platform-editor > header { padding: 11px 0 8px; border-top: 1px solid #eee4df; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.marketing-campaign-budget-platform-editor > header > div { display: grid; gap: 3px; }
+.marketing-campaign-budget-platform-editor > header strong { color: #5b3e36; font-size: 11px; }
+.marketing-campaign-budget-platform-editor > header span { color: #958078; font-size: 8px; font-weight: 750; }
+.marketing-campaign-budget-platform-editor > header > b { color: #7b4135; font-size: 9px; }
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms {
+  padding: 0;
+  border-top: 0;
+  display: grid;
+  grid-template-columns: repeat(3,minmax(260px,1fr));
+  gap: 0 20px;
+}
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms > section {
+  min-height: 56px;
+  padding: 9px 0;
+  border: 0;
+  border-bottom: 1px solid #eee4df;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(110px,145px);
+  align-items: center;
+  align-content: center;
+  gap: 12px;
+}
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms > section.selected { border-color: #ddc7bd; background: transparent; box-shadow: none; }
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms .marketing-budget-platform-head { justify-content: flex-start; gap: 8px; }
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms .marketing-budget-platform-head strong { font-size: 10px; }
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms > section > input {
+  width: 100%;
+  min-height: 39px;
+  padding: 7px 9px;
+  border: 1px solid #d8cbc5;
+  border-radius: 8px;
+  background: #fff;
+  text-align: center;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  box-shadow: none;
+}
+.marketing-campaign-budget-modal .marketing-campaign-budget-platforms > section > input:disabled { color: #a99690; background: #faf8f7; border-style: dashed; opacity: .7; }
+.marketing-campaign-budget-empty { min-height: 200px; padding: 28px; border: 1px dashed #d7b5a7; border-radius: 13px; color: #835042; background: #fff; display: grid; place-items: center; align-content: center; gap: 7px; text-align: center; }
 .marketing-campaign-budget-empty strong { color: #633b31; font-size: 14px; }
 .marketing-campaign-budget-empty span { color: var(--muted); font-size: 10px; font-weight: 750; }
+.marketing-campaign-budget-empty button { margin-top: 7px; }
+.marketing-campaign-budget-add-bottom { justify-self: start; background: #fff; color: #7b3d31; border-color: #cfa99a; }
 .marketing-campaign-budget-footer { width: 100%; display: flex; justify-content: flex-end; gap: 8px; }
-.marketing-campaign-budget-footer button { min-width: 130px; }
+.marketing-campaign-budget-footer button { min-width: 140px; }
 
-@media (max-width: 1100px) {
+@media (max-width: 1150px) {
   .marketing-database-schedule-budget { grid-template-columns: 1fr; }
   .marketing-budget-overview-head { grid-template-columns: 46px minmax(0,1fr); }
   .marketing-budget-overview-actions { grid-column: 1 / -1; }
   .marketing-budget-overview-actions > span,
   .marketing-budget-manage-button { flex: 1; }
-  .marketing-campaign-budget-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .marketing-campaign-budget-modal .marketing-budget-platforms { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .marketing-campaign-budget-toolbar { grid-template-columns: 1fr auto; }
+  .marketing-campaign-budget-inline-summary { grid-row: 2; grid-column: 1 / -1; justify-content: flex-start; }
+  .marketing-campaign-budget-primary-fields { grid-template-columns: 1fr; }
+  .marketing-campaign-budget-modal .marketing-campaign-budget-platforms { grid-template-columns: repeat(2,minmax(240px,1fr)); }
 }
 
-@media (max-width: 640px) {
-  .mzj-modal-card.marketing-campaign-budget-modal { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+@media (max-width: 700px) {
   .marketing-budget-overview-head { grid-template-columns: 42px minmax(0,1fr); }
   .marketing-budget-overview-actions { flex-direction: column; }
-  .marketing-budget-overview-summary,
-  .marketing-budget-overview-metrics,
-  .marketing-budget-overview-platforms,
-  .marketing-campaign-budget-summary,
-  .marketing-campaign-budget-fields,
-  .marketing-campaign-budget-modal .marketing-budget-platforms { grid-template-columns: 1fr; }
+  .marketing-budget-overview-actions > span { min-width: 0; }
+  .marketing-campaign-budget-manager { padding: 12px; }
+  .marketing-campaign-budget-toolbar { grid-template-columns: 1fr; gap: 12px; padding: 14px; }
+  .marketing-campaign-budget-inline-summary { grid-row: auto; grid-column: auto; justify-content: stretch; }
+  .marketing-campaign-budget-inline-summary > span { flex: 1; min-width: 0; padding-inline: 7px; }
+  .marketing-campaign-budget-add { width: 100%; }
+  .marketing-campaign-budget-row-head { align-items: flex-start; flex-wrap: wrap; }
+  .marketing-campaign-budget-card-total { margin-inline-start: 0; margin-inline-end: auto; }
+  .marketing-campaign-budget-primary-fields,
+  .marketing-campaign-budget-simple-fields { grid-template-columns: 1fr; padding-inline: 14px; }
+  .marketing-campaign-budget-modal .marketing-campaign-budget-platforms { grid-template-columns: 1fr; }
   .marketing-campaign-budget-footer { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
   .marketing-campaign-budget-footer button { min-width: 0; width: 100%; }
 }

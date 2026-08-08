@@ -15,13 +15,13 @@ function check(label, condition) {
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
 
-check("release version is 1.19.15", packageJson.version === "1.19.15");
+check("release keeps the v1.19.15 database-edit foundation", ["1.19.15", "1.19.16"].includes(packageJson.version));
 check("CRM database edit keeps the canonical department selector", drawer.includes('>القسم</span><select value={activeForm.departmentCode}') && drawer.includes("changeDatabaseDepartment"));
 check("wholesale is a selectable CRM department", drawer.includes('label: "قسم الجملة"') && drawer.includes('serviceKey: "cash" as ServiceKey'));
 check("both wholesale department codes are supported", drawer.includes('code === "wholesale"') && drawer.includes('code === "wholesale_sales"'));
 check("the configured wholesale code is resolved from central CRM users", drawer.includes('configuredCodes.has("wholesale")') && drawer.includes('configuredCodes.has("wholesale_sales")'));
-check("wholesale remains branchless when selected", drawer.includes("const branchlessDepartment = isWholesaleDepartmentCode(nextDepartmentCode)") && drawer.includes('branchlessDepartment\n        ? ""'));
-check("the branch selector explains the branchless wholesale rule", drawer.includes('disabled={isWholesaleDepartmentCode(activeForm.departmentCode)}') && drawer.includes("قسم الجملة بدون فرع"));
+check("wholesale now keeps a selectable required branch", drawer.includes('required={isWholesaleDepartmentCode(activeForm.departmentCode)}') && drawer.includes("اختر فرع قسم الجملة") && !/<select[^>]*disabled=\{isWholesaleDepartmentCode\(activeForm\.departmentCode\)\}/.test(drawer));
+check("wholesale branch choices use central CRM assignments", drawer.includes("userMatchesDepartment(user, departmentCode)") && drawer.includes("userBranchCodes.has(branch.code)"));
 check("wholesale assignment is limited to users in the selected department", drawer.includes("user.department_codes.includes(nextDepartmentCode)") && drawer.includes("currentAgentIsValid"));
 check("database edit still updates the same customer row", drawer.includes('payload.databaseEdit = true') && drawer.includes('method: "PATCH"') && crmApi.includes('update crm.leads set'));
 check("department and service key remain persisted through the canonical CRM endpoint", drawer.includes('addChangedField(payload, "serviceKey"') && drawer.includes('addChangedField(payload, "departmentCode"') && crmApi.includes('department_code=${input.departmentCode}'));

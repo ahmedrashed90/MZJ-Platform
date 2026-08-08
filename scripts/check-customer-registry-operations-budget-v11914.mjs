@@ -23,7 +23,7 @@ const marketingServer = read("server/marketing/index.ts");
 const permissions = read("server/_api-permissions.ts");
 const marketingCss = read("src/marketing/marketing.css");
 
-check("release keeps the v1.19.14 customer-registry fixes", ["1.19.14", "1.19.15"].includes(packageJson.version));
+check("release keeps the v1.19.14 customer-registry fixes", ["1.19.14", "1.19.15", "1.19.16"].includes(packageJson.version));
 
 check("CRM navigation is renamed to customer registry", crmLayout.includes('label: "سجل العملاء"') && access.includes('name: "سجل العملاء"'));
 check("customer registry separates cash, finance, and finance differences", ["عملاء الكاش", "عملاء التمويل", "فروقات حالات العملاء"].every((label) => crmPage.includes(label)));
@@ -43,6 +43,8 @@ check("branch options are sourced from canonical active branches", operationsSer
 
 check("campaign detail exposes create or edit budget action", marketingPage.includes("CampaignBudgetManager") && marketingPage.includes("إنشاء الميزانية") && marketingPage.includes("تعديل الميزانية"));
 check("campaign budget uses the professional overview", marketingPage.includes("marketing-budget-overview") && marketingCss.includes(".marketing-budget-overview"));
+check("campaign budget manager opens full-screen without platform cards", budgetManager.includes("marketing-campaign-budget-modal-fullscreen") && marketingCss.includes(".mzj-modal-card.marketing-campaign-budget-modal-fullscreen") && marketingCss.includes(".marketing-campaign-budget-platforms > section") && marketingCss.includes("border: 0;"));
+check("campaign budget result is rendered as a clean table", marketingPage.includes("marketing-budget-details-table") && marketingPage.includes(">الكرييتيف<") && marketingPage.includes(">المنصات والميزانية<"));
 check("budget editor supports inline Funnel creation", budgetManager.includes("<FunnelSelect") && budgetManager.includes("onFunnelCreated"));
 check("budget editor links one item to multiple creatives without multiplying its total", budgetManager.includes("CreativeMultiPicker") && budgetManager.includes("item.platformAmounts.reduce") && !budgetManager.includes("creativeIds.length *"));
 check("campaign budget save uses the canonical marketing API", budgetManager.includes('action: "save_campaign_budgets"') && marketingServer.includes("async function saveCampaignBudgets"));

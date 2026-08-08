@@ -54,12 +54,6 @@ function isSupportedCrmDepartment(codeValue: unknown, nameValue: unknown) {
     || identity.includes("wholesale");
 }
 
-function allowsBranchlessCrmSales(codeValue: unknown, nameValue: unknown) {
-  const identity = `${clean(codeValue).toLowerCase()} ${clean(nameValue).toLowerCase()}`;
-  return ["wholesale", "wholesale_sales"].includes(clean(codeValue).toLowerCase())
-    || identity.includes("جملة")
-    || identity.includes("wholesale");
-}
 function paymentType(serviceKey: string) {
   if (serviceKey === "finance") return "تمويل";
   if (serviceKey === "service") return "خدمة عملاء";
@@ -232,7 +226,8 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
   const [candidate] = await sql<PlatformUserMapping[]>`
     select u.id::text,u.full_name,u.email,u.next_erp_user_id,
       dep.code as department_code,dep.name as department_name,
-      br.code as branch_code,br.name as branch_name
+      case when dep.code in ('wholesale','wholesale_sales') then coalesce(br.code,wholesale_branch.code) else br.code end as branch_code,
+      case when dep.code in ('wholesale','wholesale_sales') then coalesce(br.name,wholesale_branch.name) else br.name end as branch_name
     from core.users u
     join core.user_systems us
       on us.user_id=u.id and us.system_code='crm' and us.is_enabled=true
@@ -252,16 +247,25 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
       order by usb.is_primary desc,b.created_at,b.code
       limit 1
     ) br on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true and (
+        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(b.code,'')) like '%wholesale%'
+        or lower(coalesce(b.code,'')) like '%jumla%'
+        or coalesce(b.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) wholesale_branch on true
     where u.is_active=true and lower(trim(u.next_erp_user_id))=lower(trim(${erpUserId}))
     limit 1
   `;
   if (!candidate) return { status: "user_not_mapped", mapping: null, candidate: null };
   if (!clean(candidate.department_code)) return { status: "department_not_configured", mapping: null, candidate };
   if (!isSupportedCrmDepartment(candidate.department_code, candidate.department_name)) return { status: "unsupported_department", mapping: null, candidate };
-  if (allowsBranchlessCrmSales(candidate.department_code, candidate.department_name)) {
-    candidate.branch_code = null;
-    candidate.branch_name = null;
-  } else if (!clean(candidate.branch_code)) {
+  if (!clean(candidate.branch_code)) {
     return { status: "platform_branch_not_configured", mapping: null, candidate };
   }
   return { status: "linked", mapping: candidate, candidate };

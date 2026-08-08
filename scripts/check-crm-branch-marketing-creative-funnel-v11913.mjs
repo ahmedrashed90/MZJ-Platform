@@ -29,11 +29,11 @@ const taskSnapshotStart = marketingServer.indexOf("function creativeTaskFlowSnap
 const taskSnapshotEnd = marketingServer.indexOf("async function replaceCreativeBudgets", taskSnapshotStart);
 const taskSnapshot = marketingServer.slice(taskSnapshotStart, taskSnapshotEnd);
 
-check("release retains the v1.19.13 canonical fixes", ["1.19.13", "1.19.14", "1.19.15"].includes(packageJson.version));
+check("release retains the v1.19.13 canonical fixes", ["1.19.13", "1.19.14", "1.19.15", "1.19.16"].includes(packageJson.version));
 
 check("CRM sold metric remains canonical sales transactions", salesFacts.includes("from crm.sales_transactions st"));
 check("missing sale branch falls back to the representative primary CRM branch", reports.includes("coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))"));
-check("wholesale sales remain intentionally branchless", reports.includes("in ('wholesale','wholesale_sales') then null"));
+check("wholesale sales keep one canonical branch identity", reports.includes("const transactionWholesaleIdentitySql") && reports.includes("then coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,${wholesaleBranchFallbackSql})"));
 check("representative branch comes from central CRM assignments", reports.includes("from core.user_system_branches usb") && reports.includes("usb.system_code='crm'"));
 check("sales display uses the effective transaction branch", salesFacts.includes("(${transactionBranchCodeSql}) as branch_code"));
 check("sales data scope uses the same effective branch", salesFacts.includes("(${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])"));

@@ -80,6 +80,21 @@ function isWholesaleDepartmentCode(input: unknown) {
   return code === "wholesale" || code === "wholesale_sales" || code.includes("wholesale") || code.includes("جملة");
 }
 
+function isWholesaleBranch(branch: { code?: unknown; name?: unknown }) {
+  const code = value(branch.code).trim().toLowerCase();
+  const name = value(branch.name).trim().toLowerCase();
+  return ["wholesale", "wholesale_sales", "jumla", "jomla", "aljumla"].includes(code)
+    || code.includes("wholesale")
+    || code.includes("jumla")
+    || name.includes("الجملة");
+}
+
+function userMatchesDepartment(user: { department_codes?: string[] }, departmentCode: string) {
+  const codes = Array.isArray(user.department_codes) ? user.department_codes : [];
+  if (isWholesaleDepartmentCode(departmentCode)) return codes.some((code) => isWholesaleDepartmentCode(code));
+  return codes.includes(departmentCode);
+}
+
 function comparableValue(input: unknown) {
   return input == null ? "" : String(input).trim();
 }
@@ -352,12 +367,15 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   const editableBranches = useMemo(() => {
     const branches = meta?.branches || [];
     const departmentCode = form?.departmentCode || departmentCodeFor(department);
-    if (isWholesaleDepartmentCode(departmentCode)) return [];
     const userBranchCodes = new Set((meta?.users || [])
-      .filter((user) => user.department_codes.includes(departmentCode))
+      .filter((user) => userMatchesDepartment(user, departmentCode))
       .flatMap((user) => user.branch_codes || []));
     const currentBranch = form?.branchCode || "";
     const matching = branches.filter((branch) => {
+      if (isWholesaleDepartmentCode(departmentCode)) {
+        if (userBranchCodes.size) return isWholesaleBranch(branch) || userBranchCodes.has(branch.code) || branch.code === currentBranch;
+        return !["online", "customer_service"].includes(branch.code) || branch.code === currentBranch;
+      }
       if (userBranchCodes.size) return userBranchCodes.has(branch.code) || branch.code === currentBranch;
       if (department === "finance") return branch.code === "online" || branch.code === currentBranch;
       if (department === "service") return branch.code === "customer_service" || branch.code === currentBranch;
@@ -368,7 +386,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
 
   const editableAgents = useMemo(() => {
     const departmentCode = form?.departmentCode || departmentCodeFor(department);
-    const matching = (meta?.users || []).filter((user) => user.department_codes.includes(departmentCode));
+    const matching = (meta?.users || []).filter((user) => userMatchesDepartment(user, departmentCode));
     const current = (meta?.users || []).find((user) => user.id === form?.assignedTo);
     return current && !matching.some((user) => user.id === current.id) ? [current, ...matching] : matching;
   }, [meta?.users, form?.departmentCode, form?.assignedTo, department]);
@@ -517,25 +535,29 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       if (!current) return current;
       const option = databaseDepartmentOptions.find((item) => item.value === nextDepartmentCode) || databaseDepartmentOptions[0];
       const nextServiceKey = option.serviceKey;
-      const branchlessDepartment = isWholesaleDepartmentCode(nextDepartmentCode);
       const nextStatuses = (meta?.statuses || [])
         .filter((item) => item.department_code === nextServiceKey && item.is_active !== false)
         .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
       const statusStillValid = nextStatuses.some((item) => item.value === current.values.status_label);
-      const departmentUsers = (meta?.users || []).filter((user) => user.department_codes.includes(nextDepartmentCode));
+      const departmentUsers = (meta?.users || []).filter((user) => userMatchesDepartment(user, nextDepartmentCode));
       const allowedBranchCodes = new Set(departmentUsers.flatMap((user) => user.branch_codes || []));
-      const candidateBranches = branchlessDepartment ? [] : (meta?.branches || []).filter((branch) => {
-        if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code);
-        if (nextServiceKey === "finance") return branch.code === "online";
-        if (nextServiceKey === "service") return branch.code === "customer_service";
-        return !["online", "customer_service"].includes(branch.code);
+      const candidateBranches = (meta?.branches || []).filter((branch) => {
+        if (isWholesaleDepartmentCode(nextDepartmentCode)) {
+          if (allowedBranchCodes.size) return isWholesaleBranch(branch) || allowedBranchCodes.has(branch.code) || branch.code === current.branchCode;
+          return !["online", "customer_service"].includes(branch.code) || branch.code === current.branchCode;
+        }
+        if (allowedBranchCodes.size) return allowedBranchCodes.has(branch.code) || branch.code === current.branchCode;
+        if (nextServiceKey === "finance") return branch.code === "online" || branch.code === current.branchCode;
+        if (nextServiceKey === "service") return branch.code === "customer_service" || branch.code === current.branchCode;
+        return !["online", "customer_service"].includes(branch.code) || branch.code === current.branchCode;
       });
       const currentBranchIsValid = candidateBranches.some((branch) => branch.code === current.branchCode);
-      const nextBranchCode = branchlessDepartment
-        ? ""
-        : currentBranchIsValid
+      const wholesaleBranch = candidateBranches.find(isWholesaleBranch);
+      const nextBranchCode = currentBranchIsValid
         ? current.branchCode
-        : branchCodeFor(nextServiceKey) || candidateBranches[0]?.code || "";
+        : isWholesaleDepartmentCode(nextDepartmentCode)
+          ? wholesaleBranch?.code || (candidateBranches.length === 1 ? candidateBranches[0].code : "")
+          : branchCodeFor(nextServiceKey) || "";
       const currentAgentIsValid = departmentUsers.some((user) => user.id === current.assignedTo);
       return {
         ...current,
@@ -558,6 +580,10 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   async function saveLead() {
     const currentLead = lead;
     if (!currentLead) return;
+    if (!showConversation && isWholesaleDepartmentCode(activeForm.departmentCode) && !activeForm.branchCode) {
+      setNotice("اختر فرع قسم الجملة قبل حفظ بيانات العميل");
+      return;
+    }
     setSaving(true);
     setNotice("");
     try {
@@ -828,7 +854,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                 <header><div><strong>بيانات التوزيع والحالة</strong><span>الحفظ يحدّث نفس العميل الحالي ولا ينشئ عميلاً جديدًا.</span></div></header>
                 <div className="crm-database-edit-routing-grid">
                   <label><span>القسم</span><select value={activeForm.departmentCode} onChange={(event) => changeDatabaseDepartment(event.target.value)}>{databaseDepartmentOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-                  <label><span>الفرع</span><select value={isWholesaleDepartmentCode(activeForm.departmentCode) ? "" : activeForm.branchCode} disabled={isWholesaleDepartmentCode(activeForm.departmentCode)} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="">{isWholesaleDepartmentCode(activeForm.departmentCode) ? "قسم الجملة بدون فرع" : "بدون فرع"}</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
+                  <label><span>الفرع</span><select value={activeForm.branchCode} required={isWholesaleDepartmentCode(activeForm.departmentCode)} onChange={(event) => setForm((current) => current ? { ...current, branchCode: event.target.value } : current)}><option value="" disabled={isWholesaleDepartmentCode(activeForm.departmentCode)}>{isWholesaleDepartmentCode(activeForm.departmentCode) ? "اختر فرع قسم الجملة" : "بدون فرع"}</option>{editableBranches.map((branch) => <option key={branch.code} value={branch.code}>{branch.name}</option>)}</select></label>
                   <label><span>الدفع</span><select value={activeForm.paymentType} onChange={(event) => setForm((current) => current ? { ...current, paymentType: event.target.value } : current)}><option value="كاش">كاش</option><option value="تمويل">تمويل</option><option value="خدمة عملاء">خدمة عملاء</option></select></label>
                   <label><span>الحالة</span><select value={activeForm.values.status_label} disabled={activeForm.values.status_label === "تم البيع"} onChange={(event) => {
                     const nextStatus = event.target.value;

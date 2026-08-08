@@ -15,6 +15,11 @@ function soldQuantity(value: unknown) {
   return Math.max(1, Math.floor(parsed));
 }
 
+function isWholesaleDepartmentCode(value: unknown) {
+  const code = clean(value).toLowerCase();
+  return code === "wholesale" || code === "wholesale_sales" || code.includes("wholesale") || code.includes("جملة");
+}
+
 function riyadhNoteTimestamp(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Riyadh",
@@ -410,6 +415,9 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
     if (!allowed) return;
   }
 
+  if (databaseEdit && isWholesaleDepartmentCode(input.departmentCode) && !input.branchCode) {
+    return response.status(400).json({ ok: false, error: "اختر فرع قسم الجملة قبل حفظ بيانات العميل" });
+  }
   if (input.phone && !input.phoneNormalized) {
     return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
   }

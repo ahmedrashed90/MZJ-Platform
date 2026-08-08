@@ -162,95 +162,114 @@ export function CampaignBudgetManager({
   return (
     <Modal
       open={open}
-      title="إدارة ميزانية الحملة"
-      subtitle={`${campaignName || "الحملة"} — الحسبة تعتمد على قيمة كل بند Funnel مرة واحدة دون مضاعفة حسب عدد الكرييتيفات أو المنصات.`}
+      title={initialBudgets.length ? "تعديل ميزانية الحملة" : "إنشاء ميزانية الحملة"}
+      subtitle={`${campaignName || "الحملة"} — قيمة كل بند Funnel تُحسب مرة واحدة فقط.`}
       onClose={onClose}
-      className="marketing-campaign-budget-modal"
+      className="marketing-campaign-budget-modal marketing-campaign-budget-modal-fullscreen"
       level={1}
       footer={<div className="marketing-campaign-budget-footer"><button type="button" className="secondary" disabled={saving} onClick={onClose}>إلغاء</button><button type="button" className="primary" disabled={saving} onClick={() => void save()}><FloppyDisk size={18} />{saving ? "جاري حفظ الميزانية..." : "حفظ الميزانية"}</button></div>}
     >
       <div className="marketing-campaign-budget-manager">
-        <section className="marketing-campaign-budget-summary" aria-label="ملخص الميزانية">
-          <article><span>بنود الميزانية</span><strong>{budgets.length.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
-          <article><span>المنصات المستخدمة</span><strong>{selectedPlatforms.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
-          <article className="total"><span>إجمالي الميزانية</span><strong>{grandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></article>
-        </section>
+        <div className="marketing-campaign-budget-toolbar">
+          <div className="marketing-campaign-budget-toolbar-copy">
+            <span className="marketing-campaign-budget-toolbar-icon"><CurrencyCircleDollar size={24} weight="duotone" /></span>
+            <div><strong>بنود ميزانية الحملة</strong><small>اربط كل Funnel بالكرييتيفات والمنصات، ثم اكتب قيمة كل منصة.</small></div>
+          </div>
+          <div className="marketing-campaign-budget-inline-summary" aria-label="ملخص الميزانية">
+            <span><small>البنود</small><b>{budgets.length.toLocaleString("ar-SA-u-nu-latn")}</b></span>
+            <span><small>المنصات</small><b>{selectedPlatforms.toLocaleString("ar-SA-u-nu-latn")}</b></span>
+            <span className="total"><small>الإجمالي</small><b>{grandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</b></span>
+          </div>
+          <button type="button" className="marketing-campaign-budget-add" onClick={() => setBudgets((current) => [...current, newBudget()])}><Plus size={18} />إضافة بند ميزانية</button>
+        </div>
 
         {error ? <div className="marketing-campaign-budget-error">{error}</div> : null}
 
         <div className="marketing-campaign-budget-list">
-          {budgets.map((budget, index) => (
-            <article key={budget.id} className="marketing-budget-card marketing-campaign-budget-edit-card">
-              <header className="marketing-budget-card-head">
-                <div><span>بند الميزانية</span><strong>{index + 1}</strong></div>
-                <div className="marketing-campaign-budget-card-total"><small>إجمالي البند</small><b>{budgetTotal(budget).toLocaleString("ar-SA-u-nu-latn")} ر.س</b></div>
-                <button type="button" className="marketing-card-delete" aria-label={`حذف بند الميزانية ${index + 1}`} onClick={() => setBudgets((current) => current.filter((item) => item.id !== budget.id))}><Trash size={18} /></button>
-              </header>
+          {budgets.map((budget, index) => {
+            const funnelName = meta.funnels.find((funnel) => funnel.id === budget.funnelId)?.name || "اختر Funnel";
+            return (
+              <article key={budget.id} className="marketing-campaign-budget-edit-row">
+                <header className="marketing-campaign-budget-row-head">
+                  <div className="marketing-campaign-budget-row-title">
+                    <span>{index + 1}</span>
+                    <div><small>بند الميزانية</small><strong>{funnelName}</strong></div>
+                  </div>
+                  <div className="marketing-campaign-budget-card-total"><small>إجمالي البند</small><b>{budgetTotal(budget).toLocaleString("ar-SA-u-nu-latn")} ر.س</b></div>
+                  <button type="button" className="marketing-card-delete" aria-label={`حذف بند الميزانية ${index + 1}`} onClick={() => setBudgets((current) => current.filter((item) => item.id !== budget.id))}><Trash size={18} /></button>
+                </header>
 
-              <div className="marketing-budget-fields marketing-campaign-budget-fields">
-                <FunnelSelect
-                  value={budget.funnelId}
-                  funnels={meta.funnels}
-                  onCreated={(funnel) => onFunnelCreated?.(funnel)}
-                  onChange={(funnelId) => updateBudget(budget.id, (item) => ({ ...item, funnelId }))}
-                />
-                <label><span>عدد الإعلانات</span><input type="number" min={1} value={budget.adsCount} onChange={(event) => updateBudget(budget.id, (item) => ({ ...item, adsCount: Math.max(1, Number(event.target.value) || 1) }))} /></label>
-                <label><span>هدف المحتوى</span><input value={budget.contentGoal} onChange={(event) => updateBudget(budget.id, (item) => ({ ...item, contentGoal: event.target.value }))} /></label>
-                <label><span>الهدف المتوقع</span><input value={budget.expectedGoal} onChange={(event) => updateBudget(budget.id, (item) => ({ ...item, expectedGoal: event.target.value }))} /></label>
-              </div>
+                <div className="marketing-campaign-budget-primary-fields">
+                  <FunnelSelect
+                    value={budget.funnelId}
+                    funnels={meta.funnels}
+                    onCreated={(funnel) => onFunnelCreated?.(funnel)}
+                    onChange={(funnelId) => updateBudget(budget.id, (item) => ({ ...item, funnelId }))}
+                  />
+                  <div className="marketing-campaign-budget-creative-picker">
+                    <CreativeMultiPicker
+                      label="الكرييتيف"
+                      hint="يظهر الاسم المسجل للكرييتيف في عرض الميزانية."
+                      items={creativeItems}
+                      value={budget.creativeIds}
+                      onChange={(creativeIds) => updateBudget(budget.id, (item) => ({ ...item, creativeIds }))}
+                    />
+                  </div>
+                </div>
 
-              <div className="marketing-campaign-budget-creative-picker">
-                <CreativeMultiPicker
-                  label="المنتج / الكرييتيف"
-                  hint="يمكن ربط البند بأكثر من كرييتيف، ويظل إجمالي البند محسوبًا مرة واحدة."
-                  items={creativeItems}
-                  value={budget.creativeIds}
-                  onChange={(creativeIds) => updateBudget(budget.id, (item) => ({ ...item, creativeIds }))}
-                />
-              </div>
+                <div className="marketing-campaign-budget-simple-fields">
+                  <label><span>عدد الإعلانات</span><input type="number" min={1} value={budget.adsCount} onChange={(event) => updateBudget(budget.id, (item) => ({ ...item, adsCount: Math.max(1, Number(event.target.value) || 1) }))} /></label>
+                  <label><span>هدف المحتوى</span><input value={budget.contentGoal} placeholder="اكتب هدف المحتوى" onChange={(event) => updateBudget(budget.id, (item) => ({ ...item, contentGoal: event.target.value }))} /></label>
+                  <label><span>الهدف المتوقع</span><input value={budget.expectedGoal} placeholder="اكتب الهدف المتوقع" onChange={(event) => updateBudget(budget.id, (item) => ({ ...item, expectedGoal: event.target.value }))} /></label>
+                </div>
 
-              <div className="marketing-budget-platforms">
-                {meta.platforms.map((platform) => {
-                  const selected = budget.platformAmounts.find((item) => item.platformId === platform.id);
-                  return (
-                    <section key={platform.id} className={selected ? "selected" : ""}>
-                      <label className="marketing-budget-platform-head">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(selected)}
-                          onChange={() => updateBudget(budget.id, (item) => ({
-                            ...item,
-                            platformAmounts: selected
-                              ? item.platformAmounts.filter((part) => part.platformId !== platform.id)
-                              : [...item.platformAmounts, { platformId: platform.id, amount: 0 }],
-                          }))}
-                        />
-                        <strong>{platform.name}</strong>
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
-                        disabled={!selected}
-                        value={selected?.amount ?? ""}
-                        placeholder={`قيمة ${platform.name}`}
-                        onChange={(event) => updateBudget(budget.id, (item) => ({
-                          ...item,
-                          platformAmounts: item.platformAmounts.map((part) => part.platformId === platform.id
-                            ? { ...part, amount: Math.max(0, Number(event.target.value) || 0) }
-                            : part),
-                        }))}
-                      />
-                    </section>
-                  );
-                })}
-              </div>
-            </article>
-          ))}
+                <section className="marketing-campaign-budget-platform-editor">
+                  <header><div><strong>المنصات وقيمة الميزانية</strong><span>حدد المنصة ثم اكتب المبلغ داخل حقل القيمة فقط.</span></div><b>{budget.platformAmounts.length.toLocaleString("ar-SA-u-nu-latn")} منصة</b></header>
+                  <div className="marketing-budget-platforms marketing-campaign-budget-platforms">
+                    {meta.platforms.map((platform) => {
+                      const selected = budget.platformAmounts.find((item) => item.platformId === platform.id);
+                      return (
+                        <section key={platform.id} className={selected ? "selected" : ""}>
+                          <label className="marketing-budget-platform-head">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(selected)}
+                              onChange={() => updateBudget(budget.id, (item) => ({
+                                ...item,
+                                platformAmounts: selected
+                                  ? item.platformAmounts.filter((part) => part.platformId !== platform.id)
+                                  : [...item.platformAmounts, { platformId: platform.id, amount: 0 }],
+                              }))}
+                            />
+                            <strong>{platform.name}</strong>
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            disabled={!selected}
+                            value={selected?.amount ?? ""}
+                            placeholder="قيمة المنصة"
+                            aria-label={`قيمة ${platform.name}`}
+                            onChange={(event) => updateBudget(budget.id, (item) => ({
+                              ...item,
+                              platformAmounts: item.platformAmounts.map((part) => part.platformId === platform.id
+                                ? { ...part, amount: Math.max(0, Number(event.target.value) || 0) }
+                                : part),
+                            }))}
+                          />
+                        </section>
+                      );
+                    })}
+                  </div>
+                </section>
+              </article>
+            );
+          })}
 
-          {!budgets.length ? <div className="marketing-campaign-budget-empty"><CurrencyCircleDollar size={34} weight="duotone" /><strong>لا توجد بنود ميزانية</strong><span>اضغط على «إضافة بند ميزانية» لإنشاء ميزانية الحملة.</span></div> : null}
+          {!budgets.length ? <div className="marketing-campaign-budget-empty"><CurrencyCircleDollar size={36} weight="duotone" /><strong>لا توجد بنود ميزانية</strong><span>أضف بندًا جديدًا، ثم اختر Funnel والكرييتيف والمنصات.</span><button type="button" onClick={() => setBudgets([newBudget()])}><Plus size={17} />إضافة أول بند</button></div> : null}
         </div>
 
-        <button type="button" className="marketing-add-block marketing-add-budget" onClick={() => setBudgets((current) => [...current, newBudget()])}><Plus size={18} />إضافة بند ميزانية</button>
+        {budgets.length ? <button type="button" className="marketing-campaign-budget-add-bottom" onClick={() => setBudgets((current) => [...current, newBudget()])}><Plus size={18} />إضافة بند ميزانية آخر</button> : null}
       </div>
     </Modal>
   );
