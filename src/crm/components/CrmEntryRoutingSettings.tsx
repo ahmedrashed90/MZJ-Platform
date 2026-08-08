@@ -33,7 +33,7 @@ export function CrmEntryRoutingSettings() {
     <section className="crm-panel settings-card full">
       <header className="crm-settings-section-head"><div><h2>القواعد المتاحة حاليًا</h2><p>{data.users?.eligible || 0} مستخدم مؤهل لاستقبال العملاء من أصل {data.users?.total || 0}.</p></div><UsersThree size={24} /></header>
       <div className="crm-entry-routing-rule-list">
-        {(data.rules || []).map((rule: any) => <article key={rule.id}><span className={rule.is_active ? "active" : "inactive"}>{rule.is_active ? "نشطة" : "متوقفة"}</span><div><strong>{rule.name}</strong><small>{departmentLabels[rule.department_code] || rule.department_code}{rule.branch_code ? ` · ${rule.branch_code}` : " · كل الفروع"}</small></div><b>{rule.active_member_count || 0}<small>مستقبل نشط</small></b></article>)}
+        {(data.rules || []).map((rule: any) => <article key={rule.id}><span className={rule.is_active ? "active" : "inactive"}>{rule.is_active ? "نشطة" : "متوقفة"}</span><div><strong>{rule.name}</strong><small>{departmentLabels[rule.department_code] || rule.department_code}{(rule.branch_names || []).length ? ` · ${(rule.branch_names || []).join("، ")}` : " · كل الفروع"}</small></div><b>{rule.active_member_count || 0}<small>مستقبل نشط</small></b></article>)}
         {!data.rules?.length ? <div className="crm-automation-empty">لا توجد قواعد توزيع محفوظة بعد. أضفها من تبويب «توزيع العملاء».</div> : null}
       </div>
     </section>

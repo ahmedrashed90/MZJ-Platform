@@ -1468,6 +1468,13 @@ button.small-metric { cursor: pointer; }
 .crm-distribution-source-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
+.crm-distribution-branch-picker {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 7px;
+}
+.crm-distribution-branch-picker > span { font-size: 10px; font-weight: 800; }
+.crm-distribution-branch-picker > small { color: var(--muted); font-size: 9px; }
 .crm-distribution-members-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

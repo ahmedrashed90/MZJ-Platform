@@ -445,6 +445,7 @@ create table if not exists crm.assignment_rules (
   name text not null,
   department_code text not null,
   branch_code text,
+  branch_codes text[] not null default '{}',
   source_codes text[] not null default '{}',
   assignment_mode text not null default 'round_robin',
   prevent_consecutive boolean not null default true,
@@ -455,7 +456,14 @@ create table if not exists crm.assignment_rules (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table crm.assignment_rules add column if not exists branch_codes text[] not null default '{}';
+update crm.assignment_rules
+set branch_codes=array[branch_code]
+where nullif(branch_code,'') is not null
+  and coalesce(array_length(branch_codes,1),0)=0;
 create index if not exists crm_assignment_rules_match_idx on crm.assignment_rules(department_code,branch_code,is_active,sort_order);
+create index if not exists crm_assignment_rules_scope_idx on crm.assignment_rules(department_code,is_active,sort_order);
+create index if not exists crm_assignment_rules_branch_codes_gin_idx on crm.assignment_rules using gin(branch_codes);
 
 create table if not exists crm.assignment_rule_members (
   rule_id uuid not null references crm.assignment_rules(id) on delete cascade,

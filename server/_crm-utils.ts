@@ -168,20 +168,27 @@ type AssignmentResult = {
   ruleName?: string;
 };
 
+function assignmentRulePoolKey(ruleId: string, branchCode: string) {
+  return `rule:${ruleId}:branch:${branchCode}`;
+}
+
 async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string): Promise<AssignmentResult | null> {
+  const branchCode = clean(requestedBranch);
+  if (!branchCode) return null;
+
   const sql = getSql();
   const [rule] = await sql<any[]>`
     select r.*, r.id::text,
       state.last_user_id::text,
       state.updated_at as last_distribution_at
     from crm.assignment_rules r
-    left join crm.assignment_state state on state.pool_key = concat('rule:', r.id::text)
+    left join crm.assignment_state state on state.pool_key = concat('rule:', r.id::text, ':branch:', ${branchCode})
     where r.is_active = true
       and r.department_code = ${departmentCode}
-      and (r.branch_code is null or r.branch_code = ${requestedBranch || null})
+      and (coalesce(array_length(r.branch_codes, 1), 0) = 0 or ${branchCode} = any(r.branch_codes))
       and (coalesce(array_length(r.source_codes, 1), 0) = 0 or ${sourceCode || ""} = any(r.source_codes))
     order by
-      case when r.branch_code = ${requestedBranch || null} then 0 else 1 end,
+      case when coalesce(array_length(r.branch_codes, 1), 0) > 0 then 0 else 1 end,
       case when coalesce(array_length(r.source_codes, 1), 0) > 0 then 0 else 1 end,
       r.sort_order,
       r.created_at
@@ -197,16 +204,56 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
       and m.is_active = true
       and u.is_active = true
       and u.can_receive_leads = true
+      and (
+        exists (
+          select 1
+          from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.is_active=true
+          where usd.user_id=u.id and usd.system_code='crm' and d.code=${departmentCode}
+        )
+        or (
+          not exists (
+            select 1 from core.user_system_departments usd
+            where usd.user_id=u.id and usd.system_code='crm'
+          )
+          and exists (
+            select 1
+            from core.user_departments ud
+            join core.departments d on d.id=ud.department_id and d.is_active=true
+            where ud.user_id=u.id and d.code=${departmentCode}
+          )
+        )
+      )
+      and (
+        exists (
+          select 1
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm' and b.code=${branchCode}
+        )
+        or (
+          not exists (
+            select 1 from core.user_system_branches usb
+            where usb.user_id=u.id and usb.system_code='crm'
+          )
+          and exists (
+            select 1
+            from core.user_branches ub
+            join core.branches b on b.id=ub.branch_id and b.is_active=true
+            where ub.user_id=u.id and b.code=${branchCode}
+          )
+        )
+      )
     order by m.priority, u.full_name, u.id::text
   `;
   if (!candidates.length) return null;
 
   const lastIndex = candidates.findIndex((candidate) => candidate.id === rule.last_user_id);
   const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
-  const poolKey = `rule:${rule.id}`;
+  const poolKey = assignmentRulePoolKey(rule.id, branchCode);
   await sql`
     insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
-    values (${poolKey},${selected.id}::uuid,${requestedBranch || null},now())
+    values (${poolKey},${selected.id}::uuid,${branchCode},now())
     on conflict (pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
   `;
   await sql`
@@ -216,51 +263,22 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   `;
   await sql`
     insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
-    values (${rule.id}::uuid,${departmentCode},${requestedBranch || null},${sourceCode || null},${selected.id}::uuid,${selected.full_name},${rule.assignment_mode || "round_robin"})
+    values (${rule.id}::uuid,${departmentCode},${branchCode},${sourceCode || null},${selected.id}::uuid,${selected.full_name},${rule.assignment_mode || "round_robin"})
   `;
-  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: requestedBranch, ruleId: rule.id, ruleName: rule.name };
-}
-
-async function fallbackAssignment(departmentCode: string, branch: string, sourceCode: string): Promise<AssignmentResult> {
-  const sql = getSql();
-  const candidates = await sql<{ id: string; full_name: string; branch_code: string | null }[]>`
-    select u.id::text, u.full_name, min(b.code) as branch_code
-    from core.users u
-    join core.user_departments ud on ud.user_id = u.id
-    join core.departments d on d.id = ud.department_id and d.code = ${departmentCode}
-    left join core.user_branches ub on ub.user_id = u.id
-    left join core.branches b on b.id = ub.branch_id
-    where u.is_active = true and u.can_receive_leads = true
-      and (${branch || null}::text is null or b.code = ${branch || null})
-    group by u.id
-    order by u.full_name, u.id
-  `;
-  if (!candidates.length) return { assignedTo: null, assignedName: "", branchCode: branch };
-  const poolKey = `sales:${departmentCode}:${branch || "all"}`;
-  const [state] = await sql<{ last_user_id: string | null }[]>`select last_user_id::text from crm.assignment_state where pool_key = ${poolKey}`;
-  const lastIndex = candidates.findIndex((candidate) => candidate.id === state?.last_user_id);
-  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
-  await sql`
-    insert into crm.assignment_state(pool_key, last_user_id, last_branch_code, updated_at)
-    values (${poolKey}, ${selected.id}::uuid, ${selected.branch_code || branch || null}, now())
-    on conflict (pool_key) do update set last_user_id = excluded.last_user_id, last_branch_code = excluded.last_branch_code, updated_at = now()
-  `;
-  await sql`
-    insert into crm.assignment_logs(department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
-    values (${departmentCode},${selected.branch_code || branch || null},${sourceCode || null},${selected.id}::uuid,${selected.full_name},'round_robin')
-  `;
-  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: selected.branch_code || branch };
+  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode, ruleId: rule.id, ruleName: rule.name };
 }
 
 export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {
   const department = departmentCodeFromKey(serviceKey);
-  const branch = requestedBranch || branchForDepartment(serviceKey);
-  return (await chooseFromConfiguredRule(department, branch, sourceCode)) || fallbackAssignment(department, branch, sourceCode);
+  const branch = clean(requestedBranch) || branchForDepartment(serviceKey);
+  const configured = await chooseFromConfiguredRule(department, branch, sourceCode);
+  return configured || { assignedTo: null, assignedName: "", branchCode: branch };
 }
 
 export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online") {
-  const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
-  if (configured) return configured;
-  const fallback = await fallbackAssignment("call_center", "", sourceCode);
-  return { assignedTo: fallback.assignedTo, assignedName: fallback.assignedName };
+  const branch = clean(requestedBranch) || "online";
+  const configured = await chooseFromConfiguredRule("call_center", branch, sourceCode);
+  return configured
+    ? { assignedTo: configured.assignedTo, assignedName: configured.assignedName }
+    : { assignedTo: null, assignedName: "" };
 }

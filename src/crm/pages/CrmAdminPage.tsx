@@ -57,7 +57,7 @@ const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "m
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "manual", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
 const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", isActive: true };
-const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCode: "", sourceCodes: [] as string[], memberIds: [] as string[], sortOrder: 10, preventConsecutive: true, isActive: true };
+const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCodes: [] as string[], sourceCodes: [] as string[], memberIds: [] as string[], sortOrder: 10, preventConsecutive: true, isActive: true };
 
 function dbToQuality(raw: any) {
   return {
@@ -382,9 +382,10 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const eligibleRuleUsers = useMemo(() => (data.assignmentUsers || []).filter((row: any) => {
     if (!row.is_active || !row.can_receive_leads) return false;
     if (!(row.department_codes || []).includes(ruleForm.departmentCode)) return false;
-    if (ruleForm.branchCode && !(row.branch_codes || []).includes(ruleForm.branchCode)) return false;
+    if (!(row.branch_codes || []).length) return false;
+    if (ruleForm.branchCodes.length && !(row.branch_codes || []).some((code: string) => ruleForm.branchCodes.includes(code))) return false;
     return true;
-  }), [data.assignmentUsers, ruleForm.departmentCode, ruleForm.branchCode]);
+  }), [data.assignmentUsers, ruleForm.departmentCode, ruleForm.branchCodes]);
 
   const selectedRuleUsers = useMemo(() => ruleForm.memberIds
     .map((id) => (data.assignmentUsers || []).find((row: any) => row.id === id))
@@ -404,6 +405,20 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
   function toggleQuality(key: keyof typeof quality, status: string) {
     setQuality((current) => ({ ...current, [key]: toggleList(current[key] as string[], status) }));
+  }
+
+  function toggleRuleBranch(branchCode: string) {
+    setRuleForm((current) => {
+      const branchCodes = toggleList(current.branchCodes, branchCode);
+      const eligibleIds = new Set((data.assignmentUsers || []).filter((row: any) => {
+        if (!row.is_active || !row.can_receive_leads) return false;
+        if (!(row.department_codes || []).includes(current.departmentCode)) return false;
+        if (!(row.branch_codes || []).length) return false;
+        if (branchCodes.length && !(row.branch_codes || []).some((code: string) => branchCodes.includes(code))) return false;
+        return true;
+      }).map((row: any) => row.id));
+      return { ...current, branchCodes, memberIds: current.memberIds.filter((id) => eligibleIds.has(id)) };
+    });
   }
 
   function editCustomerField(row: any) {
@@ -428,7 +443,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       id: row.id,
       name: row.name,
       departmentCode: row.department_code,
-      branchCode: row.branch_code || "",
+      branchCodes: row.branch_codes || [],
       sourceCodes: row.source_codes || [],
       memberIds: (row.members || []).filter((member: any) => member.is_active).map((member: any) => member.user_id),
       sortOrder: row.sort_order || 0,
@@ -783,7 +798,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
               <div className="crm-form-grid crm-form-grid-wide">
                 <label><span>اسم القاعدة</span><input placeholder="مثال: تمويل الأونلاين" value={ruleForm.name} onChange={(event) => setRuleForm((current) => ({ ...current, name: event.target.value }))} /></label>
                 <label><span>القسم</span><select value={ruleForm.departmentCode} onChange={(event) => setRuleForm((current) => ({ ...current, departmentCode: event.target.value, memberIds: [] }))}><option value="cash_sales">مبيعات الكاش</option><option value="finance_sales">مبيعات التمويل</option><option value="customer_service">خدمة العملاء</option><option value="call_center">الكول سنتر</option></select></label>
-                <label><span>الفرع</span><select value={ruleForm.branchCode} onChange={(event) => setRuleForm((current) => ({ ...current, branchCode: event.target.value, memberIds: [] }))}><option value="">كل الفروع</option>{data.branches.filter((row: any) => row.is_active).map((row: any) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
+                <div className="crm-distribution-branch-picker"><span>الفرع</span><small>يمكن اختيار أكثر من فرع. عدم اختيار أي فرع يعني كل الفروع.</small><div className="crm-check-grid crm-distribution-source-grid">{data.branches.filter((row: any) => row.is_active).map((row: any) => <label key={row.code}><input type="checkbox" checked={ruleForm.branchCodes.includes(row.code)} onChange={() => toggleRuleBranch(row.code)} />{row.name}</label>)}</div></div>
                 <label><span>ترتيب القاعدة</span><input type="number" value={ruleForm.sortOrder} onChange={(event) => setRuleForm((current) => ({ ...current, sortOrder: Number(event.target.value) }))} /></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={ruleForm.preventConsecutive} onChange={(event) => setRuleForm((current) => ({ ...current, preventConsecutive: event.target.checked }))} /><span>منع تكرار نفس المندوب</span></label>
                 <label className="crm-switch-row"><input type="checkbox" checked={ruleForm.isActive} onChange={(event) => setRuleForm((current) => ({ ...current, isActive: event.target.checked }))} /><span>القاعدة نشطة</span></label>
@@ -800,12 +815,12 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
               <div className="crm-distribution-members-layout">
                 <div className="crm-distribution-available">
                   <header><strong>الموظفون المؤهلون</strong><span>{eligibleRuleUsers.length}</span></header>
-                  <div className="crm-member-picker">{eligibleRuleUsers.map((row: any) => <label key={row.id} className={ruleForm.memberIds.includes(row.id) ? "selected" : ""}><input type="checkbox" checked={ruleForm.memberIds.includes(row.id)} onChange={() => setRuleForm((current) => ({ ...current, memberIds: toggleList(current.memberIds, row.id) }))} /><span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "كل الفروع"}</small></span></label>)}</div>
+                  <div className="crm-member-picker">{eligibleRuleUsers.map((row: any) => <label key={row.id} className={ruleForm.memberIds.includes(row.id) ? "selected" : ""}><input type="checkbox" checked={ruleForm.memberIds.includes(row.id)} onChange={() => setRuleForm((current) => ({ ...current, memberIds: toggleList(current.memberIds, row.id) }))} /><span><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "بدون فرع"}</small></span></label>)}</div>
                   {!eligibleRuleUsers.length ? <div className="crm-empty-state">لا يوجد موظفون مؤهلون لهذه القاعدة. فعّل استقبال العملاء واربط المستخدم بالقسم والفرع.</div> : null}
                 </div>
                 <div className="crm-distribution-order">
                   <header><strong>ترتيب التوزيع</strong><span>{selectedRuleUsers.length}</span></header>
-                  <div className="crm-distribution-order-list">{selectedRuleUsers.map((row: any, index: number) => <article key={row.id}><b>{index + 1}</b><div><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "كل الفروع"}</small></div><nav><button type="button" disabled={index === 0} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, -1) }))}><CaretUp size={15} /></button><button type="button" disabled={index === selectedRuleUsers.length - 1} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, 1) }))}><CaretDown size={15} /></button><button type="button" onClick={() => setRuleForm((current) => ({ ...current, memberIds: current.memberIds.filter((id) => id !== row.id) }))}><Trash size={15} /></button></nav></article>)}</div>
+                  <div className="crm-distribution-order-list">{selectedRuleUsers.map((row: any, index: number) => <article key={row.id}><b>{index + 1}</b><div><strong>{row.full_name}</strong><small>{(row.branches || []).join("، ") || "بدون فرع"}</small></div><nav><button type="button" disabled={index === 0} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, -1) }))}><CaretUp size={15} /></button><button type="button" disabled={index === selectedRuleUsers.length - 1} onClick={() => setRuleForm((current) => ({ ...current, memberIds: moveListItem(current.memberIds, row.id, 1) }))}><CaretDown size={15} /></button><button type="button" onClick={() => setRuleForm((current) => ({ ...current, memberIds: current.memberIds.filter((id) => id !== row.id) }))}><Trash size={15} /></button></nav></article>)}</div>
                   {!selectedRuleUsers.length ? <div className="crm-empty-state">اختر الموظفين من القائمة ليظهر ترتيب التوزيع هنا.</div> : null}
                 </div>
               </div>
@@ -813,7 +828,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
             <div className="crm-distribution-preview">
               <span><small>القسم</small><strong>{departmentLabel(ruleForm.departmentCode)}</strong></span>
-              <span><small>الفرع</small><strong>{data.branches.find((row: any) => row.code === ruleForm.branchCode)?.name || "كل الفروع"}</strong></span>
+              <span><small>الفروع</small><strong>{ruleForm.branchCodes.length ? ruleForm.branchCodes.map((code) => data.branches.find((row: any) => row.code === code)?.name || code).join("، ") : "كل الفروع"}</strong></span>
               <span><small>المصادر</small><strong>{ruleForm.sourceCodes.length || "الكل"}</strong></span>
               <span><small>الموظفون</small><strong>{ruleForm.memberIds.length}</strong></span>
               <span><small>أول دور</small><strong>{selectedRuleUsers[0]?.full_name || "—"}</strong></span>
@@ -824,7 +839,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
           <section className="crm-panel crm-list-panel crm-distribution-rules-panel">
             <header><h2>قواعد التوزيع</h2><span>{data.assignmentRules.length}</span></header>
-            <div className="crm-rule-list">{data.assignmentRules.map((row: any) => <article key={row.id} className={!row.is_active ? "inactive" : ""}><header><div><strong>{row.name}</strong><span>{departmentLabel(row.department_code)} · {row.branch_name || "كل الفروع"}</span></div><b>{row.is_active ? "نشطة" : "موقوفة"}</b></header><div className="crm-rule-stats"><span><small>الموظفون</small><strong>{(row.members || []).filter((member: any) => member.is_active).length}</strong></span><span><small>آخر توزيع</small><strong>{row.last_user_name || "لا يوجد"}</strong></span><span><small>التالي</small><strong>{row.next_user_name || "لا يوجد"}</strong></span></div><p>المصادر: {(row.source_codes || []).length ? row.source_codes.map((code: string) => data.sources.find((source: any) => source.code === code)?.name || code).join("، ") : "كل المصادر"}</p><div className="crm-rule-members">{(row.members || []).map((member: any, index: number) => <span key={member.user_id}><i>{index + 1}</i>{member.full_name}<b>{member.assignment_count || 0}</b></span>)}</div><footer><button onClick={() => editRule(row)}><PencilSimple size={16} />تعديل</button><button onClick={() => void remove("assignment_rule", row.id)}><Trash size={16} />إيقاف</button></footer></article>)}</div>
+            <div className="crm-rule-list">{data.assignmentRules.map((row: any) => <article key={row.id} className={!row.is_active ? "inactive" : ""}><header><div><strong>{row.name}</strong><span>{departmentLabel(row.department_code)} · {(row.branch_names || []).join("، ") || "كل الفروع"}</span></div><b>{row.is_active ? "نشطة" : "موقوفة"}</b></header><div className="crm-rule-stats"><span><small>الموظفون</small><strong>{(row.members || []).filter((member: any) => member.is_active).length}</strong></span><span><small>آخر توزيع</small><strong>{row.last_user_name || "لا يوجد"}</strong></span><span><small>التالي</small><strong>{(row.branch_codes || []).length === 1 ? (row.next_user_name || "لا يوجد") : "حسب الفرع"}</strong></span></div><p>المصادر: {(row.source_codes || []).length ? row.source_codes.map((code: string) => data.sources.find((source: any) => source.code === code)?.name || code).join("، ") : "كل المصادر"}</p><div className="crm-rule-members">{(row.members || []).map((member: any, index: number) => <span key={member.user_id}><i>{index + 1}</i>{member.full_name}<b>{member.assignment_count || 0}</b></span>)}</div><footer><button onClick={() => editRule(row)}><PencilSimple size={16} />تعديل</button><button onClick={() => void remove("assignment_rule", row.id)}><Trash size={16} />إيقاف</button></footer></article>)}</div>
           </section>
 
           <section className="crm-panel crm-list-panel crm-assignment-log-panel"><header><h2>سجل التوزيع</h2><span>آخر 100 عملية</span></header><div className="crm-table-shell"><table className="crm-table"><thead><tr><th>التاريخ</th><th>القاعدة</th><th>القسم</th><th>الفرع</th><th>المصدر</th><th>المندوب</th><th>العملية</th></tr></thead><tbody>{data.assignmentLogs.map((row: any) => <tr key={row.id}><td>{formatDate(row.created_at)}</td><td>{row.rule_name || "التوزيع الافتراضي"}</td><td>{departmentLabel(row.department_code)}</td><td>{data.branches.find((branch: any) => branch.code === row.branch_code)?.name || row.branch_code || "—"}</td><td>{data.sources.find((source: any) => source.code === row.source_code)?.name || sourceLabel(row.source_code)}</td><td>{row.assigned_name || "غير موزع"}</td><td>{row.action === "automatic_assignment" ? "توزيع تلقائي" : row.action}</td></tr>)}</tbody></table></div></section>
