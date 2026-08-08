@@ -62,14 +62,14 @@ function budgetPlatformDetails(item: any) {
   return [];
 }
 
-function budgetPerCreativeTotal(item: any) {
-  const platforms = budgetPlatformDetails(item);
-  if (platforms.length) return platforms.reduce((sum: number, part: any) => sum + Number(part?.amount || 0), 0);
-  return Number(item?.total || 0);
+function budgetItemTotal(item: any) {
+  const storedTotal = Number(item?.total);
+  if (Number.isFinite(storedTotal)) return Math.max(0, storedTotal);
+  return budgetPlatformDetails(item).reduce((sum: number, part: any) => sum + Math.max(0, Number(part?.amount || 0)), 0);
 }
 
 function budgetCalculatedTotal(item: any) {
-  return budgetPerCreativeTotal(item) * Math.max(1, budgetCreativeIds(item).length);
+  return budgetItemTotal(item);
 }
 
 type BudgetDisplayRow = {
@@ -264,28 +264,35 @@ export function MarketingDatabasePage() {
         .split(/\s*،\s*/g)
         .map((name) => name.trim())
         .filter(Boolean);
-      const creativeEntries = ids.length
+      const creativeNames = ids.length
         ? ids.map((id, index) => {
             const creative = creatives.find((row: any) => String(row?.id || "") === id);
-            return { id, name: creative?.name || creative?.creative_type_name || creative?.creative_type || fallbackNames[index] || "كرييتيف" };
+            return creative?.name || creative?.creative_type_name || creative?.creative_type || fallbackNames[index] || "كرييتيف";
           })
-        : (fallbackNames.length ? fallbackNames.map((name, index) => ({ id: `legacy-${budgetIndex}-${index}`, name })) : [{ id: `budget-${budgetIndex}`, name: "كرييتيف غير محدد" }]);
+        : (fallbackNames.length ? fallbackNames : ["كرييتيف غير محدد"]);
       const platforms = budgetPlatformDetails(item);
-      return creativeEntries.flatMap((creative) => platforms.map((part: any, platformIndex: number) => ({
-        key: `${item?.id || budgetIndex}-${creative.id}-${part?.platformId || platformIndex}`,
+      return platforms.map((part: any, platformIndex: number) => ({
+        key: `${item?.id || budgetIndex}-${part?.platformId || platformIndex}`,
         funnel: item?.funnel_name || "—",
-        creative: creative.name,
+        creative: creativeNames.join("، "),
         platform: part?.platformName || part?.platform_name || "منصة",
-        amount: Number(part?.amount || 0),
-      })));
+        amount: Math.max(0, Number(part?.amount || 0)),
+      }));
     });
   }, [detail]);
   const budgetFunnelTotals = useMemo(() => {
     const totals = new Map<string, number>();
-    for (const row of budgetDisplayRows) totals.set(row.funnel, (totals.get(row.funnel) || 0) + row.amount);
+    const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
+    for (const item of budgetItems) {
+      const funnel = item?.funnel_name || "—";
+      totals.set(funnel, (totals.get(funnel) || 0) + budgetItemTotal(item));
+    }
     return Array.from(totals.entries()).map(([funnel, total]) => ({ funnel, total }));
-  }, [budgetDisplayRows]);
-  const budgetGrandTotal = useMemo(() => budgetDisplayRows.reduce((sum, row) => sum + row.amount, 0), [budgetDisplayRows]);
+  }, [detail]);
+  const budgetGrandTotal = useMemo(() => {
+    const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
+    return budgetItems.reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0);
+  }, [detail]);
 
   async function load() {
     setLoading(true);
@@ -425,8 +432,8 @@ export function MarketingDatabasePage() {
       const templateCount = creativeTasks.filter((task: any) => task.task_kind === "task_template").length;
       const executionCount = creativeTasks.filter((task: any) => task.task_kind === "execution").length;
       const scheduleCount = schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id || "")).length;
-      const budgetTotal = budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + budgetPerCreativeTotal(item), 0);
-      return `<tr><td>${index + 1}</td><td>${escapePrintHtml(creative.instance_code || "—")}</td><td>${escapePrintHtml(creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف")}</td><td>${escapePrintHtml(creative.primary_department_name || "—")}</td><td>${reportCount(creative.quantity || 1)}</td><td>${reportCount(templateCount)}</td><td>${reportCount(executionCount)}</td><td>${reportCount(scheduleCount)}</td>${selected.source_type === "campaign" ? `<td>${Number(budgetTotal).toLocaleString("ar-SA-u-nu-latn")} ر.س</td>` : ""}</tr>`;
+      const budgetTotal = budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0);
+      return `<tr><td>${index + 1}</td><td>${escapePrintHtml(creative.instance_code || "—")}</td><td>${escapePrintHtml(creative.name || creative.creative_type_name || creative.creative_type || "كرييتيف")}</td><td>${escapePrintHtml(creative.primary_department_name || "—")}</td><td>${reportCount(creative.quantity || 1)}</td><td>${reportCount(templateCount)}</td><td>${reportCount(executionCount)}</td><td>${reportCount(scheduleCount)}</td>${selected.source_type === "campaign" ? `<td>${Number(budgetTotal).toLocaleString("ar-SA-u-nu-latn")} ر.س</td>` : ""}</tr>`;
     }).join("");
     const taskRows = tasks.map((task: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(taskKindLabel(task))}</td><td>${escapePrintHtml(task.creative_name || "—")}</td><td>${escapePrintHtml(task.assigned_name || "—")}</td><td>${escapePrintHtml(task.department_name || "قسم المحتوى")}</td><td>${escapePrintHtml(reportStatus(task.status))}</td><td>${Number(task.progress || 0).toLocaleString("ar-SA-u-nu-latn")}%</td><td>${escapePrintHtml(marketingDate(task.due_at))}</td><td>${escapePrintHtml(task.template_status ? reportStatus(task.template_status) : "—")}</td><td>${escapePrintHtml(task.final_file_name || "—")}</td></tr>`).join("");
     const scheduleRowsHtml = schedule.map((item: any, index: number) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(marketingDate(item.publish_date))}</td><td>${escapePrintHtml(item.creative_name || item.instance_code || "—")}</td><td>${escapePrintHtml(item.platform_name || "—")}</td><td>${escapePrintHtml(item.post_type_name || "—")}</td><td>${escapePrintHtml(reportStatus(item.status))}</td></tr>`).join("");
@@ -563,11 +570,11 @@ export function MarketingDatabasePage() {
                   const approvedTemplates = templateTasks.filter((task: any) => ["approved", "completed"].includes(String(task.template_status || task.status || "").toLowerCase())).length;
                   const completedExecution = executionTasks.filter((task: any) => Number(task.progress || 0) >= 100).length;
                   const scheduleCount = new Set(detail.schedule.filter((item: any) => String(item.creative_id || "") === String(creative.id)).map((item: any) => `${String(item.publish_date || "").slice(0, 10)}-${item.group_id || item.id}`)).size;
-                  const budgetTotal = detail.budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + budgetPerCreativeTotal(item), 0);
+                  const budgetTotal = detail.budgets.filter((item: any) => budgetIncludesCreative(item, creative.id)).reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0);
                   return <tr key={creative.id}>
                     <td className="marketing-creative-index">{index + 1}</td>
                     <td><span className="marketing-creative-code">{creative.instance_code || `#${index + 1}`}</span></td>
-                    <td><div className="marketing-creative-name-cell"><strong>{creative.creative_type_name || creative.name || creative.creative_type || "كرييتيف"}</strong><small>{creative.notes?.label || "مرتبط بنفس الحملة أو الأجندة"}</small></div></td>
+                    <td><div className="marketing-creative-name-cell"><strong>{creative.name || creative.creative_type_name || creative.creative_type || "كرييتيف"}</strong><small>{creative.notes?.label || "مرتبط بنفس الحملة أو الأجندة"}</small></div></td>
                     <td>{creative.primary_department_name || "—"}</td>
                     <td><strong>{Number(creative.quantity || 1).toLocaleString("ar-SA-u-nu-latn")}</strong></td>
                     <td><div className="marketing-creative-counter"><strong>{templateTasks.length.toLocaleString("ar-SA-u-nu-latn")}</strong><small>{approvedTemplates.toLocaleString("ar-SA-u-nu-latn")} معتمد</small></div></td>
@@ -713,6 +720,11 @@ export function MarketingDatabasePage() {
         creativeRow={creativeManager.row}
         onClose={() => setCreativeManager({ open: false, row: null })}
         onSaved={creativeSaved}
+        onFunnelCreated={(funnel) => setMeta((current) => ({
+          ...current,
+          funnels: [...current.funnels.filter((item) => item.id !== funnel.id), funnel]
+            .sort((left, right) => left.name.localeCompare(right.name, "ar")),
+        }))}
       /> : null}
     </MarketingPage>
   );

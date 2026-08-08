@@ -116,7 +116,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   }
   const payload = body(request); const action = clean(payload.action);
   const map: Record<string, string> = {
-    create_campaign: "marketing.campaign.create", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
+    create_campaign: "marketing.campaign.create", create_funnel: "system.marketing.access", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access", complete_task: "system.marketing.access",
     attach_final_file: "system.marketing.access", prepare_final_upload: "system.marketing.access", upload_final_file_proxy: "system.marketing.access", cancel_final_upload: "system.marketing.access", attach_final_media_group: "system.marketing.access",
     move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", create_manual_publish_entry: "marketing.publish_prep.manage", discard_manual_publish_entry: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.engagement.refresh", subscribe_engagement_webhooks: "marketing.engagement.subscribe", manage_engagement_item: "marketing.publish.now",

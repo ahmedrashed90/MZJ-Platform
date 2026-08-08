@@ -7,8 +7,16 @@ const contains = (file, ...tokens) => {
   const text = read(file);
   return tokens.every((token) => text.includes(token));
 };
+const versionAtLeast = (actual, minimum) => {
+  const left = String(actual).split(".").map((part) => Number(part) || 0);
+  const right = String(minimum).split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
+  }
+  return true;
+};
 
-expect("Package version is 1.19.12", JSON.parse(read("package.json")).version === "1.19.12");
+expect("Package version keeps ERPNext cancel tracking release or newer", versionAtLeast(JSON.parse(read("package.json")).version, "1.19.4"));
 expect("ERPNext instance identity includes creation", contains("server/_erpnext-sales-order-normalizer.ts", "sourceInstanceKey", "created:${erpCreatedAt}", "isCancellation"));
 expect("ERPNext cancel route uses the unified endpoint", contains("server/integrations/erpnext-sales-order.ts", "normalized.isCancellation", "cancelErpNextSalesOrder"));
 expect("Cancellation is idempotent", contains("server/_erpnext-sales-order-sync.ts", "alreadyCancelled", "ERP_CANCEL_ORDER_NOT_FOUND"));

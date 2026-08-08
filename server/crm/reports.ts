@@ -159,6 +159,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const manualSaleDateSql = sql`
     (st.sale_at at time zone 'Asia/Riyadh')::date
   `;
+  /*
+   * crm.sales_transactions remains the canonical sold source. Some legacy
+   * transactions have an empty branch snapshot, so reports resolve only that
+   * missing branch from the sale representative's primary CRM assignment and
+   * then from the linked lead. The same expression is used for display, scope
+   * and branch filtering to keep filtered and unfiltered sold totals aligned.
+   */
+  const transactionBranchCodeSql = sql`
+    case
+      when coalesce(nullif(st.department_code,''),nullif(l.department_code,'')) in ('wholesale','wholesale_sales') then null
+      else coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))
+    end
+  `;
 
   const leadDepartmentFilterSql = sql`
     (
@@ -240,17 +253,25 @@ export default async function handler(request: VercelRequest, response: VercelRe
             st.sale_at
           from crm.sales_transactions st
           join effective_leads l on l.id=st.lead_id and l.is_deleted=false
+          left join lateral (
+            select b.code,b.name
+            from core.user_system_branches usb
+            join core.branches b on b.id=usb.branch_id and b.is_active=true
+            where usb.user_id=coalesce(st.assigned_to,l.assigned_to) and usb.system_code='crm'
+            order by usb.is_primary desc,b.sort_order,b.name
+            limit 1
+          ) assigned_primary_branch on true
           where coalesce(st.is_cancelled,false)=false
             and coalesce(l.current_assigned_to::text,'__none__')=${detailValue}
             and (${from || null}::date is null or ${manualSaleDateSql}>=${from || null}::date)
             and (${to || null}::date is null or ${manualSaleDateSql}<=${to || null}::date)
             and ${scopeSql}
             and ${currentLeadDepartmentFilterSql}
-            and (${branch || null}::text is null or l.current_branch_code=${branch || null})
+            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
             and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
-            and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,l.current_assigned_name,l.current_branch_name,l.current_department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
+            and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,l.current_assigned_name,assigned_primary_branch.name,${transactionBranchCodeSql},l.current_department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
         ),
         agent_sales as (
           select
@@ -382,8 +403,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   /*
    * Canonical sold metric: every report reads only crm.sales_transactions.
-   * The transaction snapshot owns the sale date, quantity, representative,
-   * department and branch. Leads are joined only for customer/search context.
+   * The transaction snapshot owns the sale date, quantity, representative and
+   * department. A missing historic branch snapshot is resolved consistently from
+   * the representative's primary CRM branch, then the linked lead branch.
    * ERP orders and lead sold_quantity are never added as parallel fallbacks.
    */
   const salesFacts = await sql<any[]>`
@@ -397,10 +419,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       coalesce(src.name,st.source_name,l.source_name) as source_name,
       coalesce(src.report_group,'other') as source_report_group,
       st.department_code as department_code,
-      case when st.department_code in ('wholesale','wholesale_sales') then null else st.branch_code end as branch_code,
+      (${transactionBranchCodeSql}) as branch_code,
       st.assigned_to::text as assigned_to,
       coalesce(st.assigned_name,u.full_name,'غير موزع') as assigned_name,
-      coalesce(b.name,st.branch_code,'بدون فرع') as branch_name,
+      coalesce(b.name,(${transactionBranchCodeSql}),'بدون فرع') as branch_name,
       l.assigned_to::text as current_assigned_to,
       coalesce(current_sales.full_name,l.responsible_name_snapshot,'غير موزع') as current_assigned_name,
       l.department_code as current_department_code,
@@ -410,9 +432,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
       st.sale_at
     from crm.sales_transactions st
     left join crm.leads l on l.id=st.lead_id and l.is_deleted=false
+    left join lateral (
+      select branch_row.code,branch_row.name
+      from core.user_system_branches usb
+      join core.branches branch_row on branch_row.id=usb.branch_id and branch_row.is_active=true
+      where usb.user_id=coalesce(st.assigned_to,l.assigned_to) and usb.system_code='crm'
+      order by usb.is_primary desc,branch_row.sort_order,branch_row.name
+      limit 1
+    ) assigned_primary_branch on true
     left join core.sources src on src.code=coalesce(st.source_code,l.source_code)
     left join core.users u on u.id=st.assigned_to
-    left join core.branches b on b.code=st.branch_code
+    left join core.branches b on b.code=(${transactionBranchCodeSql})
     left join core.users current_sales on current_sales.id=l.assigned_to
     left join core.branches current_branch on current_branch.code=l.branch_code
     where coalesce(st.is_cancelled,false)=false
@@ -421,14 +451,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (
         ${scope.all}::boolean
         or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
-        or (st.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or st.branch_code=any(${scope.branchCodes}::text[])))
+        or (st.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
       )
       and ${transactionDepartmentFilterSql}
-      and (${branch || null}::text is null or st.branch_code=${branch || null})
+      and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
       and (${agent || null}::uuid is null or st.assigned_to=${agent || null}::uuid)
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
       and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
-      and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,st.department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
+      and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,${transactionBranchCodeSql},st.department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
   `;
 
   const [storedQuality] = await sql<any[]>`select * from crm.report_quality_settings where id='default'`;

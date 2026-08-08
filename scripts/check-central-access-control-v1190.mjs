@@ -10,8 +10,16 @@ const catalog = read("shared/access-control.ts");
 const permissionCodes = [...catalog.matchAll(/\bp\("([^"]+)"/g)].map((match) => match[1]);
 const pageKeys = [...read("shared/access-control.ts").matchAll(/\{ system: "([^"]+)", code: "([^"]+)"/g)].map((match) => `${match[1]}.${match[2]}`);
 const unique = (items) => new Set(items).size === items.length;
+const versionAtLeast = (actual, minimum) => {
+  const left = String(actual).split(".").map((part) => Number(part) || 0);
+  const right = String(minimum).split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
+  }
+  return true;
+};
 
-expect("Package version is 1.19.12", JSON.parse(read("package.json")).version === "1.19.12");
+expect("Package version keeps central access control release or newer", versionAtLeast(JSON.parse(read("package.json")).version, "1.19.0"));
 expect("Four systems exist in central catalog", ["crm", "marketing", "operations", "tracking"].every((code) => catalog.includes(`code: "${code}"`)));
 expect("Permission catalog is large enough for all systems", permissionCodes.length >= 180);
 expect("Permission codes are unique", unique(permissionCodes));

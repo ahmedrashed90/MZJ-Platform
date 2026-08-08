@@ -269,6 +269,7 @@
 
 .marketing-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
 .marketing-form-grid.compact { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.marketing-form-grid.compact.marketing-creative-name-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
 .marketing-form-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
 .marketing-form-row.three { grid-template-columns: repeat(3,minmax(0,1fr)); }
 .marketing-form-row.five { grid-template-columns: repeat(5,minmax(0,1fr)); }
@@ -586,6 +587,41 @@
 .marketing-budget-fields select,
 .marketing-schedule-fields input,
 .marketing-schedule-fields select { width: 100%; min-width: 0; }
+.marketing-funnel-field { min-width: 0; display: grid; align-self: end; gap: 7px; }
+.marketing-funnel-field > span { color: #6d5149; font-size: 12px; font-weight: 900; }
+.marketing-funnel-field > select { width: 100%; min-width: 0; }
+.marketing-funnel-add-trigger {
+  min-height: 30px !important;
+  padding: 5px 9px !important;
+  border: 1px dashed #d7aa98 !important;
+  border-radius: 9px !important;
+  color: #7b3d31 !important;
+  background: #fff8f4 !important;
+  box-shadow: none !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 10px !important;
+  font-weight: 900 !important;
+}
+.marketing-funnel-add-trigger:hover:not(:disabled) { border-style: solid !important; background: #fff1ea !important; }
+.marketing-funnel-create-row { display: grid; grid-template-columns: minmax(0,1fr) 34px 34px; gap: 5px; }
+.marketing-funnel-create-row input { min-height: 36px !important; }
+.marketing-funnel-create-row button {
+  min-width: 34px;
+  width: 34px;
+  min-height: 36px !important;
+  height: 36px;
+  padding: 0 !important;
+  border-radius: 9px !important;
+  display: grid;
+  place-items: center;
+  box-shadow: none !important;
+}
+.marketing-funnel-create-row button.save { color: #fff !important; border-color: #347d59 !important; background: #347d59 !important; }
+.marketing-funnel-create-row button.cancel { color: #6c747a !important; border-color: #d8dfe3 !important; background: #fff !important; }
+.marketing-funnel-error { color: #b33f35; font-size: 9px; font-weight: 800; }
 .marketing-budget-platforms {
   display: grid;
   grid-template-columns: repeat(6,minmax(0,1fr));
@@ -5159,6 +5195,7 @@
 .marketing-entity-creative-editor .marketing-optional-box { padding: 12px; border: 1px solid #e0e5e8; border-radius: 13px; background: #f8fafb; }
 .marketing-entity-creative-editor .marketing-cars-toggle { min-height: 46px; padding: 9px 12px; border-color: #d9c7c0; border-radius: 11px; color: #73392d; background: #fff7f3; box-shadow: none; }
 .marketing-entity-budget-fields { grid-template-columns: 1fr 1.15fr .7fr 1fr 1fr; }
+.marketing-entity-side-stats.compact { grid-template-columns: repeat(2,minmax(0,1fr)); }
 .marketing-entity-empty-state { min-height: 135px; padding: 22px; border: 1px dashed #cfd7dc; border-radius: 15px; color: #6f7b84; background: #fbfcfd; display: grid; place-items: center; align-content: center; gap: 6px; text-align: center; }
 .marketing-entity-empty-state svg { color: #8f4636; }
 .marketing-entity-empty-state strong { color: #33404a; font-size: 14px; }

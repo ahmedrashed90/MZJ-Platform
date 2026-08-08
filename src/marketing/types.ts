@@ -51,6 +51,7 @@ export type PlatformAssignment = { platformId: string; postTypeIds: string[] };
 export type CreativeDraft = {
   tempId: string;
   creativeTypeId: string;
+  name: string;
   quantity: number;
   cars: StockCar[];
   contentAssignments: ContentAssignment[];

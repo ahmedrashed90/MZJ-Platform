@@ -255,6 +255,41 @@ async function marketingMeta(sql: ReturnType<typeof getSql>, user: SessionUser) 
   return { ok: true, users, departments, contentDepartmentId: contentDepartmentIdValue, actions, creativeTypes, campaignTypes, platforms, postTypes, funnels, connections: connections.map(publicPlatformConnection), permissions: { effective: user.permissions.filter((code) => code.startsWith("marketing.")) } };
 }
 
+async function createFunnel(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  if (!hasPermission(user, "marketing.campaign.create") && !hasPermission(user, "marketing.campaign.edit")) {
+    throw new Error("لا توجد صلاحية لإضافة Funnel جديد");
+  }
+  const name = clean(body.name).replace(/\s+/g, " ");
+  if (!name) throw new Error("اكتب اسم Funnel الجديد");
+  if (name.length > 100) throw new Error("اسم Funnel يجب ألا يزيد عن 100 حرف");
+
+  const [existing] = await sql<any[]>`
+    select id::text,name,active
+    from marketing.funnels
+    where lower(btrim(name))=lower(${name})
+    order by active desc,created_at
+    limit 1
+  `;
+  if (existing) {
+    const [funnel] = await sql<any[]>`
+      update marketing.funnels
+      set active=true,source=coalesce(nullif(source,''),'campaign_budget')
+      where id=${existing.id}::uuid
+      returning id::text,name
+    `;
+    return { ok: true, id: funnel.id, funnel, message: "تم اختيار Funnel الموجود بالفعل" };
+  }
+
+  const [funnel] = await sql<any[]>`
+    insert into marketing.funnels(name,active,source)
+    values(${name},true,'campaign_budget')
+    on conflict(name) do update
+    set active=true,source=coalesce(nullif(marketing.funnels.source,''),'campaign_budget')
+    returning id::text,name
+  `;
+  return { ok: true, id: funnel.id, funnel, message: "تمت إضافة Funnel بنجاح" };
+}
+
 async function loadOperationsCars(sql: ReturnType<typeof getSql>) {
   return sql<any[]>`
     select v.id::text,v.vin,v.car_name,v.statement,v.model_year,v.exterior_color,v.interior_color,
@@ -621,14 +656,18 @@ async function createCampaignInTransaction(
     const creativeTypeId = clean(rawCreative.creativeTypeId);
     const [creativeType] = await tx<any[]>`select c.*,d.name as department_name from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeTypeId}::uuid`;
     if (!creativeType) continue;
+    const requestedCreativeName = clean(rawCreative.name);
+    if (!requestedCreativeName && !options.preserveRequestedCode) throw new Error(`اكتب اسم الكرييتيف من نوع ${creativeType.name}`);
+    if (requestedCreativeName.length > 160) throw new Error("اسم الكرييتيف يجب ألا يزيد عن 160 حرف");
+    const creativeName = requestedCreativeName || creativeType.name;
     const tempId = clean(rawCreative.tempId || rawCreative.id || `creative-${creativeIndex}`);
     const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,"0")}`;
     const [creative] = await tx<any[]>`
       insert into marketing.creatives(campaign_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
-      values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,${Math.max(1,numberValue(rawCreative.quantity,1))},'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
+      values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeName},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
     `;
     creativeMap.set(tempId, creative.id);
-    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName: creativeType.name, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
+    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
   }
   for (const budget of arrayValue(body.budgets)) {
     const requestedCreativeIds = arrayValue<string>(budget.creativeTempIds).length
@@ -872,6 +911,63 @@ function creativeTaskFlowSnapshot(value: any) {
   }));
 }
 
+function creativeBudgetSnapshot(value: unknown) {
+  const rows = arrayValue<any>(value)
+    .map((item) => ({
+      id: clean(item?.id),
+      funnelId: clean(item?.funnelId ?? item?.funnel_id),
+      adsCount: Math.max(1, numberValue(item?.adsCount ?? item?.ads_count, 1)),
+      contentGoal: clean(item?.contentGoal ?? item?.content_goal),
+      expectedGoal: clean(item?.expectedGoal ?? item?.expected_goal),
+      platformAmounts: arrayValue<any>(item?.platformAmounts ?? item?.platform_amounts)
+        .map((part) => ({
+          platformId: clean(part?.platformId ?? part?.platform_id),
+          amount: Math.max(0, numberValue(part?.amount)),
+        }))
+        .filter((part) => part.platformId)
+        .sort((left, right) => left.platformId.localeCompare(right.platformId)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id) || JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return JSON.stringify(dbJson(rows));
+}
+
+function creativeScheduleSnapshot(value: unknown) {
+  const signatures = arrayValue<any>(value).flatMap((item) => {
+    const date = isoDate(item?.date ?? item?.publish_date);
+    const platforms = arrayValue<any>(item?.platforms)
+      .map((platform) => ({
+        platformId: clean(platform?.platformId ?? platform?.platform_id),
+        postTypeIds: [...new Set(arrayValue<string>(platform?.postTypeIds ?? platform?.post_type_ids).map(clean).filter(Boolean))].sort(),
+      }))
+      .filter((platform) => platform.platformId && platform.postTypeIds.length)
+      .sort((left, right) => left.platformId.localeCompare(right.platformId));
+    if (!date || !platforms.length) return [];
+    return [`${date}|${platforms.map((platform) => `${platform.platformId}:${platform.postTypeIds.join(",")}`).join("|")}`];
+  });
+  return JSON.stringify([...new Set(signatures)].sort());
+}
+
+function groupedScheduleSnapshotRows(rows: any[]) {
+  const groups = new Map<string, { date: string; platforms: Map<string, Set<string>> }>();
+  for (const row of rows) {
+    const date = isoDate(row?.publish_date);
+    const groupKey = `${date}|${clean(row?.group_id || row?.id)}`;
+    if (!date || !clean(row?.platform_id) || !clean(row?.post_type_id)) continue;
+    if (!groups.has(groupKey)) groups.set(groupKey, { date, platforms: new Map() });
+    const group = groups.get(groupKey)!;
+    const platformId = clean(row.platform_id);
+    if (!group.platforms.has(platformId)) group.platforms.set(platformId, new Set());
+    group.platforms.get(platformId)!.add(clean(row.post_type_id));
+  }
+  return [...groups.values()].map((group) => ({
+    date: group.date,
+    platforms: [...group.platforms.entries()].map(([platformId, postTypeIds]) => ({
+      platformId,
+      postTypeIds: [...postTypeIds],
+    })),
+  }));
+}
+
 async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: string, budgets: EntityCreativeBudgetInput[]) {
   const affected = await tx<any[]>`
     select distinct b.id::text
@@ -1008,6 +1104,9 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
   await assertMarketingEntityAccess(sql, user, sourceType, sourceId);
   const creativeTypeId = clean(rawCreative.creativeTypeId);
   if (!creativeTypeId) throw new Error("اختر نوع الكرييتيف");
+  const requestedCreativeName = clean(rawCreative.name);
+  if (sourceType === 'campaign' && !requestedCreativeName) throw new Error("اكتب اسم الكرييتيف");
+  if (requestedCreativeName.length > 160) throw new Error("اسم الكرييتيف يجب ألا يزيد عن 160 حرف");
   const budgetInputs = arrayValue<EntityCreativeBudgetInput>(body.budgets);
   const scheduleInputs = arrayValue<EntityCreativeScheduleInput>(body.schedule);
   if (sourceType === 'campaign' && !budgetInputs.length) throw new Error("أضف ميزانية للكرييتيف");
@@ -1038,10 +1137,13 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
       where c.id=${creativeTypeId}::uuid and c.is_active=true
     `;
     if (!creativeType) throw new Error("نوع الكرييتيف غير موجود");
+    const creativeName = sourceType === 'campaign' ? requestedCreativeName : creativeType.name;
 
     const saveSingle = async (existingId: string | null) => {
       let targetId = existingId || '';
       let taskFlowChanged = true;
+      let budgetsChanged = sourceType === 'campaign';
+      let scheduleChanged = true;
       let previousTemplates: any[] = [];
       let creativeIndex = 1;
       if (existingId) {
@@ -1055,7 +1157,39 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
         if (!existing) throw new Error("الكرييتيف غير موجود داخل السجل المحدد");
         const [published] = await tx<any[]>`select 1 from marketing.publish_schedule where creative_id=${existingId}::uuid and status='published' limit 1`;
         if (published) throw new Error("لا يمكن تعديل كرييتيف تم نشره");
+        const currentBudgets = sourceType === 'campaign'
+          ? await tx<any[]>`
+              select distinct
+                b.id::text,
+                b.funnel_id::text,
+                b.ads_count,
+                b.content_goal,
+                b.expected_goal,
+                b.platform_amounts
+              from marketing.budget_items b
+              left join marketing.budget_item_creatives bic on bic.budget_item_id=b.id
+              where b.campaign_id=${sourceId}::uuid
+                and (bic.creative_id=${existingId}::uuid or b.creative_id=${existingId}::uuid)
+              order by b.id::text
+            `
+          : [];
+        const currentScheduleRows = await tx<any[]>`
+          select
+            s.id::text,
+            s.group_id::text,
+            s.publish_date::text,
+            s.platform_id::text,
+            s.post_type_id::text
+          from marketing.publish_schedule s
+          where s.source_type=${sourceType}
+            and s.source_id=${sourceId}::uuid
+            and s.creative_id=${existingId}::uuid
+          order by s.publish_date,s.group_id,s.platform_id,s.post_type_id,s.id
+        `;
         taskFlowChanged = creativeTaskFlowSnapshot(existing) !== creativeTaskFlowSnapshot(rawCreative);
+        budgetsChanged = sourceType === 'campaign' && creativeBudgetSnapshot(currentBudgets) !== creativeBudgetSnapshot(budgetInputs);
+        scheduleChanged = taskFlowChanged
+          || creativeScheduleSnapshot(groupedScheduleSnapshotRows(currentScheduleRows)) !== creativeScheduleSnapshot(scheduleInputs);
         if (taskFlowChanged) {
           const [started] = await tx<any[]>`
             select 1 from marketing.tasks
@@ -1075,8 +1209,8 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
         await tx`
           update marketing.creatives set
             creative_type=${creativeType.name},creative_type_id=${creativeTypeId}::uuid,
-            quantity=${Math.max(1, numberValue(rawCreative.quantity, 1))},
-            status=case when ${taskFlowChanged} then 'required' else status end,name=${creativeType.name},
+            quantity=${sourceType === 'campaign' ? 1 : Math.max(1, numberValue(rawCreative.quantity, 1))},
+            status=case when ${taskFlowChanged} then 'required' else status end,name=${creativeName},
             primary_department_id=${creativeType.primary_department_id},cars=${tx.json(dbJson(arrayValue(rawCreative.cars)))},
             content_assignments=${tx.json(dbJson(contentAssignments))},primary_assignments=${tx.json(dbJson(primaryAssignments))},
             optional_assignments=${tx.json(dbJson(optionalAssignments))},platform_assignments=${tx.json(dbJson(arrayValue(rawCreative.platforms)))},
@@ -1094,8 +1228,8 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
           values(
             ${sourceType === 'campaign' ? tx`${sourceId}::uuid` : null},
             ${sourceType === 'agenda' ? tx`${sourceId}::uuid` : null},
-            ${creativeType.name},${creativeTypeId}::uuid,${sourceType === 'agenda' ? 1 : Math.max(1, numberValue(rawCreative.quantity, 1))},
-            'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},
+            ${creativeType.name},${creativeTypeId}::uuid,1,
+            'required',${instanceCode},${creativeName},${creativeType.primary_department_id},
             ${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},
             ${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}
           ) returning id::text
@@ -1112,7 +1246,7 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
           sourceName: entity.name,
           creativeId: targetId,
           creativeIndex,
-          creativeName: creativeType.name,
+          creativeName,
           creativeType: creativeType.name,
           contentDepartmentId: contentId,
           contentAssignments,
@@ -1124,11 +1258,15 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
         if (existingId) await promoteCreativeRevisionForReview(tx, targetId, previousTemplates, user);
       }
 
-      if (sourceType === 'campaign') await replaceCreativeBudgets(tx, sourceId, targetId, budgetInputs);
-      await replaceCreativeSchedule(tx, {
-        sourceType,sourceId,creativeId:targetId,start:entity.publish_start,end:entity.publish_end,
-        schedule:scheduleInputs,
-      });
+      if (sourceType === 'campaign' && (!existingId || budgetsChanged)) {
+        await replaceCreativeBudgets(tx, sourceId, targetId, budgetInputs);
+      }
+      if (!existingId || scheduleChanged) {
+        await replaceCreativeSchedule(tx, {
+          sourceType,sourceId,creativeId:targetId,start:entity.publish_start,end:entity.publish_end,
+          schedule:scheduleInputs,
+        });
+      }
       return targetId;
     };
 
@@ -1140,7 +1278,7 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
       ids.push(await saveSingle(creativeId || null));
     }
     await recalculateProgress(tx, sourceType, sourceId);
-    await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name },undefined,undefined);
+    await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name,creativeName },undefined,undefined);
     return { ok:true,id:sourceId,creativeIds:ids,message:creativeId ? "تم تعديل الكرييتيف وإنشاء مراجعة التكليف عند الحاجة" : "تمت إضافة الكرييتيف والتاسكات المرتبطة" };
   });
 }
@@ -3017,6 +3155,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(request.method!=='POST')return response.status(405).json({ok:false,error:"Method not allowed"});
     const body=bodyObject(request),action=clean(body.action); let result:any;
     if(action==='create_campaign')result=await createCampaign(sql,body,user);
+    else if(action==='create_funnel')result=await createFunnel(sql,body,user);
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
     else if(action==='import_fresh_marketing_bundle')result=await importFreshMarketingBundle(sql,body,user);
     else if(action==='save_entity_creative')result=await saveEntityCreative(sql,body,user);

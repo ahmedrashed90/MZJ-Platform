@@ -8,9 +8,17 @@ const reports = read("server/crm/reports.ts");
 const erpSync = read("server/_erpnext-sales-order-sync.ts");
 const reconciliation = read("database/reconcile-duplicate-erp-sales-transactions.sql");
 const packageJson = JSON.parse(read("package.json"));
+const versionAtLeast = (actual, minimum) => {
+  const left = String(actual).split(".").map((part) => Number(part) || 0);
+  const right = String(minimum).split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0);
+  }
+  return true;
+};
 
 const checks = [
-  [packageJson.version === "1.19.12", "release version is 1.19.12"],
+  [versionAtLeast(packageJson.version, "1.19.12"), "release keeps CRM sold-date correction v1.19.12 or newer"],
   [drawer.includes('activeForm.values.status_label === "تم البيع" ? <label><span>تاريخ تم البيع</span><input type="date" required'), "CRM database edit exposes an explicit sold-date field only for sold customers"],
   [drawer.includes('addChangedDateField(payload, "soldAt", activeForm.values.sold_at, originalValues.sold_at)'), "the edit drawer sends only an actually changed sold date"],
   [drawer.includes("if (showSalesHistory) await loadSalesHistory(result.row.id, true)") && drawer.includes("sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at)"), "the drawer immediately refreshes the canonical sold date and sales history after saving"],

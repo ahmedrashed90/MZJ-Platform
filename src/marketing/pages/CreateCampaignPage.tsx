@@ -4,6 +4,7 @@ import { CalendarBlank, CheckCircle, CurrencyCircleDollar, FolderOpen, Plus, Tra
 import { marketingFetch, marketingLocalDateKey, marketingQuery } from "../api";
 import { CreativeEditor, newCreativeDraft } from "../components/CreativeEditor";
 import { CreativeMultiPicker } from "../components/CreativeMultiPicker";
+import { FunnelSelect } from "../components/FunnelSelect";
 import { MarketingAlert, MarketingPage } from "../components/MarketingPage";
 import { relationshipCsv } from "../templateExcel";
 import { compactExecutionFolderCreation } from "../executionFolders";
@@ -17,8 +18,10 @@ const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 function validateCreativeTaskFlow(creative: CreativeDraft, meta: MarketingMeta) {
   const creativeType = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId);
-  const creativeName = creativeType?.name || "الكرييتيف";
+  const creativeName = creative.name.trim() || creativeType?.name || "الكرييتيف";
   if (!creative.creativeTypeId) return "اختر نوع الكرييتيف";
+  if (!creative.name.trim()) return `اكتب اسم الكرييتيف بعد اختيار النوع ${creativeType?.name || ""}`;
+  if (creative.name.trim().length > 160) return "اسم الكرييتيف يجب ألا يزيد عن 160 حرف";
   if (!creative.contentAssignments.length) return `اختر يوزر قسم المحتوى داخل ${creativeName}`;
   if (creativeType?.primary_department_id && !creative.primaryAssignments.length) {
     return `اختر يوزر القسم الأساسي ${creativeType.primary_department_name || ""} داخل ${creativeName}`;
@@ -73,14 +76,15 @@ export function CreateCampaignPage() {
     setBudgets((current) => current.map((item) => ({ ...item, creativeTempIds: item.creativeTempIds.filter((id) => id !== removedId) })));
     setSchedule((current) => current.map((item) => ({ ...item, creativeTempIds: item.creativeTempIds.filter((id) => id !== removedId) })));
   }
-  function creativeName(tempId: string) { const creative = creatives.find((item) => item.tempId === tempId); return meta.creativeTypes.find((item) => item.id === creative?.creativeTypeId)?.name || "—"; }
+  function creativeName(tempId: string) {
+    const creative = creatives.find((item) => item.tempId === tempId);
+    return creative?.name.trim() || meta.creativeTypes.find((item) => item.id === creative?.creativeTypeId)?.name || "—";
+  }
   const creativePickerItems = useMemo(() => creatives.map((creative, index) => ({ id: creative.tempId, name: creativeName(creative.tempId), code: `كرييتيف ${index + 1}` })), [creatives, meta.creativeTypes]);
   function creativeNames(tempIds: string[]) { return tempIds.map(creativeName).filter((name) => name !== "—").join("، ") || "—"; }
   function platformName(id: string) { return meta.platforms.find((item) => item.id === id)?.name || "—"; }
   function budgetTotal(item: Budget) {
-    const platformTotal = item.platformAmounts.reduce((sum, platform) => sum + Number(platform.amount || 0), 0);
-    const creativeCount = Math.max(1, new Set(item.creativeTempIds.filter(Boolean)).size);
-    return platformTotal * creativeCount;
+    return item.platformAmounts.reduce((sum, platform) => sum + Number(platform.amount || 0), 0);
   }
   const totalBudget = useMemo(() => budgets.reduce((sum, item) => sum + budgetTotal(item), 0), [budgets]);
   function schedulePostCount(item: Schedule) { return item.platforms.reduce((sum, platform) => sum + platform.postTypeIds.length, 0); }
@@ -90,13 +94,20 @@ export function CreateCampaignPage() {
     return Number.isNaN(value.getTime()) ? date : new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" }).format(value);
   }
   const relations = useMemo(() => creatives.flatMap((creative) => {
-    const creativeLabel = meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.name || "";
+    const creativeLabel = creative.name.trim() || meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.name || "";
     const user = (id: string) => meta.users.find((item) => item.id === id)?.full_name || meta.users.find((item) => item.id === id)?.fullName || id;
     const rows: Record<string, unknown>[] = [];
     creative.primaryAssignments.forEach((assignment) => assignment.contentUserIds.forEach((contentId) => rows.push({ day: "", creative: creativeLabel, department: meta.creativeTypes.find((item) => item.id === creative.creativeTypeId)?.primary_department_name, user: user(assignment.userId), contentUser: user(contentId), dueOn: assignment.dueOn, note: assignment.note })));
     creative.optionalAssignments.forEach((group) => group.assignments.forEach((assignment) => assignment.contentUserIds.forEach((contentId) => rows.push({ day: "", creative: creativeLabel, department: meta.departments.find((item) => item.id === group.departmentId)?.name, user: user(assignment.userId), contentUser: user(contentId), dueOn: assignment.dueOn, note: assignment.note }))));
     return rows;
   }), [creatives, meta]);
+  function registerFunnel(funnel: MarketingMeta["funnels"][number]) {
+    setMeta((current) => ({
+      ...current,
+      funnels: [...current.funnels.filter((item) => item.id !== funnel.id), funnel]
+        .sort((a, b) => a.name.localeCompare(b.name, "ar")),
+    }));
+  }
   const rawFolderPayload = useMemo<RawFolderRequest>(() => ({
     monthKey: form.publishStart.slice(0, 7),
     campaignCode: form.campaignCode,
@@ -171,7 +182,7 @@ export function CreateCampaignPage() {
     {error ? <MarketingAlert>{error}</MarketingAlert> : null}{message ? <MarketingAlert type="success">{message}</MarketingAlert> : null}
     <section className="panel marketing-wizard-panel">
       {step === 0 ? <div className="marketing-form-grid"><label><span>تاريخ الحملة</span><input type="date" value={form.campaignDate} readOnly /></label><label><span>بداية النشر</span><input type="date" value={form.publishStart} onChange={(event) => setForm({ ...form, publishStart: event.target.value })} /></label><label><span>نهاية النشر</span><input type="date" value={form.publishEnd} min={form.publishStart} onChange={(event) => setForm({ ...form, publishEnd: event.target.value })} /></label><label><span>نوع الحملة</span><select value={form.campaignTypeId} onChange={(event) => void campaignTypeChanged(event.target.value)}><option value="">اختر نوع الحملة</option>{meta.campaignTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>كود الحملة</span><input value={form.campaignCode} readOnly /></label><label><span>اسم الحملة</span><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="full"><span>هدف الحملة</span><textarea rows={3} value={form.objective} onChange={(event) => setForm({ ...form, objective: event.target.value })} /></label><label className="full"><span>المطلوب من كاتب المحتوى</span><textarea rows={4} value={form.requiredFromContent} onChange={(event) => setForm({ ...form, requiredFromContent: event.target.value })} /></label></div> : null}
-      {step === 1 ? <div className="marketing-creatives-list">{creatives.map((creative, index) => <CreativeEditor key={creative.tempId} value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary onChange={(value) => updateCreative(index, value)} onDelete={() => deleteCreative(index)} />)}<button type="button" className="marketing-add-block" onClick={() => setCreatives((current) => [...current, newCreativeDraft()])}><Plus size={18} />إضافة كرييتيف</button></div> : null}
+      {step === 1 ? <div className="marketing-creatives-list">{creatives.map((creative, index) => <CreativeEditor key={creative.tempId} value={creative} meta={meta} autoLinkSingleContentUser showTaskFlowSummary showNameField showQuantity={false} onChange={(value) => updateCreative(index, value)} onDelete={() => deleteCreative(index)} />)}<button type="button" className="marketing-add-block" onClick={() => setCreatives((current) => [...current, newCreativeDraft()])}><Plus size={18} />إضافة كرييتيف</button></div> : null}
       {step === 2 ? <div className="marketing-budget-list marketing-campaign-budget-step">
         <div className="marketing-campaign-step-head">
           <div className="marketing-campaign-step-icon"><CurrencyCircleDollar size={25} weight="duotone" /></div>
@@ -183,7 +194,7 @@ export function CreateCampaignPage() {
             <button type="button" className="marketing-card-delete" aria-label={`حذف بند الميزانية ${index + 1}`} onClick={() => setBudgets((current) => current.filter((item) => item.id !== budget.id))}><Trash size={18} /></button>
           </header>
           <div className="marketing-budget-fields">
-            <label><span>Funnel</span><select value={budget.funnelId} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, funnelId: event.target.value } : item))}><option value="">اختر Funnel</option>{meta.funnels.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+            <FunnelSelect value={budget.funnelId} funnels={meta.funnels} onCreated={registerFunnel} onChange={(funnelId) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, funnelId } : item))} />
             <div className="marketing-multi-field"><CreativeMultiPicker label="المنتج / الكرييتيف" hint="يمكن ربط بند الميزانية بأكثر من كرييتيف" items={creativePickerItems} value={budget.creativeTempIds} onChange={(creativeTempIds) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, creativeTempIds } : item))} /></div>
             <label><span>عدد الإعلانات</span><input type="number" min={1} value={budget.adsCount} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, adsCount: Number(event.target.value) || 1 } : item))} /></label>
             <label><span>هدف المحتوى</span><input value={budget.contentGoal} onChange={(event) => setBudgets((current) => current.map((item) => item.id === budget.id ? { ...item, contentGoal: event.target.value } : item))} /></label>
