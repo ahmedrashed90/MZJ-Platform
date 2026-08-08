@@ -22,7 +22,11 @@ check("both wholesale department codes are supported", drawer.includes('code ===
 check("the configured wholesale code is resolved from central CRM users", drawer.includes('configuredCodes.has("wholesale")') && drawer.includes('configuredCodes.has("wholesale_sales")'));
 check("wholesale now keeps a selectable required branch", drawer.includes('required={isWholesaleDepartmentCode(activeForm.departmentCode)}') && drawer.includes("اختر فرع قسم الجملة") && !/<select[^>]*disabled=\{isWholesaleDepartmentCode\(activeForm\.departmentCode\)\}/.test(drawer));
 check("wholesale branch choices use central CRM assignments", drawer.includes("userMatchesDepartment(user, departmentCode)") && drawer.includes("userBranchCodes.has(branch.code)"));
+<<<<<<< Updated upstream
 check("wholesale assignment is limited to users in the selected department", drawer.includes("user.department_codes.includes(nextDepartmentCode)") && drawer.includes("currentAgentIsValid"));
+=======
+check("wholesale assignment is limited to users in the selected department", drawer.includes("userMatchesDepartment(user, nextDepartmentCode)") && drawer.includes("currentAgentIsValid"));
+>>>>>>> Stashed changes
 check("database edit still updates the same customer row", drawer.includes('payload.databaseEdit = true') && drawer.includes('method: "PATCH"') && crmApi.includes('update crm.leads set'));
 check("department and service key remain persisted through the canonical CRM endpoint", drawer.includes('addChangedField(payload, "serviceKey"') && drawer.includes('addChangedField(payload, "departmentCode"') && crmApi.includes('department_code=${input.departmentCode}'));
 check("marketing budget overview has explicit item and platform types", marketingDatabase.includes("type BudgetOverviewItem") && marketingDatabase.includes("type BudgetOverviewPlatform"));
