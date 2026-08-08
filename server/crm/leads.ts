@@ -5,6 +5,7 @@ import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCus
 import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
 import { requirePermissionForUser } from "../_access-control.js";
+import { correctLatestCanonicalSaleDate } from "../_crm-sales-history.js";
 
 
 function soldQuantity(value: unknown) {
@@ -44,6 +45,32 @@ function comparableDate(value: unknown) {
   if (!raw) return "";
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : parsed.toISOString().slice(0, 10);
+}
+
+function riyadhCalendarDate(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function isValidCalendarDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
 }
 
 function comparableNumber(value: unknown) {
@@ -319,12 +346,20 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const previousSoldQuantity = previousStatusLabel === "تم البيع" ? (before.sold_quantity || 1) : before.sold_quantity;
   const statusLabelChanged = previousStatusLabel !== input.statusLabel;
   const soldAtFieldProvided = hasOwnField(body, ["soldAt", "sold_at"]);
-  const soldDateChangeRequested = databaseEdit && changedDate(body, ["soldAt", "sold_at"], before.sold_at);
+  const soldDateChangeRequested = databaseEdit
+    && soldAtFieldProvided
+    && riyadhCalendarDate(providedValue(body, ["soldAt", "sold_at"])) !== riyadhCalendarDate(before.sold_at);
   if (soldAtFieldProvided && input.soldAt && Number.isNaN(new Date(input.soldAt).getTime())) {
     return response.status(400).json({ ok: false, error: "تاريخ تم البيع غير صحيح" });
   }
+  if (databaseEdit && soldAtFieldProvided && input.soldAt && !isValidCalendarDate(input.soldAt)) {
+    return response.status(400).json({ ok: false, error: "تاريخ تم البيع يجب أن يكون يومًا صحيحًا بصيغة YYYY-MM-DD" });
+  }
   if (soldAtFieldProvided && input.soldAt && input.statusLabel !== "تم البيع") {
     return response.status(400).json({ ok: false, error: "يمكن تحديد تاريخ تم البيع للعملاء بحالة تم البيع فقط" });
+  }
+  if (soldDateChangeRequested && !input.soldAt) {
+    return response.status(400).json({ ok: false, error: "تاريخ تم البيع مطلوب ولا يمكن تركه فارغًا" });
   }
   const assignedFieldProvided = hasOwnField(body, ["assignedTo", "assigned_to", "responsibleId"]);
   const callCenterFieldProvided = hasOwnField(body, ["callCenterAssignedTo", "call_center_assigned_to"]);
@@ -497,7 +532,23 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const callCenterChanged = clean(before.call_center_assigned_to) !== clean(callCenterAssignedTo);
 
   const soldQuantityChangeRequested = changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
-  const row = await sql.begin(async (tx: any) => {
+  const updateResult = await sql.begin(async (tx: any) => {
+    const correctedSale = soldDateChangeRequested
+      ? await correctLatestCanonicalSaleDate(tx, {
+        leadId: id,
+        saleAt: input.soldAt!,
+        actorId: user.id,
+        actorName: user.fullName,
+        reason: "تصحيح تاريخ تم البيع من قاعدة بيانات CRM",
+      })
+      : null;
+
+    if (soldDateChangeRequested && !correctedSale) {
+      return { error: "لا توجد عملية بيع نشطة مرتبطة بالعميل لتعديل تاريخها" };
+    }
+
+    const persistedSoldQuantity = correctedSale ? correctedSale.soldQuantity : input.soldQuantity;
+    const persistedSoldAt = correctedSale ? correctedSale.soldAt : nextSoldAt;
     const [updated] = await tx<any[]>`
       update crm.leads set
         customer_name=${input.customerName || before.customer_name},
@@ -533,16 +584,18 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
         call_center_assigned_to=${callCenterAssignedTo}::uuid,
         responsible_name_snapshot=${assignedName || null},
         call_center_name_snapshot=${callCenterName || null},
-        sold_quantity=${input.soldQuantity},
-        sold_at=${nextSoldAt}::timestamptz,
+        sold_quantity=${persistedSoldQuantity},
+        sold_at=${persistedSoldAt}::timestamptz,
         updated_by=${user.id}::uuid,
         updated_at=now()
       where id=${id}::uuid
       returning *, id::text, assigned_to::text, call_center_assigned_to::text
     `;
 
-    return updated;
+    return { row: updated };
   });
+  if ("error" in updateResult) return response.status(409).json({ ok: false, error: updateResult.error });
+  const row = updateResult.row;
 
   let lifecycleResult: any = null;
   if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {

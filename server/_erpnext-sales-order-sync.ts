@@ -139,7 +139,10 @@ async function upsertErpNextSalesTransaction(
         source_type='erpnext_sales_order',
         source_reference=${normalized.orderNo},
         lead_id=${input.leadId}::uuid,
-        sale_at=${saleAt}::timestamptz,
+        sale_at=case
+          when coalesce(metadata->>'soldDateOverride','false')='true' then sale_at
+          else ${saleAt}::timestamptz
+        end,
         quantity=${quantity},
         total_amount=${totalAmount},
         assigned_to=${mapping.id}::uuid,
@@ -171,7 +174,12 @@ async function upsertErpNextSalesTransaction(
       ${mapping.id}::uuid,${mapping.id}::uuid,${tx.json(metadata)},false
     )
     on conflict(source_type,source_reference) where source_reference is not null do update set
-      lead_id=excluded.lead_id,sale_at=excluded.sale_at,quantity=excluded.quantity,total_amount=excluded.total_amount,
+      lead_id=excluded.lead_id,
+      sale_at=case
+        when coalesce(crm.sales_transactions.metadata->>'soldDateOverride','false')='true' then crm.sales_transactions.sale_at
+        else excluded.sale_at
+      end,
+      quantity=excluded.quantity,total_amount=excluded.total_amount,
       assigned_to=excluded.assigned_to,assigned_name=excluded.assigned_name,department_code=excluded.department_code,
       branch_code=excluded.branch_code,source_code=excluded.source_code,source_name=excluded.source_name,
       car_name=excluded.car_name,car_category=excluded.car_category,updated_by=excluded.updated_by,

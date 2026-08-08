@@ -593,7 +593,16 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
       }
 
       const result = await crmFetch<{ ok: boolean; row: CrmLead }>("/api/crm/leads", { method: "PATCH", body: JSON.stringify(payload) });
-      setForm((current) => current ? { ...current, values: { ...current.values, notes: value(result.row.notes) } } : current);
+      setForm((current) => current ? {
+        ...current,
+        values: {
+          ...current.values,
+          notes: value(result.row.notes),
+          sold_at: result.row.sold_at ? riyadhDateInput(result.row.sold_at) : current.values.sold_at,
+          sold_quantity: value(result.row.sold_quantity || current.values.sold_quantity || 1),
+        },
+      } : current);
+      if (showSalesHistory) await loadSalesHistory(result.row.id, true);
       setNoteDraft("");
       onSaved(result.row);
       setNotice("تم حفظ بيانات العميل");
@@ -811,6 +820,7 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
                       },
                     } : current);
                   }}>{activeForm.values.status_label && !statuses.some((status) => status.value === activeForm.values.status_label) ? <option value={activeForm.values.status_label}>{activeForm.values.status_label}</option> : null}{statuses.map((status) => <option key={status.id} value={status.value}>{status.label}</option>)}</select></label>
+                  {activeForm.values.status_label === "تم البيع" ? <label><span>تاريخ تم البيع</span><input type="date" required value={activeForm.values.sold_at} onChange={(event) => setForm((current) => current ? { ...current, values: { ...current.values, sold_at: event.target.value } } : current)} /></label> : null}
                   <label><span>المسؤول</span><select value={activeForm.assignedTo} onChange={(event) => setForm((current) => current ? { ...current, assignedTo: event.target.value } : current)}><option value="">غير موزع</option>{editableAgents.map((user) => <option key={user.id} value={user.id}>{user.full_name}{user.branches.length ? ` - ${user.branches.join("، ")}` : ""}</option>)}</select></label>
                   <label><span>الكول سنتر</span><select value={activeForm.callCenterAssignedTo} onChange={(event) => setForm((current) => current ? { ...current, callCenterAssignedTo: event.target.value } : current)}><option value="">بدون كول سنتر</option>{editableCallCenterUsers.map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select></label>
                 </div>

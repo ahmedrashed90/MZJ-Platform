@@ -303,6 +303,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         select result_rows.*,(count(*) over())::int as total_count
         from result_rows
         where (${detailStatus || null}::text is null or result_rows.status_label=${detailStatus || null})
+          and (${detailStatus || null}::text is distinct from 'تم البيع' or result_rows.last_sale_at is not null)
         order by last_sale_at desc nulls last,coalesce(registered_at,created_at) desc,updated_at desc
         limit ${detailPageSize} offset ${detailOffset}
       `;

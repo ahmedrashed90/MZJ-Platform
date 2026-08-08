@@ -23,6 +23,14 @@ export type ManualSaleSnapshot = {
   metadata?: CrmSalesMetadata;
 };
 
+export type CanonicalSaleDateCorrection = {
+  leadId: string;
+  saleAt: string;
+  actorId: string;
+  actorName?: string | null;
+  reason?: string | null;
+};
+
 function positiveQuantity(value: unknown) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
@@ -109,3 +117,54 @@ export async function updateLatestManualSale(
   `;
   return row;
 }
+
+export async function correctLatestCanonicalSaleDate(
+  sql: CrmSalesSql,
+  input: CanonicalSaleDateCorrection,
+) {
+  const [latest] = await sql<any[]>`
+    select id::text,source_type,source_reference,sale_at
+    from crm.sales_transactions
+    where lead_id=${input.leadId}::uuid
+      and coalesce(is_cancelled,false)=false
+    order by sale_at desc,created_at desc,id desc
+    limit 1
+    for update
+  `;
+  if (!latest) return null;
+
+  const correctedAt = new Date().toISOString();
+  const [transaction] = await sql<any[]>`
+    update crm.sales_transactions set
+      sale_at=(${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh'),
+      updated_by=${input.actorId}::uuid,
+      metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
+        soldDateOverride: true,
+        soldDateOverrideValue: input.saleAt,
+        soldDateOverrideAt: correctedAt,
+        soldDateOverrideBy: input.actorId,
+        soldDateOverrideByName: input.actorName || null,
+        soldDateOverrideReason: input.reason || "crm_database_edit",
+        previousSaleAt: latest.sale_at || null,
+      })}::jsonb,
+      updated_at=now()
+    where id=${latest.id}::uuid
+    returning *,id::text,lead_id::text,assigned_to::text,created_by::text,updated_by::text
+  `;
+
+  const [summary] = await sql<any[]>`
+    select
+      coalesce(sum(greatest(coalesce(quantity,1),1)),0)::int as sold_quantity,
+      max(sale_at) as sold_at
+    from crm.sales_transactions
+    where lead_id=${input.leadId}::uuid
+      and coalesce(is_cancelled,false)=false
+  `;
+
+  return {
+    transaction,
+    soldQuantity: Math.max(0, Number(summary?.sold_quantity || 0)),
+    soldAt: summary?.sold_at || null,
+  };
+}
+

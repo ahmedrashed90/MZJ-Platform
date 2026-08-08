@@ -23,7 +23,7 @@ assert(baseSchema.includes("sold_at timestamptz"), "CRM lead sold snapshot field
 assert(schema.includes("crm-sold-at-20260803") && schema.includes("add column if not exists sold_at timestamptz"), "sold_at migration is missing");
 assert(baseSchema.includes("create table if not exists crm.sales_transactions"), "canonical sales transaction table is missing");
 assert(erpSync.includes("const saleAt = dateTimeForOrder(normalized.orderDate)"), "ERP order date is not the canonical sale date");
-assert(erpSync.includes("sale_at=${saleAt}::timestamptz"), "ERP link does not persist the real sale date");
+assert(erpSync.includes("else ${saleAt}::timestamptz") && erpSync.includes("${saleAt}::timestamptz,${quantity}"), "ERP link does not persist the real sale date or preserve an approved correction");
 assert(erpSync.includes("assigned_name=${mapping.full_name}"), "ERP salesperson snapshot is missing");
 assert(erpSync.includes("department_code=${input.departmentCode}"), "ERP department snapshot is missing");
 assert(!leads.includes("insertManualSale(tx") && !leads.includes("updateLatestManualSale(tx"), "manual lead edits still mutate sales history");
