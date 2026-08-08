@@ -2595,9 +2595,28 @@
   .marketing-monitor-kpis,
   .marketing-monitor-hero,
   .marketing-agenda-editor-summary { grid-template-columns: 1fr; }
-  .marketing-agenda-editor-layout { grid-template-columns: 1fr; overflow-y: auto; }
+  .marketing-agenda-editor-layout { grid-template-columns: 1fr; overflow-y: auto; overflow-x: hidden; }
   .marketing-agenda-add-panel { border-inline-start: 0; border-bottom: 1px solid var(--line); overflow: visible; }
-  .marketing-agenda-editor-main { overflow: visible; }
+  .marketing-agenda-editor-main { width: 100%; min-width: 0; max-width: 100%; padding: 14px 10px 26px; overflow: visible; overflow-x: hidden; }
+  .marketing-agenda-creative-stack,
+  .marketing-agenda-creative-stack .marketing-creative-editor,
+  .marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section,
+  .marketing-agenda-creative-stack .marketing-execution-box,
+  .marketing-agenda-creative-stack .marketing-optional-box { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .marketing-agenda-creative-stack .marketing-creative-editor { padding: 12px; }
+  .marketing-agenda-creative-stack .marketing-creative-editor > .marketing-assignment-section { padding: 12px; }
+  .marketing-agenda-creative-stack .marketing-assignment-row {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    grid-template-columns: 1fr;
+    gap: 9px;
+    align-items: stretch;
+  }
+  .marketing-agenda-creative-stack .marketing-assignment-row > strong,
+  .marketing-agenda-creative-stack .marketing-assignment-row label,
+  .marketing-agenda-creative-stack .marketing-assignment-row input { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .marketing-agenda-creative-stack .marketing-assignment-row label.wide { grid-column: auto; }
   .marketing-database-section-heading { flex-direction: column; }
   .marketing-publish-list-row { grid-template-columns: 1fr; align-items: stretch; }
   .marketing-publish-list-meta { grid-template-columns: 1fr; }
@@ -4347,11 +4366,27 @@
 }
 
 @media (max-width: 900px) {
-  .marketing-engagement-view-tabs,
-  .marketing-database-view-tabs { width: 100%; overflow-x: auto; }
-  .marketing-engagement-view-tabs button,
-  .marketing-database-view-tabs button { flex: 1 0 auto; }
-  .marketing-database-view-tabs { position: static; }
+  .marketing-engagement-view-tabs { width: 100%; overflow-x: auto; }
+  .marketing-engagement-view-tabs button { flex: 1 0 auto; }
+  .marketing-database-view-tabs {
+    position: static;
+    width: 100%;
+    max-width: 100%;
+    overflow: visible;
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: 5px;
+  }
+  .marketing-database-view-tabs button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: normal;
+    line-height: 1.55;
+  }
+  .marketing-database-workspace,
+  .marketing-database-section,
+  .marketing-database-results-section { min-width: 0; max-width: 100%; overflow-x: hidden; }
   .marketing-result-platform-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .marketing-result-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .marketing-result-best-grid { grid-template-columns: 1fr; }
