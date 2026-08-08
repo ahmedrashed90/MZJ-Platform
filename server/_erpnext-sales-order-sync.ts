@@ -170,7 +170,7 @@ async function upsertErpNextSalesTransaction(
       ${clean(firstPayload.item?.type)||null},${clean(firstPayload.item?.category)||null},
       ${mapping.id}::uuid,${mapping.id}::uuid,${tx.json(metadata)},false
     )
-    on conflict(source_type,source_reference) do update set
+    on conflict(source_type,source_reference) where source_reference is not null do update set
       lead_id=excluded.lead_id,sale_at=excluded.sale_at,quantity=excluded.quantity,total_amount=excluded.total_amount,
       assigned_to=excluded.assigned_to,assigned_name=excluded.assigned_name,department_code=excluded.department_code,
       branch_code=excluded.branch_code,source_code=excluded.source_code,source_name=excluded.source_name,
