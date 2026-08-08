@@ -23,7 +23,7 @@ const marketingServer = read("server/marketing/index.ts");
 const permissions = read("server/_api-permissions.ts");
 const marketingCss = read("src/marketing/marketing.css");
 
-check("release version is 1.19.14", packageJson.version === "1.19.14");
+check("release keeps the v1.19.14 customer-registry fixes", ["1.19.14", "1.19.15"].includes(packageJson.version));
 
 check("CRM navigation is renamed to customer registry", crmLayout.includes('label: "سجل العملاء"') && access.includes('name: "سجل العملاء"'));
 check("customer registry separates cash, finance, and finance differences", ["عملاء الكاش", "عملاء التمويل", "فروقات حالات العملاء"].every((label) => crmPage.includes(label)));

@@ -29,7 +29,7 @@ const taskSnapshotStart = marketingServer.indexOf("function creativeTaskFlowSnap
 const taskSnapshotEnd = marketingServer.indexOf("async function replaceCreativeBudgets", taskSnapshotStart);
 const taskSnapshot = marketingServer.slice(taskSnapshotStart, taskSnapshotEnd);
 
-check("release retains the v1.19.13 canonical fixes", ["1.19.13", "1.19.14"].includes(packageJson.version));
+check("release retains the v1.19.13 canonical fixes", ["1.19.13", "1.19.14", "1.19.15"].includes(packageJson.version));
 
 check("CRM sold metric remains canonical sales transactions", salesFacts.includes("from crm.sales_transactions st"));
 check("missing sale branch falls back to the representative primary CRM branch", reports.includes("coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))"));

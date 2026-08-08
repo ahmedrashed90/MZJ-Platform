@@ -97,6 +97,24 @@ type ScheduleDisplayRow = {
   sourceIndex: number;
 };
 
+type BudgetOverviewPlatform = {
+  key: string;
+  id: string;
+  name: string;
+  amount: number;
+};
+
+type BudgetOverviewItem = {
+  key: string;
+  funnel: string;
+  creativeNames: string[];
+  adsCount: number;
+  contentGoal: string;
+  expectedGoal: string;
+  platforms: BudgetOverviewPlatform[];
+  total: number;
+};
+
 function marketingPayload(value: unknown): Record<string, any> {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>;
   if (typeof value === "string" && value.trim()) {
@@ -249,7 +267,7 @@ export function MarketingDatabasePage() {
       .filter((file: any) => activeFileIds.has(String(file.id || "")) || activeGroupIds.has(String(file.final_media_group_id || "")))
       .sort((a: any, b: any) => Number(a.order_index || 0) - Number(b.order_index || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
   }, [detail]);
-  const budgetOverview = useMemo(() => {
+  const budgetOverview = useMemo<BudgetOverviewItem[]>(() => {
     const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
     const creatives = Array.isArray(detail?.creatives) ? detail.creatives : [];
     return budgetItems.map((item: any, budgetIndex: number) => {
@@ -258,13 +276,13 @@ export function MarketingDatabasePage() {
         .split(/\s*،\s*/g)
         .map((name) => name.trim())
         .filter(Boolean);
-      const creativeNames = ids.length
+      const creativeNames: string[] = ids.length
         ? ids.map((id, index) => {
             const creative = creatives.find((row: any) => String(row?.id || "") === id);
             return creative?.name || creative?.creative_type_name || creative?.creative_type || fallbackNames[index] || "كرييتيف";
           })
         : (fallbackNames.length ? fallbackNames : ["كرييتيف غير محدد"]);
-      const platforms = budgetPlatformDetails(item).map((part: any, platformIndex: number) => ({
+      const platforms: BudgetOverviewPlatform[] = budgetPlatformDetails(item).map((part: any, platformIndex: number) => ({
         key: `${item?.id || budgetIndex}-${part?.platformId || part?.platform_id || platformIndex}`,
         id: String(part?.platformId || part?.platform_id || ""),
         name: part?.platformName || part?.platform_name || meta.platforms.find((platform) => platform.id === String(part?.platformId || part?.platform_id || ""))?.name || "منصة",
@@ -295,8 +313,8 @@ export function MarketingDatabasePage() {
     const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
     return budgetItems.reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0);
   }, [detail]);
-  const budgetPlatformCount = useMemo(() => new Set(budgetOverview.flatMap((item) => item.platforms.map((platform) => platform.id || platform.name))).size, [budgetOverview]);
-  const budgetFunnelCount = useMemo(() => new Set(budgetOverview.map((item) => item.funnel).filter((name) => name && name !== "—")).size, [budgetOverview]);
+  const budgetPlatformCount = useMemo(() => new Set(budgetOverview.flatMap((item: BudgetOverviewItem) => item.platforms.map((platform: BudgetOverviewPlatform) => platform.id || platform.name))).size, [budgetOverview]);
+  const budgetFunnelCount = useMemo(() => new Set(budgetOverview.map((item: BudgetOverviewItem) => item.funnel).filter((name: string) => name && name !== "—")).size, [budgetOverview]);
 
   async function load() {
     setLoading(true);
@@ -670,14 +688,14 @@ export function MarketingDatabasePage() {
               </div>
 
               {budgetOverview.length ? <div className="marketing-budget-overview-list">
-                {budgetOverview.map((item, index) => <article className="marketing-budget-overview-card" key={item.key}>
+                {budgetOverview.map((item: BudgetOverviewItem, index: number) => <article className="marketing-budget-overview-card" key={item.key}>
                   <header>
                     <div><span>بند الميزانية {index + 1}</span><strong>{item.funnel}</strong></div>
                     <b>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</b>
                   </header>
                   <div className="marketing-budget-overview-creatives">
                     <span>الكرييتيف</span>
-                    <div>{item.creativeNames.map((name, nameIndex) => <b key={`${name}-${nameIndex}`}>{name}</b>)}</div>
+                    <div>{item.creativeNames.map((name: string, nameIndex: number) => <b key={`${name}-${nameIndex}`}>{name}</b>)}</div>
                   </div>
                   <div className="marketing-budget-overview-metrics">
                     <span><small>عدد الإعلانات</small><strong>{item.adsCount.toLocaleString("ar-SA-u-nu-latn")}</strong></span>
@@ -685,7 +703,7 @@ export function MarketingDatabasePage() {
                     <span><small>الهدف المتوقع</small><strong>{item.expectedGoal || "—"}</strong></span>
                   </div>
                   <div className="marketing-budget-overview-platforms">
-                    {item.platforms.map((platform) => <span key={platform.key}><small>{platform.name}</small><strong>{platform.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}
+                    {item.platforms.map((platform: BudgetOverviewPlatform) => <span key={platform.key}><small>{platform.name}</small><strong>{platform.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}
                   </div>
                 </article>)}
               </div> : <div className="marketing-budget-overview-empty"><CurrencyCircleDollar size={34} weight="duotone" /><div><strong>لم يتم إنشاء ميزانية للحملة</strong><span>استخدم زر «إنشاء الميزانية» لإضافة بنود Funnel وربطها بالكرييتيفات والمنصات.</span></div></div>}

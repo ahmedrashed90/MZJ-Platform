@@ -1,0 +1,34 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const root = process.cwd();
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const packageJson = JSON.parse(read("package.json"));
+const drawer = read("src/crm/components/LeadDrawer.tsx");
+const crmApi = read("server/crm/leads.ts");
+const marketingDatabase = read("src/marketing/pages/MarketingDatabasePage.tsx");
+
+const checks = [];
+function check(label, condition) {
+  const passed = Boolean(condition);
+  checks.push([label, passed]);
+  console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
+}
+
+check("release version is 1.19.15", packageJson.version === "1.19.15");
+check("CRM database edit keeps the canonical department selector", drawer.includes('>القسم</span><select value={activeForm.departmentCode}') && drawer.includes("changeDatabaseDepartment"));
+check("wholesale is a selectable CRM department", drawer.includes('label: "قسم الجملة"') && drawer.includes('serviceKey: "cash" as ServiceKey'));
+check("both wholesale department codes are supported", drawer.includes('code === "wholesale"') && drawer.includes('code === "wholesale_sales"'));
+check("the configured wholesale code is resolved from central CRM users", drawer.includes('configuredCodes.has("wholesale")') && drawer.includes('configuredCodes.has("wholesale_sales")'));
+check("wholesale remains branchless when selected", drawer.includes("const branchlessDepartment = isWholesaleDepartmentCode(nextDepartmentCode)") && drawer.includes('branchlessDepartment\n        ? ""'));
+check("the branch selector explains the branchless wholesale rule", drawer.includes('disabled={isWholesaleDepartmentCode(activeForm.departmentCode)}') && drawer.includes("قسم الجملة بدون فرع"));
+check("wholesale assignment is limited to users in the selected department", drawer.includes("user.department_codes.includes(nextDepartmentCode)") && drawer.includes("currentAgentIsValid"));
+check("database edit still updates the same customer row", drawer.includes('payload.databaseEdit = true') && drawer.includes('method: "PATCH"') && crmApi.includes('update crm.leads set'));
+check("department and service key remain persisted through the canonical CRM endpoint", drawer.includes('addChangedField(payload, "serviceKey"') && drawer.includes('addChangedField(payload, "departmentCode"') && crmApi.includes('department_code=${input.departmentCode}'));
+check("marketing budget overview has explicit item and platform types", marketingDatabase.includes("type BudgetOverviewItem") && marketingDatabase.includes("type BudgetOverviewPlatform"));
+check("the Vercel implicit-any budget callbacks are explicitly typed", marketingDatabase.includes("(item: BudgetOverviewItem, index: number)") && marketingDatabase.includes("(name: string, nameIndex: number)") && marketingDatabase.includes("(platform: BudgetOverviewPlatform)"));
+check("no release-specific database migration or patch was added", !fs.existsSync(path.join(root, "database/migrations/20260808_crm_database_wholesale_department_v11915.sql")) && !fs.existsSync(path.join(root, "database/migrations/20260808_v11915_patch.sql")));
+
+const failed = checks.filter(([, passed]) => !passed);
+console.log(`CRM database wholesale department checks: ${checks.length - failed.length}/${checks.length} passed`);
+if (failed.length) process.exit(1);
