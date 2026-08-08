@@ -169,34 +169,62 @@ type AssignmentResult = {
 };
 
 async function chooseFromConfiguredRule(departmentCode: string, requestedBranch: string, sourceCode: string): Promise<AssignmentResult | null> {
-  if (!requestedBranch) return null;
   const sql = getSql();
-  const [rule] = await sql<any[]>`
-    select r.*, r.id::text,
-      state.last_user_id::text,
-      state.updated_at as last_distribution_at
-    from crm.assignment_rules r
-    left join crm.assignment_state state on state.pool_key = concat('rule:', r.id::text)
-    where r.is_active = true
-      and r.department_code = ${departmentCode}
-      and r.branch_code = ${requestedBranch}
-      and (coalesce(array_length(r.source_codes, 1), 0) = 0 or ${sourceCode || ""} = any(r.source_codes))
-    order by
-      case when coalesce(array_length(r.source_codes, 1), 0) > 0 then 0 else 1 end,
-      r.sort_order,
-      r.created_at
-    limit 1
-  `;
-  if (!rule) return null;
+  const requested = clean(requestedBranch);
+  const source = clean(sourceCode);
 
-  const candidates = await sql<any[]>`
-    select u.id::text, u.full_name, m.priority, m.assignment_count
+  const matchingRules = await sql<any[]>`
+    select r.id::text,r.name,r.branch_code,r.source_codes,r.assignment_mode,r.prevent_consecutive,r.sort_order,r.created_at,
+      case when ${requested || null}::text is not null and r.branch_code = ${requested || null} then 0
+           when ${requested || null}::text is not null and r.branch_code is null then 1
+           else 0 end as branch_specificity,
+      case when coalesce(array_length(r.source_codes,1),0) > 0 then 0 else 1 end as source_specificity
+    from crm.assignment_rules r
+    where r.is_active=true
+      and r.department_code=${departmentCode}
+      and (${requested || null}::text is null or r.branch_code is null or r.branch_code=${requested || null})
+      and (coalesce(array_length(r.source_codes,1),0)=0 or ${source}=any(r.source_codes))
+    order by branch_specificity,source_specificity,r.sort_order,r.created_at,r.id
+  `;
+  if (!matchingRules.length) return null;
+
+  const firstRule = matchingRules[0];
+  const activeRules = matchingRules.filter((rule) =>
+    Number(rule.branch_specificity) === Number(firstRule.branch_specificity)
+    && Number(rule.source_specificity) === Number(firstRule.source_specificity)
+    && Number(rule.sort_order || 0) === Number(firstRule.sort_order || 0)
+  );
+  const ruleIds = activeRules.map((rule) => rule.id);
+  const ruleById = new Map(activeRules.map((rule) => [rule.id, rule]));
+
+  const candidateRows = await sql<any[]>`
+    select m.rule_id::text,u.id::text as user_id,u.full_name,m.priority,m.assignment_count,
+      r.branch_code as rule_branch_code,r.sort_order as rule_sort_order,
+      coalesce(
+        (
+          select b.code
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name
+          limit 1
+        ),
+        (
+          select b.code
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=u.id
+          order by ub.is_primary desc,b.sort_order,b.name
+          limit 1
+        )
+      ) as primary_branch_code
     from crm.assignment_rule_members m
-    join core.users u on u.id = m.user_id
-    where m.rule_id = ${rule.id}::uuid
-      and m.is_active = true
-      and u.is_active = true
-      and u.can_receive_leads = true
+    join crm.assignment_rules r on r.id=m.rule_id
+    join core.users u on u.id=m.user_id
+    where m.rule_id=any(${ruleIds}::uuid[])
+      and m.is_active=true
+      and u.is_active=true
+      and u.can_receive_leads=true
       and (
         exists (
           select 1
@@ -215,11 +243,12 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
         )
       )
       and (
-        exists (
+        r.branch_code is null
+        or exists (
           select 1
           from core.user_system_branches usb
           join core.branches b on b.id=usb.branch_id and b.is_active=true
-          where usb.user_id=u.id and usb.system_code='crm' and b.code=${requestedBranch}
+          where usb.user_id=u.id and usb.system_code='crm' and b.code=r.branch_code
         )
         or (
           not exists (select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
@@ -227,32 +256,81 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
             select 1
             from core.user_branches ub
             join core.branches b on b.id=ub.branch_id and b.is_active=true
-            where ub.user_id=u.id and b.code=${requestedBranch}
+            where ub.user_id=u.id and b.code=r.branch_code
           )
         )
       )
-    order by m.priority, u.full_name, u.id::text
+      and (
+        ${requested || null}::text is null
+        or exists (
+          select 1
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm' and b.code=${requested || null}
+        )
+        or (
+          not exists (select 1 from core.user_system_branches usb0 where usb0.user_id=u.id and usb0.system_code='crm')
+          and exists (
+            select 1
+            from core.user_branches ub
+            join core.branches b on b.id=ub.branch_id and b.is_active=true
+            where ub.user_id=u.id and b.code=${requested || null}
+          )
+        )
+      )
+    order by r.sort_order,m.priority,u.full_name,u.id::text,m.rule_id::text
   `;
+  if (!candidateRows.length) return null;
+
+  const candidateByUser = new Map<string, any>();
+  for (const candidate of candidateRows) {
+    const existing = candidateByUser.get(candidate.user_id);
+    if (!existing || (candidate.primary_branch_code && candidate.rule_branch_code === candidate.primary_branch_code && existing.rule_branch_code !== existing.primary_branch_code)) {
+      candidateByUser.set(candidate.user_id, candidate);
+    }
+  }
+  const candidates = [...candidateByUser.values()].sort((left, right) => {
+    const sortOrder = Number(left.rule_sort_order || 0) - Number(right.rule_sort_order || 0);
+    if (sortOrder) return sortOrder;
+    const priority = Number(left.priority || 0) - Number(right.priority || 0);
+    if (priority) return priority;
+    return String(left.full_name || '').localeCompare(String(right.full_name || ''), 'ar');
+  });
   if (!candidates.length) return null;
 
-  const lastIndex = candidates.findIndex((candidate) => candidate.id === rule.last_user_id);
+  const poolKey = `rules:${departmentCode}:${requested || "auto"}:${source || "all"}:${ruleIds.slice().sort().join(",")}`;
+  const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
+  const lastIndex = candidates.findIndex((candidate) => candidate.user_id === state?.last_user_id);
   const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
-  const poolKey = `rule:${rule.id}`;
+  const selectedRule = ruleById.get(selected.rule_id) || firstRule;
+  const selectedBranch = clean(selected.primary_branch_code) || clean(selected.rule_branch_code) || requested;
+
   await sql`
     insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
-    values (${poolKey},${selected.id}::uuid,${requestedBranch},now())
+    values (${poolKey},${selected.user_id}::uuid,${selectedBranch || null},now())
+    on conflict (pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${`rule:${selected.rule_id}`},${selected.user_id}::uuid,${selectedBranch || null},now())
     on conflict (pool_key) do update set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
   `;
   await sql`
     update crm.assignment_rule_members
     set assignment_count=assignment_count+1,last_assigned_at=now(),updated_at=now()
-    where rule_id=${rule.id}::uuid and user_id=${selected.id}::uuid
+    where rule_id=${selected.rule_id}::uuid and user_id=${selected.user_id}::uuid
   `;
   await sql`
     insert into crm.assignment_logs(rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode)
-    values (${rule.id}::uuid,${departmentCode},${requestedBranch},${sourceCode || null},${selected.id}::uuid,${selected.full_name},${rule.assignment_mode || "round_robin"})
+    values (${selected.rule_id}::uuid,${departmentCode},${selectedBranch || null},${source || null},${selected.user_id}::uuid,${selected.full_name},${selectedRule.assignment_mode || "round_robin"})
   `;
-  return { assignedTo: selected.id, assignedName: selected.full_name, branchCode: requestedBranch, ruleId: rule.id, ruleName: rule.name };
+  return {
+    assignedTo: selected.user_id,
+    assignedName: selected.full_name,
+    branchCode: selectedBranch,
+    ruleId: selected.rule_id,
+    ruleName: selectedRule.name,
+  };
 }
 
 export async function chooseAssignment(serviceKey: string, requestedBranch = "", sourceCode = "") {

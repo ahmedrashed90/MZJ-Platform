@@ -131,11 +131,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const rules = (assignmentRules as any[]).map((rule) => {
       const branchCode = clean(rule.branch_code);
       const activeMembers = (rule.members || []).filter((member: any) => {
-        if (!member.is_active || !branchCode) return false;
+        if (!member.is_active) return false;
         const assignmentUser = assignmentUserById.get(member.user_id) as any;
         if (!assignmentUser?.is_active || !assignmentUser?.can_receive_leads) return false;
         if (!(assignmentUser.department_codes || []).includes(rule.department_code)) return false;
-        if (!(assignmentUser.branch_codes || []).includes(branchCode)) return false;
+        if (branchCode && !(assignmentUser.branch_codes || []).includes(branchCode)) return false;
         return true;
       });
       const currentIndex = activeMembers.findIndex((member: any) => member.user_id === rule.last_user_id);
