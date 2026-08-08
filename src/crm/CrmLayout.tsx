@@ -17,7 +17,7 @@ const items = [
   { href: "/crm", label: "الداش بورد", icon: Gauge, end: true, permission: "crm.dashboard.view" },
   { href: "/crm/database", label: "قاعدة البيانات", icon: Database, permission: "crm.database.view" },
   { href: "/crm/manual-leads", label: "إضافة العملاء", icon: PlusCircle, permission: "crm.manual_leads.view" },
-  { href: "/crm/finance-history", label: "سجل عملاء التمويل", icon: ClipboardText, permission: "crm.finance_history.view" },
+  { href: "/crm/finance-history", label: "سجل العملاء", icon: ClipboardText, permission: "crm.finance_history.view" },
   { href: "/crm/inbox", label: "رسائل غير مصنفة", icon: ChatsCircle, permission: "crm.inbox.view" },
   { href: "/crm/contacts", label: "جهات الاتصال", icon: AddressBook, permission: "crm.contacts.view" },
   { href: "/crm/inbox-agent", label: "وكيل صندوق الوارد", icon: Robot, permission: "crm.inbox_agent.view" },

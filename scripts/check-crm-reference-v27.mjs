@@ -34,7 +34,8 @@ assert(dashboard.includes('className="crm-unread-dot"'), "green unread badge is 
 assert(!dashboard.includes("رسالة من العميل"), "unread badge must not contain text");
 assert(styles.includes(".crm-unread-dot") && styles.includes("#16a34a"), "green unread badge style is missing");
 
-assert(historyPage.includes("سجل العملاء") && historyPage.includes("فروقات حالات العملاء"), "finance history tabs are missing");
+assert(["عملاء الكاش", "عملاء التمويل", "فروقات حالات العملاء"].every((label) => historyPage.includes(label)), "customer history tabs are missing");
+assert(historyServer.includes('leadTypeCondition("finance")'), "status differences must be restricted to finance customers");
 assert(historyPage.includes('window.open(url, "_blank", "noopener,noreferrer")'), "customer conversation must open in a new tab");
 assert(historyServer.includes("order by e.created_at desc,e.id desc"), "status-at-cutoff must use the latest event up to the cutoff");
 assert(historyServer.includes("cutoff_at") && historyServer.includes("Asia/Riyadh"), "finance date cutoffs must use end-of-day Riyadh time");

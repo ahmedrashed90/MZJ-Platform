@@ -14,12 +14,34 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const scope = scopeCondition(userScope(user));
   const leadId = clean(request.query.leadId);
   const mode = clean(request.query.mode);
+  const requestedCustomerType = clean(request.query.customerType).toLowerCase();
+  const customerType = requestedCustomerType === "cash" ? "cash" : "finance";
   const q = clean(request.query.q);
   const status = clean(request.query.status);
   const from = clean(request.query.from);
   const to = clean(request.query.to);
   const limit = positiveInt(request.query.limit, 50, 200);
   const offset = Math.max(0, Number(request.query.offset || 0) || 0);
+  const leadTypeCondition = (type: "cash" | "finance") => sql`
+    case
+      when lower(trim(coalesce(l.service_key,''))) in ('finance','finance_sales','call_center','callcenter')
+        or lower(trim(coalesce(l.service_key,''))) like '%finance%'
+        or trim(coalesce(l.service_key,'')) like '%تمويل%'
+        or trim(coalesce(l.service_key,'')) like '%كول%'
+        then 'finance'
+      when lower(trim(coalesce(l.service_key,''))) in ('service','customer_service','cs')
+        or lower(trim(coalesce(l.service_key,''))) like '%service%'
+        or trim(coalesce(l.service_key,'')) like '%خدم%'
+        then 'service'
+      when lower(trim(coalesce(l.service_key,'')))='cash' then 'cash'
+      when l.department_code in ('finance_sales','call_center') then 'finance'
+      when l.department_code='customer_service' then 'service'
+      when l.department_code='cash_sales' then 'cash'
+      when trim(coalesce(l.payment_type,''))='تمويل' then 'finance'
+      when trim(coalesce(l.payment_type,''))='خدمة عملاء' then 'service'
+      else 'cash'
+    end=${type}
+  `;
 
   if (leadId) {
     const [lead] = await sql<any[]>`
@@ -53,14 +75,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         select l.id, l.status_label, coalesce(l.registered_at,l.created_at) as entry_at
         from crm.leads l
         where l.is_deleted=false
-          and (
-            l.department_code in ('finance_sales','call_center')
-            or exists (
-              select 1 from crm.lead_events de
-              where de.lead_id=l.id
-                and (de.old_department in ('finance_sales','call_center') or de.new_department in ('finance_sales','call_center'))
-            )
-          )
+          and ${leadTypeCondition("finance")}
           and (
             ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
             or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
@@ -139,14 +154,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.sources src on src.code=l.source_code
     left join crm.lead_events e on e.lead_id=l.id
     where l.is_deleted=false
-      and (
-        l.department_code in ('finance_sales','call_center')
-        or exists (
-          select 1 from crm.lead_events de
-          where de.lead_id=l.id
-            and (de.old_department in ('finance_sales','call_center') or de.new_department in ('finance_sales','call_center'))
-        )
-      )
+      and ${leadTypeCondition(customerType)}
       and (
         ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
@@ -165,14 +173,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users sales on sales.id=l.assigned_to
     left join core.users cc on cc.id=l.call_center_assigned_to
     where l.is_deleted=false
-      and (
-        l.department_code in ('finance_sales','call_center')
-        or exists (
-          select 1 from crm.lead_events de
-          where de.lead_id=l.id
-            and (de.old_department in ('finance_sales','call_center') or de.new_department in ('finance_sales','call_center'))
-        )
-      )
+      and ${leadTypeCondition(customerType)}
       and (
         ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
@@ -186,5 +187,5 @@ export default async function handler(request: VercelRequest, response: VercelRe
     row.source_name = sourceLabel(row.source_code, row.catalog_source_name || row.source_name);
     delete row.catalog_source_name;
   }
-  return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset });
+  return response.status(200).json({ ok: true, rows, total: Number(count?.total || 0), limit, offset, customerType });
 }

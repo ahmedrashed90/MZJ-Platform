@@ -37,7 +37,7 @@ type DifferenceResponse = {
 };
 
 export function CrmFinanceHistoryPage() {
-  const [activeTab, setActiveTab] = useState<"history" | "differences">("history");
+  const [activeTab, setActiveTab] = useState<"cash" | "finance" | "differences">("cash");
   const [meta, setMeta] = useState<CrmMeta | null>(null);
   const [filters, setFilters] = useState({ from: "", to: "", status: "", q: "" });
   const [differenceDates, setDifferenceDates] = useState({ from: "", to: "" });
@@ -57,7 +57,7 @@ export function CrmFinanceHistoryPage() {
   }, []);
 
   useEffect(() => {
-    if (activeTab !== "history") return;
+    if (activeTab === "differences") return;
     const timer = window.setTimeout(() => void loadRows(), 180);
     return () => window.clearTimeout(timer);
   }, [activeTab, filters, page]);
@@ -75,7 +75,7 @@ export function CrmFinanceHistoryPage() {
     setLoading(true);
     setNotice("");
     try {
-      const result = await crmFetch<{ ok: boolean; rows: CrmLead[]; total: number }>(`/api/crm/history${queryString({ ...filters, limit: pageSize, offset: page * pageSize })}`);
+      const result = await crmFetch<{ ok: boolean; rows: CrmLead[]; total: number }>(`/api/crm/history${queryString({ ...filters, customerType: activeTab, limit: pageSize, offset: page * pageSize })}`);
       setRows(result.rows || []);
       setTotal(result.total || 0);
     } catch (error) {
@@ -109,15 +109,16 @@ export function CrmFinanceHistoryPage() {
   }
 
   function openConversationInNewTab(row: CrmLead) {
-    const url = `/crm?lead=${encodeURIComponent(row.id)}&department=finance`;
+    const department = activeTab === "cash" ? "cash" : "finance";
+    const url = `/crm?lead=${encodeURIComponent(row.id)}&department=${department}`;
     const tab = window.open(url, "_blank", "noopener,noreferrer");
     tab?.focus();
   }
 
   const statuses = useMemo(() => [...new Set((meta?.statuses || [])
-    .filter((status) => status.department_code === "finance")
+    .filter((status) => status.department_code === (activeTab === "cash" ? "cash" : "finance"))
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
-    .map((status) => status.value))], [meta]);
+    .map((status) => status.value))], [activeTab, meta]);
 
   const allEvents = rows.reduce((sum, row: any) => sum + Number(row.events_count || 0), 0);
   const statusChanges = selected?.events.filter((event) => event.event_type === "status_change").length || 0;
@@ -125,6 +126,11 @@ export function CrmFinanceHistoryPage() {
   const currentStatuses = new Set(rows.map((row) => row.status_label || "عميل جديد")).size;
   const differenceDatesInvalid = Boolean(differenceDates.from && differenceDates.to && differenceDates.from > differenceDates.to);
   function setHistoryFilter(key: keyof typeof filters, value: string) { setPage(0); setFilters((current) => ({ ...current, [key]: value })); }
+  function selectHistoryTab(tab: "cash" | "finance") {
+    setActiveTab(tab);
+    setPage(0);
+    setFilters((current) => ({ ...current, status: "" }));
+  }
 
   return (
     <div className="crm-page crm-finance-history-page">
@@ -134,11 +140,12 @@ export function CrmFinanceHistoryPage() {
       </div>
 
       <div className="crm-inner-page-tabs crm-finance-history-tabs centered">
-        <button type="button" className={activeTab === "history" ? "active" : ""} onClick={() => setActiveTab("history")}><UsersThree size={18} />سجل العملاء</button>
+        <button type="button" className={activeTab === "cash" ? "active" : ""} onClick={() => selectHistoryTab("cash")}><UsersThree size={18} />عملاء الكاش</button>
+        <button type="button" className={activeTab === "finance" ? "active" : ""} onClick={() => selectHistoryTab("finance")}><UsersThree size={18} />عملاء التمويل</button>
         <button type="button" className={activeTab === "differences" ? "active" : ""} onClick={() => setActiveTab("differences")}><ClockCounterClockwise size={18} />فروقات حالات العملاء</button>
       </div>
 
-      {activeTab === "history" ? (
+      {activeTab !== "differences" ? (
         <>
           <section className="crm-finance-history-filters">
             <div className="crm-finance-history-filter-row dates">
@@ -177,8 +184,8 @@ export function CrmFinanceHistoryPage() {
                 <button type="button" className="crm-table-button crm-open-conversation-button" onClick={() => openConversationInNewTab(row)}><ChatCircleDots size={18} />فتح المحادثة</button>
               </article>
             ))}
-            {!loading && !rows.length ? <div className="crm-empty-state panel">لا يوجد عملاء مطابقون للفلاتر المحددة</div> : null}
-            {loading ? <div className="crm-loading-panel">جاري تحميل سجل العملاء...</div> : null}
+            {!loading && !rows.length ? <div className="crm-empty-state panel">لا يوجد عملاء {activeTab === "cash" ? "كاش" : "تمويل"} مطابقون للفلاتر المحددة</div> : null}
+            {loading ? <div className="crm-loading-panel">جاري تحميل سجل عملاء {activeTab === "cash" ? "الكاش" : "التمويل"}...</div> : null}
           </div>
           {total > pageSize ? <div className="crm-pagination"><button className="crm-secondary-button" disabled={page === 0 || loading} onClick={() => setPage((current) => Math.max(0, current - 1))}>السابق</button><span>صفحة {page + 1} من {Math.max(1, Math.ceil(total / pageSize))}</span><button className="crm-secondary-button" disabled={(page + 1) * pageSize >= total || loading} onClick={() => setPage((current) => current + 1)}>التالي</button></div> : null}
         </>

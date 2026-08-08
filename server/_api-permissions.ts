@@ -142,6 +142,9 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (action === "save_links") {
     return req(clean(payload.sourceType) === "agenda" ? "marketing.agenda.edit" : "marketing.campaign.edit", "marketing", "database", action);
   }
+  if (action === "save_campaign_budgets") {
+    return req("marketing.campaign.edit", "marketing", "database", action);
+  }
   if (action === "attendance") {
     const attendanceAction = clean(payload.attendanceAction);
     if (["save_settings", "edit"].includes(attendanceAction)) return req("marketing.attendance.manage", "marketing", "attendance", "manage");

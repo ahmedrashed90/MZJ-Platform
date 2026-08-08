@@ -10,7 +10,6 @@ import {
 } from "@phosphor-icons/react";
 import { operationsFetch, queryString } from "../api";
 import type { SalesOrderFollowupRow, SalesOrdersFollowupResponse } from "../types";
-import { useOperations } from "../useOperations";
 
 const statusOptions = [
   ["", "كل الحالات"],
@@ -47,12 +46,10 @@ function StateBadge({ done }: { done: boolean }) {
 }
 
 export function SalesOrdersFollowupPage() {
-  const { meta } = useOperations();
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [branch, setBranch] = useState("");
-  const [completedView, setCompletedView] = useState(false);
   const [page, setPage] = useState(1);
   const [payload, setPayload] = useState<SalesOrdersFollowupResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,7 +65,7 @@ export function SalesOrdersFollowupPage() {
           search,
           status,
           branch,
-          completed: completedView,
+          completed: false,
           page: targetPage,
           pageSize: 25,
         })}`,
@@ -85,17 +82,13 @@ export function SalesOrdersFollowupPage() {
   useEffect(() => {
     setPage(1);
     void load(1);
-  }, [search, status, branch, completedView]);
+  }, [search, status, branch]);
 
   const branches = useMemo(() => {
     const values = new Map<string, string>();
-    meta.locations.forEach((location) => {
-      values.set(location.code, location.name);
-      if (location.branch_code && !values.has(location.branch_code)) values.set(location.branch_code, location.name);
-    });
     payload?.branches.forEach((item) => values.set(item.code, item.name));
     return [...values.entries()].map(([code, name]) => ({ code, name }));
-  }, [meta.locations, payload?.branches]);
+  }, [payload?.branches]);
 
   const summary = payload?.summary || {
     total: 0,
@@ -117,14 +110,6 @@ export function SalesOrdersFollowupPage() {
 
   return (
     <div className="module-page operations-page sales-orders-followup-page">
-      <header className="sales-orders-followup-heading">
-        <div className="sales-orders-followup-title-icon"><ClipboardText size={27} weight="duotone" /></div>
-        <div>
-          <h1>متابعة طلبات البيع</h1>
-          <p>متابعة حالة طلبات البيع المرتبطة بالتراكينج والموافقات</p>
-        </div>
-      </header>
-
       {error ? <div className="operations-alert error"><WarningCircle size={18} />{error}</div> : null}
 
       <section className="sales-orders-followup-summary" aria-label="ملخص متابعة طلبات البيع">
@@ -136,10 +121,6 @@ export function SalesOrdersFollowupPage() {
       </section>
 
       <section className="panel sales-orders-followup-panel">
-        <div className="sales-orders-followup-tabs" role="tablist" aria-label="حالة متابعة طلبات البيع">
-          <button type="button" className={!completedView ? "active" : ""} onClick={() => setCompletedView(false)}>الطلبات غير المكتملة</button>
-          <button type="button" className={completedView ? "active" : ""} onClick={() => setCompletedView(true)}>الطلبات المكتملة</button>
-        </div>
         <form className="sales-orders-followup-toolbar" onSubmit={submitSearch}>
           <label className="sales-orders-followup-search">
             <MagnifyingGlass size={19} />

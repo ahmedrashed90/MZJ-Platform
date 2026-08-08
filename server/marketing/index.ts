@@ -900,6 +900,11 @@ type EntityCreativeBudgetInput = {
   platformAmounts?: Array<{ platformId?: string; amount?: number }>;
 };
 
+type CampaignBudgetInput = EntityCreativeBudgetInput & {
+  creativeIds?: string[];
+  creativeId?: string;
+};
+
 function creativeTaskFlowSnapshot(value: any) {
   return JSON.stringify(dbJson({
     creativeTypeId: clean(value?.creativeTypeId || value?.creative_type_id),
@@ -1001,6 +1006,121 @@ async function replaceCreativeBudgets(tx: any, campaignId: string, creativeId: s
     `;
     await tx`insert into marketing.budget_item_creatives(budget_item_id,creative_id) values(${created.id}::uuid,${creativeId}::uuid) on conflict do nothing`;
   }
+}
+
+async function saveCampaignBudgets(
+  sql: ReturnType<typeof getSql>,
+  body: Record<string, any>,
+  user: SessionUser,
+) {
+  if (!hasPermission(user, "marketing.campaign.edit")) throw new Error("لا توجد صلاحية لتعديل ميزانية الحملة");
+  const campaignId = clean(body.campaignId || body.id);
+  if (!campaignId) throw new Error("رقم الحملة مطلوب");
+  await assertMarketingEntityAccess(sql, user, "campaign", campaignId);
+
+  const rawBudgets = arrayValue<CampaignBudgetInput>(body.budgets);
+  if (rawBudgets.length > 100) throw new Error("عدد بنود الميزانية يتجاوز الحد المسموح");
+
+  const budgets = rawBudgets.map((budget, index) => {
+    const creativeIds = [...new Set(
+      (arrayValue<string>(budget.creativeIds).length
+        ? arrayValue<string>(budget.creativeIds)
+        : [clean(budget.creativeId)].filter(Boolean))
+        .map(clean)
+        .filter(Boolean),
+    )];
+    const amountMap = new Map<string, number>();
+    for (const part of arrayValue(budget.platformAmounts)) {
+      const platformId = clean(part?.platformId);
+      if (!platformId) continue;
+      amountMap.set(platformId, Math.max(0, numberValue(part?.amount)));
+    }
+    const platformAmounts = [...amountMap.entries()].map(([platformId, amount]) => ({ platformId, amount }));
+    const funnelId = clean(budget.funnelId);
+    if (!funnelId) throw new Error(`اختر Funnel داخل بند الميزانية ${index + 1}`);
+    if (!creativeIds.length) throw new Error(`اختر كرييتيفًا واحدًا على الأقل داخل بند الميزانية ${index + 1}`);
+    if (!platformAmounts.length) throw new Error(`حدد منصة واحدة على الأقل داخل بند الميزانية ${index + 1}`);
+    return {
+      funnelId,
+      creativeIds,
+      adsCount: Math.max(1, numberValue(budget.adsCount, 1)),
+      contentGoal: clean(budget.contentGoal),
+      expectedGoal: clean(budget.expectedGoal),
+      platformAmounts,
+      total: platformAmounts.reduce((sum, part) => sum + part.amount, 0),
+    };
+  });
+
+  return sql.begin(async (tx) => {
+    const [campaign] = await tx<any[]>`
+      select id::text,name
+      from marketing.campaigns
+      where id=${campaignId}::uuid and is_deleted=false
+      for update
+    `;
+    if (!campaign) throw new Error("الحملة غير موجودة");
+
+    const funnelIds = [...new Set(budgets.map((item) => item.funnelId))];
+    if (funnelIds.length) {
+      const validFunnels = await tx<any[]>`
+        select id::text from marketing.funnels
+        where id in ${tx(funnelIds)} and active=true
+      `;
+      if (validFunnels.length !== funnelIds.length) throw new Error("يوجد Funnel غير متاح داخل الميزانية");
+    }
+
+    const creativeIds = [...new Set(budgets.flatMap((item) => item.creativeIds))];
+    if (creativeIds.length) {
+      const validCreatives = await tx<any[]>`
+        select id::text from marketing.creatives
+        where campaign_id=${campaignId}::uuid and id in ${tx(creativeIds)}
+      `;
+      if (validCreatives.length !== creativeIds.length) throw new Error("يوجد كرييتيف غير تابع لهذه الحملة داخل الميزانية");
+    }
+
+    const platformIds = [...new Set(budgets.flatMap((item) => item.platformAmounts.map((part) => part.platformId)))];
+    if (platformIds.length) {
+      const validPlatforms = await tx<any[]>`
+        select id::text from marketing.platforms
+        where id in ${tx(platformIds)} and is_active=true
+      `;
+      if (validPlatforms.length !== platformIds.length) throw new Error("يوجد منصة غير متاحة داخل الميزانية");
+    }
+
+    await tx`delete from marketing.budget_items where campaign_id=${campaignId}::uuid`;
+    for (const budget of budgets) {
+      const [created] = await tx<any[]>`
+        insert into marketing.budget_items(campaign_id,funnel_id,creative_id,ads_count,content_goal,expected_goal,platform_amounts,total)
+        values(
+          ${campaignId}::uuid,
+          ${budget.funnelId}::uuid,
+          ${budget.creativeIds.length === 1 ? tx`${budget.creativeIds[0]}::uuid` : null},
+          ${budget.adsCount},
+          ${budget.contentGoal || null},
+          ${budget.expectedGoal || null},
+          ${tx.json(dbJson(budget.platformAmounts))},
+          ${budget.total}
+        )
+        returning id::text
+      `;
+      for (const creativeId of budget.creativeIds) {
+        await tx`
+          insert into marketing.budget_item_creatives(budget_item_id,creative_id)
+          values(${created.id}::uuid,${creativeId}::uuid)
+          on conflict do nothing
+        `;
+      }
+    }
+
+    return {
+      ok: true,
+      id: campaignId,
+      campaignId,
+      budgetCount: budgets.length,
+      total: budgets.reduce((sum, item) => sum + item.total, 0),
+      message: budgets.length ? "تم حفظ ميزانية الحملة" : "تم حذف ميزانية الحملة",
+    };
+  });
 }
 
 async function replaceCreativeSchedule(tx: any, input: {
@@ -3159,6 +3279,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
     else if(action==='import_fresh_marketing_bundle')result=await importFreshMarketingBundle(sql,body,user);
     else if(action==='save_entity_creative')result=await saveEntityCreative(sql,body,user);
+    else if(action==='save_campaign_budgets')result=await saveCampaignBudgets(sql,body,user);
     else if(action==='save_department')result=await saveDepartment(sql,body,user);
     else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body);
     else if(action==='save_creative_type')result=await saveCreativeType(sql,body);

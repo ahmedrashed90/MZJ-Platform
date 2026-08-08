@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowSquareOut, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FolderOpen, LinkSimple, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
+import { Archive, ArrowSquareOut, CurrencyCircleDollar, DownloadSimple, Eye, FileArrowUp, FileImage, FilePdf, FileVideo, FolderOpen, LinkSimple, PencilSimple, Plus, Trash, WarningCircle } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFile } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import { EngagementResultDetail } from "../components/EngagementResultDetail";
+import { CampaignBudgetManager } from "../components/CampaignBudgetManager";
 import { EntityCreativeManager } from "../components/EntityCreativeManager";
 import { FreshMarketingImportModal } from "../components/FreshMarketingImportModal";
 import { MARKETING_RESULT_PLATFORMS, marketingResultPlatformLabel } from "../engagementResults";
@@ -71,15 +72,6 @@ function budgetItemTotal(item: any) {
 function budgetCalculatedTotal(item: any) {
   return budgetItemTotal(item);
 }
-
-type BudgetDisplayRow = {
-  key: string;
-  funnel: string;
-  creative: string;
-  platform: string;
-  amount: number;
-};
-
 
 function formatFileSize(value: unknown) {
   const size = Number(value || 0);
@@ -227,11 +219,13 @@ export function MarketingDatabasePage() {
   const canArchive = hasPermission(user, "marketing.campaign.archive");
   const canUploadResults = hasPermission(user, "marketing.file.upload");
   const canEditCampaignLinks = hasPermission(user, "marketing.campaign.edit");
+  const canEditCampaignBudget = hasPermission(user, "marketing.campaign.edit");
   const canEditAgendaLinks = hasPermission(user, "marketing.agenda.edit");
   const canDownloadFiles = hasPermission(user, "marketing.file.download");
   const canFreshImport = hasPermission(user, "marketing.campaign.create") && hasPermission(user, "marketing.agenda.create");
   const [meta, setMeta] = useState<MarketingMeta>(emptyMeta);
   const [creativeManager, setCreativeManager] = useState<{ open: boolean; row: any | null }>({ open: false, row: null });
+  const [budgetManagerOpen, setBudgetManagerOpen] = useState(false);
   const [freshImportOpen, setFreshImportOpen] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
@@ -255,10 +249,10 @@ export function MarketingDatabasePage() {
       .filter((file: any) => activeFileIds.has(String(file.id || "")) || activeGroupIds.has(String(file.final_media_group_id || "")))
       .sort((a: any, b: any) => Number(a.order_index || 0) - Number(b.order_index || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
   }, [detail]);
-  const budgetDisplayRows = useMemo<BudgetDisplayRow[]>(() => {
+  const budgetOverview = useMemo(() => {
     const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
     const creatives = Array.isArray(detail?.creatives) ? detail.creatives : [];
-    return budgetItems.flatMap((item: any, budgetIndex: number) => {
+    return budgetItems.map((item: any, budgetIndex: number) => {
       const ids = budgetCreativeIds(item);
       const fallbackNames = String(item?.creative_names || item?.creative_name || "")
         .split(/\s*،\s*/g)
@@ -270,16 +264,24 @@ export function MarketingDatabasePage() {
             return creative?.name || creative?.creative_type_name || creative?.creative_type || fallbackNames[index] || "كرييتيف";
           })
         : (fallbackNames.length ? fallbackNames : ["كرييتيف غير محدد"]);
-      const platforms = budgetPlatformDetails(item);
-      return platforms.map((part: any, platformIndex: number) => ({
-        key: `${item?.id || budgetIndex}-${part?.platformId || platformIndex}`,
-        funnel: item?.funnel_name || "—",
-        creative: creativeNames.join("، "),
-        platform: part?.platformName || part?.platform_name || "منصة",
+      const platforms = budgetPlatformDetails(item).map((part: any, platformIndex: number) => ({
+        key: `${item?.id || budgetIndex}-${part?.platformId || part?.platform_id || platformIndex}`,
+        id: String(part?.platformId || part?.platform_id || ""),
+        name: part?.platformName || part?.platform_name || meta.platforms.find((platform) => platform.id === String(part?.platformId || part?.platform_id || ""))?.name || "منصة",
         amount: Math.max(0, Number(part?.amount || 0)),
       }));
+      return {
+        key: String(item?.id || `budget-${budgetIndex}`),
+        funnel: item?.funnel_name || "—",
+        creativeNames,
+        adsCount: Math.max(1, Number(item?.ads_count || 1)),
+        contentGoal: String(item?.content_goal || ""),
+        expectedGoal: String(item?.expected_goal || ""),
+        platforms,
+        total: budgetItemTotal(item),
+      };
     });
-  }, [detail]);
+  }, [detail, meta.platforms]);
   const budgetFunnelTotals = useMemo(() => {
     const totals = new Map<string, number>();
     const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
@@ -293,6 +295,8 @@ export function MarketingDatabasePage() {
     const budgetItems = Array.isArray(detail?.budgets) ? detail.budgets : [];
     return budgetItems.reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0);
   }, [detail]);
+  const budgetPlatformCount = useMemo(() => new Set(budgetOverview.flatMap((item) => item.platforms.map((platform) => platform.id || platform.name))).size, [budgetOverview]);
+  const budgetFunnelCount = useMemo(() => new Set(budgetOverview.map((item) => item.funnel).filter((name) => name && name !== "—")).size, [budgetOverview]);
 
   async function load() {
     setLoading(true);
@@ -324,6 +328,8 @@ export function MarketingDatabasePage() {
   }
 
   function closeDetail() {
+    setBudgetManagerOpen(false);
+    setCreativeManager({ open: false, row: null });
     setSelected(null);
     setDetail(null);
     setDetailView("data");
@@ -393,6 +399,20 @@ export function MarketingDatabasePage() {
     setMessage(savedMessage);
     if (selected) await open(selected);
     await load();
+  }
+
+  async function budgetSaved(savedMessage: string) {
+    setMessage(savedMessage);
+    if (selected) await open(selected);
+    await load();
+  }
+
+  function registerFunnel(funnel: MarketingMeta["funnels"][number]) {
+    setMeta((current) => ({
+      ...current,
+      funnels: [...current.funnels.filter((item) => item.id !== funnel.id), funnel]
+        .sort((left, right) => left.name.localeCompare(right.name, "ar")),
+    }));
   }
 
   function printDetail() {
@@ -618,7 +638,7 @@ export function MarketingDatabasePage() {
             </div>
           </section>
 
-          <div className="marketing-database-two-column">
+          <div className="marketing-database-two-column marketing-database-schedule-budget">
             <section className="marketing-task-section marketing-database-section">
               <h3>عرض جدول النشر</h3>
               {scheduleRows.length ? <div className="marketing-table-wrap marketing-schedule-table-wrap">
@@ -633,20 +653,47 @@ export function MarketingDatabasePage() {
               </div> : <div className="marketing-database-empty">لا يوجد جدول نشر.</div>}
             </section>
 
-            {selected?.source_type === "campaign" ? <section className="marketing-task-section marketing-database-section marketing-budget-detail-section">
-              <div className="marketing-database-section-heading"><div><h3>عرض الميزانية</h3></div><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
-              {budgetDisplayRows.length ? <div className="marketing-table-wrap marketing-budget-display-table">
-                <table>
-                  <thead><tr><th>Funnel</th><th>الكرييتيف</th><th>المنصة</th><th>قيمة المنصة</th></tr></thead>
-                  <tbody>
-                    {budgetDisplayRows.map((row) => <tr key={row.key}><td>{row.funnel}</td><td>{row.creative}</td><td>{row.platform}</td><td><strong>{row.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></td></tr>)}
-                  </tbody>
-                  <tfoot>
-                    {budgetFunnelTotals.map((item) => <tr key={item.funnel} className="marketing-budget-funnel-total"><td colSpan={3}>إجمالي {item.funnel}</td><td>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</td></tr>)}
-                    <tr className="marketing-budget-grand-total"><td colSpan={3}>إجمالي الميزانية كاملة</td><td>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</td></tr>
-                  </tfoot>
-                </table>
-              </div> : <div className="marketing-database-empty">لا توجد ميزانية.</div>}
+            {selected?.source_type === "campaign" ? <section className="marketing-task-section marketing-database-section marketing-budget-detail-section marketing-budget-overview">
+              <div className="marketing-budget-overview-head">
+                <span className="marketing-budget-overview-icon"><CurrencyCircleDollar size={27} weight="duotone" /></span>
+                <div className="marketing-budget-overview-title"><h3>عرض الميزانية</h3><p>الحسبة تعتمد على قيمة كل بند Funnel مرة واحدة، ولا تتضاعف بعدد الكرييتيفات أو المنصات.</p></div>
+                <div className="marketing-budget-overview-actions">
+                  <span><small>إجمالي الميزانية كاملة</small><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>
+                  {canEditCampaignBudget ? <button type="button" className="marketing-budget-manage-button" onClick={() => setBudgetManagerOpen(true)}><PencilSimple size={17} />{budgetOverview.length ? "تعديل الميزانية" : "إنشاء الميزانية"}</button> : null}
+                </div>
+              </div>
+
+              <div className="marketing-budget-overview-summary">
+                <article><span>بنود الميزانية</span><strong>{budgetOverview.length.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+                <article><span>أنواع Funnel</span><strong>{budgetFunnelCount.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+                <article><span>المنصات المستخدمة</span><strong>{budgetPlatformCount.toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+              </div>
+
+              {budgetOverview.length ? <div className="marketing-budget-overview-list">
+                {budgetOverview.map((item, index) => <article className="marketing-budget-overview-card" key={item.key}>
+                  <header>
+                    <div><span>بند الميزانية {index + 1}</span><strong>{item.funnel}</strong></div>
+                    <b>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</b>
+                  </header>
+                  <div className="marketing-budget-overview-creatives">
+                    <span>الكرييتيف</span>
+                    <div>{item.creativeNames.map((name, nameIndex) => <b key={`${name}-${nameIndex}`}>{name}</b>)}</div>
+                  </div>
+                  <div className="marketing-budget-overview-metrics">
+                    <span><small>عدد الإعلانات</small><strong>{item.adsCount.toLocaleString("ar-SA-u-nu-latn")}</strong></span>
+                    <span><small>هدف المحتوى</small><strong>{item.contentGoal || "—"}</strong></span>
+                    <span><small>الهدف المتوقع</small><strong>{item.expectedGoal || "—"}</strong></span>
+                  </div>
+                  <div className="marketing-budget-overview-platforms">
+                    {item.platforms.map((platform) => <span key={platform.key}><small>{platform.name}</small><strong>{platform.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}
+                  </div>
+                </article>)}
+              </div> : <div className="marketing-budget-overview-empty"><CurrencyCircleDollar size={34} weight="duotone" /><div><strong>لم يتم إنشاء ميزانية للحملة</strong><span>استخدم زر «إنشاء الميزانية» لإضافة بنود Funnel وربطها بالكرييتيفات والمنصات.</span></div></div>}
+
+              {budgetOverview.length ? <footer className="marketing-budget-overview-totals">
+                <div>{budgetFunnelTotals.map((item) => <span key={item.funnel}><small>إجمالي {item.funnel}</small><strong>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></span>)}</div>
+                <b><small>الإجمالي النهائي</small><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></b>
+              </footer> : null}
             </section> : null}
           </div>
 
@@ -720,11 +767,19 @@ export function MarketingDatabasePage() {
         creativeRow={creativeManager.row}
         onClose={() => setCreativeManager({ open: false, row: null })}
         onSaved={creativeSaved}
-        onFunnelCreated={(funnel) => setMeta((current) => ({
-          ...current,
-          funnels: [...current.funnels.filter((item) => item.id !== funnel.id), funnel]
-            .sort((left, right) => left.name.localeCompare(right.name, "ar")),
-        }))}
+        onFunnelCreated={registerFunnel}
+      /> : null}
+
+      {selected?.source_type === "campaign" && detail ? <CampaignBudgetManager
+        open={budgetManagerOpen}
+        campaignId={selected.id}
+        campaignName={detail.entity?.name || selected.name}
+        budgets={Array.isArray(detail.budgets) ? detail.budgets : []}
+        creatives={Array.isArray(detail.creatives) ? detail.creatives : []}
+        meta={meta}
+        onClose={() => setBudgetManagerOpen(false)}
+        onSaved={budgetSaved}
+        onFunnelCreated={registerFunnel}
       /> : null}
     </MarketingPage>
   );

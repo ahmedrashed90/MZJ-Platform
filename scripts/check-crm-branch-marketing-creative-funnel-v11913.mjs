@@ -29,7 +29,7 @@ const taskSnapshotStart = marketingServer.indexOf("function creativeTaskFlowSnap
 const taskSnapshotEnd = marketingServer.indexOf("async function replaceCreativeBudgets", taskSnapshotStart);
 const taskSnapshot = marketingServer.slice(taskSnapshotStart, taskSnapshotEnd);
 
-check("release version is 1.19.13", packageJson.version === "1.19.13");
+check("release retains the v1.19.13 canonical fixes", ["1.19.13", "1.19.14"].includes(packageJson.version));
 
 check("CRM sold metric remains canonical sales transactions", salesFacts.includes("from crm.sales_transactions st"));
 check("missing sale branch falls back to the representative primary CRM branch", reports.includes("coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))"));
@@ -55,7 +55,7 @@ check("name-only edits preserve unchanged publishing schedule", marketingServer.
 
 check("campaign budget total is no longer multiplied by linked creatives", !campaign.includes("platformTotal * creativeCount") && campaign.includes("return item.platformAmounts.reduce"));
 check("database grand total sums each stored budget item once", database.includes("budgetItems.reduce((sum: number, item: any) => sum + budgetItemTotal(item), 0)") && !database.includes("budgetPerCreativeTotal"));
-check("database budget display does not cross-product creatives and platforms", database.includes("return platforms.map") && !database.includes("creativeEntries.flatMap"));
+check("database budget display does not cross-product creatives and platforms", database.includes("marketing-budget-overview") && database.includes("budgetOverview") && !database.includes("creativeEntries.flatMap"));
 
 check("new Funnel can be added inline in creation and edit", funnel.includes('action: "create_funnel"') && campaign.includes("<FunnelSelect") && manager.includes("<FunnelSelect"));
 check("adding a Funnel during creative edit does not reset the editor", !manager.includes("[open, creativeRow, detail, meta.funnels]") && manager.includes("setFunnels(meta.funnels);") && manager.includes("}, [meta.funnels]);"));

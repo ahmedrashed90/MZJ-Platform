@@ -1613,6 +1613,8 @@ async function listSalesOrderFollowup(
       vehicle_match.location_code,
       vehicle_match.location_name,
       vehicle_match.location_branch_code,
+      effective_branch.code as effective_branch_code,
+      effective_branch.name as effective_branch_name,
       vehicle_match.status_code as operations_status_code,
       coalesce(o.total_incl_vat,0)::numeric(14,2) as total_incl_vat,
       coalesce(o.advance_paid,0)::numeric(14,2) as advance_paid,
@@ -1653,7 +1655,7 @@ async function listSalesOrderFollowup(
       limit 1
     ) vehicle_match on true
     left join lateral (
-      select so.erp_user_id,so.platform_user_id::text
+      select so.erp_user_id,so.platform_user_id::text,so.platform_branch_code,so.platform_branch_name,so.erp_branch
       from integrations.erpnext_sales_orders so
       where coalesce(so.is_cancelled,false)=false
         and (
@@ -1663,6 +1665,57 @@ async function listSalesOrderFollowup(
       order by case when so.tracking_order_id=o.id then 0 else 1 end,so.updated_at desc
       limit 1
     ) erp_order on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true
+        and (
+          lower(trim(b.code)) in (
+            lower(trim(coalesce(erp_order.platform_branch_code,''))),
+            lower(trim(coalesce(vehicle_match.location_branch_code,''))),
+            lower(trim(coalesce(vehicle_match.location_code,''))),
+            lower(trim(coalesce(o.branch,'')))
+          )
+          or lower(trim(b.name)) in (
+            lower(trim(coalesce(erp_order.platform_branch_name,''))),
+            lower(trim(coalesce(erp_order.erp_branch,''))),
+            lower(trim(coalesce(vehicle_match.location_name,''))),
+            lower(trim(coalesce(o.branch,'')))
+          )
+        )
+      order by
+        case
+          when lower(trim(b.code))=lower(trim(coalesce(erp_order.platform_branch_code,''))) then 0
+          when lower(trim(b.code))=lower(trim(coalesce(vehicle_match.location_branch_code,''))) then 1
+          when lower(trim(b.code))=lower(trim(coalesce(o.branch,''))) then 2
+          when lower(trim(b.code))=lower(trim(coalesce(vehicle_match.location_code,''))) then 3
+          when lower(trim(b.name))=lower(trim(coalesce(erp_order.platform_branch_name,''))) then 4
+          when lower(trim(b.name))=lower(trim(coalesce(erp_order.erp_branch,''))) then 5
+          when lower(trim(b.name))=lower(trim(coalesce(vehicle_match.location_name,''))) then 6
+          when lower(trim(b.name))=lower(trim(coalesce(o.branch,''))) then 7
+          else 8
+        end,
+        b.sort_order,b.name
+      limit 1
+    ) branch_match on true
+    left join lateral (
+      select
+        coalesce(
+          nullif(trim(branch_match.code),''),
+          nullif(trim(erp_order.platform_branch_code),''),
+          nullif(trim(vehicle_match.location_branch_code),''),
+          nullif(trim(vehicle_match.location_code),''),
+          nullif(trim(o.branch),'')
+        ) as code,
+        coalesce(
+          nullif(trim(branch_match.name),''),
+          nullif(trim(erp_order.platform_branch_name),''),
+          nullif(trim(o.branch),''),
+          nullif(trim(vehicle_match.location_name),''),
+          nullif(trim(vehicle_match.location_branch_code),''),
+          nullif(trim(vehicle_match.location_code),'')
+        ) as name
+    ) effective_branch on true
     left join lateral (
       select
         bool_or(vs.status='completed') filter (where st.sort_order=3) as stage_3_completed,
@@ -1683,9 +1736,7 @@ async function listSalesOrderFollowup(
       and ((${completedOnly}=true and o.sales_followup_completed_at is not null) or (${completedOnly}=false and o.sales_followup_completed_at is null))
       and (
         ${unrestricted}=true
-        or coalesce(o.branch,'') in ${sql(branchCodes)}
-        or coalesce(vehicle_match.location_code,'') in ${sql(branchCodes)}
-        or coalesce(vehicle_match.location_branch_code,'') in ${sql(branchCodes)}
+        or coalesce(effective_branch.code,'') in ${sql(branchCodes)}
       )
       and (${unrestrictedStatuses}=true or vehicle_match.id is null or vehicle_match.status_code in ${sql(allowedStatuses)})
       and (
@@ -1696,9 +1747,7 @@ async function listSalesOrderFollowup(
       )
       and (
         ${branch}=''
-        or coalesce(o.branch,'')=${branch}
-        or coalesce(vehicle_match.location_code,'')=${branch}
-        or coalesce(vehicle_match.location_branch_code,'')=${branch}
+        or coalesce(effective_branch.code,'')=${branch}
       )
   `;
 
@@ -1721,7 +1770,7 @@ async function listSalesOrderFollowup(
                   `
                     : sql`true`;
 
-  const [summaryRows, countRows, rows] = await Promise.all([
+  const [summaryRows, countRows, rows, branchRows] = await Promise.all([
     sql<any[]>`
       with scoped as (${scopedRows})
       select
@@ -1740,15 +1789,38 @@ async function listSalesOrderFollowup(
       order by updated_at desc,sales_order_no desc,tracking_vehicle_id
       limit ${pageSize} offset ${offset}
     `,
+    sql<any[]>`
+      select code,name
+      from (
+        select b.code,b.name,b.sort_order
+        from core.branches b
+        where b.is_active=true
+          and (${unrestricted}=true or b.code in ${sql(branchCodes)})
+        union
+        select distinct
+          coalesce(nullif(trim(l.branch_code),''),l.code) as code,
+          coalesce(b.name,l.name) as name,
+          coalesce(b.sort_order,l.sort_order,9999) as sort_order
+        from operations.locations l
+        left join core.branches b on b.code=l.branch_code and b.is_active=true
+        where l.is_active=true
+          and (
+            ${unrestricted}=true
+            or l.code in ${sql(branchCodes)}
+            or coalesce(l.branch_code,'') in ${sql(branchCodes)}
+          )
+      ) configured_branches
+      where nullif(trim(code),'') is not null
+      order by sort_order,name
+    `,
   ]);
 
   const summary = summaryRows[0] || {};
   const total = Number(countRows[0]?.total || 0);
   const branchMap = new Map<string, string>();
-  for (const row of rows) {
-    const code = clean(row.location_code || row.location_branch_code || row.branch);
-    const name = clean(row.location_name || row.branch);
-    if (code && !branchMap.has(code)) branchMap.set(code, name || code);
+  for (const row of branchRows) {
+    const code = clean(row.code);
+    if (code && !branchMap.has(code)) branchMap.set(code, clean(row.name) || code);
   }
 
   return {
