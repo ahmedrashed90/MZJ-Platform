@@ -2130,6 +2130,34 @@
 @media (max-width: 1260px) {
   .marketing-dashboard-workflow { grid-template-columns: repeat(4,310px); }
 }
+@media (max-width: 820px) {
+  .marketing-dashboard-workflow {
+    width:100%;
+    min-width:0;
+    grid-template-columns:1fr;
+    gap:12px;
+    overflow-x:visible;
+    padding-bottom:0;
+  }
+  .marketing-dashboard-column { width:100%; min-width:0; min-height:0; overflow:hidden; border-radius:15px; }
+  .marketing-dashboard-column > header { min-height:auto; padding:13px 12px; }
+  .marketing-dashboard-column > header > div { min-width:0; }
+  .marketing-dashboard-column > header h2 { font-size:14px; }
+  .marketing-dashboard-column > header p { font-size:9px; line-height:1.6; }
+  .marketing-kanban-body { padding:9px; }
+  .marketing-dashboard-department,
+  .marketing-dashboard-entity,
+  .marketing-dashboard-publishing-card { width:100%; min-width:0; }
+  .marketing-dashboard-department-head { padding:8px 9px; }
+  .marketing-dashboard-entity-head { grid-template-columns:minmax(0,1fr) auto; }
+  .marketing-dashboard-entity-stats { grid-column:1 / -1; justify-content:flex-start; flex-wrap:wrap; white-space:normal; }
+  .marketing-dashboard-publish-transfer { align-items:stretch; flex-direction:column; }
+  .marketing-dashboard-publish-transfer button { width:100%; }
+  .marketing-dashboard-publishing-card { grid-template-columns:34px minmax(0,1fr); }
+  .marketing-dashboard-publishing-card > span { grid-column:1 / -1; width:max-content; }
+  .marketing-dashboard-publishing-card > b,
+  .marketing-dashboard-publishing-dates { grid-column:1 / -1; }
+}
 @media (max-width: 620px) {
   .marketing-dashboard-task-top { flex-direction: column-reverse; align-items: stretch; }
   .marketing-dashboard-task-badge { max-width: 100%; width: fit-content; }

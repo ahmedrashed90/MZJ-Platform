@@ -146,7 +146,8 @@ export function Sidebar() {
 
   return <>
     <button type="button" className="mobile-menu-trigger" onClick={() => setMobileOpen(true)} aria-label="فتح قائمة المنصة" aria-expanded={mobileOpen}>
-      <List size={24} weight="bold" />
+      <List size={21} weight="bold" />
+      <span>القائمة</span>
     </button>
     <button type="button" className={`mobile-sidebar-backdrop ${mobileOpen ? "is-open" : ""}`} onClick={closeMobile} aria-label="إغلاق القائمة" />
     <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
