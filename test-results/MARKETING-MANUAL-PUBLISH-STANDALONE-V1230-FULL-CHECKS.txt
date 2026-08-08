@@ -1,0 +1,950 @@
+[PASS] node scripts/check-marketing-manual-publish-standalone-v1230.mjs
+PASS: manual publish no longer asks for a campaign or agenda
+PASS: manual publish creative type comes from the active system creative-type list
+PASS: manual publish still selects files directly from the device
+PASS: manual publishing remains multi-image aware
+PASS: server no longer loads campaign or agenda sources for the manual form
+PASS: manual entry is stored as a standalone source
+PASS: standalone manual creative has no campaign or agenda foreign key
+PASS: publish schedule and published posts accept manual source type
+PASS: manual rows remain visible in publish preparation
+PASS: standalone manual access is checked through its task
+PASS: standalone manual records do not recalculate campaign or agenda progress
+PASS: manual and automatic publishing keep the same schedule persistence service
+PASS: Instagram image posts still support carousel publishing
+PASS: Instagram stories still publish selected images in order
+Marketing standalone manual publish checks: 14/14 passed
+
+
+[PASS] node scripts/check-instagram-resumable-publish-v1228.mjs
+PASS: Instagram publishing is centralized in one service
+PASS: the old direct video_url Reel flow is removed
+PASS: video containers start a resumable upload session
+PASS: Zoho/R2 video bytes are uploaded directly to Meta
+PASS: container readiness is checked before media_publish
+PASS: processing ERROR and EXPIRED states stop publishing
+PASS: Media ID race is retried only after readiness
+PASS: Instagram Stories can publish ordered batches of images
+PASS: Facebook Stories can publish ordered batches of images
+PASS: Instagram carousels remain ordered and capped at ten images
+Instagram resumable publishing checks: 10/10 passed
+
+
+[PASS] node scripts/test-instagram-resumable-publisher-v1228.mjs
+Instagram resumable publisher behavior tests: 2/2 passed
+
+
+[PASS] node scripts/check-marketing-fresh-import-v1195.mjs
+PASS: import action reuses canonical campaign creator
+PASS: import action reuses canonical agenda creator
+PASS: one transaction and idempotent migration key
+PASS: old campaign code is preserved only for import
+PASS: database page exposes fresh import
+PASS: modal explicitly starts tasks from zero
+PASS: resolver maps current-system references
+PASS: legacy emails are replaced through explicit user mappings
+PASS: resolver blocks unresolved task links
+PASS: fresh import styling exists
+PASS: bundle format and version are correct
+PASS: bundle has expected entities
+PASS: bundle includes the four confirmed new-system user mappings
+PASS: bundle carries setup only
+PASS: every Task Template has an execution link
+Marketing fresh import v1.19.5 checks: 15/15 passed
+
+
+[PASS] node scripts/check-marketing-creative-ui-multiselect-reports-v1225.mjs
+PASS: reusable multi-creative picker
+PASS: campaign budget selects multiple creatives
+PASS: campaign schedule selects multiple creatives per day
+PASS: normalized budget-to-creative relation
+PASS: campaign creation persists all budget creative links
+PASS: campaign schedule expands all selected creatives
+PASS: database detail returns all budget creative names
+PASS: agenda platform chooser is professional
+PASS: database add creative action is redesigned
+PASS: archive actions are redesigned
+PASS: creative editor uses clean two-panel workspace
+PASS: selected users are visibly confirmed
+PASS: xlsx builder is reusable and sanitizes invalid XML
+PASS: xlsx package contains properties and worksheet dimension
+PASS: broken schedule and review Excel actions are removed
+PASS: responsive styles cover all new controls
+Marketing creative UI, multiselect and reports v1.22.5 checks: 16/16 passed
+
+
+[PASS] node scripts/check-marketing-database-report-redesign-v1224.mjs
+PASS: dedicated printable report window
+PASS: PDF includes entity data tasks and results
+PASS: campaign budget is included in PDF
+PASS: creatives use compact table
+PASS: real xlsx MIME and extension
+PASS: xlsx is RTL with frozen header
+PASS: spreadsheet values are formula-safe
+PASS: schedule Excel action is intentionally removed
+PASS: review Excel action is intentionally removed
+PASS: creative editor has professional hero
+PASS: creative editor actions are in modal footer
+PASS: responsive compact table and modal styling
+Marketing database reports and creative UI v1.22.4 checks: 12/12 passed
+
+
+[PASS] node scripts/check-marketing-entity-creative-management-v1223.mjs
+PASS - backend action exists
+PASS - campaign edit permission
+PASS - agenda edit permission
+PASS - entity scope validation
+PASS - creative insert
+PASS - creative update
+PASS - task flow creation
+PASS - old active tasks preserved as revisions
+PASS - latest template revision selected per writer
+PASS - approved template returns under review
+PASS - execution data waits for approval
+PASS - campaign budget replacement
+PASS - campaign budget required server-side
+PASS - budget platform required server-side
+PASS - schedule replacement
+PASS - schedule required server-side
+PASS - schedule details required server-side
+PASS - published creative protected
+PASS - started execution protected
+PASS - database add creative button
+PASS - database edit creative button
+PASS - manager campaign flow
+PASS - manager agenda flow
+PASS - budget required for campaign
+PASS - schedule required
+PASS - revision notice
+PASS - car selector modal stays above creative editor
+PASS - responsive modal styling
+PASS - creative table styling
+
+29/29 checks passed
+
+
+[PASS] node scripts/check-marketing-engagement-professional-v1221.mjs
+PASS published posts support archive and soft delete
+PASS engagement rows support archive and soft delete
+PASS Test experiment cleanup runs once after backfill
+PASS existing CRM source is repaired only for customers created by engagement
+PASS engagement API excludes deleted rows
+PASS post and engagement actions implemented
+PASS reused CRM customers cannot be removed
+PASS management action wired into marketing API
+PASS customer deletion has CRM permission guard
+PASS central permission map includes management action
+PASS page has professional shared filters
+PASS published posts expose archive restore and delete
+PASS engagements expose archive restore delete and customer delete
+PASS long sync errors are collapsed
+PASS exact source labels shown in UI
+PASS professional responsive styling exists
+
+16/16 checks passed
+
+
+[PASS] node scripts/check-marketing-engagement-subscription-details-v1219.mjs
+PASS partial subscription response remains HTTP-success payload
+PASS direct subscribed_apps calls are verified with GET
+PASS direct Instagram Login uses graph.instagram.com
+PASS Facebook subscription remains page feed on graph.facebook.com
+PASS Facebook Login Instagram avoids invalid IG subscribed_apps POST
+PASS Facebook Login Instagram performs read-only linked Page verification
+PASS Meta errors preserve code subcode and trace
+PASS missing token permissions reported explicitly
+PASS subscription result persisted per platform
+PASS stored subscription result returned on page load
+PASS UI keeps per-platform results
+PASS UI displays original Meta diagnostics
+PASS partial result is shown as error
+PASS subscription details styling exists
+
+14/14 checks passed
+
+
+[PASS] node scripts/check-marketing-engagement-comments-crm-v1218.mjs
+PASS published posts schema
+PASS general engagement schema is idempotent
+PASS legacy comments migrate into unified engagement table
+PASS daily engagement snapshots
+PASS CRM exact Facebook post source
+PASS CRM exact Instagram post source
+PASS successful publish registers provider post
+PASS engagement report API
+PASS engagement refresh action
+PASS webhook subscription action
+PASS Facebook comments reactions and shares are normalized
+PASS Instagram comments are normalized independently
+PASS direct and changes webhook payloads supported
+PASS own account interactions excluded
+PASS engagement identity dedupe
+PASS cash CRM distribution reused
+PASS new CRM status comes from lifecycle
+PASS exact CRM source selected by event platform
+PASS campaign name copied to CRM
+PASS webhook signature HMAC
+PASS raw webhook body parser disabled
+PASS dedicated webhook rewrite
+PASS required Meta comment permissions
+PASS central API permissions mapped
+PASS engagement page uses unified event list
+PASS new engagement navigation
+PASS new engagement route
+
+27/27 checks passed
+
+
+[PASS] node scripts/check-zoho-download-scope-v1217.mjs
+PASS: Zoho OAuth requests binary download permission
+PASS: Publishing uses the file metadata download URL
+PASS: Publishing follows Zoho download redirects
+PASS: Publishing validates actual image signatures
+PASS: Facebook still receives image bytes through multipart source
+Zoho download scope checks: 5/5 passed
+
+
+[PASS] node scripts/check-facebook-zoho-binary-publish-v1216.mjs
+PASS: Zoho image content is downloaded from the Saudi binary download endpoint
+PASS: Facebook photo upload uses multipart source instead of a Zoho URL
+PASS: single Facebook image is uploaded as binary
+PASS: Facebook carousel uploads every ordered image as binary
+PASS: Facebook image branches no longer send the private Zoho URL
+PASS: Instagram publishing flow remains separate
+Facebook Zoho binary publish checks: 6/6 passed
+
+
+[PASS] node scripts/check-zoho-final-upload-raw-folders-v1195.mjs
+PASS Zoho connection schema
+PASS Ordered final media schema
+PASS Platform proxy upload sessions are database-backed
+PASS OAuth start and callback
+PASS Zoho route registered before generic integrations
+PASS Final upload prepares ordered files
+PASS Zoho filenames are collision-safe
+PASS Browser uploads through the platform API
+PASS Upload progress, speed and ETA are reported
+PASS Upload can be cancelled
+PASS Task details contain a visible upload panel
+PASS Multiple images keep their selection order
+PASS Old Zoho Worker and R2 upload path removed
+PASS Carousel server records remain ordered
+PASS Existing final button condition preserved
+PASS Campaign and agenda final files supported
+PASS RAW token compatibility retained
+PASS Zoho environment documented without gateway
+PASS Zoho connection UI
+PASS Publish prep recognizes media groups
+PASS Every selected platform requires a post type
+PASS Server blocks incomplete publishing
+
+
+[PASS] node scripts/check-marketing-dashboard-completion-publish-layout-v1214.mjs
+PASS: complete button is outside task details
+PASS: complete button is limited to received execution tasks at 100 percent
+PASS: publish prep is driven by every live execution task and isolated manual publish entry
+PASS: publish prep save accepts execution tasks from every live campaign and agenda
+PASS: publish prep distinguishes automatic task preparation from isolated manual publishing
+PASS: automatic publish prep save remains linked to the resolved execution task through the shared schedule service
+PASS: publish prep can create publishing rows for an execution task that has no prior schedule
+PASS: dashboard layout uses serialized saves
+PASS: dashboard renders widgets in the saved order instead of relying on CSS order
+PASS: dashboard layout has a per-user refresh-safe recovery
+PASS: dashboard layout API returns persisted timestamp
+PASS: new dashboard and publish controls have native styling
+Marketing completion / publish prep / dashboard layout checks: 12/12 passed
+
+
+[PASS] node scripts/check-marketing-publish-prep-errors-files-v1215.mjs
+PASS: publish prep is a vertical list instead of a two-column card board
+PASS: manual publish is not blocked by a future date
+PASS: each task has a direct publish-now action
+PASS: publish errors are shown with platform and post type
+PASS: failed schedules persist their exact backend error
+PASS: previous publish errors are returned from latest publish logs
+PASS: final files open from publish prep
+PASS: database only shows current ready final files
+PASS: database final file controls use the clean file-row design
+Marketing publish prep / errors / files checks: 9/9 passed
+
+
+[PASS] node scripts/check-unified-dashboard-task-completion-template-v1213.mjs
+PASS: main and operations widgets share one persisted order
+PASS: all dashboard widgets render in one sortable grid
+PASS: cross-group drag uses the same dragged widget and drop handler
+PASS: dashboard order survives refresh through PostgreSQL and per-user local recovery
+PASS: dashboard reset restores one unified default order
+PASS: unified dashboard grid has shared responsive styling
+PASS: 100 percent marks a task ready instead of auto completing
+PASS: task completion is an explicit backend action
+PASS: completed tasks retain actor and completion date
+PASS: unapproval clears completion state
+PASS: execution task shows the completion button on its dashboard card only at 100 percent
+PASS: marketing dashboard exposes completed tasks list
+PASS: completed list shows completion actor and date
+PASS: one shared Task Template component is used for saved and approved views
+PASS: upload preview uses the exact shared Task Template presentation
+PASS: legacy table preview markup and CSS are removed
+PASS: Task Template is structured into context, fields and scenes
+PASS: preview validation is embedded inside the same presentation shell
+PASS: Task Template review remains inline on the shared design
+PASS: professional template and completion styling exists
+Unified dashboard / task completion / Task Template checks: 20/20 passed
+
+
+[PASS] node scripts/check-marketing-platform-connections-rebuild-v1212.mjs
+PASS - UI rebuilt for Meta, TikTok and YouTube
+PASS - Manual token form removed
+PASS - OAuth popup and callback message flow exist
+PASS - Meta page selection is a first-class flow
+PASS - Connection validation and real disconnect actions exist
+PASS - Responsive rebuilt styles exist
+PASS - Dedicated API is routed
+PASS - API has view/manage permission boundaries
+PASS - Callback performs authenticated permission check
+PASS - API supports all clean actions
+PASS - Tokens use AES-256-GCM with mandatory 32+ char key
+PASS - OAuth state is hashed, expiring and user-bound
+PASS - Meta reconnect draft preserves current active connection
+PASS - No token is returned by public connection mapper
+PASS - Provider scopes are verified
+PASS - Meta uses Facebook Login for Business configuration
+PASS - Meta configuration ID is mandatory
+PASS - Meta, TikTok and Google revocation exists
+PASS - TikTok and YouTube refresh flow exists
+PASS - Meta Graph default is v25.0
+PASS - PostgreSQL schema supports four platform assets
+PASS - Migration performs clean legacy cutover
+PASS - Legacy manual connection actions removed from backend
+PASS - Old manual token environment variables removed
+PASS - All OAuth environment variables are documented
+
+25/25 checks passed.
+
+
+[PASS] node scripts/check-vehicle-inventory-status-notifications-v1211.mjs
+PASS: Inventory status notifications are centralized
+PASS: Only reserved and available-for-sale status transitions use the dedicated notification
+PASS: Reserved notification title names the exact new status
+PASS: Reserved notification contains the booking administrator
+PASS: Vehicle notification keeps full transition details
+PASS: Responsible user is stored as the notification actor
+PASS: Direct vehicle edits expose the real status transition
+PASS: Bulk movements expose one transition per moved vehicle
+PASS: Operations notifications create one vehicle status alert per changed vehicle
+PASS: ERPNext status synchronization emits the same native notification
+PASS: ERPNext passes the booking administrator from inventory fields
+PASS: Notification retries are deduplicated by the movement or ERP event
+PASS: Inventory page structure remains untouched by notification wiring
+Vehicle inventory status notification checks: 13/13 passed.
+
+
+[PASS] node scripts/check-operations-access-catalog-link-v1210.mjs
+PASS: Vehicle-status scope uses the existing canonical user-system settings row
+PASS: Login and central access bootstrap do not depend on a feature-specific status table
+PASS: Operational locations have a canonical central branch link
+PASS: Existing operational locations are backfilled into central branches
+PASS: Saving an operational location updates the same central branch catalog
+PASS: Editing a central branch updates its linked operational location
+PASS: Access-control bootstrap returns active vehicle statuses
+PASS: User save persists operations vehicle-status scope without another table
+PASS: Effective access includes vehicle status codes
+PASS: Users and permissions UI shows allowed vehicle statuses
+PASS: Empty vehicle-status selection remains backward compatible
+PASS: Operations reads are status-scoped
+PASS: Operations mutations validate current and target statuses
+PASS: Deployment migration contains only the branch/location catalog relation
+
+Operations access catalog link checks passed: 14/14
+
+
+[PASS] node scripts/check-internal-notifications-v1209.mjs
+PASS: Persistent notifications table exists
+PASS: Per-user read state exists
+PASS: Notification API is routed
+PASS: Notification API requires an authenticated user
+PASS: Global notification access is restricted to system administrators
+PASS: Each system has an isolated notification scope
+PASS: Scope filtering remains separate per system
+PASS: Direct recipients can receive targeted notifications
+PASS: CRM lead events emit real notifications
+PASS: Inbound customer messages emit only for stored inbound messages
+PASS: NEXT ERP-created CRM customers emit notifications
+PASS: Marketing campaigns agendas progress and assignments emit notifications
+PASS: Operations requests and workflow actions emit notifications
+PASS: Tracking creation and stages emit notifications
+PASS: Read and mark-all actions are implemented
+PASS: No notification tab was added to any system layout
+PASS: Notification state is database-backed, not localStorage-backed
+PASS: Notification metadata uses a JSON-safe recursive type
+PASS: Notification count queries read the first result row
+PASS: NEXT ERP notification uses normalized customer fields
+PASS: Notification bell is mounted in the sidebar account area
+PASS: Unread badge keeps the red visual state
+PASS: New notifications trigger an audible alert
+PASS: New notifications show a timed in-page card
+PASS: Notification preferences are persisted per user
+PASS: Notification preferences API is authenticated and routed
+PASS: Notification settings are available from the unified settings page
+PASS: Notification settings cover sound toast duration and system alerts
+PASS: Every notification surface shows the responsible party separately
+PASS: Detailed notification text is not clamped or ellipsized
+PASS: Automated notification sources have responsible names
+PASS: Responsible-name fallback is centralized
+Internal notification regression checks: 32/32 passed.
+
+
+[PASS] node scripts/check-marketing-ui-batch-v1208.mjs
+PASS: package categories are stored in PostgreSQL settings
+PASS: package sales types are stored in PostgreSQL settings
+PASS: packages persist category and sales type IDs
+PASS: package settings API is exposed
+PASS: package save requires real category and sales IDs
+PASS: marketing settings contains package settings tab
+PASS: package form selects category and sales from settings
+PASS: package PDF exports package cards only
+PASS: database keeps the professional PDF command and removes broken Excel exports
+PASS: budget display expands creatives and platforms in the approved table layout
+PASS: publish preparation uses redesigned list and full editor
+PASS: monitoring page is rebuilt with operational KPI layout
+PASS: agenda day editor is rebuilt with sidebar and full workspace
+PASS: agenda car selection uses a dedicated modal
+PASS: marketing buttons use shared professional interaction styles
+PASS: responsive rules cover the rebuilt pages
+Marketing UI batch v1.20.8 checks: 16/16 passed
+
+
+[PASS] node scripts/check-marketing-dashboard-compact-v1206.mjs
+PASS: campaign completion is shown in a dedicated readable stat
+PASS: campaign progress bar no longer overlays a percentage label
+PASS: department task count and completion use a compact rectangular summary
+PASS: old circular campaign task counter is removed
+PASS: department headers are compact
+PASS: department cards use compact spacing
+PASS: dashboard live refresh remains enabled
+PASS: responsible colors remain sourced from marketing settings
+Marketing dashboard compact v1.20.6 checks: 8/8 passed
+
+
+[PASS] node scripts/check-marketing-dashboard-live-colors-v1204.mjs
+PASS: duplicate content writer is hidden when it is the responsible user
+PASS: responsible color comes from marketing settings
+PASS: content writer color comes from marketing settings
+PASS: old hardcoded blue responsible color was removed
+PASS: completion percentages use a stable visible LTR format
+PASS: dashboard response exposes a data version
+PASS: dashboard version endpoint is permission protected
+PASS: dashboard polls version while visible
+PASS: live refresh is silent and preserves expanded cards
+Marketing dashboard live/colors v1.20.4 checks: 9/9 passed
+
+
+[PASS] node scripts/check-marketing-dashboard-build-v1203.mjs
+PASS: required-task department accumulator has an explicit mutable task-array type
+PASS: readiness department accumulator has an explicit mutable task-array type
+Marketing dashboard build regression v1.20.3: 2/2 passed.
+
+
+[PASS] node scripts/check-marketing-review-workflow-v1202.mjs
+PASS: structured per-field feedback
+PASS: legacy plain notes remain readable
+PASS: single click selects review field
+PASS: double click opens inline field note
+PASS: browser prompt removed from template review
+PASS: writer sees yellow requested fields and note
+PASS: approval clears active feedback
+PASS: professional review action classes
+PASS: sticky review command bar
+PASS: yellow review field styling
+PASS: assigned user can view feedback
+PASS: required tasks grouped by department
+PASS: readiness grouped by campaign and department
+PASS: receive action still uses canonical backend flow
+PASS: received task leaves required and enters readiness
+PASS: dashboard task cards preserve responsible and content writer
+Marketing review workflow v1.20.2 checks: 16/16 passed
+
+
+[PASS] node scripts/check-marketing-task-template-v1201.mjs
+PASS: real xlsx extension
+PASS: OpenXML workbook content type
+PASS: RTL worksheet
+PASS: Task Template sheet name
+PASS: writer keys preserved
+PASS: main script row is tall
+PASS: XLSX parser used
+PASS: full-screen task class
+PASS: xlsx upload only
+PASS: structured main script presentation
+PASS: assignment actions are buttons
+PASS: action button styles reach the portaled modal
+PASS: full viewport modal
+PASS: mark ready sends upload context
+PASS: contextual template permission helper
+PASS: prepare upload checks task-template permission
+PASS: mark ready checks stored file category
+PASS: template file-task association validation
+PASS: gateway routes task-template contextually
+Marketing Task Template v1.20.1 checks: 19/19 passed
+
+
+[PASS] node scripts/check-marketing-content-users-v1200.mjs
+PASS: Marketing meta reads department users from central allowed departments
+PASS: Marketing meta returns one explicit canonical content department ID
+PASS: Legacy inconsistent content flags are repaired onto the canonical content UUID
+PASS: Campaign, agenda, and post-creation creative task flows use the explicit content department ID
+PASS: Creative editor selects content users by contentDepartmentId before any compatibility fallback
+PASS: Campaign and agenda initialize the explicit content department field
+PASS: Saving a content department keeps one content flag without changing memberships
+PASS: Bilal appears in both content and montage even when the old content flag is stale
+
+Marketing content-user regression checks: 8/8 passed.
+
+
+[PASS] node scripts/check-marketing-department-access-v1199.mjs
+PASS: Marketing API must not read/write the legacy department_users table
+PASS: Clean schema must not recreate legacy membership storage
+PASS: Marketing memberships must use central allowed departments
+PASS: Core marketing departments must be mirrored on the same canonical IDs
+PASS: Department user selector must expose all active non-deleted platform accounts
+PASS: Saving a marketing department must not replace the user's primary department
+PASS: Removing a user must be scoped to the selected marketing department only
+PASS: Users and permissions must read the same central department memberships
+PASS: Schema must canonicalize IDs and retire legacy membership storage
+PASS: ID migration must handle same-name collisions and stored campaign/agenda references
+PASS: Duplicate marketing department IDs must be consolidated without touching roles
+PASS: Campaign and agenda user selectors must consume users from each allowed marketing department
+PASS: Settings workspace navigation/search/collapse must remain present
+PASS: Marketing department user picker must use the central membership UX
+PASS: Legacy global department-name uniqueness must be removed safely
+PASS: Saving a duplicate marketing name must reuse the existing canonical department
+PASS: Marketing meta loading must skip legacy same-name ID collisions instead of failing
+PASS: Role template list must render one canonical row per display-name group
+PASS: Bilal multi-department acceptance scenario must preserve editing after content removal
+
+
+[PASS] node scripts/check-central-access-sql-v1193.mjs
+PASS database/migrations/20260724_central_access_control_v1190.sql
+PASS database/seeds/20260724_central_access_catalog.sql
+PASS server/_access-control-schema.ts
+Central access SQL syntax regression checks passed: 3/3
+
+
+[PASS] node scripts/check-login-schema-bootstrap-v1192.mjs
+PASS schema readiness state exists
+PASS schema bootstrap uses advisory lock
+PASS schema bootstrap verifies auth columns
+PASS login initializes schema before query
+PASS session creation initializes schema
+PASS session lookup initializes schema
+PASS profile loading initializes schema
+PASS setup uses the same bootstrap service
+Login schema bootstrap checks passed: 8/8
+
+
+[PASS] node scripts/check-build-types-v1191.mjs
+PASS: Effective access keeps query result sets separate
+PASS: Effective access reads the first permission row
+PASS: Effective access reads the first version row
+PASS: User profile reads the first database row
+PASS: NodeNext shared import has an explicit extension
+PASS: Legacy row-list property access is absent
+
+Build type regression checks: 6/6 passed.
+
+
+[PASS] node scripts/check-central-access-control-v1190.mjs
+PASS: Package version is 1.19.4
+PASS: Four systems exist in central catalog
+PASS: Permission catalog is large enough for all systems
+PASS: Permission codes are unique
+PASS: Page catalog entries are unique
+PASS: System access permissions exist
+PASS: Central settings permissions exist
+PASS: Legacy per-system settings permissions are absent
+PASS: CRM data review has separate view and execute permissions
+PASS: CRM routing and automation are separate permissions
+PASS: All ten tracking stages generate complete rollback and SMS permissions
+PASS: Marketing workflow permissions exist
+PASS: Operations workflow permissions exist
+PASS: Central schema creates user systems
+PASS: Central schema creates user overrides
+PASS: Central schema creates permission change log
+PASS: Central migration preserves and increments permission versions
+PASS: Central migration deactivates duplicated settings pages
+PASS: Rollback migration exists
+PASS: Runtime schema contains every catalog permission
+PASS: SQL migration contains every catalog permission
+PASS: Session loads effective central access
+PASS: Disabled user sessions are rejected
+PASS: Permission version invalidates stale sessions
+PASS: Explicit deny is evaluated before superadmin
+PASS: Disabled systems block their non-core permissions
+PASS: Backend permission guard logs rejection
+PASS: Access control returns the selected user row instead of the query array
+PASS: Access control blocks self-edit
+PASS: Access control blocks self-role edit
+PASS: System roles and per-system self roles cannot be edited indirectly
+PASS: Managers cannot grant permissions above their own
+PASS: Role permission templates require permission-management authority
+PASS: Managers cannot grant scopes above their own
+PASS: User updates invalidate sessions
+PASS: Permission changes are audited
+PASS: Passwords are hashed
+PASS: Password hashes are excluded from snapshots
+PASS: Unified settings contains the only users and permissions UI
+PASS: Unified settings separates all four system settings
+PASS: Settings sections use specific permissions
+PASS: User editor contains four system tabs
+PASS: User editor explains why saving is unavailable
+PASS: User editor supports allow deny and inherit
+PASS: User editor supports per-system data scope branches and departments
+PASS: Role templates include core permissions
+PASS: User access can be copied from another user
+PASS: Individual overrides can be reset to role templates
+PASS: User editor previews final role and override permissions
+PASS: Primary branch and department are explicit per system
+PASS: Users can be filtered by role system branch and department
+PASS: User list shows last access change and actor
+PASS: Old CRM admin route redirects to central settings
+PASS: Old marketing settings route redirects centrally
+PASS: API gateway applies permission requirement before handler
+PASS: Integrations are protected by gateway secrets
+PASS: Automation scheduler is protected by a secret
+PASS: ERPNext webhook is protected by a key
+PASS: CRM lists are filtered in SQL by scope
+PASS: CRM data review has exact permission checks
+PASS: CRM data review applies server-side scope
+PASS: CRM data review locks rows before correction
+PASS: CRM branch mutation is disabled in old settings endpoint
+PASS: CRM no longer renders branch management tab
+PASS: CRM assignment rules require routing permission
+PASS: CRM automation requires central and specialized permissions
+PASS: CRM settings have read-only mode
+PASS: Tracking public page uses a token
+PASS: Public tracking no longer accepts VIN/order as public identifier
+PASS: Tracking token is unique and backfilled
+PASS: Tracking stage actions use exact permissions
+PASS: Tracking SMS uses global and per-stage permissions
+PASS: Tracking settings use central keys
+PASS: Marketing queries use scope and assignment checks
+PASS: Marketing actions use exact task permissions
+PASS: Marketing settings use central keys
+PASS: Marketing settings have read-only mode
+PASS: Operations queries use per-system scope
+PASS: Operations stages have exact permissions
+PASS: Operations VIN changes use an exact sensitive permission
+PASS: Operations completion requires its exact permission and remains creator-only
+PASS: Operations request deletion has no creator or admin bypass
+PASS: Operations request cancellation has no creator or admin bypass
+PASS: Operations API maps delete and cancel to exact permissions
+PASS: Operations settings use central permission
+PASS: No hardcoded admin email comparisons remain in app code
+PASS: No literal company user emails are used as permission conditions
+PASS: No always-true transfer bypass remains
+PASS: Operations actions no longer use a platform-admin shortcut
+PASS: No localStorage permission source remains
+
+Central access control checks: 90/90 passed.
+
+
+[PASS] node scripts/check-api-imports.mjs
+API and server import extension check passed.
+
+
+[PASS] node scripts/check-crm-service-reclassification-v1156.mjs
+CRM service reclassification v1.15.6 check passed
+
+
+[PASS] node scripts/check-facebook-identity-auto-template-v1173.mjs
+Facebook canonical identity and automatic entry template v1.17.3 check passed
+
+
+[PASS] node scripts/check-crm-reports-kpi-v1159.mjs
+PASS: Package version includes the CRM reports release
+PASS: Ownership page route remains removed
+PASS: Ownership navigation remains removed
+PASS: Ownership dedicated API remains removed
+PASS: Browser voice recording is fully removed
+PASS: Existing attachment upload remains available
+PASS: Reports show requested count labels
+PASS: Report sales totals are calculated from sold
+PASS: Customer report popup exports all filtered rows to PDF
+PASS: KPI PDF actions are centered
+PASS: Each KPI PDF target has dedicated content
+PASS: KPI print layout starts content on the first page
+PASS: Attachment action is compact and writing area is larger
+PASS: Readable bold typography is integrated in canonical styles
+PASS: Finance history layout remains unchanged
+PASS: Ownership page and dedicated handler files remain deleted
+
+
+[PASS] node scripts/check-crm-kpi-manual-sales-20260803.mjs
+PASS: KPI API no longer calculates sales from sold CRM leads or ERP orders
+PASS: KPI list displays the manually entered daily sales total only
+PASS: Representative grade remains calculated only from saved KPI details
+PASS: Full test-data reset now clears KPI evaluations
+PASS: Existing stale KPI evaluations are aligned with the latest explicit test-data reset
+
+
+[PASS] node scripts/check-crm-manual-leads-v1160.mjs
+PASS: Manual lead form hides payment selector
+PASS: Manual lead form hides branch selector
+PASS: Manual lead form hides registration date input
+PASS: Manual lead form hides automatic assignment controls
+PASS: Manual lead WhatsApp-only note is removed
+PASS: New manual leads belong to the logged-in salesperson
+PASS: New manual leads do not call automatic distribution
+PASS: Registration date is generated automatically
+PASS: Tracking navigation no longer duplicates settings
+PASS: Tracking settings remain in unified settings
+PASS: Role choices use central unique role IDs
+
+
+[PASS] node scripts/check-crm-module.mjs
+CRM module structure and no-sample-data check passed.
+
+
+[PASS] node scripts/check-customer-completion.mjs
+Dynamic customer completion calculation check passed.
+
+
+[PASS] node scripts/check-crm-reference-v27.mjs
+CRM reference v27 structure, unread flow, finance differences, and category checks passed.
+
+
+[PASS] node scripts/check-crm-settings-v180.mjs
+CRM settings v1.8 full-width layout, Worker-based Mersal sync, and distribution checks passed.
+
+
+[PASS] node scripts/check-crm-reference-v39.mjs
+CRM reference v39 migration, reports, pagination, manual edit, XLSX export, and data-review checks passed.
+
+
+[PASS] node scripts/check-crm-sold-date-20260803.mjs
+CRM manual sold-date editing, reporting alignment, and schema checks passed.
+
+
+[PASS] node scripts/check-crm-export-reimport-sold-date-20260804.mjs
+CRM cash/finance export re-import sold-date update checks passed.
+
+
+[PASS] node scripts/check-crm-automation-flow-v1180.mjs
+CRM automation v1.18.0 static architecture and acceptance simulations: PASS
+
+
+[PASS] node scripts/check-crm-finance-combined-details-v1180.mjs
+CRM finance combined details parser v1.18.0: PASS
+
+
+[PASS] node scripts/check-worker-route-discovery-v194.mjs
+PASS: WhatsApp text uses the configured canonical worker route
+PASS: WhatsApp media may use its dedicated configured worker route
+PASS: Worker delivery has no route fallback loop
+PASS: Template payload sends both params and components
+PASS: Mersal template name is preferred over provider numeric id
+PASS: UI request returns queued while Vercel finishes the provider call in the background
+PASS: Worker result is stored directly by the background platform task
+PASS: Admin exposes separate text/template and attachment worker route fields
+
+
+[PASS] node scripts/check-tracking-module-v112.mjs
+Tracking native platform module, archive flow, public page, deletion, dual-sync ingest, direct ERPNext webhook, and SMS+ checks passed.
+
+
+[PASS] node scripts/check-tracking-assigned-scope.mjs
+PASS: Assigned tracking scope is resolved centrally
+PASS: Assigned scope never falls back to branch scope
+PASS: Tracking orders store the mapped platform user
+PASS: Existing tracking orders are backfilled from ERP links
+PASS: Future ERP sync updates the tracking assignee
+PASS: Order lists and details require the current assignee for assigned scope
+PASS: Stage actions validate the same assignee
+PASS: SMS validates the same assignee
+PASS: Delete actions validate the same assignee
+PASS: Canonical Tracking counters use the same assignee
+PASS: Unified dashboard tracking metrics use the canonical scoped counters
+PASS: Old unconditional branch-or-event tracking predicate is removed
+Tracking assigned-order visibility checks passed.
+
+
+[PASS] node scripts/check-operations-native-v2.mjs
+Operations Native V2 structure, branch scope, tracking delete, modal stack, dashboard drill-down, and source-identity checks passed.
+
+
+[PASS] node scripts/check-dashboard-operations-v1161.mjs
+PASS: Package version includes dashboard operations v1.16.1
+PASS: Department cards use department-specific open conversation totals
+PASS: Open conversations exclude closed rows
+PASS: Transferred conversations follow the current lead department
+PASS: Shortages use the five-field vehicle combination
+PASS: Shortages use only active available, reserved, and note statuses
+PASS: Shortages exclude agency and use the four requested stock locations
+PASS: Accessory statements are excluded from shortages
+PASS: Shortage total counts missing combinations by branch
+PASS: Dashboard shortage card opens complete shortage details
+PASS: Dashboard popups use wrapping wide layouts
+PASS: Inventory search applies while typing without Enter
+PASS: Tracking is restored as a progress button
+PASS: Vehicle detail tabs remain centered and tracking opens as a button
+PASS: Movement filters use the upgraded apply action
+PASS: Movement history provides A3 landscape PDF export
+PASS: A3 PDF contains every requested column
+PASS: A3 PDF renders present as correct and absent as wrong
+PASS: Movement API returns the requested vehicle, check, approval, actor, and request data
+
+
+[PASS] node scripts/check-operations-workflow-v1162.mjs
+PASS: Version is 1.16.2 or newer
+PASS: Existing check history tables gain the missing note column
+PASS: Approval rows persist pending final delivery requests
+PASS: Final delivery no longer forces the legacy under-delivery transition
+PASS: Missing approvals queue the requested final delivery
+PASS: Completed approvals execute the queued delivery
+PASS: Check history writes the note after schema compatibility runs
+PASS: Vehicle deletion requires exact VIN confirmation
+PASS: Vehicle deletion removes related operational and tracking data
+PASS: Operations dashboard inventory and shortage drilldowns use fullscreen modal
+PASS: Vehicle checks are rendered as separated professional cards
+PASS: Agency movement checks are rendered as separated editor cards
+PASS: Agency movement checks use professional direct true/false controls instead of a dropdown
+PASS: Agency movement checks default every item to correct and persist untouched defaults
+PASS: Movement controls stay grouped and tablet responsive
+PASS: Movement vehicle search has the wider desktop layout
+PASS: Movement general note is relabeled for reservation shortage and location
+PASS: Tracking request is a compact progress control with percentage tones
+PASS: Approval screen closes a vehicle after automatic final delivery
+
+
+[PASS] node scripts/check-operations-fk-delete-v1163.mjs
+PASS: Canonical safety bag definition exists
+PASS: Legacy history codes are preserved before FK replacement
+PASS: History FK is repointed to canonical definitions
+PASS: Deployment migration contains the same FK repair
+PASS: Vehicle delete removes related tracking SMS
+PASS: Vehicle delete remains transactional
+PASS: Vehicle delete locks only the base vehicle row across the nullable location join
+PASS: Inventory detail exposes complete vehicle delete action
+
+
+[PASS] node scripts/check-erpnext-unified-sales-link-v1166.mjs
+ERPNext unified Sales Order -> Tracking + CRM + Operations v1.16.9 check passed.
+
+
+[PASS] node scripts/check-tracking-deleted-release-v1168.mjs
+Tracking deleted-order release v1.16.9 check passed.
+
+
+[PASS] node scripts/check-tracking-final-delivery-archive.mjs
+Tracking final delivery -> delivered movement + clean sales-order note + vehicle archive runtime check passed.
+
+
+[PASS] node scripts/check-operations-auto-archive-v1169.mjs
+Operations automatic vehicle archive v1.16.9 check passed.
+
+
+[PASS] node scripts/check-operations-approval-cycles-v1170.mjs
+Operations approval-cycle and vehicle-management status v1.17.0 check passed.
+
+
+[PASS] node scripts/check-operations-movement-sales-count.mjs
+Operations movement administrator, delivered history, clean archive note, and vehicle-aware sales checks passed.
+
+
+[PASS] node scripts/check-erpnext-clean-integration-v1197.mjs
+PASS: NEXT ERP clean integration runtime checks (sales rep/admin separation + optional phone)
+
+
+[PASS] node scripts/check-erpnext-tracking-branch-routing.mjs
+PASS: NEXT ERP tracking branch routing and data-management build fix
+
+
+[PASS] node scripts/check-erpnext-sales-rep-optional-phone.mjs
+PASS: NEXT ERP sales representative, operations admin, and optional-phone source checks
+
+
+[PASS] node scripts/check-erpnext-cancel-tracking-sync-v1194.mjs
+PASS: Package version is 1.19.4
+PASS: ERPNext instance identity includes creation
+PASS: ERPNext cancel route uses the unified endpoint
+PASS: Cancellation is idempotent
+PASS: Cancelled tracking orders are deleted with their related SMS rows
+PASS: Operations returns only eligible under-delivery vehicles
+PASS: Approval cycles created for the cancelled order are deleted
+PASS: CRM previous state including sold fields is stored and restored
+PASS: Multiple CRM sales orders inherit the original pre-sale state
+PASS: Tracking stage action updates all order vehicles
+PASS: SMS sent state is persisted per order stage
+PASS: SMS button has persistent green state
+PASS: Cancellation retry reconciles earlier partial cancellation
+PASS: Operations active tracking excludes cancelled orders
+PASS: Vehicle sales-order tab includes cancellation history
+PASS: Public tracking shows cancellation instead of continuing the live flow
+PASS: Runtime schemas include cancellation columns
+PASS: Approval action constraint supports cancellation
+PASS: Migration exists
+PASS: Cancel webhook JSON exists
+
+ERPNext cancel/tracking sync checks: 20/20 passed.
+
+
+[PASS] node scripts/check-activity-dashboard-nabil-fixes.mjs
+Activity/dashboard/Nabil regression checks passed (15).
+
+
+[PASS] node scripts/check-crm-report-sold-quantity-alignment.mjs
+PASS: CRM report sold totals use the lead sold quantity as the single source of truth
+PASS: Sold customer rows normalize an empty sold quantity to one
+PASS: Customer report modal displays sold quantity
+PASS: Customer report PDF displays sold quantity
+
+
+[PASS] node scripts/check-operations-dashboard-inventory-approval-pdf-clean.mjs
+PASS: Current inventory snapshot is not restricted by the dashboard date range
+PASS: Actual inventory excludes under-delivery and delivered through one canonical card/drilldown predicate
+PASS: Dashboard inventory counts use both canonical branch and vehicle-status scopes
+PASS: Dashboard shortages use the same current-state and status scope as the details popup
+PASS: Approval totals and popup share the canonical active approval scope without a date-only mismatch
+PASS: Approval and operations cards open from the whole card while nested metric buttons keep their own filters
+PASS: Latest financial and administrative notes are exposed on the dashboard card
+PASS: Approval popup opens directly from the vehicle and contains complete notes, actors, dates, and approval actions
+PASS: Movement PDF uses explicit multi-page A3 landscape sheets with a complete fixed-width table
+PASS: Movement PDF keeps prior/current state and all notes without adding narrow duplicate columns
+PASS: Movement PDF waits for fonts, preserves technical references, and prevents row splitting
+
+Clean operations dashboard/PDF checks passed: 11/11
+
+
+[PASS] node scripts/check-operations-dashboard-card-calculations-clean.mjs
+PASS: One canonical inventory metric source is shared by dashboard counters and popup rows
+PASS: Every dashboard vehicle number is based on active non-archived inventory
+PASS: Actual total follows the approved rule and excludes only under-delivery and delivered
+PASS: Status cards are exclusive and match the exact inventory status filters
+PASS: Agency total uses the same actual-total predicate with agency location only
+PASS: Location cards use the canonical predicate for every displayed stock metric
+PASS: Vehicle popup does not keep a second handwritten calculation tree
+
+Operations dashboard card calculation checks passed: 7/7
+
+
+[PASS] node scripts/check-unified-dashboard-tracking-crm-filters-20260803.mjs
+PASS: Tracking counters have one canonical server helper
+PASS: Canonical Tracking helper counts the three active statuses
+PASS: Unified dashboard uses canonical all-active Tracking counters
+PASS: Unified dashboard no longer maintains a separate drifting not-started query
+PASS: Tracking orders page uses the same canonical counter helper
+PASS: Unified dashboard Tracking list opener is present
+PASS: Unified dashboard Tracking drawers use the same unbounded active list as Tracking
+PASS: Inventory card exposes its total in the card header
+PASS: Operation cards mark headers that contain total badges
+PASS: Operation total badge is clear of the drag handle
+PASS: CRM dashboard has a representative filter state
+PASS: CRM dashboard lead request includes the representative filter
+PASS: CRM dashboard summary cards follow the representative filter
+PASS: CRM dashboard renders the representatives dropdown next to branches
+PASS: CRM dashboard API reads the representative filter
+PASS: CRM dashboard API filters customers by their assigned representative
+PASS: Finance dashboard cards no longer show the call-center unassigned line
+PASS: CRM toolbar layout accommodates both branch and representative filters
+Unified dashboard Tracking, CRM filters, and visible totals checks passed.
+

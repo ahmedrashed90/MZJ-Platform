@@ -1,0 +1,29 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/integrations/meta/engagement-webhook",
+      "destination": "/api/meta-engagement-webhook"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/((?!api(?:/|$)).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 120
+    },
+    "api/meta-engagement-webhook.ts": {
+      "maxDuration": 120
+    }
+  }
+}
