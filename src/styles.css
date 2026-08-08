@@ -568,7 +568,7 @@ button.small-metric { cursor: pointer; }
   .crm-toolbar { align-items: stretch; }
   .crm-toolbar > *, .crm-toolbar select, .crm-toolbar input { max-width: 100%; }
 
-  .page-shell table[data-mobile-cards="true"] {
+  table[data-mobile-cards="true"] {
     display: block !important;
     width: 100% !important;
     min-width: 0 !important;
@@ -577,12 +577,12 @@ button.small-metric { cursor: pointer; }
     border-spacing: 0 !important;
     background: transparent !important;
   }
-  .page-shell table[data-mobile-cards="true"] thead,
-  .page-shell table[data-mobile-cards="true"] tr[data-mobile-header-row="true"] { display: none !important; }
-  .page-shell table[data-mobile-cards="true"] tbody,
-  .page-shell table[data-mobile-cards="true"] tfoot { display: grid !important; width: 100% !important; gap: 10px; }
-  .page-shell table[data-mobile-cards="true"] tbody tr,
-  .page-shell table[data-mobile-cards="true"] tfoot tr {
+  table[data-mobile-cards="true"] thead,
+  table[data-mobile-cards="true"] tr[data-mobile-header-row="true"] { display: none !important; }
+  table[data-mobile-cards="true"] tbody,
+  table[data-mobile-cards="true"] tfoot { display: grid !important; width: 100% !important; gap: 10px; }
+  table[data-mobile-cards="true"] tbody tr,
+  table[data-mobile-cards="true"] tfoot tr {
     position: relative !important;
     display: grid !important;
     width: 100% !important;
@@ -594,8 +594,8 @@ button.small-metric { cursor: pointer; }
     overflow: hidden !important;
     box-shadow: 0 8px 24px rgba(81,44,34,.045) !important;
   }
-  .page-shell table[data-mobile-cards="true"] tbody td,
-  .page-shell table[data-mobile-cards="true"] tfoot td {
+  table[data-mobile-cards="true"] tbody td,
+  table[data-mobile-cards="true"] tfoot td {
     position: static !important;
     width: auto !important;
     min-width: 0 !important;
@@ -616,19 +616,20 @@ button.small-metric { cursor: pointer; }
     text-overflow: clip !important;
     overflow-wrap: anywhere;
   }
-  .page-shell table[data-mobile-cards="true"] tbody td:last-child,
-  .page-shell table[data-mobile-cards="true"] tfoot td:last-child { border-bottom: 0 !important; }
-  .page-shell table[data-mobile-cards="true"] td::before { content: attr(data-mobile-label); color: var(--muted); font-size: 10px; font-weight: 900; line-height: 1.4; }
-  .page-shell table[data-mobile-cards="true"] td[data-mobile-label=""] { display: block !important; }
-  .page-shell table[data-mobile-cards="true"] td[data-mobile-label=""]::before { display: none; }
-  .page-shell table[data-mobile-cards="true"] td .crm-row-actions,
-  .page-shell table[data-mobile-cards="true"] td .operations-actions,
-  .page-shell table[data-mobile-cards="true"] td .operations-approval-pair { flex-wrap: wrap; justify-content: flex-start; }
-  .page-shell table[data-mobile-cards="true"] td button,
-  .page-shell table[data-mobile-cards="true"] td a,
-  .page-shell table[data-mobile-cards="true"] td input,
-  .page-shell table[data-mobile-cards="true"] td select,
-  .page-shell table[data-mobile-cards="true"] td textarea { max-width: 100%; white-space: normal; }
+  table[data-mobile-cards="true"] tbody td:last-child,
+  table[data-mobile-cards="true"] tfoot td:last-child { border-bottom: 0 !important; }
+  table[data-mobile-cards="true"] td::before { content: attr(data-mobile-label); color: var(--muted); font-size: 10px; font-weight: 900; line-height: 1.4; }
+  table[data-mobile-cards="true"] td[data-mobile-label=""] { display: block !important; }
+  table[data-mobile-cards="true"] td[data-mobile-label=""]::before { display: none; }
+  table[data-mobile-cards="true"] td .crm-row-actions,
+  table[data-mobile-cards="true"] td .operations-actions,
+  table[data-mobile-cards="true"] td .operations-approval-pair { flex-wrap: wrap; justify-content: flex-start; }
+  table[data-mobile-cards="true"] td button,
+  table[data-mobile-cards="true"] td a,
+  table[data-mobile-cards="true"] td input,
+  table[data-mobile-cards="true"] td select,
+  table[data-mobile-cards="true"] td textarea { max-width: 100%; white-space: normal; }
+  table[data-mobile-cards="true"] td > * { min-width: 0 !important; max-width: 100% !important; }
   .page-shell .crm-table-shell, .page-shell .operations-table-scroll, .page-shell .operations-selection-table-wrap,
   .page-shell .sales-orders-followup-table-wrap, .page-shell .kpi-level-table, .page-shell .kpi-result-table,
   .page-shell .users-table-wrap { overflow: visible; max-height: none; min-width: 0; border: 0; background: transparent; box-shadow: none; }

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 
 const MOBILE_QUERY = "(max-width: 820px)";
+const TABLE_SELECTOR = ".page-shell table, .mzj-modal-card table";
 
 function headerSource(table: HTMLTableElement) {
   const rows = Array.from(table.tHead?.rows || []);
@@ -70,7 +71,7 @@ export function MobileTableCards() {
     const sync = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        document.querySelectorAll<HTMLTableElement>(".page-shell table").forEach((table) => {
+        document.querySelectorAll<HTMLTableElement>(TABLE_SELECTOR).forEach((table) => {
           if (media.matches) decorateTable(table);
           else clearTable(table);
         });
@@ -78,8 +79,8 @@ export function MobileTableCards() {
     };
 
     const observer = new MutationObserver(sync);
-    const root = document.querySelector(".page-shell");
-    if (root) observer.observe(root, { childList: true, subtree: true });
+    const root = document.body;
+    observer.observe(root, { childList: true, subtree: true });
     media.addEventListener("change", sync);
     sync();
 

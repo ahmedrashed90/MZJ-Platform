@@ -614,32 +614,55 @@ export function MarketingDatabasePage() {
           <div className="marketing-database-two-column">
             <section className="marketing-task-section marketing-database-section">
               <h3>عرض جدول النشر</h3>
-              {scheduleRows.length ? <div className="marketing-table-wrap marketing-schedule-table-wrap">
-                <table className="marketing-grouped-schedule-table">
-                  <thead><tr><th>اليوم</th><th>المنصة</th><th>نوع النشر</th></tr></thead>
-                  <tbody>{scheduleRows.map((row) => <tr key={`${row.item.id}-${row.sourceIndex}`}>
-                    {row.showDay ? <td rowSpan={row.daySpan} className="marketing-schedule-day">{row.day}</td> : null}
-                    {row.showPlatform ? <td rowSpan={row.platformSpan} className="marketing-schedule-platform">{row.platform}</td> : null}
-                    <td>{row.item.post_type_name || "—"}</td>
-                  </tr>)}</tbody>
-                </table>
-              </div> : <div className="marketing-database-empty">لا يوجد جدول نشر.</div>}
+              {scheduleRows.length ? <>
+                <div className="marketing-mobile-detail-list marketing-mobile-schedule-list">
+                  {scheduleRows.map((row) => <article key={`mobile-${row.item.id}-${row.sourceIndex}`} className="marketing-mobile-detail-card">
+                    <div><small>اليوم</small><strong>{row.day}</strong></div>
+                    <div><small>المنصة</small><strong>{row.platform}</strong></div>
+                    <div><small>نوع النشر</small><strong>{row.item.post_type_name || "—"}</strong></div>
+                  </article>)}
+                </div>
+                <div className="marketing-table-wrap marketing-schedule-table-wrap">
+                  <table className="marketing-grouped-schedule-table" data-mobile-cards="off">
+                    <thead><tr><th>اليوم</th><th>المنصة</th><th>نوع النشر</th></tr></thead>
+                    <tbody>{scheduleRows.map((row) => <tr key={`${row.item.id}-${row.sourceIndex}`}>
+                      {row.showDay ? <td rowSpan={row.daySpan} className="marketing-schedule-day">{row.day}</td> : null}
+                      {row.showPlatform ? <td rowSpan={row.platformSpan} className="marketing-schedule-platform">{row.platform}</td> : null}
+                      <td>{row.item.post_type_name || "—"}</td>
+                    </tr>)}</tbody>
+                  </table>
+                </div>
+              </> : <div className="marketing-database-empty">لا يوجد جدول نشر.</div>}
             </section>
 
             {selected?.source_type === "campaign" ? <section className="marketing-task-section marketing-database-section marketing-budget-detail-section">
               <div className="marketing-database-section-heading"><div><h3>عرض الميزانية</h3></div><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
-              {budgetDisplayRows.length ? <div className="marketing-table-wrap marketing-budget-display-table">
-                <table>
-                  <thead><tr><th>Funnel</th><th>الكرييتيف</th><th>المنصة</th><th>قيمة المنصة</th></tr></thead>
-                  <tbody>
-                    {budgetDisplayRows.map((row) => <tr key={row.key}><td>{row.funnel}</td><td>{row.creative}</td><td>{row.platform}</td><td><strong>{row.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></td></tr>)}
-                  </tbody>
-                  <tfoot>
-                    {budgetFunnelTotals.map((item) => <tr key={item.funnel} className="marketing-budget-funnel-total"><td colSpan={3}>إجمالي {item.funnel}</td><td>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</td></tr>)}
-                    <tr className="marketing-budget-grand-total"><td colSpan={3}>إجمالي الميزانية كاملة</td><td>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</td></tr>
-                  </tfoot>
-                </table>
-              </div> : <div className="marketing-database-empty">لا توجد ميزانية.</div>}
+              {budgetDisplayRows.length ? <>
+                <div className="marketing-mobile-detail-list marketing-mobile-budget-list">
+                  {budgetDisplayRows.map((row) => <article key={`mobile-${row.key}`} className="marketing-mobile-detail-card">
+                    <div><small>Funnel</small><strong>{row.funnel}</strong></div>
+                    <div><small>الكرييتيف</small><strong>{row.creative}</strong></div>
+                    <div><small>المنصة</small><strong>{row.platform}</strong></div>
+                    <div className="amount"><small>قيمة المنصة</small><strong>{row.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
+                  </article>)}
+                  <div className="marketing-mobile-budget-totals">
+                    {budgetFunnelTotals.map((item) => <div key={`mobile-total-${item.funnel}`}><span>إجمالي {item.funnel}</span><strong>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>)}
+                    <div className="grand"><span>إجمالي الميزانية كاملة</span><strong>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
+                  </div>
+                </div>
+                <div className="marketing-table-wrap marketing-budget-display-table">
+                  <table data-mobile-cards="off">
+                    <thead><tr><th>Funnel</th><th>الكرييتيف</th><th>المنصة</th><th>قيمة المنصة</th></tr></thead>
+                    <tbody>
+                      {budgetDisplayRows.map((row) => <tr key={row.key}><td>{row.funnel}</td><td>{row.creative}</td><td>{row.platform}</td><td><strong>{row.amount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></td></tr>)}
+                    </tbody>
+                    <tfoot>
+                      {budgetFunnelTotals.map((item) => <tr key={item.funnel} className="marketing-budget-funnel-total"><td colSpan={3}>إجمالي {item.funnel}</td><td>{item.total.toLocaleString("ar-SA-u-nu-latn")} ر.س</td></tr>)}
+                      <tr className="marketing-budget-grand-total"><td colSpan={3}>إجمالي الميزانية كاملة</td><td>{budgetGrandTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</td></tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </> : <div className="marketing-database-empty">لا توجد ميزانية.</div>}
             </section> : null}
           </div>
 

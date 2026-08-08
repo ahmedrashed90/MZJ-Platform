@@ -870,7 +870,7 @@
 }
 .marketing-database-modal-fullscreen .mzj-modal-header h2 { margin: 0; font-size: clamp(19px,1.6vw,26px); }
 .marketing-database-modal-fullscreen .mzj-modal-header p { margin-top: 4px; font-weight: 800; }
-.marketing-database-modal-fullscreen .mzj-modal-body { padding: 0; background: #f7f4f2; }
+.marketing-database-modal-fullscreen .mzj-modal-body { padding: 0; overflow-x: hidden; background: #f7f4f2; }
 .marketing-database-workspace {
   width: 100%;
   padding: 18px clamp(14px,2vw,32px) 36px;
@@ -954,6 +954,81 @@
 .marketing-grouped-schedule-table tbody td { min-height: 42px; background: #fff; text-align: center; }
 .marketing-grouped-schedule-table .marketing-schedule-day { width: 27%; font-weight: 900; background: #faf7f5; }
 .marketing-grouped-schedule-table .marketing-schedule-platform { width: 33%; font-weight: 800; background: #fdfbf9; }
+.marketing-mobile-detail-list { display: none; }
+
+@media (max-width: 820px) {
+  .marketing-database-modal-fullscreen .mzj-modal-body,
+  .marketing-database-workspace,
+  .marketing-database-two-column,
+  .marketing-database-section,
+  .marketing-database-section-heading,
+  .marketing-entity-creatives-table-wrap,
+  .marketing-database-table {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+  .marketing-database-section { padding: 14px; }
+  .marketing-database-section .marketing-table-wrap { width: 100%; min-width: 0; max-width: 100%; overflow-x: hidden; overflow-y: visible; }
+  .marketing-database-section-heading > * { min-width: 0; max-width: 100%; }
+  .marketing-database-section-heading > strong { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .marketing-mobile-detail-list { display: grid; gap: 10px; }
+  .marketing-schedule-table-wrap,
+  .marketing-budget-display-table { display: none; }
+  .marketing-mobile-detail-card {
+    width: 100%;
+    min-width: 0;
+    padding: 4px 12px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 7px 20px rgba(81,44,34,.04);
+    overflow: hidden;
+  }
+  .marketing-mobile-detail-card > div {
+    min-height: 48px;
+    padding: 9px 0;
+    border-bottom: 1px solid #f1e8e4;
+    display: grid;
+    grid-template-columns: minmax(82px,.42fr) minmax(0,1fr);
+    align-items: center;
+    gap: 10px;
+  }
+  .marketing-mobile-detail-card > div:last-child { border-bottom: 0; }
+  .marketing-mobile-detail-card small { color: var(--muted); font-size: 10px; font-weight: 900; }
+  .marketing-mobile-detail-card strong { min-width: 0; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+  .marketing-mobile-detail-card .amount strong { color: #276b43; }
+  .marketing-mobile-budget-totals { display: grid; gap: 8px; }
+  .marketing-mobile-budget-totals > div {
+    min-height: 48px;
+    padding: 10px 12px;
+    border: 1px solid #e4d5cf;
+    border-radius: 12px;
+    background: #fff8f4;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .marketing-mobile-budget-totals > div span { color: #6f5048; font-size: 10px; font-weight: 900; }
+  .marketing-mobile-budget-totals > div strong { color: #6f3022; font-size: 13px; white-space: nowrap; }
+  .marketing-mobile-budget-totals > div.grand { border-color: #ccebd5; background: #f4fbf6; }
+  .marketing-mobile-budget-totals > div.grand strong { color: #17603a; }
+  .marketing-database-upload-state { width: 100%; min-width: 0; max-width: 100%; padding: 16px 12px; }
+  .marketing-database-upload-state .marketing-inline-actions,
+  .marketing-database-section > .marketing-inline-actions { width: 100%; display: grid; grid-template-columns: 1fr; }
+  .marketing-database-upload-state .marketing-inline-actions > *,
+  .marketing-database-section > .marketing-inline-actions > * { width: 100%; min-width: 0; max-width: 100%; }
+  .marketing-database-link-row { width: 100%; min-width: 0; max-width: 100%; grid-template-columns: 1fr; }
+  .marketing-database-link-row input,
+  .marketing-database-link-row select { width: 100%; min-width: 0; max-width: 100%; }
+  .marketing-database-link-row .icon-danger { width: 44px; min-width: 44px; justify-self: end; }
+  .marketing-archive-panel { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .marketing-archive-panel-copy p { min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .marketing-archive-button { width: 100%; min-width: 0; max-width: 100%; }
+}
 
 @media (max-width: 1300px) {
   .marketing-database-summary-grid { grid-template-columns: repeat(4,minmax(0,1fr)); }
