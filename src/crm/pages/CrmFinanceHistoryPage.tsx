@@ -117,6 +117,7 @@ export function CrmFinanceHistoryPage() {
 
   const statuses = useMemo(() => [...new Set((meta?.statuses || [])
     .filter((status) => status.department_code === (activeTab === "cash" ? "cash" : "finance"))
+    .filter((status) => status.value !== "تم البيع")
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
     .map((status) => status.value))], [activeTab, meta]);
 

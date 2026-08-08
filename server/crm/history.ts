@@ -155,6 +155,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join crm.lead_events e on e.lead_id=l.id
     where l.is_deleted=false
       and ${leadTypeCondition(customerType)}
+      and trim(coalesce(l.status_label,'')) <> 'تم البيع'
       and (
         ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
@@ -174,6 +175,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.users cc on cc.id=l.call_center_assigned_to
     where l.is_deleted=false
       and ${leadTypeCondition(customerType)}
+      and trim(coalesce(l.status_label,'')) <> 'تم البيع'
       and (
         ${scope.all}::boolean or (${scope.includeAssigned}::boolean and (l.assigned_to=${scope.userId}::uuid or l.call_center_assigned_to=${scope.userId}::uuid))
         or (l.department_code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or l.branch_code=any(${scope.branchCodes}::text[])))
