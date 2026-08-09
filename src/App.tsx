@@ -43,6 +43,9 @@ const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCale
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
 const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
+const OwnersCommunityPage = lazy(() => import("./owners/OwnersCommunityPage").then((module) => ({ default: module.OwnersCommunityPage })));
+const OwnersPortalPage = lazy(() => import("./owners/OwnersPortalPage").then((module) => ({ default: module.OwnersPortalPage })));
+const OwnersInvitePage = lazy(() => import("./owners/OwnersInvitePage").then((module) => ({ default: module.OwnersInvitePage })));
 
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
@@ -137,6 +140,7 @@ function PlatformRoutes() {
             <Route path="archive" element={<PermissionGuard permission="tracking.archive.view"><TrackingOrdersPage archivedOnly /></PermissionGuard>} />
             <Route path="delete" element={<PermissionGuard permission="tracking.delete.view"><TrackingDeletePage /></PermissionGuard>} />
           </Route>
+          <Route path="/owners-community" element={<PermissionGuard permission="owners.community.view"><OwnersCommunityPage /></PermissionGuard>} />
           <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
           <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />
           <Route path="/settings" element={<SettingsRoute />} />
@@ -154,6 +158,7 @@ export default function App() {
   const { loading, status, user } = useAuth();
   const location = useLocation();
   const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
+  const isPublicOwners = location.pathname === "/owners" || location.pathname.startsWith("/owners/invite/");
 
   if (loading) return <PlatformLoadingPage />;
   if (isPublicTracking) {
@@ -163,6 +168,16 @@ export default function App() {
           <Route path="/track" element={<PublicTrackingPage />} />
           <Route path="/track.html" element={<Navigate to={`/track${location.search}`} replace />} />
           <Route path="/Test-Track.html" element={<Navigate to={`/track${location.search}`} replace />} />
+        </Routes>
+      </Suspense>
+    );
+  }
+  if (isPublicOwners) {
+    return (
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل MZJ Owners Community...</div>}>
+        <Routes>
+          <Route path="/owners" element={<OwnersPortalPage />} />
+          <Route path="/owners/invite/:code" element={<OwnersInvitePage />} />
         </Routes>
       </Suspense>
     );

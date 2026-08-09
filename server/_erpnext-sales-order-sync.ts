@@ -11,6 +11,7 @@ import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
 import type { ErpNextVehiclePayload, NormalizedErpNextSalesOrder } from "./_erpnext-sales-order-normalizer.js";
 import type { NormalizedErpNextPaymentEntry } from "./_erpnext-payment-entry-normalizer.js";
 
+import { ensureOwnerMemberForLead } from "./_owners.js";
 export type PlatformUserMapping = {
   id: string;
   full_name: string;
@@ -1679,7 +1680,10 @@ export async function syncErpNextSalesOrder(input: {
       crm_link_status=${crm.status},operations_link_status=${operations.status},warnings=${sql.json(finalWarnings)},updated_at=now()
     where id=${order.id}::uuid
   `;
-  if (crm.leadId) await refreshCrmLeadSalesSnapshot(crm.leadId);
+  if (crm.leadId) {
+    await refreshCrmLeadSalesSnapshot(crm.leadId);
+    await ensureOwnerMemberForLead(crm.leadId).catch((error) => console.error("MZJ Owners enrollment failed", error));
+  }
 
   return {
     integrationOrderId: order.id,

@@ -158,6 +158,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('marketing','platforms','ربط المنصات','/marketing/platforms',60,true),
 ('marketing','publish_prep','تجهيز النشر','/marketing/publish-prep',70,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
+('core','owners_community','MZJ Owners Community','/owners-community',60,true),
 ('marketing','monitoring','المتابعة','/marketing/monitoring',80,true),
 ('marketing','calendar','التقويم','/marketing/calendar',90,true),
 ('marketing','receipt_calendar','تقويم الاستلام','/marketing/receipt-calendar',100,true),
@@ -202,6 +203,10 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('settings.operations.manage','تعديل إعدادات العمليات','core','settings','operations_manage','تعديل إعدادات العمليات','تعديل إعدادات العمليات التشغيلية','settings',true,220,true),
 ('settings.tracking.view','مشاهدة إعدادات التتبع','core','settings','tracking_view','مشاهدة إعدادات التتبع','مشاهدة إعدادات التتبع','settings',false,230,true),
 ('settings.tracking.manage','تعديل إعدادات التتبع','core','settings','tracking_manage','تعديل إعدادات التتبع','تعديل إعدادات التتبع التشغيلية','settings',true,240,true),
+('settings.owners.view','مشاهدة إعدادات MZJ Owners Community','core','settings','owners_view','مشاهدة إعدادات MZJ Owners Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,241,true),
+('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,242,true),
+('owners.community.view','دخول MZJ Owners Community','core','owners_community','view','دخول MZJ Owners Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,243,true),
+('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,244,true),
 ('system.crm.access','دخول نظام CRM','crm','dashboard','access','دخول نظام CRM','دخول نظام CRM','system',false,250,true),
 ('crm.dashboard.view','مشاهدة داش بورد CRM','crm','dashboard','view','مشاهدة داش بورد CRM','مشاهدة داش بورد CRM','page',false,260,true),
 ('crm.database.view','مشاهدة قاعدة بيانات CRM','crm','database','view','مشاهدة قاعدة بيانات CRM','مشاهدة قاعدة بيانات CRM','page',false,270,true),
@@ -549,7 +554,8 @@ on conflict(id) do update set version=greatest(core.access_control_schema_state.
 const REQUIRED_PAGE_PERMISSION_CATALOG_SQL = String.raw`
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
-('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true)
+('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
+('core','owners_community','MZJ Owners Community','/owners-community',60,true)
 on conflict(system_code,code) do update set
   name_ar=excluded.name_ar,
   route=excluded.route,
@@ -559,7 +565,11 @@ on conflict(system_code,code) do update set
 
 insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values
 ('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','التحكم في فتح صفحة متابعة طلبات البيع داخل سيستم العمليات','page',false,865,true),
-('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true)
+('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true),
+('owners.community.view','دخول MZJ Owners Community','core','owners_community','view','دخول MZJ Owners Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
+('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
+('settings.owners.view','مشاهدة إعدادات MZJ Owners Community','core','settings','owners_view','مشاهدة إعدادات MZJ Owners Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
+('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true)
 on conflict(code) do update set
   name=excluded.name,
   system_code=excluded.system_code,
@@ -622,7 +632,12 @@ async function requiredPagePermissionCatalogReady() {
           and system_code='marketing'
           and page_code='engagement'
           and is_active=true
-      ) as ready
+      )
+      and exists(select 1 from core.system_pages where system_code='core' and code='owners_community' and is_active=true)
+      and exists(select 1 from core.permissions where code='owners.community.view' and is_active=true)
+      and exists(select 1 from core.permissions where code='owners.community.manage' and is_active=true)
+      and exists(select 1 from core.permissions where code='settings.owners.view' and is_active=true)
+      and exists(select 1 from core.permissions where code='settings.owners.manage' and is_active=true) as ready
   `;
   return Boolean(state?.ready);
 }
@@ -630,7 +645,7 @@ async function requiredPagePermissionCatalogReady() {
 async function ensureRequiredPagePermissionCatalog() {
   if (await requiredPagePermissionCatalogReady()) return;
   await withDatabaseAdvisoryLock(
-    "mzj:access-control-required-page-permissions:v1",
+    "mzj:access-control-required-page-permissions:v2",
     async () => {
       if (await requiredPagePermissionCatalogReady()) return;
       await runSqlScript(REQUIRED_PAGE_PERMISSION_CATALOG_SQL);

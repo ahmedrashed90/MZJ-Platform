@@ -78,6 +78,7 @@ export const PAGE_CATALOG: CatalogPage[] = [
   { system: "core", code: "database", name: "قاعدة البيانات الموحدة", route: "/database", sortOrder: 30 },
   { system: "core", code: "settings", name: "الإعدادات", route: "/settings", sortOrder: 40 },
   { system: "core", code: "activity", name: "سجل النشاط", route: "/activity", sortOrder: 50 },
+  { system: "core", code: "owners_community", name: "MZJ Owners Community", route: "/owners-community", sortOrder: 60 },
 
   { system: "crm", code: "dashboard", name: "الداش بورد", route: "/crm", sortOrder: 10 },
   { system: "crm", code: "database", name: "قاعدة البيانات", route: "/crm/database", sortOrder: 20 },
@@ -158,6 +159,10 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("settings.operations.manage", "تعديل إعدادات العمليات", "core", "settings", "operations_manage", "settings", "تعديل إعدادات العمليات التشغيلية", true),
   p("settings.tracking.view", "مشاهدة إعدادات التتبع", "core", "settings", "tracking_view", "settings"),
   p("settings.tracking.manage", "تعديل إعدادات التتبع", "core", "settings", "tracking_manage", "settings", "تعديل إعدادات التتبع التشغيلية", true),
+  p("settings.owners.view", "مشاهدة إعدادات MZJ Owners Community", "core", "settings", "owners_view", "settings", "مشاهدة إعدادات برنامج مجتمع ملاك MZJ", true),
+  p("settings.owners.manage", "تعديل إعدادات MZJ Owners Community", "core", "settings", "owners_manage", "settings", "تعديل إعدادات النقاط والمكافآت والقوالب", true),
+  p("owners.community.view", "دخول MZJ Owners Community", "core", "owners_community", "view", "page", "فتح لوحة إدارة مجتمع ملاك MZJ", true),
+  p("owners.community.manage", "إدارة MZJ Owners Community", "core", "owners_community", "manage", "action", "إدارة الأعضاء والدعوات والمكافآت والاستبدالات", true),
 
   p("system.crm.access", "دخول نظام CRM", "crm", "dashboard", "access", "system"),
   p("crm.dashboard.view", "مشاهدة داش بورد CRM", "crm", "dashboard", "view", "page"),

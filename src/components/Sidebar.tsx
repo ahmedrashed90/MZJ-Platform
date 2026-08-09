@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { ChartBar, Database, Gear, House, MapPin, Megaphone, Pulse, Question, SignOut, SuitcaseSimple, UsersThree } from "@phosphor-icons/react";
+import { ChartBar, Crown, Database, Gear, House, MapPin, Megaphone, Pulse, Question, SignOut, SuitcaseSimple, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canOpenSettings, hasPermission } from "../systemAccess";
@@ -11,6 +11,7 @@ const items = [
   { href: "/marketing", label: "التسويق", icon: Megaphone, system: "marketing" },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, system: "operations" },
   { href: "/tracking", label: "التراكينج", icon: MapPin, system: "tracking" },
+  { href: "/owners-community", label: "MZJ Owners", icon: Crown, permission: "owners.community.view" },
 ] as const;
 const supportItems = [
   { href: "/reports", label: "التقارير", icon: ChartBar, permission: "platform.reports.view" },

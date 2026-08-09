@@ -170,9 +170,15 @@ function trackingRequirement(route: string, request: VercelRequest): ApiPermissi
 
 export function resolveApiPermission(route: string, request: VercelRequest): ApiPermissionRequirement | null {
   if (route === "data-management") return req("platform.superadmin", "core", "settings", "data_management");
-  if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public"].includes(route)) return null;
+  if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public", "owners/public"].includes(route)) return null;
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");
+  if (route === "owners") {
+    const payload = body(request);
+    const settingsScope = clean(request.query.scope) === "settings" || clean(payload.action) === "save_settings";
+    if (settingsScope) return req(request.method === "GET" ? "settings.owners.view" : "settings.owners.manage", "core", "settings", request.method === "GET" ? "owners_view" : "owners_manage");
+    return req(request.method === "GET" ? "owners.community.view" : "owners.community.manage", "core", "owners_community", request.method === "GET" ? "view" : "manage");
+  }
   if (route === "activity" && request.method === "GET") return req("platform.activity.view", "core", "activity", "view");
   if (route.startsWith("crm/")) return crmRequirement(route, request);
   if (route === "operations") return operationsRequirement(request);

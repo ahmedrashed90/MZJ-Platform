@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CaretDown, CaretUp, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { Bell, CaretDown, CaretUp, Crown, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { UsersPermissionsPanel } from "../access-control/UsersPermissionsPanel";
 import { useAuth } from "../auth/AuthContext";
@@ -10,8 +10,9 @@ import { OperationsSettingsPanel } from "../operations/components/OperationsSett
 import { hasPermission } from "../systemAccess";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
 import { DataManagementPanel } from "../settings/DataManagementPanel";
+import { OwnersSettingsPanel } from "../owners/OwnersSettingsPanel";
 
-type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking" | "data";
+type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking" | "owners" | "data";
 
 type SectionDefinition = {
   key: Section;
@@ -30,6 +31,7 @@ const sectionDefinitions: SectionDefinition[] = [
   { key: "tracking", label: "إعدادات التتبع", description: "المراحل والرسائل وإعدادات التراكينج", keywords: "التتبع التراكينج المراحل الرسائل", icon: Path, permissions: ["settings.tracking.view", "settings.tracking.manage"] },
   { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage", "marketing.platforms.view"] },
   { key: "crm", label: "إعدادات CRM", description: "مسارات العملاء والأتمتة والتوزيع والتقارير", keywords: "CRM العملاء الأتمتة التوزيع السرعة الكفاءة", icon: GearSix, permissions: ["settings.crm.view", "settings.crm.manage"] },
+  { key: "owners", label: "MZJ Owners Community", description: "OTP والنقاط والمكافآت وإعدادات الدعوات", keywords: "owners community العملاء النقاط المكافآت otp واتساب الدعوات", icon: Crown, permissions: ["settings.owners.view", "settings.owners.manage", "owners.community.manage"] },
   { key: "data", label: "البيانات والنسخ الاحتياطية", description: "استيراد وتصدير العملاء والنسخ الاحتياطية ومسح بيانات التجربة", keywords: "البيانات النسخة الاحتياطية استيراد تصدير العملاء مسح التجربة", icon: Database, permissions: ["platform.superadmin"] },
 ];
 
@@ -98,6 +100,7 @@ export function SettingsPage() {
             {section === "marketing" ? <MarketingSettingsPanel readOnly={!hasPermission(user, "settings.marketing.manage")} /> : null}
             {section === "operations" ? <OperationsSettingsPanel /> : null}
             {section === "tracking" ? <TrackingSettingsPanel readOnly={!hasPermission(user, "settings.tracking.manage")} /> : null}
+            {section === "owners" ? <OwnersSettingsPanel /> : null}
             {section === "data" ? <DataManagementPanel /> : null}
           </div>
         ) : (
