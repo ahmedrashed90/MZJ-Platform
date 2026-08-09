@@ -49,18 +49,18 @@ export function OwnersInvitePage() {
     <div className="owners-public invite" dir="rtl">
       <div className="owners-invite-public-card">
         <img src="/logo.png" alt="MZJ" />
-        <span className="owners-eyebrow">دعوة من {info?.referrerName || "أحد عملاء MZJ"}</span>
+        <span className="owners-eyebrow">دعوة من {info?.referrerName || "أحد عملاء مجموعة محمد بن ذعار العجمي"}</span>
         <ShareNetwork size={38} />
-        <h1>{info?.benefitTitle || "ميزة خاصة من عميل MZJ"}</h1>
-        <p>{info?.benefitText || "سجل بياناتك وسيقوم فريق MZJ بالتواصل معك."}</p>
+        <h1>مجموعة محمد بن ذعار العجمي</h1>
+        <p>سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك.</p>
         {message ? <div className="owners-public-message">{message}</div> : null}
         {done ? (
-          <div className="owners-success"><CheckCircle size={46} weight="fill" /><strong>تم تسجيل بياناتك</strong><span>فريق MZJ سيتواصل معك.</span></div>
+          <div className="owners-success"><CheckCircle size={46} weight="fill" /><strong>تم تسجيل بياناتك</strong><span>فريق مجموعة محمد بن ذعار العجمي سيتواصل معك.</span></div>
         ) : (
           <div className="owners-invite-form">
             <label><span>الاسم</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label><span>رقم الجوال</span><input inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="05xxxxxxxx" /></label>
-            <button disabled={busy || !name.trim() || !phone.trim()} onClick={() => void register()}>{busy ? "جاري التسجيل..." : "تسجيل والاستفادة من الدعوة"}</button>
+            <button disabled={busy || !name.trim() || !phone.trim()} onClick={() => void register()}>{busy ? "جاري التسجيل..." : "تسجيل البيانات"}</button>
           </div>
         )}
       </div>

@@ -42,8 +42,8 @@ const emptyForm: OwnersSettingsForm = {
   platinumPoints: 7000,
   referralDefaultService: "cash",
   referralDefaultBranch: "online",
-  friendBenefitTitle: "ميزة خاصة من عميل MZJ",
-  friendBenefitText: "سجل بياناتك وسيقوم فريق MZJ بالتواصل معك.",
+  friendBenefitTitle: "دعوة من مجموعة محمد بن ذعار العجمي",
+  friendBenefitText: "سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك.",
 };
 
 function errorMessage(error: unknown) {

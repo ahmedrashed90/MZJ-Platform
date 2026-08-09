@@ -21,7 +21,7 @@ create table if not exists owners.settings (
   platinum_points integer not null default 7000 check (platinum_points >= 0),
   referral_default_service text not null default 'cash',
   referral_default_branch text not null default 'online',
-  friend_benefit_title text not null default 'ميزة خاصة من عميل MZJ',
+  friend_benefit_title text not null default 'دعوة من مجموعة محمد بن ذعار العجمي',
   friend_benefit_text text not null default 'سجل بياناتك من رابط الدعوة وسيقوم فريق MZJ بالتواصل معك.',
   welcome_message_enabled boolean not null default false,
   updated_by uuid references core.users(id) on delete set null,

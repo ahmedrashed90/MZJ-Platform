@@ -275,8 +275,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         platinum_points=${platinumPoints},
         referral_default_service=${clean(payload.referralDefaultService) || "cash"},
         referral_default_branch=${clean(payload.referralDefaultBranch) || "online"},
-        friend_benefit_title=${clean(payload.friendBenefitTitle) || "ميزة خاصة من عميل MZJ"},
-        friend_benefit_text=${clean(payload.friendBenefitText) || "سجل بياناتك وسيقوم فريق MZJ بالتواصل معك."},
+        friend_benefit_title=${clean(payload.friendBenefitTitle) || "دعوة من مجموعة محمد بن ذعار العجمي"},
+        friend_benefit_text=${clean(payload.friendBenefitText) || "سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك."},
         welcome_message_enabled=${payload.welcomeMessageEnabled === true},
         updated_by=${actor.id}::uuid,
         updated_at=now()
@@ -450,11 +450,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
 
     const portalUrl = `${publicBase(request)}/owners`;
-    const inviteUrl = `${publicBase(request)}/owners/invite/${member.referral_code}`;
     const phone = normalizePhone(member.phone_normalized);
     if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العضو غير صالح" });
-    const customerName = clean(member.customer_name) || "عميل MZJ";
-    const message = `مرحباً ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\n\nرابط دعوتك الخاص لمشاركته مع أصدقائك:\n${inviteUrl}\n\nمع MZJ أنت نجم الطريق ⭐`;
+    const customerName = clean(member.customer_name) || "عميل مجموعة محمد بن ذعار العجمي";
+    const message = `مرحباً ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\n\nتاريخ تثق به`;
 
     try {
       const queued = await queueFirebaseSms({

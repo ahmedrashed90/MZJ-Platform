@@ -87,7 +87,7 @@ export function OwnersPortalPage() {
         <div className="owners-login-card">
           <img src="/logo.png" alt="MZJ" />
           <span className="owners-eyebrow">MZJ Owners Community</span>
-          <h1>مجتمع ملاك MZJ</h1>
+          <h1>مجتمع ملاك مجموعة محمد بن ذعار العجمي</h1>
           <p>ادخل برقم الجوال المسجل في عملية الشراء. سنرسل لك رمز تحقق عبر SMS+ على رقم الجوال المسجل.</p>
           {message ? <div className="owners-public-message">{message}</div> : null}
           {stage === "phone" ? (
@@ -157,11 +157,11 @@ export function OwnersPortalPage() {
         </section>
 
         <section className="owners-invite-card">
-          <div><ShareNetwork size={28} /><div><h2>شارك MZJ مع أصحابك</h2><p>كل صديق جديد يفتح الرابط أو يسجل أو يتأهل أو يشتري يضيف نقاطًا حسب إعدادات البرنامج.</p></div></div>
+          <div><ShareNetwork size={28} /><div><h2>شارك رابطك مع أصدقائك</h2></div></div>
           <div className="owners-invite-link">
             <input readOnly value={member.inviteUrl || ""} />
             <button onClick={() => void copyInvite()}><Copy size={18} /> نسخ</button>
-            <a href={`https://wa.me/?text=${encodeURIComponent(`ميزة خاصة من MZJ عبر رابط دعوتي: ${member.inviteUrl || ""}`)}`} target="_blank" rel="noreferrer"><WhatsappLogo size={18} /> واتساب</a>
+            <a href={`https://wa.me/?text=${encodeURIComponent(`رابط دعوتي من مجموعة محمد بن ذعار العجمي: ${member.inviteUrl || ""}`)}`} target="_blank" rel="noreferrer"><WhatsappLogo size={18} /> واتساب</a>
           </div>
         </section>
 
@@ -178,7 +178,7 @@ export function OwnersPortalPage() {
               <article key={reward.id}>
                 <Gift size={25} />
                 <h3>{reward.name}</h3>
-                <p>{reward.description || "مكافأة لأعضاء MZJ Owners Community"}</p>
+                <p>{reward.description || "مكافأة لأعضاء مجتمع الملاك"}</p>
                 <strong>{Number(reward.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong>
                 <button disabled={busy || Number(member.points) < Number(reward.points_cost)} onClick={() => void redeem(reward.id)}>استبدال النقاط</button>
               </article>
@@ -191,7 +191,7 @@ export function OwnersPortalPage() {
           <div className="owners-referral-list">
             {referrals.length ? referrals.map((referral: any) => (
               <article key={referral.id}><div><strong>{referral.referred_name || "صديق من دعوتك"}</strong><span>{referralStatus(referral.status)}</span></div><small>{formatDate(referral.registered_at || referral.created_at)}</small></article>
-            )) : <p>لسه مفيش دعوات مسجلة. شارك رابطك وابدأ تجمع نقاط.</p>}
+            )) : <p>لا توجد دعوات مسجلة حتى الآن.</p>}
           </div>
         </section>
 
