@@ -300,7 +300,7 @@ export function OwnersCommunityPage() {
             <header><h2>أعضاء MZJ Owners Community</h2><span>{members.length - testMembersCount} حقيقي · {testMembersCount} تجريبي</span></header>
             <div className="owners-table-wrap">
               <table>
-                <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>الإجراءات</th></tr></thead>
+                <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
                 <tbody>
                   {members.map((member: any) => (
                     <tr key={member.id}>
@@ -313,10 +313,11 @@ export function OwnersCommunityPage() {
                       <td>{member.referrals_count || 0}</td>
                       <td>{member.sales_count || 0}</td>
                       <td>{formatDate(member.last_sale_at)}</td>
+                      <td><span className={`owners-welcome-status ${member.welcome_sent_at ? "sent" : "pending"}`}>{member.welcome_sent_at ? "تم الإرسال" : "لم يتم الإرسال"}</span></td>
                       <td>
                         {canManage ? (
                           <div className="owners-actions">
-                            <button className="owners-link-btn" disabled={busy} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> إرسال الترحيب</button>
+                            <button className="owners-link-btn" disabled={busy || Boolean(member.welcome_sent_at)} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> {member.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button>
                             {member.member_kind === "test" ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm("حذف العضو التجريبي وكل بيانات تجربته؟") && void act({ action: "delete_test_member", memberId: member.id }, "تم حذف العضو التجريبي") }><Trash size={16} /> حذف</button> : null}
                           </div>
                         ) : "—"}

@@ -452,6 +452,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 1
     `;
     if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
+    if (member.welcome_sent_at) return response.status(409).json({ ok: false, error: "تم إرسال رسالة الترحيب لهذا العضو مسبقًا" });
 
     const portalUrl = `${publicBase(request)}/owners`;
     const phone = normalizePhone(member.phone_normalized);

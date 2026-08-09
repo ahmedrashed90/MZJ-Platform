@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowCounterClockwise, Copy, Gift, Medal, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 
 function errorMessage(error: unknown) {
@@ -176,20 +176,20 @@ export function OwnersPortalPage() {
             <div className="owners-membership-face back">
               <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>مزايا بطاقة العضوية</strong></div><img src="/logo.png" alt="MZJ" /></div>
               <div className="owners-card-back-rewards">
-                {cardRewards.length ? cardRewards.slice(0, 4).map((reward: any) => <article key={reward.id}><Gift size={18} /><div><strong>{reward.name}</strong><span>{rewardTypeLabel(reward.reward_type)}{reward.reward_value ? ` · ${reward.reward_value}` : ""}</span></div></article>) : <div className="owners-card-empty"><Medal size={28} /><strong>مزايا جديدة قريبًا</strong><span>تظهر هنا المكافآت التي تخصصها الإدارة لبطاقة العضوية.</span></div>}
+                {cardRewards.length ? cardRewards.slice(0, 4).map((reward: any) => <article key={reward.id}><span className="owners-card-reward-icon"><Gift size={16} weight="fill" /></span><div><strong>{reward.name}</strong><span>{rewardTypeLabel(reward.reward_type)}{reward.reward_value ? ` · ${reward.reward_value}` : ""}</span></div></article>) : <div className="owners-card-empty"><Sparkle size={22} weight="fill" /><strong>مزايا جديدة قريبًا تخصصها الإدارة لبطاقة العضوية</strong></div>}
               </div>
               <div className="owners-card-footer"><span>تاريخ تثق به</span><small><ArrowCounterClockwise size={15} /> اضغط للعودة</small></div>
             </div>
           </div>
         </section>
 
-        <section className="owners-public-welcome">
-          <div><span>مرحبًا {member.name || "بك"}</span><strong>كل شيء في حسابك أمامك بشكل واضح</strong></div>
+        <section className="owners-public-welcome owners-public-welcome-compact">
+          <span>مرحبًا {member.name || "بك"}</span>
           <div className="owners-mini-badges"><span><Star size={16} weight="fill" /> {tierLabel(member.tier)}</span><span><Ticket size={16} /> {redemptions.length} طلب استبدال</span></div>
         </section>
 
         <section className="owners-invite-card">
-          <div><ShareNetwork size={28} /><div><h2>شارك رابطك مع أصدقائك</h2></div></div>
+          <div><ShareNetwork size={28} /><div><h2 className="owners-invite-title">شارك رابطك مع أصدقائك</h2></div></div>
           <div className="owners-invite-link">
             <input readOnly value={member.inviteUrl || ""} />
             <button onClick={() => void copyInvite()}><Copy size={18} /> نسخ</button>
@@ -197,11 +197,6 @@ export function OwnersPortalPage() {
           </div>
         </section>
 
-        <section className="owners-public-stats">
-          <article><strong>{referrals.length}</strong><span>أصدقاء مسجلون</span></article>
-          <article><strong>{referrals.filter((referral: any) => referral.status === "qualified" || referral.status === "sold").length}</strong><span>عملاء مؤهلون</span></article>
-          <article><strong>{referrals.filter((referral: any) => referral.status === "sold").length}</strong><span>مبيعات ناجحة</span></article>
-        </section>
 
         <section className="owners-public-section">
           <h2>المكافآت المتاحة</h2>
