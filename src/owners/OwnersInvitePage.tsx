@@ -52,10 +52,10 @@ export function OwnersInvitePage() {
         <span className="owners-eyebrow">دعوة من {info?.referrerName || "أحد عملاء مجموعة محمد بن ذعار العجمي"}</span>
         <ShareNetwork size={38} />
         <h1>مجموعة محمد بن ذعار العجمي</h1>
-        <p>سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك.</p>
+        <p>سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.</p>
         {message ? <div className="owners-public-message">{message}</div> : null}
         {done ? (
-          <div className="owners-success"><CheckCircle size={46} weight="fill" /><strong>تم تسجيل بياناتك</strong><span>فريق مجموعة محمد بن ذعار العجمي سيتواصل معك.</span></div>
+          <div className="owners-success"><CheckCircle size={46} weight="fill" /><strong>تم تسجيل بياناتك</strong><span>مجموعة محمد بن ذعار العجمي تاريخ تثق به</span></div>
         ) : (
           <div className="owners-invite-form">
             <label><span>الاسم</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>

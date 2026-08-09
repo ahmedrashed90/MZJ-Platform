@@ -43,7 +43,7 @@ const emptyForm: OwnersSettingsForm = {
   referralDefaultService: "cash",
   referralDefaultBranch: "online",
   friendBenefitTitle: "دعوة من مجموعة محمد بن ذعار العجمي",
-  friendBenefitText: "سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك.",
+  friendBenefitText: "سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.",
 };
 
 function errorMessage(error: unknown) {

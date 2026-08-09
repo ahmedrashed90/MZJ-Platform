@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Gift, ShareNetwork, SignOut, Star, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Copy, Gift, Medal, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 
 function errorMessage(error: unknown) {
@@ -23,6 +23,15 @@ function tierLabel(value: unknown) {
   return "Member";
 }
 
+
+function rewardTypeLabel(value: unknown) {
+  const type = String(value || "gift");
+  if (type === "discount") return "خصم";
+  if (type === "service") return "خدمة";
+  if (type === "voucher") return "قسيمة";
+  return "هدية";
+}
+
 function referralStatus(value: unknown) {
   const status = String(value || "");
   if (status === "sold") return "تم البيع";
@@ -40,6 +49,7 @@ export function OwnersPortalPage() {
   const [stage, setStage] = useState<"phone" | "otp">("phone");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cardFlipped, setCardFlipped] = useState(false);
 
   async function load() {
     try {
@@ -60,7 +70,7 @@ export function OwnersPortalPage() {
       const response = await ownersPublicPost({ action: "request_otp", phone });
       setChallenge(response.challengeId);
       setStage("otp");
-      setMessage("تم إرسال رمز التحقق عبر SMS+");
+      setMessage("تم إرسال رمز التحقق");
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -87,13 +97,13 @@ export function OwnersPortalPage() {
         <div className="owners-login-card">
           <img src="/logo.png" alt="MZJ" />
           <span className="owners-eyebrow">MZJ Owners Community</span>
-          <h1>مجتمع ملاك مجموعة محمد بن ذعار العجمي</h1>
-          <p>ادخل برقم الجوال المسجل في عملية الشراء. سنرسل لك رمز تحقق عبر SMS+ على رقم الجوال المسجل.</p>
+          <h1>مجموعة محمد بن ذعار العجمي</h1>
+          <p>ادخل برقم الجوال المسجل في عملية الشراء، وسيصلك رمز تحقق على رقم الجوال المسجل.</p>
           {message ? <div className="owners-public-message">{message}</div> : null}
           {stage === "phone" ? (
             <>
               <label><span>رقم الجوال</span><input inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="05xxxxxxxx" /></label>
-              <button disabled={busy} onClick={() => void requestOtp()}>{busy ? "جاري الإرسال..." : "إرسال رمز التحقق عبر SMS+"}</button>
+              <button disabled={busy} onClick={() => void requestOtp()}>{busy ? "جاري الإرسال..." : "إرسال رمز التحقق"}</button>
             </>
           ) : (
             <>
@@ -111,6 +121,7 @@ export function OwnersPortalPage() {
   const referrals = Array.isArray(me.referrals) ? me.referrals : [];
   const rewards = Array.isArray(me.rewards) ? me.rewards : [];
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
+  const cardRewards = rewards.filter((reward: any) => reward.show_on_member_card === true);
 
   async function copyInvite() {
     try {
@@ -151,9 +162,30 @@ export function OwnersPortalPage() {
       </header>
       <main>
         {message ? <div className="owners-public-message">{message}</div> : null}
-        <section className="owners-member-card">
-          <div><span>رصيدك الحالي</span><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
-          <div><span>مستوى العضوية</span><b><Star size={18} weight="fill" /> {tierLabel(member.tier)}</b><small>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة</small></div>
+        <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
+          <div className="owners-membership-card">
+            <div className="owners-membership-face front">
+              <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Owners Community</span><strong>بطاقة العضوية</strong></div></div>
+              <div className="owners-card-name"><small>العضو</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
+              <div className="owners-card-metrics">
+                <div><span>رصيد النقاط</span><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
+                <div><span>المستوى</span><b><Star size={18} weight="fill" /> {tierLabel(member.tier)}</b><small>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة</small></div>
+              </div>
+              <div className="owners-card-footer"><span>مجموعة محمد بن ذعار العجمي</span><small><ArrowCounterClockwise size={15} /> اضغط لعرض مزايا البطاقة</small></div>
+            </div>
+            <div className="owners-membership-face back">
+              <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>مزايا بطاقة العضوية</strong></div><img src="/logo.png" alt="MZJ" /></div>
+              <div className="owners-card-back-rewards">
+                {cardRewards.length ? cardRewards.slice(0, 4).map((reward: any) => <article key={reward.id}><Gift size={18} /><div><strong>{reward.name}</strong><span>{rewardTypeLabel(reward.reward_type)}{reward.reward_value ? ` · ${reward.reward_value}` : ""}</span></div></article>) : <div className="owners-card-empty"><Medal size={28} /><strong>مزايا جديدة قريبًا</strong><span>تظهر هنا المكافآت التي تخصصها الإدارة لبطاقة العضوية.</span></div>}
+              </div>
+              <div className="owners-card-footer"><span>تاريخ تثق به</span><small><ArrowCounterClockwise size={15} /> اضغط للعودة</small></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="owners-public-welcome">
+          <div><span>مرحبًا {member.name || "بك"}</span><strong>كل شيء في حسابك أمامك بشكل واضح</strong></div>
+          <div className="owners-mini-badges"><span><Star size={16} weight="fill" /> {tierLabel(member.tier)}</span><span><Ticket size={16} /> {redemptions.length} طلب استبدال</span></div>
         </section>
 
         <section className="owners-invite-card">
@@ -178,7 +210,9 @@ export function OwnersPortalPage() {
               <article key={reward.id}>
                 <Gift size={25} />
                 <h3>{reward.name}</h3>
-                <p>{reward.description || "مكافأة لأعضاء مجتمع الملاك"}</p>
+                <span className="owners-public-reward-type">{rewardTypeLabel(reward.reward_type)}</span>
+                {reward.reward_value ? <div className="owners-public-reward-value">{reward.reward_value}</div> : null}
+                <p>{reward.description || "راجع تفاصيل المكافأة قبل الاستبدال"}</p>
                 <strong>{Number(reward.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong>
                 <button disabled={busy || Number(member.points) < Number(reward.points_cost)} onClick={() => void redeem(reward.id)}>استبدال النقاط</button>
               </article>

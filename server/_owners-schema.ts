@@ -22,7 +22,7 @@ create table if not exists owners.settings (
   referral_default_service text not null default 'cash',
   referral_default_branch text not null default 'online',
   friend_benefit_title text not null default 'دعوة من مجموعة محمد بن ذعار العجمي',
-  friend_benefit_text text not null default 'سجل بياناتك من رابط الدعوة وسيقوم فريق MZJ بالتواصل معك.',
+  friend_benefit_text text not null default 'سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.',
   welcome_message_enabled boolean not null default false,
   updated_by uuid references core.users(id) on delete set null,
   updated_at timestamptz not null default now()
@@ -96,6 +96,8 @@ create table if not exists owners.rewards (
   name text not null,
   description text,
   reward_type text not null default 'gift' check (reward_type in ('gift','discount','service','voucher')),
+  reward_value text,
+  show_on_member_card boolean not null default false,
   points_cost integer not null check(points_cost > 0),
   stock_quantity integer,
   redeemed_quantity integer not null default 0,
@@ -108,6 +110,8 @@ create table if not exists owners.rewards (
   updated_at timestamptz not null default now()
 );
 alter table owners.rewards add column if not exists reward_type text not null default 'gift';
+alter table owners.rewards add column if not exists reward_value text;
+alter table owners.rewards add column if not exists show_on_member_card boolean not null default false;
 
 create table if not exists owners.points_ledger (
   id uuid primary key default gen_random_uuid(),
@@ -183,7 +187,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1204,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1206,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -201,11 +205,13 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='schema_state')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_hourly_limit')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='reward_value')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
       as ready
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1204;
+  return Number(state?.version || 0) >= 1206;
 }
 
 export function ensureOwnersSchema() {

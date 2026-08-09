@@ -19,6 +19,7 @@ import { ownersAdminGet, ownersAdminPost } from "./api";
 import { readXlsx } from "../crm/xlsxReader";
 
 type Tab = "members" | "import" | "referrals" | "rewards" | "redemptions";
+type RewardsView = "catalog" | "memberCard";
 
 
 type ImportMapping = { name: string; phone: string; purchaseDate: string; vehicle: string; branch: string; orderId: string };
@@ -38,6 +39,8 @@ type RewardDraft = {
   name: string;
   description: string;
   rewardType: "gift" | "discount" | "service" | "voucher";
+  rewardValue: string;
+  showOnMemberCard: boolean;
   pointsCost: number;
   stockQuantity: string;
   startsAt: string;
@@ -50,12 +53,36 @@ const emptyReward: RewardDraft = {
   name: "",
   description: "",
   rewardType: "gift",
+  rewardValue: "",
+  showOnMemberCard: false,
   pointsCost: 500,
   stockQuantity: "",
   startsAt: "",
   endsAt: "",
   isActive: true,
 };
+
+
+function rewardTypeLabel(value: RewardDraft["rewardType"] | string) {
+  if (value === "discount") return "خصم";
+  if (value === "service") return "خدمة";
+  if (value === "voucher") return "قسيمة";
+  return "هدية";
+}
+
+function rewardValueLabel(value: RewardDraft["rewardType"]) {
+  if (value === "discount") return "قيمة الخصم";
+  if (value === "service") return "نوع الخدمة";
+  if (value === "voucher") return "تفاصيل القسيمة";
+  return "تفاصيل الهدية";
+}
+
+function rewardValuePlaceholder(value: RewardDraft["rewardType"]) {
+  if (value === "discount") return "مثال: 15% أو 500 ريال";
+  if (value === "service") return "مثال: تغيير زيت مجاني";
+  if (value === "voucher") return "مثال: قسيمة صيانة بقيمة 300 ريال";
+  return "مثال: حقيبة سفر أو عازل حراري";
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تنفيذ العملية";
@@ -103,6 +130,7 @@ export function OwnersCommunityPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [reward, setReward] = useState<RewardDraft>(emptyReward);
+  const [rewardsView, setRewardsView] = useState<RewardsView>("catalog");
   const [testMember, setTestMember] = useState({ name: "", phone: "" });
   const [importRows, setImportRows] = useState<Record<string, string>[]>([]);
   const [importFileName, setImportFileName] = useState("");
@@ -196,6 +224,8 @@ export function OwnersCommunityPage() {
       name: item.name || "",
       description: item.description || "",
       rewardType: ["gift", "discount", "service", "voucher"].includes(item.reward_type) ? item.reward_type : "gift",
+      rewardValue: item.reward_value || "",
+      showOnMemberCard: item.show_on_member_card === true,
       pointsCost: Number(item.points_cost || 1),
       stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity),
       startsAt: toLocalDateTime(item.starts_at),
@@ -355,39 +385,62 @@ export function OwnersCommunityPage() {
 
       {tab === "rewards" ? (
         <>
-          <section className="owners-table-card">
-            <header><h2>كتالوج المكافآت</h2><span>يمكن تغيير المكافآت بدون تغيير أرصدة العملاء</span></header>
-            <div className="owners-rewards-grid">
-              {rewards.map((item: any) => (
-                <article key={item.id}>
-                  <Gift size={24} />
-                  <strong>{item.name}</strong>
-                  <p>{item.description || "مكافأة لأعضاء المجتمع"}</p>
-                  <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
-                  <small>{item.stock_quantity == null ? "كمية مفتوحة" : `المتبقي ${Math.max(0, Number(item.stock_quantity) - Number(item.redeemed_quantity || 0))}`}</small>
-                  <small>{item.is_active ? "مفعلة" : "متوقفة"}</small>
-                  {canManage ? <button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button> : null}
-                </article>
-              ))}
-            </div>
-          </section>
+          <div className="owners-rewards-subtabs">
+            <button className={rewardsView === "catalog" ? "active" : ""} onClick={() => setRewardsView("catalog")}>كتالوج المكافآت</button>
+            <button className={rewardsView === "memberCard" ? "active" : ""} onClick={() => setRewardsView("memberCard")}>بطاقة العضوية</button>
+          </div>
 
-          {canManage ? (
-            <section className="owners-table-card owners-reward-editor">
-              <header><h2>{reward.id ? "تعديل المكافأة" : "إضافة مكافأة جديدة"}</h2>{reward.id ? <button className="owners-link-btn" onClick={() => setReward(emptyReward)}>إلغاء التعديل</button> : null}</header>
-              <div className="owners-form-grid">
-                <label><span>اسم المكافأة</span><input value={reward.name} onChange={(event) => setReward({ ...reward, name: event.target.value })} /></label>
-                <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => setReward({ ...reward, rewardType: event.target.value as RewardDraft["rewardType"] })}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
-                <label><span>النقاط المطلوبة</span><input type="number" min="1" value={reward.pointsCost} onChange={(event) => setReward({ ...reward, pointsCost: Number(event.target.value) })} /></label>
-                <label><span>الكمية المتاحة</span><input type="number" min="0" placeholder="اتركها فارغة لكمية مفتوحة" value={reward.stockQuantity} onChange={(event) => setReward({ ...reward, stockQuantity: event.target.value })} /></label>
-                <label><span>تبدأ في</span><input type="datetime-local" value={reward.startsAt} onChange={(event) => setReward({ ...reward, startsAt: event.target.value })} /></label>
-                <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
-                <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
-                <label className="wide"><span>الوصف</span><textarea value={reward.description} onChange={(event) => setReward({ ...reward, description: event.target.value })} /></label>
+          {rewardsView === "catalog" ? <>
+            <section className="owners-table-card">
+              <header><h2>كتالوج المكافآت</h2><span>كل مكافأة تعرض للعميل بنوعها وقيمتها أو تفاصيلها بوضوح</span></header>
+              <div className="owners-rewards-grid">
+                {rewards.map((item: any) => (
+                  <article key={item.id}>
+                    <div className="owners-reward-type">{rewardTypeLabel(item.reward_type)}</div>
+                    <Gift size={24} />
+                    <strong>{item.name}</strong>
+                    {item.reward_value ? <div className="owners-reward-value">{item.reward_value}</div> : null}
+                    <p>{item.description || "تفاصيل المكافأة تظهر للعميل هنا"}</p>
+                    <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
+                    <small>{item.stock_quantity == null ? "كمية مفتوحة" : `المتبقي ${Math.max(0, Number(item.stock_quantity) - Number(item.redeemed_quantity || 0))}`}</small>
+                    <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}</small>
+                    {canManage ? <button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button> : null}
+                  </article>
+                ))}
               </div>
-              <button className="owners-primary" disabled={busy || !reward.name.trim()} onClick={() => void saveReward()}><Gift size={18} />{reward.id ? "حفظ التعديل" : "إضافة المكافأة"}</button>
             </section>
-          ) : null}
+
+            {canManage ? (
+              <section className="owners-table-card owners-reward-editor">
+                <header><h2>{reward.id ? "تعديل المكافأة" : "إضافة مكافأة جديدة"}</h2>{reward.id ? <button className="owners-link-btn" onClick={() => setReward(emptyReward)}>إلغاء التعديل</button> : null}</header>
+                <div className="owners-form-grid">
+                  <label><span>اسم المكافأة</span><input value={reward.name} onChange={(event) => setReward({ ...reward, name: event.target.value })} placeholder="اسم واضح يظهر للعميل" /></label>
+                  <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => setReward({ ...reward, rewardType: event.target.value as RewardDraft["rewardType"], rewardValue: "" })}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
+                  <label><span>{rewardValueLabel(reward.rewardType)}</span><input value={reward.rewardValue} onChange={(event) => setReward({ ...reward, rewardValue: event.target.value })} placeholder={rewardValuePlaceholder(reward.rewardType)} /></label>
+                  <label><span>النقاط المطلوبة</span><input type="number" min="1" value={reward.pointsCost} onChange={(event) => setReward({ ...reward, pointsCost: Number(event.target.value) })} /></label>
+                  <label><span>الكمية المتاحة</span><input type="number" min="0" placeholder="اتركها فارغة لكمية مفتوحة" value={reward.stockQuantity} onChange={(event) => setReward({ ...reward, stockQuantity: event.target.value })} /></label>
+                  <label><span>تبدأ في</span><input type="datetime-local" value={reward.startsAt} onChange={(event) => setReward({ ...reward, startsAt: event.target.value })} /></label>
+                  <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
+                  <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
+                  <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberCard} onChange={(event) => setReward({ ...reward, showOnMemberCard: event.target.checked })} /><span>إظهار المكافأة على ظهر بطاقة العضوية</span></label>
+                  <label className="wide"><span>الوصف</span><textarea value={reward.description} onChange={(event) => setReward({ ...reward, description: event.target.value })} placeholder="اكتب الشروط أو التفاصيل التي يحتاج العميل معرفتها قبل الاستبدال" /></label>
+                </div>
+                <button className="owners-primary" disabled={busy || !reward.name.trim() || !reward.rewardValue.trim()} onClick={() => void saveReward()}><Gift size={18} />{reward.id ? "حفظ التعديل" : "إضافة المكافأة"}</button>
+              </section>
+            ) : null}
+          </> : (
+            <section className="owners-table-card owners-member-card-admin">
+              <header><h2>بطاقة العضوية</h2><span>حدد المكافآت التي تظهر على ظهر بطاقة العميل عند الضغط عليها</span></header>
+              <div className="owners-card-reward-list">
+                {rewards.length ? rewards.map((item: any) => (
+                  <article key={item.id}>
+                    <div><strong>{item.name}</strong><span>{rewardTypeLabel(item.reward_type)}{item.reward_value ? ` · ${item.reward_value}` : ""}</span></div>
+                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, pointsCost: item.points_cost, stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity), startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
+                  </article>
+                )) : <p>أضف مكافآت أولًا ثم اختر ما يظهر منها على بطاقة العضوية.</p>}
+              </div>
+            </section>
+          )}
         </>
       ) : null}
 

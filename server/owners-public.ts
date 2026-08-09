@@ -413,7 +413,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 100
     `;
     const rewards = await sql<any[]>`
-      select id::text,name,description,reward_type,points_cost,stock_quantity,redeemed_quantity,starts_at,ends_at
+      select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,stock_quantity,redeemed_quantity,starts_at,ends_at
       from owners.rewards
       where is_active=true
         and (starts_at is null or starts_at<=now())
