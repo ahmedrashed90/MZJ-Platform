@@ -3,6 +3,17 @@ import path from "node:path";
 
 const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+
+function versionAtLeast(current, minimum) {
+  const a = String(current || "0.0.0").split(".").map((part) => Number(part) || 0);
+  const b = String(minimum || "0.0.0").split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const left = a[index] || 0;
+    const right = b[index] || 0;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
 const checks = [];
 function check(label, condition) {
   const passed = Boolean(condition);
@@ -23,7 +34,7 @@ const marketingServer = read("server/marketing/index.ts");
 const permissions = read("server/_api-permissions.ts");
 const marketingCss = read("src/marketing/marketing.css");
 
-check("release keeps the v1.19.14 customer-registry fixes", ["1.19.14", "1.19.15", "1.19.16"].includes(packageJson.version));
+check("release keeps the v1.19.14 customer-registry fixes", versionAtLeast(packageJson.version, "1.19.14"));
 
 check("CRM navigation is renamed to customer registry", crmLayout.includes('label: "سجل العملاء"') && access.includes('name: "سجل العملاء"'));
 check("customer registry separates cash, finance, and finance differences", ["عملاء الكاش", "عملاء التمويل", "فروقات حالات العملاء"].every((label) => crmPage.includes(label)));
