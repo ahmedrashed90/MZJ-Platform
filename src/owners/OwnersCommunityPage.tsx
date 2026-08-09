@@ -286,7 +286,7 @@ export function OwnersCommunityPage() {
                       <td>
                         {canManage ? (
                           <div className="owners-actions">
-                            <button className="owners-link-btn" disabled={busy} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى مسار مرسال") }><PaperPlaneTilt size={16} /> إرسال الترحيب</button>
+                            <button className="owners-link-btn" disabled={busy} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> إرسال الترحيب</button>
                             {member.member_kind === "test" ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm("حذف العضو التجريبي وكل بيانات تجربته؟") && void act({ action: "delete_test_member", memberId: member.id }, "تم حذف العضو التجريبي") }><Trash size={16} /> حذف</button> : null}
                           </div>
                         ) : "—"}

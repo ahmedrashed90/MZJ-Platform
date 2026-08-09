@@ -60,7 +60,7 @@ export function OwnersPortalPage() {
       const response = await ownersPublicPost({ action: "request_otp", phone });
       setChallenge(response.challengeId);
       setStage("otp");
-      setMessage("تم إرسال رمز التحقق إلى واتساب");
+      setMessage("تم إرسال رمز التحقق عبر SMS+");
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -88,12 +88,12 @@ export function OwnersPortalPage() {
           <img src="/logo.png" alt="MZJ" />
           <span className="owners-eyebrow">MZJ Owners Community</span>
           <h1>مجتمع ملاك MZJ</h1>
-          <p>ادخل برقم الجوال المسجل في عملية الشراء. سنرسل لك رمز تحقق عبر واتساب من خلال قالب مرسال المعتمد.</p>
+          <p>ادخل برقم الجوال المسجل في عملية الشراء. سنرسل لك رمز تحقق عبر SMS+ على رقم الجوال المسجل.</p>
           {message ? <div className="owners-public-message">{message}</div> : null}
           {stage === "phone" ? (
             <>
               <label><span>رقم الجوال</span><input inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="05xxxxxxxx" /></label>
-              <button disabled={busy} onClick={() => void requestOtp()}><WhatsappLogo size={20} />{busy ? "جاري الإرسال..." : "إرسال رمز التحقق"}</button>
+              <button disabled={busy} onClick={() => void requestOtp()}>{busy ? "جاري الإرسال..." : "إرسال رمز التحقق عبر SMS+"}</button>
             </>
           ) : (
             <>

@@ -3,7 +3,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSessionUser } from "./_auth.js";
 import { hasPermission } from "./_access-control.js";
 import { clean } from "./_crm-utils.js";
-import { deliverDirectWhatsapp } from "./_crm-messaging.js";
 import { getSql } from "./_db.js";
 import { normalizePhone } from "./_phone-utils.js";
 import {
@@ -12,6 +11,7 @@ import {
   syncOwnerReferralProgress,
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
+import { queueFirebaseSms } from "./_firebase-sms.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -29,10 +29,6 @@ function publicBase(request: VercelRequest) {
   const protocol = String(request.headers["x-forwarded-proto"] || "https").split(",")[0];
   const host = String(request.headers["x-forwarded-host"] || request.headers.host || "mzj-platform.vercel.app").split(",")[0];
   return `${protocol}://${host}`;
-}
-
-function renderNumberedTemplate(content: string, values: string[]) {
-  return String(content || "").replace(/{{\s*(\d+)\s*}}/g, (_match, number) => values[Number(number) - 1] || "");
 }
 
 function integer(value: unknown, fallback: number, minimum: number, maximum: number) {
@@ -149,34 +145,6 @@ async function createManualOwnerMember(input: {
   throw new Error("تعذر إنشاء كود دعوة فريد للعضو");
 }
 
-async function approvedMersalTemplates() {
-  return getSql()<any[]>`
-    select id::text,name,display_name,content,provider,template_type,language_code,status,external_id
-    from crm.message_templates
-    where is_active=true
-      and lower(coalesce(provider,''))='mersal'
-      and upper(coalesce(status,''))='APPROVED'
-      and nullif(coalesce(name,external_id),'') is not null
-    order by display_name,name
-  `;
-}
-
-async function approvedMersalTemplateId(value: unknown) {
-  const id = clean(value);
-  if (!id) return null;
-  const [template] = await getSql()<any[]>`
-    select id::text
-    from crm.message_templates
-    where id=${id}::uuid
-      and is_active=true
-      and lower(coalesce(provider,''))='mersal'
-      and upper(coalesce(status,''))='APPROVED'
-      and nullif(coalesce(name,external_id),'') is not null
-    limit 1
-  `;
-  return template?.id || null;
-}
-
 async function syncMembersFromCanonicalSales() {
   const sql = getSql();
   const rows = await sql<any[]>`
@@ -214,16 +182,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       : hasPermission(actor, "owners.community.view") || hasPermission(actor, "owners.community.manage");
     if (!allowed) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية للدخول إلى MZJ Owners Community" });
     if (scope === "settings") {
-      const [settingsRows, templates] = await Promise.all([
-        sql<any[]>`select * from owners.settings where id='default'`,
-        approvedMersalTemplates(),
-      ]);
-      return response.status(200).json({ ok: true, settings: settingsRows[0] || {}, templates });
+      const settingsRows = await sql<any[]>`select * from owners.settings where id='default'`;
+      return response.status(200).json({ ok: true, settings: settingsRows[0] || {} });
     }
 
-    const [settings, templates, members, referrals, rewards, redemptions, stats] = await Promise.all([
+    const [settings, members, referrals, rewards, redemptions, stats] = await Promise.all([
       sql<any[]>`select * from owners.settings where id='default'`.then((rows) => rows[0] || {}),
-      approvedMersalTemplates(),
       sql<any[]>`
         select
           m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
@@ -276,7 +240,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({
       ok: true,
       settings,
-      templates,
       members,
       referrals,
       rewards,
@@ -292,28 +255,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (action !== "save_settings" && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
 
   if (action === "save_settings") {
-    const otpChannel = clean(payload.otpChannel).toLowerCase() === 'whatsapp' ? 'whatsapp' : 'smsplus';
-    const requestedOtpTemplateId = clean(payload.otpTemplateId);
-    const requestedWelcomeTemplateId = clean(payload.welcomeTemplateId);
-    const [otpTemplateId, welcomeTemplateId] = await Promise.all([
-      approvedMersalTemplateId(requestedOtpTemplateId),
-      approvedMersalTemplateId(requestedWelcomeTemplateId),
-    ]);
-    if (otpChannel === 'whatsapp' && requestedOtpTemplateId && !otpTemplateId) {
-      return response.status(400).json({ ok: false, error: "قالب OTP يجب أن يكون قالب مرسال معتمدًا ونشطًا" });
-    }
-    if (requestedWelcomeTemplateId && !welcomeTemplateId) {
-      return response.status(400).json({ ok: false, error: "قالب الترحيب يجب أن يكون قالب مرسال معتمدًا ونشطًا" });
-    }
     const silverPoints = integer(payload.silverPoints, 1000, 0, 1_000_000_000);
     const goldPoints = Math.max(silverPoints, integer(payload.goldPoints, 3000, 0, 1_000_000_000));
     const platinumPoints = Math.max(goldPoints, integer(payload.platinumPoints, 7000, 0, 1_000_000_000));
     const [settings] = await sql<any[]>`
       update owners.settings set
         is_enabled=${payload.isEnabled !== false},
-        otp_channel=${otpChannel},
-        otp_template_id=${otpTemplateId}::uuid,
-        welcome_template_id=${welcomeTemplateId}::uuid,
         otp_expiry_minutes=${integer(payload.otpExpiryMinutes, 5, 1, 30)},
         otp_resend_seconds=${integer(payload.otpResendSeconds, 60, 15, 600)},
         otp_max_attempts=${integer(payload.otpMaxAttempts, 5, 1, 20)},
@@ -494,40 +441,38 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (action === "send_welcome") {
     const memberId = clean(payload.memberId);
-    const [settings] = await sql<any[]>`select * from owners.settings where id='default'`;
-    if (!settings?.welcome_template_id) {
-      return response.status(400).json({ ok: false, error: "حدد قالب الترحيب المعتمد من مرسال أولًا" });
-    }
     const [member] = await sql<any[]>`
       select *,id::text
       from owners.members
       where id=${memberId}::uuid and status='active'
       limit 1
     `;
-    const [template] = await sql<any[]>`
-      select *,id::text
-      from crm.message_templates
-      where id=${settings.welcome_template_id}::uuid
-        and is_active=true
-        and lower(coalesce(provider,''))='mersal'
-        and upper(coalesce(status,''))='APPROVED'
-      limit 1
-    `;
-    if (!member || !template) return response.status(404).json({ ok: false, error: "العميل أو القالب غير موجود" });
+    if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
 
     const portalUrl = `${publicBase(request)}/owners`;
     const inviteUrl = `${publicBase(request)}/owners/invite/${member.referral_code}`;
-    const text = renderNumberedTemplate(template.content, [member.customer_name || "عميل MZJ", portalUrl, inviteUrl]);
-    await deliverDirectWhatsapp({
-      phone: member.phone_normalized,
-      text,
-      template,
-      idempotencyKey: `owners-welcome:${member.id}:${Date.now()}`,
-      reason: "owners_welcome",
-    });
-    await sql`update owners.members set welcome_sent_at=now(),updated_at=now() where id=${member.id}::uuid`;
-    return response.status(200).json({ ok: true });
+    const phone = normalizePhone(member.phone_normalized);
+    if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العضو غير صالح" });
+    const customerName = clean(member.customer_name) || "عميل MZJ";
+    const message = `مرحباً ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\n\nرابط دعوتك الخاص لمشاركته مع أصدقائك:\n${inviteUrl}\n\nمع MZJ أنت نجم الطريق ⭐`;
+
+    try {
+      const queued = await queueFirebaseSms({
+        byUid: actor.id,
+        createdAt: new Date(),
+        message,
+        meta: { type: "owners_welcome", purpose: "welcome", memberId: member.id },
+        phone,
+        source: "mzj_owners_community",
+        status: "queued",
+        to: phone,
+      });
+      await sql`update owners.members set welcome_sent_at=now(),updated_at=now() where id=${member.id}::uuid`;
+      return response.status(200).json({ ok: true, status: "queued", documentId: queued.documentId });
+    } catch (error) {
+      return response.status(502).json({ ok: false, error: error instanceof Error ? error.message : "تعذر إرسال رسالة الترحيب عبر SMS+" });
+    }
   }
 
-  return response.status(400).json({ ok: false, error: "الإجراء غير معروف" });
+  return response.status(400).json({ ok: false, error: "Unknown action" });
 }

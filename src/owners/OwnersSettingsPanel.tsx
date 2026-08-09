@@ -1,20 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ChatCircleText, FloppyDisk, Gift, Medal, ShieldCheck } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
 
-type OwnerTemplate = {
-  id: string;
-  name?: string | null;
-  display_name?: string | null;
-};
-
 type OwnersSettingsForm = {
   isEnabled: boolean;
-  otpChannel: "smsplus" | "whatsapp";
-  otpTemplateId: string;
-  welcomeTemplateId: string;
   welcomeMessageEnabled: boolean;
   otpExpiryMinutes: number;
   otpResendSeconds: number;
@@ -36,9 +27,6 @@ type OwnersSettingsForm = {
 
 const emptyForm: OwnersSettingsForm = {
   isEnabled: true,
-  otpChannel: "smsplus",
-  otpTemplateId: "",
-  welcomeTemplateId: "",
   welcomeMessageEnabled: false,
   otpExpiryMinutes: 5,
   otpResendSeconds: 60,
@@ -65,7 +53,6 @@ function errorMessage(error: unknown) {
 export function OwnersSettingsPanel() {
   const { user } = useAuth();
   const editable = hasPermission(user, "settings.owners.manage") || hasPermission(user, "owners.community.manage");
-  const [templates, setTemplates] = useState<OwnerTemplate[]>([]);
   const [form, setForm] = useState<OwnersSettingsForm>(emptyForm);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -74,12 +61,8 @@ export function OwnersSettingsPanel() {
   async function load() {
     const response = await ownersAdminGet("settings");
     const settings = response.settings || {};
-    setTemplates(Array.isArray(response.templates) ? response.templates : []);
     setForm({
       isEnabled: settings.is_enabled !== false,
-      otpChannel: settings.otp_channel === "whatsapp" ? "whatsapp" : "smsplus",
-      otpTemplateId: settings.otp_template_id || "",
-      welcomeTemplateId: settings.welcome_template_id || "",
       welcomeMessageEnabled: settings.welcome_message_enabled === true,
       otpExpiryMinutes: Number(settings.otp_expiry_minutes || 5),
       otpResendSeconds: Number(settings.otp_resend_seconds || 60),
@@ -108,11 +91,6 @@ export function OwnersSettingsPanel() {
     });
   }, []);
 
-  const templateOptions = useMemo(
-    () => templates.map((template) => ({ id: template.id, label: template.display_name || template.name || template.id })),
-    [templates],
-  );
-
   async function save() {
     setBusy(true);
     setMessage("");
@@ -140,7 +118,7 @@ export function OwnersSettingsPanel() {
           <ShieldCheck size={28} />
           <div>
             <h2>إعدادات MZJ Owners Community</h2>
-            <p>إدارة قناة OTP عبر SMS+ أو واتساب، قواعد النقاط، مستويات العضوية ورحلة الدعوة من مكان واحد.</p>
+            <p>إدارة التحقق عبر SMS+، قواعد النقاط، مستويات العضوية ورحلة الدعوة من مكان واحد.</p>
           </div>
         </div>
         <span className={form.isEnabled ? "owners-badge ok" : "owners-badge"}>
@@ -161,25 +139,8 @@ export function OwnersSettingsPanel() {
             </select>
           </label>
           <label>
-            <span>قناة إرسال OTP</span>
-            <select disabled={!editable} value={form.otpChannel} onChange={(event) => setForm({ ...form, otpChannel: event.target.value === "whatsapp" ? "whatsapp" : "smsplus" })}>
-              <option value="smsplus">SMS+ عبر تطبيق التراكينج</option>
-              <option value="whatsapp">واتساب عبر مرسال</option>
-            </select>
-          </label>
-          <label>
-            <span>قالب OTP المعتمد من مرسال</span>
-            <select disabled={!editable || form.otpChannel !== "whatsapp"} value={form.otpTemplateId} onChange={(event) => setForm({ ...form, otpTemplateId: event.target.value })}>
-              <option value="">{form.otpChannel === "smsplus" ? "غير مطلوب مع SMS+" : "اختر القالب"}</option>
-              {templateOptions.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>قالب ترحيب العضو</span>
-            <select disabled={!editable} value={form.welcomeTemplateId} onChange={(event) => setForm({ ...form, welcomeTemplateId: event.target.value })}>
-              <option value="">بدون قالب</option>
-              {templateOptions.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
-            </select>
+            <span>قناة رسائل البرنامج</span>
+            <input disabled value="SMS+ عبر تطبيق التراكينج" />
           </label>
           <label>
             <span>صلاحية OTP بالدقائق</span>

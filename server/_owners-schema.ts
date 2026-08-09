@@ -7,9 +7,6 @@ create schema if not exists owners;
 create table if not exists owners.settings (
   id text primary key default 'default',
   is_enabled boolean not null default true,
-  otp_channel text not null default 'smsplus' check (otp_channel in ('smsplus','whatsapp')),
-  otp_template_id uuid references crm.message_templates(id) on delete set null,
-  welcome_template_id uuid references crm.message_templates(id) on delete set null,
   otp_expiry_minutes integer not null default 5 check (otp_expiry_minutes between 1 and 30),
   otp_resend_seconds integer not null default 60 check (otp_resend_seconds between 15 and 600),
   otp_max_attempts integer not null default 5 check (otp_max_attempts between 1 and 20),
@@ -32,7 +29,6 @@ create table if not exists owners.settings (
 );
 insert into owners.settings(id) values('default') on conflict(id) do nothing;
 
-alter table owners.settings add column if not exists otp_channel text not null default 'smsplus';
 alter table owners.settings add column if not exists otp_hourly_limit integer not null default 5;
 alter table owners.settings add column if not exists silver_points integer not null default 1000;
 alter table owners.settings add column if not exists gold_points integer not null default 3000;
@@ -187,7 +183,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1203,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1204,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -203,14 +199,13 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='points_ledger')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='otp_challenges')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='schema_state')
-      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_channel')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_hourly_limit')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
       as ready
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1203;
+  return Number(state?.version || 0) >= 1204;
 }
 
 export function ensureOwnersSchema() {
