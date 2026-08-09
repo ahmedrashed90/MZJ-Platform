@@ -3,18 +3,35 @@ import {
   ArrowsClockwise,
   CheckCircle,
   Crown,
+  FileXls,
   Gift,
   NotePencil,
   PaperPlaneTilt,
   ShareNetwork,
+  Trash,
+  UserPlus,
   UsersThree,
   Wallet,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
+import { readXlsx } from "../crm/xlsxReader";
 
-type Tab = "members" | "referrals" | "rewards" | "redemptions";
+type Tab = "members" | "import" | "referrals" | "rewards" | "redemptions";
+
+
+type ImportMapping = { name: string; phone: string; purchaseDate: string; vehicle: string; branch: string; orderId: string };
+const emptyMapping: ImportMapping = { name: "", phone: "", purchaseDate: "", vehicle: "", branch: "", orderId: "" };
+
+function normalizedHeader(value: string) {
+  return value.trim().toLowerCase().replace(/[\s_\-]+/g, "");
+}
+
+function guessHeader(headers: string[], aliases: string[]) {
+  const normalizedAliases = aliases.map(normalizedHeader);
+  return headers.find((header) => normalizedAliases.includes(normalizedHeader(header))) || "";
+}
 
 type RewardDraft = {
   id: string;
@@ -86,6 +103,11 @@ export function OwnersCommunityPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [reward, setReward] = useState<RewardDraft>(emptyReward);
+  const [testMember, setTestMember] = useState({ name: "", phone: "" });
+  const [importRows, setImportRows] = useState<Record<string, string>[]>([]);
+  const [importFileName, setImportFileName] = useState("");
+  const [mapping, setMapping] = useState<ImportMapping>(emptyMapping);
+  const [importSummary, setImportSummary] = useState<any>(null);
 
   async function load() {
     setData(await ownersAdminGet());
@@ -116,6 +138,58 @@ export function OwnersCommunityPage() {
     if (saved) setReward(emptyReward);
   }
 
+  async function createTestMember() {
+    const ok = await act({ action: "create_test_member", ...testMember }, "تمت إضافة العضو التجريبي");
+    if (ok) setTestMember({ name: "", phone: "" });
+  }
+
+  async function loadImportFile(file: File | null) {
+    if (!file) return;
+    setMessage("");
+    setImportSummary(null);
+    try {
+      const rows = await readXlsx(file);
+      if (!rows.length) throw new Error("ملف Excel لا يحتوي على بيانات");
+      const headers = Object.keys(rows[0]);
+      setImportRows(rows);
+      setImportFileName(file.name);
+      setMapping({
+        name: guessHeader(headers, ["الاسم", "اسم العميل", "العميل", "name", "customer name", "customer_name"]),
+        phone: guessHeader(headers, ["الجوال", "رقم الجوال", "الهاتف", "الموبايل", "phone", "mobile", "phone_number"]),
+        purchaseDate: guessHeader(headers, ["تاريخ الشراء", "تاريخ البيع", "purchase date", "sale date", "sold date"]),
+        vehicle: guessHeader(headers, ["السيارة", "اسم السيارة", "الموديل", "vehicle", "car", "model"]),
+        branch: guessHeader(headers, ["الفرع", "branch"]),
+        orderId: guessHeader(headers, ["رقم الطلب", "طلب البيع", "order id", "order", "sales order"]),
+      });
+    } catch (error) {
+      setImportRows([]);
+      setImportFileName("");
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function importMembers() {
+    if (!mapping.name || !mapping.phone) { setMessage("حدد عمود اسم العميل وعمود رقم الجوال أولًا"); return; }
+    const mapped = importRows.map((row) => ({
+      name: row[mapping.name] || "", phone: row[mapping.phone] || "",
+      purchaseDate: mapping.purchaseDate ? row[mapping.purchaseDate] || "" : "",
+      vehicle: mapping.vehicle ? row[mapping.vehicle] || "" : "",
+      branch: mapping.branch ? row[mapping.branch] || "" : "",
+      orderId: mapping.orderId ? row[mapping.orderId] || "" : "",
+    }));
+    setBusy(true); setMessage(""); setImportSummary(null);
+    const total = { total: mapped.length, created: 0, matched: 0, duplicates: 0, invalid: 0 };
+    try {
+      for (let index = 0; index < mapped.length; index += 400) {
+        const result = await ownersAdminPost({ action: "import_members", rows: mapped.slice(index, index + 400) });
+        for (const key of ["created", "matched", "duplicates", "invalid"] as const) total[key] += Number(result.summary?.[key] || 0);
+      }
+      setImportSummary(total);
+      await load();
+      setMessage("اكتمل استيراد العملاء السابقين");
+    } catch (error) { setMessage(errorMessage(error)); } finally { setBusy(false); }
+  }
+
   function editReward(item: any) {
     setReward({
       id: item.id || "",
@@ -136,6 +210,8 @@ export function OwnersCommunityPage() {
   const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
+  const importHeaders = importRows.length ? Object.keys(importRows[0]) : [];
+  const testMembersCount = members.filter((member: any) => member.member_kind === "test").length;
   const soldRate = useMemo(
     () => Number(stats.referrals || 0) ? Math.round(Number(stats.referral_sales || 0) * 100 / Number(stats.referrals || 1)) : 0,
     [stats.referrals, stats.referral_sales],
@@ -172,40 +248,84 @@ export function OwnersCommunityPage() {
 
       <nav className="owners-tabs">
         <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>الأعضاء</button>
+        {canManage ? <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}>استيراد العملاء السابقين</button> : null}
         <button className={tab === "referrals" ? "active" : ""} onClick={() => setTab("referrals")}>الدعوات</button>
         <button className={tab === "rewards" ? "active" : ""} onClick={() => setTab("rewards")}>المكافآت</button>
         <button className={tab === "redemptions" ? "active" : ""} onClick={() => setTab("redemptions")}>طلبات الاستبدال</button>
       </nav>
 
       {tab === "members" ? (
-        <section className="owners-table-card">
-          <header><h2>أعضاء MZJ Owners Community</h2><span>{members.length} عضو ظاهر</span></header>
-          <div className="owners-table-wrap">
-            <table>
-              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>الإجراءات</th></tr></thead>
-              <tbody>
-                {members.map((member: any) => (
-                  <tr key={member.id}>
-                    <td><strong>{member.customer_name || "عميل MZJ"}</strong></td>
-                    <td>{member.phone_normalized}</td>
-                    <td><code>{member.referral_code}</code></td>
-                    <td>{tierLabel(member.tier_code)}</td>
-                    <td>{Number(member.points_balance || 0).toLocaleString("ar-SA-u-nu-latn")}</td>
-                    <td>{member.referrals_count || 0}</td>
-                    <td>{member.sales_count || 0}</td>
-                    <td>{formatDate(member.last_sale_at)}</td>
-                    <td>
-                      {canManage ? (
-                        <button className="owners-link-btn" disabled={busy} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى مسار مرسال") }>
-                          <PaperPlaneTilt size={16} /> إرسال الترحيب
-                        </button>
-                      ) : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <>
+          {canManage ? (
+            <section className="owners-table-card owners-test-member-card">
+              <header><div><h2>إضافة عضو تجريبي</h2><span>للاختبار فقط — لا يدخل في أرقام وتقارير البرنامج الفعلية ولا ينشئ Lead في CRM عند تجربة رابط الدعوة.</span></div></header>
+              <div className="owners-inline-form">
+                <label><span>اسم العضو التجريبي</span><input value={testMember.name} onChange={(event) => setTestMember({ ...testMember, name: event.target.value })} placeholder="اكتب اسم العضو" /></label>
+                <label><span>رقم الجوال</span><input value={testMember.phone} onChange={(event) => setTestMember({ ...testMember, phone: event.target.value })} placeholder="05xxxxxxxx" dir="ltr" /></label>
+                <button className="owners-primary" disabled={busy || !testMember.name.trim() || !testMember.phone.trim()} onClick={() => void createTestMember()}><UserPlus size={18} /> إضافة عضو تجريبي</button>
+              </div>
+            </section>
+          ) : null}
+          <section className="owners-table-card">
+            <header><h2>أعضاء MZJ Owners Community</h2><span>{members.length - testMembersCount} حقيقي · {testMembersCount} تجريبي</span></header>
+            <div className="owners-table-wrap">
+              <table>
+                <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>الإجراءات</th></tr></thead>
+                <tbody>
+                  {members.map((member: any) => (
+                    <tr key={member.id}>
+                      <td><strong>{member.customer_name || "عميل MZJ"}</strong></td>
+                      <td><span className={`owners-member-type ${member.member_kind === "test" ? "test" : "real"}`}>{member.member_kind === "test" ? "تجريبي" : member.enrollment_source?.startsWith("excel_import") ? "مستورد" : "حقيقي"}</span></td>
+                      <td>{member.phone_normalized}</td>
+                      <td><code>{member.referral_code}</code></td>
+                      <td>{tierLabel(member.tier_code)}</td>
+                      <td>{Number(member.points_balance || 0).toLocaleString("ar-SA-u-nu-latn")}</td>
+                      <td>{member.referrals_count || 0}</td>
+                      <td>{member.sales_count || 0}</td>
+                      <td>{formatDate(member.last_sale_at)}</td>
+                      <td>
+                        {canManage ? (
+                          <div className="owners-actions">
+                            <button className="owners-link-btn" disabled={busy} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى مسار مرسال") }><PaperPlaneTilt size={16} /> إرسال الترحيب</button>
+                            {member.member_kind === "test" ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm("حذف العضو التجريبي وكل بيانات تجربته؟") && void act({ action: "delete_test_member", memberId: member.id }, "تم حذف العضو التجريبي") }><Trash size={16} /> حذف</button> : null}
+                          </div>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {tab === "import" && canManage ? (
+        <section className="owners-table-card owners-import-card">
+          <header><div><h2>استيراد العملاء السابقين من Excel</h2><span>يتم منع التكرار برقم الجوال، ومطابقة العميل تلقائيًا مع المبيعات الحالية عند وجود تطابق.</span></div></header>
+          <div className="owners-import-upload">
+            <FileXls size={32} />
+            <div><strong>{importFileName || "اختر ملف Excel بصيغة .xlsx"}</strong><span>الصف الأول يجب أن يحتوي على أسماء الأعمدة. الحد الأقصى 20MB.</span></div>
+            <label className="owners-primary"><FileXls size={18} /> اختيار الملف<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => void loadImportFile(event.target.files?.[0] || null)} /></label>
           </div>
+          {importRows.length ? (
+            <>
+              <div className="owners-form-grid">
+                {([
+                  ["name", "اسم العميل *"], ["phone", "رقم الجوال *"], ["purchaseDate", "تاريخ الشراء"],
+                  ["vehicle", "السيارة"], ["branch", "الفرع"], ["orderId", "رقم الطلب"],
+                ] as Array<[keyof ImportMapping, string]>).map(([key, label]) => (
+                  <label key={key}><span>{label}</span><select value={mapping[key]} onChange={(event) => setMapping({ ...mapping, [key]: event.target.value })}><option value="">غير محدد</option>{importHeaders.map((header) => <option key={header} value={header}>{header}</option>)}</select></label>
+                ))}
+              </div>
+              <div className="owners-import-preview">
+                <strong>معاينة أول {Math.min(5, importRows.length)} من {importRows.length} صف</strong>
+                <div className="owners-table-wrap"><table><thead><tr><th>الاسم</th><th>الجوال</th><th>تاريخ الشراء</th><th>السيارة</th><th>الفرع</th><th>رقم الطلب</th></tr></thead><tbody>{importRows.slice(0,5).map((row,index)=><tr key={index}><td>{mapping.name ? row[mapping.name] : "—"}</td><td>{mapping.phone ? row[mapping.phone] : "—"}</td><td>{mapping.purchaseDate ? row[mapping.purchaseDate] : "—"}</td><td>{mapping.vehicle ? row[mapping.vehicle] : "—"}</td><td>{mapping.branch ? row[mapping.branch] : "—"}</td><td>{mapping.orderId ? row[mapping.orderId] : "—"}</td></tr>)}</tbody></table></div>
+              </div>
+              {importSummary ? <div className="owners-import-summary"><span>إجمالي <b>{importSummary.total}</b></span><span>جديد <b>{importSummary.created}</b></span><span>طابق المبيعات <b>{importSummary.matched}</b></span><span>مكرر <b>{importSummary.duplicates}</b></span><span>غير صالح <b>{importSummary.invalid}</b></span></div> : null}
+              <div className="owners-save-row"><button className="owners-primary" disabled={busy || !mapping.name || !mapping.phone} onClick={() => void importMembers()}><FileXls size={18} />{busy ? "جاري الاستيراد..." : `استيراد ${importRows.length} عميل`}</button></div>
+            </>
+          ) : null}
         </section>
       ) : null}
 
@@ -218,7 +338,7 @@ export function OwnersCommunityPage() {
               <tbody>
                 {referrals.map((referral: any) => (
                   <tr key={referral.id}>
-                    <td>{referral.referrer_name}<small className="owners-sub">{referral.referral_code}</small></td>
+                    <td>{referral.referrer_name}{referral.referrer_member_kind === "test" ? <span className="owners-member-type test">تجريبي</span> : null}<small className="owners-sub">{referral.referral_code}</small></td>
                     <td>{referral.referred_name || "—"}</td>
                     <td>{referral.referred_phone_normalized || "—"}</td>
                     <td><span className={`owners-status ${referral.status}`}>{referralStatusLabel(referral.status)}</span></td>

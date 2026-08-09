@@ -60,7 +60,8 @@ async function findReferrer(codeValue: unknown) {
   const code = clean(codeValue).toUpperCase();
   if (!code) return null;
   const [member] = await getSql()<any[]>`
-    select id::text,customer_name,phone_normalized,referral_code
+    select id::text,customer_name,phone_normalized,referral_code,metadata,
+      coalesce(metadata->>'memberKind','real') as member_kind
     from owners.members
     where referral_code=${code} and status='active'
     limit 1
@@ -142,6 +143,34 @@ async function registerReferral(response: VercelResponse, payload: Record<string
   `;
   if (linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
     return response.status(409).json({ ok: false, error: "هذا الرقم مرتبط بدعوة سابقة" });
+  }
+
+  if (referrer.member_kind === "test") {
+    const testMetadata: OwnerJson = { source: "test_invite", memberKind: "test" };
+    const [referral] = await sql<any[]>`
+      insert into owners.referrals(
+        referrer_member_id,referred_name,referred_phone_normalized,status,registered_at,metadata
+      ) values(
+        ${referrer.id}::uuid,${name},${phone},'registered',now(),${sql.json(testMetadata)}
+      )
+      on conflict(referred_phone_normalized) where referred_phone_normalized is not null do update set
+        referred_name=excluded.referred_name,
+        registered_at=coalesce(owners.referrals.registered_at,excluded.registered_at),
+        status=case when owners.referrals.status='rejected' then 'registered' else owners.referrals.status end,
+        metadata=coalesce(owners.referrals.metadata,'{}'::jsonb)||excluded.metadata,
+        updated_at=now()
+      returning id::text
+    `;
+    await awardOwnerPoints({
+      memberId: referrer.id,
+      points: Number(settings.points_registration || 0),
+      eventType: "registration",
+      eventKey: `test-registration:${referral.id}`,
+      referralId: referral.id,
+      description: "تسجيل صديق تجريبي من رابط الدعوة",
+      metadata: { memberKind: "test" } as OwnerJson,
+    });
+    return response.status(200).json({ ok: true, message: "تم تسجيل الصديق التجريبي بدون إضافة بيانات إلى CRM" });
   }
 
   let [lead] = await sql<any[]>`

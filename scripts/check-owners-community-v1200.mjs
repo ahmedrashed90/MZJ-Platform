@@ -58,6 +58,12 @@ expect("redemption is transactional and can refund rejected or cancelled request
 expect("admin settings include OTP, point rules, levels, benefit copy and Mersal templates", ["otpHourlyLimit", "pointsUniqueOpen", "silverPoints", "friendBenefitTitle", "otpTemplateId"].every((field) => settingsPanel.includes(field)));
 expect("member portal exposes points, invite link, referrals, rewards and ledger", ["member.inviteUrl", "owners-public-rewards", "owners-referral-list", "owners-ledger"].every((text) => portal.includes(text)));
 expect("invite page registers a friend through the public referral endpoint", invite.includes("register_referral") && invite.includes("ownersPublicPost"));
+expect("admin can create and delete isolated test members", adminApi.includes('action === "create_test_member"') && adminApi.includes('action === "delete_test_member"') && adminPage.includes("إضافة عضو تجريبي"));
+expect("test members are excluded from real Owners KPIs", adminApi.includes("memberKind','real')<>'test") && adminPage.includes('member.member_kind === "test"'));
+expect("test referrals never create CRM leads", publicApi.includes('referrer.member_kind === "test"') && publicApi.includes("تم تسجيل الصديق التجريبي بدون إضافة بيانات إلى CRM"));
+expect("historical customers can be imported from xlsx with explicit column mapping", adminPage.includes("readXlsx") && adminPage.includes("import_members") && adminPage.includes("استيراد العملاء السابقين من Excel"));
+expect("Excel import deduplicates by normalized phone and matches canonical sales", adminApi.includes("seen = new Set") && adminApi.includes("excel_import_matched") && adminApi.includes("ensureOwnerMemberForLead(sale.lead_id, sale.sale_id)"));
+expect("internal Owners API independently enforces employee permissions", adminApi.includes('hasPermission(actor, "owners.community.view")') && adminApi.includes('hasPermission(actor, "owners.community.manage")') && adminApi.includes('hasPermission(actor, "settings.owners.manage")'));
 expect("focused Owners check runs before the existing baseline checks", String(packageJson.scripts?.typecheck || "").startsWith("node scripts/check-owners-community-v1200.mjs && "));
 expect("no release-specific Owners migration or patch file was added", !fs.readdirSync("database/migrations").some((name) => /owners|1200/i.test(name)));
 

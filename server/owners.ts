@@ -1,8 +1,11 @@
+import crypto from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSessionUser } from "./_auth.js";
+import { hasPermission } from "./_access-control.js";
 import { clean } from "./_crm-utils.js";
 import { deliverDirectWhatsapp } from "./_crm-messaging.js";
 import { getSql } from "./_db.js";
+import { normalizePhone } from "./_phone-utils.js";
 import {
   ensureOwnerMemberForLead,
   processOwnerSaleForLead,
@@ -41,6 +44,109 @@ function integer(value: unknown, fallback: number, minimum: number, maximum: num
 function optionalDate(value: unknown) {
   const normalized = clean(value);
   return normalized || null;
+}
+
+function safeImportedDate(value: unknown) {
+  const text = clean(value);
+  if (!text) return null;
+  const dmy = text.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  const candidate = dmy
+    ? `${dmy[3]}-${String(dmy[2]).padStart(2, "0")}-${String(dmy[1]).padStart(2, "0")}T12:00:00+03:00`
+    : /^\d{4}-\d{2}-\d{2}$/.test(text)
+      ? `${text}T12:00:00+03:00`
+      : text;
+  const date = new Date(candidate);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+
+function isTestMemberMetadata(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  return clean((metadata as Record<string, unknown>).memberKind).toLowerCase() === "test";
+}
+
+function randomReferralCode() {
+  return crypto.randomBytes(7).toString("base64url").replace(/[-_]/g, "").toUpperCase().slice(0, 10);
+}
+
+async function createManualOwnerMember(input: {
+  name: unknown;
+  phone: unknown;
+  purchaseDate?: unknown;
+  vehicle?: unknown;
+  branch?: unknown;
+  orderId?: unknown;
+  source: "admin_test" | "excel_import";
+  actorId: string;
+}) {
+  const sql = getSql();
+  const phone = normalizePhone(input.phone);
+  const name = clean(input.name);
+  if (!phone) return { status: "invalid" as const, error: "رقم الجوال غير صالح" };
+  if (!name) return { status: "invalid" as const, error: "اسم العميل مطلوب" };
+
+  const [existing] = await sql<any[]>`
+    select id::text,metadata
+    from owners.members
+    where phone_normalized=${phone}
+    limit 1
+  `;
+  if (existing) return { status: "duplicate" as const, memberId: existing.id, test: isTestMemberMetadata(existing.metadata) };
+
+  if (input.source === "excel_import") {
+    const [sale] = await sql<any[]>`
+      select l.id::text as lead_id,st.id::text as sale_id
+      from crm.leads l
+      join crm.sales_transactions st on st.lead_id=l.id and coalesce(st.is_cancelled,false)=false
+      where l.is_deleted=false and l.phone_normalized=${phone}
+      order by st.sale_at desc,st.created_at desc,st.id desc
+      limit 1
+    `;
+    if (sale) {
+      const member = await ensureOwnerMemberForLead(sale.lead_id, sale.sale_id);
+      if (member) {
+        const importMetadata = {
+          memberKind: "real", enrollmentSource: "excel_import_matched", importedBy: input.actorId,
+          importedAt: new Date().toISOString(), vehicle: clean(input.vehicle) || null, branch: clean(input.branch) || null,
+          orderId: clean(input.orderId) || null, purchaseDate: clean(input.purchaseDate) || null,
+        };
+        await sql`update owners.members set metadata=coalesce(metadata,'{}'::jsonb)||${sql.json(importMetadata)}::jsonb,updated_at=now() where id=${member.id}::uuid`;
+        return { status: "matched" as const, memberId: member.id };
+      }
+    }
+  }
+
+  const purchaseDate = safeImportedDate(input.purchaseDate);
+  const metadata = {
+    memberKind: input.source === "admin_test" ? "test" : "real",
+    enrollmentSource: input.source,
+    importedBy: input.actorId,
+    importedAt: new Date().toISOString(),
+    vehicle: clean(input.vehicle) || null,
+    branch: clean(input.branch) || null,
+    orderId: clean(input.orderId) || null,
+    purchaseDate: purchaseDate || null,
+  };
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      const [member] = await sql<any[]>`
+        insert into owners.members(
+          phone_normalized,customer_name,referral_code,first_sale_at,last_sale_at,metadata
+        ) values(
+          ${phone},${name},${randomReferralCode()},
+          ${purchaseDate || null}::timestamptz,${purchaseDate || null}::timestamptz,${sql.json(metadata)}
+        )
+        returning id::text
+      `;
+      return { status: "created" as const, memberId: member.id };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/referral_code|owners_members_referral/i.test(message)) continue;
+      throw error;
+    }
+  }
+  throw new Error("تعذر إنشاء كود دعوة فريد للعضو");
 }
 
 async function approvedMersalTemplates() {
@@ -98,8 +204,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const payload = requestBody(request);
   const action = clean(payload.action || request.query.action);
 
+  const actor = await getSessionUser(request);
+  if (!actor) return response.status(401).json({ ok: false, error: "يجب تسجيل الدخول أولًا" });
+
   if (request.method === "GET") {
     const scope = clean(request.query.scope);
+    const allowed = scope === "settings"
+      ? hasPermission(actor, "settings.owners.view") || hasPermission(actor, "settings.owners.manage") || hasPermission(actor, "owners.community.manage")
+      : hasPermission(actor, "owners.community.view") || hasPermission(actor, "owners.community.manage");
+    if (!allowed) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية للدخول إلى MZJ Owners Community" });
     if (scope === "settings") {
       const [settingsRows, templates] = await Promise.all([
         sql<any[]>`select * from owners.settings where id='default'`,
@@ -114,7 +227,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql<any[]>`
         select
           m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
-          m.tier_code,m.first_sale_at,m.last_sale_at,m.last_login_at,m.welcome_sent_at,
+          m.tier_code,m.first_sale_at,m.last_sale_at,m.last_login_at,m.welcome_sent_at,m.metadata,
+          coalesce(m.metadata->>'memberKind','real') as member_kind,
+          coalesce(m.metadata->>'enrollmentSource','canonical_sale') as enrollment_source,
           count(distinct r.id)::int as referrals_count,
           count(distinct r.id) filter(where r.status='sold')::int as sales_count
         from owners.members m
@@ -127,7 +242,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql<any[]>`
         select
           r.id::text,r.status,r.referred_name,r.referred_phone_normalized,r.registered_at,
-          r.qualified_at,r.sold_at,m.customer_name as referrer_name,m.referral_code
+          r.qualified_at,r.sold_at,m.customer_name as referrer_name,m.referral_code,
+          coalesce(m.metadata->>'memberKind','real') as referrer_member_kind
         from owners.referrals r
         join owners.members m on m.id=r.referrer_member_id
         order by r.created_at desc
@@ -150,11 +266,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `,
       sql<any[]>`
         select
-          (select count(*) from owners.members where status='active')::int as members,
-          (select count(*) from owners.referrals)::int as referrals,
-          (select count(*) from owners.referrals where status='sold')::int as referral_sales,
-          (select coalesce(sum(points_balance),0) from owners.members where status='active')::int as outstanding_points,
-          (select count(*) from owners.redemptions where status='requested')::int as pending_redemptions
+          (select count(*) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as members,
+          (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where coalesce(m.metadata->>'memberKind','real')<>'test')::int as referrals,
+          (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where r.status='sold' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as referral_sales,
+          (select coalesce(sum(points_balance),0) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as outstanding_points,
+          (select count(*) from owners.redemptions rd join owners.members m on m.id=rd.member_id where rd.status='requested' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as pending_redemptions
       `,
     ]);
     return response.status(200).json({
@@ -170,8 +286,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
-  const actor = await getSessionUser(request);
-  if (!actor) return response.status(401).json({ ok: false, error: "يجب تسجيل الدخول أولًا" });
+  const canManageCommunity = hasPermission(actor, "owners.community.manage");
+  const canManageSettings = hasPermission(actor, "settings.owners.manage") || canManageCommunity;
+  if (action === "save_settings" && !canManageSettings) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لتعديل إعدادات البرنامج" });
+  if (action !== "save_settings" && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
 
   if (action === "save_settings") {
     const requestedOtpTemplateId = clean(payload.otpTemplateId);
@@ -223,6 +341,57 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const synced = await syncMembersFromCanonicalSales();
     const referrals = await syncOwnerReferralProgress();
     return response.status(200).json({ ok: true, synced, referrals });
+  }
+
+  if (action === "create_test_member") {
+    const result = await createManualOwnerMember({
+      name: payload.name, phone: payload.phone, source: "admin_test", actorId: actor.id,
+    });
+    if (result.status === "invalid") return response.status(400).json({ ok: false, error: result.error });
+    if (result.status === "duplicate") return response.status(409).json({ ok: false, error: "رقم الجوال موجود بالفعل ضمن أعضاء البرنامج" });
+    return response.status(200).json({ ok: true, memberId: result.memberId });
+  }
+
+  if (action === "delete_test_member") {
+    const memberId = clean(payload.memberId);
+    const [member] = await sql<any[]>`select id::text,metadata from owners.members where id=${memberId}::uuid limit 1`;
+    if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
+    if (!isTestMemberMetadata(member.metadata)) return response.status(409).json({ ok: false, error: "الحذف متاح للأعضاء التجريبيين فقط" });
+    await sql`delete from owners.members where id=${memberId}::uuid`;
+    return response.status(200).json({ ok: true });
+  }
+
+  if (action === "import_members") {
+    const rows = Array.isArray(payload.rows) ? payload.rows.slice(0, 5000) : [];
+    if (!rows.length) return response.status(400).json({ ok: false, error: "لا توجد بيانات صالحة للاستيراد" });
+    const summary = { total: rows.length, created: 0, matched: 0, duplicates: 0, invalid: 0 };
+    const details: Array<{ row: number; status: string; error?: string }> = [];
+    const seen = new Set<string>();
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index] && typeof rows[index] === "object" ? rows[index] as Record<string, unknown> : {};
+      const normalized = normalizePhone(row.phone);
+      if (!normalized || seen.has(normalized)) {
+        summary[normalized ? "duplicates" : "invalid"] += 1;
+        details.push({ row: index + 2, status: normalized ? "duplicate_in_file" : "invalid_phone" });
+        continue;
+      }
+      seen.add(normalized);
+      try {
+        const result = await createManualOwnerMember({
+          name: row.name, phone: normalized, purchaseDate: row.purchaseDate, vehicle: row.vehicle,
+          branch: row.branch, orderId: row.orderId, source: "excel_import", actorId: actor.id,
+        });
+        if (result.status === "created") summary.created += 1;
+        else if (result.status === "matched") summary.matched += 1;
+        else if (result.status === "duplicate") summary.duplicates += 1;
+        else summary.invalid += 1;
+        if (result.status !== "created" && result.status !== "matched") details.push({ row: index + 2, status: result.status, error: "error" in result ? result.error : undefined });
+      } catch (error) {
+        summary.invalid += 1;
+        details.push({ row: index + 2, status: "error", error: error instanceof Error ? error.message : "تعذر الاستيراد" });
+      }
+    }
+    return response.status(200).json({ ok: true, summary, details: details.slice(0, 100) });
   }
 
   if (action === "save_reward") {
