@@ -273,11 +273,26 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
 }
 
 function erpCustomerIdentity(normalized: NormalizedErpNextSalesOrder) {
-  const raw = clean(normalized.erpCustomerId)
-    || clean(normalized.accountingCustomerName)
-    || clean(normalized.actualCustomerName)
-    || clean(normalized.sourceInstanceKey);
-  const comparable = normalizeComparable(raw) || clean(normalized.sourceInstanceKey);
+  const accountingRaw = clean(normalized.erpCustomerId)
+    || clean(normalized.accountingCustomerName);
+  const actualRaw = clean(normalized.actualCustomerName);
+  const accountingComparable = normalizeComparable(accountingRaw);
+  const actualComparable = normalizeComparable(actualRaw);
+  const accountingNameComparable = normalizeComparable(normalized.accountingCustomerName);
+
+  // NEXT ERP may use one accounting customer (for example a bank) for sales
+  // that belong to different real users. CRM ownership must therefore identify
+  // the real customer first instead of collapsing every order under the shared
+  // accounting customer and letting the latest sales order overwrite the owner.
+  const hasDistinctActualCustomer = Boolean(
+    actualComparable
+    && (!accountingNameComparable || actualComparable !== accountingNameComparable),
+  );
+  const comparable = hasDistinctActualCustomer
+    ? [accountingComparable, actualComparable].filter(Boolean).join(":")
+    : accountingComparable || actualComparable || clean(normalized.sourceInstanceKey);
+  const raw = accountingRaw || actualRaw || clean(normalized.sourceInstanceKey);
+
   return {
     raw,
     externalId: `customer:${comparable}`,
