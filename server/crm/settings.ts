@@ -469,13 +469,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const mediaSendUrl = clean(body.mediaSendUrl) || textSendUrl;
     const templatesSyncUrl = clean(body.templatesSyncUrl);
     const inboundWebhookUrl = clean(body.inboundWebhookUrl || body.webhookUrl);
+    const endpointSecretName = ["whatsapp", "mersal"].includes(sourceCode)
+      ? "MZJ_GATEWAY_SECRET"
+      : clean(body.secretName);
     const [row] = await sql<any[]>`
       insert into crm.integration_endpoints(
         source_code,display_name,send_url,webhook_url,text_send_url,template_send_url,media_send_url,templates_sync_url,inbound_webhook_url,
         health_url,secret_name,is_active,updated_by,updated_at
       ) values (
         ${sourceCode},${clean(body.displayName)||sourceCode},${textSendUrl||null},${inboundWebhookUrl||null},${textSendUrl||null},${templateSendUrl||null},
-        ${mediaSendUrl||null},${templatesSyncUrl||null},${inboundWebhookUrl||null},${clean(body.healthUrl)||null},${clean(body.secretName)||null},${body.isActive!==false},${user.id}::uuid,now()
+        ${mediaSendUrl||null},${templatesSyncUrl||null},${inboundWebhookUrl||null},${clean(body.healthUrl)||null},${endpointSecretName||null},${body.isActive!==false},${user.id}::uuid,now()
       )
       on conflict (source_code) do update set display_name=excluded.display_name,send_url=excluded.send_url,webhook_url=excluded.webhook_url,
         text_send_url=excluded.text_send_url,template_send_url=excluded.template_send_url,media_send_url=excluded.media_send_url,

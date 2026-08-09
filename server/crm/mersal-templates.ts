@@ -40,8 +40,10 @@ function componentBody(value: unknown) {
 }
 
 function workerHeaders(secretName: string) {
-  const secret = clean(process.env[secretName] || process.env.MZJ_GATEWAY_SECRET);
-  if (!secret) throw new Error(`${secretName || "MZJ_GATEWAY_SECRET"} غير موجود في Environment Variables`);
+  // Mersal Worker validates x-mzj-gateway-secret against MZJ_GATEWAY_SECRET.
+  // Use the shared gateway secret first so template sync and normal sends cannot drift.
+  const secret = clean(process.env.MZJ_GATEWAY_SECRET) || clean(process.env[secretName]);
+  if (!secret) throw new Error("MZJ_GATEWAY_SECRET غير موجود في Environment Variables");
   return {
     accept: "application/json",
     "content-type": "application/json; charset=utf-8",
@@ -101,6 +103,9 @@ async function requestTemplates(config: WorkerConfig) {
   }
 
   if (!upstream.ok || payload.ok === false) {
+    if (upstream.status === 401) {
+      throw new Error("تعذر اعتماد الاتصال بمرسال: تأكد أن MZJ_GATEWAY_SECRET في Vercel مطابق لنفس السر في Mersal Worker");
+    }
     throw new Error(clean(payload.error || payload.message) || `فشل وركر واتساب: HTTP ${upstream.status}`);
   }
 

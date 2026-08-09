@@ -85,8 +85,10 @@ export function renderCrmTemplate(content: string, conversation: ConversationCon
 function gatewayHeaders(secretName: string | null | undefined) {
   const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8", accept: "application/json" };
   const configuredName = clean(secretName) || "MZJ_GATEWAY_SECRET";
-  const secretValue = clean(process.env[configuredName]);
-  if (!secretValue) throw new Error(`متغير السر ${configuredName} غير موجود في Vercel`);
+  // All shipped gateway workers authenticate with the shared MZJ_GATEWAY_SECRET.
+  // Keep a legacy endpoint-specific variable only as a fallback for old installations.
+  const secretValue = clean(process.env.MZJ_GATEWAY_SECRET) || clean(process.env[configuredName]);
+  if (!secretValue) throw new Error("متغير السر MZJ_GATEWAY_SECRET غير موجود في Vercel");
   headers["x-mzj-gateway-secret"] = secretValue;
   return headers;
 }

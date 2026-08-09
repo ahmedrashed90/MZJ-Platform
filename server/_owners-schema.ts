@@ -187,7 +187,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1200,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1203,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -203,13 +203,14 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='points_ledger')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='otp_challenges')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='schema_state')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_channel')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_hourly_limit')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
       as ready
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1200;
+  return Number(state?.version || 0) >= 1203;
 }
 
 export function ensureOwnersSchema() {

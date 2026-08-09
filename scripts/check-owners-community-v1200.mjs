@@ -25,6 +25,9 @@ const core = read("server/_owners.ts");
 const publicApi = read("server/owners-public.ts");
 const adminApi = read("server/owners.ts");
 const erp = read("server/_erpnext-sales-order-sync.ts");
+const mersalSync = read("server/crm/mersal-templates.ts");
+const crmMessaging = read("server/_crm-messaging.ts");
+const crmSettings = read("server/crm/settings.ts");
 const packageJson = JSON.parse(read("package.json"));
 
 expect("public Owners portal and invite routes exist", app.includes('path="/owners"') && app.includes('path="/owners/invite/:code"'));
@@ -39,10 +42,14 @@ expect("base central access migration includes Owners page and all four permissi
 expect("public Owners API bypasses employee authentication only for the public route", permissions.includes('"owners/public"') && api.includes('["owners/public", ownersPublicHandler]'));
 expect("internal Owners API requires view/manage permissions", permissions.includes("owners.community.view") && permissions.includes("owners.community.manage") && permissions.includes("settings.owners.manage"));
 expect("Owners schema is idempotent and version-gated", schema.includes("owners.schema_state") && schema.includes("withDatabaseAdvisoryLock") && schema.includes("runSqlScript"));
+expect("Owners schema readiness requires otp_channel before serving settings", schema.includes("column_name='otp_channel'") && schema.includes(">= 1203") && schema.includes("add column if not exists otp_channel"));
 expect("Owners schema contains settings, members, referrals, visits, points, rewards, redemptions, OTP and sessions", ["owners.settings", "owners.members", "owners.referrals", "owners.referral_visits", "owners.points_ledger", "owners.rewards", "owners.redemptions", "owners.otp_challenges", "owners.sessions"].every((table) => schema.includes(table)));
 expect("Owners Community keeps its data in PostgreSQL and reuses the centralized SMS+ queue only as a delivery channel", publicApi.includes("queueFirebaseSms") && ![schema, core, adminApi].some((source) => /firestore\.googleapis|sms_outbox/i.test(source)) && !/firestore\.googleapis|sms_outbox/i.test(publicApi));
 expect("JSON metadata uses the postgres JSONValue type instead of Record<string, unknown>", core.includes('export type OwnerJson = Parameters<SqlClient["json"]>[0]') && core.includes("metadata?: OwnerJson"));
 expect("OTP supports SMS+ now and approved active Mersal templates when WhatsApp is selected", publicApi.includes("queueFirebaseSms") && publicApi.includes("otp_channel") && publicApi.includes("deliverDirectWhatsapp") && publicApi.includes("upper(coalesce(status,''))='APPROVED'") && publicApi.includes("otp_template_id"));
+expect("Mersal sync uses the same canonical gateway secret as the shipped worker", mersalSync.includes("process.env.MZJ_GATEWAY_SECRET") && mersalSync.indexOf("process.env.MZJ_GATEWAY_SECRET") < mersalSync.indexOf("process.env[secretName]") && mersalSync.includes("x-mzj-gateway-secret"));
+expect("CRM gateway sends prefer the canonical shared gateway secret", crmMessaging.includes("clean(process.env.MZJ_GATEWAY_SECRET) || clean(process.env[configuredName])"));
+expect("WhatsApp endpoint settings persist the canonical gateway secret name", crmSettings.includes('["whatsapp", "mersal"].includes(sourceCode)') && crmSettings.includes('"MZJ_GATEWAY_SECRET"'));
 expect("OTP is HMAC-hashed, expires, is attempt-limited and is hourly rate-limited", core.includes("createHmac") && publicApi.includes("otp_expiry_minutes") && publicApi.includes("otp_max_attempts") && publicApi.includes("otp_hourly_limit"));
 expect("customer identity is based on canonical sold phone", publicApi.includes("ensureOwnerMemberByPhone") && core.includes("crm.sales_transactions"));
 expect("customer session is separate from the public referral link", core.includes("OWNER_SESSION_COOKIE") && schema.includes("owners.sessions") && !portal.includes("phone_normalized}/owners"));
