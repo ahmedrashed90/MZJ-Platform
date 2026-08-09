@@ -141,6 +141,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('core','database','قاعدة البيانات الموحدة','/database',30,true),
 ('core','settings','الإعدادات','/settings',40,true),
 ('core','activity','سجل النشاط','/activity',50,true),
+('core','owners_community','MZJ Owners Community','/owners-community',60,true),
 ('crm','dashboard','الداش بورد','/crm',10,true),
 ('crm','database','قاعدة البيانات','/crm/database',20,true),
 ('crm','manual_leads','إضافة العملاء','/crm/manual-leads',30,true),
@@ -158,7 +159,6 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('marketing','platforms','ربط المنصات','/marketing/platforms',60,true),
 ('marketing','publish_prep','تجهيز النشر','/marketing/publish-prep',70,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
-('core','owners_community','MZJ Owners Community','/owners-community',60,true),
 ('marketing','monitoring','المتابعة','/marketing/monitoring',80,true),
 ('marketing','calendar','التقويم','/marketing/calendar',90,true),
 ('marketing','receipt_calendar','تقويم الاستلام','/marketing/receipt-calendar',100,true),
@@ -633,11 +633,21 @@ async function requiredPagePermissionCatalogReady() {
           and page_code='engagement'
           and is_active=true
       )
-      and exists(select 1 from core.system_pages where system_code='core' and code='owners_community' and is_active=true)
-      and exists(select 1 from core.permissions where code='owners.community.view' and is_active=true)
+      and exists(
+        select 1 from core.system_pages
+        where system_code='core' and code='owners_community' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='owners.community.view'
+          and system_code='core'
+          and page_code='owners_community'
+          and is_active=true
+      )
       and exists(select 1 from core.permissions where code='owners.community.manage' and is_active=true)
       and exists(select 1 from core.permissions where code='settings.owners.view' and is_active=true)
-      and exists(select 1 from core.permissions where code='settings.owners.manage' and is_active=true) as ready
+      and exists(select 1 from core.permissions where code='settings.owners.manage' and is_active=true)
+      as ready
   `;
   return Boolean(state?.ready);
 }

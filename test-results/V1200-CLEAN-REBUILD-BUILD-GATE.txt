@@ -1,7 +1,0 @@
-MZJ Platform v1.20.0 clean rebuild verification
-Baseline: user-uploaded v1.19.19 clean source
-Owners Community applied once to baseline source.
-Legacy v1.16.2 regression version gate corrected to semantic >= 1.16.2 so v1.20.0 is accepted.
-All 80 executable Node/static regression commands in package typecheck passed.
-Full tsc/vite build was not executed in this environment because project npm dependencies are not available from the local registry.
-No merge-conflict markers found.

@@ -6,11 +6,11 @@ import { useAuth } from "../auth/AuthContext";
 import { CrmAdminPage } from "../crm/pages/CrmAdminPage";
 import { MarketingSettingsPanel } from "../marketing/components/MarketingSettingsPanel";
 import { NotificationSettingsPanel } from "../notifications/NotificationSettingsPanel";
+import { OwnersSettingsPanel } from "../owners/OwnersSettingsPanel";
 import { OperationsSettingsPanel } from "../operations/components/OperationsSettingsPanel";
 import { hasPermission } from "../systemAccess";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
 import { DataManagementPanel } from "../settings/DataManagementPanel";
-import { OwnersSettingsPanel } from "../owners/OwnersSettingsPanel";
 
 type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking" | "owners" | "data";
 

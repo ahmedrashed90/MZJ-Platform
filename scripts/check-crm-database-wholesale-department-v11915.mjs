@@ -3,17 +3,6 @@ import path from "node:path";
 
 const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
-
-function versionAtLeast(current, minimum) {
-  const a = String(current || "0.0.0").split(".").map((part) => Number(part) || 0);
-  const b = String(minimum || "0.0.0").split(".").map((part) => Number(part) || 0);
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const left = a[index] || 0;
-    const right = b[index] || 0;
-    if (left !== right) return left > right;
-  }
-  return true;
-}
 const packageJson = JSON.parse(read("package.json"));
 const drawer = read("src/crm/components/LeadDrawer.tsx");
 const crmApi = read("server/crm/leads.ts");
@@ -26,7 +15,7 @@ function check(label, condition) {
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
 
-check("release keeps the v1.19.15 database-edit foundation", versionAtLeast(packageJson.version, "1.19.15"));
+check("release keeps the v1.19.15 database-edit foundation", ["1.19.15", "1.19.16"].includes(packageJson.version));
 check("CRM database edit keeps the canonical department selector", drawer.includes('>القسم</span><select value={activeForm.departmentCode}') && drawer.includes("changeDatabaseDepartment"));
 check("wholesale is a selectable CRM department", drawer.includes('label: "قسم الجملة"') && drawer.includes('serviceKey: "cash" as ServiceKey'));
 check("both wholesale department codes are supported", drawer.includes('code === "wholesale"') && drawer.includes('code === "wholesale_sales"'));

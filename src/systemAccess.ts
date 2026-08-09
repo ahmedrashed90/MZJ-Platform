@@ -31,6 +31,7 @@ export function defaultSystemPath(user: AuthUser | null | undefined) {
   for (const system of ["crm", "marketing", "operations", "tracking"] as PlatformSystem[]) {
     if (sharedCanAccessSystem(user, system)) return firstAllowedPage(user, system);
   }
+  if (hasPermission(user, "owners.community.view")) return "/owners-community";
   if (canOpenSettings(user)) return "/settings";
   return "/help";
 }

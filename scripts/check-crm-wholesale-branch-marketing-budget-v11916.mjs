@@ -3,6 +3,7 @@ import path from "node:path";
 
 const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const packageJson = JSON.parse(read("package.json"));
 const drawer = read("src/crm/components/LeadDrawer.tsx");
 const leadsApi = read("server/crm/leads.ts");
 const reports = read("server/crm/reports.ts");
@@ -18,6 +19,8 @@ function check(label, condition) {
   checks.push([label, passed]);
   console.log(`${passed ? "PASS" : "FAIL"}: ${label}`);
 }
+
+check("release version is 1.19.16", packageJson.version === "1.19.16");
 
 check("wholesale remains a first-class department in customer edit", drawer.includes('label: "قسم الجملة"') && drawer.includes("isWholesaleDepartmentCode"));
 check("both wholesale department codes share the same user pool", drawer.includes("function userMatchesDepartment") && drawer.includes("codes.some((code) => isWholesaleDepartmentCode(code))"));

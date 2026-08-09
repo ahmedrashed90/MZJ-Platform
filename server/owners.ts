@@ -1,58 +1,362 @@
-import type { VercelRequest,VercelResponse } from "@vercel/node";
-import { getSql } from "./_db.js";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { getSessionUser } from "./_auth.js";
 import { clean } from "./_crm-utils.js";
 import { deliverDirectWhatsapp } from "./_crm-messaging.js";
-import { ensureOwnerMemberForLead } from "./_owners.js";
+import { getSql } from "./_db.js";
+import {
+  ensureOwnerMemberForLead,
+  processOwnerSaleForLead,
+  syncOwnerReferralProgress,
+} from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
 
-function body(request:VercelRequest){if(request.body&&typeof request.body==='object')return request.body as Record<string,any>;if(typeof request.body==='string'){try{return JSON.parse(request.body||'{}')}catch{return {}}}return {}}
-function base(request:VercelRequest){const proto=String(request.headers['x-forwarded-proto']||'https').split(',')[0];const host=String(request.headers['x-forwarded-host']||request.headers.host||'mzj-platform.vercel.app').split(',')[0];return `${proto}://${host}`;}
-function renderNumbered(content:string,values:string[]){return String(content||'').replace(/{{\s*(\d+)\s*}}/g,(_m,n)=>values[Number(n)-1]||'');}
-async function syncMembers(){
-  const sql=getSql(); const rows=await sql<any[]>`select distinct on(l.phone_normalized) l.id::text,st.id::text sale_id from crm.sales_transactions st join crm.leads l on l.id=st.lead_id and l.is_deleted=false where coalesce(st.is_cancelled,false)=false and nullif(l.phone_normalized,'') is not null order by l.phone_normalized,st.sale_at desc`;
-  let synced=0; for(const r of rows){if(await ensureOwnerMemberForLead(r.id,r.sale_id))synced+=1;} return synced;
-}
-async function syncReferralSales(){
-  const sql=getSql(); const [s]=await sql<any[]>`select * from owners.settings where id='default'`; const rows=await sql<any[]>`select r.id::text,r.referrer_member_id::text,r.crm_lead_id::text,l.status_label,st.id::text sale_id,st.sale_at from owners.referrals r left join crm.leads l on l.id=r.crm_lead_id and l.is_deleted=false left join lateral(select id,sale_at from crm.sales_transactions where lead_id=r.crm_lead_id and coalesce(is_cancelled,false)=false order by sale_at desc limit 1) st on true where r.status<>'sold'`;
-  const { awardOwnerPoints }=await import('./_owners.js'); let changed=0;
-  for(const r of rows){const status=clean(r.status_label);const qualified=Boolean(status&&!['عميل جديد','لم يتم الرد','غير مؤهل'].includes(status));if(qualified){await sql`update owners.referrals set status='qualified',qualified_at=coalesce(qualified_at,now()),updated_at=now() where id=${r.id}::uuid and status in('clicked','registered')`;await awardOwnerPoints({memberId:r.referrer_member_id,points:Number(s?.points_qualified||0),eventType:'qualified',eventKey:`qualified:${r.id}`,referralId:r.id,description:'تحول الصديق إلى عميل مؤهل'});changed+=1;}if(r.sale_id){await sql`update owners.referrals set status='sold',sale_transaction_id=${r.sale_id}::uuid,sold_at=${r.sale_at}::timestamptz,qualified_at=coalesce(qualified_at,now()),updated_at=now() where id=${r.id}::uuid`;await awardOwnerPoints({memberId:r.referrer_member_id,points:Number(s?.points_sale||0),eventType:'sale',eventKey:`sale:${r.sale_id}`,referralId:r.id,description:'أتم الصديق عملية شراء'});if(r.crm_lead_id)await ensureOwnerMemberForLead(r.crm_lead_id,r.sale_id);changed+=1;}}
-  return changed;
+function requestBody(request: VercelRequest) {
+  if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
+  if (typeof request.body === "string") {
+    try {
+      return JSON.parse(request.body || "{}") as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
-export default async function handler(request:VercelRequest,response:VercelResponse){
-  await ensureOwnersSchema(); response.setHeader('Cache-Control','no-store'); const sql=getSql(); const payload=body(request); const action=clean(payload.action||request.query.action);
-  if(request.method==='GET'){
-    const scope=clean(request.query.scope);
-    if(scope==='settings'){
-      const [settingsRows,templates]=await Promise.all([sql<any[]>`select * from owners.settings where id='default'`,sql<any[]>`select id::text,name,display_name,content,provider,template_type,language_code from crm.message_templates where is_active=true and status='active' and (external_id is not null or lower(coalesce(provider,'')) like '%mersal%' or lower(coalesce(template_type,'')) like '%whatsapp%') order by display_name,name`]);
-      return response.status(200).json({ok:true,settings:settingsRows[0]||{},templates});
+function publicBase(request: VercelRequest) {
+  const protocol = String(request.headers["x-forwarded-proto"] || "https").split(",")[0];
+  const host = String(request.headers["x-forwarded-host"] || request.headers.host || "mzj-platform.vercel.app").split(",")[0];
+  return `${protocol}://${host}`;
+}
+
+function renderNumberedTemplate(content: string, values: string[]) {
+  return String(content || "").replace(/{{\s*(\d+)\s*}}/g, (_match, number) => values[Number(number) - 1] || "");
+}
+
+function integer(value: unknown, fallback: number, minimum: number, maximum: number) {
+  const parsed = Math.trunc(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function optionalDate(value: unknown) {
+  const normalized = clean(value);
+  return normalized || null;
+}
+
+async function approvedMersalTemplates() {
+  return getSql()<any[]>`
+    select id::text,name,display_name,content,provider,template_type,language_code,status,external_id
+    from crm.message_templates
+    where is_active=true
+      and lower(coalesce(provider,''))='mersal'
+      and upper(coalesce(status,''))='APPROVED'
+      and nullif(coalesce(name,external_id),'') is not null
+    order by display_name,name
+  `;
+}
+
+async function approvedMersalTemplateId(value: unknown) {
+  const id = clean(value);
+  if (!id) return null;
+  const [template] = await getSql()<any[]>`
+    select id::text
+    from crm.message_templates
+    where id=${id}::uuid
+      and is_active=true
+      and lower(coalesce(provider,''))='mersal'
+      and upper(coalesce(status,''))='APPROVED'
+      and nullif(coalesce(name,external_id),'') is not null
+    limit 1
+  `;
+  return template?.id || null;
+}
+
+async function syncMembersFromCanonicalSales() {
+  const sql = getSql();
+  const rows = await sql<any[]>`
+    select distinct on(l.phone_normalized)
+      l.id::text as lead_id,
+      st.id::text as sale_id
+    from crm.sales_transactions st
+    join crm.leads l on l.id=st.lead_id and l.is_deleted=false
+    where coalesce(st.is_cancelled,false)=false
+      and nullif(l.phone_normalized,'') is not null
+    order by l.phone_normalized,st.sale_at desc,st.created_at desc,st.id desc
+  `;
+  let synced = 0;
+  for (const row of rows) {
+    const member = await processOwnerSaleForLead(row.lead_id, row.sale_id);
+    if (member) synced += 1;
+  }
+  return synced;
+}
+
+export default async function handler(request: VercelRequest, response: VercelResponse) {
+  await ensureOwnersSchema();
+  response.setHeader("Cache-Control", "no-store");
+  const sql = getSql();
+  const payload = requestBody(request);
+  const action = clean(payload.action || request.query.action);
+
+  if (request.method === "GET") {
+    const scope = clean(request.query.scope);
+    if (scope === "settings") {
+      const [settingsRows, templates] = await Promise.all([
+        sql<any[]>`select * from owners.settings where id='default'`,
+        approvedMersalTemplates(),
+      ]);
+      return response.status(200).json({ ok: true, settings: settingsRows[0] || {}, templates });
     }
-    const [settings,templates,members,referrals,rewards,redemptions,stats]=await Promise.all([
-      sql<any[]>`select * from owners.settings where id='default'`.then(r=>r[0]),
-      sql<any[]>`select id::text,name,display_name,content,provider,template_type,language_code from crm.message_templates where is_active=true and status='active' and (external_id is not null or lower(coalesce(provider,'')) like '%mersal%' or lower(coalesce(template_type,'')) like '%whatsapp%') order by display_name,name`,
-      sql<any[]>`select m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.tier_code,m.first_sale_at,m.last_sale_at,m.last_login_at,m.welcome_sent_at,count(distinct r.id)::int referrals_count,count(distinct r.id) filter(where r.status='sold')::int sales_count from owners.members m left join owners.referrals r on r.referrer_member_id=m.id where m.status='active' group by m.id order by m.created_at desc limit 500`,
-      sql<any[]>`select r.id::text,r.status,r.referred_name,r.referred_phone_normalized,r.registered_at,r.qualified_at,r.sold_at,m.customer_name referrer_name,m.referral_code from owners.referrals r join owners.members m on m.id=r.referrer_member_id order by r.created_at desc limit 500`,
-      sql<any[]>`select *,id::text,created_by::text,updated_by::text from owners.rewards order by is_active desc,points_cost,name`,
-      sql<any[]>`select rd.id::text,rd.status,rd.points_cost,rd.note,rd.created_at,rd.reviewed_at,m.customer_name,m.phone_normalized,r.name reward_name from owners.redemptions rd join owners.members m on m.id=rd.member_id join owners.rewards r on r.id=rd.reward_id order by rd.created_at desc limit 300`,
-      sql<any[]>`select (select count(*) from owners.members where status='active')::int members,(select count(*) from owners.referrals)::int referrals,(select count(*) from owners.referrals where status='sold')::int referral_sales,(select coalesce(sum(points_balance),0) from owners.members where status='active')::int outstanding_points,(select count(*) from owners.redemptions where status='requested')::int pending_redemptions`
+
+    const [settings, templates, members, referrals, rewards, redemptions, stats] = await Promise.all([
+      sql<any[]>`select * from owners.settings where id='default'`.then((rows) => rows[0] || {}),
+      approvedMersalTemplates(),
+      sql<any[]>`
+        select
+          m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
+          m.tier_code,m.first_sale_at,m.last_sale_at,m.last_login_at,m.welcome_sent_at,
+          count(distinct r.id)::int as referrals_count,
+          count(distinct r.id) filter(where r.status='sold')::int as sales_count
+        from owners.members m
+        left join owners.referrals r on r.referrer_member_id=m.id
+        where m.status='active'
+        group by m.id
+        order by m.created_at desc
+        limit 1000
+      `,
+      sql<any[]>`
+        select
+          r.id::text,r.status,r.referred_name,r.referred_phone_normalized,r.registered_at,
+          r.qualified_at,r.sold_at,m.customer_name as referrer_name,m.referral_code
+        from owners.referrals r
+        join owners.members m on m.id=r.referrer_member_id
+        order by r.created_at desc
+        limit 1000
+      `,
+      sql<any[]>`
+        select *,id::text,created_by::text,updated_by::text
+        from owners.rewards
+        order by is_active desc,points_cost,name
+      `,
+      sql<any[]>`
+        select
+          rd.id::text,rd.status,rd.points_cost,rd.note,rd.created_at,rd.reviewed_at,
+          m.customer_name,m.phone_normalized,r.name as reward_name
+        from owners.redemptions rd
+        join owners.members m on m.id=rd.member_id
+        join owners.rewards r on r.id=rd.reward_id
+        order by rd.created_at desc
+        limit 500
+      `,
+      sql<any[]>`
+        select
+          (select count(*) from owners.members where status='active')::int as members,
+          (select count(*) from owners.referrals)::int as referrals,
+          (select count(*) from owners.referrals where status='sold')::int as referral_sales,
+          (select coalesce(sum(points_balance),0) from owners.members where status='active')::int as outstanding_points,
+          (select count(*) from owners.redemptions where status='requested')::int as pending_redemptions
+      `,
     ]);
-    return response.status(200).json({ok:true,settings,templates,members,referrals,rewards,redemptions,stats:stats[0]||{}});
+    return response.status(200).json({
+      ok: true,
+      settings,
+      templates,
+      members,
+      referrals,
+      rewards,
+      redemptions,
+      stats: stats[0] || {},
+    });
   }
-  if(request.method!=='POST')return response.status(405).json({ok:false,error:'Method not allowed'});
-  if(action==='save_settings'){
-    const [row]=await sql<any[]>`update owners.settings set is_enabled=${payload.isEnabled!==false},otp_template_id=${clean(payload.otpTemplateId)||null}::uuid,welcome_template_id=${clean(payload.welcomeTemplateId)||null}::uuid,otp_expiry_minutes=${Number(payload.otpExpiryMinutes||5)},otp_resend_seconds=${Number(payload.otpResendSeconds||60)},otp_max_attempts=${Number(payload.otpMaxAttempts||5)},points_unique_open=${Number(payload.pointsUniqueOpen||0)},points_registration=${Number(payload.pointsRegistration||0)},points_qualified=${Number(payload.pointsQualified||0)},points_sale=${Number(payload.pointsSale||0)},daily_open_points_cap=${Number(payload.dailyOpenPointsCap||0)},referral_default_service=${clean(payload.referralDefaultService)||'cash'},referral_default_branch=${clean(payload.referralDefaultBranch)||'online'},friend_benefit_title=${clean(payload.friendBenefitTitle)||'ميزة خاصة من عميل MZJ'},friend_benefit_text=${clean(payload.friendBenefitText)||'سجل بياناتك وسيقوم فريق MZJ بالتواصل معك.'},welcome_message_enabled=${payload.welcomeMessageEnabled===true},updated_by=${clean(payload.actorId)||null}::uuid,updated_at=now() where id='default' returning *`;return response.status(200).json({ok:true,settings:row});
+
+  if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
+  const actor = await getSessionUser(request);
+  if (!actor) return response.status(401).json({ ok: false, error: "يجب تسجيل الدخول أولًا" });
+
+  if (action === "save_settings") {
+    const requestedOtpTemplateId = clean(payload.otpTemplateId);
+    const requestedWelcomeTemplateId = clean(payload.welcomeTemplateId);
+    const [otpTemplateId, welcomeTemplateId] = await Promise.all([
+      approvedMersalTemplateId(requestedOtpTemplateId),
+      approvedMersalTemplateId(requestedWelcomeTemplateId),
+    ]);
+    if (requestedOtpTemplateId && !otpTemplateId) {
+      return response.status(400).json({ ok: false, error: "قالب OTP يجب أن يكون قالب مرسال معتمدًا ونشطًا" });
+    }
+    if (requestedWelcomeTemplateId && !welcomeTemplateId) {
+      return response.status(400).json({ ok: false, error: "قالب الترحيب يجب أن يكون قالب مرسال معتمدًا ونشطًا" });
+    }
+    const silverPoints = integer(payload.silverPoints, 1000, 0, 1_000_000_000);
+    const goldPoints = Math.max(silverPoints, integer(payload.goldPoints, 3000, 0, 1_000_000_000));
+    const platinumPoints = Math.max(goldPoints, integer(payload.platinumPoints, 7000, 0, 1_000_000_000));
+    const [settings] = await sql<any[]>`
+      update owners.settings set
+        is_enabled=${payload.isEnabled !== false},
+        otp_template_id=${otpTemplateId}::uuid,
+        welcome_template_id=${welcomeTemplateId}::uuid,
+        otp_expiry_minutes=${integer(payload.otpExpiryMinutes, 5, 1, 30)},
+        otp_resend_seconds=${integer(payload.otpResendSeconds, 60, 15, 600)},
+        otp_max_attempts=${integer(payload.otpMaxAttempts, 5, 1, 20)},
+        otp_hourly_limit=${integer(payload.otpHourlyLimit, 5, 1, 30)},
+        points_unique_open=${integer(payload.pointsUniqueOpen, 1, 0, 1_000_000)},
+        points_registration=${integer(payload.pointsRegistration, 10, 0, 1_000_000)},
+        points_qualified=${integer(payload.pointsQualified, 25, 0, 1_000_000)},
+        points_sale=${integer(payload.pointsSale, 500, 0, 1_000_000)},
+        daily_open_points_cap=${integer(payload.dailyOpenPointsCap, 25, 0, 1_000_000)},
+        silver_points=${silverPoints},
+        gold_points=${goldPoints},
+        platinum_points=${platinumPoints},
+        referral_default_service=${clean(payload.referralDefaultService) || "cash"},
+        referral_default_branch=${clean(payload.referralDefaultBranch) || "online"},
+        friend_benefit_title=${clean(payload.friendBenefitTitle) || "ميزة خاصة من عميل MZJ"},
+        friend_benefit_text=${clean(payload.friendBenefitText) || "سجل بياناتك وسيقوم فريق MZJ بالتواصل معك."},
+        welcome_message_enabled=${payload.welcomeMessageEnabled === true},
+        updated_by=${actor.id}::uuid,
+        updated_at=now()
+      where id='default'
+      returning *
+    `;
+    return response.status(200).json({ ok: true, settings });
   }
-  if(action==='sync_members'){const synced=await syncMembers();const referrals=await syncReferralSales();return response.status(200).json({ok:true,synced,referrals});}
-  if(action==='save_reward'){
-    const id=clean(payload.id); const fields={name:clean(payload.name),description:clean(payload.description),cost:Math.max(1,Number(payload.pointsCost||1)),stock:payload.stockQuantity===''||payload.stockQuantity==null?null:Math.max(0,Number(payload.stockQuantity)),starts:clean(payload.startsAt)||null,ends:clean(payload.endsAt)||null,active:payload.isActive!==false}; if(!fields.name)return response.status(400).json({ok:false,error:'اسم المكافأة مطلوب'});
-    if(id)await sql`update owners.rewards set name=${fields.name},description=${fields.description||null},points_cost=${fields.cost},stock_quantity=${fields.stock},starts_at=${fields.starts}::timestamptz,ends_at=${fields.ends}::timestamptz,is_active=${fields.active},updated_at=now() where id=${id}::uuid`; else await sql`insert into owners.rewards(name,description,points_cost,stock_quantity,starts_at,ends_at,is_active) values(${fields.name},${fields.description||null},${fields.cost},${fields.stock},${fields.starts}::timestamptz,${fields.ends}::timestamptz,${fields.active})`;return response.status(200).json({ok:true});
+
+  if (action === "sync_members") {
+    const synced = await syncMembersFromCanonicalSales();
+    const referrals = await syncOwnerReferralProgress();
+    return response.status(200).json({ ok: true, synced, referrals });
   }
-  if(action==='redemption'){
-    const id=clean(payload.id),status=clean(payload.status); if(!['approved','delivered','rejected','cancelled'].includes(status))return response.status(400).json({ok:false,error:'حالة الطلب غير صحيحة'}); const [rd]=await sql<any[]>`select *,member_id::text,reward_id::text from owners.redemptions where id=${id}::uuid for update`;if(!rd)return response.status(404).json({ok:false,error:'طلب الاستبدال غير موجود'});
-    await sql.begin(async(tx:any)=>{if(['rejected','cancelled'].includes(status)&&!['rejected','cancelled'].includes(rd.status)){await tx`insert into owners.points_ledger(member_id,points,event_type,event_key,reward_id,description) values(${rd.member_id}::uuid,${Number(rd.points_cost)},'redemption_refund',${`redemption-refund:${rd.id}`},${rd.reward_id}::uuid,'إرجاع نقاط طلب استبدال ملغي') on conflict(event_key) do nothing`;await tx`update owners.members set points_balance=points_balance+${Number(rd.points_cost)},updated_at=now() where id=${rd.member_id}::uuid`;await tx`update owners.rewards set redeemed_quantity=greatest(0,redeemed_quantity-1),updated_at=now() where id=${rd.reward_id}::uuid`;}await tx`update owners.redemptions set status=${status},note=${clean(payload.note)||null},reviewed_at=now(),updated_at=now() where id=${id}::uuid`;});return response.status(200).json({ok:true});
+
+  if (action === "save_reward") {
+    const id = clean(payload.id);
+    const name = clean(payload.name);
+    const description = clean(payload.description);
+    const rewardType = ["gift", "discount", "service", "voucher"].includes(clean(payload.rewardType))
+      ? clean(payload.rewardType)
+      : "gift";
+    const pointsCost = integer(payload.pointsCost, 1, 1, 1_000_000_000);
+    const stockQuantity = payload.stockQuantity === "" || payload.stockQuantity == null
+      ? null
+      : integer(payload.stockQuantity, 0, 0, 1_000_000_000);
+    const startsAt = optionalDate(payload.startsAt);
+    const endsAt = optionalDate(payload.endsAt);
+    const isActive = payload.isActive !== false;
+    if (!name) return response.status(400).json({ ok: false, error: "اسم المكافأة مطلوب" });
+
+    if (id) {
+      await sql`
+        update owners.rewards set
+          name=${name},description=${description || null},reward_type=${rewardType},points_cost=${pointsCost},
+          stock_quantity=${stockQuantity},starts_at=${startsAt}::timestamptz,ends_at=${endsAt}::timestamptz,
+          is_active=${isActive},updated_by=${actor.id}::uuid,updated_at=now()
+        where id=${id}::uuid
+      `;
+    } else {
+      await sql`
+        insert into owners.rewards(
+          name,description,reward_type,points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
+        ) values(
+          ${name},${description || null},${rewardType},${pointsCost},${stockQuantity},
+          ${startsAt}::timestamptz,${endsAt}::timestamptz,${isActive},${actor.id}::uuid,${actor.id}::uuid
+        )
+      `;
+    }
+    return response.status(200).json({ ok: true });
   }
-  if(action==='send_welcome'){
-    const memberId=clean(payload.memberId);const [s]=await sql<any[]>`select * from owners.settings where id='default'`;if(!s?.welcome_template_id)return response.status(400).json({ok:false,error:'حدد قالب الترحيب المعتمد من مرسال أولًا'});const [m]=await sql<any[]>`select *,id::text from owners.members where id=${memberId}::uuid and status='active'`;const [t]=await sql<any[]>`select *,id::text from crm.message_templates where id=${s.welcome_template_id}::uuid and is_active=true`;if(!m||!t)return response.status(404).json({ok:false,error:'العميل أو القالب غير موجود'});const portal=`${base(request)}/owners`;const invite=`${base(request)}/owners/invite/${m.referral_code}`;const text=renderNumbered(t.content,[m.customer_name||'عميل MZJ',portal,invite]);await deliverDirectWhatsapp({phone:m.phone_normalized,text,template:t,idempotencyKey:`owners-welcome:${m.id}`,reason:'owners_welcome'});await sql`update owners.members set welcome_sent_at=now(),updated_at=now() where id=${m.id}::uuid`;return response.status(200).json({ok:true});
+
+  if (action === "redemption") {
+    const id = clean(payload.id);
+    const status = clean(payload.status);
+    if (!["approved", "delivered", "rejected", "cancelled"].includes(status)) {
+      return response.status(400).json({ ok: false, error: "حالة الطلب غير صحيحة" });
+    }
+    const result = await sql.begin(async (tx) => {
+      const [redemption] = await tx<any[]>`
+        select *,member_id::text,reward_id::text
+        from owners.redemptions
+        where id=${id}::uuid
+        for update
+      `;
+      if (!redemption) return { error: "طلب الاستبدال غير موجود", status: 404 };
+
+      const transitionAllowed =
+        (redemption.status === "requested" && ["approved", "rejected", "cancelled"].includes(status))
+        || (redemption.status === "approved" && ["delivered", "rejected", "cancelled"].includes(status))
+        || redemption.status === status;
+      if (!transitionAllowed) {
+        return { error: "لا يمكن تغيير طلب الاستبدال من حالته الحالية إلى الحالة المطلوبة", status: 409 };
+      }
+
+      const shouldRefund = ["rejected", "cancelled"].includes(status)
+        && !["rejected", "cancelled"].includes(redemption.status);
+      if (shouldRefund) {
+        const refundRows = await tx<any[]>`
+          insert into owners.points_ledger(member_id,points,event_type,event_key,reward_id,description)
+          values(
+            ${redemption.member_id}::uuid,${Number(redemption.points_cost)},'redemption_refund',
+            ${`redemption-refund:${redemption.id}`},${redemption.reward_id}::uuid,'إرجاع نقاط طلب استبدال ملغي'
+          )
+          on conflict(event_key) do nothing
+          returning id::text
+        `;
+        if (refundRows.length) {
+          await tx`
+            update owners.members set points_balance=points_balance+${Number(redemption.points_cost)},updated_at=now()
+            where id=${redemption.member_id}::uuid
+          `;
+          await tx`
+            update owners.rewards set redeemed_quantity=greatest(0,redeemed_quantity-1),updated_at=now()
+            where id=${redemption.reward_id}::uuid
+          `;
+        }
+      }
+
+      await tx`
+        update owners.redemptions set
+          status=${status},note=${clean(payload.note) || null},reviewed_by=${actor.id}::uuid,
+          reviewed_at=now(),updated_at=now()
+        where id=${id}::uuid
+      `;
+      return { ok: true };
+    });
+    if ("error" in result) return response.status(result.status).json({ ok: false, error: result.error });
+    return response.status(200).json({ ok: true });
   }
-  return response.status(400).json({ok:false,error:'الإجراء غير معروف'});
+
+  if (action === "send_welcome") {
+    const memberId = clean(payload.memberId);
+    const [settings] = await sql<any[]>`select * from owners.settings where id='default'`;
+    if (!settings?.welcome_template_id) {
+      return response.status(400).json({ ok: false, error: "حدد قالب الترحيب المعتمد من مرسال أولًا" });
+    }
+    const [member] = await sql<any[]>`
+      select *,id::text
+      from owners.members
+      where id=${memberId}::uuid and status='active'
+      limit 1
+    `;
+    const [template] = await sql<any[]>`
+      select *,id::text
+      from crm.message_templates
+      where id=${settings.welcome_template_id}::uuid
+        and is_active=true
+        and lower(coalesce(provider,''))='mersal'
+        and upper(coalesce(status,''))='APPROVED'
+      limit 1
+    `;
+    if (!member || !template) return response.status(404).json({ ok: false, error: "العميل أو القالب غير موجود" });
+
+    const portalUrl = `${publicBase(request)}/owners`;
+    const inviteUrl = `${publicBase(request)}/owners/invite/${member.referral_code}`;
+    const text = renderNumberedTemplate(template.content, [member.customer_name || "عميل MZJ", portalUrl, inviteUrl]);
+    await deliverDirectWhatsapp({
+      phone: member.phone_normalized,
+      text,
+      template,
+      idempotencyKey: `owners-welcome:${member.id}:${Date.now()}`,
+      reason: "owners_welcome",
+    });
+    await sql`update owners.members set welcome_sent_at=now(),updated_at=now() where id=${member.id}::uuid`;
+    return response.status(200).json({ ok: true });
+  }
+
+  return response.status(400).json({ ok: false, error: "الإجراء غير معروف" });
 }

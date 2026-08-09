@@ -140,7 +140,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   ensureRequestId(request);
 
   if (!route || route === "index") {
-    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.20.0" });
+    return response.status(200).json({ ok: true, service: "mzj-platform-api", version: "1.19.0" });
   }
 
   if (route === "integrations/media") {

@@ -6,12 +6,12 @@ import { ensureOperationsSchema } from "./_operations-schema.js";
 import { ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "./_operations-approval-cycle.js";
 import { ensureTrackingSchema } from "./_tracking-schema.js";
 import { createNotification, notificationDedupe } from "./_notifications.js";
+import { processOwnerSaleForLead } from "./_owners.js";
 import { clean, dateValue, numberValue } from "./_tracking-utils.js";
 import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
 import type { ErpNextVehiclePayload, NormalizedErpNextSalesOrder } from "./_erpnext-sales-order-normalizer.js";
 import type { NormalizedErpNextPaymentEntry } from "./_erpnext-payment-entry-normalizer.js";
 
-import { ensureOwnerMemberForLead } from "./_owners.js";
 export type PlatformUserMapping = {
   id: string;
   full_name: string;
@@ -1682,7 +1682,9 @@ export async function syncErpNextSalesOrder(input: {
   `;
   if (crm.leadId) {
     await refreshCrmLeadSalesSnapshot(crm.leadId);
-    await ensureOwnerMemberForLead(crm.leadId).catch((error) => console.error("MZJ Owners enrollment failed", error));
+    await processOwnerSaleForLead(crm.leadId).catch((error) =>
+      console.error("MZJ Owners enrollment failed", error),
+    );
   }
 
   return {
