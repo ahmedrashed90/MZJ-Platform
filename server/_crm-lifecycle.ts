@@ -387,6 +387,47 @@ export async function classifyConversationService(input: {
   return { request, leadId: lead.id, reused: false, reclassified: Boolean(existing), assignment, callCenter, automaticTemplate };
 }
 
+export async function syncLeadConversationContext(sql: any, leadId: string) {
+  const [lead] = await sql`
+    select l.id::text,l.contact_id::text,l.current_request_id::text,l.service_key,l.department_code,l.branch_code,
+      l.assigned_to::text,l.call_center_assigned_to::text,l.customer_name
+    from crm.leads l
+    where l.id=${leadId}::uuid and l.is_deleted=false
+    limit 1
+  `;
+  if (!lead) return null;
+
+  await sql`
+    update crm.conversations set
+      contact_id=coalesce(${lead.contact_id || null}::uuid,contact_id),
+      service_request_id=case when ${lead.current_request_id || null}::uuid is not null then ${lead.current_request_id || null}::uuid else service_request_id end,
+      customer_name=coalesce(nullif(${lead.customer_name || ""},''),customer_name),
+      service_key=${lead.service_key || null},
+      department_code=${lead.department_code || null},
+      branch_code=${lead.branch_code || null},
+      assigned_to=${lead.assigned_to || null}::uuid,
+      call_center_assigned_to=${lead.call_center_assigned_to || null}::uuid,
+      updated_at=now()
+    where lead_id=${lead.id}::uuid
+  `;
+
+  if (lead.current_request_id) {
+    await sql`
+      update crm.service_requests set
+        lead_id=${lead.id}::uuid,
+        service_key=${lead.service_key || null},
+        department_code=${lead.department_code || null},
+        branch_code=${lead.branch_code || null},
+        assigned_to=${lead.assigned_to || null}::uuid,
+        call_center_assigned_to=${lead.call_center_assigned_to || null}::uuid,
+        updated_at=now()
+      where id=${lead.current_request_id}::uuid and request_state='open'
+    `;
+  }
+
+  return lead;
+}
+
 export async function closeCurrentServiceRequest(input: { leadId: string; statusLabel: string; actor?: SessionUser | null; reason?: string }) {
   const sql = getSql();
   const [settings] = await sql<any[]>`select closed_statuses from crm.crm_runtime_settings where id='default'`;

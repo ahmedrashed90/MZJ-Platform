@@ -300,13 +300,11 @@ export function LeadDrawer({ lead, meta, onClose, onSaved, onRead, mode = "works
   async function loadConversation(leadId: string, preferredId = "", silent = false) {
     if (!silent) setLoadingMessages(true);
     try {
-      let id = preferredId;
-      if (!id) {
-        const result = await crmFetch<{ ok: boolean; rows: Array<{ id: string; channel_code?: string | null }> }>(`/api/crm/conversations?leadId=${encodeURIComponent(leadId)}&limit=1`);
-        id = result.rows[0]?.id || "";
-        setConversationId(id);
-        setConversationChannel(result.rows[0]?.channel_code || "");
-      }
+      const resolved = await crmFetch<{ ok: boolean; rows: Array<{ id: string; channel_code?: string | null }> }>(`/api/crm/conversations?leadId=${encodeURIComponent(leadId)}&limit=1`);
+      const resolvedId = resolved.rows[0]?.id || "";
+      const id = resolvedId || preferredId;
+      setConversationId(id);
+      setConversationChannel(resolved.rows[0]?.channel_code || "");
       if (id) {
         const result = await crmFetch<{ ok: boolean; conversation?: { channel_code?: string | null }; messages: CrmMessage[] }>(`/api/crm/conversations?conversationId=${encodeURIComponent(id)}&limit=300`);
         setConversationChannel(result.conversation?.channel_code || "");

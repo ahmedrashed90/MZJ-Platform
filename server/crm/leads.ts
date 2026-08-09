@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, branchForDepartment, calculateCreditLimit, calculateLeadCompletion, chooseAssignment, chooseCallCenterAssignment, clean, departmentCodeFromKey, departmentKey, isCrmManager, normalizePhone, parseBody, positiveInt, requireCrmUser, resolveSourceName, sourceLabel, userScope } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { getCustomerFieldDefinitions, missingRequiredCustomerFields, sanitizeCustomFieldValues } from "../_crm-customer-fields.js";
-import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent } from "../_crm-lifecycle.js";
+import { attachLeadToContactAndOpenRequest, closeCurrentServiceRequest, recordOwnershipEvent, syncLeadConversationContext } from "../_crm-lifecycle.js";
 import { emitCrmLeadNotification } from "../_notifications.js";
 import { requirePermissionForUser } from "../_access-control.js";
 import { correctLatestCanonicalSaleDate } from "../_crm-sales-history.js";
@@ -604,6 +604,10 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   });
   if ("error" in updateResult) return response.status(409).json({ ok: false, error: updateResult.error });
   const row = updateResult.row;
+
+  if (departmentChanged || branchChanged || assignedChanged || callCenterChanged) {
+    await syncLeadConversationContext(sql, id);
+  }
 
   let lifecycleResult: any = null;
   if (statusChanged || departmentChanged || branchChanged || assignedChanged || callCenterChanged) {

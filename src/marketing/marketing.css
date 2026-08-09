@@ -5686,3 +5686,15 @@
   background: #fff3d9;
   transform: translateY(-1px);
 }
+
+/* Selected-day task view shared by Marketing Calendar and Receipt Calendar. */
+.marketing-calendar-day[role="button"] { cursor:pointer; }
+.marketing-calendar-day.selected { box-shadow:inset 0 0 0 2px #9f6a58; background:#fff8f4; }
+.marketing-calendar-selected { margin-top:16px; padding:16px; border:1px solid var(--line); border-radius:16px; background:#fffaf7; }
+.marketing-calendar-selected > header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.marketing-calendar-selected > header div { display:grid; gap:4px; }
+.marketing-calendar-selected > header span { color:var(--muted); font-size:10px; font-weight:800; }
+.marketing-calendar-selected > header strong { color:var(--ink); font-size:15px; }
+.marketing-calendar-selected > header b { min-width:72px; padding:7px 10px; border-radius:999px; background:#f2e3dc; color:var(--brand); text-align:center; font-size:10px; }
+.marketing-calendar-selected-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:9px; }
+.marketing-calendar-selected > p { margin:0; padding:18px; border:1px dashed var(--line); border-radius:12px; color:var(--muted); text-align:center; background:#fff; }

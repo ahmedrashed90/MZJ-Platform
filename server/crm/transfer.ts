@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { audit, clean, departmentCodeFromKey, departmentKey, isCrmManager, parseBody, requireCrmUser } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
+import { syncLeadConversationContext } from "../_crm-lifecycle.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
@@ -31,6 +32,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     where id=any(${leadIds}::uuid[]) and is_deleted=false returning id::text
   `;
   for (const old of before) {
+    await syncLeadConversationContext(sql, old.id);
     await sql`
       insert into crm.lead_events(lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,actor_id,actor_name,note,details)
       values (${old.id}::uuid,'bulk_transfer',${old.status_label},'عميل جديد',${old.department_code},${targetDepartment},${old.branch_code},${agent.branch_code||null},${user.id}::uuid,${user.fullName},'نقل العملاء من صفحة قاعدة البيانات',${sql.json({ newAgentId, newAgentName: agent.full_name })})
