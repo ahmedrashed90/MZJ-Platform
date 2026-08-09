@@ -292,13 +292,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (action !== "save_settings" && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
 
   if (action === "save_settings") {
+    const otpChannel = clean(payload.otpChannel).toLowerCase() === 'whatsapp' ? 'whatsapp' : 'smsplus';
     const requestedOtpTemplateId = clean(payload.otpTemplateId);
     const requestedWelcomeTemplateId = clean(payload.welcomeTemplateId);
     const [otpTemplateId, welcomeTemplateId] = await Promise.all([
       approvedMersalTemplateId(requestedOtpTemplateId),
       approvedMersalTemplateId(requestedWelcomeTemplateId),
     ]);
-    if (requestedOtpTemplateId && !otpTemplateId) {
+    if (otpChannel === 'whatsapp' && requestedOtpTemplateId && !otpTemplateId) {
       return response.status(400).json({ ok: false, error: "قالب OTP يجب أن يكون قالب مرسال معتمدًا ونشطًا" });
     }
     if (requestedWelcomeTemplateId && !welcomeTemplateId) {
@@ -310,6 +311,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const [settings] = await sql<any[]>`
       update owners.settings set
         is_enabled=${payload.isEnabled !== false},
+        otp_channel=${otpChannel},
         otp_template_id=${otpTemplateId}::uuid,
         welcome_template_id=${welcomeTemplateId}::uuid,
         otp_expiry_minutes=${integer(payload.otpExpiryMinutes, 5, 1, 30)},

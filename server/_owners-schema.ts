@@ -7,6 +7,7 @@ create schema if not exists owners;
 create table if not exists owners.settings (
   id text primary key default 'default',
   is_enabled boolean not null default true,
+  otp_channel text not null default 'smsplus' check (otp_channel in ('smsplus','whatsapp')),
   otp_template_id uuid references crm.message_templates(id) on delete set null,
   welcome_template_id uuid references crm.message_templates(id) on delete set null,
   otp_expiry_minutes integer not null default 5 check (otp_expiry_minutes between 1 and 30),
@@ -31,6 +32,7 @@ create table if not exists owners.settings (
 );
 insert into owners.settings(id) values('default') on conflict(id) do nothing;
 
+alter table owners.settings add column if not exists otp_channel text not null default 'smsplus';
 alter table owners.settings add column if not exists otp_hourly_limit integer not null default 5;
 alter table owners.settings add column if not exists silver_points integer not null default 1000;
 alter table owners.settings add column if not exists gold_points integer not null default 3000;

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { attachLeadToContactAndOpenRequest } from "./_crm-lifecycle.js";
 import { deliverDirectWhatsapp } from "./_crm-messaging.js";
+import { queueFirebaseSms } from "./_firebase-sms.js";
 import { chooseAssignment, clean } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 import { normalizePhone } from "./_phone-utils.js";
@@ -313,20 +314,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (Number(limits?.hourly_count || 0) >= Number(settings.otp_hourly_limit || 5)) {
       return response.status(429).json({ ok: false, error: "تم تجاوز عدد طلبات رمز التحقق خلال الساعة" });
     }
-    if (!settings.otp_template_id) {
-      return response.status(503).json({ ok: false, error: "لم يتم ضبط قالب OTP المعتمد من مرسال في إعدادات البرنامج" });
+    const otpChannel = String(settings.otp_channel || "smsplus").toLowerCase() === "whatsapp" ? "whatsapp" : "smsplus";
+    let template: any = null;
+    if (otpChannel === "whatsapp") {
+      if (!settings.otp_template_id) {
+        return response.status(503).json({ ok: false, error: "لم يتم ضبط قالب OTP المعتمد من مرسال في إعدادات البرنامج" });
+      }
+      [template] = await sql<any[]>`
+        select *,id::text
+        from crm.message_templates
+        where id=${settings.otp_template_id}::uuid
+          and is_active=true
+          and lower(coalesce(provider,''))='mersal'
+          and upper(coalesce(status,''))='APPROVED'
+        limit 1
+      `;
+      if (!template) return response.status(503).json({ ok: false, error: "قالب OTP المحدد غير متاح أو غير معتمد" });
     }
-
-    const [template] = await sql<any[]>`
-      select *,id::text
-      from crm.message_templates
-      where id=${settings.otp_template_id}::uuid
-        and is_active=true
-        and lower(coalesce(provider,''))='mersal'
-        and upper(coalesce(status,''))='APPROVED'
-      limit 1
-    `;
-    if (!template) return response.status(503).json({ ok: false, error: "قالب OTP المحدد غير متاح أو غير معتمد" });
 
     const challengeId = crypto.randomUUID();
     const otp = randomOtp();
@@ -337,21 +341,38 @@ export default async function handler(request: VercelRequest, response: VercelRe
         ${Number(settings.otp_max_attempts || 5)},now()+${Number(settings.otp_expiry_minutes || 5)}*interval '1 minute'
       )
     `;
-    const text = renderNumberedTemplate(template.content, [
-      otp,
-      String(Number(settings.otp_expiry_minutes || 5)),
-    ]);
+    const expiryMinutes = Number(settings.otp_expiry_minutes || 5);
     try {
-      await deliverDirectWhatsapp({
-        phone,
-        text,
-        template,
-        idempotencyKey: `owners-otp:${challengeId}`,
-        reason: "owners_otp",
-      });
+      if (otpChannel === "smsplus") {
+        const message = `رمز التحقق الخاص بك في MZJ Owners Community هو: ${otp}. الرمز صالح لمدة ${expiryMinutes} دقائق. لا تشارك الرمز مع أي شخص.`;
+        await queueFirebaseSms({
+          createdAt: new Date(),
+          message,
+          meta: {
+            type: "owners_otp",
+            purpose: "login",
+            challengeId,
+            expiresMinutes: expiryMinutes,
+          },
+          phone,
+          source: "mzj_owners_community",
+          status: "queued",
+          to: phone,
+        });
+      } else {
+        const text = renderNumberedTemplate(template.content, [otp, String(expiryMinutes)]);
+        await deliverDirectWhatsapp({
+          phone,
+          text,
+          template,
+          idempotencyKey: `owners-otp:${challengeId}`,
+          reason: "owners_otp",
+        });
+      }
     } catch (error) {
       await sql`delete from owners.otp_challenges where id=${challengeId}::uuid`;
-      const message = error instanceof Error ? error.message : "تعذر إرسال رمز التحقق عبر واتساب";
+      const fallback = otpChannel === "smsplus" ? "تعذر إرسال رمز التحقق عبر SMS+" : "تعذر إرسال رمز التحقق عبر واتساب";
+      const message = error instanceof Error ? error.message : fallback;
       return response.status(502).json({ ok: false, error: message });
     }
     return response.status(200).json({

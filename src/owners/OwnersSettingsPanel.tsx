@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FloppyDisk, Gift, Medal, ShieldCheck, WhatsappLogo } from "@phosphor-icons/react";
+import { ChatCircleText, FloppyDisk, Gift, Medal, ShieldCheck } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
@@ -12,6 +12,7 @@ type OwnerTemplate = {
 
 type OwnersSettingsForm = {
   isEnabled: boolean;
+  otpChannel: "smsplus" | "whatsapp";
   otpTemplateId: string;
   welcomeTemplateId: string;
   welcomeMessageEnabled: boolean;
@@ -35,6 +36,7 @@ type OwnersSettingsForm = {
 
 const emptyForm: OwnersSettingsForm = {
   isEnabled: true,
+  otpChannel: "smsplus",
   otpTemplateId: "",
   welcomeTemplateId: "",
   welcomeMessageEnabled: false,
@@ -75,6 +77,7 @@ export function OwnersSettingsPanel() {
     setTemplates(Array.isArray(response.templates) ? response.templates : []);
     setForm({
       isEnabled: settings.is_enabled !== false,
+      otpChannel: settings.otp_channel === "whatsapp" ? "whatsapp" : "smsplus",
       otpTemplateId: settings.otp_template_id || "",
       welcomeTemplateId: settings.welcome_template_id || "",
       welcomeMessageEnabled: settings.welcome_message_enabled === true,
@@ -137,7 +140,7 @@ export function OwnersSettingsPanel() {
           <ShieldCheck size={28} />
           <div>
             <h2>إعدادات MZJ Owners Community</h2>
-            <p>إدارة التحقق عبر واتساب، قواعد النقاط، مستويات العضوية ورحلة الدعوة من مكان واحد.</p>
+            <p>إدارة قناة OTP عبر SMS+ أو واتساب، قواعد النقاط، مستويات العضوية ورحلة الدعوة من مكان واحد.</p>
           </div>
         </div>
         <span className={form.isEnabled ? "owners-badge ok" : "owners-badge"}>
@@ -148,7 +151,7 @@ export function OwnersSettingsPanel() {
       {message ? <div className="owners-notice">{message}</div> : null}
 
       <section className="owners-settings-card">
-        <h3><WhatsappLogo size={21} /> واتساب وOTP</h3>
+        <h3><ChatCircleText size={21} /> قناة OTP والتحقق</h3>
         <div className="owners-form-grid">
           <label>
             <span>حالة البرنامج</span>
@@ -158,9 +161,16 @@ export function OwnersSettingsPanel() {
             </select>
           </label>
           <label>
+            <span>قناة إرسال OTP</span>
+            <select disabled={!editable} value={form.otpChannel} onChange={(event) => setForm({ ...form, otpChannel: event.target.value === "whatsapp" ? "whatsapp" : "smsplus" })}>
+              <option value="smsplus">SMS+ عبر تطبيق التراكينج</option>
+              <option value="whatsapp">واتساب عبر مرسال</option>
+            </select>
+          </label>
+          <label>
             <span>قالب OTP المعتمد من مرسال</span>
-            <select disabled={!editable} value={form.otpTemplateId} onChange={(event) => setForm({ ...form, otpTemplateId: event.target.value })}>
-              <option value="">اختر القالب</option>
+            <select disabled={!editable || form.otpChannel !== "whatsapp"} value={form.otpTemplateId} onChange={(event) => setForm({ ...form, otpTemplateId: event.target.value })}>
+              <option value="">{form.otpChannel === "smsplus" ? "غير مطلوب مع SMS+" : "اختر القالب"}</option>
               {templateOptions.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
             </select>
           </label>
