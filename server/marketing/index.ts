@@ -3098,7 +3098,11 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   }
   if(action==='check_in'){
     const [row]=await sql<any[]>`
-      with settings as(select work_start,grace_minutes from marketing.attendance_settings where singleton=true), calculated as(
+      with settings as(
+        select
+          coalesce((select work_start from marketing.attendance_settings where singleton=true),'09:00'::time) as work_start,
+          coalesce((select grace_minutes from marketing.attendance_settings where singleton=true),15) as grace_minutes
+      ), calculated as(
         select greatest(0,floor(extract(epoch from (((now() at time zone 'Asia/Riyadh')::time)-(work_start+(grace_minutes||' minutes')::interval)))/60))::int as delay_minutes from settings
       )
       insert into marketing.attendance_records(user_id,attendance_date,check_in,delay_minutes,status)
@@ -3109,6 +3113,7 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
         status=case when marketing.attendance_records.check_in is null then excluded.status else marketing.attendance_records.status end,
         updated_at=now()
       returning *,id::text`;
+    if(!row?.id||!row?.check_in)throw new Error("تعذر تثبيت تسجيل الحضور، حاول مرة أخرى");
     return{ok:true,row,message:"تم تسجيل الحضور"};
   }
   if(action==='check_out'){
