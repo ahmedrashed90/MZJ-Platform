@@ -274,7 +274,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                   <tr key={order.id} onClick={() => void openOrder(order.id)}>
                     <td><button type="button" className="tracking-order-link">{order.sales_order_no}</button><small>{order.vins || "لا يوجد رقم هيكل"}</small></td>
                     <td><strong>{order.customer_name || "—"}</strong><small>{order.customer_mobile || "—"}</small></td>
-                    <td>{trackingBranchLabel(order.branch)}</td>
+                    <td>{trackingBranchLabel(order.branch) === "—" ? "الموقع الالكتروني" : trackingBranchLabel(order.branch)}</td>
                     <td>{order.vehicles_count}</td>
                     <td><div className="tracking-mini-progress"><span style={{ width: `${percent}%` }} /></div><small>{percent}%</small></td>
                     <td><span className={`tracking-status ${order.is_cancelled ? "cancelled" : order.is_archived ? "archived" : order.status}`}>{trackingStatusLabel(order.status, order.is_archived, order.is_cancelled)}</span></td>
