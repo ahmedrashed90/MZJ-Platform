@@ -175,6 +175,58 @@ function isRegistrationFeeItem(item: JsonRecord) {
   ].some(includesRegistrationFee);
 }
 
+const WEBSITE_PACKAGE_ITEM_CODE = "MZJ-WEBSITE-PACKAGE";
+
+function normalizedItemCode(value: unknown) {
+  return clean(value).toUpperCase().replace(/\s+/g, "");
+}
+
+function isWebsitePackageItem(item: JsonRecord) {
+  return normalizedItemCode(pick(item, ["item_code", "code"])) === normalizedItemCode(WEBSITE_PACKAGE_ITEM_CODE);
+}
+
+function descriptionValue(description: unknown, label: string) {
+  const normalizedLabel = label.replace(/\s+/g, "").replace(/[：:]/g, "");
+  for (const rawLine of clean(description).split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const [head, ...rest] = line.split(/[：:]/);
+    if (head.replace(/\s+/g, "").trim() === normalizedLabel && rest.length) return rest.join(":").trim();
+  }
+  return "";
+}
+
+function packageSummaryFromItems(items: JsonRecord[], fallbackTaxRate: number) {
+  if (!items.length) return null;
+  const first = items[0];
+  const description = pickText(first, ["description"]);
+  const priceBeforeTax = Number(items.reduce((sum, item) => sum + itemAmount(item), 0).toFixed(2));
+  const taxValue = Number(items.reduce((sum, item) => {
+    const subtotal = itemAmount(item);
+    const rate = percentRate(pick(item, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || fallbackTaxRate;
+    return sum + (directTaxAmount(item) || subtotal * rate / 100);
+  }, 0).toFixed(2));
+  const totalInclVat = Number((priceBeforeTax + taxValue).toFixed(2));
+  const packageName = pickText(first, ["package_name", "custom_package_name"])
+    || descriptionValue(description, "الباقة")
+    || "باقة الموقع";
+  const packageGroup = pickText(first, ["package_group", "custom_package_group"])
+    || descriptionValue(description, "مجموعة الباقة");
+  const discountText = pickText(first, ["package_discount_percent", "custom_package_discount_percent"])
+    || descriptionValue(description, "خصم نقدي على السيارة");
+  const cashDiscountPercent = numberValue(discountText.replace("%", ""));
+
+  return {
+    itemCode: WEBSITE_PACKAGE_ITEM_CODE,
+    name: packageName,
+    group: packageGroup,
+    priceBeforeTax,
+    taxValue,
+    totalInclVat,
+    cashDiscountPercent,
+  };
+}
+
 function itemAmount(item: JsonRecord) {
   const qty = numberValue(pick(item, ["qty", "quantity", "stock_qty"])) || 1;
   const amount = numberValue(pick(item, ["net_amount", "amount", "base_net_amount", "base_amount", "item_value", "value"]));
@@ -331,13 +383,15 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على جدول Items في طلب ${orderNo}`);
   }
 
-  const feeItems = rawItems.filter(isRegistrationFeeItem);
-  const vehicleItems = rawItems.filter((item) => !isRegistrationFeeItem(item));
+  const packageItems = rawItems.filter(isWebsitePackageItem);
+  const feeItems = rawItems.filter((item) => !isWebsitePackageItem(item) && isRegistrationFeeItem(item));
+  const vehicleItems = rawItems.filter((item) => !isWebsitePackageItem(item) && !isRegistrationFeeItem(item));
   if (!vehicleItems.length && !isCancellation && !isUpdateAfterSubmit) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على صف سيارة داخل طلب ${orderNo}`);
   }
 
   const taxMeta = resolveTaxMetadata(doc, body);
+  const packageSummary = packageSummaryFromItems(packageItems, taxMeta.rate);
   const directRegistrationFee = numberValue(pick(doc, ["registration_fee", "custom_registration_fee", "RegistrationFee"]));
   const registrationFee = directRegistrationFee || feeItems.reduce((sum, item) => sum + itemAmount(item), 0);
 
@@ -371,6 +425,11 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   const salesPerson = resolveSalesPerson(doc, body) || erpUserId;
 
   const totalVehicleSubtotal = vehicleItems.reduce((sum, item) => sum + itemAmount(item), 0);
+  const totalPackageSubtotal = packageSummary?.priceBeforeTax || 0;
+  const explicitNetTotal = numberValue(
+    pick(doc, ["net_total", "base_net_total", "subtotal_excl_vat", "NetTotal", "netTotal"])
+      ?? pick(body, ["net_total", "base_net_total", "subtotal_excl_vat", "NetTotal", "netTotal"]),
+  );
   const explicitGrandTotal = numberValue(
     pick(doc, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal", "grandTotal"])
       ?? pick(body, ["grand_total", "rounded_total", "base_grand_total", "GrandTotal", "grandTotal"]),
@@ -379,6 +438,13 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     pick(doc, ["advance_paid", "base_advance_paid", "AdvancePaid", "advancePaid"])
       ?? pick(body, ["advance_paid", "base_advance_paid", "AdvancePaid", "advancePaid"]),
   );
+  const vehicleTaxTotal = vehicleItems.reduce((sum, current) => {
+    const currentSubtotal = itemAmount(current);
+    const currentRate = percentRate(pick(current, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || taxMeta.rate;
+    return sum + (directTaxAmount(current) || currentSubtotal * currentRate / 100);
+  }, 0);
+  const orderTaxValue = Number((vehicleTaxTotal + (packageSummary?.taxValue || 0)).toFixed(2));
+  const orderSubtotalBeforeTax = explicitNetTotal || Number((totalVehicleSubtotal + totalPackageSubtotal + registrationFee).toFixed(2));
   const payloads: NormalizedErpNextSalesOrder["payloads"] = [];
   const warnings: NormalizedErpNextSalesOrder["warnings"] = [];
 
@@ -458,17 +524,15 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
         unitPrice,
         value: itemValue,
       },
+      package: packageSummary,
       totals: {
         carSubtotalExclVAT: subtotal,
         carTaxValue: taxValue,
         carTotalInclVAT: totalInclVat,
         registrationFee: feeForThisRow,
-        subtotalBeforeTax: Number((totalVehicleSubtotal + registrationFee).toFixed(2)),
-        grandTotal: explicitGrandTotal || Number((totalVehicleSubtotal + registrationFee + vehicleItems.reduce((sum, current) => {
-          const currentSubtotal = itemAmount(current);
-          const currentRate = percentRate(pick(current, ["tax_rate", "TaxRate", "item_tax_rate", "vat_rate"])) || taxMeta.rate;
-          return sum + (directTaxAmount(current) || currentSubtotal * currentRate / 100);
-        }, 0)).toFixed(2)),
+        subtotalBeforeTax: orderSubtotalBeforeTax,
+        orderTaxValue,
+        grandTotal: explicitGrandTotal || Number((orderSubtotalBeforeTax + orderTaxValue).toFixed(2)),
         advancePaid: explicitAdvancePaid,
         taxCode: taxMeta.code,
         taxName: taxMeta.name,

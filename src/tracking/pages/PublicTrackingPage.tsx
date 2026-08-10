@@ -69,6 +69,11 @@ export function PublicTrackingPage() {
                 <div><small>الفرع</small><strong>{trackingBranchLabel(order.branch)}</strong></div>
                 <div><small>تاريخ الطلب</small><strong>{formatTrackingDate(order.order_date, false)}</strong></div>
                 <div><small>عدد السيارات</small><strong>{order.vehicles.length}</strong></div>
+                {order.package_name ? <>
+                  <div><small>اسم الباقة</small><strong>{order.package_name}</strong>{order.package_group ? <small>{order.package_group}</small> : null}</div>
+                  <div><small>سعر الباقة قبل الضريبة</small><strong>{formatTrackingMoney(order.package_price_before_tax)}</strong></div>
+                  <div><small>إجمالي الباقة شامل الضريبة</small><strong>{formatTrackingMoney(order.package_total_incl_vat)}</strong></div>
+                </> : null}
                 <div><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(order.total_incl_vat)}</strong></div>
               </div>
             </section>

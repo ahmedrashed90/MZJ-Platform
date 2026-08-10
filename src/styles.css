@@ -7186,6 +7186,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .tracking-order-summary-card .tracking-order-info-item strong { font-size: 14px; line-height: 1.55; }
 .tracking-order-summary-card .tracking-order-customer { grid-column: 1 / -1; }
 .tracking-order-summary-card .tracking-order-customer strong { font-size: 16px; }
+.tracking-order-summary-card .tracking-order-package-name { grid-column: 1 / -1; background: #fffaf7; }
+.tracking-order-summary-card .tracking-order-package-name strong { color: var(--brand); font-size: 15px; }
 .tracking-order-summary-card .tracking-order-total {
   grid-column: 1 / -1;
   min-height: 76px;
@@ -7298,6 +7300,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .tracking-detail-header,.tracking-detail-actions,.tracking-detail-body { padding-left: 14px; padding-right: 14px; }
   .tracking-order-summary-card .tracking-order-info-grid { grid-template-columns: 1fr; }
   .tracking-order-summary-card .tracking-order-customer,
+  .tracking-order-summary-card .tracking-order-package-name,
   .tracking-order-summary-card .tracking-order-total { grid-column: auto; }
   .tracking-vehicle-summary-card .tracking-car-details { grid-template-columns: 1fr 1fr; }
   .tracking-vehicle-summary-card .tracking-car-name { grid-column: 1 / -1; }

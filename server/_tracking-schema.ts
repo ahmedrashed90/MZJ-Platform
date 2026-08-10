@@ -29,6 +29,12 @@ alter table tracking.orders add column if not exists sales_followup_completed_at
 alter table tracking.orders add column if not exists sales_followup_completed_by uuid references core.users(id) on delete set null;
 alter table tracking.orders add column if not exists sales_followup_completed_by_name text;
 alter table tracking.orders add column if not exists registration_fee numeric(14,2) not null default 0;
+alter table tracking.orders add column if not exists package_name text;
+alter table tracking.orders add column if not exists package_group text;
+alter table tracking.orders add column if not exists package_price_before_tax numeric(14,2) not null default 0;
+alter table tracking.orders add column if not exists package_tax_value numeric(14,2) not null default 0;
+alter table tracking.orders add column if not exists package_total_incl_vat numeric(14,2) not null default 0;
+alter table tracking.orders add column if not exists package_cash_discount_percent numeric(8,4) not null default 0;
 alter table tracking.orders add column if not exists source text;
 alter table tracking.orders add column if not exists source_payload jsonb not null default '{}'::jsonb;
 alter table tracking.orders add column if not exists source_updated_at timestamptz;
