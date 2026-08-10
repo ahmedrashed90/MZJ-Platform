@@ -331,8 +331,7 @@ export function TrackingOrdersPage({ archivedOnly = false }: { archivedOnly?: bo
                     <div className="tracking-order-info-item"><CalendarBlank size={18} /><span><small>تاريخ التسليم</small><strong>{formatTrackingDate(selected.delivery_date, false)}</strong></span></div>
                     {selected.package_name ? <>
                       <div className="tracking-order-info-item tracking-order-package-name"><CurrencyCircleDollar size={18} /><span><small>اسم الباقة</small><strong>{selected.package_name}</strong>{selected.package_group ? <small>{selected.package_group}</small> : null}</span></div>
-                      <div className="tracking-order-info-item"><CurrencyCircleDollar size={18} /><span><small>سعر الباقة قبل الضريبة</small><strong>{formatTrackingMoney(selected.package_price_before_tax)}</strong></span></div>
-                      <div className="tracking-order-info-item"><CurrencyCircleDollar size={18} /><span><small>إجمالي الباقة شامل الضريبة</small><strong>{formatTrackingMoney(selected.package_total_incl_vat)}</strong></span></div>
+                      <div className="tracking-order-info-item"><CurrencyCircleDollar size={18} /><span><small>سعر الباقة</small><strong>{formatTrackingMoney(selected.package_price_before_tax)}</strong></span></div>
                     </> : null}
                     <div className="tracking-order-info-item tracking-order-total"><CurrencyCircleDollar size={18} /><span><small>الإجمالي شامل الضريبة</small><strong>{formatTrackingMoney(selected.total_incl_vat)}</strong></span></div>
                   </div>
