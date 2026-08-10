@@ -370,6 +370,12 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const finalUploadPercent = finalUploadTotalBytes ? Math.round((finalUploadLoadedBytes / finalUploadTotalBytes) * 100) : 0;
   const activeFinalUploadFile = finalUpload?.files.find((item) => item.status === "uploading" || item.status === "verifying") || null;
   const executionFolders = task?.task_kind === "execution" ? taskExecutionFolders(task.execution_folders) : null;
+  const executionDepartment = String(task?.department_name || "").trim().toLowerCase();
+  const canDownloadScenesWord = task?.task_kind === "execution" && [
+    "قسم التصميم", "التصميم", "تصميم", "design",
+    "قسم المونتاج", "المونتاج", "مونتاج", "montage",
+    "قسم التصوير", "التصوير", "تصوير", "shooting", "photography",
+  ].includes(executionDepartment);
 
   function selectReviewField(key: string) {
     if (!canReview) return;
@@ -527,6 +533,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             statusLabel="تم الاعتماد"
             statusTone="approved"
             adminNote={task.admin_note || ""}
+            canDownloadScenesWord={canDownloadScenesWord}
           />}
 
           <section className="marketing-task-section">
