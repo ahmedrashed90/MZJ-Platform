@@ -51,6 +51,8 @@ export type NormalizedErpNextSalesOrder = {
   erpSubmittedBy: string;
   erpSubmittedByName: string;
   erpBranch: string;
+  crmSourceCode: string;
+  crmSourceName: string;
   accountingCustomerName: string;
   actualCustomerName: string;
   actualCustomerPhone: string;
@@ -236,6 +238,20 @@ function resolveErpUserId(doc: JsonRecord, body: JsonRecord) {
   return (teamEmail || "").toLowerCase();
 }
 
+function resolveCrmBusinessSource(doc: JsonRecord, body: JsonRecord) {
+  const rawSource = pickText(doc, ["source", "source_code", "sourceCode", "order_source", "orderSource"])
+    || pickText(body, ["source", "source_code", "sourceCode", "order_source", "orderSource"]);
+  const normalized = rawSource.trim().toLowerCase().replace(/[\s_-]+/g, "");
+
+  if (normalized === "website" || normalized === "web" || normalized === "الموقع" || normalized === "الموقعالالكتروني") {
+    return { code: "website", name: "Website" };
+  }
+
+  // Preserve the established manual ERPNext flow for every payload that does
+  // not explicitly identify itself as a website-originated order.
+  return { code: "next_erp", name: "NEXT ERP" };
+}
+
 function resolveAlternateCustomer(doc: JsonRecord, body: JsonRecord) {
   const name = pickText(doc, [
     "user_name", "username", "custom_user_name", "custom_username", "actual_customer_name",
@@ -306,6 +322,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     || pickText(body, ["Timestamp", "createdAt", "creation"]);
   const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
   const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
+  const crmSource = resolveCrmBusinessSource(doc, body);
   const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
   const isUpdateAfterSubmit = updateAfterSubmitEvent(erpEvent);
 
@@ -495,6 +512,8 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     erpSubmittedBy,
     erpSubmittedByName,
     erpBranch: branch,
+    crmSourceCode: crmSource.code,
+    crmSourceName: crmSource.name,
     accountingCustomerName,
     actualCustomerName,
     actualCustomerPhone,

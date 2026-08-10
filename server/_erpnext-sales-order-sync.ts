@@ -90,6 +90,8 @@ async function upsertErpNextSalesTransaction(
   const saleAt = dateTimeForOrder(normalized.orderDate);
   const quantity = erpSalesOrderQuantity(normalized);
   const totalAmount = numberValue(normalized.grandTotal);
+  const crmSourceCode = clean(normalized.crmSourceCode) || "next_erp";
+  const crmSourceName = clean(normalized.crmSourceName) || "NEXT ERP";
   const metadata = {
     origin: "erpnext-sales-order",
     integrationOrderId: input.orderId,
@@ -98,6 +100,8 @@ async function upsertErpNextSalesTransaction(
     erpCreatedAt: normalized.erpCreatedAt,
     erpUserId: normalized.erpUserId,
     erpSalesPerson: normalized.erpSalesPerson,
+    crmSourceCode,
+    crmSourceName,
     canonicalSalesTransaction: true,
   };
 
@@ -144,8 +148,8 @@ async function upsertErpNextSalesTransaction(
         assigned_name=${mapping.full_name},
         department_code=${input.departmentCode},
         branch_code=${input.branchCode},
-        source_code='next_erp',
-        source_name='NEXT ERP',
+        source_code=${crmSourceCode},
+        source_name=${crmSourceName},
         car_name=${clean(firstPayload.item?.type)||null},
         car_category=${clean(firstPayload.item?.category)||null},
         updated_by=${mapping.id}::uuid,
@@ -164,7 +168,7 @@ async function upsertErpNextSalesTransaction(
       car_name,car_category,created_by,updated_by,metadata,is_cancelled
     ) values(
       ${input.leadId}::uuid,'erpnext_sales_order',${normalized.orderNo},${saleAt}::timestamptz,${quantity},${totalAmount},
-      ${mapping.id}::uuid,${mapping.full_name},${input.departmentCode},${input.branchCode},'next_erp','NEXT ERP',
+      ${mapping.id}::uuid,${mapping.full_name},${input.departmentCode},${input.branchCode},${crmSourceCode},${crmSourceName},
       ${clean(firstPayload.item?.type)||null},${clean(firstPayload.item?.category)||null},
       ${mapping.id}::uuid,${mapping.id}::uuid,${tx.json(metadata)},false
     )
@@ -273,26 +277,11 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
 }
 
 function erpCustomerIdentity(normalized: NormalizedErpNextSalesOrder) {
-  const accountingRaw = clean(normalized.erpCustomerId)
-    || clean(normalized.accountingCustomerName);
-  const actualRaw = clean(normalized.actualCustomerName);
-  const accountingComparable = normalizeComparable(accountingRaw);
-  const actualComparable = normalizeComparable(actualRaw);
-  const accountingNameComparable = normalizeComparable(normalized.accountingCustomerName);
-
-  // NEXT ERP may use one accounting customer (for example a bank) for sales
-  // that belong to different real users. CRM ownership must therefore identify
-  // the real customer first instead of collapsing every order under the shared
-  // accounting customer and letting the latest sales order overwrite the owner.
-  const hasDistinctActualCustomer = Boolean(
-    actualComparable
-    && (!accountingNameComparable || actualComparable !== accountingNameComparable),
-  );
-  const comparable = hasDistinctActualCustomer
-    ? [accountingComparable, actualComparable].filter(Boolean).join(":")
-    : accountingComparable || actualComparable || clean(normalized.sourceInstanceKey);
-  const raw = accountingRaw || actualRaw || clean(normalized.sourceInstanceKey);
-
+  const raw = clean(normalized.erpCustomerId)
+    || clean(normalized.accountingCustomerName)
+    || clean(normalized.actualCustomerName)
+    || clean(normalized.sourceInstanceKey);
+  const comparable = normalizeComparable(raw) || clean(normalized.sourceInstanceKey);
   return {
     raw,
     externalId: `customer:${comparable}`,
@@ -393,6 +382,8 @@ async function linkCrmCustomer(input: {
     || (serviceKey === "finance" ? "finance_sales" : serviceKey === "service" ? "customer_service" : "cash_sales");
   const branchCode = clean(mapping.branch_code) || null;
   const customerName = clean(normalized.actualCustomerName) || clean(normalized.accountingCustomerName) || "عميل NEXT ERP";
+  const crmSourceCode = clean(normalized.crmSourceCode) || "next_erp";
+  const crmSourceName = clean(normalized.crmSourceName) || "NEXT ERP";
   const sourceMetadata = {
     origin: "erpnext-sales-order",
     salesOrderNo: normalized.orderNo,
@@ -404,6 +395,8 @@ async function linkCrmCustomer(input: {
     operationsAdminEmail: normalized.erpSubmittedBy,
     operationsAdminName: normalized.erpSubmittedByName,
     erpBranch: normalized.erpBranch,
+    crmSourceCode,
+    crmSourceName,
     accountingCustomerName: normalized.accountingCustomerName,
     linkedAt: new Date().toISOString(),
   };
@@ -521,12 +514,12 @@ async function linkCrmCustomer(input: {
           assigned_to,created_by,updated_by,registered_at,sold_at,responsible_name_snapshot,completion_percent
         ) values (
           ${contact.id}::uuid,${customerName},${normalized.actualCustomerPhone||null},${normalized.actualCustomerPhoneNormalized||null},
-          'next_erp','NEXT ERP','next_erp',${serviceKey},${departmentCode},${branchCode},null,'تم البيع',${paymentType(serviceKey)},
+          ${crmSourceCode},${crmSourceName},'next_erp',${serviceKey},${departmentCode},${branchCode},null,'تم البيع',${paymentType(serviceKey)},
           ${clean(firstPayload.item?.type)||null},${clean(firstPayload.item?.category)||null},${clean(firstPayload.item?.model)||null},
           ${clean(firstPayload.item?.type)||null},${clean(firstPayload.item?.exteriorColor)||null},
           ${`تم إنشاء العميل تلقائيًا من طلب البيع ${normalized.orderNo} في NEXT ERP`},
           ${tx.json({ ...sourceMetadata, salesOrders: [normalized.orderNo] })},
-          ${tx.json([{ source: "next_erp", at: saleAt, orderNo: normalized.orderNo }])},
+          ${tx.json([{ source: crmSourceCode, at: saleAt, orderNo: normalized.orderNo }])},
           ${mapping.id}::uuid,${mapping.id}::uuid,${mapping.id}::uuid,${saleAt}::timestamptz,${saleAt}::timestamptz,${mapping.full_name},100
         )
         returning *,id::text,contact_id::text,current_request_id::text,assigned_to::text,call_center_assigned_to::text
@@ -537,7 +530,7 @@ async function linkCrmCustomer(input: {
           contact_id,lead_id,service_key,department_code,branch_code,status_label,request_state,source_code,
           classification_method,assigned_to,opened_at,closed_at,closed_by,closure_reason,metadata
         ) values(
-          ${contact.id}::uuid,${lead.id}::uuid,${serviceKey},${departmentCode},${branchCode},'تم البيع','closed','next_erp',
+          ${contact.id}::uuid,${lead.id}::uuid,${serviceKey},${departmentCode},${branchCode},'تم البيع','closed',${crmSourceCode},
           'erpnext_sales_order',${mapping.id}::uuid,${saleAt}::timestamptz,${saleAt}::timestamptz,${mapping.id}::uuid,'تم البيع',${tx.json(sourceMetadata)}
         )
       `;
@@ -615,6 +608,19 @@ async function linkCrmCustomer(input: {
           customer_name=coalesce(nullif(customer_name,''),${customerName}),
           phone=coalesce(nullif(${normalized.actualCustomerPhone},''),phone),
           phone_normalized=coalesce(nullif(${normalized.actualCustomerPhoneNormalized},''),phone_normalized),
+          source_code=case
+            when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceCode}
+            else source_code
+          end,
+          source_name=case
+            when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceName}
+            else source_name
+          end,
+          source_history=case
+            when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp'
+              then coalesce(source_history,'[]'::jsonb)||${tx.json([{ source: crmSourceCode, at: saleAt, orderNo: normalized.orderNo }])}::jsonb
+            else source_history
+          end,
           service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},
           status_code=null,status_label='تم البيع',payment_type=${paymentType(serviceKey)},sold_at=${saleAt}::timestamptz,
           assigned_to=${mapping.id}::uuid,responsible_name_snapshot=${mapping.full_name},
@@ -632,6 +638,10 @@ async function linkCrmCustomer(input: {
         await tx`
           update crm.service_requests set
             service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},status_label='تم البيع',
+            source_code=case
+              when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceCode}
+              else source_code
+            end,
             request_state='closed',assigned_to=${mapping.id}::uuid,closed_at=${saleAt}::timestamptz,
             closed_by=${mapping.id}::uuid,closure_reason='تم البيع',metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(sourceMetadata)}::jsonb,updated_at=now()
           where id=${existing.current_request_id}::uuid
