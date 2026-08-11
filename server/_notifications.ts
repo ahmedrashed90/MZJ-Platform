@@ -789,6 +789,93 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
     }
     return;
   }
+  if (action === "attach_final_media_group") {
+    const taskId = clean(body?.taskId);
+    const groupId = clean(result?.groupId || body?.groupId);
+    if (!validUuid(taskId) || !validUuid(groupId)) return;
+    const [uploadRef] = await sql<any[]>`
+      select t.id::text as task_id,t.source_type,t.source_id::text,t.assigned_to::text,t.paired_content_user_id::text,t.title,
+        d.name as department_name,
+        coalesce(cr.name,cr.instance_code,cr.creative_type,'—') as creative_name,
+        assigned.full_name as assigned_name,paired.full_name as paired_content_name,
+        coalesce(campaign.name,agenda.name,'—') as source_name,
+        coalesce(campaign.campaign_code,agenda.month_key,'') as source_code,
+        g.id::text as group_id,g.media_kind,g.file_count,g.status as group_status,g.updated_at as upload_completed_at
+      from marketing.tasks t
+      join marketing.final_media_groups g on g.id=${groupId}::uuid and g.task_id=t.id
+      left join marketing.departments d on d.id=t.department_id
+      left join marketing.creatives cr on cr.id=t.creative_id
+      left join core.users assigned on assigned.id=t.assigned_to
+      left join core.users paired on paired.id=t.paired_content_user_id
+      left join marketing.campaigns campaign on t.source_type='campaign' and campaign.id=t.source_id
+      left join marketing.agendas agenda on t.source_type='agenda' and agenda.id=t.source_id
+      where t.id=${taskId}::uuid and t.is_deleted=false
+      limit 1
+    `;
+    if (!uploadRef) return;
+    const files = await sql<any[]>`
+      select id::text,original_name,mime_type,file_size,order_index,status,external_id,updated_at
+      from marketing.files
+      where final_media_group_id=${groupId}::uuid
+      order by order_index,created_at,id
+    `;
+    const mediaKindLabel = clean(uploadRef.media_kind) === "video"
+      ? "فيديو / ريل"
+      : clean(uploadRef.media_kind) === "carousel"
+        ? "مجموعة صور مرتبة"
+        : "صورة";
+    const fileDetails = files.flatMap((file: any, index: number) => {
+      const size = Number(file?.file_size || 0);
+      const exactSize = Number.isFinite(size) && size >= 0 ? `${Math.trunc(size).toLocaleString("en-US")} بايت` : cleanOptional(file?.file_size);
+      return [
+        detailLine(`اسم الملف ${index + 1}`, file?.original_name),
+        detailLine(`نوع الملف ${index + 1}`, file?.mime_type),
+        detailLine(`حجم الملف ${index + 1}`, exactSize),
+        detailLine(`ترتيب الملف ${index + 1}`, Number(file?.order_index || 0) + 1),
+        detailLine(`حالة الملف ${index + 1}`, clean(file?.status) === "ready" ? "جاهز" : file?.status),
+        detailLine(`معرف الملف في Zoho ${index + 1}`, file?.external_id),
+      ].filter(Boolean);
+    });
+    await createNotification({
+      systemCode: "marketing",
+      eventType: "final_file_uploaded",
+      title: files.length > 1 ? `تم رفع ${files.length} ملفات نهائية` : "تم رفع الملف النهائي",
+      body: joinDetails([
+        detailLine(uploadRef.source_type === "agenda" ? "الأجندة" : "الحملة", uploadRef.source_name),
+        detailLine("كود السجل", uploadRef.source_code),
+        detailLine("الكرييتيف", uploadRef.creative_name),
+        detailLine("التكليف", uploadRef.title),
+        detailLine("القسم", uploadRef.department_name),
+        detailLine("المسؤول عن التكليف", uploadRef.assigned_name),
+        detailLine("كاتب المحتوى المرتبط", uploadRef.paired_content_name),
+        detailLine("نوع الملف النهائي", mediaKindLabel),
+        detailCount("عدد الملفات", files.length),
+        ...fileDetails,
+        detailLine("وقت اكتمال الرفع", notificationDateTime(uploadRef.upload_completed_at)),
+        detailLine("نتيجة الرفع", result?.message || "تم رفع الملف النهائي على Zoho WorkDrive"),
+        detailLine("المسؤول عن رفع الملف النهائي", user.fullName),
+      ]),
+      entityType: "task",
+      entityId: taskId,
+      actionUrl: "/marketing",
+      audienceUserIds: [uploadRef.assigned_to, uploadRef.paired_content_user_id],
+      severity: "success",
+      ...actor,
+      metadata: {
+        responsibleName: user.fullName,
+        taskId,
+        groupId,
+        fileCount: files.length,
+        mediaKind: clean(uploadRef.media_kind),
+        sourceType: clean(uploadRef.source_type),
+        sourceName: clean(uploadRef.source_name),
+        creativeName: clean(uploadRef.creative_name),
+      },
+      dedupeKey: notificationDedupe("marketing-final-file-uploaded", taskId, groupId),
+    });
+    return;
+  }
+
   if (["receive_task", "upload_template", "review_template", "toggle_task_action", "attach_final_file", "archive_entity"].includes(action)) {
     const map: Record<string, [string, string, NotificationSeverity]> = {
       receive_task: ["task_received", "تم استلام التكليف", "success"],
