@@ -78,7 +78,6 @@ export type MarketingFinalUploadCancellation = {
   cancelled: boolean;
   groupId: string;
   currentRequest: XMLHttpRequest | null;
-  currentReader: FileReader | null;
   cancel: () => void;
 };
 
@@ -87,10 +86,8 @@ export function createMarketingFinalUploadCancellation(): MarketingFinalUploadCa
     cancelled: false,
     groupId: "",
     currentRequest: null,
-    currentReader: null,
     cancel() {
       control.cancelled = true;
-      control.currentReader?.abort();
       control.currentRequest?.abort();
     },
   };
@@ -109,64 +106,34 @@ function parseUploadResponse(xhr: XMLHttpRequest) {
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
-function fileToDataUrl(input: { file: File; cancellation: MarketingFinalUploadCancellation }) {
-  return new Promise<string>((resolve, reject) => {
-    if (input.cancellation.cancelled) return reject(uploadCancelledError());
-    const reader = new FileReader();
-    input.cancellation.currentReader = reader;
-    reader.onerror = () => reject(new Error("تعذر قراءة الملف المحدد"));
-    reader.onabort = () => reject(uploadCancelledError());
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.readAsDataURL(input.file);
-  }).finally(() => {
-    input.cancellation.currentReader = null;
-  });
-}
-
-function uploadFileThroughPlatform(input: {
+function uploadFinalChunk(input: {
   file: File;
   fileIndex: number;
   fileCount: number;
   ticket: string;
+  start: number;
+  end: number;
+  startedAt: number;
   cancellation: MarketingFinalUploadCancellation;
   onProgress?: (progress: MarketingFinalUploadProgress) => void;
 }) {
-  return new Promise<Record<string, unknown>>(async (resolve, reject) => {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
     if (input.cancellation.cancelled) return reject(uploadCancelledError());
-    let dataUrl = "";
-    try {
-      input.onProgress?.({
-        fileIndex: input.fileIndex,
-        fileCount: input.fileCount,
-        fileName: input.file.name,
-        loaded: 0,
-        total: input.file.size,
-        percent: 0,
-        speedBytesPerSecond: 0,
-        etaSeconds: null,
-        status: "pending",
-        detail: "جاري تجهيز الملف للرفع",
-      });
-      dataUrl = await fileToDataUrl({ file: input.file, cancellation: input.cancellation });
-    } catch (error) {
-      reject(error);
-      return;
-    }
-    if (input.cancellation.cancelled) return reject(uploadCancelledError());
-
     const xhr = new XMLHttpRequest();
     input.cancellation.currentRequest = xhr;
-    const startedAt = performance.now();
-    xhr.open("POST", "/api/marketing", true);
+    xhr.open("POST", "/api/marketing?resource=final_upload_chunk", true);
     xhr.withCredentials = true;
     xhr.timeout = 0;
-    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("X-MZJ-Upload-Ticket", input.ticket);
+    xhr.setRequestHeader("X-MZJ-Upload-Offset", String(input.start));
+    xhr.setRequestHeader("X-MZJ-Upload-Total", String(input.file.size));
 
     xhr.upload.onprogress = (event) => {
-      const ratio = event.lengthComputable && event.total > 0 ? Math.min(1, event.loaded / event.total) : 0;
-      const loaded = Math.round(input.file.size * ratio);
-      const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.2);
+      const chunkLoaded = event.lengthComputable ? Math.min(event.loaded, input.end - input.start) : 0;
+      const loaded = Math.min(input.file.size, input.start + chunkLoaded);
+      const elapsedSeconds = Math.max((performance.now() - input.startedAt) / 1000, 0.2);
       const speedBytesPerSecond = loaded / elapsedSeconds;
       const remaining = Math.max(0, input.file.size - loaded);
       input.onProgress?.({
@@ -175,48 +142,104 @@ function uploadFileThroughPlatform(input: {
         fileName: input.file.name,
         loaded,
         total: input.file.size,
-        percent: Math.min(100, Math.round(ratio * 100)),
+        percent: Math.min(100, Math.round((loaded / input.file.size) * 100)),
         speedBytesPerSecond,
         etaSeconds: speedBytesPerSecond > 0 ? Math.ceil(remaining / speedBytesPerSecond) : null,
         status: "uploading",
+        detail: "جاري رفع الملف إلى Zoho WorkDrive على أجزاء آمنة",
       });
     };
 
-    xhr.onerror = () => reject(new Error("تعذر رفع الملف إلى Zoho WorkDrive عبر المنصة"));
-    xhr.ontimeout = () => reject(new Error("انتهت مهلة رفع الملف إلى Zoho WorkDrive"));
+    xhr.onerror = () => reject(new Error("تعذر رفع جزء الملف إلى Zoho WorkDrive عبر المنصة"));
+    xhr.ontimeout = () => reject(new Error("انتهت مهلة رفع جزء الملف إلى Zoho WorkDrive"));
     xhr.onabort = () => reject(uploadCancelledError());
     xhr.onload = () => {
       const payload = parseUploadResponse(xhr) as any;
       if (xhr.status < 200 || xhr.status >= 300 || payload.ok === false) {
-        reject(new Error(String(payload.error || payload.message || `تعذر رفع الملف إلى Zoho (${xhr.status})`)));
+        reject(new Error(String(payload.error || payload.message || `تعذر رفع جزء الملف إلى Zoho (${xhr.status})`)));
         return;
       }
-      input.onProgress?.({
-        fileIndex: input.fileIndex,
-        fileCount: input.fileCount,
-        fileName: input.file.name,
-        loaded: input.file.size,
-        total: input.file.size,
-        percent: 100,
-        speedBytesPerSecond: input.file.size / Math.max((performance.now() - startedAt) / 1000, 0.2),
-        etaSeconds: 0,
-        status: "completed",
-        detail: "تم الرفع إلى Zoho WorkDrive",
-      });
       resolve(payload);
     };
 
-    xhr.send(JSON.stringify({
-      action: "upload_final_file_proxy",
-      ticket: input.ticket,
-      fileName: input.file.name,
-      mimeType: input.file.type || "application/octet-stream",
-      fileSize: input.file.size,
-      fileData: dataUrl,
-    }));
+    xhr.send(input.file.slice(input.start, input.end));
   }).finally(() => {
     input.cancellation.currentRequest = null;
   });
+}
+
+async function uploadFileThroughPlatform(input: {
+  file: File;
+  fileIndex: number;
+  fileCount: number;
+  ticket: string;
+  chunkSize: number;
+  cancellation: MarketingFinalUploadCancellation;
+  onProgress?: (progress: MarketingFinalUploadProgress) => void;
+}) {
+  if (input.cancellation.cancelled) throw uploadCancelledError();
+  const chunkSize = Math.max(256 * 1024, Math.min(input.chunkSize || 4 * 1024 * 1024, 4 * 1024 * 1024));
+  const startedAt = performance.now();
+  input.onProgress?.({
+    fileIndex: input.fileIndex,
+    fileCount: input.fileCount,
+    fileName: input.file.name,
+    loaded: 0,
+    total: input.file.size,
+    percent: 0,
+    speedBytesPerSecond: 0,
+    etaSeconds: null,
+    status: "pending",
+    detail: "جاري تجهيز جلسة الرفع المتجزئ",
+  });
+
+  for (let start = 0; start < input.file.size; start += chunkSize) {
+    if (input.cancellation.cancelled) throw uploadCancelledError();
+    const end = Math.min(input.file.size, start + chunkSize);
+    await uploadFinalChunk({
+      file: input.file,
+      fileIndex: input.fileIndex,
+      fileCount: input.fileCount,
+      ticket: input.ticket,
+      start,
+      end,
+      startedAt,
+      cancellation: input.cancellation,
+      onProgress: input.onProgress,
+    });
+  }
+
+  if (input.cancellation.cancelled) throw uploadCancelledError();
+  const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.2);
+  input.onProgress?.({
+    fileIndex: input.fileIndex,
+    fileCount: input.fileCount,
+    fileName: input.file.name,
+    loaded: input.file.size,
+    total: input.file.size,
+    percent: 100,
+    speedBytesPerSecond: input.file.size / elapsedSeconds,
+    etaSeconds: 0,
+    status: "verifying",
+    detail: "اكتمل إرسال الملف، جاري تثبيته في Zoho WorkDrive",
+  });
+  const committed = await marketingFetch<Record<string, unknown>>("/api/marketing", {
+    method: "POST",
+    body: JSON.stringify({ action: "commit_final_file_upload", ticket: input.ticket }),
+  });
+  input.onProgress?.({
+    fileIndex: input.fileIndex,
+    fileCount: input.fileCount,
+    fileName: input.file.name,
+    loaded: input.file.size,
+    total: input.file.size,
+    percent: 100,
+    speedBytesPerSecond: input.file.size / elapsedSeconds,
+    etaSeconds: 0,
+    status: "completed",
+    detail: "تم الرفع إلى Zoho WorkDrive",
+  });
+  return committed;
 }
 
 export async function uploadMarketingFinalFiles(input: {
@@ -240,7 +263,9 @@ export async function uploadMarketingFinalFiles(input: {
       fileName: string;
       mimeType: string;
       fileSize: number;
+      chunkSize?: number;
     }>;
+    chunkSize?: number;
   }>("/api/marketing", {
     method: "POST",
     body: JSON.stringify({
@@ -275,6 +300,7 @@ export async function uploadMarketingFinalFiles(input: {
         fileIndex: index,
         fileCount: prepared.uploads.length,
         ticket: upload.ticket,
+        chunkSize: upload.chunkSize || prepared.chunkSize || 4 * 1024 * 1024,
         cancellation,
         onProgress: input.onProgress,
       });
