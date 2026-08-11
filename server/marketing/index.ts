@@ -19,7 +19,8 @@ import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.
 import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { publishInstagramContent } from "../_instagram-publisher.js";
-import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, getZohoTransferRuntime, parseZohoUploadResult, ticketHash, zohoChunkUploadDomain } from "../_zoho-workdrive.js";
+import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, ticketHash } from "../_zoho-workdrive.js";
+import { commitZohoChunkUpload, createZohoChunkUploadSession, uploadZohoChunk, ZOHO_PROXY_CHUNK_SIZE } from "../_zoho-chunk-upload.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -1945,62 +1946,6 @@ async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
 }
 
 
-const FINAL_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024;
-
-function headerValue(request: VercelRequest, name: string) {
-  const value = request.headers[name.toLowerCase()];
-  return Array.isArray(value) ? clean(value[0]) : clean(value);
-}
-
-function nestedStringByKeys(value: unknown, keys: string[]): string {
-  if (!value || typeof value !== "object") return "";
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = nestedStringByKeys(item, keys);
-      if (found) return found;
-    }
-    return "";
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = clean(record[key]);
-    if (candidate && typeof record[key] !== "object") return candidate;
-  }
-  for (const child of Object.values(record)) {
-    const found = nestedStringByKeys(child, keys);
-    if (found) return found;
-  }
-  return "";
-}
-
-function zohoResponsePayload(text: string) {
-  if (!text) return {} as Record<string, any>;
-  try { return JSON.parse(text) as Record<string, any>; } catch { return { raw: text }; }
-}
-
-function zohoResponseError(payload: any, status: number, fallback: string) {
-  const first = Array.isArray(payload?.errors) ? payload.errors[0] : payload?.error;
-  return clean(first?.title || first?.detail || first?.message || first || payload?.message || payload?.error_description || payload?.raw) || `${fallback} (${status})`;
-}
-
-async function createZohoFinalUploadSession(runtime: Awaited<ReturnType<typeof getZohoTransferRuntime>>, input: { fileName: string; fileSize: number; parentId: string }) {
-  const url = new URL(`${runtime.apiDomain}/workdrive/api/v1/uploadsession/create`);
-  url.searchParams.set("size", String(input.fileSize));
-  url.searchParams.set("file_name", input.fileName);
-  url.searchParams.set("parent_id", input.parentId);
-  url.searchParams.set("name_conflict", "fail");
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { Authorization: `Zoho-oauthtoken ${runtime.accessToken}`, Accept: "application/vnd.api+json" },
-  });
-  const text = await response.text();
-  const payload = zohoResponsePayload(text);
-  if (!response.ok || payload?.errors) throw new Error(zohoResponseError(payload, response.status, "تعذر إنشاء جلسة رفع Zoho"));
-  const uploadId = nestedStringByKeys(payload, ["upload_id", "uploadId", "UPLOAD_ID"]);
-  if (!uploadId) throw new Error("Zoho لم يرجع معرف جلسة رفع الملف الكبير");
-  return uploadId;
-}
-
 async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId);
   const task=await requireFinalFileUploadAccess(sql,user,taskId);
@@ -2028,8 +1973,8 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     });
     if(expected.length&&!sameFiles)throw new Error("الملفات المختارة لا تطابق ملفات النشر اليدوي المحفوظة. أعد إنشاء التجهيز بالملفات الحالية");
   }
+
   const mediaKind=videoCount?'video':requested.length>1?'carousel':'image';
-  const runtime=await getZohoTransferRuntime(sql);
   await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
   const[group]=await sql<any[]>`
     insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
@@ -2039,17 +1984,17 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
   const uploads:any[]=[];
   try{
     for(const item of requested){
-      const ticket=createOpaqueTicket();
-      const zohoFileName=zohoFinalFileName(item.name,task.source_type,task.source_id,taskId,group.id,item.orderIndex);
-      const uploadId=await createZohoFinalUploadSession(runtime,{fileName:zohoFileName,fileSize:item.size,parentId:runtime.rootFolderId});
       const[file]=await sql<any[]>`
         insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider,final_media_group_id,order_index)
         values(${`zoho:${group.id}:${globalThis.crypto.randomUUID()}`},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'zoho',${group.id}::uuid,${item.orderIndex})
         returning id::text
       `;
+      const ticket=createOpaqueTicket();
+      const zohoFileName=zohoFinalFileName(item.name,task.source_type,task.source_id,taskId,group.id,item.orderIndex);
+      const session=await createZohoChunkUploadSession(sql,{fileName:zohoFileName,fileSize:item.size});
       await sql`
         insert into marketing.zoho_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,file_name,mime_type,file_size,parent_folder_id,upload_id,status,expires_at,created_by)
-        values(${ticketHash(ticket)},${file.id}::uuid,${group.id}::uuid,${taskId}::uuid,${zohoFileName},${item.mimeType},${item.size},${runtime.rootFolderId},${uploadId},'prepared',now()+interval '7 days',${user.id}::uuid)
+        values(${ticketHash(ticket)},${file.id}::uuid,${group.id}::uuid,${taskId}::uuid,${zohoFileName},${item.mimeType},${item.size},${session.parentId},${session.uploadId},'prepared',now()+interval '7 days',${user.id}::uuid)
       `;
       uploads.push({
         ticket,
@@ -2059,7 +2004,7 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
         fileName:zohoFileName,
         mimeType:item.mimeType,
         fileSize:item.size,
-        chunkSize:FINAL_UPLOAD_CHUNK_SIZE,
+        chunkSize:ZOHO_PROXY_CHUNK_SIZE,
       });
     }
   }catch(error:any){
@@ -2071,14 +2016,35 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     }).catch(()=>undefined);
     throw error;
   }
-  return{ok:true,groupId:group.id,mediaKind,uploads,chunkSize:FINAL_UPLOAD_CHUNK_SIZE};
+  return{ok:true,groupId:group.id,mediaKind,uploads,chunkSize:ZOHO_PROXY_CHUNK_SIZE};
 }
 
-async function finalUploadTicket(sql:ReturnType<typeof getSql>,ticket:string,user:SessionUser,statuses:string[]=['prepared','uploading']){
+function finalUploadHeader(request:VercelRequest,name:string){
+  const value=request.headers[name.toLowerCase()];
+  return Array.isArray(value)?clean(value[0]):clean(value);
+}
+
+function finalUploadBytes(request:VercelRequest){
+  const body=request.body;
+  if(Buffer.isBuffer(body)){
+    const bytes=new Uint8Array(body.byteLength);
+    bytes.set(body);
+    return bytes;
+  }
+  if(body instanceof Uint8Array){
+    const bytes=new Uint8Array(body.byteLength);
+    bytes.set(body);
+    return bytes;
+  }
+  if(body instanceof ArrayBuffer)return new Uint8Array(body);
+  return null;
+}
+
+async function finalUploadTicket(sql:ReturnType<typeof getSql>,ticket:string,user:SessionUser){
   const[row]=await sql<any[]>`
     select z.*,z.file_id::text,z.final_media_group_id::text,z.task_id::text,z.created_by::text
     from marketing.zoho_upload_tickets z
-    where z.ticket_hash=${ticketHash(ticket)} and z.expires_at>now() and z.status in ${sql(statuses)}
+    where z.ticket_hash=${ticketHash(ticket)} and z.expires_at>now() and z.status in ('prepared','uploading')
   `;
   if(!row)throw new Error("جلسة رفع الملف منتهية أو غير صالحة");
   await requireFinalFileUploadAccess(sql,user,row.task_id);
@@ -2087,80 +2053,51 @@ async function finalUploadTicket(sql:ReturnType<typeof getSql>,ticket:string,use
 }
 
 async function uploadFinalFileChunk(sql:ReturnType<typeof getSql>,request:VercelRequest,user:SessionUser){
-  const ticket=headerValue(request,"x-mzj-upload-ticket");
+  const ticket=finalUploadHeader(request,"x-mzj-upload-ticket");
   if(!ticket)throw new Error("بيانات جلسة رفع Zoho غير مكتملة");
   const row=await finalUploadTicket(sql,ticket,user);
-  const body=request.body;
-  const buffer=Buffer.isBuffer(body)?body:body instanceof Uint8Array?Buffer.from(body):null;
-  if(!buffer?.length)throw new Error("جزء الملف المرفوع فارغ");
-  if(buffer.length>FINAL_UPLOAD_CHUNK_SIZE)throw new Error("حجم جزء الملف أكبر من الحد الآمن للرفع");
-  const start=Number(headerValue(request,"x-mzj-upload-offset"));
-  const total=Number(headerValue(request,"x-mzj-upload-total"));
+  const bytes=finalUploadBytes(request);
+  if(!bytes?.byteLength)throw new Error("جزء الملف المرفوع فارغ");
+  if(bytes.byteLength>ZOHO_PROXY_CHUNK_SIZE)throw new Error("حجم جزء الملف أكبر من الحد الآمن للرفع");
+
+  const start=Number(finalUploadHeader(request,"x-mzj-upload-offset"));
+  const total=Number(finalUploadHeader(request,"x-mzj-upload-total"));
   const expected=Number(row.file_size||0);
   if(!Number.isSafeInteger(start)||start<0)throw new Error("موضع جزء الملف غير صالح");
   if(!Number.isSafeInteger(total)||total<=0||total!==expected)throw new Error("حجم الملف لا يطابق جلسة الرفع");
-  const end=start+buffer.length-1;
-  if(end>=total) {
-    if(end!==total-1)throw new Error("نطاق جزء الملف يتجاوز الحجم المحدد");
-  }
-  const runtime=await getZohoTransferRuntime(sql);
-  const response=await fetch(`${zohoChunkUploadDomain(runtime)}/workdrive-api/v1/stream/upload`,{
-    method:'POST',
-    headers:{
-      Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,
-      Accept:'application/vnd.api+json',
-      'Content-Type':'application/octet-stream',
-      'upload-id':clean(row.upload_id),
-      'Content-Range':`bytes ${start}-${end}/${total}`,
-      'x-streammode':'1',
-      'Content-Length':String(buffer.length),
-    },
-    body:buffer,
-  });
-  const text=await response.text();
-  const payload=zohoResponsePayload(text);
-  if(!response.ok||payload?.errors)throw new Error(zohoResponseError(payload,response.status,"تعذر رفع جزء الملف إلى Zoho"));
+  const end=start+bytes.byteLength-1;
+  if(end>=total&&end!==total-1)throw new Error("نطاق جزء الملف يتجاوز الحجم المحدد");
+
+  const uploaded=await uploadZohoChunk(sql,{uploadId:clean(row.upload_id),start,total,bytes});
   await sql`update marketing.zoho_upload_tickets set status='uploading' where ticket_hash=${ticketHash(ticket)} and status='prepared'`;
-  return{ok:true,uploaded:end+1,total};
+  return{ok:true,uploaded:uploaded.uploaded,total};
 }
 
 async function commitFinalFileUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const ticket=clean(body.ticket);
   if(!ticket)throw new Error("بيانات جلسة رفع Zoho غير مكتملة");
   const row=await finalUploadTicket(sql,ticket,user);
-  const runtime=await getZohoTransferRuntime(sql);
-  const url=new URL(`${runtime.apiDomain}/workdrive/api/v1/uploadsession/commit`);
-  url.searchParams.set('upload_id',clean(row.upload_id));
-  url.searchParams.set('parent_id',clean(row.parent_folder_id)||runtime.rootFolderId);
-  url.searchParams.set('file_name',clean(row.file_name)||'file');
-  url.searchParams.set('name_conflict','fail');
-  const response=await fetch(url,{
-    method:'POST',
-    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/vnd.api+json'},
-  });
-  const text=await response.text();
-  const payload=zohoResponsePayload(text);
-  if(!response.ok||payload?.errors){
-    const message=zohoResponseError(payload,response.status,"تعذر إنهاء رفع الملف في Zoho");
+  let committed;
+  try{
+    committed=await commitZohoChunkUpload(sql,{uploadId:clean(row.upload_id),parentId:clean(row.parent_folder_id),fileName:clean(row.file_name)||'file'});
+  }catch(error:any){
+    const message=clean(error?.message)||"تعذر إنهاء رفع الملف في Zoho";
     await sql.begin(async tx=>{
       await tx`update marketing.zoho_upload_tickets set status='failed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
       await tx`update marketing.files set status='failed',upload_error=${message},updated_at=now() where id=${row.file_id}::uuid`;
       await tx`update marketing.final_media_groups set status='failed',updated_at=now() where id=${row.final_media_group_id}::uuid`;
     });
-    throw new Error(message);
+    throw error;
   }
 
-  const parsed=parseZohoUploadResult(payload);
-  const resourceId=parsed.resourceId||nestedStringByKeys(payload,['resource_id','resourceId','RESOURCE_ID']);
-  if(!resourceId)throw new Error("Zoho لم يرجع معرف الملف بعد اكتمال الرفع");
   let fileInfo:any={};
-  try{fileInfo=await getZohoFileInfo(sql,resourceId);}catch{fileInfo={};}
-  const externalUrl=clean(fileInfo.permalink||parsed.permalink)||null;
-  const finalName=clean(fileInfo.fileName||parsed.fileName||row.file_name);
+  try{fileInfo=await getZohoFileInfo(sql,committed.resourceId);}catch{fileInfo={};}
+  const externalUrl=clean(fileInfo.permalink||committed.parsed.permalink)||null;
+  const finalName=clean(fileInfo.fileName||committed.parsed.fileName||row.file_name);
   await sql.begin(async tx=>{
     await tx`
       update marketing.files
-      set status='ready',storage_provider='zoho',external_id=${resourceId},external_parent_id=${clean(fileInfo.parentId||parsed.parentId||row.parent_folder_id)},external_url=${externalUrl},original_name=${finalName||row.file_name},upload_error=null,updated_at=now()
+      set status='ready',storage_provider='zoho',external_id=${committed.resourceId},external_parent_id=${clean(fileInfo.parentId||committed.parsed.parentId||committed.parentId)},external_url=${externalUrl},original_name=${finalName||row.file_name},upload_error=null,updated_at=now()
       where id=${row.file_id}::uuid
     `;
     await tx`update marketing.zoho_upload_tickets set status='completed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
@@ -2170,7 +2107,7 @@ async function commitFinalFileUpload(sql:ReturnType<typeof getSql>,body:any,user
     `;
     if(Number(counts?.total||0)>0&&Number(counts?.total||0)===Number(counts?.ready||0))await tx`update marketing.final_media_groups set status='ready',updated_at=now() where id=${row.final_media_group_id}::uuid`;
   });
-  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId,fileName:finalName};
+  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:committed.resourceId,fileName:finalName};
 }
 
 async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -2555,7 +2492,6 @@ function validateManualPublishFiles(files:any[],combinations:PublishScheduleComb
   const videoCount=files.filter(isVideo).length;
   if(videoCount&&files.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. بوست الصور والستوري يدعمان عدة صور بالترتيب");
   if(files.some((item)=>item.file_size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
-  if(files.some((item)=>item.file_size>50*1024*1024*1024))throw new Error("حجم الملف يتجاوز الحد المدعوم في Zoho WorkDrive");
   for(const item of combinations){
     assertPublishMedia(item.platformCode,item.publishFormat,files);
     if(item.platformCode==='instagram'&&['photo_post','carousel','post'].includes(item.publishFormat)&&files.length>10){
@@ -3343,8 +3279,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if(!canUseMarketing(user))return response.status(403).json({ok:false,error:"لا توجد صلاحية لدخول سيستم التسويق"});
     const sql=getSql(); const resource=clean(request.query.resource)||"dashboard";
     if(request.method==='POST'&&resource==='final_upload_chunk'){
-      const result=await uploadFinalFileChunk(sql,request,user);
-      return response.status(200).json(result);
+      return response.status(200).json(await uploadFinalFileChunk(sql,request,user));
     }
     if(request.method==='GET'){
       if(resource==='meta')return response.status(200).json({...await marketingMeta(sql,user),cars:(hasPermission(user,'marketing.campaign.create')||hasPermission(user,'marketing.agenda.create')||hasPermission(user,'marketing.campaign.edit')||hasPermission(user,'marketing.agenda.edit'))?await loadOperationsCars(sql):[]});

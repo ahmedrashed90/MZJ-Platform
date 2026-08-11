@@ -194,30 +194,12 @@ export async function getZohoTransferRuntime(sql: Sql) {
   const [row] = await sql<any[]>`select * from marketing.zoho_workdrive_connection where id=1`;
   const config = zohoStaticConfig();
   if (!row?.refresh_token_encrypted) throw new Error("Zoho WorkDrive غير مربوط");
-  const accessToken = await getZohoAccessToken(sql);
   return {
-    accessToken,
+    accessToken: await getZohoAccessToken(sql),
     apiDomain: normalizeDomain(row.api_domain, config.apiDomain),
     uploadDomain: normalizeDomain(row.upload_domain, config.uploadDomain),
     rootFolderId: clean(row.root_folder_id) || config.rootFolderId,
   };
-}
-
-export function zohoChunkUploadDomain(runtime: { apiDomain: string; uploadDomain?: string }) {
-  const configured = clean(process.env.ZOHO_CHUNK_UPLOAD_DOMAIN);
-  if (configured) return normalizeDomain(configured, configured);
-  try {
-    const api = new URL(runtime.apiDomain);
-    const match = api.hostname.match(/^www\.zohoapis\.(.+)$/i);
-    if (match?.[1]) return `${api.protocol}//upload.zoho.${match[1]}`.replace(/\/+$/, "");
-  } catch { /* use configured upload domain fallback below */ }
-  try {
-    const upload = new URL(clean(runtime.uploadDomain));
-    if (/^upload\.zoho\./i.test(upload.hostname)) return `${upload.protocol}//${upload.host}`.replace(/\/+$/, "");
-    const match = upload.hostname.match(/^files\.zoho\.(.+)$/i);
-    if (match?.[1]) return `${upload.protocol}//upload.zoho.${match[1]}`.replace(/\/+$/, "");
-  } catch { /* handled below */ }
-  throw new Error("تعذر تحديد نطاق رفع الملفات الكبيرة في Zoho WorkDrive");
 }
 
 export async function getZohoRuntime(sql: Sql) {

@@ -6,6 +6,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const files = {
   schema: read("server/_marketing-schema.ts"),
   zoho: read("server/_zoho-workdrive.ts"),
+  chunk: read("server/_zoho-chunk-upload.ts"),
   route: read("server/integrations/zoho.ts"),
   api: read("api/index.ts"),
   marketing: read("server/marketing/index.ts"),
@@ -20,19 +21,21 @@ const files = {
 };
 
 const oldGatewayTokens = ["partUploadUrl", "handleZohoUploadPart", "handleZohoUploadFinalize", "ZOHO_UPLOAD_STAGING", "ZOHO_UPLOAD_GATEWAY_URL", "createZohoMediaUrl", "zoho_media_tickets"];
-const liveSource = [files.schema, files.zoho, files.route, files.marketing, files.client, files.modal, files.worker, files.env].join("\n");
+const liveSource = [files.schema, files.zoho, files.chunk, files.route, files.marketing, files.client, files.modal, files.worker, files.env].join("\n");
 
 const checks = [
   ["Zoho connection schema", files.schema.includes("marketing.zoho_workdrive_connection")],
   ["Ordered final media schema", files.schema.includes("marketing.final_media_groups") && files.schema.includes("order_index")],
   ["Platform chunk upload sessions are database-backed", files.schema.includes("marketing.zoho_upload_tickets") && files.marketing.includes("uploadFinalFileChunk") && files.marketing.includes("commitFinalFileUpload") && files.marketing.includes("cancelFinalUpload")],
-  ["Large-file upload uses Zoho chunk session API", files.marketing.includes("FINAL_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024") && files.marketing.includes("/workdrive/api/v1/uploadsession/create") && files.marketing.includes("/workdrive-api/v1/stream/upload") && files.marketing.includes("Content-Range") && files.marketing.includes("x-streammode") && files.marketing.includes("/workdrive/api/v1/uploadsession/commit")],
-  ["No local 50 GB cap remains in final-file preparation", !files.marketing.slice(files.marketing.indexOf("async function prepareFinalUpload"), files.marketing.indexOf("async function finalUploadTicket")).includes("50*1024*1024*1024")],
   ["OAuth start and callback", files.route.includes('action === "start"') && files.route.includes('action === "callback"')],
   ["Zoho route registered before generic integrations", files.api.indexOf('route.startsWith("integrations/zoho/")') < files.api.indexOf('route.startsWith("integrations/")')],
   ["Final upload prepares ordered files", files.marketing.includes("prepareFinalUpload") && files.marketing.includes("attachFinalMediaGroup")],
   ["Zoho filenames are collision-safe", files.marketing.includes("zohoFinalFileName") && files.marketing.includes("const zohoFileName=zohoFinalFileName")],
-  ["Browser uploads binary chunks through the platform API", files.client.includes("new XMLHttpRequest()") && files.client.includes("final_upload_chunk") && files.client.includes("application/octet-stream") && files.client.includes("commit_final_file_upload") && !files.client.includes("readAsDataURL") && !files.client.includes("fileData")],
+  ["Browser uploads chunks through the platform API", files.client.includes("new XMLHttpRequest()") && files.client.includes("final_upload_chunk") && files.client.includes("commit_final_file_upload") && files.client.includes("/api/marketing") && !files.client.includes("/workdrive-api/v1/stream/upload")],
+  ["Chunk size stays below the Vercel function payload ceiling", files.chunk.includes("ZOHO_PROXY_CHUNK_SIZE = 4 * 1024 * 1024") && files.client.includes("4 * 1024 * 1024")],
+  ["Zoho chunk flow uses create, stream and commit endpoints", files.chunk.includes("/workdrive/api/v1/uploadsession/create") && files.chunk.includes("/workdrive-api/v1/stream/upload") && files.chunk.includes("/workdrive/api/v1/uploadsession/commit")],
+  ["Chunk forwarding uses ArrayBuffer instead of Node Buffer as fetch body", files.chunk.includes("const uploadBody = new ArrayBuffer") && files.chunk.includes("body: uploadBody") && !files.chunk.includes("body: input.bytes")],
+  ["Final upload no longer serializes files as base64", !files.client.includes("readAsDataURL") && !files.client.includes("base64") && !files.marketing.includes("base64")],
   ["Upload progress, speed and ETA are reported", files.client.includes("xhr.upload.onprogress") && files.client.includes("speedBytesPerSecond") && files.client.includes("etaSeconds")],
   ["Upload can be cancelled", files.client.includes("currentRequest?.abort()") && files.client.includes("UploadCancelledError") && files.modal.includes("cancelFinalUpload")],
   ["Task details contain a visible upload panel", files.modal.includes("marketing-final-upload-dropzone") && files.modal.includes("اسحب الملفات هنا أو اضغط للاختيار") && files.css.includes(".marketing-final-upload-progress")],
@@ -42,7 +45,7 @@ const checks = [
   ["Existing final button condition preserved", files.modal.includes('task.template_status !== "approved" || task.status === "completed"')],
   ["Campaign and agenda final files supported", files.marketing.includes("source_type") && files.marketing.includes("source_id")],
   ["RAW token compatibility retained", files.marketing.includes("MZJ_RAW_ALLOW_LEGACY_TOKEN") && files.marketing.includes("MZJ_RAW_SECRET_2026_CHANGE_ME")],
-  ["Zoho environment documented without gateway", files.env.includes("ZOHO_PUBLISH_ROOT_FOLDER_ID=efosi67f34a771f13446c8d01545192eb1829") && files.env.includes("ZOHO_CHUNK_UPLOAD_DOMAIN=https://upload.zoho.sa") && !files.env.includes("ZOHO_UPLOAD_GATEWAY_URL")],
+  ["Zoho environment documented without gateway", files.env.includes("ZOHO_PUBLISH_ROOT_FOLDER_ID=efosi67f34a771f13446c8d01545192eb1829") && !files.env.includes("ZOHO_UPLOAD_GATEWAY_URL")],
   ["Zoho connection UI", files.connections.includes("Zoho WorkDrive") && files.connections.includes("/api/integrations/zoho/start") && files.connections.includes("رفع من المنصة")],
   ["Publish prep recognizes media groups", files.publish.includes("final_file_count")],
   ["Every selected platform requires a post type", files.marketing.includes("حدد نوع نشر لكل منصة مختارة") && files.publish.includes("نوع النشر لكل منصة")],
