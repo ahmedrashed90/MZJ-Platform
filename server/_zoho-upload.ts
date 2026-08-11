@@ -2,12 +2,15 @@ import type { getSql } from "./_db.js";
 import { getZohoTransferRuntime, parseZohoUploadResult } from "./_zoho-workdrive.js";
 
 type Sql = ReturnType<typeof getSql>;
-
 type ZohoTransferRuntime = Awaited<ReturnType<typeof getZohoTransferRuntime>>;
 
+export type ZohoUploadStrategy = "standard" | "chunk";
+
 export const ZOHO_PROXY_CHUNK_SIZE = 4 * 1024 * 1024;
+export const ZOHO_CHUNK_UPLOAD_MIN_FILE_SIZE = 64 * 1024 * 1024;
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
+
 function findString(value: unknown, keys: string[]): string {
   if (!value || typeof value !== "object") return "";
   if (Array.isArray(value)) {
@@ -59,7 +62,13 @@ function chunkUploadDomain(runtime: ZohoTransferRuntime) {
   throw new Error("تعذر تحديد نطاق رفع الملفات الكبيرة في Zoho WorkDrive");
 }
 
-export async function createZohoChunkUploadSession(sql: Sql, input: { fileName: string; fileSize: number; parentId?: string }) {
+function ownedArrayBuffer(bytes: Uint8Array) {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+async function createZohoChunkUploadSession(sql: Sql, input: { fileName: string; fileSize: number; parentId?: string }) {
   const runtime = await getZohoTransferRuntime(sql);
   const parentId = clean(input.parentId) || runtime.rootFolderId;
   const url = new URL(`${runtime.apiDomain}/workdrive/api/v1/uploadsession/create`);
@@ -80,11 +89,20 @@ export async function createZohoChunkUploadSession(sql: Sql, input: { fileName: 
   return { uploadId, parentId };
 }
 
+export async function prepareZohoUpload(sql: Sql, input: { fileName: string; fileSize: number; parentId?: string }) {
+  const runtime = await getZohoTransferRuntime(sql);
+  const parentId = clean(input.parentId) || runtime.rootFolderId;
+  if (input.fileSize < ZOHO_CHUNK_UPLOAD_MIN_FILE_SIZE) {
+    return { strategy: "standard" as const, uploadId: null, parentId };
+  }
+  const session = await createZohoChunkUploadSession(sql, { ...input, parentId });
+  return { strategy: "chunk" as const, uploadId: session.uploadId, parentId: session.parentId };
+}
+
 export async function uploadZohoChunk(sql: Sql, input: { uploadId: string; start: number; total: number; bytes: Uint8Array }) {
   const runtime = await getZohoTransferRuntime(sql);
   const end = input.start + input.bytes.byteLength - 1;
-  const uploadBody = new ArrayBuffer(input.bytes.byteLength);
-  new Uint8Array(uploadBody).set(input.bytes);
+  const uploadBody = ownedArrayBuffer(input.bytes);
 
   const response = await fetch(`${chunkUploadDomain(runtime)}/workdrive-api/v1/stream/upload`, {
     method: "POST",
@@ -119,6 +137,45 @@ export async function commitZohoChunkUpload(sql: Sql, input: { uploadId: string;
   });
   const payload = parseResponse(await response.text());
   if (!response.ok || payload?.errors) throw new Error(responseError(payload, response.status, "تعذر إنهاء رفع الملف في Zoho"));
+
+  const parsed = parseZohoUploadResult(payload);
+  const resourceId = parsed.resourceId || findString(payload, ["resource_id", "resourceId", "RESOURCE_ID"]);
+  if (!resourceId) throw new Error("Zoho لم يرجع معرف الملف بعد اكتمال الرفع");
+  return { payload, parsed, resourceId, parentId };
+}
+
+export async function uploadZohoStandardFile(sql: Sql, input: {
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  parentId?: string;
+  parts: Uint8Array[];
+}) {
+  const runtime = await getZohoTransferRuntime(sql);
+  const parentId = clean(input.parentId) || runtime.rootFolderId;
+  const total = input.parts.reduce((sum, part) => sum + part.byteLength, 0);
+  if (total !== input.fileSize) throw new Error("أجزاء الملف لا تطابق الحجم المحدد قبل الإرسال إلى Zoho");
+
+  const form = new FormData();
+  form.append("filename", encodeURIComponent(input.fileName));
+  form.append("parent_id", parentId);
+  form.append("override-name-exist", "false");
+  form.append(
+    "content",
+    new Blob(input.parts.map(ownedArrayBuffer), { type: clean(input.mimeType) || "application/octet-stream" }),
+    input.fileName,
+  );
+
+  const response = await fetch(`${runtime.apiDomain}/workdrive/api/v1/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Zoho-oauthtoken ${runtime.accessToken}`,
+      Accept: "application/vnd.api+json",
+    },
+    body: form,
+  });
+  const payload = parseResponse(await response.text());
+  if (!response.ok || payload?.errors) throw new Error(responseError(payload, response.status, "تعذر رفع الملف إلى Zoho"));
 
   const parsed = parseZohoUploadResult(payload);
   const resourceId = parsed.resourceId || findString(payload, ["resource_id", "resourceId", "RESOURCE_ID"]);

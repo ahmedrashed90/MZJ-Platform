@@ -3,10 +3,11 @@ import path from "node:path";
 
 const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const exists = (file) => fs.existsSync(path.join(root, file));
 const files = {
   schema: read("server/_marketing-schema.ts"),
   zoho: read("server/_zoho-workdrive.ts"),
-  chunk: read("server/_zoho-chunk-upload.ts"),
+  upload: read("server/_zoho-upload.ts"),
   route: read("server/integrations/zoho.ts"),
   api: read("api/index.ts"),
   marketing: read("server/marketing/index.ts"),
@@ -21,20 +22,24 @@ const files = {
 };
 
 const oldGatewayTokens = ["partUploadUrl", "handleZohoUploadPart", "handleZohoUploadFinalize", "ZOHO_UPLOAD_STAGING", "ZOHO_UPLOAD_GATEWAY_URL", "createZohoMediaUrl", "zoho_media_tickets"];
-const liveSource = [files.schema, files.zoho, files.chunk, files.route, files.marketing, files.client, files.modal, files.worker, files.env].join("\n");
+const liveSource = [files.schema, files.zoho, files.upload, files.route, files.marketing, files.client, files.modal, files.worker, files.env].join("\n");
 
 const checks = [
   ["Zoho connection schema", files.schema.includes("marketing.zoho_workdrive_connection")],
   ["Ordered final media schema", files.schema.includes("marketing.final_media_groups") && files.schema.includes("order_index")],
-  ["Platform chunk upload sessions are database-backed", files.schema.includes("marketing.zoho_upload_tickets") && files.marketing.includes("uploadFinalFileChunk") && files.marketing.includes("commitFinalFileUpload") && files.marketing.includes("cancelFinalUpload")],
+  ["Platform upload sessions are database-backed", files.schema.includes("marketing.zoho_upload_tickets") && files.marketing.includes("uploadFinalFileChunk") && files.marketing.includes("commitFinalFileUpload") && files.marketing.includes("cancelFinalUpload")],
+  ["Small-file staging is database-backed and bounded", files.schema.includes("marketing.zoho_standard_upload_parts") && files.schema.includes("byte_length <= 4194304") && files.marketing.includes("stageStandardFinalUploadPart") && files.marketing.includes("readStandardFinalUploadParts")],
   ["OAuth start and callback", files.route.includes('action === "start"') && files.route.includes('action === "callback"')],
   ["Zoho route registered before generic integrations", files.api.indexOf('route.startsWith("integrations/zoho/")') < files.api.indexOf('route.startsWith("integrations/")')],
   ["Final upload prepares ordered files", files.marketing.includes("prepareFinalUpload") && files.marketing.includes("attachFinalMediaGroup")],
   ["Zoho filenames are collision-safe", files.marketing.includes("zohoFinalFileName") && files.marketing.includes("const zohoFileName=zohoFinalFileName")],
   ["Browser uploads chunks through the platform API", files.client.includes("new XMLHttpRequest()") && files.client.includes("final_upload_chunk") && files.client.includes("commit_final_file_upload") && files.client.includes("/api/marketing") && !files.client.includes("/workdrive-api/v1/stream/upload")],
-  ["Chunk size stays below the Vercel function payload ceiling", files.chunk.includes("ZOHO_PROXY_CHUNK_SIZE = 4 * 1024 * 1024") && files.client.includes("4 * 1024 * 1024")],
-  ["Zoho chunk flow uses create, stream and commit endpoints", files.chunk.includes("/workdrive/api/v1/uploadsession/create") && files.chunk.includes("/workdrive-api/v1/stream/upload") && files.chunk.includes("/workdrive/api/v1/uploadsession/commit")],
-  ["Chunk forwarding uses ArrayBuffer instead of Node Buffer as fetch body", files.chunk.includes("const uploadBody = new ArrayBuffer") && files.chunk.includes("body: uploadBody") && !files.chunk.includes("body: input.bytes")],
+  ["Proxy chunk size stays below the Vercel function payload ceiling", files.upload.includes("ZOHO_PROXY_CHUNK_SIZE = 4 * 1024 * 1024") && files.client.includes("4 * 1024 * 1024")],
+  ["Upload strategy uses standard upload below 64 MiB and chunk sessions from 64 MiB", files.upload.includes("ZOHO_CHUNK_UPLOAD_MIN_FILE_SIZE = 64 * 1024 * 1024") && files.upload.includes("input.fileSize < ZOHO_CHUNK_UPLOAD_MIN_FILE_SIZE") && files.marketing.includes("upload_strategy")],
+  ["Small files use Zoho standard multipart upload", files.upload.includes("/workdrive/api/v1/upload") && files.upload.includes('"content",') && files.upload.includes("new Blob(") && files.upload.includes('form.append("parent_id", parentId)') && files.upload.includes('form.append("filename", encodeURIComponent(input.fileName))')],
+  ["Large files use Zoho chunk create, stream and commit endpoints", files.upload.includes("/workdrive/api/v1/uploadsession/create") && files.upload.includes("/workdrive-api/v1/stream/upload") && files.upload.includes("/workdrive/api/v1/uploadsession/commit")],
+  ["Chunk forwarding uses an owned ArrayBuffer instead of Node Buffer as fetch body", files.upload.includes("function ownedArrayBuffer") && files.upload.includes("const uploadBody = ownedArrayBuffer(input.bytes)") && files.upload.includes("body: uploadBody") && !files.upload.includes("body: input.bytes")],
+  ["Old chunk-only upload module was replaced", !exists("server/_zoho-chunk-upload.ts") && files.marketing.includes('from "../_zoho-upload.js"')],
   ["Final upload no longer serializes files as base64", !files.client.includes("readAsDataURL") && !files.client.includes("base64") && !files.marketing.includes("base64")],
   ["Upload progress, speed and ETA are reported", files.client.includes("xhr.upload.onprogress") && files.client.includes("speedBytesPerSecond") && files.client.includes("etaSeconds")],
   ["Upload can be cancelled", files.client.includes("currentRequest?.abort()") && files.client.includes("UploadCancelledError") && files.modal.includes("cancelFinalUpload")],
