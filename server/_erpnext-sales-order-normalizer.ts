@@ -176,13 +176,19 @@ function isRegistrationFeeItem(item: JsonRecord) {
 }
 
 const WEBSITE_PACKAGE_ITEM_CODE = "MZJ-WEBSITE-PACKAGE";
+const WEBSITE_PACKAGE_FEE_ITEM_CODE = "رسوم";
 
 function normalizedItemCode(value: unknown) {
   return clean(value).toUpperCase().replace(/\s+/g, "");
 }
 
-function isWebsitePackageItem(item: JsonRecord) {
-  return normalizedItemCode(pick(item, ["item_code", "code"])) === normalizedItemCode(WEBSITE_PACKAGE_ITEM_CODE);
+function isWebsitePackageItem(item: JsonRecord, isWebsiteOrder = false) {
+  const itemCode = normalizedItemCode(pick(item, ["item_code", "code"]));
+  if (itemCode === normalizedItemCode(WEBSITE_PACKAGE_ITEM_CODE)) return true;
+  if (!isWebsiteOrder || itemCode !== normalizedItemCode(WEBSITE_PACKAGE_FEE_ITEM_CODE)) return false;
+
+  const description = clean(pick(item, ["description"]));
+  return description.includes("باقة الموقع");
 }
 
 function descriptionValue(description: unknown, label: string) {
@@ -217,7 +223,7 @@ function packageSummaryFromItems(items: JsonRecord[], fallbackTaxRate: number) {
   const cashDiscountPercent = numberValue(discountText.replace("%", ""));
 
   return {
-    itemCode: WEBSITE_PACKAGE_ITEM_CODE,
+    itemCode: pickText(first, ["item_code", "code"]) || WEBSITE_PACKAGE_ITEM_CODE,
     name: packageName,
     group: packageGroup,
     priceBeforeTax,
@@ -383,9 +389,10 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على جدول Items في طلب ${orderNo}`);
   }
 
-  const packageItems = rawItems.filter(isWebsitePackageItem);
-  const feeItems = rawItems.filter((item) => !isWebsitePackageItem(item) && isRegistrationFeeItem(item));
-  const vehicleItems = rawItems.filter((item) => !isWebsitePackageItem(item) && !isRegistrationFeeItem(item));
+  const isWebsiteOrder = crmSource.code === "website";
+  const packageItems = rawItems.filter((item) => isWebsitePackageItem(item, isWebsiteOrder));
+  const feeItems = rawItems.filter((item) => !isWebsitePackageItem(item, isWebsiteOrder) && isRegistrationFeeItem(item));
+  const vehicleItems = rawItems.filter((item) => !isWebsitePackageItem(item, isWebsiteOrder) && !isRegistrationFeeItem(item));
   if (!vehicleItems.length && !isCancellation && !isUpdateAfterSubmit) {
     throw new ErpNextSalesOrderError(400, `لم يتم العثور على صف سيارة داخل طلب ${orderNo}`);
   }
