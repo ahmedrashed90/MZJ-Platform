@@ -1848,7 +1848,7 @@ async function listSalesOrderFollowup(
       with scoped as (${scopedRows})
       select * from scoped
       where ${statusClause}
-      order by updated_at desc,sales_order_no desc,tracking_vehicle_id
+      order by (stage_3_completed and stage_4_completed and stage_5_completed and stage_6_completed and stage_7_completed and stage_9_completed and stage_10_completed),updated_at desc,sales_order_no desc,tracking_vehicle_id
       limit ${pageSize} offset ${offset}
     `,
     sql<any[]>`
