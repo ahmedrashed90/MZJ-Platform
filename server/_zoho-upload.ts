@@ -6,8 +6,12 @@ type ZohoTransferRuntime = Awaited<ReturnType<typeof getZohoTransferRuntime>>;
 
 export type ZohoUploadStrategy = "standard" | "chunk";
 
+// Browser -> Vercel. Keep every request below Vercel's request-body ceiling.
 export const ZOHO_PROXY_CHUNK_SIZE = 4 * 1024 * 1024;
+// WorkDrive chunk sessions are available from 64 MiB file size.
 export const ZOHO_CHUNK_UPLOAD_MIN_FILE_SIZE = 64 * 1024 * 1024;
+// WorkDrive provider chunks use 64 MiB windows, except the final remainder.
+export const ZOHO_PROVIDER_CHUNK_SIZE = 64 * 1024 * 1024;
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
 
@@ -42,7 +46,10 @@ function parseResponse(text: string) {
 
 function responseError(payload: any, status: number, fallback: string) {
   const first = Array.isArray(payload?.errors) ? payload.errors[0] : payload?.error;
-  return clean(first?.title || first?.detail || first?.message || first || payload?.message || payload?.error_description || payload?.raw) || `${fallback} (${status})`;
+  const code = clean(first?.id || first?.code || first?.status || payload?.code || payload?.status);
+  const message = clean(first?.title || first?.detail || first?.message || first || payload?.message || payload?.error_description || payload?.raw);
+  if (message && code && !message.includes(code)) return `${message} [${code}]`;
+  return message || code || `${fallback} (${status})`;
 }
 
 function chunkUploadDomain(runtime: ZohoTransferRuntime) {
@@ -100,10 +107,20 @@ export async function prepareZohoUpload(sql: Sql, input: { fileName: string; fil
 }
 
 export async function uploadZohoChunk(sql: Sql, input: { uploadId: string; start: number; total: number; bytes: Uint8Array }) {
-  const runtime = await getZohoTransferRuntime(sql);
-  const end = input.start + input.bytes.byteLength - 1;
-  const uploadBody = ownedArrayBuffer(input.bytes);
+  if (!Number.isSafeInteger(input.start) || input.start < 0) throw new Error("موضع جزء Zoho غير صالح");
+  if (!Number.isSafeInteger(input.total) || input.total <= 0) throw new Error("حجم ملف Zoho غير صالح");
+  if (!input.bytes.byteLength || input.bytes.byteLength > ZOHO_PROVIDER_CHUNK_SIZE) throw new Error("حجم جزء Zoho غير صالح");
+  if (input.start % ZOHO_PROVIDER_CHUNK_SIZE !== 0) throw new Error("بداية جزء Zoho لا تطابق نافذة الرفع المعتمدة");
 
+  const end = input.start + input.bytes.byteLength - 1;
+  if (end >= input.total) throw new Error("نطاق جزء Zoho يتجاوز حجم الملف");
+  const isFinalChunk = end === input.total - 1;
+  if (!isFinalChunk && input.bytes.byteLength !== ZOHO_PROVIDER_CHUNK_SIZE) {
+    throw new Error("جزء Zoho غير النهائي يجب أن يكون 64 MiB كاملًا");
+  }
+
+  const runtime = await getZohoTransferRuntime(sql);
+  const uploadBody = ownedArrayBuffer(input.bytes);
   const response = await fetch(`${chunkUploadDomain(runtime)}/workdrive-api/v1/stream/upload`, {
     method: "POST",
     headers: {
