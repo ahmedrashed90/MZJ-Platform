@@ -926,35 +926,24 @@ create table if not exists marketing.zoho_upload_tickets (
   mime_type text,
   file_size bigint,
   parent_folder_id text not null,
-  upload_strategy text not null default 'chunk',
+  upload_strategy text not null default 'standard',
   upload_id text,
-  provider_uploaded_bytes bigint not null default 0,
   status text not null default 'prepared',
   expires_at timestamptz not null,
   created_by uuid references core.users(id),
   created_at timestamptz not null default now(),
   completed_at timestamptz,
-  constraint marketing_zoho_upload_tickets_strategy_check check(upload_strategy in ('standard','chunk'))
+  constraint marketing_zoho_upload_tickets_strategy_check check(upload_strategy in ('standard','stream'))
 );
 alter table marketing.zoho_upload_tickets add column if not exists upload_strategy text;
-update marketing.zoho_upload_tickets set upload_strategy='chunk' where upload_strategy is null or upload_strategy not in ('standard','chunk');
-alter table marketing.zoho_upload_tickets alter column upload_strategy set default 'chunk';
+alter table marketing.zoho_upload_tickets drop constraint if exists marketing_zoho_upload_tickets_strategy_check;
+update marketing.zoho_upload_tickets set upload_strategy='stream' where upload_strategy='chunk';
+update marketing.zoho_upload_tickets set upload_strategy='standard' where upload_strategy is null or upload_strategy not in ('standard','stream');
+alter table marketing.zoho_upload_tickets alter column upload_strategy set default 'standard';
 alter table marketing.zoho_upload_tickets alter column upload_strategy set not null;
 alter table marketing.zoho_upload_tickets alter column upload_id drop not null;
-alter table marketing.zoho_upload_tickets add column if not exists provider_uploaded_bytes bigint not null default 0;
-alter table marketing.zoho_upload_tickets drop constraint if exists marketing_zoho_upload_tickets_strategy_check;
-alter table marketing.zoho_upload_tickets add constraint marketing_zoho_upload_tickets_strategy_check check(upload_strategy in ('standard','chunk'));
+alter table marketing.zoho_upload_tickets add constraint marketing_zoho_upload_tickets_strategy_check check(upload_strategy in ('standard','stream'));
 create index if not exists marketing_zoho_upload_tickets_expiry_idx on marketing.zoho_upload_tickets(expires_at,status);
-
-create table if not exists marketing.zoho_standard_upload_parts (
-  ticket_hash text not null references marketing.zoho_upload_tickets(ticket_hash) on delete cascade,
-  start_offset bigint not null check(start_offset >= 0),
-  byte_length integer not null check(byte_length > 0 and byte_length <= 4194304),
-  content bytea not null,
-  created_at timestamptz not null default now(),
-  primary key(ticket_hash,start_offset),
-  check(byte_length = octet_length(content))
-);
 
 
 create table if not exists marketing.published_posts (

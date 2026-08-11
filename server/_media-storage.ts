@@ -70,7 +70,7 @@ function signingKey(secret: string, stamp: string) {
   return hmac(service, "aws4_request");
 }
 
-function presign(method: "GET" | "PUT", storageKey: string, expiresSeconds = 900) {
+function presign(method: "GET" | "PUT" | "DELETE", storageKey: string, expiresSeconds = 900) {
   const config = mediaStorageConfig();
   if (!config) throw new Error("تخزين الوسائط R2 غير مضبوط في متغيرات Vercel");
   const now = new Date();
@@ -95,3 +95,4 @@ function presign(method: "GET" | "PUT", storageKey: string, expiresSeconds = 900
 
 export function createUploadUrl(storageKey: string, expiresSeconds = 900) { return presign("PUT", storageKey, expiresSeconds); }
 export function createDownloadUrl(storageKey: string, expiresSeconds = 300) { return presign("GET", storageKey, expiresSeconds); }
+export function createDeleteUrl(storageKey: string, expiresSeconds = 300) { return presign("DELETE", storageKey, expiresSeconds); }
