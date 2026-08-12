@@ -118,7 +118,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   const map: Record<string, string> = {
     create_campaign: "marketing.campaign.create", create_funnel: "system.marketing.access", create_agenda: "marketing.agenda.create", receive_task: "marketing.task.receive",
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access", complete_task: "system.marketing.access",
-    attach_final_file: "system.marketing.access", prepare_final_upload: "system.marketing.access", commit_final_file_upload: "system.marketing.access", cancel_final_upload: "system.marketing.access", attach_final_media_group: "system.marketing.access", delete_first_file: "system.marketing.access",
+    attach_final_file: "system.marketing.access", prepare_final_upload: "system.marketing.access", commit_final_file_upload: "system.marketing.access", cancel_final_upload: "system.marketing.access", attach_final_media_group: "system.marketing.access", delete_first_file: "marketing.task.final_file.upload",
     move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", create_manual_publish_entry: "marketing.publish_prep.manage", discard_manual_publish_entry: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.engagement.refresh", subscribe_engagement_webhooks: "marketing.engagement.subscribe", manage_engagement_item: "marketing.publish.now",
     archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
     create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
@@ -129,7 +129,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   if (action === "prepare_upload" || action === "mark_file_ready") {
     const category = clean(payload.category);
     if (category === "task-template") return req("system.marketing.access", "marketing", "dashboard", action);
-    if (category === "final-file") return req("marketing.task.final_file.upload", "marketing", "dashboard", action);
+    if (category === "final-file" || category === "first-file") return req("marketing.task.final_file.upload", "marketing", "dashboard", action);
     return req("marketing.file.upload", "marketing", resource, action);
   }
   if (action === "review_template") {

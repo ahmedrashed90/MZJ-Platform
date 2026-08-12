@@ -145,7 +145,7 @@ async function requireFirstFileUploadAccess(sql: ReturnType<typeof getSql>, user
   if (task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
   if (task.status === "completed") throw new Error("التاسك منتهي ولا يمكن تعديل الملف الأول");
   if (task.assigned_to !== user.id && !canViewAllTasks(user)) throw new Error("الملف الأول متاح لمسؤول التاسك فقط");
-  if (!hasPermission(user, "marketing.file.upload")) throw new Error("لا توجد صلاحية لرفع الملفات");
+  if (!hasPermission(user, "marketing.task.final_file.upload")) throw new Error("لا توجد صلاحية لرفع الملف الأول");
   return task;
 }
 
@@ -1728,8 +1728,8 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
       canDownloadFile:hasPermission(user,"marketing.file.download"),
       showFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name),
-      canUploadFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && hasPermission(user,"marketing.file.upload") && (task.assigned_to===user.id || canViewAllTasks(user)),
-      canDeleteFirstFile:Boolean(task.first_file_id) && task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && (task.assigned_to===user.id || canViewAllTasks(user)),
+      canUploadFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && hasPermission(user,"marketing.task.final_file.upload") && (task.assigned_to===user.id || canViewAllTasks(user)),
+      canDeleteFirstFile:Boolean(task.first_file_id) && task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && hasPermission(user,"marketing.task.final_file.upload") && (task.assigned_to===user.id || canViewAllTasks(user)),
       canCompleteTask:task.assigned_to===user.id || task.paired_content_user_id===user.id || canViewAllTasks(user),
     }
   };
