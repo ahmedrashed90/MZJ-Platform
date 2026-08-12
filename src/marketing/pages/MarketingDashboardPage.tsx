@@ -80,12 +80,15 @@ function DashboardTaskCard({
   showReceive?: boolean;
   completing?: boolean;
 }) {
-  const statusLabel = task.status === "completed"
-    ? "منتهي"
-    : task.status === "ready_to_complete"
-      ? "جاهز للإنهاء"
-      : templateStatusLabel(task.template_status);
-  const statusClass = task.status === "completed" || task.status === "ready_to_complete" ? task.status : task.template_status || "not_started";
+  const contentTemplateRevision = task.task_kind === "task_template" && task.template_status === "revision_requested";
+  const statusLabel = contentTemplateRevision
+    ? templateStatusLabel(task.template_status)
+    : task.status === "completed"
+      ? "منتهي"
+      : task.status === "ready_to_complete"
+        ? "جاهز للإنهاء"
+        : templateStatusLabel(task.template_status);
+  const statusClass = contentTemplateRevision ? "revision_requested" : task.status === "completed" || task.status === "ready_to_complete" ? task.status : task.template_status || "not_started";
   const progress = taskProgress(task);
   const showContentWriter = Boolean(task.content_user_name) && !sameAssignedUser(task);
 

@@ -9,6 +9,7 @@ import {
   FloppyDisk,
   FolderOpen,
   ShieldCheck,
+  Trash,
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
@@ -289,6 +290,28 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     }
   }
 
+  async function uploadFirstFile(file: File) {
+    if (!payload?.task) return;
+    setLoading(true);
+    setError("");
+    setMessage("");
+    try {
+      await uploadMarketingFile({ file, category: "first-file", sourceType: payload.task.source_type, sourceId: payload.task.source_id, taskId: payload.task.id });
+      setMessage("تم رفع الملف الأول");
+      await load();
+      onChanged?.();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر رفع الملف الأول");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteFirstFile() {
+    if (!payload?.task?.first_file_id || !window.confirm("تأكيد مسح الملف الأول؟ يمكنك رفع نسخة جديدة بعد المسح.")) return;
+    await action({ action: "delete_first_file", fileId: payload.task.first_file_id });
+  }
+
   async function uploadFinal(files: File[]) {
     if (!payload?.task || !files.length) return;
     const control = createMarketingFinalUploadCancellation();
@@ -558,6 +581,31 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
               }) : <p>لا توجد إجراءات تكليف معرفة لهذا القسم.</p>}
             </div>
           </section>
+
+          {permissions.showFirstFile ? <section className="marketing-task-section marketing-final-upload-section">
+            <div className="marketing-task-section-heading"><div><h3>الملف الأول</h3><p>نسخة العمل الأولى للمراجعة قبل الملف النهائي. يمكن مسحها ورفع نسخة جديدة عند وجود تعديل.</p></div></div>
+            <div className="marketing-final-upload-shell">
+              {!task.first_file_id && permissions.canUploadFirstFile ? <label
+                className={`marketing-final-upload-dropzone ${loading ? "disabled" : ""}`}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (loading) return;
+                  const file = Array.from(event.dataTransfer.files || []).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/"));
+                  if (file) void uploadFirstFile(file);
+                }}
+              >
+                <span className="marketing-final-upload-icon"><FileArrowUp size={28} weight="duotone" /></span>
+                <span><strong>{loading ? "جاري رفع الملف الأول" : "اسحب الملف الأول هنا أو اضغط للاختيار"}</strong><small>صورة أو فيديو للمراجعة قبل رفع الملف النهائي</small></span>
+                <input type="file" accept="image/*,video/*" disabled={loading} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFirstFile(file); event.currentTarget.value = ""; }} />
+              </label> : null}
+
+              {task.first_file_id ? <div className="marketing-inline-actions marketing-final-files-actions">
+                {permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.first_file_id)}><DownloadSimple size={18} />{task.first_file_name || "فتح الملف الأول"}</button> : <strong>{task.first_file_name || "تم رفع الملف الأول"}</strong>}
+                {permissions.canDeleteFirstFile ? <button type="button" className="danger" disabled={loading} onClick={() => void deleteFirstFile()}><Trash size={18} />مسح الملف الأول</button> : null}
+              </div> : null}
+            </div>
+          </section> : null}
 
           <section className="marketing-task-section marketing-final-upload-section">
             <div className="marketing-task-section-heading"><div><h3>الملف النهائي</h3><p>يرفع من داخل المنصة إلى Zoho WorkDrive بنفس مسار الرفع المعتمد، مع عرض النسبة والسرعة وإمكانية الإلغاء.</p></div></div>

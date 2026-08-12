@@ -123,6 +123,32 @@ async function requireTaskTemplateUploadAccess(sql: ReturnType<typeof getSql>, u
   return task;
 }
 
+const FIRST_FILE_EXECUTION_DEPARTMENTS = new Set([
+  "قسم المونتاج", "المونتاج", "مونتاج", "montage",
+  "قسم التصوير", "التصوير", "تصوير", "photography", "shooting",
+  "قسم التصميم", "التصميم", "تصميم", "design",
+]);
+function isFirstFileExecutionDepartment(value: unknown) {
+  return FIRST_FILE_EXECUTION_DEPARTMENTS.has(clean(value).toLowerCase().replace(/\s+/g, " "));
+}
+async function requireFirstFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
+  if (!taskId) throw new Error("رقم التاسك مطلوب");
+  const [task] = await sql<any[]>`
+    select t.id::text,t.task_kind,t.status,t.source_type,t.source_id::text,t.assigned_to::text,
+      d.name as department_name,tt.status as template_status
+    from marketing.tasks t
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if (!task || task.task_kind !== "execution" || !isFirstFileExecutionDepartment(task.department_name)) throw new Error("الملف الأول متاح فقط لتاسكات المونتاج والتصوير والتصميم");
+  if (task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
+  if (task.status === "completed") throw new Error("التاسك منتهي ولا يمكن تعديل الملف الأول");
+  if (task.assigned_to !== user.id && !canViewAllTasks(user)) throw new Error("الملف الأول متاح لمسؤول التاسك فقط");
+  if (!hasPermission(user, "marketing.file.upload")) throw new Error("لا توجد صلاحية لرفع الملفات");
+  return task;
+}
+
 async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
   if (!taskId) throw new Error("رقم التاسك مطلوب");
   const [task] = await sql<any[]>`
@@ -1658,10 +1684,18 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,cam.campaign_date,cam.campaign_type,cam.objective,cam.required_from_content,
       coalesce(cam.publish_start,ag.publish_start) as campaign_start,coalesce(cam.publish_end,ag.publish_end) as campaign_end,
       tt.task_no,tt.status as template_status,tt.progress as template_progress,tt.due_on as template_due_on,tt.department_note as template_department_note,tt.admin_note,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,
+      first_file.id as first_file_id,first_file.original_name as first_file_name,first_file.mime_type as first_file_mime_type,first_file.file_size as first_file_size,
       coalesce(fm.primary_name,ff.original_name) as final_file_name,coalesce(fm.file_count,case when ff.id is null then 0 else 1 end)::int as final_file_count,coalesce(fm.files,'[]'::jsonb) as final_files,done_by.full_name as completed_by_name
     from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join core.users done_by on done_by.id=t.completed_by left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files ff on ff.id=t.final_file_id
+    left join lateral (
+      select f.id::text,f.original_name,f.mime_type,f.file_size
+      from marketing.files f
+      where f.task_id=t.id and f.category='first-file' and f.status='ready'
+      order by f.updated_at desc,f.created_at desc,f.id desc
+      limit 1
+    ) first_file on true
     left join lateral (
       select count(*)::int as file_count,min(f.original_name) filter(where f.order_index=0) as primary_name,
         jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mimeType',f.mime_type,'size',f.file_size,'orderIndex',f.order_index) order by f.order_index,f.created_at) as files
@@ -1693,6 +1727,9 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
       canDownloadFile:hasPermission(user,"marketing.file.download"),
+      showFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name),
+      canUploadFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && hasPermission(user,"marketing.file.upload") && (task.assigned_to===user.id || canViewAllTasks(user)),
+      canDeleteFirstFile:Boolean(task.first_file_id) && task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name) && task.template_status==="approved" && task.status!=="completed" && (task.assigned_to===user.id || canViewAllTasks(user)),
       canCompleteTask:task.assigned_to===user.id || task.paired_content_user_id===user.id || canViewAllTasks(user),
     }
   };
@@ -2164,6 +2201,11 @@ async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:Session
   if(!category)throw new Error("نوع الملف مطلوب");
   if(category==="task-template")await requireTaskTemplateUploadAccess(sql,user,taskId);
   else if(category==="final-file")await requireFinalFileUploadAccess(sql,user,taskId);
+  else if(category==="first-file"){
+    await requireFirstFileUploadAccess(sql,user,taskId);
+    const[existing]=await sql<any[]>`select id::text from marketing.files where task_id=${taskId}::uuid and category='first-file' and status='ready' order by updated_at desc limit 1`;
+    if(existing)throw new Error("امسح الملف الأول الحالي قبل رفع نسخة جديدة");
+  }
   else{
     if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");
     if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");
@@ -2181,6 +2223,7 @@ async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:Session
   if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لتحديث الملف");
   if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
   else if(file.category==="final-file")await requireFinalFileUploadAccess(sql,user,file.task_id);
+  else if(file.category==="first-file")await requireFirstFileUploadAccess(sql,user,file.task_id);
   else{
     if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لتحديث الملف");
     if(file.task_id&&!await canAccessMarketingTask(sql,user,file.task_id))throw new Error("التاسك خارج نطاق بياناتك");
@@ -2190,6 +2233,21 @@ async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:Session
   if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
 }
+async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const fileId=clean(body.fileId);
+  if(!fileId)throw new Error("الملف الأول غير محدد");
+  const[file]=await sql<any[]>`select id::text,task_id::text,storage_key,storage_provider,status,uploaded_by::text from marketing.files where id=${fileId}::uuid and category='first-file'`;
+  if(!file||file.status!=="ready"||!file.task_id)throw new Error("الملف الأول غير موجود");
+  await requireFirstFileUploadAccess(sql,user,file.task_id);
+  const storageKey=clean(file.storage_key);
+  if(storageKey&&clean(file.storage_provider)!=='zoho'&&mediaStorageConfigured()){
+    const response=await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'});
+    if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف الأول من التخزين (${response.status})`);
+  }
+  await sql`delete from marketing.files where id=${fileId}::uuid and category='first-file'`;
+  return{ok:true,message:"تم مسح الملف الأول ويمكن رفع نسخة جديدة"};
+}
+
 async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
   const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;
   if(!file)throw new Error("الملف غير موجود");
@@ -3329,6 +3387,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
+    else if(action==='delete_first_file')result=await deleteFirstFile(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='create_manual_publish_entry')result=await createManualPublishEntry(sql,body,user);
     else if(action==='discard_manual_publish_entry')result=await discardManualPublishEntry(sql,body,user);
