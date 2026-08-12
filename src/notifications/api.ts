@@ -6,8 +6,8 @@ async function readJson(response: Response) {
   return payload;
 }
 
-export async function fetchNotifications(system = "", limit = 30, unreadOnly = false) {
-  const params = new URLSearchParams({ limit: String(limit) });
+export async function fetchNotifications(system = "", limit = 30, unreadOnly = false, offset = 0) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(Math.max(0, offset)) });
   if (system) params.set("system", system);
   if (unreadOnly) params.set("unreadOnly", "true");
   const response = await fetch(`/api/notifications?${params.toString()}`, { credentials: "include", cache: "no-store" });

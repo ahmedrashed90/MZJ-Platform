@@ -37,12 +37,69 @@ export function publicTrackingUrl(requestOrigin: string, trackingToken: string) 
 
 export async function ensureVehicleStageRows(vehicleId: string) {
   const sql = getSql();
+
+  // Stage actions are order-wide: completing or reverting a stage updates every
+  // vehicle that belongs to the order. If ERP synchronization adds a vehicle
+  // later, its stage rows must inherit the last explicit order-level stage
+  // action instead of being recreated as pending and making progress regress.
   await sql`
-    insert into tracking.vehicle_stages(vehicle_id, stage_id)
-    select ${vehicleId}::uuid, s.id
+    with vehicle_order as (
+      select order_id
+      from tracking.order_vehicles
+      where id=${vehicleId}::uuid
+    ), latest_stage_events as (
+      select distinct on (e.stage_id)
+        e.stage_id,e.action,e.actor_id,e.created_at
+      from tracking.stage_events e
+      join vehicle_order vo on vo.order_id=e.order_id
+      order by e.stage_id,e.created_at desc,e.id desc
+    )
+    insert into tracking.vehicle_stages(
+      vehicle_id,stage_id,status,completed_by,completed_at,reverted_by,reverted_at
+    )
+    select
+      ${vehicleId}::uuid,s.id,
+      case when le.action='completed' then 'completed' else 'pending' end,
+      case when le.action='completed' then le.actor_id else null end,
+      case when le.action='completed' then le.created_at else null end,
+      case when le.action='reverted' then le.actor_id else null end,
+      case when le.action='reverted' then le.created_at else null end
     from tracking.stages s
-    where s.is_active = true
+    left join latest_stage_events le on le.stage_id=s.id
+    where s.is_active=true
     on conflict (vehicle_id, stage_id) do nothing
+  `;
+
+  // Heal rows created by an older sync after a stage had already been completed.
+  // Only an explicit stage event can change the canonical state, so the normal
+  // rollback action remains fully supported and no unrelated workflow changes.
+  await sql`
+    with vehicle_order as (
+      select order_id
+      from tracking.order_vehicles
+      where id=${vehicleId}::uuid
+    ), latest_stage_events as (
+      select distinct on (e.stage_id)
+        e.stage_id,e.action,e.actor_id,e.created_at
+      from tracking.stage_events e
+      join vehicle_order vo on vo.order_id=e.order_id
+      order by e.stage_id,e.created_at desc,e.id desc
+    )
+    update tracking.vehicle_stages vs
+    set
+      status=case when le.action='completed' then 'completed' else 'pending' end,
+      completed_by=case when le.action='completed' then le.actor_id else null end,
+      completed_at=case when le.action='completed' then le.created_at else null end,
+      reverted_by=case when le.action='reverted' then le.actor_id else null end,
+      reverted_at=case when le.action='reverted' then le.created_at else null end,
+      updated_at=greatest(vs.updated_at,le.created_at)
+    from latest_stage_events le
+    where vs.vehicle_id=${vehicleId}::uuid
+      and vs.stage_id=le.stage_id
+      and (
+        (le.action='completed' and vs.status<>'completed')
+        or (le.action='reverted' and vs.status<>'pending')
+      )
   `;
 }
 
