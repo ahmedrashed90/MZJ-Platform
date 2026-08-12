@@ -675,28 +675,72 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const salesOnlyFacts = reportFacts.filter((fact) => fact.department_code !== "customer_service");
   const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`);
 
-  const agentContext = new Map<string, { departments: Set<string>; branches: Set<string> }>();
-  const rememberAgentContext = (item: any) => {
-    const isSaleFact = Boolean(item.order_id);
-    const key = String(isSaleFact ? (item.assigned_to || "__none__") : (item.current_assigned_to || "__none__"));
-    if (!agentContext.has(key)) agentContext.set(key, { departments: new Set<string>(), branches: new Set<string>() });
-    const context = agentContext.get(key)!;
-    const departmentCode = isSaleFact ? item.department_code : item.current_department_code;
-    if (departmentCode) context.departments.add(departmentLabel(departmentCode));
-    const branchName = isSaleFact
-      ? (item.branch_name || item.branch_code)
-      : (item.current_branch_name || item.current_branch_code);
-    if (branchName) context.branches.add(String(branchName));
-  };
-  salesRows.forEach(rememberAgentContext);
-  salesOnlyFacts.forEach(rememberAgentContext);
+  /*
+   * Representative identity is profile data, not a historical sales dimension.
+   * Keep sold metrics attributed to crm.sales_transactions exactly as-is, while
+   * rendering each representative with only their primary CRM department/branch.
+   * This prevents old transactions or cross-system access from adding extra
+   * departments/branches to the representative row.
+   */
+  const agentIds = [...new Set([
+    ...salesRows.map((row) => String(row.current_assigned_to || "").trim()),
+    ...salesOnlyFacts.map((fact) => String(fact.assigned_to || "").trim()),
+  ].filter((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)))];
+
+  const agentIdentityRows = agentIds.length ? await sql<any[]>`
+    select
+      u.id::text as user_id,
+      primary_department.code as department_code,
+      primary_department.name as department_name,
+      primary_branch.code as branch_code,
+      primary_branch.name as branch_name
+    from core.users u
+    left join lateral (
+      select d.code,d.name
+      from core.user_system_departments usd
+      join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+      where usd.user_id=u.id and usd.system_code='crm' and usd.is_primary=true
+      order by d.created_at,d.code
+      limit 1
+    ) primary_department on true
+    left join lateral (
+      select b.code,b.name
+      from core.user_system_branches usb
+      join core.branches b on b.id=usb.branch_id and b.is_active=true
+      where usb.user_id=u.id and usb.system_code='crm' and usb.is_primary=true
+      order by b.sort_order,b.name
+      limit 1
+    ) primary_branch on true
+    where u.id=any(${agentIds}::uuid[])
+  ` : [];
+
+  const agentIdentity = new Map<string, { department: string; branch: string }>();
+  for (const item of agentIdentityRows) {
+    agentIdentity.set(String(item.user_id), {
+      department: String(item.department_name || item.department_code || "").trim(),
+      branch: String(item.branch_name || item.branch_code || "").trim(),
+    });
+  }
+
+  // Fallback only to the customer's current CRM ownership; never to sale-history context.
+  const currentAgentContext = new Map<string, { department: string; branch: string }>();
+  for (const item of salesRows) {
+    const key = String(item.current_assigned_to || "__none__");
+    const current = currentAgentContext.get(key) || { department: "", branch: "" };
+    if (!current.department && item.current_department_code) current.department = departmentLabel(item.current_department_code);
+    if (!current.branch) current.branch = String(item.current_branch_name || item.current_branch_code || "").trim();
+    currentAgentContext.set(key, current);
+  }
+
   const agents = group(salesRows, salesOnlyFacts, "agent", (row) => row.current_assigned_to || "__none__", (row) => row.current_assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع")
     .map((row) => {
-      const context = agentContext.get(String(row.detailValue || "__none__"));
+      const key = String(row.detailValue || "__none__");
+      const identity = agentIdentity.get(key);
+      const fallback = currentAgentContext.get(key);
       return {
         ...row,
-        department: context ? [...context.departments].sort((a, b) => a.localeCompare(b, "ar")).join("، ") : "غير محدد",
-        branch: context ? [...context.branches].sort((a, b) => a.localeCompare(b, "ar")).join("، ") || "بدون فرع" : "بدون فرع",
+        department: identity?.department || fallback?.department || "غير محدد",
+        branch: identity?.branch || fallback?.branch || "بدون فرع",
       };
     })
     .sort((a, b) => Number(b.sold || 0) - Number(a.sold || 0) || Number(b.total || 0) - Number(a.total || 0) || a.name.localeCompare(b.name, "ar"));
