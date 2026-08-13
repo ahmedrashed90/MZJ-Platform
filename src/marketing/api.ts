@@ -56,8 +56,8 @@ export async function uploadMarketingFile(input: {
 }
 
 export async function downloadMarketingFile(fileId: string) {
-  const payload = await marketingFetch<{ url: string }>(`/api/marketing${marketingQuery({ resource: "file", id: fileId })}`);
-  window.open(payload.url, "_blank", "noopener,noreferrer");
+  const url = `/api/marketing${marketingQuery({ resource: "file", id: fileId })}`;
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 export type MarketingFinalUploadStatus = "pending" | "uploading" | "verifying" | "completed" | "cancelled" | "error";
 

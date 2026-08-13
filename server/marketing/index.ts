@@ -1,4 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { getSql } from "../_db.js";
 import { requireUser, requestIp, type SessionUser } from "../_auth.js";
 import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
@@ -2248,22 +2250,56 @@ async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   return{ok:true,message:"تم مسح الملف الأول ويمكن رفع نسخة جديدة"};
 }
 
-async function fileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
+async function downloadableMarketingFile(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
   const[file]=await sql<any[]>`select *,id::text,source_id::text,task_id::text,uploaded_by::text from marketing.files where id=${id}::uuid and status='ready'`;
   if(!file)throw new Error("الملف غير موجود");
   if(!hasPermission(user,"marketing.file.view_others")){
     const allowed=file.task_id?await canAccessMarketingTask(sql,user,file.task_id):file.source_id?await canAccessMarketingEntity(sql,user,clean(file.source_type),file.source_id):file.uploaded_by===user.id;
     if(!allowed)throw new Error("الملف خارج نطاق بياناتك");
   }
-  if(clean(file.storage_provider)==='zoho'){
-    if(!clean(file.external_id))throw new Error("معرف ملف Zoho غير موجود");
-    const info=await getZohoFileInfo(sql,clean(file.external_id));
-    const url=clean(info.permalink||file.external_url||info.downloadUrl);
-    if(!url)throw new Error("Zoho لم يرجع رابط فتح للملف");
-    return{ok:true,url,file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'zoho'}};
+  return file;
+}
+function marketingFileDisposition(fileName:unknown){
+  const original=clean(fileName)||"file";
+  const fallback=original.replace(/[^\x20-\x7E]/g,"_").replace(/["\\\r\n]/g,"_")||"file";
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(original)}`;
+}
+async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser,response:VercelResponse){
+  const file=await downloadableMarketingFile(sql,id,user);
+  if(clean(file.storage_provider)!=='zoho'){
+    if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
+    const url=createDownloadUrl(clean(file.storage_key),900);
+    if(!url)throw new Error("تعذر تجهيز رابط الملف");
+    response.setHeader("Cache-Control","private, no-store");
+    return response.redirect(302,url);
   }
-  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
-  return{ok:true,url:createDownloadUrl(file.storage_key,900),file:{id:file.id,name:file.original_name,mimeType:file.mime_type,size:file.file_size,provider:'r2'}};
+  const externalId=clean(file.external_id);
+  if(!externalId)throw new Error("معرف ملف Zoho غير موجود");
+  const runtime=await getZohoRuntime(sql);
+  const info=await getZohoFileInfo(sql,externalId);
+  const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
+  const upstream=await fetch(downloadUrl,{
+    redirect:'follow',
+    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
+  });
+  if(!upstream.ok){
+    const message=clean(await upstream.text().catch(()=>''));
+    throw new Error(message||`تعذر تنزيل ملف Zoho (${upstream.status})`);
+  }
+  const contentType=clean(upstream.headers.get('content-type')).split(';')[0].trim().toLowerCase();
+  if(contentType.includes('application/json')||contentType.includes('text/html')){
+    throw new Error("Zoho لم يرجع محتوى الملف الفعلي. أعد ربط Zoho بعد قبول صلاحية تنزيل الملفات");
+  }
+  if(!upstream.body)throw new Error("Zoho لم يرجع محتوى الملف");
+  const mimeType=clean(file.mime_type)||contentType||'application/octet-stream';
+  const contentLength=clean(upstream.headers.get('content-length'));
+  response.status(200);
+  response.setHeader("Cache-Control","private, no-store");
+  response.setHeader("Content-Type",mimeType);
+  response.setHeader("Content-Disposition",marketingFileDisposition(file.original_name));
+  if(contentLength)response.setHeader("Content-Length",contentLength);
+  await pipeline(Readable.fromWeb(upstream.body as any),response);
+  return response;
 }
 
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
@@ -3354,7 +3390,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
-      if(resource==='file')return response.status(200).json(await fileDownload(sql,clean(request.query.id),user));
+      if(resource==='file')return streamMarketingFileDownload(sql,clean(request.query.id),user,response);
       if(resource==='campaign_code'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,message:'لا توجد صلاحية لإنشاء حملة'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
       return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
     }
