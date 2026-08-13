@@ -413,7 +413,7 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
   ]) || pickText(body, ["CustomerPhone", "customerPhone", "customerMobile"]);
   const alternateCustomer = resolveAlternateCustomer(doc, body);
   const actualCustomerName = alternateCustomer.name || accountingCustomerName;
-  const actualCustomerPhone = alternateCustomer.name ? alternateCustomer.phone : (accountingCustomerPhone || alternateCustomer.phone);
+  const actualCustomerPhone = alternateCustomer.phone || accountingCustomerPhone;
   const actualCustomerPhoneNormalized = normalizePhone(actualCustomerPhone);
   const branch = pickText(doc, ["branch", "branch_name", "custom_branch", "Branch"])
     || pickText(body, ["Branch", "branch"]);

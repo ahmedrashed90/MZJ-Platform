@@ -276,32 +276,7 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
   return { status: "linked", mapping: candidate, candidate };
 }
 
-function isBankOrderWithActualCustomer(normalized: NormalizedErpNextSalesOrder) {
-  const accountingIdentity = normalizeComparable(`${clean(normalized.erpCustomerId)} ${clean(normalized.accountingCustomerName)}`);
-  const actualName = normalizeComparable(normalized.actualCustomerName);
-  const accountingName = normalizeComparable(normalized.accountingCustomerName);
-  const isBank = accountingIdentity.includes("بنك")
-    || accountingIdentity.includes("مصرف")
-    || accountingIdentity.includes("bank");
-  return Boolean(
-    isBank
-    && clean(normalized.actualCustomerPhoneNormalized)
-    && actualName
-    && accountingName
-    && actualName !== accountingName
-  );
-}
-
 function erpCustomerIdentity(normalized: NormalizedErpNextSalesOrder) {
-  if (isBankOrderWithActualCustomer(normalized)) {
-    const phoneNormalized = clean(normalized.actualCustomerPhoneNormalized);
-    return {
-      raw: phoneNormalized,
-      externalId: `customer-phone:${phoneNormalized}`,
-      contactKey: `erpnext:customer-phone:${phoneNormalized}`,
-    };
-  }
-
   const raw = clean(normalized.erpCustomerId)
     || clean(normalized.accountingCustomerName)
     || clean(normalized.actualCustomerName)
@@ -334,7 +309,12 @@ async function ensureCrmContact(
       select *,id::text from crm.contacts where id=${clean(input.existingContactId)}::uuid limit 1 for update
     `;
   }
-  if (!contact) {
+  if (!contact && phoneNormalized) {
+    [contact] = await tx`
+      select *,id::text from crm.contacts where primary_phone_normalized=${phoneNormalized} limit 1 for update
+    `;
+  }
+  if (!contact && !phoneNormalized) {
     [contact] = await tx`
       select c.*,c.id::text
       from crm.contact_identities ci
@@ -343,12 +323,7 @@ async function ensureCrmContact(
       limit 1 for update of c
     `;
   }
-  if (!contact && phoneNormalized) {
-    [contact] = await tx`
-      select *,id::text from crm.contacts where primary_phone_normalized=${phoneNormalized} limit 1 for update
-    `;
-  }
-  if (!contact) {
+  if (!contact && !phoneNormalized) {
     [contact] = await tx`
       select *,id::text from crm.contacts where contact_key=${identity.contactKey} limit 1 for update
     `;
@@ -443,7 +418,7 @@ async function linkCrmCustomer(input: {
       }
     };
 
-    if (clean(integrationState?.crm_lead_id)) {
+    if (clean(integrationState?.crm_lead_id) && !normalized.actualCustomerPhoneNormalized) {
       const [linkedLead] = await tx`
         select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
           assigned.full_name as assigned_name,true as has_erp_history
@@ -455,24 +430,26 @@ async function linkCrmCustomer(input: {
       rememberCandidate(linkedLead, 3);
     }
 
-    const identityMatches = await tx`
-      select chosen.*
-      from crm.contact_identities ci
-      join lateral (
-        select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
-          assigned.full_name as assigned_name,
-          exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) as has_erp_history
-        from crm.leads l
-        left join core.users assigned on assigned.id=l.assigned_to
-        where l.contact_id=ci.contact_id and l.is_deleted=false
-        order by exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) desc,
-          (l.current_request_id is not null) desc,l.updated_at desc,l.created_at desc
-        limit 1 for update of l
-      ) chosen on true
-      where ci.channel_code='erpnext' and ci.external_id=${identity.externalId}
-      limit 1
-    `;
-    for (const match of identityMatches) rememberCandidate(match, 2);
+    if (!normalized.actualCustomerPhoneNormalized) {
+      const identityMatches = await tx`
+        select chosen.*
+        from crm.contact_identities ci
+        join lateral (
+          select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
+            assigned.full_name as assigned_name,
+            exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) as has_erp_history
+          from crm.leads l
+          left join core.users assigned on assigned.id=l.assigned_to
+          where l.contact_id=ci.contact_id and l.is_deleted=false
+          order by exists(select 1 from integrations.erpnext_sales_orders linked_order where linked_order.crm_lead_id=l.id) desc,
+            (l.current_request_id is not null) desc,l.updated_at desc,l.created_at desc
+          limit 1 for update of l
+        ) chosen on true
+        where ci.channel_code='erpnext' and ci.external_id=${identity.externalId}
+        limit 1
+      `;
+      for (const match of identityMatches) rememberCandidate(match, 2);
+    }
 
     if (normalized.actualCustomerPhoneNormalized) {
       const phoneMatches = await tx`
