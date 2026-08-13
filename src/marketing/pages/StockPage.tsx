@@ -556,7 +556,7 @@ export function StockPage() {
               <span>المكان المستهدف</span>
               <select value={destinationLocationId} onChange={(event) => setDestinationLocationId(event.target.value)}>
                 <option value="">اختر المكان</option>
-                {(data?.locations || []).filter((item) => item.id !== selectedSourceLocationId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                {(data?.locations || []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </label>
             <div className="operations-control-field marketing-photo-date-field">

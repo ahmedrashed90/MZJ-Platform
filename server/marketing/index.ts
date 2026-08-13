@@ -3317,7 +3317,6 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
         for update of v
       `;
       if(!v)throw new Error("إحدى السيارات غير موجودة");
-      if(String(v.location_id)===destinationLocationId)throw new Error(`السيارة ${v.vin} موجودة بالفعل في المكان المستهدف`);
       const[active]=await tx<any[]>`select r.request_no from operations.transfer_request_vehicles rv join operations.transfer_requests r on r.id=rv.transfer_request_id where rv.vehicle_id=${item.vehicleId}::uuid and r.is_deleted=false and r.cancelled_at is null and r.status<>'completed' limit 1`;
       if(active)throw new Error(`السيارة ${v.vin} مرتبطة بطلب نشط ${active.request_no}`);
       cars.push({...v,itemNote:item.note});
