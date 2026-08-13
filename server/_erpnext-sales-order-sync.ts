@@ -276,7 +276,32 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
   return { status: "linked", mapping: candidate, candidate };
 }
 
+function isBankOrderWithActualCustomer(normalized: NormalizedErpNextSalesOrder) {
+  const accountingIdentity = normalizeComparable(`${clean(normalized.erpCustomerId)} ${clean(normalized.accountingCustomerName)}`);
+  const actualName = normalizeComparable(normalized.actualCustomerName);
+  const accountingName = normalizeComparable(normalized.accountingCustomerName);
+  const isBank = accountingIdentity.includes("بنك")
+    || accountingIdentity.includes("مصرف")
+    || accountingIdentity.includes("bank");
+  return Boolean(
+    isBank
+    && clean(normalized.actualCustomerPhoneNormalized)
+    && actualName
+    && accountingName
+    && actualName !== accountingName
+  );
+}
+
 function erpCustomerIdentity(normalized: NormalizedErpNextSalesOrder) {
+  if (isBankOrderWithActualCustomer(normalized)) {
+    const phoneNormalized = clean(normalized.actualCustomerPhoneNormalized);
+    return {
+      raw: phoneNormalized,
+      externalId: `customer-phone:${phoneNormalized}`,
+      contactKey: `erpnext:customer-phone:${phoneNormalized}`,
+    };
+  }
+
   const raw = clean(normalized.erpCustomerId)
     || clean(normalized.accountingCustomerName)
     || clean(normalized.actualCustomerName)
