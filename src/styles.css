@@ -3788,7 +3788,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .kpi-day-card>header { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
 .kpi-day-card>header strong { flex:1; }
 .kpi-day-card>header button,.kpi-delay-list button { border:1px solid #ead8cd; border-radius:10px; background:#fff; color:#8a4938; }
-.kpi-delay-list { display:grid; gap:8px; }
+.kpi-delay-list { display:grid; grid-template-columns:1fr; gap:8px; }
 .kpi-delay-list>div { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }
 .kpi-delay-list>div.has-note { grid-template-columns:minmax(0,.7fr) minmax(0,1.3fr) auto; }
 .kpi-week-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
