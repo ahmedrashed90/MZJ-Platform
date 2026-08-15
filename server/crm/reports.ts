@@ -243,17 +243,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
   `;
   const transactionWholesaleIdentitySql = sql`
     (
-      (${transactionRawDepartmentCodeSql}) in ('wholesale','wholesale_sales')
-      or l.department_code in ('wholesale','wholesale_sales')
-      or lower(coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
-      or lower(coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,'')) like '%wholesale%'
-      or lower(coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,'')) like '%jumla%'
-      or exists(
-        select 1
-        from core.branches transaction_branch
-        where transaction_branch.code=coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code)
-          and coalesce(transaction_branch.name,'') ilike '%الجملة%'
-      )
+      case
+        -- A sale transaction owns its attribution. The customer's current department
+        -- is only a legacy fallback when the transaction has no department snapshot.
+        when nullif(st.department_code,'') is not null
+          then nullif(st.department_code,'') in ('wholesale','wholesale_sales')
+        else (
+          l.department_code in ('wholesale','wholesale_sales')
+          or lower(coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''),'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+          or lower(coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''),'')) like '%wholesale%'
+          or lower(coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''),'')) like '%jumla%'
+          or exists(
+            select 1
+            from core.branches transaction_branch
+            where transaction_branch.code=coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))
+              and coalesce(transaction_branch.name,'') ilike '%الجملة%'
+          )
+        )
+      end
     )
   `;
   const transactionDepartmentCodeSql = sql`
@@ -265,7 +272,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const transactionBranchCodeSql = sql`
     case
       when ${transactionWholesaleIdentitySql}
-        then coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,${wholesaleBranchFallbackSql})
+        then coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''),${wholesaleBranchFallbackSql})
       else coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))
     end
   `;
@@ -342,19 +349,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     )
   `;
 
-  const leadFiltersWithoutDateSql = sql`
+  const filtersSql = sql`
     ${scopeSql}
+    and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
+    and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
     and ${leadDepartmentFilterSql}
     and (${branch || null}::text is null or l.report_branch_code=${branch || null})
     and (${agent || null}::uuid is null or l.current_assigned_to=${agent || null}::uuid)
     and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
     and (${source || null}::text is null or l.source_code=${source || null})
     and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${q ? `%${q}%` : null})
-  `;
-  const filtersSql = sql`
-    ${leadFiltersWithoutDateSql}
-    and (${from || null}::date is null or ${reportDateSql} >= ${from || null}::date)
-    and (${to || null}::date is null or ${reportDateSql} <= ${to || null}::date)
   `;
 
   if (detailKind) {
@@ -371,12 +375,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
 
     /*
-     * Source and department customer drill-downs keep normal statuses on the
-     * lead's latest update. When the user explicitly selects "تم البيع" with a
-     * date range, the canonical sale transaction is the date source, matching
-     * the rest of CRM sold reporting and avoiding a stale/latest lead snapshot.
+     * The sold drill-down is transaction-based end to end. The selected month
+     * arrives as its first/last calendar day in `from`/`to`, so only sales whose
+     * canonical sale_at falls inside that exact period are returned. Source,
+     * department and branch attribution also come from the same sale transaction
+     * identity used by the report totals; the lead's current status/update date
+     * never decides whether a sold customer belongs to the selected month.
      */
     if (detailStatus === "تم البيع" && Boolean(from || to) && ["source", "department_branch"].includes(detailKind)) {
+      const soldDetailMatchSql = detailKind === "source"
+        ? sql`
+            (${transactionDepartmentCodeSql})<>'customer_service'
+            and coalesce(st.source_code,l.source_code,'__none__')=${detailValue}
+          `
+        : sql`
+            (coalesce((${transactionDepartmentCodeSql}),'__none__') || '|' || coalesce((${transactionBranchCodeSql}),'__none__'))=${detailValue}
+          `;
+
       const soldDetailRows = await sql<any[]>`
         with effective_leads as (${effectiveLeads}),
         in_period_sales as (
@@ -386,25 +401,42 @@ export default async function handler(request: VercelRequest, response: VercelRe
             max(st.sale_at) as last_sale_at
           from crm.sales_transactions st
           join effective_leads l on l.id=st.lead_id and l.is_deleted=false
+          left join lateral (
+            select b.code,b.name
+            from core.user_system_branches usb
+            join core.branches b on b.id=usb.branch_id and b.is_active=true
+            where usb.user_id=coalesce(st.assigned_to,l.assigned_to) and usb.system_code='crm'
+            order by usb.is_primary desc,b.sort_order,b.name
+            limit 1
+          ) assigned_primary_branch on true
           where coalesce(st.is_cancelled,false)=false
             and (${from || null}::date is null or ${manualSaleDateSql}>=${from || null}::date)
             and (${to || null}::date is null or ${manualSaleDateSql}<=${to || null}::date)
-            and ${leadFiltersWithoutDateSql}
-            and l.status_label='تم البيع'
-            and ${detailMatch}
+            and (
+              ${scope.all}::boolean
+              or (${scope.includeAssigned}::boolean and st.assigned_to=${scope.userId}::uuid)
+              or ((${transactionDepartmentCodeSql})=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or (${transactionBranchCodeSql})=any(${scope.branchCodes}::text[])))
+            )
+            and ${transactionDepartmentFilterSql}
+            and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
+            and (${agent || null}::uuid is null or st.assigned_to=${agent || null}::uuid)
+            and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
+            and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
+            and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,l.report_assigned_name,assigned_primary_branch.name,${transactionBranchCodeSql},${transactionDepartmentCodeSql},st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
+            and ${soldDetailMatchSql}
           group by st.lead_id
         )
         select
           l.id::text,l.customer_name,l.phone,l.phone_normalized,l.source_code,l.source_name,
           l.report_department_code as department_code,l.report_branch_code as branch_code,
-          l.status_label,l.car_name,l.notes,l.status_note,s.sold_quantity,s.last_sale_at as sold_at,l.registered_at,l.created_at,l.updated_at,
+          'تم البيع'::text as status_label,l.car_name,l.notes,l.status_note,s.sold_quantity,s.last_sale_at as sold_at,l.registered_at,l.created_at,l.updated_at,
           l.report_assigned_to::text as assigned_to,l.call_center_assigned_to::text,
           l.report_assigned_name as assigned_name,l.report_call_center_name as call_center_name,
           l.report_branch_name as branch_name,l.catalog_source_name,l.source_report_group,
           (count(*) over())::int as total_count
         from in_period_sales s
         join effective_leads l on l.id=s.lead_id
-        where (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.status_note,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${detailQ ? `%${detailQ}%` : null})
+        where (${detailQ || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.notes,l.status_note,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${detailQ ? `%${detailQ}%` : null})
         order by s.last_sale_at desc,l.updated_at desc,coalesce(l.registered_at,l.created_at) desc
         limit ${detailPageSize} offset ${detailOffset}
       `;

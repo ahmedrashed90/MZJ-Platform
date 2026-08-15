@@ -483,6 +483,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const completedRaw = clean(request.query.completed);
   const hasCompletedFilter = completedRaw !== "";
   const completed = boolValue(request.query.completed);
+  const includeArchivedHistory = hasCompletedFilter && completed;
   const includeCancelled = clean(request.query.includeCancelled) !== "false";
   const pattern = `%${search}%`;
   const allowedStatuses = allowedVehicleStatusCodes(user);
@@ -494,7 +495,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
     r.is_deleted=false
     and ${requestAccessScope}
     and (${includeCancelled}=true or r.cancelled_at is null)
-    and (r.cancelled_at is not null or ${activeVehicleScope})
+    and ((r.cancelled_at is not null or ${activeVehicleScope}) or (${includeArchivedHistory}=true and r.status='completed'))
     and (${kind}='all' or r.request_kind=${kind})
     and (${status}='' or r.status=${status})
     and (${hasCompletedFilter}=false or (${completed}=true and r.status='completed') or (${completed}=false and r.status<>'completed'))
@@ -504,7 +505,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
       join operations.vehicles vx on vx.id=rx.vehicle_id
       where rx.transfer_request_id=r.id
         and vx.is_deleted=false
-        and (r.cancelled_at is not null or (vx.archived_at is null and vx.is_inventory_active=true))
+        and (r.cancelled_at is not null or ${includeArchivedHistory}=true or (vx.archived_at is null and vx.is_inventory_active=true))
         and (${statusUnrestricted}=true or vx.status_code in ${sql(statusCodes)})
         and (vx.vin ilike ${pattern} or coalesce(vx.car_name,'') ilike ${pattern} or coalesce(vx.statement,'') ilike ${pattern})
     ))
@@ -533,7 +534,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
       left join operations.vehicle_statuses cs on cs.code=v.status_code
       where rv.transfer_request_id=r.id
         and v.is_deleted=false
-        and (r.cancelled_at is not null or (v.archived_at is null and v.is_inventory_active=true))
+        and (r.cancelled_at is not null or ${includeArchivedHistory}=true or (v.archived_at is null and v.is_inventory_active=true))
         and (${statusUnrestricted}=true or v.status_code in ${sql(statusCodes)})
     ) cars on true
     left join lateral (

@@ -48,6 +48,247 @@ function positiveQuantity(value: unknown, label: string) {
   return Math.round(parsed * 100) / 100;
 }
 
+function positiveWholeQuantity(value: unknown, label: string) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} يجب أن يكون عددًا صحيحًا واحدًا أو أكثر`);
+  return parsed;
+}
+
+async function resolveSalespersonSnapshot(sql: any, salespersonId: string) {
+  const [salesperson] = await sql<any[]>`
+    select
+      u.id::text,u.full_name,
+      coalesce(crm_department.code,global_department.code) as department_code,
+      coalesce(crm_department.name,global_department.name) as department_name,
+      case
+        when coalesce(crm_department.code,global_department.code) in ('wholesale','wholesale_sales')
+          then coalesce(crm_branch.code,global_branch.code,wholesale_branch.code)
+        else coalesce(crm_branch.code,global_branch.code)
+      end as branch_code,
+      case
+        when coalesce(crm_department.code,global_department.code) in ('wholesale','wholesale_sales')
+          then coalesce(crm_branch.name,global_branch.name,wholesale_branch.name)
+        else coalesce(crm_branch.name,global_branch.name)
+      end as branch_name
+    from core.users u
+    left join lateral (
+      select d.code,d.name
+      from core.user_system_departments usd
+      join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+      where usd.user_id=u.id and usd.system_code='crm'
+      order by usd.is_primary desc,d.created_at,d.code
+      limit 1
+    ) crm_department on true
+    left join lateral (
+      select d.code,d.name
+      from core.user_departments ud
+      join core.departments d on d.id=ud.department_id and d.is_active=true
+      where ud.user_id=u.id and d.code in ('cash_sales','finance_sales','wholesale','wholesale_sales')
+      order by d.created_at,d.code
+      limit 1
+    ) global_department on true
+    left join lateral (
+      select b.code,b.name
+      from core.user_system_branches usb
+      join core.branches b on b.id=usb.branch_id and b.is_active=true
+      where usb.user_id=u.id and usb.system_code='crm'
+      order by usb.is_primary desc,b.sort_order,b.name
+      limit 1
+    ) crm_branch on true
+    left join lateral (
+      select b.code,b.name
+      from core.user_branches ub
+      join core.branches b on b.id=ub.branch_id and b.is_active=true
+      where ub.user_id=u.id
+      order by b.sort_order,b.name
+      limit 1
+    ) global_branch on true
+    left join lateral (
+      select b.code,b.name
+      from core.branches b
+      where b.is_active=true and (
+        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
+        or lower(coalesce(b.code,'')) like '%wholesale%'
+        or lower(coalesce(b.code,'')) like '%jumla%'
+        or coalesce(b.name,'') ilike '%الجملة%'
+      )
+      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
+      limit 1
+    ) wholesale_branch on true
+    where u.id=${salespersonId}::uuid and u.is_active=true and coalesce(u.can_receive_leads,true)=true
+    limit 1
+  `;
+  if (!salesperson || !salesDepartmentCodes.has(clean(salesperson.department_code))) return null;
+  return {
+    ...salesperson,
+    department_code: clean(salesperson.department_code),
+    department_name: clean(salesperson.department_name) || clean(salesperson.department_code),
+    branch_code: clean(salesperson.branch_code) || null,
+    branch_name: clean(salesperson.branch_name) || clean(salesperson.branch_code) || null,
+  };
+}
+
+async function syncSalesOrderTransaction(tx: any, input: {
+  leadId: string;
+  salesOrderNo: string;
+  saleAt: string;
+  quantity: number;
+  totalAmount: number;
+  salesperson: any;
+  sourceCode?: string | null;
+  sourceName?: string | null;
+  carName?: string | null;
+  carCategory?: string | null;
+  actorId: string;
+  sourceType?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const rows = await tx<any[]>`
+    select *,id::text
+    from crm.sales_transactions
+    where source_reference=${input.salesOrderNo}
+    order by
+      case
+        when source_type='erpnext_sales_order' then 0
+        when source_type='crm_contact_sales_order' then 1
+        when coalesce(is_cancelled,false)=false then 2
+        else 3
+      end,
+      created_at asc,id asc
+    for update
+  `;
+  const canonical = rows[0] || null;
+  if (rows.length > 1) {
+    const duplicateIds = rows.slice(1).map((row: any) => clean(row.id)).filter(Boolean);
+    if (duplicateIds.length) {
+      await tx`
+        update crm.sales_transactions set
+          is_cancelled=true,cancelled_at=coalesce(cancelled_at,now()),cancelled_by=${input.actorId}::uuid,
+          updated_by=${input.actorId}::uuid,
+          metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({ mergedIntoSalesOrder: input.salesOrderNo, mergedReason: "crm_contact_sales_order_attribution" })}::jsonb,
+          updated_at=now()
+        where id in ${tx(duplicateIds)} and coalesce(is_cancelled,false)=false
+      `;
+    }
+  }
+
+  const metadata = {
+    canonicalSalesTransaction: true,
+    salesOrderNo: input.salesOrderNo,
+    attributionSource: "sales_order",
+    ...input.metadata,
+  };
+  if (canonical) {
+    const [updated] = await tx<any[]>`
+      update crm.sales_transactions set
+        lead_id=${input.leadId}::uuid,
+        sale_at=case
+          when coalesce(metadata->>'soldDateOverride','false')='true' then sale_at
+          when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
+            then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
+          else ${input.saleAt}::timestamptz
+        end,
+        quantity=${Math.max(1, Math.round(input.quantity))},
+        total_amount=${Math.max(0, Number(input.totalAmount || 0))},
+        assigned_to=${input.salesperson.id}::uuid,
+        assigned_name=${input.salesperson.full_name},
+        department_code=${input.salesperson.department_code},
+        branch_code=${input.salesperson.branch_code},
+        source_code=coalesce(${clean(input.sourceCode) || null},source_code),
+        source_name=coalesce(${clean(input.sourceName) || null},source_name),
+        car_name=coalesce(${clean(input.carName) || null},car_name),
+        car_category=coalesce(${clean(input.carCategory) || null},car_category),
+        updated_by=${input.actorId}::uuid,
+        metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(metadata)}::jsonb,
+        is_cancelled=false,cancelled_at=null,cancelled_by=null,updated_at=now()
+      where id=${canonical.id}::uuid
+      returning *,id::text
+    `;
+    return updated;
+  }
+
+  const [created] = await tx<any[]>`
+    insert into crm.sales_transactions(
+      lead_id,source_type,source_reference,sale_at,quantity,total_amount,
+      assigned_to,assigned_name,department_code,branch_code,source_code,source_name,
+      car_name,car_category,created_by,updated_by,metadata,is_cancelled
+    ) values(
+      ${input.leadId}::uuid,${input.sourceType || "crm_contact_sales_order"},${input.salesOrderNo},
+      case
+        when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
+          then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
+        else ${input.saleAt}::timestamptz
+      end,
+      ${Math.max(1, Math.round(input.quantity))},${Math.max(0, Number(input.totalAmount || 0))},
+      ${input.salesperson.id}::uuid,${input.salesperson.full_name},${input.salesperson.department_code},${input.salesperson.branch_code},
+      ${clean(input.sourceCode) || null},${clean(input.sourceName) || null},${clean(input.carName) || null},${clean(input.carCategory) || null},
+      ${input.actorId}::uuid,${input.actorId}::uuid,${tx.json(metadata)},false
+    )
+    returning *,id::text
+  `;
+  return created;
+}
+
+async function markLeadSoldWithoutReassignment(tx: any, input: {
+  lead: any;
+  saleAt: string;
+  salesOrderNo: string;
+  salesperson: any;
+  actor: any;
+}) {
+  const oldStatus = clean(input.lead.status_label);
+  await tx`
+    update crm.leads set
+      status_code=null,status_label='تم البيع',
+      sold_at=case
+        when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
+          then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
+        else ${input.saleAt}::timestamptz
+      end,
+      updated_by=${input.actor.id}::uuid,updated_at=now()
+    where id=${input.lead.id}::uuid
+  `;
+  if (input.lead.current_request_id) {
+    await tx`
+      update crm.service_requests set
+        status_label='تم البيع',request_state='closed',
+        closed_at=case
+          when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
+            then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
+          else ${input.saleAt}::timestamptz
+        end,
+        closed_by=${input.actor.id}::uuid,closure_reason='تم البيع',updated_at=now()
+      where id=${input.lead.current_request_id}::uuid
+    `;
+    await tx`
+      update crm.conversations set service_request_id=null,classification_state='closed',
+        closed_at=case
+          when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
+            then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
+          else ${input.saleAt}::timestamptz
+        end,
+        updated_at=now()
+      where service_request_id=${input.lead.current_request_id}::uuid
+    `;
+    await tx`update crm.leads set current_request_id=null where id=${input.lead.id}::uuid`;
+  }
+  if (oldStatus !== "تم البيع") {
+    await tx`
+      insert into crm.lead_events(
+        lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
+        actor_id,actor_name,actor_role,note,details,created_at
+      ) values(
+        ${input.lead.id}::uuid,'status_change',${oldStatus || null},'تم البيع',
+        ${clean(input.lead.department_code) || null},${clean(input.lead.department_code) || null},
+        ${clean(input.lead.branch_code) || null},${clean(input.lead.branch_code) || null},
+        ${input.actor.id}::uuid,${input.actor.fullName},${Array.isArray(input.actor.roles) ? input.actor.roles.join("، ") : null},
+        ${`تم تسجيل طلب البيع ${input.salesOrderNo} للمندوب ${input.salesperson.full_name} بدون تغيير مسؤول أو قسم العميل`},
+        ${tx.json({ salesOrderNo: input.salesOrderNo, salespersonId: input.salesperson.id, salespersonName: input.salesperson.full_name })},now()
+      )
+    `;
+  }
+}
+
 async function canAccessContact(contactId: string, user: any) {
   const sql = getSql();
   const scope = scopeSql(userScope(user), user.id);
@@ -361,6 +602,152 @@ async function contactProfile(request: VercelRequest, response: VercelResponse, 
   });
 }
 
+async function createSalesOrder(request: VercelRequest, response: VercelResponse, user: any) {
+  if (!canManageSalesOrders(user)) return response.status(403).json({ ok: false, error: "إضافة طلبات البيع متاحة لمدير النظام أو مدير المبيعات فقط" });
+  const body = parseBody(request);
+  const contactId = clean(body.contactId || body.contact_id || request.query.contactId);
+  if (!contactId) return response.status(400).json({ ok: false, error: "اختر جهة الاتصال" });
+  if (!(await canAccessContact(contactId, user))) return response.status(404).json({ ok: false, error: "جهة الاتصال غير موجودة أو لا توجد صلاحية لتعديلها" });
+
+  const orderInput = body.order && typeof body.order === "object" ? body.order : body;
+  let salespersonId: string;
+  let orderDate: string;
+  let deliveryDate: string | null;
+  let vehicleQty: number;
+  let subtotalBeforeTax: number;
+  let taxValue: number;
+  let registrationFee: number;
+  let totalInclVat: number;
+  let vehicleDescription: string;
+  let vehicleModel: string;
+  let vin: string;
+  try {
+    salespersonId = clean(orderInput.salespersonId ?? orderInput.salesperson_id);
+    if (!uuidPattern.test(salespersonId)) throw new Error("اختر المندوب المسؤول عن طلب البيع");
+    const parsedOrderDate = dateOrNull(orderInput.orderDate ?? orderInput.order_date, "تاريخ الطلب");
+    if (!parsedOrderDate) throw new Error("اختر تاريخ طلب البيع");
+    orderDate = parsedOrderDate;
+    deliveryDate = dateOrNull(orderInput.deliveryDate ?? orderInput.delivery_date, "تاريخ التسليم");
+    vehicleQty = positiveWholeQuantity(orderInput.vehicleQty ?? orderInput.vehicle_qty ?? 1, "عدد السيارات");
+    subtotalBeforeTax = nonNegativeNumber(orderInput.subtotalBeforeTax ?? orderInput.subtotal_before_tax ?? 0, "القيمة قبل الضريبة");
+    taxValue = nonNegativeNumber(orderInput.taxValue ?? orderInput.tax_value ?? 0, "قيمة الضريبة");
+    registrationFee = nonNegativeNumber(orderInput.registrationFee ?? orderInput.registration_fee ?? 0, "رسوم التسجيل");
+    const totalInput = orderInput.totalInclVat ?? orderInput.total_incl_vat;
+    totalInclVat = clean(totalInput) ? nonNegativeNumber(totalInput, "إجمالي الطلب") : Math.round((subtotalBeforeTax + taxValue + registrationFee) * 100) / 100;
+    vehicleDescription = clean(orderInput.vehicleDescription ?? orderInput.vehicle_description);
+    vehicleModel = clean(orderInput.vehicleModel ?? orderInput.vehicle_model);
+    vin = clean(orderInput.vin).toUpperCase();
+  } catch (failure) {
+    return response.status(400).json({ ok: false, error: failure instanceof Error ? failure.message : "بيانات طلب البيع غير صحيحة" });
+  }
+
+  const sql = getSql();
+  const salesperson = await resolveSalespersonSnapshot(sql, salespersonId);
+  if (!salesperson) return response.status(400).json({ ok: false, error: "المستخدم المحدد ليس مندوب مبيعات فعالًا داخل CRM" });
+
+  const result = await sql.begin(async (tx: any) => {
+    const [lead] = await tx<any[]>`
+      select l.*,l.id::text,l.current_request_id::text,l.assigned_to::text,c.display_name,c.primary_phone,c.primary_phone_normalized,
+        src.name as catalog_source_name
+      from crm.leads l
+      join crm.contacts c on c.id=l.contact_id
+      left join core.sources src on src.code=l.source_code
+      where l.contact_id=${contactId}::uuid and l.is_deleted=false
+      order by coalesce(l.updated_at,l.created_at) desc,l.created_at desc
+      limit 1 for update
+    `;
+    if (!lead) return { missingLead: true };
+
+    const customerName = clean(lead.customer_name || lead.display_name) || "عميل CRM";
+    const customerPhone = clean(lead.phone || lead.primary_phone) || null;
+    const customerPhoneNormalized = clean(lead.phone_normalized || lead.primary_phone_normalized) || null;
+    const sourceName = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
+    const sourcePayload = {
+      origin: "crm-contact-sales-order",
+      createdFrom: "crm_contacts",
+      createdBy: user.id,
+      createdByName: user.fullName,
+      contactId,
+      salespersonId: salesperson.id,
+      salespersonName: salesperson.full_name,
+    };
+
+    const [order] = await tx<any[]>`
+      with generated as (select gen_random_uuid() as id)
+      insert into integrations.erpnext_sales_orders(
+        id,sales_order_no,source_instance_key,erp_status,erp_event,erp_sales_person,
+        accounting_customer_name,actual_customer_name,actual_customer_phone,actual_customer_phone_normalized,
+        order_date,delivery_date,platform_user_id,platform_user_name,platform_department_code,platform_department_name,
+        platform_branch_code,platform_branch_name,crm_lead_id,subtotal_before_tax,tax_value,total_incl_vat,registration_fee,
+        user_link_status,crm_link_status,operations_link_status,warnings,source_payload,crm_created_by_integration,is_cancelled,received_at,updated_at
+      )
+      select
+        generated.id,
+        'CRM-SAL-'||to_char(now() at time zone 'Asia/Riyadh','YYYYMMDD')||'-'||upper(substr(replace(generated.id::text,'-',''),1,8)),
+        'crm:contact-sales-order:'||generated.id::text,
+        'CRM','crm.contact.sales_order.created',${salesperson.full_name},
+        ${customerName},${customerName},${customerPhone},${customerPhoneNormalized},
+        ${orderDate}::date,${deliveryDate}::date,${salesperson.id}::uuid,${salesperson.full_name},${salesperson.department_code},${salesperson.department_name},
+        ${salesperson.branch_code},${salesperson.branch_name},${lead.id}::uuid,${subtotalBeforeTax},${taxValue},${totalInclVat},${registrationFee},
+        'linked','linked','not_applicable','[]'::jsonb,${tx.json(sourcePayload)},false,false,now(),now()
+      from generated
+      returning *,id::text,crm_lead_id::text
+    `;
+
+    const unitPrice = vehicleQty > 0 ? Math.round((subtotalBeforeTax / vehicleQty) * 100) / 100 : 0;
+    const [vehicle] = await tx<any[]>`
+      insert into integrations.erpnext_sales_order_vehicles(
+        sales_order_id,item_identity,vin,item_type,item_model,qty,unit_price,item_value,total_incl_vat,
+        operations_status_code,is_cancelled,raw_payload,created_at,updated_at
+      ) values(
+        ${order.id}::uuid,${`crm-contact:${order.id}:line:1`},${vin || null},${vehicleDescription || lead.car_name || null},${vehicleModel || lead.car_model || null},
+        ${vehicleQty},${unitPrice},${subtotalBeforeTax},${totalInclVat},'crm_manual',false,
+        ${tx.json({ origin: "crm-contact-sales-order", contactId, salesOrderNo: order.sales_order_no })},now(),now()
+      )
+      returning *,id::text
+    `;
+
+    const sale = await syncSalesOrderTransaction(tx, {
+      leadId: lead.id,
+      salesOrderNo: order.sales_order_no,
+      saleAt: orderDate,
+      quantity: vehicleQty,
+      totalAmount: totalInclVat,
+      salesperson,
+      sourceCode: lead.source_code || null,
+      sourceName,
+      carName: vehicleDescription || lead.car_name || null,
+      carCategory: lead.car_category || null,
+      actorId: user.id,
+      sourceType: "crm_contact_sales_order",
+      metadata: { origin: "crm-contact-sales-order", integrationOrderId: order.id, contactId },
+    });
+
+    await markLeadSoldWithoutReassignment(tx, { lead, saleAt: orderDate, salesOrderNo: order.sales_order_no, salesperson, actor: user });
+    return { order, vehicle, sale, leadId: lead.id, customerOwnerId: lead.assigned_to || null, customerDepartmentCode: lead.department_code || null, customerBranchCode: lead.branch_code || null };
+  });
+
+  if ((result as any).missingLead) return response.status(409).json({ ok: false, error: "لا يوجد سجل عميل فعال مرتبط بجهة الاتصال لإضافة طلب البيع" });
+  await refreshCrmLeadSalesSnapshot((result as any).leadId);
+  await audit(user, "sales_order_created_from_contact", "erpnext_sales_order", (result as any).order.id, {
+    contactId,
+    salesOrderNo: (result as any).order.sales_order_no,
+    salespersonId: salesperson.id,
+    salespersonName: salesperson.full_name,
+    saleDepartmentCode: salesperson.department_code,
+    saleBranchCode: salesperson.branch_code,
+    customerOwnerId: (result as any).customerOwnerId,
+    customerDepartmentCode: (result as any).customerDepartmentCode,
+    customerBranchCode: (result as any).customerBranchCode,
+  }, null);
+  return response.status(201).json({
+    ok: true,
+    orderId: (result as any).order.id,
+    salesOrderNo: (result as any).order.sales_order_no,
+    message: `تم إنشاء طلب البيع وحسابه للمندوب ${salesperson.full_name} بدون تغيير مسؤول العميل`,
+  });
+}
+
 async function updateSalesOrder(request: VercelRequest, response: VercelResponse, user: any) {
   if (!canManageSalesOrders(user)) return response.status(403).json({ ok: false, error: "تعديل طلبات البيع متاح لمدير النظام أو مدير المبيعات فقط" });
   const body = parseBody(request);
@@ -400,75 +787,13 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
   }
 
   const sql = getSql();
-  const [salesperson] = await sql<any[]>`
-    select
-      u.id::text,u.full_name,
-      coalesce(crm_department.code,global_department.code) as department_code,
-      coalesce(crm_department.name,global_department.name) as department_name,
-      case
-        when coalesce(crm_department.code,global_department.code) in ('wholesale','wholesale_sales')
-          then coalesce(crm_branch.code,global_branch.code,wholesale_branch.code)
-        else coalesce(crm_branch.code,global_branch.code)
-      end as branch_code,
-      case
-        when coalesce(crm_department.code,global_department.code) in ('wholesale','wholesale_sales')
-          then coalesce(crm_branch.name,global_branch.name,wholesale_branch.name)
-        else coalesce(crm_branch.name,global_branch.name)
-      end as branch_name
-    from core.users u
-    left join lateral (
-      select d.code,d.name
-      from core.user_system_departments usd
-      join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
-      where usd.user_id=u.id and usd.system_code='crm'
-      order by usd.is_primary desc,d.created_at,d.code
-      limit 1
-    ) crm_department on true
-    left join lateral (
-      select d.code,d.name
-      from core.user_departments ud
-      join core.departments d on d.id=ud.department_id and d.is_active=true
-      where ud.user_id=u.id and d.code in ('cash_sales','finance_sales','wholesale','wholesale_sales')
-      order by d.created_at,d.code
-      limit 1
-    ) global_department on true
-    left join lateral (
-      select b.code,b.name
-      from core.user_system_branches usb
-      join core.branches b on b.id=usb.branch_id and b.is_active=true
-      where usb.user_id=u.id and usb.system_code='crm'
-      order by usb.is_primary desc,b.sort_order,b.name
-      limit 1
-    ) crm_branch on true
-    left join lateral (
-      select b.code,b.name
-      from core.user_branches ub
-      join core.branches b on b.id=ub.branch_id and b.is_active=true
-      where ub.user_id=u.id
-      order by b.sort_order,b.name
-      limit 1
-    ) global_branch on true
-    left join lateral (
-      select b.code,b.name
-      from core.branches b
-      where b.is_active=true and (
-        lower(coalesce(b.code,'')) in ('wholesale','wholesale_sales','jumla','jomla','aljumla')
-        or lower(coalesce(b.code,'')) like '%wholesale%'
-        or lower(coalesce(b.code,'')) like '%jumla%'
-        or coalesce(b.name,'') ilike '%الجملة%'
-      )
-      order by case when coalesce(b.name,'') ilike '%الجملة%' then 0 else 1 end,b.sort_order,b.name
-      limit 1
-    ) wholesale_branch on true
-    where u.id=${salespersonId}::uuid and u.is_active=true and coalesce(u.can_receive_leads,true)=true
-    limit 1
-  `;
-  if (!salesperson || !salesDepartmentCodes.has(clean(salesperson.department_code))) {
+  const salesperson = await resolveSalespersonSnapshot(sql, salespersonId);
+  if (!salesperson) {
     return response.status(400).json({ ok: false, error: "المستخدم المحدد ليس مندوب مبيعات فعالًا داخل CRM" });
   }
-  const salespersonDepartmentCode = clean(salesperson.department_code);
+  const salespersonDepartmentCode = salesperson.department_code;
   const salespersonBranchCode = clean(salesperson.branch_code) || null;
-  const salespersonBranchName = salespersonBranchCode ? clean(salesperson.branch_name) || salespersonBranchCode : null;
+  const salespersonBranchName = salesperson.branch_name;
 
   const result = await sql.begin(async (tx: any) => {
     const [beforeOrder] = await tx<any[]>`
@@ -528,6 +853,27 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
       where sov.sales_order_id=${orderId}::uuid
       order by sov.created_at,sov.id
     `;
+    const [saleLead] = await tx<any[]>`
+      select l.id::text,l.source_code,l.source_name,l.car_name,l.car_category
+      from crm.leads l where l.id=${afterOrder.crm_lead_id}::uuid limit 1
+    `;
+    const activeVehicles = afterVehicles.filter((vehicle: any) => !vehicle.is_cancelled);
+    const soldQuantity = Math.max(1, Math.round(activeVehicles.reduce((total: number, vehicle: any) => total + Number(vehicle.qty || 0), 0) || 1));
+    await syncSalesOrderTransaction(tx, {
+      leadId: afterOrder.crm_lead_id,
+      salesOrderNo: afterOrder.sales_order_no,
+      saleAt: clean(afterOrder.order_date) || clean(afterOrder.received_at),
+      quantity: soldQuantity,
+      totalAmount: Number(afterOrder.total_incl_vat || 0),
+      salesperson,
+      sourceCode: saleLead?.source_code || null,
+      sourceName: sourceLabel(saleLead?.source_code, saleLead?.source_name),
+      carName: clean(activeVehicles[0]?.item_type || activeVehicles[0]?.item_category || saleLead?.car_name) || null,
+      carCategory: clean(activeVehicles[0]?.item_category || saleLead?.car_category) || null,
+      actorId: user.id,
+      sourceType: String(afterOrder.source_instance_key || '').startsWith('crm:contact-sales-order:') ? 'crm_contact_sales_order' : 'erp_reconciliation',
+      metadata: { attributionUpdatedFrom: 'crm_contacts', integrationOrderId: afterOrder.id },
+    });
     return { beforeOrder, beforeVehicles, afterOrder, afterVehicles };
   });
 
@@ -569,6 +915,7 @@ async function deleteSalesOrder(request: VercelRequest, response: VercelResponse
   if (!confirmation || confirmation !== clean(order.sales_order_no)) {
     return response.status(400).json({ ok: false, error: "اكتب رقم طلب البيع كاملًا لتأكيد الحذف" });
   }
+
 
   const cancellation = await cancelErpNextSalesOrder({
     mode: "crm_only",
@@ -615,6 +962,10 @@ async function deleteSalesOrder(request: VercelRequest, response: VercelResponse
         and not exists(
           select 1 from integrations.erpnext_sales_orders active_order
           where active_order.crm_lead_id=crm.leads.id and coalesce(active_order.is_cancelled,false)=false
+        )
+        and not exists(
+          select 1 from crm.sales_transactions active_sale
+          where active_sale.lead_id=crm.leads.id and coalesce(active_sale.is_cancelled,false)=false
         )
       returning id::text,status_code,status_label,sold_quantity
     `;
@@ -700,6 +1051,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const id = clean(request.query.id);
     return id ? contactProfile(request, response, user, id) : listContacts(request, response, user);
   }
+  if (request.method === "POST") return createSalesOrder(request, response, user);
   if (request.method === "PATCH") return updateSalesOrder(request, response, user);
   if (request.method === "DELETE") {
     if (clean(request.query.resource) === "sales_order") return deleteSalesOrder(request, response, user);

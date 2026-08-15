@@ -202,7 +202,7 @@ async function cancelErpNextSalesTransaction(
       metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({ cancellationReason: input.reason, cancelledFrom: 'erpnext-sales-order' })}::jsonb,
       updated_at=now()
     where source_reference=${input.salesOrderNo}
-      and source_type in ('erpnext_sales_order','erp_reconciliation')
+      and source_type in ('erpnext_sales_order','erp_reconciliation','crm_contact_sales_order')
       and coalesce(is_cancelled,false)=false
   `;
 }
@@ -598,7 +598,6 @@ async function linkCrmCustomer(input: {
       const oldStatus = clean(existing.status_label);
       const oldDepartment = clean(existing.department_code);
       const oldBranch = clean(existing.branch_code);
-      const oldAssignedTo = clean(existing.assigned_to);
       const orders = Array.isArray(existing.extra_data?.salesOrders)
         ? existing.extra_data.salesOrders.map(clean).filter(Boolean)
         : [];
@@ -623,9 +622,11 @@ async function linkCrmCustomer(input: {
               then coalesce(source_history,'[]'::jsonb)||${tx.json([{ source: crmSourceCode, at: saleAt, orderNo: normalized.orderNo }])}::jsonb
             else source_history
           end,
-          service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},
-          status_code=null,status_label='تم البيع',payment_type=${paymentType(serviceKey)},sold_at=${saleAt}::timestamptz,
-          assigned_to=${mapping.id}::uuid,responsible_name_snapshot=${mapping.full_name},
+          -- Existing customer ownership is independent from the salesperson who made this sale.
+          -- Keep the customer's representative/department/branch untouched and store sale attribution
+          -- only on the sales order + canonical sales transaction.
+          service_key=coalesce(nullif(service_key,''),${serviceKey}),
+          status_code=null,status_label='تم البيع',payment_type=coalesce(nullif(payment_type,''),${paymentType(serviceKey)}),sold_at=${saleAt}::timestamptz,
           car_name=coalesce(nullif(car_name,''),${clean(firstPayload.item?.type)||null}),
           car_category=coalesce(nullif(car_category,''),${clean(firstPayload.item?.category)||null}),
           car_model=coalesce(nullif(car_model,''),${clean(firstPayload.item?.model)||null}),
@@ -639,12 +640,12 @@ async function linkCrmCustomer(input: {
       if (existing.current_request_id) {
         await tx`
           update crm.service_requests set
-            service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},status_label='تم البيع',
+            service_key=coalesce(nullif(service_key,''),${serviceKey}),status_label='تم البيع',
             source_code=case
               when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceCode}
               else source_code
             end,
-            request_state='closed',assigned_to=${mapping.id}::uuid,closed_at=${saleAt}::timestamptz,
+            request_state='closed',closed_at=${saleAt}::timestamptz,
             closed_by=${mapping.id}::uuid,closure_reason='تم البيع',metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(sourceMetadata)}::jsonb,updated_at=now()
           where id=${existing.current_request_id}::uuid
         `;
@@ -655,32 +656,16 @@ async function linkCrmCustomer(input: {
         await tx`update crm.leads set current_request_id=null where id=${existing.id}::uuid`;
       }
 
-      const changed = oldStatus !== "تم البيع"
-        || oldDepartment !== departmentCode
-        || oldBranch !== clean(branchCode)
-        || oldAssignedTo !== mapping.id;
+      const changed = oldStatus !== "تم البيع";
       if (changed) {
         await tx`
           insert into crm.lead_events(
             lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
             actor_id,actor_name,actor_role,note,details,created_at
           ) values(
-            ${existing.id}::uuid,'status_change',${oldStatus||null},'تم البيع',${oldDepartment||null},${departmentCode},${oldBranch||null},${branchCode},
-            ${mapping.id}::uuid,${mapping.full_name},'NEXT ERP',${`تم تحويل العميل إلى تم البيع تلقائيًا من طلب ${normalized.orderNo}`},
+            ${existing.id}::uuid,'status_change',${oldStatus||null},'تم البيع',${oldDepartment||null},${oldDepartment||null},${oldBranch||null},${oldBranch||null},
+            ${mapping.id}::uuid,${mapping.full_name},'NEXT ERP',${`تم تسجيل البيع ${normalized.orderNo} للمندوب ${mapping.full_name} بدون تغيير مسؤول أو قسم العميل`},
             ${tx.json(sourceMetadata)},${saleAt}::timestamptz
-          )
-        `;
-      }
-
-      if (oldAssignedTo !== mapping.id || oldDepartment !== departmentCode || oldBranch !== clean(branchCode)) {
-        await tx`
-          insert into crm.ownership_events(
-            contact_id,service_request_id,lead_id,previous_assigned_to,previous_assigned_name,new_assigned_to,new_assigned_name,
-            previous_department_code,new_department_code,previous_branch_code,new_branch_code,actor_id,actor_name,actor_type,reason,metadata
-          ) values(
-            ${contact.id}::uuid,null,${existing.id}::uuid,${oldAssignedTo||null}::uuid,${existing.assigned_name||null},${mapping.id}::uuid,${mapping.full_name},
-            ${oldDepartment||null},${departmentCode},${oldBranch||null},${branchCode},${mapping.id}::uuid,${mapping.full_name},'erpnext',
-            ${`ربط المندوب وبياناته التنظيمية من طلب البيع ${normalized.orderNo}`},${tx.json(sourceMetadata)}
           )
         `;
       }
