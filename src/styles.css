@@ -3682,7 +3682,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-reports-filters-pro input:focus,.crm-reports-filters-pro select:focus { border-color:#b98272; box-shadow:0 0 0 3px rgba(132,60,47,.08); }
 .crm-report-search { min-height:42px; }
 .crm-report-row-name,.crm-report-customer-name { font-weight:900; color:var(--ink); }
-.crm-table.reports td:first-child { min-width:170px; }
+.crm-table.reports th:first-child,.crm-table.reports td:first-child { width:56px; min-width:56px; max-width:56px; text-align:center; padding-inline:6px; }
 
 /* KPI page: same reports and evaluation layout as the approved CRM reference. */
 .kpi-page-v3 { gap:18px; font-size:13px; }

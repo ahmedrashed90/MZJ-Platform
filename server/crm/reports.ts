@@ -673,7 +673,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const otherSources = sourceGroup("other");
   const salesRows = reportRows.filter((row) => row.current_assigned_is_call_center !== true);
   const salesOnlyFacts = reportFacts.filter((fact) => fact.department_code !== "customer_service");
-  const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`);
+  const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`)
+    .filter((row) => norm(row.name) !== norm("قسم الجملة - القادسية"));
 
   /*
    * Representative identity is profile data, not a historical sales dimension.
