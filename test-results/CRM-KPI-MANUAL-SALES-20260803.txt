@@ -1,9 +1,0 @@
-CRM KPI manual sales clean change - 2026-08-03
-
-PASS: KPI list and totals use only dailyPerformance.salesCount entered in the evaluation form.
-PASS: KPI API no longer reads sold CRM leads, ERP sales orders, or tracking vehicles for KPI sales.
-PASS: Stale KPI evaluations older than the latest explicit test-data reset are removed once.
-PASS: Future test-data resets include crm.kpi_evaluations.
-PASS: All package static check scripts completed successfully after updating the two obsolete KPI/sold coupling assertions.
-PASS: TypeScript syntax transpilation passed for all modified TS/TSX files.
-NOTE: Full pnpm build was not run because project dependencies are not installed in this sandbox.
