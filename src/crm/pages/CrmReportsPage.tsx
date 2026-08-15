@@ -38,7 +38,7 @@ type ReportSection = {
   summary?: ReportSummary | null;
 };
 type ReportColumn = {
-  key: keyof ReportRow | "customers";
+  key: keyof ReportRow | "customers" | "serial";
   label: string;
   percentage?: boolean;
   action?: boolean;
@@ -114,6 +114,7 @@ function columnsForSection(section: ReportSection): ReportColumn[] {
   ];
   if (section.kind === "agent") {
     return [
+      { key: "serial", label: "مسلسل" },
       { key: "name", label: "المندوب" },
       { key: "department", label: "القسم" },
       { key: "branch", label: "الفرع" },
@@ -123,23 +124,26 @@ function columnsForSection(section: ReportSection): ReportColumn[] {
     ];
   }
   return [
+    { key: "serial", label: "مسلسل" },
     { key: "name", label: section.firstColumn },
     ...metricColumns,
     { key: "salesQuality", label: section.kind === "department" ? "جودة القسم / الفرع" : "جودة المبيعات", percentage: true },
+    { key: "customers", label: "تقارير العملاء", action: true },
   ];
 }
 
-function reportCellValue(row: ReportRow, column: ReportColumn) {
+function reportCellValue(row: ReportRow, column: ReportColumn, serial?: number) {
   if (column.action) return "";
+  if (column.key === "serial") return serial ?? 0;
   const value = row[column.key as keyof ReportRow] ?? 0;
   return column.percentage ? `${value}%` : value;
 }
 
 function reportExportRows(section: ReportSection) {
   const columns = columnsForSection(section).filter((column) => !column.action);
-  return section.rows.map((row) => {
+  return section.rows.map((row, index) => {
     const record: Record<string, string | number> = { "القسم بالتقرير": section.title };
-    for (const column of columns) record[column.label] = reportCellValue(row, column);
+    for (const column of columns) record[column.label] = reportCellValue(row, column, index + 1);
     return record;
   });
 }
@@ -257,7 +261,7 @@ export function CrmReportsPage() {
     const sectionHtml = sections.map((section) => {
       const columns = columnsForSection(section).filter((column) => !column.action);
       return `<section><h2>${htmlEscape(section.title)}</h2><table><thead><tr>${columns.map((column) => `<th>${htmlEscape(column.label)}</th>`).join("")}</tr></thead><tbody>
-      ${section.rows.map((row) => `<tr>${columns.map((column) => `<td>${htmlEscape(reportCellValue(row, column))}</td>`).join("")}</tr>`).join("")}
+      ${section.rows.map((row, index) => `<tr>${columns.map((column) => `<td>${htmlEscape(reportCellValue(row, column, index + 1))}</td>`).join("")}</tr>`).join("")}
       </tbody></table></section>`;
     }).join("");
     win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقارير CRM</title><style>body{font-family:Tajawal,Arial;padding:22px;color:#38231d}h1{margin-bottom:4px}h2{margin-top:26px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #dbc8bd;padding:7px;text-align:center}th{background:#f5e8df}section{break-inside:avoid}</style></head><body><h1>تقارير CRM</h1><p>الفترة: ${htmlEscape(filters.from || "—")} إلى ${htmlEscape(filters.to || "—")}</p>${sectionHtml}<script>window.onload=()=>window.print()</script></body></html>`);
@@ -382,10 +386,11 @@ export function CrmReportsPage() {
               <table className="crm-table reports">
                 <thead><tr>{columnsForSection(section).map((column) => <th key={`${section.title}-${String(column.key)}`}>{column.label}</th>)}</tr></thead>
                 <tbody>
-                  {section.rows.map((row) => (
+                  {section.rows.map((row, index) => (
                     <tr key={`${section.title}-${row.detailValue || row.name}`}>
                       {columnsForSection(section).map((column) => {
                         if (column.action) return <td key={String(column.key)}><button className="crm-table-button" onClick={() => openPopup(row)}><Users size={16} />تقارير العملاء</button></td>;
+                        if (column.key === "serial") return <td key={String(column.key)}>{index + 1}</td>;
                         if (column.key === "name") return <td key={String(column.key)}><strong className="crm-report-row-name">{row.name}</strong></td>;
                         if (column.percentage) return <td key={String(column.key)}><span className={`crm-quality-pill${column.key === "marketingQuality" ? "" : " sales"}`}>{row[column.key as keyof ReportRow] ?? 0}%</span></td>;
                         return <td key={String(column.key)}>{row[column.key as keyof ReportRow] ?? 0}</td>;

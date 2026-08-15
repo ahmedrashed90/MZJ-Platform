@@ -656,7 +656,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
     return [...map.entries()]
       .map(([groupDetailValue, grouped]) => ({ name: grouped.name, ...makeMetrics(grouped.rows, grouped.facts), detailKind: detailKindName, detailValue: groupDetailValue }))
-      .sort((a, b) => b.total - a.total || b.sold - a.sold || a.name.localeCompare(b.name, "ar"));
+      .sort((a, b) => b.sold - a.sold || b.total - a.total || a.name.localeCompare(b.name, "ar"));
   };
 
   const sourceRows = group(reportRows, reportFacts, "source", (row) => row.source_code || "__none__", (row) => sourceLabel(row.source_code, row.source_name), (fact) => fact.source_code || "__none__", (fact) => sourceLabel(fact.source_code, fact.source_name));
