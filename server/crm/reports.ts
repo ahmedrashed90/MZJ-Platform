@@ -272,7 +272,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const transactionBranchCodeSql = sql`
     case
       when ${transactionWholesaleIdentitySql}
-        then coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''),${wholesaleBranchFallbackSql})
+        then coalesce(nullif(st.branch_code,''),nullif(l.branch_code,''),assigned_primary_branch.code,${wholesaleBranchFallbackSql})
       else coalesce(nullif(st.branch_code,''),assigned_primary_branch.code,nullif(l.branch_code,''))
     end
   `;
