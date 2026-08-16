@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, Trash, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, DownloadSimple, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, Trash, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
-import { createMarketingFinalUploadCancellation, downloadMarketingFile, marketingDate, marketingFetch, marketingQuery, uploadMarketingFinalFiles, type MarketingFinalUploadCancellation, type MarketingFinalUploadProgress } from "../api";
+import { createMarketingFinalUploadCancellation, downloadMarketingFile, downloadMarketingFiles, marketingDate, marketingFetch, marketingQuery, uploadMarketingFinalFiles, type MarketingFinalUploadCancellation, type MarketingFinalUploadProgress } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
 import type { MarketingMeta, PlatformAssignment } from "../types";
 import { useAuth } from "../../auth/AuthContext";
@@ -480,6 +480,17 @@ export function PublishPrepPage() {
     }
   }
 
+  function downloadFinalFiles(files: any[]) {
+    const fileIds = files.map((file) => String(file?.id || "").trim()).filter(Boolean);
+    if (!fileIds.length) return;
+    setError("");
+    try {
+      downloadMarketingFiles(fileIds);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر تحميل الملف النهائي");
+    }
+  }
+
   function startEdit(row: any) {
     setEditing({
       ...row,
@@ -615,7 +626,10 @@ export function PublishPrepPage() {
 
             <div className="marketing-publish-file-cell">
               <small>الملف النهائي</small>
-              {finalFiles.length ? <div className="marketing-publish-file-links">{finalFiles.map((file: any, index: number) => <button key={file.id || index} type="button" onClick={() => void openFinalFile(String(file.id))}><ArrowSquareOut size={16} />{finalFiles.length > 1 ? `${index + 1}. ${file.name || "ملف"}` : file.name || "فتح الملف النهائي"}</button>)}</div> : <strong>غير مرفوع</strong>}
+              {finalFiles.length ? <div className="marketing-publish-final-files">
+                <div className="marketing-publish-file-links">{finalFiles.map((file: any, index: number) => <button key={file.id || index} type="button" onClick={() => void openFinalFile(String(file.id))}><ArrowSquareOut size={16} />{finalFiles.length > 1 ? `${index + 1}. ${file.name || "ملف"}` : file.name || "فتح الملف النهائي"}</button>)}</div>
+                <button type="button" className="marketing-publish-download-files" onClick={() => downloadFinalFiles(finalFiles)}><DownloadSimple size={16} />{finalFiles.length > 1 ? "تحميل الملفات" : "تحميل الملف"}</button>
+              </div> : <strong>غير مرفوع</strong>}
             </div>
 
             <div className="marketing-publish-platforms">{rowPlatforms(row).length ? rowPlatforms(row).map((platform) => {

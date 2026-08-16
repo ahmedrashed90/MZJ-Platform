@@ -59,6 +59,19 @@ export async function downloadMarketingFile(fileId: string) {
   const url = `/api/marketing${marketingQuery({ resource: "file", id: fileId })}`;
   window.open(url, "_blank", "noopener,noreferrer");
 }
+
+export function downloadMarketingFiles(fileIds: string[]) {
+  const ids = [...new Set(fileIds.map((fileId) => String(fileId || "").trim()).filter(Boolean))];
+  for (const fileId of ids) {
+    const anchor = document.createElement("a");
+    anchor.href = `/api/marketing${marketingQuery({ resource: "file", id: fileId, download: 1 })}`;
+    anchor.download = "";
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+}
 export type MarketingFinalUploadStatus = "pending" | "uploading" | "verifying" | "completed" | "cancelled" | "error";
 
 export type MarketingFinalUploadProgress = {

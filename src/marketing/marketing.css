@@ -2713,6 +2713,9 @@
 .marketing-publish-file-links { display: grid; gap: 5px; }
 .marketing-publish-file-links button { width: 100%; min-height: 33px; justify-content: flex-start; padding: 6px 8px; color: var(--brand); background: #fff8f5; border: 1px solid #ecd6cc; border-radius: 8px; font-size: 11px; overflow: hidden; }
 .marketing-publish-file-links button:hover { background: #fff0ea; border-color: #d9ad99; }
+.marketing-publish-final-files { display: grid; gap: 7px; }
+.marketing-publish-download-files { width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid #bcd9c8; border-radius: 8px; background: #eef9f2; color: #246d45; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: 11px; font-weight: 900; cursor: pointer; }
+.marketing-publish-download-files:hover { background: #e3f5e9; border-color: #9fcbb0; }
 .marketing-publish-platforms { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .marketing-publish-platforms > div { padding: 7px 9px; border-radius: 9px; background: #fff2ec; border: 1px solid #eed7cd; display: grid; gap: 2px; }
 .marketing-publish-platforms strong { font-size: 11px; }
@@ -3426,6 +3429,7 @@
 .marketing-final-upload-progress > footer small { color: #8a7770; font-size: 9px; font-weight: 800; }
 .marketing-final-upload-cancel { min-height: 37px !important; padding: 7px 11px !important; border: 1px solid #e1b5b1 !important; border-radius: 10px !important; color: #9b332d !important; background: #fff3f1 !important; display: inline-flex !important; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: 10px; font-weight: 900; }
 .marketing-final-files-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.marketing-inline-file-pair { display: inline-flex; align-items: center; gap: 6px; }
 
 @media (max-width: 620px) {
   .marketing-final-upload-dropzone { min-height: 108px; padding: 14px; flex-direction: column; }

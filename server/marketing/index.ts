@@ -21,6 +21,7 @@ import { normalizeYouTubePublishOptions } from "../../shared/youtube-publishing.
 import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFormatRequiresVideo, type MarketingPublishFormat } from "../../shared/marketing-publishing.js";
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { publishInstagramContent } from "../_instagram-publisher.js";
+import { publishFacebookReel, publishFacebookVideoStory } from "../_facebook-video-publisher.js";
 import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, ticketHash } from "../_zoho-workdrive.js";
 import { prepareZohoUpload, uploadZohoWholeFile, type ZohoUploadStrategy } from "../_zoho-upload.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
@@ -1687,6 +1688,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       coalesce(cam.publish_start,ag.publish_start) as campaign_start,coalesce(cam.publish_end,ag.publish_end) as campaign_end,
       tt.task_no,tt.status as template_status,tt.progress as template_progress,tt.due_on as template_due_on,tt.department_note as template_department_note,tt.admin_note,tt.template_data,tt.approved_data,tt.file_id::text as template_file_id,
       first_file.id as first_file_id,first_file.original_name as first_file_name,first_file.mime_type as first_file_mime_type,first_file.file_size as first_file_size,
+      coalesce(first_files.file_count,case when first_file.id is null then 0 else 1 end)::int as first_file_count,coalesce(first_files.files,'[]'::jsonb) as first_files,
       coalesce(fm.primary_name,ff.original_name) as final_file_name,coalesce(fm.file_count,case when ff.id is null then 0 else 1 end)::int as final_file_count,coalesce(fm.files,'[]'::jsonb) as final_files,done_by.full_name as completed_by_name
     from marketing.tasks t left join core.users u on u.id=t.assigned_to left join core.users cu on cu.id=t.paired_content_user_id left join core.users done_by on done_by.id=t.completed_by left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
@@ -1695,9 +1697,15 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       select f.id::text,f.original_name,f.mime_type,f.file_size
       from marketing.files f
       where f.task_id=t.id and f.category='first-file' and f.status='ready'
-      order by f.updated_at desc,f.created_at desc,f.id desc
+      order by f.created_at asc,f.id asc
       limit 1
     ) first_file on true
+    left join lateral (
+      select count(*)::int as file_count,
+        jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mimeType',f.mime_type,'size',f.file_size) order by f.created_at,f.id) as files
+      from marketing.files f
+      where f.task_id=t.id and f.category='first-file' and f.status='ready'
+    ) first_files on true
     left join lateral (
       select count(*)::int as file_count,min(f.original_name) filter(where f.order_index=0) as primary_name,
         jsonb_agg(jsonb_build_object('id',f.id::text,'name',f.original_name,'mimeType',f.mime_type,'size',f.file_size,'orderIndex',f.order_index) order by f.order_index,f.created_at) as files
@@ -1996,12 +2004,11 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     orderIndex:index,
   }));
   if(!requested.length)throw new Error("اختر الملف النهائي أولًا");
-  if(requested.length>30)throw new Error("الحد الأقصى 30 صورة داخل مجموعة النشر الواحدة");
+  if(requested.length>30)throw new Error("الحد الأقصى 30 ملفًا داخل مجموعة الرفع الواحدة");
   const isVideo=(item:any)=>item.mimeType.startsWith('video/')||/\.(mp4|mov|m4v|webm)$/i.test(item.name);
   const isImage=(item:any)=>item.mimeType.startsWith('image/')||/\.(jpe?g|png|webp|gif|heic|heif)$/i.test(item.name);
   if(requested.some((item)=>!isVideo(item)&&!isImage(item)))throw new Error("الملف النهائي يجب أن يكون صورة أو فيديو");
   const videoCount=requested.filter(isVideo).length;
-  if(videoCount&&requested.length!==1)throw new Error("الفيديو أو الريل يُرفع كملف واحد فقط. الصور يمكن رفعها ككاروسيل مرتب");
   if(requested.some((item)=>item.size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
   if(task.task_kind==='manual_publish'){
     const expected=arrayValue<any>(task.approved_template_data?.manualFiles);
@@ -2014,7 +2021,7 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     if(expected.length&&!sameFiles)throw new Error("الملفات المختارة لا تطابق ملفات النشر اليدوي المحفوظة. أعد إنشاء التجهيز بالملفات الحالية");
   }
 
-  const mediaKind=videoCount?'video':requested.length>1?'carousel':'image';
+  const mediaKind=requested.length>1?'carousel':videoCount?'video':'image';
   await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
   const[group]=await sql<any[]>`
     insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
@@ -2205,8 +2212,8 @@ async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:Session
   else if(category==="final-file")await requireFinalFileUploadAccess(sql,user,taskId);
   else if(category==="first-file"){
     await requireFirstFileUploadAccess(sql,user,taskId);
-    const[existing]=await sql<any[]>`select id::text from marketing.files where task_id=${taskId}::uuid and category='first-file' and status='ready' order by updated_at desc limit 1`;
-    if(existing)throw new Error("امسح الملف الأول الحالي قبل رفع نسخة جديدة");
+    const[count]=await sql<any[]>`select count(*)::int as count from marketing.files where task_id=${taskId}::uuid and category='first-file' and status in ('uploading','ready')`;
+    if(Number(count?.count||0)>=30)throw new Error("الحد الأقصى 30 ملفًا أوليًا لكل تكليف");
   }
   else{
     if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لرفع الملفات");
@@ -2247,7 +2254,7 @@ async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
     if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف الأول من التخزين (${response.status})`);
   }
   await sql`delete from marketing.files where id=${fileId}::uuid and category='first-file'`;
-  return{ok:true,message:"تم مسح الملف الأول ويمكن رفع نسخة جديدة"};
+  return{ok:true,message:"تم مسح الملف الأولي"};
 }
 
 async function downloadableMarketingFile(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
@@ -2259,19 +2266,42 @@ async function downloadableMarketingFile(sql:ReturnType<typeof getSql>,id:string
   }
   return file;
 }
-function marketingFileDisposition(fileName:unknown){
+function marketingFileDisposition(fileName:unknown,forceDownload=false){
   const original=clean(fileName)||"file";
   const fallback=original.replace(/[^\x20-\x7E]/g,"_").replace(/["\\\r\n]/g,"_")||"file";
-  return `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(original)}`;
+  const mode=forceDownload?"attachment":"inline";
+  return `${mode}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(original)}`;
 }
-async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser,response:VercelResponse){
+async function pipeMarketingFileResponse(response:VercelResponse,upstream:Response,file:any,forceDownload:boolean,providerLabel:string){
+  if(!upstream.ok){
+    const message=clean(await upstream.text().catch(()=>''));
+    throw new Error(message||`تعذر تنزيل ملف ${providerLabel} (${upstream.status})`);
+  }
+  const contentType=clean(upstream.headers.get('content-type')).split(';')[0].trim().toLowerCase();
+  if(contentType.includes('application/json')||contentType.includes('text/html')){
+    throw new Error(`${providerLabel} لم يرجع محتوى الملف الفعلي`);
+  }
+  if(!upstream.body)throw new Error(`${providerLabel} لم يرجع محتوى الملف`);
+  const mimeType=clean(file.mime_type)||contentType||'application/octet-stream';
+  const contentLength=clean(upstream.headers.get('content-length'));
+  response.status(200);
+  response.setHeader("Cache-Control","private, no-store");
+  response.setHeader("Content-Type",mimeType);
+  response.setHeader("Content-Disposition",marketingFileDisposition(file.original_name,forceDownload));
+  if(contentLength)response.setHeader("Content-Length",contentLength);
+  await pipeline(Readable.fromWeb(upstream.body as any),response);
+  return response;
+}
+async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser,response:VercelResponse,forceDownload=false){
   const file=await downloadableMarketingFile(sql,id,user);
   if(clean(file.storage_provider)!=='zoho'){
     if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
     const url=createDownloadUrl(clean(file.storage_key),900);
     if(!url)throw new Error("تعذر تجهيز رابط الملف");
     response.setHeader("Cache-Control","private, no-store");
-    return response.redirect(302,url);
+    if(!forceDownload)return response.redirect(302,url);
+    const upstream=await fetch(url,{redirect:'follow',headers:{Accept:'application/octet-stream,*/*'}});
+    return pipeMarketingFileResponse(response,upstream,file,true,"R2");
   }
   const externalId=clean(file.external_id);
   if(!externalId)throw new Error("معرف ملف Zoho غير موجود");
@@ -2282,24 +2312,7 @@ async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:stri
     redirect:'follow',
     headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
   });
-  if(!upstream.ok){
-    const message=clean(await upstream.text().catch(()=>''));
-    throw new Error(message||`تعذر تنزيل ملف Zoho (${upstream.status})`);
-  }
-  const contentType=clean(upstream.headers.get('content-type')).split(';')[0].trim().toLowerCase();
-  if(contentType.includes('application/json')||contentType.includes('text/html')){
-    throw new Error("Zoho لم يرجع محتوى الملف الفعلي. أعد ربط Zoho بعد قبول صلاحية تنزيل الملفات");
-  }
-  if(!upstream.body)throw new Error("Zoho لم يرجع محتوى الملف");
-  const mimeType=clean(file.mime_type)||contentType||'application/octet-stream';
-  const contentLength=clean(upstream.headers.get('content-length'));
-  response.status(200);
-  response.setHeader("Cache-Control","private, no-store");
-  response.setHeader("Content-Type",mimeType);
-  response.setHeader("Content-Disposition",marketingFileDisposition(file.original_name));
-  if(contentLength)response.setHeader("Content-Length",contentLength);
-  await pipeline(Readable.fromWeb(upstream.body as any),response);
-  return response;
+  return pipeMarketingFileResponse(response,upstream,file,forceDownload,"Zoho");
 }
 
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
@@ -2764,20 +2777,6 @@ async function graphFileRequest(path:string,token:string,file:{bytes:Uint8Array;
   return payload;
 }
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
-async function uploadFacebookHostedVideo(uploadUrl:string,token:string,mediaUrl:string,kind:string){
-  const response=await fetch(uploadUrl,{method:'POST',headers:{Authorization:`OAuth ${token}`,file_url:mediaUrl}});
-  const payload=await response.json().catch(()=>({}));
-  if(!response.ok||(payload as any).error)throw new Error((payload as any).error?.message||`تعذر رفع فيديو ${kind} على Facebook (${response.status})`);
-  return payload;
-}
-async function publishFacebookReel(pageId:string,token:string,mediaUrl:string,caption:string){
-  const start=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'start'});
-  const videoId=clean(start.video_id||start.id),uploadUrl=clean(start.upload_url||start.uploadUrl);
-  if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع Reel على Facebook");
-  const upload=await uploadFacebookHostedVideo(uploadUrl,token,mediaUrl,'Reel');
-  const publish=await graphRequest(`/${pageId}/video_reels`,'POST',token,{upload_phase:'finish',video_id:videoId,video_state:'PUBLISHED',description:caption});
-  return{start,upload,publish,video_id:videoId};
-}
 function assertPublishMedia(platform:string,format:MarketingPublishFormat,files:any[]){
   const videos=files.filter(looksVideo),images=files.filter((file:any)=>!looksVideo(file));
   if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
@@ -2879,13 +2878,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
     if(!pageId||!token)throw new Error("بيانات Facebook غير مكتملة");
     if(publishFormat==='story'){
       if(looksVideo(file)){
-        const mediaUrl=await finalMediaDeliveryUrl(sql,file);
-        const start=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'start'});
-        const videoId=clean(start.video_id||start.id),uploadUrl=clean(start.upload_url||start.uploadUrl);
-        if(!videoId||!uploadUrl)throw new Error("تعذر بدء رفع فيديو Story على Facebook");
-        const upload=await uploadFacebookHostedVideo(uploadUrl,token,mediaUrl,'Story');
-        const publish=await graphRequest(`/${pageId}/video_stories`,'POST',token,{upload_phase:'finish',video_id:videoId});
-        result={start,upload,publish,video_id:videoId};
+        result=await publishFacebookVideoStory(sql,{pageId,token,file});
       }else{
         const stories=[];
         for(const storyFile of files){
@@ -2899,7 +2892,7 @@ async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,us
         result={stories,publish:stories[0]?.publish,id:clean(stories[0]?.publish?.id),batchCount:stories.length};
       }
     }else if(publishFormat==='reel'||publishFormat==='short'){
-      result=await publishFacebookReel(pageId,token,await finalMediaDeliveryUrl(sql,file),caption);
+      result=await publishFacebookReel(sql,{pageId,token,file,caption});
     }else if(publishFormat==='video'){
       result=await graphRequest(`/${pageId}/videos`,'POST',token,{file_url:await finalMediaDeliveryUrl(sql,file),description:caption});
     }else if(publishFormat==='photo_post'||publishFormat==='carousel'||multipleImages){
@@ -3389,7 +3382,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
-      if(resource==='file')return streamMarketingFileDownload(sql,clean(request.query.id),user,response);
+      if(resource==='file'){const downloadQuery=Array.isArray(request.query.download)?request.query.download[0]:request.query.download;return streamMarketingFileDownload(sql,clean(request.query.id),user,response,bool(downloadQuery));}
       if(resource==='campaign_code'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,message:'لا توجد صلاحية لإنشاء حملة'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
       return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
     }

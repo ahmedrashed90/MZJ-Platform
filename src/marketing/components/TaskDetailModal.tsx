@@ -290,26 +290,32 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
     }
   }
 
-  async function uploadFirstFile(file: File) {
-    if (!payload?.task) return;
+  async function uploadFirstFiles(files: File[]) {
+    if (!payload?.task || !files.length) return;
     setLoading(true);
     setError("");
     setMessage("");
     try {
-      await uploadMarketingFile({ file, category: "first-file", sourceType: payload.task.source_type, sourceId: payload.task.source_id, taskId: payload.task.id });
-      setMessage("تم رفع الملف الأول");
+      const accepted = files.filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
+      if (!accepted.length) throw new Error("اختر صورة أو فيديو واحدًا على الأقل");
+      const currentCount = Number(payload.task.first_file_count || (Array.isArray(payload.task.first_files) ? payload.task.first_files.length : payload.task.first_file_id ? 1 : 0));
+      if (accepted.length > 30 || currentCount + accepted.length > 30) throw new Error("الحد الأقصى 30 ملفًا أوليًا لكل تكليف");
+      for (const file of accepted) {
+        await uploadMarketingFile({ file, category: "first-file", sourceType: payload.task.source_type, sourceId: payload.task.source_id, taskId: payload.task.id });
+      }
+      setMessage(accepted.length > 1 ? `تم رفع ${accepted.length} ملفات أولية` : "تم رفع الملف الأول");
       await load();
       onChanged?.();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر رفع الملف الأول");
+      setError(failure instanceof Error ? failure.message : "تعذر رفع الملفات الأولية");
     } finally {
       setLoading(false);
     }
   }
 
-  async function deleteFirstFile() {
-    if (!payload?.task?.first_file_id || !window.confirm("تأكيد مسح الملف الأول؟ يمكنك رفع نسخة جديدة بعد المسح.")) return;
-    await action({ action: "delete_first_file", fileId: payload.task.first_file_id });
+  async function deleteFirstFile(fileId: string) {
+    if (!fileId || !window.confirm("تأكيد مسح هذا الملف الأولي؟")) return;
+    await action({ action: "delete_first_file", fileId });
   }
 
   async function uploadFinal(files: File[]) {
@@ -583,26 +589,31 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
           </section>
 
           {permissions.showFirstFile ? <section className="marketing-task-section marketing-final-upload-section">
-            <div className="marketing-task-section-heading"><div><h3>الملف الأول</h3><p>نسخة العمل الأولى للمراجعة قبل الملف النهائي. يمكن مسحها ورفع نسخة جديدة عند وجود تعديل.</p></div></div>
+            <div className="marketing-task-section-heading"><div><h3>الملف الأول</h3><p>نسخ العمل الأولية للمراجعة قبل الملف النهائي. يمكن رفع أكثر من صورة أو فيديو، ومسح أي ملف بشكل مستقل.</p></div></div>
             <div className="marketing-final-upload-shell">
-              {!task.first_file_id && permissions.canUploadFirstFile ? <label
+              {permissions.canUploadFirstFile ? <label
                 className={`marketing-final-upload-dropzone ${loading ? "disabled" : ""}`}
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault();
                   if (loading) return;
-                  const file = Array.from(event.dataTransfer.files || []).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/"));
-                  if (file) void uploadFirstFile(file);
+                  const files = Array.from(event.dataTransfer.files || []).filter((item) => item.type.startsWith("image/") || item.type.startsWith("video/"));
+                  if (files.length) void uploadFirstFiles(files);
                 }}
               >
                 <span className="marketing-final-upload-icon"><FileArrowUp size={28} weight="duotone" /></span>
-                <span><strong>{loading ? "جاري رفع الملف الأول" : "اسحب الملف الأول هنا أو اضغط للاختيار"}</strong><small>صورة أو فيديو للمراجعة قبل رفع الملف النهائي</small></span>
-                <input type="file" accept="image/*,video/*" disabled={loading} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFirstFile(file); event.currentTarget.value = ""; }} />
+                <span><strong>{loading ? "جاري رفع الملفات الأولية" : "اسحب الملفات الأولية هنا أو اضغط للاختيار"}</strong><small>يمكن اختيار عدة صور أو فيديوهات للمراجعة قبل رفع الملف النهائي</small></span>
+                <input type="file" accept="image/*,video/*" multiple disabled={loading} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFirstFiles(files); event.currentTarget.value = ""; }} />
               </label> : null}
 
-              {task.first_file_id ? <div className="marketing-inline-actions marketing-final-files-actions">
+              {Array.isArray(task.first_files) && task.first_files.length ? <div className="marketing-inline-actions marketing-final-files-actions">
+                {task.first_files.map((file: any, index: number) => <span key={file.id || index} className="marketing-inline-file-pair">
+                  {permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(file.id)}><DownloadSimple size={18} />{task.first_files.length > 1 ? `${index + 1}. ${file.name}` : file.name || "فتح الملف الأول"}</button> : <strong>{file.name || `ملف أولي ${index + 1}`}</strong>}
+                  {permissions.canDeleteFirstFile ? <button type="button" className="danger" disabled={loading} onClick={() => void deleteFirstFile(file.id)}><Trash size={18} />مسح</button> : null}
+                </span>)}
+              </div> : task.first_file_id ? <div className="marketing-inline-actions marketing-final-files-actions">
                 {permissions.canDownloadFile ? <button type="button" className="secondary" onClick={() => void downloadMarketingFile(task.first_file_id)}><DownloadSimple size={18} />{task.first_file_name || "فتح الملف الأول"}</button> : <strong>{task.first_file_name || "تم رفع الملف الأول"}</strong>}
-                {permissions.canDeleteFirstFile ? <button type="button" className="danger" disabled={loading} onClick={() => void deleteFirstFile()}><Trash size={18} />مسح الملف الأول</button> : null}
+                {permissions.canDeleteFirstFile ? <button type="button" className="danger" disabled={loading} onClick={() => void deleteFirstFile(task.first_file_id)}><Trash size={18} />مسح</button> : null}
               </div> : null}
             </div>
           </section> : null}
@@ -621,7 +632,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
                 }}
               >
                 <span className="marketing-final-upload-icon"><FileArrowUp size={28} weight="duotone" /></span>
-                <span><strong>{finalUpload?.active ? "جاري رفع الملف النهائي" : "اسحب الملفات هنا أو اضغط للاختيار"}</strong><small>فيديو أو ريل واحد، أو صورة واحدة، أو عدة صور بالترتيب</small></span>
+                <span><strong>{finalUpload?.active ? "جاري رفع الملفات النهائية" : "اسحب الملفات النهائية هنا أو اضغط للاختيار"}</strong><small>يمكن اختيار أكثر من صورة أو فيديو بالترتيب، حتى 30 ملفًا</small></span>
                 <input type="file" accept="image/*,video/*" multiple disabled={task.template_status !== "approved" || task.status === "completed" || Boolean(finalUpload?.active)} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFinal(files); event.currentTarget.value = ""; }} />
               </label> : null}
 
