@@ -1,0 +1,136 @@
+PASS: public Owners portal and invite routes exist
+PASS: internal Owners route is permission guarded
+PASS: sidebar entry is hidden without Owners permission
+PASS: settings has a permission-scoped Owners section
+PASS: authorized Owners-only user has a valid default route
+PASS: central permission catalog includes all four Owners permissions
+PASS: runtime access schema includes Owners page and permissions for existing databases
+PASS: base central access migration includes Owners page and all four permissions
+PASS: public Owners API bypasses employee authentication only for the public route
+PASS: internal Owners API requires view/manage permissions
+PASS: Owners schema is idempotent and version-gated
+PASS: Owners schema contains settings, members, referrals, visits, points, rewards, redemptions, OTP and sessions
+PASS: Owners Community uses PostgreSQL and adds no Firebase dependency
+PASS: JSON metadata uses the postgres JSONValue type instead of Record<string, unknown>
+PASS: OTP uses an approved active Mersal template
+PASS: OTP is HMAC-hashed, expires, is attempt-limited and is hourly rate-limited
+PASS: customer identity is based on canonical sold phone
+PASS: customer session is separate from the public referral link
+PASS: referral registration creates or links a CRM lead using the centralized assignment flow
+PASS: self-referrals, duplicate owners and previous buyers are rejected
+PASS: unique opens and registration award configurable idempotent points
+PASS: qualification and sale milestones are synchronized from CRM and canonical sales
+PASS: a referred buyer becomes a new Owner automatically
+PASS: new canonical NEXT ERP sales trigger Owners enrollment
+PASS: historical canonical sales can be synchronized from the admin page
+PASS: reward catalog supports gift, discount, service and voucher
+PASS: redemption is transactional and can refund rejected or cancelled requests
+PASS: admin settings include OTP, point rules, levels, benefit copy and Mersal templates
+PASS: member portal exposes points, invite link, referrals, rewards and ledger
+PASS: invite page registers a friend through the public referral endpoint
+PASS: admin can create and delete isolated test members
+PASS: test members are excluded from real Owners KPIs
+PASS: test referrals never create CRM leads
+PASS: historical customers can be imported from xlsx with explicit column mapping
+PASS: Excel import deduplicates by normalized phone and matches canonical sales
+PASS: internal Owners API independently enforces employee permissions
+PASS: focused Owners check runs before the existing baseline checks
+PASS: no release-specific Owners migration or patch file was added
+PASS: no unresolved merge-conflict marker exists
+
+MZJ Owners Community checks: 39/39 passed.
+PASS: no unresolved merge-conflict markers found
+PASS: Package version keeps central access control release or newer
+PASS: Four systems exist in central catalog
+PASS: Permission catalog is large enough for all systems
+PASS: Permission codes are unique
+PASS: Page catalog entries are unique
+PASS: System access permissions exist
+PASS: Central settings permissions exist
+PASS: Legacy per-system settings permissions are absent
+PASS: CRM data review has separate view and execute permissions
+PASS: CRM routing and automation are separate permissions
+PASS: All ten tracking stages generate complete rollback and SMS permissions
+PASS: Marketing workflow permissions exist
+PASS: Operations workflow permissions exist
+PASS: Central schema creates user systems
+PASS: Central schema creates user overrides
+PASS: Central schema creates permission change log
+PASS: Central migration preserves and increments permission versions
+PASS: Central migration deactivates duplicated settings pages
+PASS: Rollback migration exists
+PASS: Runtime schema contains every catalog permission
+PASS: SQL migration contains every catalog permission
+PASS: Session loads effective central access
+PASS: Disabled user sessions are rejected
+PASS: Permission version invalidates stale sessions
+PASS: Explicit deny is evaluated before superadmin
+PASS: Disabled systems block their non-core permissions
+PASS: Backend permission guard logs rejection
+PASS: Access control returns the selected user row instead of the query array
+PASS: Access control blocks self-edit
+PASS: Access control blocks self-role edit
+PASS: System roles and per-system self roles cannot be edited indirectly
+PASS: Managers cannot grant permissions above their own
+PASS: Role permission templates require permission-management authority
+PASS: Managers cannot grant scopes above their own
+PASS: User updates invalidate sessions
+PASS: Permission changes are audited
+PASS: Passwords are hashed
+PASS: Password hashes are excluded from snapshots
+PASS: Unified settings contains the only users and permissions UI
+PASS: Unified settings separates all four system settings
+PASS: Settings sections use specific permissions
+PASS: User editor contains four system tabs
+PASS: User editor explains why saving is unavailable
+PASS: User editor supports allow deny and inherit
+PASS: User editor supports per-system data scope branches and departments
+PASS: Role templates include core permissions
+PASS: User access can be copied from another user
+PASS: Individual overrides can be reset to role templates
+PASS: User editor previews final role and override permissions
+PASS: Primary branch and department are explicit per system
+PASS: Users can be filtered by role system branch and department
+PASS: User list shows last access change and actor
+PASS: Old CRM admin route redirects to central settings
+PASS: Old marketing settings route redirects centrally
+PASS: API gateway applies permission requirement before handler
+PASS: Integrations are protected by gateway secrets
+PASS: Automation scheduler is protected by a secret
+PASS: ERPNext webhook is protected by a key
+PASS: CRM lists are filtered in SQL by scope
+PASS: CRM data review has exact permission checks
+PASS: CRM data review applies server-side scope
+PASS: CRM data review locks rows before correction
+PASS: CRM branch mutation is disabled in old settings endpoint
+PASS: CRM no longer renders branch management tab
+PASS: CRM assignment rules require routing permission
+PASS: CRM automation requires central and specialized permissions
+PASS: CRM settings have read-only mode
+PASS: Tracking public page uses a token
+PASS: Public tracking no longer accepts VIN/order as public identifier
+PASS: Tracking token is unique and backfilled
+PASS: Tracking stage actions use exact permissions
+PASS: Tracking SMS uses global and per-stage permissions
+PASS: Tracking settings use central keys
+PASS: Marketing queries use scope and assignment checks
+PASS: Marketing actions use exact task permissions
+PASS: Marketing settings use central keys
+PASS: Marketing settings have read-only mode
+PASS: Operations queries use per-system scope
+PASS: Operations stages have exact permissions
+PASS: Operations VIN changes use an exact sensitive permission
+PASS: Operations completion requires its exact permission and remains creator-only
+PASS: Operations request deletion has no creator or admin bypass
+PASS: Operations request cancellation has no creator or admin bypass
+PASS: Operations API maps delete and cancel to exact permissions
+PASS: Operations settings use central permission
+PASS: No hardcoded admin email comparisons remain in app code
+PASS: No literal company user emails are used as permission conditions
+PASS: No always-true transfer bypass remains
+PASS: Operations actions no longer use a platform-admin shortcut
+PASS: No localStorage permission source remains
+
+Central access control checks: 90/90 passed.
+CRM module structure and no-sample-data check passed.
+CRM canonical sold single-source checks: 8/8 passed.

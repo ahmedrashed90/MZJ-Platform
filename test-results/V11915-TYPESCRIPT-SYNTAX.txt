@@ -1,0 +1,8 @@
+MZJ Platform v1.19.15 - TypeScript validation
+
+PASS: src/crm/components/LeadDrawer.tsx transpiles with TypeScript 5.7 in strict isolated-module mode.
+PASS: src/marketing/pages/MarketingDatabasePage.tsx transpiles with TypeScript 5.7 in strict isolated-module mode.
+PASS: the extracted budget overview model and all callbacks reported by Vercel compile with noImplicitAny enabled.
+PASS: the Vercel TS7006 callback locations now use BudgetOverviewItem, BudgetOverviewPlatform, string, and number annotations.
+
+The full Vite production build was not executed in this container because the uploaded ZIP has no node_modules and the npm registry was unreachable while preparing pnpm. This is an environment dependency limitation, not a claimed successful full build.
