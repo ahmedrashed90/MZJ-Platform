@@ -42,7 +42,7 @@ async function ensureSocialEngagementChatMessageForLead(sql: any, lead: any, con
         socialActorId: clean(extra.socialActorId || metadata.socialActorId),
         commentId: engagementType === "comment" ? clean(extra.commentId || metadata.commentId || eventId) : null,
         messagingReady: false,
-        messagingStatus: engagementType !== "comment" ? "social_only" : channel === "instagram" ? "private_reply_available" : "identity_pending",
+        messagingStatus: engagementType !== "comment" ? "social_only" : "private_reply_available",
       })}
     )
     on conflict(conversation_id,provider_message_id) where provider_message_id is not null do nothing

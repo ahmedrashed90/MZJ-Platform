@@ -1,4 +1,4 @@
-# MZJ Facebook Worker v2.0.3
+# MZJ Facebook Worker v2.0.4
 
 Worker تقني فقط لاستقبال وإرسال Facebook Messenger. لا يحتوي على رسائل أو اختيارات أو أسئلة أو توزيع؛ منصة MZJ هي المصدر الوحيد لإعدادات الأوتوميشن.
 
@@ -19,8 +19,9 @@ Worker تقني فقط لاستقبال وإرسال Facebook Messenger. لا ي
 ## Social chat identity
 - الـPSID الحقيقي فقط هو هوية Messenger القابلة للإرسال.
 - Social comment/like IDs لا تُعامل كـPSID.
+- لو العميل جاي من Facebook Comment ولسه مفيش PSID، أول رسالة نصية تستخدم Facebook Private Replies على `commentId`؛ بعد رد العميل يتم اعتماد PSID الحقيقي من Messenger webhook.
 - عند وصول هوية Messenger الحقيقية يتم ربطها بنفس العميل/المحادثة في المنصة.
-- النسخة المستقلة المطابقة: `workers/MZJ-Facebook-Worker-v2.0.3-FULL.js`.
+- النسخة المستقلة المطابقة: `workers/MZJ-Facebook-Worker-v2.0.4-FULL.js`.
 
 ## Provider-confirmed manual send
 - الإرسال اليدوي من CRM ينتظر رد الـWorker بدل إرجاع queued قبل معرفة النتيجة.

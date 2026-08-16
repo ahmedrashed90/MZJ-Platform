@@ -1404,7 +1404,7 @@ async function persistSocialEngagementChatMessage(
         commentId: item.engagementType === "comment" ? item.eventId : null,
         messagingReady: false,
         messagingStatus: item.engagementType === "comment"
-          ? (item.platform === "instagram" ? "private_reply_available" : "identity_pending")
+          ? "private_reply_available"
           : "social_only",
       } as any)}
     )
@@ -1426,7 +1426,7 @@ async function socialEngagementConversation(
   const messagingParticipantId = item.platform === "instagram" ? clean(item.messagingParticipantId) : "";
   const commentId = item.engagementType === "comment" ? clean(item.eventId) : "";
   const messagingStatus = item.engagementType === "comment"
-    ? (item.platform === "instagram" ? "private_reply_available" : "identity_pending")
+    ? "private_reply_available"
     : "social_only";
   const metadata = {
     origin: "post_engagement",
@@ -1490,7 +1490,7 @@ async function createCrmLeadFromSocialEngagement(sql: ReturnType<typeof getSql>,
   const messagingParticipantId = item.platform === "instagram" ? clean(item.messagingParticipantId) : "";
   const commentId = item.engagementType === "comment" ? clean(item.eventId) : "";
   const messagingStatus = item.engagementType === "comment"
-    ? (item.platform === "instagram" ? "private_reply_available" : "identity_pending")
+    ? "private_reply_available"
     : "social_only";
   const { contact } = await ensureContactIdentity({
     channelCode: item.platform,
@@ -1593,7 +1593,7 @@ async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql
     await tx`
       update crm.contact_identities
       set participant_id=null,
-          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when channel_code='instagram' and metadata->>'engagementType'='comment' then 'private_reply_available' when metadata->>'engagementType'='comment' then 'identity_pending' else 'social_only' end),
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when metadata->>'engagementType'='comment' then 'private_reply_available' else 'social_only' end),
           updated_at=now()
       where channel_code='facebook'
         and metadata->>'origin'='post_engagement'
@@ -1604,7 +1604,7 @@ async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql
     await tx`
       update crm.conversations
       set participant_id=null,
-          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when channel_code='instagram' and metadata->>'engagementType'='comment' then 'private_reply_available' when metadata->>'engagementType'='comment' then 'identity_pending' else 'social_only' end),
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when metadata->>'engagementType'='comment' then 'private_reply_available' else 'social_only' end),
           updated_at=now()
       where channel_code='facebook'
         and metadata->>'origin'='post_engagement'
@@ -1624,7 +1624,7 @@ async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql
       set metadata=coalesce(c.metadata,'{}'::jsonb)||jsonb_build_object(
         'commentId',latest_comment.provider_event_id,
         'socialActorId',latest_comment.actor_id,
-        'messagingStatus',case when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready' when c.channel_code='instagram' then 'private_reply_available' else 'identity_pending' end
+        'messagingStatus',case when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready' else 'private_reply_available' end
       ),updated_at=now()
       from latest_comment
       where c.lead_id=latest_comment.crm_lead_id and c.channel_code in ('facebook','instagram') and c.metadata->>'origin'='post_engagement'
@@ -1669,8 +1669,7 @@ async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql
             'messagingStatus',case
               when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready'
               when pe.engagement_type<>'comment' then 'social_only'
-              when pe.platform='instagram' then 'private_reply_available'
-              else 'identity_pending'
+              else 'private_reply_available'
             end
           )
         from marketing.post_engagements pe

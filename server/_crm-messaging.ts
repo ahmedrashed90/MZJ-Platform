@@ -25,6 +25,7 @@ export type ConversationContext = {
   service_key?: string | null;
   page_id?: string | null;
   metadata?: Record<string, unknown> | null;
+  lead_extra_data?: Record<string, unknown> | null;
   manychat_contact_id?: string | null;
 };
 
@@ -257,19 +258,63 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
 
     if (input.conversationId) {
       const recipientId = providerRecipientIdFrom(data);
-      const privateReply = input.payload?.privateReply === true || input.payload?.private_reply === true;
+      const requestedPrivateReply = input.payload?.privateReply === true || input.payload?.private_reply === true;
+      const providerPrivateReply = data?.privateReply ?? data?.private_reply;
+      const privateReply = providerPrivateReply === true || (providerPrivateReply == null && requestedPrivateReply);
       const route = clean(input.payload?.deliveryChannel || input.payload?.platform || input.payload?.channel).toLowerCase();
       const commentId = clean(input.payload?.commentId || input.payload?.comment_id);
       const manychatContactId = clean(data?.manychatContactId || data?.manychat_contact_id);
+      const resolvedFacebookPsid = route === "facebook" && !privateReply
+        ? clean(data?.participantId || data?.participant_id || data?.facebookPsid || data?.facebook_psid || recipientId)
+        : "";
 
-      if (providerStatus === "sent" && privateReply && route === "instagram" && recipientId) {
+      if (providerStatus === "sent" && route === "facebook" && resolvedFacebookPsid) {
         const [conversation] = await sql<any[]>`
           update crm.conversations set
-            participant_id=${recipientId},
+            participant_id=${resolvedFacebookPsid},
             metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
-              messagingParticipantId: recipientId,
-              messagingReady: false,
-              messagingStatus: "private_reply_sent",
+              messagingParticipantId: resolvedFacebookPsid,
+              facebookPsid: resolvedFacebookPsid,
+              manychatContactId: manychatContactId || null,
+              messagingReady: true,
+              messagingStatus: "ready",
+              identityResolution: clean(data?.identityResolution) || "provider_confirmed_psid",
+            })}::jsonb,
+            updated_at=now()
+          where id=${input.conversationId}::uuid
+          returning id::text,contact_id::text,page_id
+        `;
+        if (conversation?.contact_id) {
+          await sql`
+            insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
+            select ${conversation.contact_id}::uuid,'facebook',${resolvedFacebookPsid},${resolvedFacebookPsid},${clean(conversation.page_id) || null},c.display_name,
+              ${sql.json({ origin: "facebook_provider_confirmed_identity", messagingReady: true, messagingStatus: "ready", manychatContactId: manychatContactId || null })}::jsonb
+            from crm.contacts c where c.id=${conversation.contact_id}::uuid
+            on conflict(channel_code,external_id) do update set
+              contact_id=excluded.contact_id,participant_id=excluded.participant_id,page_id=coalesce(excluded.page_id,crm.contact_identities.page_id),
+              metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
+          `;
+          await sql`
+            update crm.leads set extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
+              messagingParticipantId: resolvedFacebookPsid,
+              facebookPsid: resolvedFacebookPsid,
+              manychatContactId: manychatContactId || null,
+              messagingReady: true,
+              messagingStatus: "ready",
+            })}::jsonb,updated_at=now()
+            where contact_id=${conversation.contact_id}::uuid and is_deleted=false
+          `;
+        }
+      } else if (providerStatus === "sent" && privateReply && ["instagram", "facebook"].includes(route)) {
+        const hasProviderRecipient = Boolean(recipientId);
+        const identityReady = false;
+        const [conversation] = await sql<any[]>`
+          update crm.conversations set
+            participant_id=case when ${hasProviderRecipient} then ${recipientId} else participant_id end,
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
+              messagingParticipantId: recipientId || null,
+              messagingReady: identityReady,
+              messagingStatus: identityReady ? "ready" : "private_reply_sent",
               privateReplyCommentId: commentId || null,
               privateReplyProviderMessageId: providerMessageId || null,
               privateReplySentAt: new Date().toISOString(),
@@ -279,21 +324,26 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
           returning id::text,contact_id::text,page_id
         `;
         if (conversation?.contact_id) {
-          await sql`
-            insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
-            select ${conversation.contact_id}::uuid,'instagram',${recipientId},${recipientId},${clean(conversation.page_id) || null},c.display_name,
-              ${sql.json({ origin: "instagram_private_reply", messagingReady: false, messagingStatus: "private_reply_sent", commentId: commentId || null, manychatContactId: manychatContactId || null })}::jsonb
-            from crm.contacts c where c.id=${conversation.contact_id}::uuid
-            on conflict(channel_code,external_id) do update set
-              contact_id=excluded.contact_id,participant_id=excluded.participant_id,page_id=coalesce(excluded.page_id,crm.contact_identities.page_id),
-              metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
-          `;
+          if (hasProviderRecipient) {
+            await sql`
+              insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
+              select ${conversation.contact_id}::uuid,${route},${recipientId},${recipientId},${clean(conversation.page_id) || null},c.display_name,
+                ${sql.json({ origin: `${route}_private_reply`, messagingReady: identityReady, messagingStatus: identityReady ? "ready" : "private_reply_sent", commentId: commentId || null, manychatContactId: manychatContactId || null })}::jsonb
+              from crm.contacts c where c.id=${conversation.contact_id}::uuid
+              on conflict(channel_code,external_id) do update set
+                contact_id=excluded.contact_id,participant_id=excluded.participant_id,page_id=coalesce(excluded.page_id,crm.contact_identities.page_id),
+                metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
+            `;
+          }
           await sql`
             update crm.leads set extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
-              messagingParticipantId: recipientId,
-              messagingReady: false,
-              messagingStatus: "private_reply_sent",
+              messagingParticipantId: recipientId || null,
+              facebookPsid: route === "facebook" && recipientId ? recipientId : null,
+              instagramScopedId: route === "instagram" && recipientId ? recipientId : null,
+              messagingReady: identityReady,
+              messagingStatus: identityReady ? "ready" : "private_reply_sent",
               privateReplyProviderMessageId: providerMessageId || null,
+              privateReplyCommentId: commentId || null,
             })}::jsonb,updated_at=now()
             where contact_id=${conversation.contact_id}::uuid and is_deleted=false
           `;
@@ -333,7 +383,9 @@ function startWorkerDelivery(input: BackgroundDeliveryInput) {
 }
 
 function conversationMetadata(conversation: ConversationContext) {
-  return conversation.metadata && typeof conversation.metadata === "object" ? conversation.metadata : {};
+  const leadMetadata = conversation.lead_extra_data && typeof conversation.lead_extra_data === "object" ? conversation.lead_extra_data : {};
+  const conversationData = conversation.metadata && typeof conversation.metadata === "object" ? conversation.metadata : {};
+  return { ...leadMetadata, ...conversationData };
 }
 
 function metadataFlag(value: unknown) {
@@ -363,7 +415,7 @@ async function normalizeProvisionalFacebookMessagingIdentity(
 
   const metadata = conversationMetadata(conversation);
   const engagementType = clean(metadata.engagementType).toLowerCase();
-  const messagingStatus = engagementType === "comment" ? "identity_pending" : "social_only";
+  const messagingStatus = engagementType === "comment" ? "private_reply_available" : "social_only";
   await sql`
     update crm.conversations set
       participant_id=null,
@@ -387,6 +439,7 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
   const messagingReady = socialMessagingReady(conversation);
   const socialActorId = clean(metadata.socialActorId);
   const manychatContactId = clean(conversation.manychat_contact_id || metadata.manychatContactId);
+  const messagingStatus = clean(metadata.messagingStatus).toLowerCase();
 
   if (route === "whatsapp") {
     const phone = normalizePhone(conversation.phone_normalized || conversation.phone || participantId);
@@ -416,22 +469,42 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
   }
 
   if (socialConversation && !messagingReady) {
-    if (manychatContactId) {
+    if (engagementType === "comment" && commentId && origin === "post_engagement") {
+      if (messagingStatus === "private_reply_sent") {
+        throw new Error("تم إرسال أول رسالة خاصة من تعليق Facebook؛ انتظر رد العميل في Messenger لاستكمال المحادثة");
+      }
       return {
         pageId: conversation.page_id || "",
-        manychatContactId,
-        manychat_contact_id: manychatContactId,
-        commentId: commentId || undefined,
-        comment_id: commentId || undefined,
+        participantId: participantId || undefined,
+        facebookPsid: participantId || undefined,
+        manychatContactId: manychatContactId || undefined,
+        manychat_contact_id: manychatContactId || undefined,
+        commentId,
+        comment_id: commentId,
+        privateReply: true,
+        private_reply: true,
         socialActorId: socialActorId || undefined,
         social_actor_id: socialActorId || undefined,
+        conversationId,
+        convId: conversationId,
+        displayName,
+        serviceKey: conversation.service_key || "",
       };
     }
     if (engagementType === "like") {
       throw new Error("عميل Facebook الناتج من Like لم يبدأ محادثة Messenger بعد؛ لا يمكن إرسال رسالة حتى تتوفر هوية PSID حقيقية");
     }
-    if (engagementType === "comment") {
-      throw new Error("عميل Facebook القادم من تعليق لم يصبح جاهزًا للمراسلة بعد؛ يجب ربط PSID الحقيقي من Messenger/ManyChat أولًا");
+    if (manychatContactId) {
+      return {
+        pageId: conversation.page_id || "",
+        manychatContactId,
+        manychat_contact_id: manychatContactId,
+        socialActorId: socialActorId || undefined,
+        social_actor_id: socialActorId || undefined,
+        conversationId,
+        convId: conversationId,
+        displayName,
+      };
     }
     throw new Error("عميل Facebook الاجتماعي لم يصبح جاهزًا للمراسلة بعد");
   }
@@ -471,7 +544,7 @@ async function loadConversation(conversationId: string): Promise<ConversationCon
   const [row] = await sql<any[]>`
     select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text,
       l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.car_name,l.status_label,l.source_code,l.source_name,l.platform_code,l.service_key,
-      identity.manychat_contact_id
+      l.extra_data as lead_extra_data,identity.manychat_contact_id
     from crm.conversations c
     left join crm.leads l on l.id=c.lead_id
     left join lateral (
@@ -519,8 +592,16 @@ export async function deliverCrmMessage(input: {
     && clean(metadata.origin) === "post_engagement"
     && clean(metadata.engagementType) === "comment"
     && Boolean(clean(metadata.commentId || metadata.privateReplyCommentId));
+  const needsFacebookPrivateReply = policy.route === "facebook"
+    && !socialMessagingReady(conversation)
+    && clean(metadata.origin) === "post_engagement"
+    && clean(metadata.engagementType) === "comment"
+    && Boolean(clean(metadata.commentId || metadata.privateReplyCommentId));
   if (needsInstagramPrivateReply && (kind !== "text" || (Array.isArray(input.buttons) && input.buttons.length))) {
     throw new Error("أول رسالة خاصة لعميل Instagram القادم من تعليق يجب أن تكون رسالة نصية فقط");
+  }
+  if (needsFacebookPrivateReply && (kind !== "text" || (Array.isArray(input.buttons) && input.buttons.length))) {
+    throw new Error("أول رسالة خاصة لعميل Facebook القادم من تعليق يجب أن تكون رسالة نصية فقط");
   }
   const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;

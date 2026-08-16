@@ -60,6 +60,18 @@ const graphCall = calls.findLast((call) => call.url.includes("graph.facebook.com
 const graphBody = JSON.parse(graphCall.options.body);
 assert.equal(graphBody.message.quick_replies[0].payload, "a");
 
+const privateReply = await worker.fetch(new Request("https://worker.test/send/facebook", {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-mzj-gateway-secret": "gateway-secret" },
+  body: JSON.stringify({ pageId: "page-1", commentId: "comment-1", privateReply: true, text: "اهلا" }),
+}), env, {});
+assert.equal(privateReply.status, 200);
+const privateReplyBody = await privateReply.json();
+assert.equal(privateReplyBody.private_reply, true);
+const privateReplyCall = calls.findLast((call) => call.url.includes("/comment-1/private_replies"));
+assert.ok(privateReplyCall);
+assert.equal(JSON.parse(privateReplyCall.options.body).message, "اهلا");
+
 const source = await (await import("node:fs/promises")).readFile(new URL("./src/index.js", import.meta.url), "utf8");
 for (const forbidden of ["مبيعات الكاش", "مبيعات التمويل", "خدمة العملاء", "finance_registration_complete", "forceServiceReclassification"]) assert.equal(source.includes(forbidden), false, `worker must not contain flow string: ${forbidden}`);
 
