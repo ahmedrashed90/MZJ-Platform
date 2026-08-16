@@ -955,7 +955,7 @@ create table if not exists marketing.published_posts (
   task_id uuid references marketing.tasks(id) on delete set null,
   platform text not null check(platform in ('facebook','instagram','tiktok','snapchat','youtube')),
   account_id text not null,
-  provider_post_id text not null,
+  provider_post_id text,
   provider_media_id text,
   permalink text,
   post_type_name text,
@@ -973,6 +973,7 @@ create table if not exists marketing.published_posts (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table marketing.published_posts alter column provider_post_id drop not null;
 create index if not exists marketing_published_posts_provider_idx on marketing.published_posts(platform,account_id,provider_post_id);
 create index if not exists marketing_published_posts_media_idx on marketing.published_posts(platform,provider_media_id) where provider_media_id is not null;
 create index if not exists marketing_published_posts_source_idx on marketing.published_posts(source_type,source_id,published_at desc);

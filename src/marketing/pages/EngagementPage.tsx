@@ -77,7 +77,6 @@ type Payload = {
 };
 
 type RecordStatus = "active" | "archived" | "all";
-type EngagementKind = "" | "comment" | "like" | "share";
 type ManageEntity = "post" | "engagement";
 type ManageOperation = "archive" | "restore" | "delete" | "delete_customer";
 type PageView = "engagement" | "campaigns" | "agendas";
@@ -114,11 +113,6 @@ function platformIcon(platform: string, size: number) {
   if (platform === "tiktok") return <TiktokLogo size={size} weight="fill" />;
   return null;
 }
-function engagementLabel(kind: string) {
-  if (kind === "like") return "إعجاب";
-  if (kind === "share") return "مشاركة";
-  return "تعليق";
-}
 function recordMatchesStatus(row: any, status: RecordStatus) {
   if (status === "all") return true;
   return status === "archived" ? Boolean(row.archived_at) : !row.archived_at;
@@ -154,7 +148,6 @@ export function EngagementPage() {
   const [search, setSearch] = useState("");
   const [postStatus, setPostStatus] = useState<RecordStatus>("active");
   const [engagementStatus, setEngagementStatus] = useState<RecordStatus>("active");
-  const [engagementKind, setEngagementKind] = useState<EngagementKind>("");
   const canRefresh = hasPermission(user, "marketing.engagement.refresh");
   const canManage = hasPermission(user, "marketing.publish.now");
   const canSubscribeWebhook = hasPermission(user, "marketing.engagement.subscribe");
@@ -200,10 +193,9 @@ export function EngagementPage() {
   const engagements = useMemo(() => (data?.engagements || []).filter((row: any) => {
     const haystack = `${row.actor_name || ""} ${row.customer_name || ""} ${row.event_text || ""} ${row.campaign_name || ""} ${row.creative_name || ""} ${row.crm_source_name || ""}`.toLowerCase();
     return (!platform || row.platform === platform)
-      && (!engagementKind || row.engagement_type === engagementKind)
       && recordMatchesStatus(row, engagementStatus)
       && (!search || haystack.includes(search.toLowerCase()));
-  }), [data, engagementKind, engagementStatus, platform, search]);
+  }), [data, engagementStatus, platform, search]);
 
   const resultRows = useMemo(() => {
     const collection = view === "campaigns" ? data?.results.campaigns || [] : view === "agendas" ? data?.results.agendas || [] : [];
@@ -270,7 +262,7 @@ export function EngagementPage() {
       setSubscriptionOpen(true);
       if (result.subscriptionOk) setMessage(result.message); else setError(result.message);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "تعذر تفعيل استقبال التفاعلات");
+      setError(failure instanceof Error ? failure.message : "تعذر تفعيل استقبال التعليقات");
     } finally {
       setLoading(false);
     }
@@ -283,7 +275,7 @@ export function EngagementPage() {
       delete: "مسح",
       delete_customer: "مسح العميل من CRM",
     };
-    const target = entity === "post" ? "المنشور" : operation === "delete_customer" ? "العميل وسجل تفاعلاته" : "التفاعل";
+    const target = entity === "post" ? "المنشور" : operation === "delete_customer" ? "العميل وسجل تعليقاته" : "التعليق";
     if ((operation === "delete" || operation === "delete_customer") && !window.confirm(`تأكيد ${labels[operation]} ${target}؟`)) return;
     const key = `${entity}:${row.id}:${operation}`;
     setBusyKey(key);
@@ -308,10 +300,10 @@ export function EngagementPage() {
 
   return <MarketingPage
     title="تفاعل النشر"
-    description="متابعة المنشورات والتفاعلات ونتائج الحملات والأجندات وتحويل الحسابات المتاحة تلقائيًا إلى عملاء CRM."
+    description="متابعة أرقام النشر والتفاعل؛ الإعجابات والمشاركات أرقام مجمعة، والتعليقات فقط تدخل مسار CRM."
     actions={<div className="marketing-engagement-actions">
-      {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التفاعلات</button> : null}
-      {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التفاعلات</button> : null}
+      {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التعليقات</button> : null}
+      {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
       {data && canViewWebhookUrl ? <button type="button" className="secondary-button" onClick={() => setWebhookOpen(true)}><LinkSimple size={18} /> رابط Webhook</button> : null}
       {canRefresh ? <button type="button" className="primary-button" disabled={loading} onClick={refresh}><ArrowClockwise size={18} className={loading ? "spin" : ""} /> تحديث الأرقام الآن</button> : null}
     </div>}
@@ -329,10 +321,10 @@ export function EngagementPage() {
       {view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>منشورات السيستم فقط</small></article>
-          <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>{count(summary.likeEvents)} تفاعل بهوية متاحة</small></article>
-          <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{count(summary.comments)}</strong><small>{count(summary.commentEvents)} تعليق وصل للسيستم</small></article>
-          <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{count(summary.shares)}</strong><small>{count(summary.shareEvents)} مشاركة بهوية متاحة</small></article>
-          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{count(summary.crmLeads)}</strong><small>من {count(summary.engagements)} تفاعل مسجل</small></article>
+          <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
+          <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{count(summary.comments)}</strong><small>{count(summary.commentEvents)} تعليق محفوظ ومربوط بالسيستم</small></article>
+          <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{count(summary.shares)}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
+          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{count(summary.crmLeads)}</strong><small>من {count(summary.commentEvents)} تعليق محفوظ</small></article>
         </section>
 
         <section className="panel marketing-engagement-panel marketing-posts-panel">
@@ -347,7 +339,7 @@ export function EngagementPage() {
           <div className="marketing-engagement-control-panel">
             <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف، العميل أو نص التعليق" /></div>
             <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
-            <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>البحث والمنصة والحالة ونوع التفاعل تعمل على نفس بيانات الحملات والأجندات.</small></div>
+            <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>البحث والمنصة والحالة تعمل على نفس بيانات الحملات والأجندات، وسجل العملاء هنا للتعليقات فقط.</small></div>
           </div>
           <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>الحملة / الأجندة</th><th>الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
             {rows.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
@@ -371,20 +363,19 @@ export function EngagementPage() {
 
         <section className="panel marketing-engagement-panel marketing-interactions-panel">
           <header>
-            <div><h3>التفاعلات والعملاء</h3><p>سجل موحد للتعليقات والإعجابات والمشاركات ونتيجة تحويل كل حساب إلى CRM.</p></div>
+            <div><h3>التعليقات والعملاء</h3><p>التعليقات فقط تُحفظ بهوية صاحبها وتدخل مسار CRM؛ الإعجابات والمشاركات تبقى أرقامًا مجمعة من المنصة.</p></div>
             <div className="marketing-engagement-section-filters">
-              <select value={engagementKind} onChange={(event) => setEngagementKind(event.target.value as EngagementKind)}><option value="">كل التفاعلات</option><option value="comment">التعليقات</option><option value="like">الإعجابات</option><option value="share">المشاركات</option></select>
-              <div className="marketing-segmented" aria-label="فلتر حالة التفاعلات"><button type="button" className={engagementStatus === "active" ? "active" : ""} onClick={() => setEngagementStatus("active")}>النشطة</button><button type="button" className={engagementStatus === "archived" ? "active" : ""} onClick={() => setEngagementStatus("archived")}>الأرشيف</button><button type="button" className={engagementStatus === "all" ? "active" : ""} onClick={() => setEngagementStatus("all")}>الكل</button></div>
+              <div className="marketing-segmented" aria-label="فلتر حالة التعليقات"><button type="button" className={engagementStatus === "active" ? "active" : ""} onClick={() => setEngagementStatus("active")}>النشطة</button><button type="button" className={engagementStatus === "archived" ? "active" : ""} onClick={() => setEngagementStatus("archived")}>الأرشيف</button><button type="button" className={engagementStatus === "all" ? "active" : ""} onClick={() => setEngagementStatus("all")}>الكل</button></div>
             </div>
           </header>
           <div className="marketing-engagement-feed">
             {engagements.map((item: any) => <article key={item.id} className={item.archived_at ? "is-archived" : ""}>
-              <div className={`marketing-engagement-event-icon ${item.platform} ${item.engagement_type}`}>
-                {item.engagement_type === "comment" ? <ChatCircleDots size={22} weight="fill" /> : item.engagement_type === "like" ? <Heart size={22} weight="fill" /> : <ShareNetwork size={22} weight="fill" />}
+              <div className={`marketing-engagement-event-icon ${item.platform} comment`}>
+                <ChatCircleDots size={22} weight="fill" />
               </div>
               <div className="marketing-engagement-event-main">
-                <header><div><b>{item.actor_name || item.customer_name || "حساب غير معروف"}</b><span className={`marketing-engagement-type ${item.engagement_type}`}>{engagementLabel(item.engagement_type)}</span><span className={`marketing-platform-mini ${item.platform}`}>{platformIcon(item.platform, 13)}{platformLabel(item.platform)}</span></div><time>{marketingDate(item.engaged_at || item.created_at, true)}</time></header>
-                <p>{item.event_text || (item.engagement_type === "like" ? "سجل إعجابًا بالمنشور" : item.engagement_type === "share" ? "شارك المنشور" : "تعليق بدون نص")}</p>
+                <header><div><b>{item.actor_name || item.customer_name || "حساب غير معروف"}</b><span className="marketing-engagement-type comment">تعليق</span><span className={`marketing-platform-mini ${item.platform}`}>{platformIcon(item.platform, 13)}{platformLabel(item.platform)}</span></div><time>{marketingDate(item.engaged_at || item.created_at, true)}</time></header>
+                <p>{item.event_text || "تعليق بدون نص"}</p>
                 <footer><span>{item.campaign_name} — {item.creative_name}</span><strong>{sourceLabel(item.platform)}</strong></footer>
               </div>
               <div className="marketing-engagement-crm-card">
@@ -392,15 +383,15 @@ export function EngagementPage() {
                 {item.crm_lead_id ? <><b>{item.customer_name || item.actor_name}</b><small>{item.crm_source_name || sourceLabel(item.platform)}</small><small>{item.branch_code || "جارٍ التوزيع"} — {item.assigned_name || "غير موزع"}</small></> : null}
                 {item.processing_error ? <details className="marketing-error-compact"><summary>سبب فشل التحويل</summary><p>{item.processing_error}</p></details> : null}
               </div>
-              <div className="marketing-engagement-row-action">{canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات التفاعل"><DotsThreeVertical size={20} weight="bold" /></summary><div>
+              <div className="marketing-engagement-row-action">{canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات التعليق"><DotsThreeVertical size={20} weight="bold" /></summary><div>
                 {item.archived_at
                   ? <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "restore", item)}><ArrowCounterClockwise size={16} /> استعادة</button>
                   : <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "archive", item)}><Archive size={16} /> أرشفة</button>}
-                <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "delete", item)}><Trash size={16} /> مسح التفاعل</button>
+                <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "delete", item)}><Trash size={16} /> مسح التعليق</button>
                 {canDeleteCustomer && item.crm_lead_id && item.processing_status === "created" && !item.crm_is_deleted ? <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "delete_customer", item)}><Trash size={16} /> مسح العميل من CRM</button> : null}
               </div></details> : null}</div>
             </article>)}
-            {!engagements.length ? <div className="empty-cell">{loading ? "جاري التحميل..." : engagementStatus === "archived" ? "لا توجد تفاعلات في الأرشيف" : "لم تصل تفاعلات مطابقة بعد"}</div> : null}
+            {!engagements.length ? <div className="empty-cell">{loading ? "جاري التحميل..." : engagementStatus === "archived" ? "لا توجد تعليقات في الأرشيف" : "لم تصل تعليقات مطابقة بعد"}</div> : null}
           </div>
         </section>
       </> : <>
@@ -453,7 +444,7 @@ export function EngagementPage() {
 
     <Modal
       open={subscriptionOpen}
-      title="حالة استقبال التفاعلات من Meta"
+      title="حالة استقبال التعليقات من Meta"
       subtitle="نتيجة مستقلة لكل منصة مع بيانات التحقق دون تغيير مسار Facebook العامل."
       onClose={() => setSubscriptionOpen(false)}
       className="marketing-engagement-status-modal"
@@ -482,12 +473,12 @@ export function EngagementPage() {
     <Modal
       open={webhookOpen}
       title="رابط Webhook"
-      subtitle="بيانات ربط استقبال التفاعلات من Meta."
+      subtitle="بيانات ربط استقبال التعليقات من Meta."
       onClose={() => setWebhookOpen(false)}
       className="marketing-webhook-modal"
     >
       <div className="marketing-webhook-card marketing-webhook-modal-content">
-        {data && !data.webhook.verifyTokenConfigured ? <MarketingAlert type="info">أضف META_WEBHOOK_VERIFY_TOKEN في Vercel قبل ربط Callback التفاعلات.</MarketingAlert> : null}
+        {data && !data.webhook.verifyTokenConfigured ? <MarketingAlert type="info">أضف META_WEBHOOK_VERIFY_TOKEN في Vercel قبل ربط Callback التعليقات.</MarketingAlert> : null}
         <code>{callbackUrl}</code>
         <p>ضع الرابط في Meta App، واستخدم نفس قيمة META_WEBHOOK_VERIFY_TOKEN. استقبال Instagram يتطلب تفعيل حقل comments داخل Webhooks الخاص بـInstagram.</p>
       </div>

@@ -18,7 +18,7 @@ check("Meta errors preserve code subcode and trace", backend.includes("subcode:"
 check("missing token permissions reported explicitly", backend.includes("التوكن الحالي لا يحتوي الصلاحيات المطلوبة"));
 check("subscription result persisted per platform", backend.includes("engagementWebhookSubscription: { result: item, updatedAt }") && backend.includes("where platform=${item.platform}"));
 check("stored subscription result returned on page load", backend.includes("subscriptionResults") && backend.includes("engagementWebhookSubscription"));
-check("UI keeps per-platform results", page.includes("setSubscriptionResults") && page.includes("حالة استقبال التفاعلات من Meta"));
+check("UI keeps per-platform results", page.includes("setSubscriptionResults") && page.includes("حالة استقبال التعليقات من Meta"));
 check("UI displays original Meta diagnostics", page.includes("Meta Error Code") && page.includes("Trace ID") && page.includes("صلاحيات ناقصة"));
 check("partial result is shown as error", page.includes("if (result.subscriptionOk) setMessage(result.message); else setError(result.message)"));
 check("subscription details styling exists", css.includes(".marketing-subscription-results"));

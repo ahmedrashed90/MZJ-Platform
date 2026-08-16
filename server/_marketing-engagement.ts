@@ -75,10 +75,11 @@ function addLead(bucket: ResultMetricBucket, leadId: string, sold: boolean, sold
 }
 
 function addEngagementToBucket(bucket: ResultMetricBucket, row: any) {
+  // Individual engagement rows are intentionally comment-only. Likes/reactions and shares
+  // remain aggregate platform metrics and must never create CRM identity/event rows.
+  if (clean(row.engagement_type) !== "comment") return;
   bucket.identifiedEngagements += 1;
-  if (row.engagement_type === "comment") bucket.commentEvents += 1;
-  if (row.engagement_type === "like") bucket.likeEvents += 1;
-  if (row.engagement_type === "share") bucket.shareEvents += 1;
+  bucket.commentEvents += 1;
   const actorId = clean(row.actor_id);
   if (actorId) bucket.actors.add(`${clean(row.platform)}:${clean(row.account_id)}:${actorId}`);
   const leadId = clean(row.crm_lead_id);
@@ -174,7 +175,7 @@ export async function engagementResultsData(
       from marketing.post_engagements pe
       join marketing.published_posts pp on pp.id=pe.published_post_id
       left join crm.leads l on l.id=pe.crm_lead_id
-      where pe.is_deleted=false and pp.is_deleted=false and pp.source_type=${sourceType} and pp.source_id=${sourceId}::uuid
+      where pe.is_deleted=false and pe.engagement_type='comment' and pp.is_deleted=false and pp.source_type=${sourceType} and pp.source_id=${sourceId}::uuid
       order by coalesce(pe.engaged_at,pe.created_at) desc
     `
     : await sql<any[]>`
@@ -184,7 +185,7 @@ export async function engagementResultsData(
       from marketing.post_engagements pe
       join marketing.published_posts pp on pp.id=pe.published_post_id
       left join crm.leads l on l.id=pe.crm_lead_id
-      where pe.is_deleted=false and pp.is_deleted=false
+      where pe.is_deleted=false and pe.engagement_type='comment' and pp.is_deleted=false
       order by coalesce(pe.engaged_at,pe.created_at) desc
     `;
   const connections = await sql<any[]>`
@@ -419,24 +420,27 @@ function platformDisplayName(platform: string) {
   return platform;
 }
 
-/**
- * Facebook Page post nodes must be addressed with the full Page post id.
- * Publishing endpoints for videos/Reels can return only the media/video id,
- * so normalize it once using the Page account id and persist the canonical id.
- */
-function facebookPostNodeId(accountId: unknown, providerPostId: unknown) {
-  const pageId = clean(accountId);
-  const postId = clean(providerPostId);
-  if (!postId || !pageId || postId.includes("_")) return postId;
-  return `${pageId}_${postId}`;
-}
-
 function publishedIds(platform: string, resultInput: unknown) {
   const result = asObject(resultInput);
   const publish = asObject(result.publish);
   if (platform === "facebook") {
-    const providerPostId = clean(result.post_id || publish.post_id || publish.id || result.video_id || result.id);
-    const providerMediaId = clean(result.video_id || result.id || asArray(result.uploads)[0]?.id || providerPostId);
+    const format = clean(result.publishFormat).toLowerCase();
+    const uploads = asArray(result.uploads);
+    // Facebook video/Reels publishing returns a media/video id, not a Page Post id.
+    // Keep those identifiers separate. A real Page Post id is resolved from the Page feed below.
+    const providerPostId = clean(
+      result.post_id
+      || result.page_post_id
+      || publish.post_id
+      || (uploads.length || format === "carousel" ? publish.id : ""),
+    );
+    const providerMediaId = clean(
+      result.video_id
+      || result.media_id
+      || result.id
+      || uploads[0]?.id
+      || providerPostId,
+    );
     const permalink = clean(result.permalink_url || publish.permalink_url || result.url);
     return { providerPostId, providerMediaId, permalink };
   }
@@ -459,11 +463,103 @@ function publishedIds(platform: string, resultInput: unknown) {
   return { providerPostId, providerMediaId, permalink };
 }
 
+function attachmentTargetIds(value: unknown): string[] {
+  const output = new Set<string>();
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const item of node) visit(item); return; }
+    const object = node as Record<string, any>;
+    const targetId = clean(object.target?.id);
+    if (targetId) output.add(targetId);
+    for (const child of Object.values(object)) visit(child);
+  };
+  visit(value);
+  return [...output];
+}
+
+function sameFacebookPermalink(left: unknown, right: unknown, mediaId: string) {
+  const a = clean(left).replace(/\/$/, "");
+  const b = clean(right).replace(/\/$/, "");
+  if (a && b && a === b) return true;
+  if (!mediaId) return false;
+  return Boolean((a && a.includes(mediaId)) || (b && b.includes(mediaId)));
+}
+
+async function resolveFacebookPagePostId(pageId: string, token: string, mediaId: string) {
+  const normalizedPageId = clean(pageId);
+  const normalizedMediaId = clean(mediaId);
+  if (!normalizedPageId || !normalizedMediaId) return { postId: "", permalink: "" };
+
+  let mediaPermalink = "";
+  try {
+    const media = await graphRequest(`/${encodeURIComponent(normalizedMediaId)}`, "GET", token, {
+      fields: "id,permalink_url,created_time",
+    });
+    mediaPermalink = clean(media?.permalink_url);
+  } catch {
+    // A video/reel node is not a Page Post node. Feed matching below remains authoritative.
+  }
+
+  const edges = ["published_posts", "feed"];
+  for (const edge of edges) {
+    let collection: { data: any[] };
+    try {
+      collection = await graphCollection(`/${encodeURIComponent(normalizedPageId)}/${edge}`, token, {
+        fields: "id,created_time,permalink_url,attachments{target}",
+        limit: 100,
+      }, "facebook", 5);
+    } catch {
+      try {
+        collection = await graphCollection(`/${encodeURIComponent(normalizedPageId)}/${edge}`, token, {
+          fields: "id,created_time,permalink_url",
+          limit: 100,
+        }, "facebook", 5);
+      } catch {
+        continue;
+      }
+    }
+
+    for (const row of collection.data) {
+      const targetIds = attachmentTargetIds(row?.attachments);
+      if (targetIds.includes(normalizedMediaId) || sameFacebookPermalink(row?.permalink_url, mediaPermalink, normalizedMediaId)) {
+        return { postId: clean(row?.id), permalink: clean(row?.permalink_url || mediaPermalink) };
+      }
+    }
+  }
+  return { postId: "", permalink: mediaPermalink };
+}
+
+async function resolveFacebookPostForStoredRow(sql: ReturnType<typeof getSql>, post: any, token: string) {
+  const storedPostId = clean(post.provider_post_id);
+  const mediaId = clean(post.provider_media_id || storedPostId);
+  const pageId = clean(post.account_id);
+  const suspiciousComposedId = Boolean(storedPostId && mediaId && storedPostId === `${pageId}_${mediaId}`);
+
+  // Media/video ids and Page Post ids are separate identifiers. When media is available,
+  // resolve the real Page Post from the Page collection instead of manufacturing or guessing an id.
+  if (mediaId && (!storedPostId || storedPostId === mediaId || suspiciousComposedId)) {
+    const resolved = await resolveFacebookPagePostId(pageId, token, mediaId);
+    if (resolved.postId) {
+      await sql`
+        update marketing.published_posts
+        set provider_post_id=${resolved.postId},permalink=coalesce(nullif(${resolved.permalink},''),permalink),updated_at=now()
+        where id=${post.id}::uuid
+      `;
+      return { postId: resolved.postId, permalink: clean(resolved.permalink || post.permalink), resolved: true };
+    }
+    return { postId: "", permalink: clean(resolved.permalink || post.permalink), resolved: false };
+  }
+
+  // IDs returned directly by a Page publishing endpoint (for example feed/carousel posts)
+  // are already Page Post ids and can be used as-is.
+  if (storedPostId) return { postId: storedPostId, permalink: clean(post.permalink), resolved: true };
+  return { postId: "", permalink: clean(post.permalink), resolved: false };
+}
+
 export async function recordPublishedPost(sql: ReturnType<typeof getSql>, schedule: any, result: unknown) {
   const platform = resultPlatform(schedule.platform_code || schedule.platform);
   if (!platform) return null;
-  const { providerPostId, providerMediaId, permalink } = publishedIds(platform, result);
-  if (!providerPostId) throw new Error("لم ترجع المنصة معرف المنشور بعد نجاح النشر");
+  let { providerPostId, providerMediaId, permalink } = publishedIds(platform, result);
   const [connection] = await sql<any[]>`
     select platform,page_id,ig_user_id,account_id from marketing.platform_connections where platform=${platform} and connected=true limit 1
   `;
@@ -473,15 +569,30 @@ export async function recordPublishedPost(sql: ReturnType<typeof getSql>, schedu
       ? clean(connection?.ig_user_id || connection?.account_id)
       : clean(connection?.account_id);
   if (!accountId) throw new Error(`حساب ${platformDisplayName(platform)} غير مكتمل`);
-  const canonicalProviderPostId = platform === "facebook" ? facebookPostNodeId(accountId, providerPostId) : providerPostId;
+  if (!providerPostId && !providerMediaId) throw new Error("لم ترجع المنصة معرف المنشور أو الميديا بعد نجاح النشر");
+
+  let resolutionWarning = "";
+  if (platform === "facebook" && !providerPostId && providerMediaId) {
+    try {
+      const linked = await platformConnection(sql, "facebook");
+      const resolved = await resolveFacebookPagePostId(accountId, linked.token, providerMediaId);
+      providerPostId = clean(resolved.postId);
+      permalink = clean(resolved.permalink || permalink);
+      if (!providerPostId) resolutionWarning = "بانتظار ظهور معرف Page Post الحقيقي من Facebook";
+    } catch (error: any) {
+      resolutionWarning = clean(error?.message) || "تعذر تحديد معرف Page Post من Facebook";
+    }
+  }
+
   const [row] = await sql<any[]>`
     insert into marketing.published_posts(
       schedule_id,source_type,source_id,creative_id,task_id,platform,account_id,provider_post_id,provider_media_id,permalink,post_type_name,published_at,raw_metrics
     ) values(
       ${schedule.id}::uuid,${schedule.source_type},${schedule.source_id}::uuid,${schedule.creative_id || null}::uuid,${schedule.task_id || null}::uuid,
-      ${platform},${accountId},${canonicalProviderPostId},${providerMediaId || null},${permalink || null},${clean(schedule.post_type_name) || null},now(),${sql.json({ publishResult: result } as any)}
+      ${platform},${accountId},${providerPostId || null},${providerMediaId || null},${permalink || null},${clean(schedule.post_type_name) || null},now(),
+      ${sql.json({ publishResult: result, providerPostResolution: resolutionWarning ? { status: "pending", warning: resolutionWarning } : { status: "resolved" } } as any)}
     ) on conflict(schedule_id) do update set
-      platform=excluded.platform,account_id=excluded.account_id,provider_post_id=excluded.provider_post_id,provider_media_id=excluded.provider_media_id,
+      platform=excluded.platform,account_id=excluded.account_id,provider_post_id=coalesce(excluded.provider_post_id,marketing.published_posts.provider_post_id),provider_media_id=coalesce(excluded.provider_media_id,marketing.published_posts.provider_media_id),
       permalink=coalesce(excluded.permalink,marketing.published_posts.permalink),post_type_name=excluded.post_type_name,published_at=excluded.published_at,
       sync_status='pending',sync_error=null,raw_metrics=coalesce(marketing.published_posts.raw_metrics,'{}'::jsonb)||excluded.raw_metrics,updated_at=now()
     returning *,id::text,schedule_id::text,source_id::text,creative_id::text,task_id::text
@@ -544,7 +655,7 @@ async function repairStoredEngagementSources(sql: ReturnType<typeof getSql>) {
         select distinct on(pe.crm_lead_id) pe.crm_lead_id,pp.platform
         from marketing.post_engagements pe
         join marketing.published_posts pp on pp.id=pe.published_post_id
-        where pe.crm_lead_id is not null and pe.processing_status='created' and pe.is_deleted=false and pp.is_deleted=false
+        where pe.crm_lead_id is not null and pe.engagement_type='comment' and pe.processing_status='created' and pe.is_deleted=false and pp.is_deleted=false
         order by pe.crm_lead_id,coalesce(pe.engaged_at,pe.created_at) desc
       )
       update crm.leads l
@@ -571,6 +682,40 @@ async function platformConnection(sql: ReturnType<typeof getSql>, platform: stri
   return { connection, token };
 }
 
+function graphHostForConnection(platform: string, connection: any): MetaGraphHost {
+  if (platform === "instagram" && connectionScopes(connection).some((scope) => scope.startsWith("instagram_business_"))) {
+    return "instagram";
+  }
+  return "facebook";
+}
+
+async function graphCollection(
+  path: string,
+  token: string,
+  params: Record<string, any> = {},
+  host: MetaGraphHost = "facebook",
+  maxPages = 25,
+) {
+  const data: any[] = [];
+  let after = "";
+  let pages = 0;
+  let complete = true;
+  while (pages < maxPages) {
+    const payload = await graphRequest(path, "GET", token, { ...params, after: after || undefined }, host);
+    data.push(...asArray(payload?.data));
+    pages += 1;
+    const nextAfter = clean(payload?.paging?.cursors?.after);
+    const hasNext = Boolean(payload?.paging?.next && nextAfter && nextAfter !== after);
+    if (!hasNext) break;
+    if (pages >= maxPages) {
+      complete = false;
+      break;
+    }
+    after = nextAfter;
+  }
+  return { data, pages, complete };
+}
+
 async function youtubeVideoStatistics(sql: ReturnType<typeof getSql>, post: any) {
   const { accessToken } = await getYouTubeAccessToken(sql);
   const videoId = clean(post.provider_media_id || post.provider_post_id);
@@ -586,40 +731,251 @@ async function youtubeVideoStatistics(sql: ReturnType<typeof getSql>, post: any)
   return { payload, videoId, video };
 }
 
+type CommentEngagementInput = {
+  platform: "facebook" | "instagram";
+  accountId: string;
+  postIds: string[];
+  eventId: string;
+  actorId: string;
+  actorName: string;
+  text: string;
+  engagedAt: string;
+  raw: any;
+};
+
+function commentTimestamp(value: unknown, fallback: unknown = Date.now()) {
+  const text = clean(value);
+  if (text) {
+    const parsed = Date.parse(text);
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+    const numeric = numberValue(value);
+    if (numeric > 0) return new Date(numeric > 10_000_000_000 ? numeric : numeric * 1000).toISOString();
+  }
+  const fallbackNumber = numberValue(fallback);
+  return new Date(fallbackNumber > 10_000_000_000 ? fallbackNumber : fallbackNumber > 0 ? fallbackNumber * 1000 : Date.now()).toISOString();
+}
+
+function remoteCommentInput(platform: "facebook" | "instagram", post: any, row: any): CommentEngagementInput | null {
+  const eventId = clean(row?.id || row?.comment_id);
+  if (!eventId) return null;
+  const from = asObject(row?.from);
+  const actorId = clean(from?.id || from?.ig_scoped_id || from?.username);
+  const accountId = clean(post.account_id);
+  if (!actorId || actorId === accountId) return null;
+  if (platform === "facebook") {
+    return {
+      platform,
+      accountId,
+      postIds: [clean(post.provider_post_id)].filter(Boolean),
+      eventId,
+      actorId,
+      actorName: clean(from?.name) || "عميل Facebook",
+      text: clean(row?.message),
+      engagedAt: commentTimestamp(row?.created_time),
+      raw: row,
+    };
+  }
+  return {
+    platform,
+    accountId,
+    postIds: [clean(post.provider_media_id || post.provider_post_id)].filter(Boolean),
+    eventId,
+    actorId,
+    actorName: clean(from?.username || from?.name) || "عميل Instagram",
+    text: clean(row?.text || row?.message),
+    engagedAt: commentTimestamp(row?.timestamp),
+    raw: row,
+  };
+}
+
+async function upsertCommentAndCrm(sql: ReturnType<typeof getSql>, post: any, item: CommentEngagementInput) {
+  if (!item.eventId || !item.actorId || item.actorId === item.accountId) {
+    return { status: "ignored" as const, leadId: "", createdEvent: false };
+  }
+
+  const [existing] = await sql<any[]>`
+    select *,id::text,crm_lead_id::text from marketing.post_engagements
+    where platform=${item.platform} and engagement_type='comment' and provider_event_id=${item.eventId}
+    limit 1
+  `;
+
+  const [eventRow] = await sql<any[]>`
+    insert into marketing.post_engagements(
+      published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,engaged_at,raw_payload
+    ) values(
+      ${post.id}::uuid,${item.platform},'comment',${item.eventId},${item.postIds[0] || post.provider_post_id || post.provider_media_id || null},${item.accountId},
+      ${item.actorId},${item.actorName},${item.text || null},${item.engagedAt}::timestamptz,${sql.json(item.raw as any)}
+    ) on conflict(platform,engagement_type,provider_event_id) do update set
+      published_post_id=excluded.published_post_id,
+      provider_post_id=coalesce(excluded.provider_post_id,marketing.post_engagements.provider_post_id),
+      account_id=excluded.account_id,
+      actor_id=excluded.actor_id,
+      actor_name=coalesce(nullif(excluded.actor_name,''),marketing.post_engagements.actor_name),
+      event_text=coalesce(excluded.event_text,marketing.post_engagements.event_text),
+      engaged_at=coalesce(excluded.engaged_at,marketing.post_engagements.engaged_at),
+      raw_payload=coalesce(marketing.post_engagements.raw_payload,'{}'::jsonb)||excluded.raw_payload,
+      is_deleted=case when marketing.post_engagements.deleted_by is null then false else marketing.post_engagements.is_deleted end,
+      deleted_at=case when marketing.post_engagements.deleted_by is null then null else marketing.post_engagements.deleted_at end,
+      updated_at=now()
+    returning *,id::text,crm_lead_id::text
+  `;
+
+  if (existing?.deleted_by) return { status: "hidden" as const, leadId: clean(existing.crm_lead_id), createdEvent: false };
+  const existingLeadId = clean(eventRow?.crm_lead_id || existing?.crm_lead_id);
+  if (existingLeadId && ["created", "reused"].includes(clean(eventRow?.processing_status || existing?.processing_status))) {
+    return { status: "duplicate" as const, leadId: existingLeadId, createdEvent: !existing };
+  }
+
+  try {
+    const lead = await createCrmLeadFromComment(sql, post, item);
+    await sql`
+      update marketing.post_engagements
+      set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now()
+      where id=${eventRow.id}::uuid
+    `;
+    if (!lead.reused) {
+      await emitSocialEngagementLeadNotification({
+        eventKey: item.eventId,
+        leadId: lead.leadId,
+        publishedPostId: post.id,
+        platform: item.platform,
+        engagementType: "comment",
+        actorId: item.actorId,
+        actorName: item.actorName,
+        eventText: item.text,
+        engagedAt: item.engagedAt,
+      }).catch((notificationError: unknown) => console.error("Post comment CRM notification failed", {
+        eventId: item.eventId,
+        leadId: lead.leadId,
+        notificationError,
+      }));
+    }
+    return { status: lead.reused ? "reused" as const : "created" as const, leadId: lead.leadId, createdEvent: !existing };
+  } catch (error: any) {
+    const message = clean(error?.message) || "تعذر تحويل التعليق إلى CRM";
+    await sql`
+      update marketing.post_engagements
+      set processing_status='failed',processing_error=${message},updated_at=now()
+      where id=${eventRow.id}::uuid
+    `;
+    throw error;
+  }
+}
+
+async function reconcileRemovedComments(sql: ReturnType<typeof getSql>, post: any, activeCommentIds: string[]) {
+  if (activeCommentIds.length) {
+    const removed = await sql<any[]>`
+      update marketing.post_engagements
+      set is_deleted=true,deleted_at=coalesce(deleted_at,now()),processing_error=null,updated_at=now()
+      where published_post_id=${post.id}::uuid and engagement_type='comment' and is_deleted=false and deleted_by is null
+        and not(provider_event_id=any(${activeCommentIds}::text[]))
+      returning id::text,provider_event_id
+    `;
+    return removed.length;
+  }
+  const removed = await sql<any[]>`
+    update marketing.post_engagements
+    set is_deleted=true,deleted_at=coalesce(deleted_at,now()),processing_error=null,updated_at=now()
+    where published_post_id=${post.id}::uuid and engagement_type='comment' and is_deleted=false and deleted_by is null
+    returning id::text,provider_event_id
+  `;
+  return removed.length;
+}
+
+async function syncRemoteComments(
+  sql: ReturnType<typeof getSql>,
+  post: any,
+  token: string,
+  host: MetaGraphHost,
+) {
+  const platform = clean(post.platform) as "facebook" | "instagram";
+  if (platform !== "facebook" && platform !== "instagram") return { synced: 0, removed: 0, skipped: 0, pages: 0 };
+  const nodeId = platform === "facebook" ? clean(post.provider_post_id) : clean(post.provider_media_id || post.provider_post_id);
+  if (!nodeId) return { synced: 0, removed: 0, skipped: 0, pages: 0 };
+
+  const collection = platform === "facebook"
+    ? await graphCollection(`/${encodeURIComponent(nodeId)}/comments`, token, {
+      fields: "id,from,message,created_time,parent",
+      limit: 100,
+      order: "chronological",
+    }, "facebook")
+    : await graphCollection(`/${encodeURIComponent(nodeId)}/comments`, token, {
+      fields: "id,from,text,timestamp,media,parent_id",
+      limit: 100,
+    }, host);
+
+  const activeIds: string[] = [];
+  let synced = 0;
+  let skipped = 0;
+  for (const row of collection.data) {
+    const eventId = clean(row?.id || row?.comment_id);
+    if (eventId) activeIds.push(eventId);
+    const item = remoteCommentInput(platform, post, row);
+    if (!item) { skipped += 1; continue; }
+    try {
+      await upsertCommentAndCrm(sql, post, item);
+      synced += 1;
+    } catch (error) {
+      console.error("Remote post comment CRM sync failed", { platform, postId: post.id, eventId: item.eventId, error });
+      skipped += 1;
+    }
+  }
+  const removed = collection.complete ? await reconcileRemovedComments(sql, post, [...new Set(activeIds)]) : 0;
+  return { synced, removed, skipped, pages: collection.pages, complete: collection.complete };
+}
+
 async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
   try {
     let payload: any;
     let likes = numberValue(post.likes_count), comments = numberValue(post.comments_count), shares = numberValue(post.shares_count);
     let saves = numberValue(post.saves_count), views = numberValue(post.views_count), reach = numberValue(post.reach_count);
     let permalink = clean(post.permalink);
-    let providerPostId = clean(post.provider_post_id);
     let syncStatus: "pending" | "synced" = "synced";
     let syncError = "";
+    let commentSync: any = null;
 
     if (post.platform === "facebook") {
-      const { connection, token } = await platformConnection(sql, post.platform);
-      const pageId = clean(post.account_id || connection?.page_id || connection?.account_id);
-      providerPostId = facebookPostNodeId(pageId, providerPostId);
-      if (!providerPostId) throw new Error("معرف منشور Facebook غير موجود");
-      payload = await graphRequest(`/${encodeURIComponent(providerPostId)}`, "GET", token, {
-        fields: "id,permalink_url,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares",
-      });
-      likes = numberValue(payload?.reactions?.summary?.total_count);
-      comments = numberValue(payload?.comments?.summary?.total_count);
-      shares = numberValue(payload?.shares?.count);
-      permalink = clean(payload?.permalink_url || permalink);
+      const linked = await platformConnection(sql, post.platform);
+      const resolved = await resolveFacebookPostForStoredRow(sql, post, linked.token);
+      if (!resolved.resolved || !resolved.postId) {
+        syncStatus = "pending";
+        syncError = "بانتظار ظهور معرف Page Post الحقيقي من Facebook";
+        payload = {
+          warning: syncError,
+          providerMediaId: clean(post.provider_media_id),
+          providerPostId: clean(post.provider_post_id),
+        };
+        permalink = clean(resolved.permalink || permalink);
+      } else {
+        const workingPost = { ...post, provider_post_id: resolved.postId, permalink: resolved.permalink || post.permalink };
+        payload = await graphRequest(`/${encodeURIComponent(resolved.postId)}`, "GET", linked.token, {
+          fields: "id,permalink_url,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares",
+        }, "facebook");
+        likes = numberValue(payload?.reactions?.summary?.total_count);
+        comments = numberValue(payload?.comments?.summary?.total_count);
+        shares = numberValue(payload?.shares?.count);
+        permalink = clean(payload?.permalink_url || resolved.permalink || permalink);
+        try {
+          commentSync = await syncRemoteComments(sql, workingPost, linked.token, "facebook");
+        } catch (error: any) {
+          commentSync = { warning: clean(error?.message) || "تعذر مزامنة تعليقات Facebook" };
+        }
+      }
     } else if (post.platform === "instagram") {
-      const { token } = await platformConnection(sql, post.platform);
-      payload = await graphRequest(`/${encodeURIComponent(post.provider_media_id || post.provider_post_id)}`, "GET", token, {
+      const linked = await platformConnection(sql, post.platform);
+      const host = graphHostForConnection(post.platform, linked.connection);
+      const mediaId = clean(post.provider_media_id || post.provider_post_id);
+      if (!mediaId) throw new Error("معرف Media الخاص بـInstagram غير موجود");
+      payload = await graphRequest(`/${encodeURIComponent(mediaId)}`, "GET", linked.token, {
         fields: "id,permalink,like_count,comments_count,media_type,timestamp",
-      });
+      }, host);
       likes = numberValue(payload?.like_count);
       comments = numberValue(payload?.comments_count);
       permalink = clean(payload?.permalink || permalink);
       try {
-        const insight = await graphRequest(`/${encodeURIComponent(post.provider_media_id || post.provider_post_id)}/insights`, "GET", token, {
+        const insight = await graphRequest(`/${encodeURIComponent(mediaId)}/insights`, "GET", linked.token, {
           metric: "reach,views,saved,shares",
-        });
+        }, host);
         for (const metric of asArray(insight?.data)) {
           const value = numberValue(asArray(metric?.values)[0]?.value ?? metric?.value);
           if (metric?.name === "reach") reach = value;
@@ -630,6 +986,11 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
         payload = { ...payload, insights: insight };
       } catch (error: any) {
         payload = { ...payload, insightsWarning: clean(error?.message) };
+      }
+      try {
+        commentSync = await syncRemoteComments(sql, { ...post, provider_media_id: mediaId }, linked.token, host);
+      } catch (error: any) {
+        commentSync = { warning: clean(error?.message) || "تعذر مزامنة تعليقات Instagram" };
       }
     } else if (post.platform === "youtube") {
       const youtube = await youtubeVideoStatistics(sql, post);
@@ -647,9 +1008,10 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
       syncError = clean(payload.warning);
     }
 
+    if (commentSync) payload = { ...asObject(payload), commentSync };
     await sql.begin(async tx => {
       await tx`
-        update marketing.published_posts set provider_post_id=${providerPostId || post.provider_post_id},permalink=${permalink || null},likes_count=${likes},comments_count=${comments},shares_count=${shares},
+        update marketing.published_posts set permalink=${permalink || null},likes_count=${likes},comments_count=${comments},shares_count=${shares},
           saves_count=${saves},views_count=${views},reach_count=${reach},last_synced_at=now(),sync_status=${syncStatus},sync_error=${syncError || null},
           raw_metrics=coalesce(raw_metrics,'{}'::jsonb)||${tx.json({ latest: payload } as any)}::jsonb,updated_at=now()
         where id=${post.id}::uuid
@@ -661,7 +1023,7 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
           shares_count=excluded.shares_count,saves_count=excluded.saves_count,views_count=excluded.views_count,reach_count=excluded.reach_count,updated_at=now()
       `;
     });
-    return { id: post.id, ok: true, skipped: syncStatus === "pending" };
+    return { id: post.id, ok: true, skipped: syncStatus === "pending", commentSync };
   } catch (error: any) {
     const message = clean(error?.message) || "تعذر تحديث التفاعل";
     await sql`update marketing.published_posts set last_synced_at=now(),sync_status='failed',sync_error=${message},updated_at=now() where id=${post.id}::uuid`;
@@ -715,7 +1077,7 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     left join marketing.creatives cr on cr.id=pp.creative_id
     left join crm.leads l on l.id=pe.crm_lead_id
     left join core.users sales on sales.id=l.assigned_to
-    where pe.is_deleted=false and pp.is_deleted=false
+    where pe.is_deleted=false and pe.engagement_type='comment' and pp.is_deleted=false
     order by coalesce(pe.engaged_at,pe.created_at) desc limit 500
   `;
   const activeRows = rows.filter((row: any) => !row.archived_at);
@@ -729,13 +1091,12 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     views: total.views + numberValue(row.views_count),
     reach: total.reach + numberValue(row.reach_count),
   }), { posts: 0, likes: 0, comments: 0, shares: 0, saves: 0, views: 0, reach: 0 });
-  const engagementSummary = activeEngagements.reduce((total: any, row: any) => {
-    total.engagements += 1;
-    if (row.engagement_type === 'comment') total.commentEvents += 1;
-    if (row.engagement_type === 'like') total.likeEvents += 1;
-    if (row.engagement_type === 'share') total.shareEvents += 1;
-    return total;
-  }, { engagements: 0, commentEvents: 0, likeEvents: 0, shareEvents: 0 });
+  const engagementSummary = {
+    engagements: activeEngagements.length,
+    commentEvents: activeEngagements.length,
+    likeEvents: 0,
+    shareEvents: 0,
+  };
   const crmLeads = new Set(activeEngagements.map((row: any) => clean(row.crm_lead_id)).filter(Boolean)).size;
   const connections = await sql<any[]>`select platform,metadata from marketing.platform_connections where platform in ('facebook','instagram') order by platform`;
   const subscriptionResults = connections.flatMap((row: any) => {
@@ -894,11 +1255,11 @@ export async function subscribeMetaEngagementWebhooks(sql: ReturnType<typeof get
   };
 }
 
-type EngagementType = 'comment' | 'like' | 'share';
-
-type NormalizedEngagement = {
-  platform: 'facebook' | 'instagram';
-  engagementType: EngagementType;
+type NormalizedMetaEvent = {
+  platform: "facebook" | "instagram";
+  kind: "comment_added" | "comment_removed" | "metrics_changed";
+  metric?: "reaction" | "share";
+  verb?: "add" | "remove" | "update";
   accountId: string;
   postIds: string[];
   eventId: string;
@@ -909,12 +1270,6 @@ type NormalizedEngagement = {
   raw: any;
 };
 
-function engagementPreview(item: NormalizedEngagement) {
-  if (item.engagementType === 'comment') return item.text || 'تعليق على منشور';
-  if (item.engagementType === 'like') return 'تفاعل بالإعجاب على منشور';
-  return 'مشاركة منشور';
-}
-
 function normalizedChanges(entry: any) {
   const changes = asArray(entry?.changes);
   if (changes.length) return changes;
@@ -922,56 +1277,77 @@ function normalizedChanges(entry: any) {
   return field ? [{ field, value: entry?.value }] : [];
 }
 
-function normalizeWebhook(payload: any): NormalizedEngagement[] {
-  const output: NormalizedEngagement[] = [];
+function normalizeWebhook(payload: any): NormalizedMetaEvent[] {
+  const output: NormalizedMetaEvent[] = [];
   const object = clean(payload?.object).toLowerCase();
   for (const entry of asArray(payload?.entry)) {
     const accountId = clean(entry?.id);
     for (const change of normalizedChanges(entry)) {
       const value = asObject(change?.value);
       const field = clean(change?.field);
-      if (object === 'page' && field === 'feed' && clean(value?.verb) === 'add') {
-        const item = clean(value?.item);
+      if (object === "page" && field === "feed") {
+        const item = clean(value?.item).toLowerCase();
+        const verbRaw = clean(value?.verb).toLowerCase();
+        const verb = verbRaw === "remove" ? "remove" : verbRaw === "update" ? "update" : "add";
         const from = asObject(value?.from || value?.actor);
         const actorId = clean(from?.id);
-        const actorName = clean(from?.name) || 'عميل Facebook';
-        const postIds = [clean(value?.post_id), clean(value?.parent_id)].filter(Boolean);
-        const timestamp = value?.created_time
-          ? new Date(numberValue(value.created_time) * 1000).toISOString()
-          : new Date(numberValue(entry?.time) * 1000 || Date.now()).toISOString();
-        if (item === 'comment') {
+        const actorName = clean(from?.name) || "عميل Facebook";
+        const postIds = [...new Set([
+          clean(value?.post_id),
+          clean(value?.parent_id),
+          clean(value?.video_id),
+        ].filter(Boolean))];
+        const engagedAt = commentTimestamp(value?.created_time, entry?.time);
+
+        if (item === "comment") {
           const eventId = clean(value?.comment_id || value?.id);
-          if (eventId && actorId) output.push({
-            platform: 'facebook', engagementType: 'comment', accountId, postIds, eventId, actorId, actorName,
-            text: clean(value?.message), engagedAt: timestamp, raw: change,
-          });
+          if (!eventId) continue;
+          if (verb === "remove") {
+            output.push({
+              platform: "facebook", kind: "comment_removed", verb, accountId, postIds, eventId,
+              actorId, actorName, text: clean(value?.message), engagedAt, raw: change,
+            });
+          } else if (actorId) {
+            output.push({
+              platform: "facebook", kind: "comment_added", verb, accountId, postIds, eventId,
+              actorId, actorName, text: clean(value?.message), engagedAt, raw: change,
+            });
+          }
+          continue;
         }
-        if (item === 'reaction') {
-          const eventId = clean(value?.reaction_id || value?.id) || `${postIds[0] || 'post'}:${actorId}:${clean(value?.reaction_type) || 'like'}`;
-          if (eventId && actorId) output.push({
-            platform: 'facebook', engagementType: 'like', accountId, postIds, eventId, actorId, actorName,
-            text: clean(value?.reaction_type) || 'LIKE', engagedAt: timestamp, raw: change,
-          });
-        }
-        if (item === 'share') {
-          const eventId = clean(value?.share_id || value?.id) || `${postIds[0] || 'post'}:${actorId}:share`;
-          if (eventId && actorId) output.push({
-            platform: 'facebook', engagementType: 'share', accountId, postIds, eventId, actorId, actorName,
-            text: '', engagedAt: timestamp, raw: change,
+
+        if (item === "reaction" || item === "share") {
+          const metric = item === "reaction" ? "reaction" : "share";
+          const eventId = clean(value?.reaction_id || value?.share_id || value?.id)
+            || `${postIds[0] || "post"}:${metric}:${verb}:${clean(value?.reaction_type) || actorId || "aggregate"}`;
+          output.push({
+            platform: "facebook", kind: "metrics_changed", metric, verb, accountId, postIds, eventId,
+            actorId, actorName, text: metric === "reaction" ? clean(value?.reaction_type) : "", engagedAt, raw: change,
           });
         }
       }
-      if (object === 'instagram' && field === 'comments') {
+
+      if (object === "instagram" && field === "comments") {
         const from = asObject(value?.from);
         const media = asObject(value?.media);
         const eventId = clean(value?.id || value?.comment_id);
+        if (!eventId) continue;
         const actorId = clean(from?.id || from?.ig_scoped_id || from?.username);
-        if (eventId && actorId) output.push({
-          platform: 'instagram', engagementType: 'comment', accountId,
-          postIds: [clean(media?.id), clean(value?.media_id)].filter(Boolean),
-          eventId, actorId, actorName: clean(from?.username || from?.name) || 'عميل Instagram',
+        const verbRaw = clean(value?.verb).toLowerCase();
+        const removed = verbRaw === "remove" || value?.deleted === true || value?.is_deleted === true;
+        const postIds = [...new Set([clean(media?.id), clean(value?.media_id)].filter(Boolean))];
+        output.push({
+          platform: "instagram",
+          kind: removed ? "comment_removed" : "comment_added",
+          verb: removed ? "remove" : "add",
+          accountId,
+          postIds,
+          eventId,
+          actorId,
+          actorName: clean(from?.username || from?.name) || "عميل Instagram",
           text: clean(value?.text || value?.message),
-          engagedAt: new Date(numberValue(entry?.time) * 1000 || Date.now()).toISOString(), raw: change,
+          engagedAt: commentTimestamp(value?.timestamp, entry?.time),
+          raw: change,
         });
       }
     }
@@ -979,31 +1355,90 @@ function normalizeWebhook(payload: any): NormalizedEngagement[] {
   return output;
 }
 
-async function findPublishedPost(sql: ReturnType<typeof getSql>, item: NormalizedEngagement) {
+async function exactPublishedPost(sql: ReturnType<typeof getSql>, item: NormalizedMetaEvent) {
   const candidates = [...new Set(item.postIds.map(clean).filter(Boolean))];
   if (!candidates.length) return null;
   const [post] = await sql<any[]>`
     select *,id::text,source_id::text,creative_id::text,task_id::text from marketing.published_posts
     where platform=${item.platform} and account_id=${item.accountId} and is_deleted=false
-      and (provider_post_id=any(${candidates}::text[]) or coalesce(provider_media_id,'')=any(${candidates}::text[]))
+      and (coalesce(provider_post_id,'')=any(${candidates}::text[]) or coalesce(provider_media_id,'')=any(${candidates}::text[]))
     order by published_at desc limit 1
   `;
   return post || null;
 }
 
-async function createCrmLeadFromEngagement(sql: ReturnType<typeof getSql>, post: any, item: NormalizedEngagement) {
-  const sourceCode = item.platform === 'facebook' ? 'facebook_post' : 'instagram_post';
-  const sourceName = item.platform === 'facebook' ? 'بوست فيس بوك' : 'بوست انستجرام';
-  const preview = engagementPreview(item);
+async function findPublishedPost(sql: ReturnType<typeof getSql>, item: NormalizedMetaEvent) {
+  const direct = await exactPublishedPost(sql, item);
+  if (direct || item.platform !== "facebook") return direct;
+  const candidates = [...new Set(item.postIds.map(clean).filter(Boolean))];
+  if (!candidates.length) return null;
+
+  let token = "";
+  try {
+    token = (await platformConnection(sql, "facebook")).token;
+  } catch {
+    return null;
+  }
+
+  // A Page feed webhook contains the real post id. Resolve its attachment target(s) back to
+  // the media/video id saved during publishing, then persist the real Page Post id once.
+  for (const candidate of candidates) {
+    try {
+      const node = await graphRequest(`/${encodeURIComponent(candidate)}`, "GET", token, {
+        fields: "id,permalink_url,attachments{target}",
+      }, "facebook");
+      const mediaIds = attachmentTargetIds(node?.attachments);
+      if (!mediaIds.length) continue;
+      const [matched] = await sql<any[]>`
+        select *,id::text,source_id::text,creative_id::text,task_id::text from marketing.published_posts
+        where platform='facebook' and account_id=${item.accountId} and is_deleted=false
+          and coalesce(provider_media_id,'')=any(${mediaIds}::text[])
+        order by published_at desc limit 1
+      `;
+      if (!matched) continue;
+      const realPostId = clean(node?.id || candidate);
+      const permalink = clean(node?.permalink_url || matched.permalink);
+      await sql`
+        update marketing.published_posts
+        set provider_post_id=${realPostId},permalink=coalesce(nullif(${permalink},''),permalink),updated_at=now()
+        where id=${matched.id}::uuid
+      `;
+      return { ...matched, provider_post_id: realPostId, permalink };
+    } catch {
+      // Candidate may be a parent comment id rather than a post id. Try the next candidate.
+    }
+  }
+
+  const unresolved = await sql<any[]>`
+    select *,id::text,source_id::text,creative_id::text,task_id::text from marketing.published_posts
+    where platform='facebook' and account_id=${item.accountId} and is_deleted=false and provider_media_id is not null
+    order by published_at desc limit 12
+  `;
+  for (const row of unresolved) {
+    try {
+      const resolved = await resolveFacebookPostForStoredRow(sql, row, token);
+      if (resolved.postId && candidates.includes(resolved.postId)) {
+        return { ...row, provider_post_id: resolved.postId, permalink: resolved.permalink || row.permalink };
+      }
+    } catch {
+      // Continue scanning recent unresolved records.
+    }
+  }
+  return null;
+}
+
+async function createCrmLeadFromComment(sql: ReturnType<typeof getSql>, post: any, item: CommentEngagementInput) {
+  const sourceCode = item.platform === "facebook" ? "facebook_post" : "instagram_post";
+  const sourceName = item.platform === "facebook" ? "بوست فيس بوك" : "بوست انستجرام";
+  const preview = item.text || "تعليق على منشور";
   const { contact } = await ensureContactIdentity({
     channelCode: item.platform,
     externalId: item.actorId,
     participantId: item.actorId,
     pageId: item.accountId,
     displayName: item.actorName,
-    metadata: { origin: 'post_engagement', engagementType: item.engagementType, sourceCode, providerPostId: post.provider_post_id },
+    metadata: { origin: "post_comment", engagementType: "comment", sourceCode, providerPostId: post.provider_post_id, providerMediaId: post.provider_media_id },
   });
-  // Keep the original stable key so existing comment-created conversations are reused rather than duplicated.
   const legacyId = `post-comment:${item.platform}:${item.accountId}:${item.actorId}`;
   const [conversation] = await sql<any[]>`
     insert into crm.conversations(
@@ -1011,7 +1446,7 @@ async function createCrmLeadFromEngagement(sql: ReturnType<typeof getSql>, post:
       provider,page_id,classification_state,last_customer_message_at,metadata
     ) values(
       ${legacyId},${contact.id}::uuid,${item.platform},${item.actorName},${item.actorId},'open',${preview},1,${item.engagedAt}::timestamptz,
-      'meta',${item.accountId},'new',${item.engagedAt}::timestamptz,${sql.json({ origin: 'post_engagement', engagementType: item.engagementType, sourceCode, publishedPostId: post.id, providerPostId: post.provider_post_id } as any)}
+      'meta',${item.accountId},'new',${item.engagedAt}::timestamptz,${sql.json({ origin: 'post_comment', engagementType: 'comment', sourceCode, publishedPostId: post.id, providerPostId: post.provider_post_id, providerMediaId: post.provider_media_id } as any)}
     ) on conflict(legacy_id) do update set
       contact_id=excluded.contact_id,customer_name=coalesce(nullif(excluded.customer_name,''),crm.conversations.customer_name),
       preview_text=coalesce(nullif(excluded.preview_text,''),crm.conversations.preview_text),unread_count=greatest(crm.conversations.unread_count,1),
@@ -1021,73 +1456,135 @@ async function createCrmLeadFromEngagement(sql: ReturnType<typeof getSql>, post:
     returning *,id::text,contact_id::text,lead_id::text,service_request_id::text
   `;
   const classification = await classifyConversationService({
-    conversationId: conversation.id, serviceKey: 'cash', sourceCode, classificationMethod: 'meta_post_engagement',
-    eventKey: `${item.platform}:${item.engagementType}:${item.eventId}`, skipAutomaticTemplate: true, assignPrimary: true, assignCallCenter: false,
+    conversationId: conversation.id,
+    serviceKey: "cash",
+    sourceCode,
+    classificationMethod: "meta_post_comment",
+    eventKey: `${item.platform}:comment:${item.eventId}`,
+    skipAutomaticTemplate: true,
+    assignPrimary: true,
+    assignCallCenter: false,
   });
-  const [source] = post.source_type === 'agenda'
+  const [source] = post.source_type === "agenda"
     ? await sql<any[]>`select name from marketing.agendas where id=${post.source_id}::uuid`
     : await sql<any[]>`select name from marketing.campaigns where id=${post.source_id}::uuid`;
   const leadId = clean(classification.leadId || classification.request?.lead_id);
-  if (!leadId) throw new Error('تعذر تحديد عميل CRM بعد التوزيع');
+  if (!leadId) throw new Error("تعذر تحديد عميل CRM بعد توزيع التعليق");
   await sql`
     update crm.leads set source_code=${sourceCode},source_name=${sourceName},platform_code=${item.platform},campaign_name=${clean(source?.name) || null},
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
-        socialEngagement: true, engagementType: item.engagementType, publishedPostId: post.id, providerPostId: post.provider_post_id,
-        latestEngagementId: item.eventId, latestEngagementText: item.text,
+        socialEngagement: true,
+        engagementType: "comment",
+        publishedPostId: post.id,
+        providerPostId: post.provider_post_id,
+        providerMediaId: post.provider_media_id,
+        latestEngagementId: item.eventId,
+        latestEngagementText: item.text,
       } as any)}::jsonb,updated_at=now()
     where id=${leadId}::uuid
   `;
   return { leadId, reused: Boolean(classification.reused) };
 }
 
+async function markCommentRemoved(sql: ReturnType<typeof getSql>, post: any, eventId: string) {
+  const removed = await sql<any[]>`
+    update marketing.post_engagements
+    set is_deleted=true,deleted_at=coalesce(deleted_at,now()),processing_error=null,updated_at=now()
+    where published_post_id=${post.id}::uuid and engagement_type='comment' and provider_event_id=${eventId} and is_deleted=false and deleted_by is null
+    returning id::text,crm_lead_id::text
+  `;
+  return removed.length;
+}
+
+function commentInputFromWebhook(item: NormalizedMetaEvent): CommentEngagementInput {
+  return {
+    platform: item.platform,
+    accountId: item.accountId,
+    postIds: item.postIds,
+    eventId: item.eventId,
+    actorId: item.actorId,
+    actorName: item.actorName,
+    text: item.text,
+    engagedAt: item.engagedAt,
+    raw: item.raw,
+  };
+}
+
 export async function processMetaEngagementWebhook(payload: any) {
   await Promise.all([ensureMarketingSchema(), ensureCrmSchema()]);
   const sql = getSql();
-  const engagements = normalizeWebhook(payload);
+  const events = normalizeWebhook(payload);
   const results: any[] = [];
-  for (const item of engagements) {
-    let eventRow: any = null;
+
+  for (const item of events) {
     try {
       const post = await findPublishedPost(sql, item);
-      if (!post) { results.push({ eventId: item.eventId, status: 'ignored', reason: 'post_not_published_by_platform' }); continue; }
-      if (item.actorId === item.accountId) { results.push({ eventId: item.eventId, status: 'ignored', reason: 'own_account_engagement' }); continue; }
-      const [inserted] = await sql<any[]>`
-        insert into marketing.post_engagements(
-          published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,engaged_at,raw_payload
-        ) values(
-          ${post.id}::uuid,${item.platform},${item.engagementType},${item.eventId},${item.postIds[0] || post.provider_post_id},${item.accountId},
-          ${item.actorId},${item.actorName},${item.text || null},${item.engagedAt}::timestamptz,${sql.json(item.raw as any)}
-        ) on conflict(platform,engagement_type,provider_event_id) do nothing returning *,id::text
-      `;
-      if (!inserted) { results.push({ eventId: item.eventId, status: 'duplicate' }); continue; }
-      eventRow = inserted;
-      const lead = await createCrmLeadFromEngagement(sql, post, item);
-      await sql`update marketing.post_engagements set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now() where id=${inserted.id}::uuid`;
-      if (!lead.reused) {
-        await emitSocialEngagementLeadNotification({
-          eventKey: item.eventId,
-          leadId: lead.leadId,
-          publishedPostId: post.id,
-          platform: item.platform,
-          engagementType: item.engagementType,
-          actorId: item.actorId,
-          actorName: item.actorName,
-          eventText: item.text,
-          engagedAt: item.engagedAt,
-        }).catch((notificationError) => console.error("Post engagement CRM notification failed", {
-          eventId: item.eventId,
-          leadId: lead.leadId,
-          notificationError,
-        }));
+      if (!post) {
+        results.push({ eventId: item.eventId, kind: item.kind, status: "ignored", reason: "post_not_published_by_platform" });
+        continue;
       }
-      results.push({ eventId: item.eventId, engagementType: item.engagementType, status: lead.reused ? 'reused' : 'created', leadId: lead.leadId });
+
+      if (item.kind === "metrics_changed") {
+        // Reactions/likes and shares are aggregate metrics only. Never create an identity,
+        // engagement row, Contact, Conversation, or Lead for them. Refresh authoritative counts.
+        const refreshed = await refreshOne(sql, post);
+        results.push({
+          eventId: item.eventId,
+          kind: item.kind,
+          metric: item.metric,
+          status: refreshed.ok ? "metrics_synced" : "metrics_sync_failed",
+          error: refreshed.ok ? undefined : refreshed.error,
+        });
+        continue;
+      }
+
+      if (item.kind === "comment_removed") {
+        const removed = await markCommentRemoved(sql, post, item.eventId);
+        const refreshed = await refreshOne(sql, post);
+        results.push({
+          eventId: item.eventId,
+          kind: item.kind,
+          status: "comment_removed",
+          removed,
+          metricsSynced: refreshed.ok,
+          metricsError: refreshed.ok ? undefined : refreshed.error,
+        });
+        continue;
+      }
+
+      if (!item.actorId || item.actorId === item.accountId) {
+        const refreshed = await refreshOne(sql, post);
+        results.push({
+          eventId: item.eventId,
+          kind: item.kind,
+          status: "ignored",
+          reason: item.actorId === item.accountId ? "own_account_comment" : "comment_actor_unavailable",
+          metricsSynced: refreshed.ok,
+        });
+        continue;
+      }
+
+      const stored = await upsertCommentAndCrm(sql, post, commentInputFromWebhook(item));
+      const refreshed = await refreshOne(sql, post);
+      results.push({
+        eventId: item.eventId,
+        kind: item.kind,
+        engagementType: "comment",
+        status: stored.status,
+        leadId: stored.leadId || undefined,
+        metricsSynced: refreshed.ok,
+        metricsError: refreshed.ok ? undefined : refreshed.error,
+      });
     } catch (error: any) {
-      const message = clean(error?.message) || 'تعذر تحويل التفاعل إلى CRM';
-      if (eventRow?.id) await sql`update marketing.post_engagements set processing_status='failed',processing_error=${message},updated_at=now() where id=${eventRow.id}::uuid`;
-      results.push({ eventId: item.eventId, engagementType: item.engagementType, status: 'failed', error: message });
+      results.push({
+        eventId: item.eventId,
+        kind: item.kind,
+        status: "failed",
+        error: clean(error?.message) || "تعذر معالجة حدث Meta",
+      });
     }
   }
-  return { ok: true, received: engagements.length, results };
+  return { ok: true, received: events.length, results };
 }
 
 export async function manageEngagementItem(sql: ReturnType<typeof getSql>, body: any, user: SessionUser) {

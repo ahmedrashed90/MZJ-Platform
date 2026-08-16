@@ -154,14 +154,14 @@ export function EngagementResultDetail({ result, initialTab = "overview", platfo
 
     {tab === "crm" ? <div className="marketing-result-crm-section">
       <div className="marketing-result-crm-kpis">
-        <article><span>الحسابات التي تم التعرف عليها</span><strong>{marketingResultCount(result.summary.identifiedAccounts)}</strong></article>
+        <article><span>أصحاب التعليقات الذين تم التعرف عليهم</span><strong>{marketingResultCount(result.summary.identifiedAccounts)}</strong></article>
         <article><span>عملاء CRM المختلفون</span><strong>{marketingResultCount(result.summary.crmLeads)}</strong></article>
         <article><span>نسبة التحويل إلى CRM</span><strong>{marketingResultPercent(result.summary.crmConversionRate)}</strong></article>
         <article><span>العملاء الذين وصلوا تم البيع</span><strong>{marketingResultCount(result.summary.soldLeads)}</strong></article>
         <article><span>إجمالي عدد المباع</span><strong>{marketingResultCount(result.summary.soldQuantity)}</strong></article>
         <article><span>نسبة التحويل إلى بيع</span><strong>{marketingResultPercent(result.summary.salesConversionRate)}</strong></article>
       </div>
-      <div className="marketing-result-note"><strong>طريقة الحساب</strong><p>العميل يُحسب مرة واحدة داخل الحملة أو الأجندة حتى لو نفذ أكثر من تفاعل، وحالة البيع تُقرأ مباشرة من حالة العميل الحالية داخل CRM.</p></div>
+      <div className="marketing-result-note"><strong>طريقة الحساب</strong><p>العميل يُحسب مرة واحدة داخل الحملة أو الأجندة حتى لو كتب أكثر من تعليق. الإعجابات والمشاركات أرقام مجمعة فقط ولا تنشئ عميل CRM، وحالة البيع تُقرأ مباشرة من حالة العميل الحالية داخل CRM.</p></div>
       <section className="marketing-result-section"><div className="marketing-result-section-title"><div><h4>نتيجة كل منشور داخل CRM</h4><p>يوضح عدد العملاء والمبيعات الناتجة عن كل منشور.</p></div></div><PostsTable posts={result.posts.filter((post) => post.crmLeads > 0 || post.soldLeads > 0)} /></section>
     </div> : null}
   </div>;
