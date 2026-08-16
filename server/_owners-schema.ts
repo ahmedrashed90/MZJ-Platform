@@ -98,9 +98,12 @@ create table if not exists owners.rewards (
   reward_type text not null default 'gift' check (reward_type in ('gift','discount','service','voucher')),
   reward_value text,
   show_on_member_card boolean not null default false,
+  available_for_referral_purchase boolean not null default false,
+  checkout_discount_amount numeric(12,2) not null default 0 check(checkout_discount_amount >= 0),
   points_cost integer not null check(points_cost > 0),
   stock_quantity integer,
   redeemed_quantity integer not null default 0,
+  referral_purchase_redeemed_quantity integer not null default 0,
   starts_at timestamptz,
   ends_at timestamptz,
   is_active boolean not null default true,
@@ -112,6 +115,32 @@ create table if not exists owners.rewards (
 alter table owners.rewards add column if not exists reward_type text not null default 'gift';
 alter table owners.rewards add column if not exists reward_value text;
 alter table owners.rewards add column if not exists show_on_member_card boolean not null default false;
+alter table owners.rewards add column if not exists available_for_referral_purchase boolean not null default false;
+alter table owners.rewards add column if not exists checkout_discount_amount numeric(12,2) not null default 0;
+alter table owners.rewards add column if not exists referral_purchase_redeemed_quantity integer not null default 0;
+
+create table if not exists owners.referral_purchase_benefits (
+  id uuid primary key default gen_random_uuid(),
+  referral_id uuid not null references owners.referrals(id) on delete cascade,
+  referrer_member_id uuid not null references owners.members(id) on delete cascade,
+  referred_phone_normalized text not null,
+  reward_id uuid not null references owners.rewards(id),
+  reward_name text not null,
+  reward_type text not null,
+  reward_value text,
+  checkout_discount_amount numeric(12,2) not null default 0,
+  website_order_id text not null,
+  next_erp_sales_order text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(referred_phone_normalized),
+  unique(website_order_id)
+);
+create index if not exists owners_referral_purchase_benefits_referrer_idx
+  on owners.referral_purchase_benefits(referrer_member_id,created_at desc);
+create index if not exists owners_referral_purchase_benefits_reward_idx
+  on owners.referral_purchase_benefits(reward_id,created_at desc);
 
 create table if not exists owners.points_ledger (
   id uuid primary key default gen_random_uuid(),
@@ -187,7 +216,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1206,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1207,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -207,11 +236,15 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='reward_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_referral_purchase')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_amount')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='referral_purchase_redeemed_quantity')
+      and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='referral_purchase_benefits')
       as ready
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1206;
+  return Number(state?.version || 0) >= 1207;
 }
 
 export function ensureOwnersSchema() {

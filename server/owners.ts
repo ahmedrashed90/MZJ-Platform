@@ -352,6 +352,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       : "gift";
     const rewardValue = clean(payload.rewardValue);
     const showOnMemberCard = payload.showOnMemberCard === true;
+    const availableForReferralPurchase = payload.availableForReferralPurchase === true;
+    const checkoutDiscountRaw = Number(payload.checkoutDiscountAmount);
+    const checkoutDiscountAmount = rewardType === "discount" && availableForReferralPurchase
+      ? Math.round((Number.isFinite(checkoutDiscountRaw) ? checkoutDiscountRaw : 0) * 100) / 100
+      : 0;
     const pointsCost = integer(payload.pointsCost, 1, 1, 1_000_000_000);
     const stockQuantity = payload.stockQuantity === "" || payload.stockQuantity == null
       ? null
@@ -361,12 +366,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const isActive = payload.isActive !== false;
     if (!name) return response.status(400).json({ ok: false, error: "اسم المكافأة مطلوب" });
     if (!rewardValue) return response.status(400).json({ ok: false, error: "حدد قيمة أو تفاصيل المكافأة التي ستظهر للعميل" });
+    if (availableForReferralPurchase && rewardType === "discount" && !(checkoutDiscountAmount > 0)) {
+      return response.status(400).json({ ok: false, error: "حدد قيمة الخصم الفعلية بالريال للمكافأة المتاحة بكود الدعوة" });
+    }
 
     if (id) {
       await sql`
         update owners.rewards set
           name=${name},description=${description || null},reward_type=${rewardType},reward_value=${rewardValue || null},
-          show_on_member_card=${showOnMemberCard},points_cost=${pointsCost},stock_quantity=${stockQuantity},
+          show_on_member_card=${showOnMemberCard},available_for_referral_purchase=${availableForReferralPurchase},
+          checkout_discount_amount=${checkoutDiscountAmount},points_cost=${pointsCost},stock_quantity=${stockQuantity},
           starts_at=${startsAt}::timestamptz,ends_at=${endsAt}::timestamptz,is_active=${isActive},
           updated_by=${actor.id}::uuid,updated_at=now()
         where id=${id}::uuid
@@ -374,9 +383,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else {
       await sql`
         insert into owners.rewards(
-          name,description,reward_type,reward_value,show_on_member_card,points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
+          name,description,reward_type,reward_value,show_on_member_card,available_for_referral_purchase,checkout_discount_amount,
+          points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
         ) values(
-          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${pointsCost},${stockQuantity},
+          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${availableForReferralPurchase},${checkoutDiscountAmount},${pointsCost},${stockQuantity},
           ${startsAt}::timestamptz,${endsAt}::timestamptz,${isActive},${actor.id}::uuid,${actor.id}::uuid
         )
       `;
