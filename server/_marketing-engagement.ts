@@ -419,6 +419,18 @@ function platformDisplayName(platform: string) {
   return platform;
 }
 
+/**
+ * Facebook Page post nodes must be addressed with the full Page post id.
+ * Publishing endpoints for videos/Reels can return only the media/video id,
+ * so normalize it once using the Page account id and persist the canonical id.
+ */
+function facebookPostNodeId(accountId: unknown, providerPostId: unknown) {
+  const pageId = clean(accountId);
+  const postId = clean(providerPostId);
+  if (!postId || !pageId || postId.includes("_")) return postId;
+  return `${pageId}_${postId}`;
+}
+
 function publishedIds(platform: string, resultInput: unknown) {
   const result = asObject(resultInput);
   const publish = asObject(result.publish);
@@ -461,12 +473,13 @@ export async function recordPublishedPost(sql: ReturnType<typeof getSql>, schedu
       ? clean(connection?.ig_user_id || connection?.account_id)
       : clean(connection?.account_id);
   if (!accountId) throw new Error(`حساب ${platformDisplayName(platform)} غير مكتمل`);
+  const canonicalProviderPostId = platform === "facebook" ? facebookPostNodeId(accountId, providerPostId) : providerPostId;
   const [row] = await sql<any[]>`
     insert into marketing.published_posts(
       schedule_id,source_type,source_id,creative_id,task_id,platform,account_id,provider_post_id,provider_media_id,permalink,post_type_name,published_at,raw_metrics
     ) values(
       ${schedule.id}::uuid,${schedule.source_type},${schedule.source_id}::uuid,${schedule.creative_id || null}::uuid,${schedule.task_id || null}::uuid,
-      ${platform},${accountId},${providerPostId},${providerMediaId || null},${permalink || null},${clean(schedule.post_type_name) || null},now(),${sql.json({ publishResult: result } as any)}
+      ${platform},${accountId},${canonicalProviderPostId},${providerMediaId || null},${permalink || null},${clean(schedule.post_type_name) || null},now(),${sql.json({ publishResult: result } as any)}
     ) on conflict(schedule_id) do update set
       platform=excluded.platform,account_id=excluded.account_id,provider_post_id=excluded.provider_post_id,provider_media_id=excluded.provider_media_id,
       permalink=coalesce(excluded.permalink,marketing.published_posts.permalink),post_type_name=excluded.post_type_name,published_at=excluded.published_at,
@@ -579,12 +592,16 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
     let likes = numberValue(post.likes_count), comments = numberValue(post.comments_count), shares = numberValue(post.shares_count);
     let saves = numberValue(post.saves_count), views = numberValue(post.views_count), reach = numberValue(post.reach_count);
     let permalink = clean(post.permalink);
+    let providerPostId = clean(post.provider_post_id);
     let syncStatus: "pending" | "synced" = "synced";
     let syncError = "";
 
     if (post.platform === "facebook") {
-      const { token } = await platformConnection(sql, post.platform);
-      payload = await graphRequest(`/${encodeURIComponent(post.provider_post_id)}`, "GET", token, {
+      const { connection, token } = await platformConnection(sql, post.platform);
+      const pageId = clean(post.account_id || connection?.page_id || connection?.account_id);
+      providerPostId = facebookPostNodeId(pageId, providerPostId);
+      if (!providerPostId) throw new Error("معرف منشور Facebook غير موجود");
+      payload = await graphRequest(`/${encodeURIComponent(providerPostId)}`, "GET", token, {
         fields: "id,permalink_url,reactions.limit(0).summary(true),comments.limit(0).summary(true),shares",
       });
       likes = numberValue(payload?.reactions?.summary?.total_count);
@@ -632,7 +649,7 @@ async function refreshOne(sql: ReturnType<typeof getSql>, post: any) {
 
     await sql.begin(async tx => {
       await tx`
-        update marketing.published_posts set permalink=${permalink || null},likes_count=${likes},comments_count=${comments},shares_count=${shares},
+        update marketing.published_posts set provider_post_id=${providerPostId || post.provider_post_id},permalink=${permalink || null},likes_count=${likes},comments_count=${comments},shares_count=${shares},
           saves_count=${saves},views_count=${views},reach_count=${reach},last_synced_at=now(),sync_status=${syncStatus},sync_error=${syncError || null},
           raw_metrics=coalesce(raw_metrics,'{}'::jsonb)||${tx.json({ latest: payload } as any)}::jsonb,updated_at=now()
         where id=${post.id}::uuid

@@ -1,0 +1,20 @@
+MZJ Platform - Facebook engagement Page Post ID clean fix
+Date: 2026-08-16
+
+Targeted check:
+PASS Facebook Page post ids are normalized to full pageId_postId form
+PASS New Facebook published rows persist canonical post ids
+PASS Existing Facebook rows are repaired before metrics refresh
+PASS Successful refresh persists repaired provider post id
+PASS Facebook engagement still reads reactions comments and shares from post node
+Result: 5/5
+
+Project static commands:
+Result: 81/81 passed after providing the local TypeScript compiler dependency used by five existing compiler-based checks.
+
+TypeScript syntax transpile for modified TS/TSX files:
+PASS server/_marketing-engagement.ts
+PASS server/_facebook-video-publisher.ts
+PASS server/marketing/index.ts
+PASS src/marketing/api.ts
+PASS src/marketing/pages/PublishPrepPage.tsx
