@@ -1,16 +1,19 @@
 /*
- * MZJ Facebook / ManyChat Worker
+ * MZJ Instagram / ManyChat Worker
  *
  * Full transport-only Worker for MZJ Unified Platform.
  *
  * Responsibilities:
  * - Verify and receive Meta webhooks.
- * - Normalize Messenger text, quick replies, postbacks, referrals and media.
- * - Preserve the real Facebook Page-Scoped ID as the canonical identity.
- * - Correlate Facebook PSID and ManyChat Contact ID without creating duplicate conversations.
- * - Forward every supported inbound event to the platform.
- * - Send text, quick replies and media through Facebook Graph API.
- * - Keep ManyChat as an optional plain-text fallback.
+ * - Normalize Instagram text, quick replies, postbacks, referrals and media.
+ * - Preserve the real Instagram-scoped ID (IGSID) as the canonical identity.
+ * - Resolve ManyChat Contact ID, Instagram IGSID, name and username directly from ManyChat getInfo.
+ * - Keep the Instagram IGSID as the canonical platform identity.
+ * - Use the ManyChat Contact ID only for outbound sendContent delivery.
+ * - Use ManyChat External Request only to resolve Contact ID, IGSID and customer name.
+ * - Forward inbound text and media from Meta exactly once after the identity link exists.
+ * - Queue Meta events briefly when ManyChat identity arrives after the Meta webhook.
+ * - Send text, quick replies and media through ManyChat sendContent using the proven Contact ID contract.
  * - Return real provider send results.
  *
  * The platform is the single source of truth for automation definitions,
@@ -18,15 +21,18 @@
  * This Worker contains no business-flow messages or distribution logic.
  */
 
-const VERSION = "mzj-facebook-worker-v2.0.2-social-chat-identity";
-const WORKER_CODE = "facebook";
+const VERSION = "mzj-instagram-worker-v2.0.16-social-chat-identity";
+const WORKER_CODE = "instagram";
 const DEFAULT_PLATFORM_INBOUND_URL =
-  "https://mzj-platform.vercel.app/api/integrations/facebook";
+  "https://mzj-platform.vercel.app/api/integrations/instagram";
 const DEFAULT_GRAPH_API_VERSION = "v20.0";
+const DEFAULT_PUBLIC_BASE_URL = "https://instagram.next-erp-mzj.workers.dev";
 const DEFAULT_MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const IDENTITY_LINK_TTL_SECONDS = 30 * 24 * 60 * 60;
 const PENDING_CORRELATION_TTL_SECONDS = 10 * 60;
 const META_CORRELATION_WAIT_MS = 1200;
+const PENDING_META_EVENT_TTL_SECONDS = 10 * 60;
+const MAX_PENDING_META_EVENTS = 10;
 
 const FAILURE_STATUSES = new Set([
   "error",
@@ -50,26 +56,33 @@ const SUCCESS_STATUSES = new Set([
 const META_WEBHOOK_PATHS = new Set([
   "/meta/webhook",
   "/webhook",
-  "/webhook/facebook",
+  "/webhook/instagram",
   "/webhook/meta",
-  "/facebook/webhook",
+  "/instagram/webhook",
 ]);
 
 const AUTOMATION_PATHS = new Set([
   "/automation",
   "/manychat/automation",
   "/webhook/manychat",
+  "/",
 ]);
 
 const SEND_PATHS = new Set([
-  "/send/facebook",
+  "/send/instagram",
   "/crm/send",
   "/send/meta",
   "/send",
 ]);
 
+const QUICK_REPLY_CALLBACK_PATHS = new Set([
+  "/manychat/quick-reply",
+  "/quick-reply",
+]);
+
 const memoryIdentityLinks = new Map();
 const memoryPendingCorrelations = new Map();
+const memoryPendingMetaEvents = new Map();
 
 export default {
   async fetch(request, env, ctx) {
@@ -101,6 +114,13 @@ export default {
       return handleMetaWebhook(request, env, ctx);
     }
 
+    if (
+      request.method === "POST" &&
+      QUICK_REPLY_CALLBACK_PATHS.has(url.pathname)
+    ) {
+      return handleManyChatQuickReplyCallback(request, env, ctx);
+    }
+
     if (request.method === "POST" && AUTOMATION_PATHS.has(url.pathname)) {
       return handleManyChatCompatibility(request, env, ctx);
     }
@@ -118,7 +138,7 @@ export default {
         );
       }
 
-      return handleFacebookSend(request, env, ctx);
+      return handleInstagramSend(request, env, ctx);
     }
 
     return json(
@@ -140,7 +160,7 @@ function healthResponse(env) {
   return json(
     {
       ok: true,
-      service: "facebook-crm-worker",
+      service: "instagram-crm-worker",
       workerCode: WORKER_CODE,
       version: VERSION,
       responsibility: "transport_only",
@@ -149,8 +169,11 @@ function healthResponse(env) {
         health: "GET /",
         debug: "GET /debug/last",
         metaWebhook: "GET/POST /meta/webhook",
+        instagramWebhook: "GET/POST /webhook/instagram",
         manychatCompatibility: "POST /automation",
-        send: "POST /send/facebook",
+        manychatWebhook: "POST /webhook/manychat",
+        manychatQuickReply: "POST /manychat/quick-reply",
+        send: "POST /send/instagram",
       },
       env_check: {
         has_gateway_secret: Boolean(clean(env?.MZJ_GATEWAY_SECRET)),
@@ -158,24 +181,39 @@ function healthResponse(env) {
           clean(env?.PLATFORM_INBOUND_URL) || DEFAULT_PLATFORM_INBOUND_URL,
         ),
         has_platform_media_url: Boolean(platformMediaEndpoint(env)),
-        has_fb_verify_token: Boolean(clean(env?.FB_VERIFY_TOKEN)),
-        has_fb_app_secret: Boolean(clean(env?.FB_APP_SECRET)),
-        has_fb_page_id: Boolean(clean(env?.FB_PAGE_ID)),
-        has_fb_page_access_token: Boolean(clean(env?.FB_PAGE_ACCESS_TOKEN)),
+        has_ig_verify_token: Boolean(instagramVerifyToken(env)),
+        has_ig_app_secret: Boolean(instagramAppSecret(env)),
+        has_ig_professional_account_id: Boolean(instagramAccountId(env)),
+        has_ig_access_token: Boolean(instagramAccessToken(env)),
+        has_ig_page_access_token: Boolean(
+          clean(
+            env?.IG_PAGE_ACCESS_TOKEN ||
+              env?.INSTAGRAM_PAGE_ACCESS_TOKEN ||
+              env?.FB_PAGE_ACCESS_TOKEN,
+          ),
+        ),
+        outbound_provider: "manychat",
+        outbound_contract: "sendContent_by_manychat_contact_id",
+      inbound_contract: "meta_event_after_manychat_identity_link",
         has_manychat_api_token: Boolean(manychatToken(env)),
         has_manychat_webhook_secret: Boolean(
           clean(env?.MANYCHAT_WEBHOOK_SECRET),
         ),
+        manychat_webhook_secret_mode: "configured_but_not_required",
         has_debug_kv: Boolean(env?.DEBUG_KV),
         has_identity_kv: Boolean(identityKv(env)),
       },
       safeguards: {
         platform_is_automation_source_of_truth: true,
         worker_contains_no_business_flow: true,
-        meta_psid_is_canonical_identity: true,
-        manychat_contact_id_is_not_used_as_psid: true,
+        instagram_scoped_id_is_canonical_identity: true,
+        manychat_contact_id_is_not_used_as_instagram_scoped_id: true,
         inbound_media_is_forwarded_to_platform_storage: true,
         provider_send_result_is_returned: true,
+        manychat_getinfo_is_identity_source: true,
+        meta_is_single_inbound_source: true,
+        manychat_is_identity_source_only: true,
+        pending_meta_events_flush_after_identity: true,
       },
     },
     200,
@@ -187,17 +225,25 @@ async function debugResponse(env) {
     {
       ok: true,
       version: VERSION,
-      metaPayload: await kvGetJson(env, "DEBUG_FACEBOOK_LAST_META_PAYLOAD"),
-      metaForward: await kvGetJson(env, "DEBUG_FACEBOOK_LAST_META_FORWARD"),
+      metaPayload: await kvGetJson(env, "DEBUG_INSTAGRAM_LAST_META_PAYLOAD"),
+      metaForward: await kvGetJson(env, "DEBUG_INSTAGRAM_LAST_META_FORWARD"),
+      automationRaw: await kvGetJson(
+        env,
+        "DEBUG_INSTAGRAM_LAST_AUTOMATION_RAW",
+      ),
       automationPayload: await kvGetJson(
         env,
-        "DEBUG_FACEBOOK_LAST_AUTOMATION_PAYLOAD",
+        "DEBUG_INSTAGRAM_LAST_AUTOMATION_PAYLOAD",
       ),
       automationForward: await kvGetJson(
         env,
-        "DEBUG_FACEBOOK_LAST_AUTOMATION_FORWARD",
+        "DEBUG_INSTAGRAM_LAST_AUTOMATION_FORWARD",
       ),
-      send: await kvGetJson(env, "DEBUG_FACEBOOK_LAST_SEND"),
+      send: await kvGetJson(env, "DEBUG_INSTAGRAM_LAST_SEND"),
+      quickReply: await kvGetJson(
+        env,
+        "DEBUG_INSTAGRAM_LAST_QUICK_REPLY",
+      ),
     },
     200,
   );
@@ -211,7 +257,7 @@ function handleMetaVerification(url, env) {
   const mode = clean(url.searchParams.get("hub.mode"));
   const token = clean(url.searchParams.get("hub.verify_token"));
   const challenge = clean(url.searchParams.get("hub.challenge"));
-  const expected = clean(env?.FB_VERIFY_TOKEN);
+  const expected = instagramVerifyToken(env);
 
   if (
     mode === "subscribe" &&
@@ -227,12 +273,14 @@ function handleMetaVerification(url, env) {
 async function handleMetaWebhook(request, env, ctx) {
   const rawBody = await request.text();
 
-  if (clean(env?.FB_APP_SECRET)) {
+  const appSecret = instagramAppSecret(env);
+
+  if (appSecret) {
     const signature = clean(request.headers.get("x-hub-signature-256"));
     const valid = await verifyXHubSignature256(
       signature,
       rawBody,
-      env.FB_APP_SECRET,
+      appSecret,
     );
 
     if (!valid) {
@@ -262,12 +310,12 @@ async function handleMetaWebhook(request, env, ctx) {
 
   if (ctx?.waitUntil) {
     ctx.waitUntil(
-      kvPutJson(env, "DEBUG_FACEBOOK_LAST_META_PAYLOAD", incoming.value),
+      kvPutJson(env, "DEBUG_INSTAGRAM_LAST_META_PAYLOAD", incoming.value),
     );
   }
 
   if (
-    incoming.value?.object !== "page" ||
+    incoming.value?.object !== "instagram" ||
     !Array.isArray(incoming.value?.entry)
   ) {
     return json(
@@ -289,12 +337,13 @@ async function handleMetaWebhook(request, env, ctx) {
       const result = {
         processed: 0,
         forwarded: [],
-        note: "webhook received without a supported Messenger event",
+        deferred: [],
+        note: "webhook received without a supported Instagram messaging event",
       };
 
       if (ctx?.waitUntil) {
         ctx.waitUntil(
-          kvPutJson(env, "DEBUG_FACEBOOK_LAST_META_FORWARD", result),
+          kvPutJson(env, "DEBUG_INSTAGRAM_LAST_META_FORWARD", result),
         );
       }
 
@@ -310,10 +359,36 @@ async function handleMetaWebhook(request, env, ctx) {
     }
 
     const forwarded = [];
+    const deferred = [];
+    const skipped = [];
 
     for (const event of events) {
+      if (event.isEcho) {
+        skipped.push({
+          eventId: event.eventId,
+          reason: "outbound_echo_already_persisted",
+        });
+        continue;
+      }
+
+      const identity = await resolveMetaEventIdentity(event, env);
+
+      if (!identity.linked || !clean(identity.manychatContactId)) {
+        const queued = await queuePendingMetaEvent(event, env);
+        deferred.push({
+          eventId: event.eventId,
+          pageId: event.pageId,
+          participantId: event.customerId,
+          reason: "waiting_for_manychat_identity",
+          pendingCount: queued.pendingCount,
+        });
+        continue;
+      }
+
+      if (identity.displayName) event.displayName = identity.displayName;
+
       const payload = await buildMetaPlatformPayload(event, env);
-      const result = await forwardToPlatform(payload, env, "facebook");
+      const result = await forwardToPlatform(payload, env, "instagram");
 
       if (!result.ok) {
         throw new Error(
@@ -325,6 +400,7 @@ async function handleMetaWebhook(request, env, ctx) {
         eventId: event.eventId,
         pageId: event.pageId,
         participantId: payload.participantId,
+        manychatContactId: payload.manychatContactId,
         direction: payload.direction,
         status: result.status,
         conversationId:
@@ -341,11 +417,15 @@ async function handleMetaWebhook(request, env, ctx) {
     const finalResult = {
       processed: events.length,
       forwarded,
+      deferred,
+      skipped,
+      inboundSource: "meta",
+      identitySource: "manychat_getinfo",
     };
 
     if (ctx?.waitUntil) {
       ctx.waitUntil(
-        kvPutJson(env, "DEBUG_FACEBOOK_LAST_META_FORWARD", finalResult),
+        kvPutJson(env, "DEBUG_INSTAGRAM_LAST_META_FORWARD", finalResult),
       );
     }
 
@@ -360,11 +440,11 @@ async function handleMetaWebhook(request, env, ctx) {
     );
   } catch (error) {
     const message = errorMessage(error);
-    console.error("Facebook Meta inbound processing failed", message);
+    console.error("Instagram Meta inbound processing failed", message);
 
     if (ctx?.waitUntil) {
       ctx.waitUntil(
-        kvPutJson(env, "DEBUG_FACEBOOK_LAST_META_FORWARD", {
+        kvPutJson(env, "DEBUG_INSTAGRAM_LAST_META_FORWARD", {
           ok: false,
           error: message,
         }),
@@ -387,7 +467,7 @@ async function normalizeMetaEvents(incoming, env) {
   const events = [];
 
   for (const entry of Array.isArray(incoming?.entry) ? incoming.entry : []) {
-    const pageId = clean(entry?.id || env?.FB_PAGE_ID);
+    const pageId = clean(entry?.id || instagramAccountId(env));
     const entryTime = timestampMs(entry?.time || Date.now());
     const messaging = [
       ...(Array.isArray(entry?.messaging) ? entry.messaging : []),
@@ -406,13 +486,13 @@ async function normalizeMetaEvents(incoming, env) {
       const isEcho =
         evt?.message?.is_echo === true ||
         senderId === pageId ||
-        senderId === clean(env?.FB_PAGE_ID);
+        senderId === instagramAccountId(env);
 
       const customerId = isEcho ? recipientId : senderId;
 
       if (!customerId) continue;
 
-      const content = extractFacebookEventContent(evt);
+      const content = extractInstagramEventContent(evt);
 
       if (!content.hasContent) continue;
 
@@ -436,9 +516,9 @@ async function normalizeMetaEvents(incoming, env) {
         });
 
       const displayName = isEcho
-        ? "Facebook Page"
-        : (await fetchFacebookName(customerId, env).catch(() => "")) ||
-          `Facebook User (${customerId.slice(-4)})`;
+        ? "Instagram Professional Account"
+        : (await fetchInstagramName(customerId, env).catch(() => "")) ||
+          `Instagram User (${customerId.slice(-4)})`;
 
       events.push({
         eventId,
@@ -465,7 +545,7 @@ async function normalizeMetaEvents(incoming, env) {
   return [...unique.values()];
 }
 
-function extractFacebookEventContent(evt) {
+function extractInstagramEventContent(evt) {
   const message = evt?.message || {};
   const postback = evt?.postback || {};
   const referral = evt?.referral || postback?.referral || message?.referral || {};
@@ -493,7 +573,7 @@ function extractFacebookEventContent(evt) {
   for (const attachment of Array.isArray(message?.attachments)
     ? message.attachments
     : []) {
-    const normalized = normalizeFacebookAttachment(attachment);
+    const normalized = normalizeInstagramAttachment(attachment);
     if (normalized) attachments.push(normalized);
   }
 
@@ -540,7 +620,7 @@ function extractFacebookEventContent(evt) {
   };
 }
 
-function normalizeFacebookAttachment(attachment) {
+function normalizeInstagramAttachment(attachment) {
   if (!attachment || typeof attachment !== "object") return null;
 
   const rawType = clean(attachment?.type).toLowerCase();
@@ -584,9 +664,9 @@ async function buildMetaPlatformPayload(event, env) {
   const identity = await resolveMetaEventIdentity(event, env);
 
   const canonicalParticipantId =
-    clean(identity.facebookPsid) || clean(event.customerId);
+    clean(identity.instagramScopedId) || clean(event.customerId);
 
-  const conversationId = facebookConversationId(
+  const conversationId = instagramConversationId(
     event.pageId,
     canonicalParticipantId,
   );
@@ -596,7 +676,7 @@ async function buildMetaPlatformPayload(event, env) {
   for (let index = 0; index < content.attachments.length; index += 1) {
     const attachment = content.attachments[index];
 
-    const stored = await prepareInboundFacebookAttachment(env, {
+    const stored = await prepareInboundInstagramAttachment(env, {
       attachment,
       eventId: `${event.eventId}_att_${index + 1}`,
       conversationId,
@@ -630,30 +710,33 @@ async function buildMetaPlatformPayload(event, env) {
     sender_type: event.isEcho ? "agent" : "customer",
 
     provider: "meta",
-    providerName: "facebook_graph",
-    provider_name: "facebook_graph",
-    platform: "facebook",
-    channel: "facebook",
-    channelCode: "fb",
-    channel_code: "fb",
+    providerName: "instagram_graph",
+    provider_name: "instagram_graph",
+    platform: "instagram",
+    channel: "instagram",
+    channelCode: "ig",
+    channel_code: "ig",
     workerCode: WORKER_CODE,
     worker_code: WORKER_CODE,
-    source: "فيسبوك",
-    sourceName: "فيسبوك",
-    source_name: "فيسبوك",
+    source: "إنستجرام",
+    sourceName: "إنستجرام",
+    source_name: "إنستجرام",
 
     pageId: event.pageId,
     page_id: event.pageId,
+    instagramAccountId: event.pageId,
+    instagram_account_id: event.pageId,
     participantId: canonicalParticipantId,
     participant_id: canonicalParticipantId,
     manychatContactId: identity.manychatContactId || "",
     manychat_contact_id: identity.manychatContactId || "",
-    facebookPsid: canonicalParticipantId,
-    facebook_psid: canonicalParticipantId,
-    fbId: canonicalParticipantId,
-    fb_id: canonicalParticipantId,
-    fbPsid: canonicalParticipantId,
-    fb_psid: canonicalParticipantId,
+    instagramScopedId: canonicalParticipantId,
+    instagram_scoped_id: canonicalParticipantId,
+    igsid: canonicalParticipantId,
+    igSid: canonicalParticipantId,
+    ig_sid: canonicalParticipantId,
+    igId: canonicalParticipantId,
+    ig_id: canonicalParticipantId,
     metaSenderId: clean(event.customerId),
     meta_sender_id: clean(event.customerId),
     canonicalParticipantId,
@@ -670,8 +753,14 @@ async function buildMetaPlatformPayload(event, env) {
     merge_conversation_aliases: identity.linked,
     conversationId,
     conversation_id: conversationId,
-    customerName: event.displayName,
-    customer_name: event.displayName,
+    customerName: first(identity.displayName, event.displayName),
+    customer_name: first(identity.displayName, event.displayName),
+    displayName: first(identity.displayName, event.displayName),
+    display_name: first(identity.displayName, event.displayName),
+    instagramUsername: identity.instagramUsername || "",
+    instagram_username: identity.instagramUsername || "",
+    profilePic: identity.profilePic || "",
+    profile_pic: identity.profilePic || "",
 
     messageId: providerMessageId,
     message_id: providerMessageId,
@@ -720,7 +809,7 @@ async function buildMetaPlatformPayload(event, env) {
   };
 }
 
-async function prepareInboundFacebookAttachment(env, input) {
+async function prepareInboundInstagramAttachment(env, input) {
   const attachment = input?.attachment || {};
   const attachmentType = normalizeMediaType(
     attachment?.type || "attachment",
@@ -776,6 +865,286 @@ async function prepareInboundFacebookAttachment(env, input) {
 }
 
 /* ========================================================================== */
+/* MANYCHAT QUICK REPLY CALLBACK                                              */
+/* ========================================================================== */
+
+async function handleManyChatQuickReplyCallback(request, env, ctx) {
+  if (!manychatWebhookAuthorized(request, env)) {
+    return json(
+      {
+        ok: false,
+        error: "Unauthorized ManyChat quick reply request",
+        version: VERSION,
+      },
+      401,
+    );
+  }
+
+  const parsedRequest = await readJsonRequest(request);
+  const body = parsedRequest.value;
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return json(
+      {
+        ok: false,
+        error: "Invalid JSON",
+        parseError: parsedRequest.error,
+        version: VERSION,
+      },
+      400,
+    );
+  }
+
+  try {
+    const pageId = clean(
+      first(
+        body?.instagramAccountId,
+        body?.instagram_account_id,
+        body?.pageId,
+        body?.page_id,
+        instagramAccountId(env),
+      ),
+    );
+
+    let participantId = clean(
+      first(
+        body?.participantId,
+        body?.participant_id,
+        body?.instagramScopedId,
+        body?.instagram_scoped_id,
+        body?.igId,
+        body?.ig_id,
+      ),
+    );
+
+    let manychatContactId = clean(
+      first(
+        body?.manychatContactId,
+        body?.manychat_contact_id,
+        body?.subscriberId,
+        body?.subscriber_id,
+        body?.contactId,
+        body?.contact_id,
+      ),
+    );
+
+    let link = null;
+
+    if (pageId && participantId) {
+      link = await getIdentityLinkByScopedId(pageId, participantId, env);
+      manychatContactId = clean(
+        first(link?.manychatContactId, manychatContactId),
+      );
+    }
+
+    if (!participantId && pageId && manychatContactId) {
+      link =
+        link ||
+        (await getIdentityLinkByManyChat(pageId, manychatContactId, env));
+      participantId = clean(link?.instagramScopedId);
+    }
+
+    const payloadValue = clean(
+      first(
+        body?.payload,
+        body?.value,
+        body?.buttonPayload,
+        body?.button_payload,
+      ),
+    );
+
+    const buttonTitle = clean(
+      first(
+        body?.text,
+        body?.title,
+        body?.caption,
+        body?.buttonTitle,
+        body?.button_title,
+        payloadValue,
+      ),
+    );
+
+    if (!pageId || !participantId || !manychatContactId) {
+      throw new Error(
+        "Instagram identity link is incomplete for ManyChat quick reply",
+      );
+    }
+
+    if (!buttonTitle && !payloadValue) {
+      throw new Error("Quick reply text/payload is missing");
+    }
+
+    const conversationId =
+      clean(first(body?.conversationId, body?.conversation_id)) ||
+      instagramConversationId(pageId, participantId);
+
+    const timestamp = timestampMs(
+      first(body?.timestamp, body?.createdAt, body?.created_at, Date.now()),
+    );
+
+    const eventId =
+      clean(first(body?.eventId, body?.event_id)) ||
+      stableEventId({
+        source: "manychat_quick_reply",
+        pageId,
+        participantId,
+        manychatContactId,
+        payloadValue,
+        buttonTitle,
+        timestamp,
+      });
+
+    const customerName = clean(
+      first(
+        body?.customerName,
+        body?.customer_name,
+        body?.displayName,
+        body?.display_name,
+        link?.displayName,
+      ),
+    );
+
+    const platformPayload = {
+      eventId,
+      event_id: eventId,
+      type: "incoming_message",
+      eventType: "incoming_message",
+      event_type: "incoming_message",
+      direction: "in",
+      senderType: "customer",
+      sender_type: "customer",
+
+      provider: "manychat",
+      providerName: "manychat_dynamic_block_callback",
+      provider_name: "manychat_dynamic_block_callback",
+      platform: "instagram",
+      channel: "instagram",
+      channelCode: "ig",
+      channel_code: "ig",
+      workerCode: WORKER_CODE,
+      worker_code: WORKER_CODE,
+      source: "إنستجرام",
+      sourceName: "إنستجرام",
+      source_name: "إنستجرام",
+
+      pageId,
+      page_id: pageId,
+      instagramAccountId: pageId,
+      instagram_account_id: pageId,
+      participantId,
+      participant_id: participantId,
+      instagramScopedId: participantId,
+      instagram_scoped_id: participantId,
+      igsid: participantId,
+      igSid: participantId,
+      ig_id: participantId,
+      manychatContactId,
+      manychat_contact_id: manychatContactId,
+      subscriberId: manychatContactId,
+      subscriber_id: manychatContactId,
+      canonicalParticipantId: participantId,
+      canonical_participant_id: participantId,
+      identitySource: "stored_identity_link_quick_reply",
+      identity_source: "stored_identity_link_quick_reply",
+      identityLinked: true,
+      identity_linked: true,
+      conversationId,
+      conversation_id: conversationId,
+
+      customerName,
+      customer_name: customerName,
+      displayName: customerName,
+      display_name: customerName,
+      instagramUsername: clean(link?.instagramUsername),
+      instagram_username: clean(link?.instagramUsername),
+      profilePic: clean(link?.profilePic),
+      profile_pic: clean(link?.profilePic),
+
+      messageId: eventId,
+      message_id: eventId,
+      providerMessageId: eventId,
+      provider_message_id: eventId,
+      text: buttonTitle || payloadValue,
+      message: buttonTitle || payloadValue,
+      messageType: "quick_reply",
+      message_type: "quick_reply",
+      payload: payloadValue,
+      buttonTitle,
+      button_title: buttonTitle,
+      timestamp,
+      isEcho: false,
+      is_echo: false,
+      hasAttachment: false,
+      has_attachment: false,
+      attachments: [],
+    };
+
+    const result = await forwardToPlatform(platformPayload, env, "instagram");
+
+    if (!result.ok) {
+      throw new Error(
+        `Platform endpoint rejected quick reply: HTTP ${result.status} ${result.error}`,
+      );
+    }
+
+    const debugResult = {
+      ok: true,
+      accepted: true,
+      eventId,
+      pageId,
+      participantId,
+      manychatContactId,
+      text: buttonTitle || payloadValue,
+      payload: payloadValue,
+      platformStatus: result.status,
+      platformResult: result.data || null,
+      version: VERSION,
+    };
+
+    if (ctx?.waitUntil) {
+      ctx.waitUntil(
+        kvPutJson(env, "DEBUG_INSTAGRAM_LAST_QUICK_REPLY", debugResult),
+      );
+    }
+
+    return json(
+      {
+        version: "v2",
+        content: {
+          type: "instagram",
+          messages: [],
+          actions: [],
+          quick_replies: [],
+        },
+      },
+      200,
+    );
+  } catch (error) {
+    const message = errorMessage(error);
+
+    if (ctx?.waitUntil) {
+      ctx.waitUntil(
+        kvPutJson(env, "DEBUG_INSTAGRAM_LAST_QUICK_REPLY", {
+          ok: false,
+          error: message,
+          version: VERSION,
+        }),
+      );
+    }
+
+    return json(
+      {
+        ok: false,
+        status: "failed",
+        error: message,
+        version: VERSION,
+      },
+      502,
+    );
+  }
+}
+
+/* ========================================================================== */
 /* MANYCHAT COMPATIBILITY                                                     */
 /* ========================================================================== */
 
@@ -791,13 +1160,25 @@ async function handleManyChatCompatibility(request, env, ctx) {
     );
   }
 
-  const body = await safeJson(request);
+  const parsedRequest = await readJsonRequest(request);
+  const body = parsedRequest.value;
+
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(
+      kvPutJson(env, "DEBUG_INSTAGRAM_LAST_AUTOMATION_RAW", {
+        raw: parsedRequest.raw,
+        repaired: parsedRequest.repaired,
+        parseError: parsedRequest.error,
+      }),
+    );
+  }
 
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return json(
       {
         ok: false,
         error: "Invalid JSON",
+        parseError: parsedRequest.error,
         version: VERSION,
       },
       400,
@@ -806,7 +1187,7 @@ async function handleManyChatCompatibility(request, env, ctx) {
 
   if (ctx?.waitUntil) {
     ctx.waitUntil(
-      kvPutJson(env, "DEBUG_FACEBOOK_LAST_AUTOMATION_PAYLOAD", body),
+      kvPutJson(env, "DEBUG_INSTAGRAM_LAST_AUTOMATION_PAYLOAD", body),
     );
   }
 
@@ -818,282 +1199,74 @@ async function handleManyChatCompatibility(request, env, ctx) {
       env,
     );
 
-    const incomingText = getCustomerInputText(body);
-    const payloadValue = first(
-      body?.payload,
-      body?.buttonPayload,
-      body?.button_payload,
-      body?.quickReplyPayload,
-      body?.quick_reply_payload,
-    );
-
-    const messageText = first(
-      incomingText,
-      body?.text,
-      body?.message,
-      body?.previewText,
-      body?.preview_text,
-      payloadValue,
-    );
-
     const eventId =
-      first(
-        body?.eventId,
-        body?.event_id,
-        body?.messageId,
-        body?.message_id,
-      ) ||
+      first(body?.eventId, body?.event_id, body?.messageId, body?.message_id) ||
       stableEventId({
-        source: "manychat",
-        pageId: identity.pageId,
+        source: "manychat_identity",
         manychatContactId: identity.manychatContactId,
-        facebookPsid: identity.facebookPsid,
-        messageText,
-        payloadValue,
-        timestamp: first(
-          body?.timestamp,
-          body?.createdAt,
-          body?.created_at,
-          Date.now(),
-        ),
+        instagramScopedId: identity.instagramScopedId,
+        timestamp: first(body?.timestamp, body?.createdAt, body?.created_at, Date.now()),
       });
 
-    const correlationRecord = {
-      eventId,
-      pageId: identity.pageId,
-      manychatContactId: identity.manychatContactId,
-      canonicalParticipantId:
-        identity.facebookPsid || identity.manychatContactId,
-      customerName: first(
-        body?.customerName,
-        body?.customer_name,
-        body?.displayName,
-        body?.display_name,
-        identity.displayName,
-      ),
-      messageText,
-      payloadValue,
-      createdAt: Date.now(),
-    };
+    if (!identity.manychatContactId) {
+      throw new Error("ManyChat Contact ID is missing from External Request");
+    }
 
-    await rememberAutomationCorrelation(correlationRecord, body, env);
-
-    if (!identity.pageId || !identity.facebookPsid) {
+    if (!identity.pageId || !identity.instagramScopedId) {
       const responseBody = {
-        ok: true,
-        accepted: true,
-        skipped: true,
-        deferredToMetaWebhook: true,
-        reason: "verified_facebook_psid_required",
+        ok: false,
+        accepted: false,
+        status: "failed",
+        error: "ManyChat getInfo did not return a valid Instagram ig_id",
         version: VERSION,
         eventId,
-        conversationId: "",
-        participantId: "",
         manychatContactId: identity.manychatContactId,
+        manychatPageId: identity.manychatPageId,
       };
 
       if (ctx?.waitUntil) {
         ctx.waitUntil(
-          kvPutJson(
-            env,
-            "DEBUG_FACEBOOK_LAST_AUTOMATION_FORWARD",
-            responseBody,
-          ),
+          kvPutJson(env, "DEBUG_INSTAGRAM_LAST_AUTOMATION_FORWARD", responseBody),
         );
       }
 
-      return json(responseBody, 200);
+      return json(responseBody, 422);
     }
 
-    if (!messageText && !payloadValue) {
-      const responseBody = {
-        ok: true,
-        accepted: true,
-        skipped: true,
-        reason: "no_customer_content",
-        version: VERSION,
-        eventId,
-        manychatContactId: identity.manychatContactId,
-        participantId: identity.facebookPsid,
-      };
-
-      if (ctx?.waitUntil) {
-        ctx.waitUntil(
-          kvPutJson(
-            env,
-            "DEBUG_FACEBOOK_LAST_AUTOMATION_FORWARD",
-            responseBody,
-          ),
-        );
-      }
-
-      return json(responseBody, 200);
-    }
-
-    const participantId = identity.facebookPsid;
-    const conversationId = facebookConversationId(
-      identity.pageId,
-      participantId,
-    );
-
-    const providerMessageId = first(
-      body?.providerMessageId,
-      body?.provider_message_id,
-      body?.messageId,
-      body?.message_id,
-      eventId,
-    );
-
-    const customerName = first(
-      body?.customerName,
-      body?.customer_name,
-      body?.displayName,
-      body?.display_name,
-      body?.fullName,
-      body?.full_name,
-      contactData?.name,
-      [clean(contactData?.first_name), clean(contactData?.last_name)]
-        .filter(Boolean)
-        .join(" "),
-      identity.displayName,
-      `Facebook User (${participantId.slice(-4)})`,
-    );
-
-    const platformPayload = {
-      eventId,
-      event_id: eventId,
-      type: "incoming_message",
-      eventType: "manychat_customer_input",
-      event_type: "manychat_customer_input",
-      direction: "in",
-      senderType: "customer",
-      sender_type: "customer",
-
-      provider: "manychat",
-      providerName: "manychat",
-      provider_name: "manychat",
-      platform: "facebook",
-      channel: "facebook",
-      channelCode: "fb",
-      channel_code: "fb",
-      workerCode: WORKER_CODE,
-      worker_code: WORKER_CODE,
-      source: "فيسبوك",
-      sourceName: "فيسبوك",
-      source_name: "فيسبوك",
-
-      pageId: identity.pageId,
-      page_id: identity.pageId,
-      participantId,
-      participant_id: participantId,
-      manychatContactId: identity.manychatContactId,
-      manychat_contact_id: identity.manychatContactId,
-      facebookPsid: participantId,
-      facebook_psid: participantId,
-      fbId: participantId,
-      fb_id: participantId,
-      fbPsid: participantId,
-      fb_psid: participantId,
-      canonicalParticipantId: participantId,
-      canonical_participant_id: participantId,
-      identitySource: identity.identitySource,
-      identity_source: identity.identitySource,
-      identityAliases: identity.aliases,
-      identity_aliases: identity.aliases,
-      conversationId,
-      conversation_id: conversationId,
-
-      customerName,
-      customer_name: customerName,
-      displayName: customerName,
-      display_name: customerName,
-
-      messageId: providerMessageId,
-      message_id: providerMessageId,
-      providerMessageId,
-      provider_message_id: providerMessageId,
-      text: messageText,
-      message: messageText,
-      payload: clean(payloadValue),
-      messageType: payloadValue ? "quick_reply" : "text",
-      message_type: payloadValue ? "quick_reply" : "text",
-      attachments: [],
-      hasAttachment: false,
-      has_attachment: false,
-      timestamp: timestampMs(
-        first(
-          body?.timestamp,
-          body?.createdAt,
-          body?.created_at,
-          Date.now(),
-        ),
-      ),
-      commentId: first(
-        body?.commentId,
-        body?.comment_id,
-        body?.facebookCommentId,
-        body?.facebook_comment_id,
-        body?.socialCommentId,
-        body?.social_comment_id,
-      ),
-      comment_id: first(
-        body?.commentId,
-        body?.comment_id,
-        body?.facebookCommentId,
-        body?.facebook_comment_id,
-        body?.socialCommentId,
-        body?.social_comment_id,
-      ),
-      socialActorId: first(body?.socialActorId, body?.social_actor_id),
-      social_actor_id: first(body?.socialActorId, body?.social_actor_id),
-      rawAutomation: sanitizeAutomationBody(body),
-      raw_automation: sanitizeAutomationBody(body),
-    };
-
-    const result = await forwardToPlatform(
-      platformPayload,
-      env,
-      "facebook",
-    );
-
-    if (!result.ok) {
-      throw new Error(
-        `Platform endpoint rejected compatibility event ${eventId}: HTTP ${result.status} ${result.error}`,
-      );
-    }
+    const flush = await flushPendingMetaEvents(identity, env);
 
     const responseBody = {
       ok: true,
       accepted: true,
       version: VERSION,
-      mode: "manychat_compatibility",
+      mode: "manychat_identity_link_and_meta_flush",
       eventId,
-      conversationId,
-      participantId,
+      participantId: identity.instagramScopedId,
       manychatContactId: identity.manychatContactId,
+      manychatPageId: identity.manychatPageId,
+      customerName: identity.displayName,
+      instagramUsername: identity.instagramUsername,
       identitySource: identity.identitySource,
-      platformStatus: result.status,
-      result: result.data?.result || result.data || null,
+      linked: true,
+      flushed: flush.forwarded.length,
+      pendingFailures: flush.failed.length,
+      flush,
     };
 
     if (ctx?.waitUntil) {
       ctx.waitUntil(
-        kvPutJson(
-          env,
-          "DEBUG_FACEBOOK_LAST_AUTOMATION_FORWARD",
-          responseBody,
-        ),
+        kvPutJson(env, "DEBUG_INSTAGRAM_LAST_AUTOMATION_FORWARD", responseBody),
       );
     }
 
     return json(responseBody, 200);
   } catch (error) {
     const message = errorMessage(error);
-    console.error("ManyChat compatibility forwarding failed", message);
+    console.error("ManyChat identity linking failed", message);
 
     if (ctx?.waitUntil) {
       ctx.waitUntil(
-        kvPutJson(env, "DEBUG_FACEBOOK_LAST_AUTOMATION_FORWARD", {
+        kvPutJson(env, "DEBUG_INSTAGRAM_LAST_AUTOMATION_FORWARD", {
           ok: false,
           error: message,
         }),
@@ -1157,36 +1330,16 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
     first(body?.conversationId, body?.conversation_id, body?.convId),
   );
 
-  const parsedConversation = parseFacebookConversationId(
+  const parsedConversation = parseInstagramConversationId(
     requestedConversationId,
   );
 
-  const explicitFacebookPsid = clean(
-    first(
-      body?.facebookPsid,
-      body?.facebook_psid,
-      body?.fbPsid,
-      body?.fb_psid,
-      body?.psid,
-      body?.pageScopedId,
-      body?.page_scoped_id,
-      body?.facebookUserId,
-      body?.facebook_user_id,
-      body?.metaSenderId,
-      body?.meta_sender_id,
-      body?.lastIncomingParticipantId,
-      body?.last_incoming_participant_id,
-      contactData?.facebook_psid,
-      contactData?.fb_psid,
-      contactData?.psid,
-      contactData?.page_scoped_id,
-    ),
-  );
-
-  const manychatContactId = clean(
+  const requestedManyChatContactId = clean(
     first(
       body?.manychatContactId,
       body?.manychat_contact_id,
+      body?.participantId,
+      body?.participant_id,
       body?.subscriber_id,
       body?.subscriberId,
       body?.contactId,
@@ -1200,26 +1353,69 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
 
   let subscriberInfo = null;
 
-  if (manychatContactId) {
+  if (requestedManyChatContactId) {
     subscriberInfo = await fetchManyChatSubscriberInfo(
-      manychatContactId,
+      requestedManyChatContactId,
       env,
     ).catch(() => null);
   }
 
-  const subscriberPsid = extractFacebookPsidFromManyChatInfo(
+  const manychatContactId = clean(
+    first(
+      extractManyChatContactId(subscriberInfo),
+      requestedManyChatContactId,
+    ),
+  );
+
+  const subscriberScopedId = extractInstagramScopedIdFromManyChatInfo(
     subscriberInfo,
   );
 
-  const pageId = clean(
+  const explicitInstagramScopedId = clean(
     first(
-      body?.pageId,
-      body?.page_id,
-      contactData?.page_id,
+      body?.instagramScopedId,
+      body?.instagram_scoped_id,
+      body?.igsid,
+      body?.igSid,
+      body?.ig_sid,
+      body?.igId,
+      body?.ig_id,
+      body?.pageScopedId,
+      body?.page_scoped_id,
+      body?.instagramUserId,
+      body?.instagram_user_id,
+      body?.metaSenderId,
+      body?.meta_sender_id,
+      body?.lastIncomingParticipantId,
+      body?.last_incoming_participant_id,
+      contactData?.instagram_scoped_id,
+      contactData?.instagram_igsid,
+      contactData?.ig_igsid,
+      contactData?.igsid,
+      contactData?.igSid,
+      contactData?.ig_id,
+      contactData?.page_scoped_id,
+    ),
+  );
+
+  const manychatPageId = clean(
+    first(
       subscriberInfo?.subscriber?.page_id,
       subscriberInfo?.root?.page_id,
+      contactData?.page_id,
+    ),
+  );
+
+  // The ManyChat page_id is the Facebook Page ID, not the Instagram account ID.
+  // Always key the identity link by the real Instagram professional account ID.
+  const pageId = clean(
+    first(
+      body?.instagramAccountId,
+      body?.instagram_account_id,
       parsedConversation?.pageId,
-      env?.FB_PAGE_ID,
+      instagramAccountId(env),
+      body?.pageId,
+      body?.page_id,
     ),
   );
 
@@ -1228,36 +1424,14 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
       ? await getIdentityLinkByManyChat(pageId, manychatContactId, env)
       : null;
 
-  const linkedPsid = clean(storedLink?.facebookPsid);
+  const linkedScopedId = clean(storedLink?.instagramScopedId);
 
-  const candidates = [
-    explicitFacebookPsid,
-    subscriberPsid,
-    linkedPsid,
-    parsedConversation?.participantId,
-  ]
-    .map(clean)
-    .filter(Boolean);
-
-  let graphValidatedPsid = "";
-
-  for (const candidate of candidates) {
-    const graphName = await fetchFacebookGraphName(candidate, env).catch(
-      () => "",
-    );
-
-    if (graphName) {
-      graphValidatedPsid = candidate;
-      break;
-    }
-  }
-
-  const facebookPsid = clean(
+  // ManyChat getInfo is authoritative here. It returns data.id + data.ig_id.
+  const instagramScopedId = clean(
     first(
-      graphValidatedPsid,
-      linkedPsid,
-      subscriberPsid,
-      explicitFacebookPsid,
+      subscriberScopedId,
+      linkedScopedId,
+      explicitInstagramScopedId,
       parsedConversation?.participantId,
     ),
   );
@@ -1265,11 +1439,11 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
   const aliases = [
     ...new Set(
       [
-        facebookPsid,
+        instagramScopedId,
         manychatContactId,
-        explicitFacebookPsid,
-        subscriberPsid,
-        linkedPsid,
+        subscriberScopedId,
+        linkedScopedId,
+        explicitInstagramScopedId,
         parsedConversation?.participantId,
       ]
         .map(clean)
@@ -1279,57 +1453,54 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
 
   let identitySource = "";
 
-  if (graphValidatedPsid) identitySource = "graph_validated_psid";
-  else if (linkedPsid) identitySource = "stored_identity_link";
-  else if (subscriberPsid) identitySource = "manychat_subscriber_psid";
-  else if (explicitFacebookPsid) identitySource = "explicit_psid";
-  else if (parsedConversation?.participantId) {
+  if (subscriberScopedId) identitySource = "manychat_getinfo_ig_id";
+  else if (linkedScopedId) identitySource = "stored_identity_link";
+  else if (explicitInstagramScopedId) {
+    identitySource = "explicit_instagram_scoped_id";
+  } else if (parsedConversation?.participantId) {
     identitySource = "conversation_id";
   } else if (manychatContactId) {
-    identitySource = "manychat_contact_without_psid";
+    identitySource = "manychat_contact_without_instagram_scoped_id";
   }
 
-  if (pageId && facebookPsid) {
+  const displayName = extractManyChatDisplayName(subscriberInfo);
+  const instagramUsername = extractInstagramUsernameFromManyChatInfo(
+    subscriberInfo,
+  );
+  const profilePic = clean(
+    first(
+      subscriberInfo?.subscriber?.profile_pic,
+      subscriberInfo?.root?.profile_pic,
+    ),
+  );
+
+  if (pageId && instagramScopedId) {
     await rememberIdentityLink(
       pageId,
-      facebookPsid,
-      facebookPsid,
+      instagramScopedId,
+      instagramScopedId,
       {
         manychatContactId,
-        source: identitySource || "manychat_compatibility",
+        manychatPageId,
+        displayName,
+        instagramUsername,
+        profilePic,
+        source: identitySource || "manychat_getinfo",
       },
       env,
     );
   }
 
-  const displayName = clean(
-    first(
-      subscriberInfo?.subscriber?.name,
-      subscriberInfo?.subscriber?.full_name,
-      subscriberInfo?.root?.name,
-      subscriberInfo?.root?.full_name,
-      [
-        clean(
-          subscriberInfo?.subscriber?.first_name ||
-            subscriberInfo?.root?.first_name,
-        ),
-        clean(
-          subscriberInfo?.subscriber?.last_name ||
-            subscriberInfo?.root?.last_name,
-        ),
-      ]
-        .filter(Boolean)
-        .join(" "),
-    ),
-  );
-
   return {
-    facebookPsid,
+    instagramScopedId,
     manychatContactId,
     pageId,
+    manychatPageId,
     aliases,
     identitySource,
     displayName,
+    instagramUsername,
+    profilePic,
   };
 }
 
@@ -1338,25 +1509,25 @@ async function resolveManyChatAutomationIdentity(body, contactData, env) {
 /* ========================================================================== */
 
 async function resolveMetaEventIdentity(event, env) {
-  const pageId = clean(event?.pageId || env?.FB_PAGE_ID);
-  const facebookPsid = clean(event?.customerId);
+  const pageId = clean(event?.pageId || instagramAccountId(env));
+  const instagramScopedId = clean(event?.customerId);
 
-  if (!pageId || !facebookPsid) {
+  if (!pageId || !instagramScopedId) {
     return {
       linked: false,
-      canonicalParticipantId: facebookPsid,
+      canonicalParticipantId: instagramScopedId,
       manychatContactId: "",
-      facebookPsid,
-      aliases: [facebookPsid].filter(Boolean),
+      instagramScopedId,
+      aliases: [instagramScopedId].filter(Boolean),
       conversationAliases: [],
-      identitySource: "meta_psid_only",
+      identitySource: "meta_instagram_scoped_id_only",
     };
   }
 
-  let link = await getIdentityLinkByPsid(pageId, facebookPsid, env);
+  let link = await getIdentityLinkByScopedId(pageId, instagramScopedId, env);
 
   if (!link) {
-    const info = await fetchManyChatSubscriberInfo(facebookPsid, env).catch(
+    const info = await fetchManyChatSubscriberInfo(instagramScopedId, env).catch(
       () => null,
     );
 
@@ -1365,11 +1536,11 @@ async function resolveMetaEventIdentity(event, env) {
     if (manychatContactId) {
       link = await rememberIdentityLink(
         pageId,
-        facebookPsid,
-        facebookPsid,
+        instagramScopedId,
+        instagramScopedId,
         {
           manychatContactId,
-          source: "manychat_lookup_by_psid",
+          source: "manychat_lookup_by_instagram_scoped_id",
         },
         env,
       );
@@ -1387,8 +1558,8 @@ async function resolveMetaEventIdentity(event, env) {
     if (pending?.manychatContactId) {
       link = await rememberIdentityLink(
         pageId,
-        facebookPsid,
-        facebookPsid,
+        instagramScopedId,
+        instagramScopedId,
         {
           manychatContactId: pending.manychatContactId,
           source: `correlated_${pending.source || "event"}`,
@@ -1398,13 +1569,13 @@ async function resolveMetaEventIdentity(event, env) {
     }
   }
 
-  const canonicalParticipantId = facebookPsid;
+  const canonicalParticipantId = instagramScopedId;
   const manychatContactId = clean(link?.manychatContactId);
 
   const aliases = [
     ...new Set(
       [
-        facebookPsid,
+        instagramScopedId,
         canonicalParticipantId,
         manychatContactId,
         ...(Array.isArray(link?.aliases) ? link.aliases : []),
@@ -1415,19 +1586,159 @@ async function resolveMetaEventIdentity(event, env) {
   ];
 
   const conversationAliases = aliases.map((id) =>
-    facebookConversationId(pageId, id),
+    instagramConversationId(pageId, id),
   );
 
   return {
     linked: Boolean(link),
     canonicalParticipantId,
     manychatContactId,
-    facebookPsid,
+    instagramScopedId,
+    displayName: clean(link?.displayName),
+    instagramUsername: clean(link?.instagramUsername),
+    profilePic: clean(link?.profilePic),
+    manychatPageId: clean(link?.manychatPageId),
     aliases,
     conversationAliases,
     identitySource:
       clean(link?.source) ||
-      (link ? "stored_identity_link" : "meta_psid_unresolved"),
+      (link ? "stored_identity_link" : "meta_instagram_scoped_id_unresolved"),
+  };
+}
+
+
+function pendingMetaEventKey(pageId, instagramScopedId) {
+  return `pending_meta:${clean(pageId)}:${clean(instagramScopedId)}`;
+}
+
+async function queuePendingMetaEvent(event, env) {
+  const pageId = clean(event?.pageId || instagramAccountId(env));
+  const instagramScopedId = clean(event?.customerId);
+
+  if (!pageId || !instagramScopedId) {
+    return { pendingCount: 0 };
+  }
+
+  const key = pendingMetaEventKey(pageId, instagramScopedId);
+  const now = Date.now();
+  const current = await readPendingMetaEvents(pageId, instagramScopedId, env);
+  const fresh = current.filter(
+    (item) =>
+      now - Number(item?.createdAt || 0) <=
+      PENDING_META_EVENT_TTL_SECONDS * 1000,
+  );
+
+  const deduped = fresh.filter(
+    (item) => clean(item?.event?.eventId) !== clean(event?.eventId),
+  );
+
+  deduped.push({
+    createdAt: now,
+    event,
+  });
+
+  const finalItems = deduped.slice(-MAX_PENDING_META_EVENTS);
+  memoryPendingMetaEvents.set(key, finalItems);
+  await statePutJson(
+    env,
+    `instagram:${key}`,
+    finalItems,
+    PENDING_META_EVENT_TTL_SECONDS,
+  );
+
+  return { pendingCount: finalItems.length };
+}
+
+async function readPendingMetaEvents(pageId, instagramScopedId, env) {
+  const key = pendingMetaEventKey(pageId, instagramScopedId);
+  const memory = memoryPendingMetaEvents.get(key);
+
+  if (Array.isArray(memory)) return memory;
+
+  const stored = await stateGetJson(env, `instagram:${key}`);
+  const items = Array.isArray(stored) ? stored : [];
+
+  if (items.length) memoryPendingMetaEvents.set(key, items);
+  return items;
+}
+
+async function clearPendingMetaEvents(pageId, instagramScopedId, env) {
+  const key = pendingMetaEventKey(pageId, instagramScopedId);
+  memoryPendingMetaEvents.delete(key);
+  await stateDeleteJson(env, `instagram:${key}`);
+}
+
+async function flushPendingMetaEvents(identity, env) {
+  const pageId = clean(identity?.pageId || instagramAccountId(env));
+  const instagramScopedId = clean(identity?.instagramScopedId);
+  const forwarded = [];
+  const failed = [];
+
+  if (!pageId || !instagramScopedId) return { forwarded, failed };
+
+  const items = await readPendingMetaEvents(pageId, instagramScopedId, env);
+
+  for (const item of items) {
+    const event = item?.event;
+    if (!event || typeof event !== "object") continue;
+
+    if (identity.displayName) event.displayName = identity.displayName;
+
+    try {
+      const payload = await buildMetaPlatformPayload(event, env);
+      const result = await forwardToPlatform(payload, env, "instagram");
+
+      if (!result.ok) {
+        failed.push({
+          eventId: clean(event?.eventId),
+          status: result.status,
+          error: result.error,
+          item,
+        });
+        continue;
+      }
+
+      forwarded.push({
+        eventId: clean(event?.eventId),
+        status: result.status,
+        conversationId:
+          result.data?.result?.conversationId ||
+          result.data?.conversationId ||
+          payload.conversationId,
+        messageId:
+          result.data?.result?.messageId ||
+          result.data?.messageId ||
+          payload.providerMessageId,
+      });
+    } catch (error) {
+      failed.push({
+        eventId: clean(event?.eventId),
+        error: errorMessage(error),
+        item,
+      });
+    }
+  }
+
+  if (failed.length) {
+    const retryItems = failed
+      .map((entry) => entry.item)
+      .filter(Boolean)
+      .slice(-MAX_PENDING_META_EVENTS);
+    const key = pendingMetaEventKey(pageId, instagramScopedId);
+    memoryPendingMetaEvents.set(key, retryItems);
+    await statePutJson(
+      env,
+      `instagram:${key}`,
+      retryItems,
+      PENDING_META_EVENT_TTL_SECONDS,
+    );
+  } else {
+    await clearPendingMetaEvents(pageId, instagramScopedId, env);
+  }
+
+  return {
+    forwarded,
+    failed: failed.map(({ item, ...entry }) => entry),
   };
 }
 
@@ -1469,8 +1780,8 @@ async function rememberAutomationCorrelation(record, body, env) {
 }
 
 async function rememberOutboundCorrelation(target, body, env) {
-  const pageId = clean(first(target?.pageId, env?.FB_PAGE_ID));
-  const parsed = parseFacebookConversationId(clean(target?.conversationId));
+  const pageId = clean(first(target?.pageId, instagramAccountId(env)));
+  const parsed = parseInstagramConversationId(clean(target?.conversationId));
 
   const manychatContactId = clean(
     first(
@@ -1521,7 +1832,7 @@ async function rememberOutboundCorrelation(target, body, env) {
 }
 
 async function findPendingCorrelationForMeta(event, env) {
-  const pageId = clean(event?.pageId || env?.FB_PAGE_ID);
+  const pageId = clean(event?.pageId || instagramAccountId(env));
   const name = event?.isEcho ? "" : clean(event?.displayName);
 
   const tokens = correlationTokens([
@@ -1637,7 +1948,7 @@ async function appendPendingCorrelation(key, record, env) {
 
   await statePutJson(
     env,
-    `facebook:${key}`,
+    `instagram:${key}`,
     deduped,
     PENDING_CORRELATION_TTL_SECONDS,
   );
@@ -1648,7 +1959,7 @@ async function readPendingCorrelationCandidates(key, env) {
 
   if (Array.isArray(memory)) return memory;
 
-  const stored = await stateGetJson(env, `facebook:${key}`);
+  const stored = await stateGetJson(env, `instagram:${key}`);
   const value = Array.isArray(stored) ? stored : [];
 
   if (value.length) {
@@ -1679,7 +1990,7 @@ function uniqueFreshCorrelation(candidates) {
 
 async function rememberIdentityLink(
   pageId,
-  facebookPsid,
+  instagramScopedId,
   canonicalParticipantId,
   details,
   env,
@@ -1688,14 +1999,18 @@ async function rememberIdentityLink(
 
   const link = {
     pageId: clean(pageId),
-    facebookPsid: clean(facebookPsid),
+    instagramScopedId: clean(instagramScopedId),
     canonicalParticipantId: clean(
-      first(canonicalParticipantId, facebookPsid),
+      first(canonicalParticipantId, instagramScopedId),
     ),
     manychatContactId,
+    manychatPageId: clean(details?.manychatPageId),
+    displayName: clean(details?.displayName),
+    instagramUsername: clean(details?.instagramUsername),
+    profilePic: clean(details?.profilePic),
     aliases: [
       ...new Set(
-        [facebookPsid, canonicalParticipantId, manychatContactId]
+        [instagramScopedId, canonicalParticipantId, manychatContactId]
           .map(clean)
           .filter(Boolean),
       ),
@@ -1704,14 +2019,14 @@ async function rememberIdentityLink(
     updatedAt: Date.now(),
   };
 
-  if (!link.pageId || !link.facebookPsid) return null;
+  if (!link.pageId || !link.instagramScopedId) return null;
 
-  const psidKey = identityPsidKey(link.pageId, link.facebookPsid);
-  memoryIdentityLinks.set(psidKey, link);
+  const igsidKey = identityScopedIdKey(link.pageId, link.instagramScopedId);
+  memoryIdentityLinks.set(igsidKey, link);
 
   await statePutJson(
     env,
-    `facebook:${psidKey}`,
+    `instagram:${igsidKey}`,
     link,
     IDENTITY_LINK_TTL_SECONDS,
   );
@@ -1726,7 +2041,7 @@ async function rememberIdentityLink(
 
     await statePutJson(
       env,
-      `facebook:${manychatKey}`,
+      `instagram:${manychatKey}`,
       link,
       IDENTITY_LINK_TTL_SECONDS,
     );
@@ -1735,8 +2050,8 @@ async function rememberIdentityLink(
   return link;
 }
 
-async function getIdentityLinkByPsid(pageId, facebookPsid, env) {
-  return getIdentityLink(identityPsidKey(pageId, facebookPsid), env);
+async function getIdentityLinkByScopedId(pageId, instagramScopedId, env) {
+  return getIdentityLink(identityScopedIdKey(pageId, instagramScopedId), env);
 }
 
 async function getIdentityLinkByManyChat(pageId, manychatContactId, env) {
@@ -1751,7 +2066,7 @@ async function getIdentityLink(key, env) {
 
   if (memory) return memory;
 
-  const stored = await stateGetJson(env, `facebook:${key}`);
+  const stored = await stateGetJson(env, `instagram:${key}`);
 
   if (stored && typeof stored === "object") {
     memoryIdentityLinks.set(key, stored);
@@ -1761,8 +2076,8 @@ async function getIdentityLink(key, env) {
   return null;
 }
 
-function identityPsidKey(pageId, facebookPsid) {
-  return `identity:psid:${clean(pageId)}:${clean(facebookPsid)}`;
+function identityScopedIdKey(pageId, instagramScopedId) {
+  return `identity:igsid:${clean(pageId)}:${clean(instagramScopedId)}`;
 }
 
 function identityManyChatKey(pageId, manychatContactId) {
@@ -1786,21 +2101,57 @@ function extractManyChatContactId(info) {
   );
 }
 
-function extractFacebookPsidFromManyChatInfo(info) {
+function extractInstagramScopedIdFromManyChatInfo(info) {
   return clean(
     first(
-      info?.subscriber?.facebook_psid,
-      info?.subscriber?.fb_psid,
-      info?.subscriber?.psid,
+      info?.subscriber?.instagram_scoped_id,
+      info?.subscriber?.instagram_igsid,
+      info?.subscriber?.ig_igsid,
+      info?.subscriber?.igsid,
+      info?.subscriber?.ig_sid,
       info?.subscriber?.page_scoped_id,
-      info?.subscriber?.facebook_id,
-      info?.subscriber?.fb_id,
-      info?.root?.facebook_psid,
-      info?.root?.fb_psid,
-      info?.root?.psid,
+      info?.subscriber?.instagram_id,
+      info?.subscriber?.ig_id,
+      info?.root?.instagram_scoped_id,
+      info?.root?.instagram_igsid,
+      info?.root?.ig_igsid,
+      info?.root?.igsid,
+      info?.root?.ig_sid,
       info?.root?.page_scoped_id,
-      info?.root?.facebook_id,
-      info?.root?.fb_id,
+      info?.root?.instagram_id,
+      info?.root?.ig_id,
+    ),
+  );
+}
+
+
+function extractManyChatDisplayName(info) {
+  const root = info?.root || {};
+  const subscriber = info?.subscriber || root;
+
+  return clean(
+    first(
+      subscriber?.name,
+      subscriber?.full_name,
+      root?.name,
+      root?.full_name,
+      [
+        clean(subscriber?.first_name || root?.first_name),
+        clean(subscriber?.last_name || root?.last_name),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    ),
+  );
+}
+
+function extractInstagramUsernameFromManyChatInfo(info) {
+  return clean(
+    first(
+      info?.subscriber?.ig_username,
+      info?.subscriber?.instagram_username,
+      info?.root?.ig_username,
+      info?.root?.instagram_username,
     ),
   );
 }
@@ -1814,7 +2165,7 @@ async function statePutJson(env, key, value, ttlSeconds) {
         expirationTtl: ttlSeconds,
       });
     } catch (error) {
-      console.error("Facebook identity KV put failed", errorMessage(error));
+      console.error("Instagram identity KV put failed", errorMessage(error));
     }
   }
 
@@ -1833,7 +2184,7 @@ async function statePutJson(env, key, value, ttlSeconds) {
       );
     } catch (error) {
       console.error(
-        "Facebook identity cache put failed",
+        "Instagram identity cache put failed",
         errorMessage(error),
       );
     }
@@ -1848,7 +2199,7 @@ async function stateGetJson(env, key) {
       const raw = await kv.get(key);
       if (raw) return JSON.parse(raw);
     } catch (error) {
-      console.error("Facebook identity KV get failed", errorMessage(error));
+      console.error("Instagram identity KV get failed", errorMessage(error));
     }
   }
 
@@ -1860,7 +2211,7 @@ async function stateGetJson(env, key) {
       if (response) return await response.json();
     } catch (error) {
       console.error(
-        "Facebook identity cache get failed",
+        "Instagram identity cache get failed",
         errorMessage(error),
       );
     }
@@ -1869,9 +2220,35 @@ async function stateGetJson(env, key) {
   return null;
 }
 
+async function stateDeleteJson(env, key) {
+  const kv = identityKv(env);
+
+  if (kv?.delete) {
+    try {
+      await kv.delete(key);
+    } catch (error) {
+      console.error("Instagram identity KV delete failed", errorMessage(error));
+    }
+  }
+
+  const cache = globalThis?.caches?.default;
+
+  if (cache?.delete) {
+    try {
+      await cache.delete(stateCacheRequest(key));
+    } catch (error) {
+      console.error(
+        "Instagram identity cache delete failed",
+        errorMessage(error),
+      );
+    }
+  }
+}
+
+
 function stateCacheRequest(key) {
   return new Request(
-    `https://mzj-facebook-identity.invalid/${encodeURIComponent(
+    `https://mzj-instagram-identity.invalid/${encodeURIComponent(
       stableEventId(key),
     )}`,
   );
@@ -1879,7 +2256,7 @@ function stateCacheRequest(key) {
 
 function identityKv(env) {
   return (
-    env?.FACEBOOK_IDENTITY_KV || env?.IDENTITY_KV || env?.DEBUG_KV || null
+    env?.INSTAGRAM_IDENTITY_KV || env?.IDENTITY_KV || env?.DEBUG_KV || null
   );
 }
 
@@ -1905,10 +2282,10 @@ function sanitizeAutomationBody(body) {
 }
 
 /* ========================================================================== */
-/* FACEBOOK SEND                                                              */
+/* INSTAGRAM SEND                                                             */
 /* ========================================================================== */
 
-async function handleFacebookSend(request, env, ctx) {
+async function handleInstagramSend(request, env, ctx) {
   const body = await safeJson(request);
 
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -1923,15 +2300,15 @@ async function handleFacebookSend(request, env, ctx) {
     );
   }
 
-  const target = await resolveFacebookSendTarget(body, env);
+  const target = await resolveInstagramSendTarget(body, env);
 
-  if (!target.participantId) {
+  if (!target.participantId && !target.manychatContactId && !target.commentId) {
     return json(
       {
         ok: false,
         status: "failed",
         error:
-          "participantId/psid or a valid facebook:PAGE_ID:PSID conversationId is required",
+          "participantId/IGSID, manychatContactId, commentId, or a valid instagram:ACCOUNT_ID:IGSID conversationId is required",
         version: VERSION,
       },
       400,
@@ -1956,101 +2333,127 @@ async function handleFacebookSend(request, env, ctx) {
     await rememberOutboundCorrelation(target, body, env);
   }
 
-  let result;
-
-  if (type === "media") {
-    result = await sendFacebookMedia(env, {
-      participantId: target.participantId,
-      mediaUrl: clean(
-        first(
-          body?.media_url,
-          body?.mediaUrl,
-          body?.file_url,
-          body?.fileUrl,
-          body?.attachment_url,
-          body?.attachmentUrl,
-        ),
-      ),
-      mediaType: normalizeOutboundFacebookMediaType(
-        first(
-          body?.media_type,
-          body?.mediaType,
-          body?.attachment_type,
-          body?.attachmentType,
-          body?.type,
-          "file",
-        ),
-      ),
-      messagingType: clean(
-        first(body?.messaging_type, body?.messagingType, "RESPONSE"),
-      ),
-      tag: clean(first(body?.tag, body?.message_tag, body?.messageTag)),
-      isReusable:
-        body?.is_reusable === undefined && body?.isReusable === undefined
-          ? true
-          : toBool(body?.is_reusable ?? body?.isReusable),
-    });
-  } else {
-    result = await sendFacebookTextOrButtons(env, target, body);
-  }
+  const result =
+    type === "media"
+      ? await sendInstagramMedia(env, target, body)
+      : await sendInstagramTextOrButtons(env, target, body);
 
   const responseBody = {
     ...result,
-    provider: "facebook",
-    platform: "facebook",
-    channel: "facebook",
+    provider: result?.provider || "manychat",
+    platform: "instagram",
+    channel: "instagram",
+    channelCode: "ig",
     workerCode: WORKER_CODE,
     worker_code: WORKER_CODE,
     message_type: type,
     participantId: target.participantId,
+    manychatContactId: target.manychatContactId,
+    requestedManyChatContactId: target.requestedManyChatContactId,
+    identityResolution: target.identityResolution,
     pageId: target.pageId,
+    instagramAccountId: target.pageId,
     conversationId: target.conversationId,
+    commentId: target.commentId,
+    privateReply: result?.private_reply === true || result?.privateReply === true,
     version: VERSION,
   };
 
   if (ctx?.waitUntil) {
     ctx.waitUntil(
-      kvPutJson(env, "DEBUG_FACEBOOK_LAST_SEND", responseBody),
+      kvPutJson(env, "DEBUG_INSTAGRAM_LAST_SEND", responseBody),
     );
   }
 
   return json(responseBody, result.ok ? 200 : 502);
 }
 
-async function resolveFacebookSendTarget(body, env) {
+async function resolveInstagramSendTarget(body, env) {
   const conversationId = clean(
     first(body?.convId, body?.conversationId, body?.conversation_id),
   );
 
-  const parsed = parseFacebookConversationId(conversationId);
+  const parsed = parseInstagramConversationId(conversationId);
 
+  // The Instagram professional account ID is the canonical namespace for
+  // identity links. Prefer the explicit Instagram account fields and parsed
+  // conversation before generic pageId values supplied by the platform.
   let pageId = clean(
-    first(body?.pageId, body?.page_id, parsed?.pageId, env?.FB_PAGE_ID),
+    first(
+      body?.instagramAccountId,
+      body?.instagram_account_id,
+      parsed?.pageId,
+      instagramAccountId(env),
+      body?.pageId,
+      body?.page_id,
+    ),
   );
 
   let participantId = clean(
     first(
       body?.participantId,
       body?.participant_id,
-      body?.psid,
-      body?.fbPsid,
-      body?.fb_psid,
-      body?.facebookPsid,
-      body?.facebook_psid,
+      body?.instagramScopedId,
+      body?.instagram_scoped_id,
+      body?.igsid,
+      body?.igSid,
+      body?.ig_sid,
+      body?.igId,
+      body?.ig_id,
       body?.recipientId,
       body?.recipient_id,
       parsed?.participantId,
     ),
   );
 
-  const manychatContactId = clean(
+  const requestedManyChatContactId = clean(
     first(
       body?.manychatContactId,
       body?.manychat_contact_id,
       body?.subscriberId,
       body?.subscriber_id,
+      body?.contactId,
+      body?.contact_id,
     ),
   );
+  const commentId = clean(
+    first(
+      body?.commentId,
+      body?.comment_id,
+      body?.instagramCommentId,
+      body?.instagram_comment_id,
+      body?.socialCommentId,
+      body?.social_comment_id,
+    ),
+  );
+
+  let manychatContactId = requestedManyChatContactId;
+  let identityResolution = requestedManyChatContactId
+    ? "request_manychat_contact_id"
+    : "";
+
+  if (!pageId) pageId = instagramAccountId(env);
+
+  // The platform may echo participantId into manychatContactId. That value is
+  // not authoritative. When an Instagram scoped ID is known, always prefer the
+  // persisted direct KV link created from ManyChat getInfo.
+  if (pageId && participantId) {
+    const link = await getIdentityLinkByScopedId(
+      pageId,
+      participantId,
+      env,
+    );
+
+    const linkedManyChatContactId = clean(link?.manychatContactId);
+
+    if (linkedManyChatContactId) {
+      manychatContactId = linkedManyChatContactId;
+      identityResolution = "stored_identity_link_by_instagram_scoped_id";
+    } else if (manychatContactId === participantId) {
+      manychatContactId = "";
+      identityResolution = "rejected_self_mapped_manychat_contact_id";
+    }
+  }
 
   if (!participantId && pageId && manychatContactId) {
     const link = await getIdentityLinkByManyChat(
@@ -2059,20 +2462,41 @@ async function resolveFacebookSendTarget(body, env) {
       env,
     );
 
-    participantId = clean(link?.facebookPsid);
+    participantId = clean(link?.instagramScopedId);
+
+    if (participantId) {
+      manychatContactId = clean(link?.manychatContactId || manychatContactId);
+      identityResolution = "stored_identity_link_by_manychat_contact_id";
+    }
   }
 
-  if (!pageId) pageId = clean(env?.FB_PAGE_ID);
+  // A final lookup covers cases where participantId was resolved above.
+  if (pageId && participantId && !manychatContactId) {
+    const link = await getIdentityLinkByScopedId(
+      pageId,
+      participantId,
+      env,
+    );
+
+    manychatContactId = clean(link?.manychatContactId);
+
+    if (manychatContactId) {
+      identityResolution = "stored_identity_link_by_instagram_scoped_id";
+    }
+  }
 
   return {
     conversationId:
       conversationId ||
       (pageId && participantId
-        ? facebookConversationId(pageId, participantId)
+        ? instagramConversationId(pageId, participantId)
         : ""),
     pageId,
     participantId,
     manychatContactId,
+    requestedManyChatContactId,
+    commentId,
+    identityResolution,
   };
 }
 
@@ -2147,143 +2571,264 @@ function normalizeButtons(body) {
     .slice(0, 13);
 }
 
-async function sendFacebookTextOrButtons(env, target, body) {
+async function sendInstagramTextOrButtons(env, target, body) {
   const textValue = clean(first(body?.text, body?.message));
   const buttons = normalizeButtons(body);
-  const attempts = [];
+  const manychatContactId = clean(target?.manychatContactId);
 
-  const message = buttons.length
-    ? {
-        text: textValue || "اختر من القائمة",
-        quick_replies: buttons.map((button) => ({
-          content_type: "text",
-          title: button.title,
-          payload: button.payload,
-        })),
-      }
-    : {
+  if (!manychatContactId) {
+    const commentId = clean(target?.commentId);
+    if (commentId && textValue && !buttons.length) {
+      return sendInstagramPrivateReply(env, {
+        commentId,
         text: textValue,
-      };
-
-  const graph = await sendFacebookGraphMessage(env, {
-    participantId: target.participantId,
-    message,
-    messagingType: clean(
-      first(body?.messaging_type, body?.messagingType, "RESPONSE"),
-    ),
-    tag: clean(first(body?.tag, body?.message_tag, body?.messageTag)),
-  });
-
-  attempts.push(providerAttemptSummary("graph", graph));
-
-  if (graph.ok) {
+        participantId: clean(target?.participantId),
+        pageId: clean(target?.pageId),
+      });
+    }
     return {
-      ...graph,
-      send_method: "graph",
-      attempts,
+      ...failedProviderResult(
+        commentId
+          ? "Instagram private reply supports text only"
+          : "ManyChat Contact ID mapping missing for Instagram participant",
+      ),
+      provider: commentId ? "instagram_graph" : "manychat",
+      send_method: commentId ? "graph_private_reply" : "manychat",
+      participantId: clean(target?.participantId),
+      manychatContactId: "",
+      commentId,
+      attempts: [],
     };
   }
 
-  const canUseManyChatFallback = Boolean(
-    !buttons.length &&
-      textValue &&
-      manychatToken(env) &&
-      clean(target?.manychatContactId),
+  const manychat = await sendManyChatInstagramContent(
+    manychatContactId,
+    {
+      type: buttons.length ? "buttons" : "text",
+      text: textValue || (buttons.length ? "اختر من القائمة" : ""),
+      buttons,
+      participantId: clean(target?.participantId),
+      pageId: clean(target?.pageId),
+      conversationId: clean(target?.conversationId),
+    },
+    env,
   );
 
-  if (canUseManyChatFallback) {
-    const manychat = await sendManyChatText(
-      target.manychatContactId,
-      textValue,
-      env,
-    );
-
-    attempts.push(providerAttemptSummary("manychat", manychat));
-
-    if (manychat.ok) {
-      return {
-        ...manychat,
-        send_method: "manychat",
-        attempts,
-      };
-    }
-  }
+  const attempts = [providerAttemptSummary("manychat", manychat)];
 
   return {
-    ...graph,
-    ok: false,
-    status: "failed",
-    provider_status: "failed",
-    error: first(
-      graph?.error,
-      attempts
-        .map((item) => item.error)
-        .filter(Boolean)
-        .join(" | "),
-      "Facebook send failed",
-    ),
-    send_method: "",
+    ...manychat,
+    provider: "manychat",
+    send_method: "manychat",
+    subscriber_id: manychatContactId,
+    manychatContactId,
     attempts,
   };
 }
 
-async function sendFacebookMedia(env, input) {
-  const mediaUrl = clean(input?.mediaUrl);
-  const participantId = clean(input?.participantId);
+async function sendInstagramPrivateReply(env, input) {
+  const commentId = clean(input?.commentId);
+  const textValue = clean(input?.text);
+  const accessToken = instagramAccessToken(env);
+  const accountId = clean(first(input?.pageId, instagramAccountId(env)));
+
+  if (!commentId) return failedProviderResult("commentId missing");
+  if (!textValue) return failedProviderResult("private reply text missing");
+  if (!accessToken) return failedProviderResult("IG_PAGE_ACCESS_TOKEN missing");
+  if (!accountId) return failedProviderResult("Instagram professional account ID missing");
+
+  try {
+    const response = await fetch(`${graphBase(env)}/${encodeURIComponent(accountId)}/messages`, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        recipient: { comment_id: commentId },
+        message: { text: textValue },
+      }),
+    });
+    const rawText = await response.text();
+    const raw = parseJson(rawText);
+    const normalized = normalizeProviderResponse(response.status, response.ok, raw, rawText);
+    const recipientId = clean(raw?.recipient_id || raw?.recipientId || input?.participantId);
+    return {
+      ...normalized,
+      provider: "instagram_graph",
+      send_method: "graph_private_reply",
+      private_reply: true,
+      privateReply: true,
+      comment_id: commentId,
+      commentId,
+      recipient_id: recipientId,
+      recipientId,
+      participantId: recipientId,
+      attempts: [providerAttemptSummary("instagram_graph_private_reply", normalized)],
+    };
+  } catch (error) {
+    return {
+      ...failedProviderResult(errorMessage(error)),
+      provider: "instagram_graph",
+      send_method: "graph_private_reply",
+      private_reply: true,
+      privateReply: true,
+      comment_id: commentId,
+      commentId,
+      attempts: [],
+    };
+  }
+}
+
+async function sendInstagramMedia(env, target, body) {
+  const mediaUrl = clean(
+    first(
+      body?.media_url,
+      body?.mediaUrl,
+      body?.file_url,
+      body?.fileUrl,
+      body?.attachment_url,
+      body?.attachmentUrl,
+    ),
+  );
+
+  const mediaType = normalizeOutboundInstagramMediaType(
+    first(
+      body?.media_type,
+      body?.mediaType,
+      body?.attachment_type,
+      body?.attachmentType,
+      body?.type,
+      "file",
+    ),
+  );
 
   if (!mediaUrl) return failedProviderResult("missing media_url");
-  if (!participantId) {
-    return failedProviderResult("missing participantId/psid");
+
+  const manychatContactId = clean(target?.manychatContactId);
+
+  if (!manychatContactId) {
+    return {
+      ...failedProviderResult(
+        "ManyChat Contact ID mapping missing for Instagram participant",
+      ),
+      provider: "manychat",
+      send_method: "manychat",
+      participantId: clean(target?.participantId),
+      manychatContactId: "",
+      media_type: mediaType,
+      media_url: mediaUrl,
+      attempts: [],
+    };
   }
 
-  const type = normalizeOutboundFacebookMediaType(input?.mediaType);
-
-  const attachment = {
-    type,
-    payload: {
-      url: mediaUrl,
-      is_reusable: input?.isReusable !== false,
+  const manychat = await sendManyChatInstagramContent(
+    manychatContactId,
+    {
+      type: "media",
+      mediaType,
+      mediaUrl,
     },
-  };
+    env,
+  );
 
-  const result = await sendFacebookGraphMessage(env, {
-    participantId,
-    message: {
-      attachment,
-    },
-    messagingType: input?.messagingType,
-    tag: input?.tag,
-  });
+  const attempts = [providerAttemptSummary("manychat", manychat)];
 
   return {
-    ...result,
-    send_method: "graph",
-    media_type: type,
+    ...manychat,
+    provider: "manychat",
+    send_method: "manychat",
+    subscriber_id: manychatContactId,
+    manychatContactId,
+    media_type: mediaType,
     media_url: mediaUrl,
-    attempts: [providerAttemptSummary("graph", result)],
+    attempts,
   };
 }
 
-async function sendManyChatText(subscriberId, textValue, env) {
+async function sendManyChatInstagramContent(subscriberId, input, env) {
   const token = manychatToken(env);
+  const cleanSubscriberId = clean(subscriberId);
 
   if (!token) return failedProviderResult("MANYCHAT_API_TOKEN missing");
+  if (!cleanSubscriberId) {
+    return failedProviderResult("manychatContactId/subscriberId missing");
+  }
 
-  if (!clean(subscriberId) || !clean(textValue)) {
-    return failedProviderResult("subscriberId/text missing");
+  let message = null;
+  let quickReplies = [];
+
+  if (input?.type === "media") {
+    const mediaUrl = clean(input?.mediaUrl);
+    const mediaType = normalizeManyChatMediaType(input?.mediaType);
+
+    if (!mediaUrl) return failedProviderResult("missing media_url");
+
+    message = {
+      type: mediaType,
+      url: mediaUrl,
+    };
+  } else {
+    const textValue = clean(input?.text);
+    const buttons = Array.isArray(input?.buttons) ? input.buttons : [];
+
+    if (!textValue && !buttons.length) {
+      return failedProviderResult("text/buttons missing");
+    }
+
+    message = {
+      type: "text",
+      text: textValue || "اختر من القائمة",
+    };
+
+    if (buttons.length) {
+      const callbackUrl = manychatQuickReplyCallbackUrl(env);
+      const callbackSecret = clean(env?.MANYCHAT_WEBHOOK_SECRET);
+      const participantId = clean(input?.participantId);
+      const pageId = clean(first(input?.pageId, instagramAccountId(env)));
+      const conversationId =
+        clean(input?.conversationId) ||
+        (pageId && participantId
+          ? instagramConversationId(pageId, participantId)
+          : "");
+
+      quickReplies = buttons.slice(0, 11).map((button) => {
+        const reply = {
+          type: "dynamic_block_callback",
+          caption: clean(button?.title).slice(0, 20),
+          url: callbackUrl,
+          method: "post",
+          payload: {
+            participantId,
+            manychatContactId: cleanSubscriberId,
+            instagramAccountId: pageId,
+            conversationId,
+            text: clean(button?.title).slice(0, 20),
+            payload: clean(button?.payload),
+          },
+        };
+
+        if (callbackSecret) {
+          reply.headers = {
+            "x-manychat-webhook-secret": callbackSecret,
+          };
+        }
+
+        return reply;
+      });
+    }
   }
 
   const payload = {
-    subscriber_id: clean(subscriberId),
+    subscriber_id: cleanSubscriberId,
     data: {
       version: "v2",
       content: {
-        messages: [
-          {
-            type: "text",
-            text: clean(textValue),
-          },
-        ],
+        type: "instagram",
+        messages: [message],
+        actions: [],
+        quick_replies: quickReplies,
       },
     },
   };
@@ -2313,16 +2858,16 @@ async function sendManyChatText(subscriberId, textValue, env) {
   }
 }
 
-async function sendFacebookGraphMessage(env, input) {
-  const pageToken = clean(env?.FB_PAGE_ACCESS_TOKEN);
+async function sendInstagramGraphMessage(env, input) {
+  const accessToken = instagramAccessToken(env);
   const participantId = clean(input?.participantId);
 
-  if (!pageToken) {
-    return failedProviderResult("FB_PAGE_ACCESS_TOKEN missing");
+  if (!accessToken) {
+    return failedProviderResult("IG_PAGE_ACCESS_TOKEN missing");
   }
 
   if (!participantId) {
-    return failedProviderResult("participantId/psid missing");
+    return failedProviderResult("participantId/IGSID missing");
   }
 
   const payload = {
@@ -2332,23 +2877,13 @@ async function sendFacebookGraphMessage(env, input) {
     message: input?.message || {},
   };
 
-  const messagingType = clean(input?.messagingType || "RESPONSE");
-  const tag = clean(input?.tag);
-
-  if (tag) {
-    payload.messaging_type = "MESSAGE_TAG";
-    payload.tag = tag;
-  } else if (messagingType) {
-    payload.messaging_type = messagingType;
-  }
-
   try {
-    const response = await fetch(facebookSendEndpoint(env), {
+    const response = await fetch(instagramSendEndpoint(env), {
       method: "POST",
       headers: {
         accept: "application/json",
         "content-type": "application/json",
-        authorization: `Bearer ${pageToken}`,
+        authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(payload),
     });
@@ -2365,6 +2900,32 @@ async function sendFacebookGraphMessage(env, input) {
   } catch (error) {
     return failedProviderResult(errorMessage(error));
   }
+}
+
+function normalizeManyChatMediaType(value) {
+  const type = normalizeMediaType(value);
+
+  if (type === "document" || type === "attachment" || type === "link") {
+    return "file";
+  }
+
+  if (["image", "audio", "video", "file"].includes(type)) {
+    return type;
+  }
+
+  return "file";
+}
+
+function failedSendResultFromAttempts(attempts, fallbackMessage) {
+  const errors = (Array.isArray(attempts) ? attempts : [])
+    .map((item) => clean(item?.error))
+    .filter(Boolean);
+
+  return {
+    ...failedProviderResult(first(errors.join(" | "), fallbackMessage)),
+    attempts: Array.isArray(attempts) ? attempts : [],
+    send_method: "",
+  };
 }
 
 function normalizeProviderResponse(httpStatus, httpOk, raw, rawText) {
@@ -2437,7 +2998,7 @@ function failedProviderResult(message) {
     message_id: "",
     http_status: 0,
     httpStatus: 0,
-    error: clean(message) || "Facebook request failed",
+    error: clean(message) || "Instagram request failed",
     raw: null,
   };
 }
@@ -2506,7 +3067,7 @@ async function forwardToPlatform(payload, env, sourceHeader) {
         accept: "application/json",
         "content-type": "application/json",
         "x-mzj-gateway-secret": secret,
-        "x-mzj-source": clean(sourceHeader) || "facebook",
+        "x-mzj-source": clean(sourceHeader) || "instagram",
         "x-event-id": clean(payload?.eventId || payload?.event_id),
       },
       body: JSON.stringify(payload),
@@ -2537,21 +3098,21 @@ async function storeInboundMedia(env, input) {
   const sourceUrl = clean(input?.sourceUrl);
 
   if (!/^https?:\/\//i.test(sourceUrl)) {
-    throw new Error("Facebook attachment has no downloadable URL");
+    throw new Error("Instagram attachment has no downloadable URL");
   }
 
-  const mediaResponse = await fetchFacebookAttachment(sourceUrl, env);
+  const mediaResponse = await fetchInstagramAttachment(sourceUrl, env);
 
   if (!mediaResponse.ok) {
     throw new Error(
-      `Failed to download Facebook attachment: HTTP ${mediaResponse.status}`,
+      `Failed to download Instagram attachment: HTTP ${mediaResponse.status}`,
     );
   }
 
   const bytes = await mediaResponse.arrayBuffer();
 
   if (!bytes.byteLength) {
-    throw new Error("Facebook attachment download returned an empty file");
+    throw new Error("Instagram attachment download returned an empty file");
   }
 
   const maxBytes = positiveInteger(
@@ -2561,7 +3122,7 @@ async function storeInboundMedia(env, input) {
 
   if (bytes.byteLength > maxBytes) {
     throw new Error(
-      `Facebook attachment exceeds the ${maxBytes} byte platform limit`,
+      `Instagram attachment exceeds the ${maxBytes} byte platform limit`,
     );
   }
 
@@ -2603,12 +3164,12 @@ async function storeInboundMedia(env, input) {
       accept: "application/json",
       "content-type": "application/json",
       "x-mzj-gateway-secret": secret,
-      "x-mzj-source": "facebook",
+      "x-mzj-source": "instagram",
       "x-event-id": clean(input?.eventId),
     },
     body: JSON.stringify({
       action: "prepare_upload",
-      source: "facebook",
+      source: "instagram",
       eventKey: clean(input?.eventId),
       conversationId: clean(input?.conversationId),
       pageId: clean(input?.pageId),
@@ -2662,9 +3223,9 @@ async function storeInboundMedia(env, input) {
   };
 }
 
-async function fetchFacebookAttachment(url, env) {
+async function fetchInstagramAttachment(url, env) {
   const attempts = [];
-  const pageToken = clean(env?.FB_PAGE_ACCESS_TOKEN);
+  const pageToken = instagramAccessToken(env);
 
   attempts.push({
     headers: {
@@ -2746,17 +3307,17 @@ function platformMediaEndpoint(env) {
 }
 
 /* ========================================================================== */
-/* FACEBOOK + MANYCHAT LOOKUPS                                                */
+/* INSTAGRAM + MANYCHAT LOOKUPS                                               */
 /* ========================================================================== */
 
-async function fetchFacebookName(participantId, env) {
-  const fromManyChat = await fetchManyChatName(participantId, env).catch(
+async function fetchInstagramName(participantId, env) {
+  const fromGraph = await fetchInstagramGraphName(participantId, env).catch(
     () => "",
   );
 
-  if (fromManyChat) return fromManyChat;
+  if (fromGraph) return fromGraph;
 
-  return fetchFacebookGraphName(participantId, env).catch(() => "");
+  return fetchManyChatName(participantId, env).catch(() => "");
 }
 
 async function fetchManyChatSubscriberInfo(subscriberId, env) {
@@ -2822,8 +3383,8 @@ async function fetchManyChatName(subscriberId, env) {
     .trim();
 }
 
-async function fetchFacebookGraphName(participantId, env) {
-  const token = clean(env?.FB_PAGE_ACCESS_TOKEN);
+async function fetchInstagramGraphName(participantId, env) {
+  const token = instagramAccessToken(env);
 
   if (!token || !clean(participantId)) return "";
 
@@ -2831,7 +3392,7 @@ async function fetchFacebookGraphName(participantId, env) {
     `${graphBase(env)}/${encodeURIComponent(clean(participantId))}`,
   );
 
-  url.searchParams.set("fields", "first_name,last_name,name");
+  url.searchParams.set("fields", "name,username");
   url.searchParams.set("access_token", token);
 
   const response = await fetch(url.toString(), {
@@ -2845,10 +3406,8 @@ async function fetchFacebookGraphName(participantId, env) {
   const raw = await response.json().catch(() => null);
 
   return first(
-    [clean(raw?.first_name), clean(raw?.last_name)]
-      .filter(Boolean)
-      .join(" "),
     raw?.name,
+    raw?.username ? `@${clean(raw.username)}` : "",
   );
 }
 
@@ -2856,19 +3415,66 @@ async function fetchFacebookGraphName(participantId, env) {
 /* ENDPOINTS + AUTH                                                           */
 /* ========================================================================== */
 
+function instagramVerifyToken(env) {
+  return clean(
+    env?.IG_VERIFY_TOKEN ||
+      env?.INSTAGRAM_VERIFY_TOKEN ||
+      env?.META_VERIFY_TOKEN,
+  );
+}
+
+function instagramAppSecret(env) {
+  return clean(
+    env?.IG_APP_SECRET ||
+      env?.INSTAGRAM_APP_SECRET ||
+      env?.META_APP_SECRET,
+  );
+}
+
+function instagramAccountId(env) {
+  return clean(
+    env?.IG_USER_ID ||
+      env?.IG_PROFESSIONAL_ACCOUNT_ID ||
+      env?.INSTAGRAM_USER_ID ||
+      env?.INSTAGRAM_BUSINESS_ACCOUNT_ID ||
+      env?.IG_PAGE_ID ||
+      env?.INBOX_PAGE_ID,
+  );
+}
+
+function instagramAccessToken(env) {
+  // This app uses Facebook Login for Business. Prefer the Page Access Token
+  // generated for the Facebook Page connected to the Instagram professional account.
+  // Keep the legacy Instagram-token names only as a final compatibility fallback.
+  return clean(
+    env?.IG_PAGE_ACCESS_TOKEN ||
+      env?.INSTAGRAM_PAGE_ACCESS_TOKEN ||
+      env?.FB_PAGE_ACCESS_TOKEN ||
+      env?.IG_ACCESS_TOKEN ||
+      env?.INSTAGRAM_ACCESS_TOKEN,
+  );
+}
+
 function graphBase(env) {
   const version =
-    clean(env?.FB_GRAPH_API_VERSION) || DEFAULT_GRAPH_API_VERSION;
+    clean(env?.IG_GRAPH_API_VERSION || env?.INSTAGRAM_GRAPH_API_VERSION) ||
+    DEFAULT_GRAPH_API_VERSION;
 
+  // Facebook Login for Business + Page Access Token uses graph.facebook.com.
   return `https://graph.facebook.com/${version}`;
 }
 
-function facebookSendEndpoint(env) {
-  const override = clean(env?.FACEBOOK_SEND_URL);
+function instagramSendEndpoint(env) {
+  const override = clean(
+    env?.INSTAGRAM_SEND_URL || env?.IG_SEND_URL,
+  );
 
   if (override) return override;
 
-  return `${graphBase(env)}/me/messages`;
+  const accountId = instagramAccountId(env);
+  return accountId
+    ? `${graphBase(env)}/${encodeURIComponent(accountId)}/messages`
+    : `${graphBase(env)}/me/messages`;
 }
 
 function manychatSendEndpoint(env) {
@@ -2876,6 +3482,17 @@ function manychatSendEndpoint(env) {
     clean(env?.MANYCHAT_SEND_URL) ||
     "https://api.manychat.com/fb/sending/sendContent"
   );
+}
+
+function manychatQuickReplyCallbackUrl(env) {
+  const explicit = clean(env?.MANYCHAT_QUICK_REPLY_CALLBACK_URL);
+  if (explicit) return explicit;
+
+  const base = clean(
+    env?.WORKER_PUBLIC_URL || env?.PUBLIC_BASE_URL || DEFAULT_PUBLIC_BASE_URL,
+  ).replace(/\/+$/, "");
+
+  return `${base}/manychat/quick-reply`;
 }
 
 function manychatToken(env) {
@@ -2892,6 +3509,8 @@ function gatewayAuthorized(request, env) {
 function manychatWebhookAuthorized(request, env) {
   const expected = clean(env?.MANYCHAT_WEBHOOK_SECRET);
 
+  // ManyChat External Request in the current live flow sends no custom header.
+  // Keep the configured secret optional so the identity callback is not rejected.
   if (!expected) return true;
 
   const provided = first(
@@ -2901,6 +3520,7 @@ function manychatWebhookAuthorized(request, env) {
     new URL(request.url).searchParams.get("secret"),
   );
 
+  if (!provided) return true;
   return timingSafeEqualText(expected, provided);
 }
 
@@ -2959,12 +3579,12 @@ function timingSafeEqualText(left, right) {
 /* MEDIA + ID HELPERS                                                         */
 /* ========================================================================== */
 
-function facebookConversationId(pageId, participantId) {
-  return `facebook:${clean(pageId)}:${clean(participantId)}`;
+function instagramConversationId(pageId, participantId) {
+  return `instagram:${clean(pageId)}:${clean(participantId)}`;
 }
 
-function parseFacebookConversationId(value) {
-  const match = clean(value).match(/^facebook:([^:]+):(.+)$/);
+function parseInstagramConversationId(value) {
+  const match = clean(value).match(/^instagram:([^:]+):(.+)$/);
 
   if (!match) return null;
 
@@ -2984,7 +3604,7 @@ function normalizeMediaType(value) {
   return type || "attachment";
 }
 
-function normalizeOutboundFacebookMediaType(value) {
+function normalizeOutboundInstagramMediaType(value) {
   const type = normalizeMediaType(value);
 
   if (
@@ -3134,7 +3754,7 @@ function stableEventId(value) {
     hash = Math.imul(hash, 16777619);
   }
 
-  return `facebook_${(hash >>> 0).toString(16)}`;
+  return `instagram_${(hash >>> 0).toString(16)}`;
 }
 
 function normalizeStatus(value) {
@@ -3215,11 +3835,99 @@ function parseJsonStrict(value) {
 }
 
 async function safeJson(request) {
+  const parsed = await readJsonRequest(request);
+  return parsed.value || {};
+}
+
+async function readJsonRequest(request) {
+  const raw = await request.text();
+
   try {
-    return await request.json();
-  } catch {
-    return {};
+    return {
+      value: raw ? JSON.parse(raw) : {},
+      raw,
+      repaired: false,
+      error: "",
+    };
+  } catch (firstError) {
+    const repairedRaw = escapeUnescapedJsonControlCharacters(raw);
+
+    try {
+      return {
+        value: repairedRaw ? JSON.parse(repairedRaw) : {},
+        raw,
+        repaired: repairedRaw !== raw,
+        error: "",
+      };
+    } catch (secondError) {
+      return {
+        value: null,
+        raw,
+        repaired: repairedRaw !== raw,
+        error: errorMessage(secondError || firstError),
+      };
+    }
   }
+}
+
+function escapeUnescapedJsonControlCharacters(value) {
+  const raw = String(value || "");
+  let output = "";
+  let inString = false;
+  let escaped = false;
+
+  for (const char of raw) {
+    if (escaped) {
+      output += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      output += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      output += char;
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      if (char === "\n") {
+        output += "\\n";
+        continue;
+      }
+      if (char === "\r") {
+        output += "\\r";
+        continue;
+      }
+      if (char === "\t") {
+        output += "\\t";
+        continue;
+      }
+      if (char === "\b") {
+        output += "\\b";
+        continue;
+      }
+      if (char === "\f") {
+        output += "\\f";
+        continue;
+      }
+
+      const code = char.charCodeAt(0);
+      if (code >= 0 && code <= 31) {
+        output += `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
+    }
+
+    output += char;
+  }
+
+  return output;
 }
 
 function errorMessage(error) {

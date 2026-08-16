@@ -75,11 +75,11 @@ function addLead(bucket: ResultMetricBucket, leadId: string, sold: boolean, sold
 }
 
 function addEngagementToBucket(bucket: ResultMetricBucket, row: any) {
-  // Individual engagement rows are intentionally comment-only. Likes/reactions and shares
-  // remain aggregate platform metrics and must never create CRM identity/event rows.
-  if (clean(row.engagement_type) !== "comment") return;
+  const engagementType = clean(row.engagement_type);
+  if (engagementType !== "comment" && engagementType !== "like") return;
   bucket.identifiedEngagements += 1;
-  bucket.commentEvents += 1;
+  if (engagementType === "comment") bucket.commentEvents += 1;
+  if (engagementType === "like") bucket.likeEvents += 1;
   const actorId = clean(row.actor_id);
   if (actorId) bucket.actors.add(`${clean(row.platform)}:${clean(row.account_id)}:${actorId}`);
   const leadId = clean(row.crm_lead_id);
@@ -175,7 +175,7 @@ export async function engagementResultsData(
       from marketing.post_engagements pe
       join marketing.published_posts pp on pp.id=pe.published_post_id
       left join crm.leads l on l.id=pe.crm_lead_id
-      where pe.is_deleted=false and pe.engagement_type='comment' and pp.is_deleted=false and pp.source_type=${sourceType} and pp.source_id=${sourceId}::uuid
+      where pe.is_deleted=false and pe.engagement_type in ('comment','like') and pp.is_deleted=false and pp.source_type=${sourceType} and pp.source_id=${sourceId}::uuid
       order by coalesce(pe.engaged_at,pe.created_at) desc
     `
     : await sql<any[]>`
@@ -185,7 +185,7 @@ export async function engagementResultsData(
       from marketing.post_engagements pe
       join marketing.published_posts pp on pp.id=pe.published_post_id
       left join crm.leads l on l.id=pe.crm_lead_id
-      where pe.is_deleted=false and pe.engagement_type='comment' and pp.is_deleted=false
+      where pe.is_deleted=false and pe.engagement_type in ('comment','like') and pp.is_deleted=false
       order by coalesce(pe.engaged_at,pe.created_at) desc
     `;
   const connections = await sql<any[]>`
@@ -655,7 +655,7 @@ async function repairStoredEngagementSources(sql: ReturnType<typeof getSql>) {
         select distinct on(pe.crm_lead_id) pe.crm_lead_id,pp.platform
         from marketing.post_engagements pe
         join marketing.published_posts pp on pp.id=pe.published_post_id
-        where pe.crm_lead_id is not null and pe.engagement_type='comment' and pe.processing_status='created' and pe.is_deleted=false and pp.is_deleted=false
+        where pe.crm_lead_id is not null and pe.engagement_type in ('comment','like') and pe.processing_status in ('created','reused') and pe.is_deleted=false and pp.is_deleted=false
         order by pe.crm_lead_id,coalesce(pe.engaged_at,pe.created_at) desc
       )
       update crm.leads l
@@ -737,6 +737,7 @@ type CommentEngagementInput = {
   postIds: string[];
   eventId: string;
   actorId: string;
+  messagingParticipantId?: string;
   actorName: string;
   text: string;
   engagedAt: string;
@@ -759,7 +760,8 @@ function remoteCommentInput(platform: "facebook" | "instagram", post: any, row: 
   const eventId = clean(row?.id || row?.comment_id);
   if (!eventId) return null;
   const from = asObject(row?.from);
-  const actorId = clean(from?.id || from?.ig_scoped_id || from?.username);
+  const messagingParticipantId = platform === "instagram" ? clean(from?.id || from?.ig_scoped_id) : "";
+  const actorId = clean(messagingParticipantId || from?.id || from?.username);
   const accountId = clean(post.account_id);
   if (!actorId || actorId === accountId) return null;
   if (platform === "facebook") {
@@ -781,85 +783,12 @@ function remoteCommentInput(platform: "facebook" | "instagram", post: any, row: 
     postIds: [clean(post.provider_media_id || post.provider_post_id)].filter(Boolean),
     eventId,
     actorId,
+    messagingParticipantId,
     actorName: clean(from?.username || from?.name) || "عميل Instagram",
     text: clean(row?.text || row?.message),
     engagedAt: commentTimestamp(row?.timestamp),
     raw: row,
   };
-}
-
-async function upsertCommentAndCrm(sql: ReturnType<typeof getSql>, post: any, item: CommentEngagementInput) {
-  if (!item.eventId || !item.actorId || item.actorId === item.accountId) {
-    return { status: "ignored" as const, leadId: "", createdEvent: false };
-  }
-
-  const [existing] = await sql<any[]>`
-    select *,id::text,crm_lead_id::text from marketing.post_engagements
-    where platform=${item.platform} and engagement_type='comment' and provider_event_id=${item.eventId}
-    limit 1
-  `;
-
-  const [eventRow] = await sql<any[]>`
-    insert into marketing.post_engagements(
-      published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,engaged_at,raw_payload
-    ) values(
-      ${post.id}::uuid,${item.platform},'comment',${item.eventId},${item.postIds[0] || post.provider_post_id || post.provider_media_id || null},${item.accountId},
-      ${item.actorId},${item.actorName},${item.text || null},${item.engagedAt}::timestamptz,${sql.json(item.raw as any)}
-    ) on conflict(platform,engagement_type,provider_event_id) do update set
-      published_post_id=excluded.published_post_id,
-      provider_post_id=coalesce(excluded.provider_post_id,marketing.post_engagements.provider_post_id),
-      account_id=excluded.account_id,
-      actor_id=excluded.actor_id,
-      actor_name=coalesce(nullif(excluded.actor_name,''),marketing.post_engagements.actor_name),
-      event_text=coalesce(excluded.event_text,marketing.post_engagements.event_text),
-      engaged_at=coalesce(excluded.engaged_at,marketing.post_engagements.engaged_at),
-      raw_payload=coalesce(marketing.post_engagements.raw_payload,'{}'::jsonb)||excluded.raw_payload,
-      is_deleted=case when marketing.post_engagements.deleted_by is null then false else marketing.post_engagements.is_deleted end,
-      deleted_at=case when marketing.post_engagements.deleted_by is null then null else marketing.post_engagements.deleted_at end,
-      updated_at=now()
-    returning *,id::text,crm_lead_id::text
-  `;
-
-  if (existing?.deleted_by) return { status: "hidden" as const, leadId: clean(existing.crm_lead_id), createdEvent: false };
-  const existingLeadId = clean(eventRow?.crm_lead_id || existing?.crm_lead_id);
-  if (existingLeadId && ["created", "reused"].includes(clean(eventRow?.processing_status || existing?.processing_status))) {
-    return { status: "duplicate" as const, leadId: existingLeadId, createdEvent: !existing };
-  }
-
-  try {
-    const lead = await createCrmLeadFromComment(sql, post, item);
-    await sql`
-      update marketing.post_engagements
-      set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now()
-      where id=${eventRow.id}::uuid
-    `;
-    if (!lead.reused) {
-      await emitSocialEngagementLeadNotification({
-        eventKey: item.eventId,
-        leadId: lead.leadId,
-        publishedPostId: post.id,
-        platform: item.platform,
-        engagementType: "comment",
-        actorId: item.actorId,
-        actorName: item.actorName,
-        eventText: item.text,
-        engagedAt: item.engagedAt,
-      }).catch((notificationError: unknown) => console.error("Post comment CRM notification failed", {
-        eventId: item.eventId,
-        leadId: lead.leadId,
-        notificationError,
-      }));
-    }
-    return { status: lead.reused ? "reused" as const : "created" as const, leadId: lead.leadId, createdEvent: !existing };
-  } catch (error: any) {
-    const message = clean(error?.message) || "تعذر تحويل التعليق إلى CRM";
-    await sql`
-      update marketing.post_engagements
-      set processing_status='failed',processing_error=${message},updated_at=now()
-      where id=${eventRow.id}::uuid
-    `;
-    throw error;
-  }
 }
 
 async function reconcileRemovedComments(sql: ReturnType<typeof getSql>, post: any, activeCommentIds: string[]) {
@@ -1035,6 +964,8 @@ export async function refreshEngagementMetrics(sql: ReturnType<typeof getSql>, i
   await backfillPublishedPosts(sql);
   await cleanupLegacyTestEngagementRows(sql);
   await repairStoredEngagementSources(sql);
+  await repairLegacySocialMessagingIdentity(sql);
+  await repairUnassignedSocialEngagementAssignments(sql);
   const rows = ids.length
     ? await sql<any[]>`select *,id::text from marketing.published_posts where id=any(${ids}::uuid[]) and is_deleted=false order by published_at desc`
     : await sql<any[]>`select *,id::text from marketing.published_posts where is_deleted=false order by published_at desc`;
@@ -1048,6 +979,8 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
   await backfillPublishedPosts(sql);
   await cleanupLegacyTestEngagementRows(sql);
   await repairStoredEngagementSources(sql);
+  await repairLegacySocialMessagingIdentity(sql);
+  await repairUnassignedSocialEngagementAssignments(sql);
   const rows = await sql<any[]>`
     select pp.*,pp.id::text,pp.schedule_id::text,pp.source_id::text,pp.creative_id::text,pp.task_id::text,
       pp.archived_by::text,pp.deleted_by::text,
@@ -1077,7 +1010,7 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
     left join marketing.creatives cr on cr.id=pp.creative_id
     left join crm.leads l on l.id=pe.crm_lead_id
     left join core.users sales on sales.id=l.assigned_to
-    where pe.is_deleted=false and pe.engagement_type='comment' and pp.is_deleted=false
+    where pe.is_deleted=false and pe.engagement_type in ('comment','like') and pp.is_deleted=false
     order by coalesce(pe.engaged_at,pe.created_at) desc limit 500
   `;
   const activeRows = rows.filter((row: any) => !row.archived_at);
@@ -1093,8 +1026,8 @@ export async function engagementData(sql: ReturnType<typeof getSql>) {
   }), { posts: 0, likes: 0, comments: 0, shares: 0, saves: 0, views: 0, reach: 0 });
   const engagementSummary = {
     engagements: activeEngagements.length,
-    commentEvents: activeEngagements.length,
-    likeEvents: 0,
+    commentEvents: activeEngagements.filter((row: any) => clean(row.engagement_type) === "comment").length,
+    likeEvents: activeEngagements.filter((row: any) => clean(row.engagement_type) === "like").length,
     shareEvents: 0,
   };
   const crmLeads = new Set(activeEngagements.map((row: any) => clean(row.crm_lead_id)).filter(Boolean)).size;
@@ -1264,6 +1197,7 @@ type NormalizedMetaEvent = {
   postIds: string[];
   eventId: string;
   actorId: string;
+  messagingParticipantId?: string;
   actorName: string;
   text: string;
   engagedAt: string;
@@ -1319,7 +1253,7 @@ function normalizeWebhook(payload: any): NormalizedMetaEvent[] {
         if (item === "reaction" || item === "share") {
           const metric = item === "reaction" ? "reaction" : "share";
           const eventId = clean(value?.reaction_id || value?.share_id || value?.id)
-            || `${postIds[0] || "post"}:${metric}:${verb}:${clean(value?.reaction_type) || actorId || "aggregate"}`;
+            || `${postIds[0] || "post"}:${metric}:${actorId || clean(value?.reaction_type) || "aggregate"}`;
           output.push({
             platform: "facebook", kind: "metrics_changed", metric, verb, accountId, postIds, eventId,
             actorId, actorName, text: metric === "reaction" ? clean(value?.reaction_type) : "", engagedAt, raw: change,
@@ -1332,7 +1266,8 @@ function normalizeWebhook(payload: any): NormalizedMetaEvent[] {
         const media = asObject(value?.media);
         const eventId = clean(value?.id || value?.comment_id);
         if (!eventId) continue;
-        const actorId = clean(from?.id || from?.ig_scoped_id || from?.username);
+        const messagingParticipantId = clean(from?.id || from?.ig_scoped_id);
+        const actorId = clean(messagingParticipantId || from?.username);
         const verbRaw = clean(value?.verb).toLowerCase();
         const removed = verbRaw === "remove" || value?.deleted === true || value?.is_deleted === true;
         const postIds = [...new Set([clean(media?.id), clean(value?.media_id)].filter(Boolean))];
@@ -1344,6 +1279,7 @@ function normalizeWebhook(payload: any): NormalizedMetaEvent[] {
           postIds,
           eventId,
           actorId,
+          messagingParticipantId,
           actorName: clean(from?.username || from?.name) || "عميل Instagram",
           text: clean(value?.text || value?.message),
           engagedAt: commentTimestamp(value?.timestamp, entry?.time),
@@ -1427,70 +1363,359 @@ async function findPublishedPost(sql: ReturnType<typeof getSql>, item: Normalize
   return null;
 }
 
-async function createCrmLeadFromComment(sql: ReturnType<typeof getSql>, post: any, item: CommentEngagementInput) {
-  const sourceCode = item.platform === "facebook" ? "facebook_post" : "instagram_post";
-  const sourceName = item.platform === "facebook" ? "بوست فيس بوك" : "بوست انستجرام";
-  const preview = item.text || "تعليق على منشور";
-  const { contact } = await ensureContactIdentity({
-    channelCode: item.platform,
-    externalId: item.actorId,
-    participantId: item.actorId,
-    pageId: item.accountId,
-    displayName: item.actorName,
-    metadata: { origin: "post_comment", engagementType: "comment", sourceCode, providerPostId: post.provider_post_id, providerMediaId: post.provider_media_id },
-  });
-  const legacyId = `post-comment:${item.platform}:${item.accountId}:${item.actorId}`;
+type CrmSocialEngagementInput = CommentEngagementInput & {
+  engagementType: "comment" | "like";
+};
+
+function socialEngagementSource(item: CrmSocialEngagementInput) {
+  return item.platform === "facebook"
+    ? { code: "facebook_post", name: "بوست فيس بوك" }
+    : { code: "instagram_post", name: "بوست انستجرام" };
+}
+
+function socialEngagementPreview(item: CrmSocialEngagementInput) {
+  if (item.engagementType === "comment") return item.text || "تعليق على منشور";
+  return item.text ? `تفاعل ${item.text} على منشور` : "إعجاب على منشور";
+}
+
+async function socialEngagementConversation(
+  sql: ReturnType<typeof getSql>,
+  contactId: string,
+  post: any,
+  item: CrmSocialEngagementInput,
+) {
+  const genericLegacyId = `post-engagement:${item.platform}:${item.accountId}:${item.actorId}`;
+  const legacyCommentId = `post-comment:${item.platform}:${item.accountId}:${item.actorId}`;
+  const preview = socialEngagementPreview(item);
+  const messagingParticipantId = item.platform === "instagram" ? clean(item.messagingParticipantId) : "";
+  const commentId = item.engagementType === "comment" ? clean(item.eventId) : "";
+  const messagingStatus = item.engagementType === "comment" ? "private_reply_available" : "social_only";
+  const metadata = {
+    origin: "post_engagement",
+    engagementType: item.engagementType,
+    sourceCode: socialEngagementSource(item).code,
+    publishedPostId: post.id,
+    providerPostId: post.provider_post_id,
+    providerMediaId: post.provider_media_id,
+    socialActorId: item.actorId,
+    commentId: commentId || null,
+    messagingParticipantId: messagingParticipantId || null,
+    messagingStatus,
+    messagingReady: false,
+  };
+  const [existing] = await sql<any[]>`
+    select *,id::text,contact_id::text,lead_id::text,service_request_id::text
+    from crm.conversations
+    where legacy_id=any(${[genericLegacyId, legacyCommentId]}::text[])
+    order by case when legacy_id=${genericLegacyId} then 0 else 1 end,updated_at desc
+    limit 1
+  `;
+  if (existing) {
+    const [conversation] = await sql<any[]>`
+      update crm.conversations set
+        contact_id=${contactId}::uuid,
+        customer_name=coalesce(nullif(${item.actorName},''),customer_name),
+        participant_id=coalesce(nullif(${messagingParticipantId},''),participant_id),
+        preview_text=coalesce(nullif(${preview},''),preview_text),
+        unread_count=greatest(unread_count,1),
+        last_message_at=greatest(coalesce(last_message_at,'epoch'),${item.engagedAt}::timestamptz),
+        last_customer_message_at=greatest(coalesce(last_customer_message_at,'epoch'),${item.engagedAt}::timestamptz),
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json(metadata as any)},updated_at=now()
+      where id=${existing.id}::uuid
+      returning *,id::text,contact_id::text,lead_id::text,service_request_id::text
+    `;
+    return conversation;
+  }
   const [conversation] = await sql<any[]>`
     insert into crm.conversations(
       legacy_id,contact_id,channel_code,customer_name,participant_id,status,preview_text,unread_count,last_message_at,
       provider,page_id,classification_state,last_customer_message_at,metadata
     ) values(
-      ${legacyId},${contact.id}::uuid,${item.platform},${item.actorName},${item.actorId},'open',${preview},1,${item.engagedAt}::timestamptz,
-      'meta',${item.accountId},'new',${item.engagedAt}::timestamptz,${sql.json({ origin: 'post_comment', engagementType: 'comment', sourceCode, publishedPostId: post.id, providerPostId: post.provider_post_id, providerMediaId: post.provider_media_id } as any)}
+      ${genericLegacyId},${contactId}::uuid,${item.platform},${item.actorName},${messagingParticipantId || null},'open',${preview},1,${item.engagedAt}::timestamptz,
+      'meta',${item.accountId},'new',${item.engagedAt}::timestamptz,${sql.json(metadata as any)}
     ) on conflict(legacy_id) do update set
       contact_id=excluded.contact_id,customer_name=coalesce(nullif(excluded.customer_name,''),crm.conversations.customer_name),
+      participant_id=coalesce(nullif(excluded.participant_id,''),crm.conversations.participant_id),
       preview_text=coalesce(nullif(excluded.preview_text,''),crm.conversations.preview_text),unread_count=greatest(crm.conversations.unread_count,1),
       last_message_at=greatest(coalesce(crm.conversations.last_message_at,'epoch'),excluded.last_message_at),
       last_customer_message_at=greatest(coalesce(crm.conversations.last_customer_message_at,'epoch'),excluded.last_customer_message_at),
       metadata=coalesce(crm.conversations.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
     returning *,id::text,contact_id::text,lead_id::text,service_request_id::text
   `;
+  return conversation;
+}
+
+async function createCrmLeadFromSocialEngagement(sql: ReturnType<typeof getSql>, post: any, item: CrmSocialEngagementInput) {
+  const source = socialEngagementSource(item);
+  const messagingParticipantId = item.platform === "instagram" ? clean(item.messagingParticipantId) : "";
+  const commentId = item.engagementType === "comment" ? clean(item.eventId) : "";
+  const messagingStatus = item.engagementType === "comment" ? "private_reply_available" : "social_only";
+  const { contact } = await ensureContactIdentity({
+    channelCode: item.platform,
+    externalId: item.actorId,
+    participantId: messagingParticipantId || undefined,
+    participantIdMode: messagingParticipantId ? "explicit" : "none",
+    pageId: item.accountId,
+    displayName: item.actorName,
+    metadata: {
+      origin: "post_engagement",
+      engagementType: item.engagementType,
+      sourceCode: source.code,
+      providerPostId: post.provider_post_id,
+      providerMediaId: post.provider_media_id,
+      socialActorId: item.actorId,
+      commentId: commentId || null,
+      messagingStatus,
+      messagingReady: false,
+    },
+  });
+  const conversation = await socialEngagementConversation(sql, contact.id, post, item);
   const classification = await classifyConversationService({
     conversationId: conversation.id,
     serviceKey: "cash",
-    sourceCode,
-    classificationMethod: "meta_post_comment",
-    eventKey: `${item.platform}:comment:${item.eventId}`,
+    sourceCode: source.code,
+    classificationMethod: item.engagementType === "comment" ? "meta_post_comment" : "meta_post_reaction",
+    eventKey: `${item.platform}:${item.engagementType}:${item.eventId}`,
     skipAutomaticTemplate: true,
     assignPrimary: true,
     assignCallCenter: false,
   });
-  const [source] = post.source_type === "agenda"
+  const [campaign] = post.source_type === "agenda"
     ? await sql<any[]>`select name from marketing.agendas where id=${post.source_id}::uuid`
     : await sql<any[]>`select name from marketing.campaigns where id=${post.source_id}::uuid`;
   const leadId = clean(classification.leadId || classification.request?.lead_id);
-  if (!leadId) throw new Error("تعذر تحديد عميل CRM بعد توزيع التعليق");
+  if (!leadId) throw new Error("تعذر تحديد عميل CRM بعد توزيع التفاعل");
   await sql`
-    update crm.leads set source_code=${sourceCode},source_name=${sourceName},platform_code=${item.platform},campaign_name=${clean(source?.name) || null},
+    update crm.leads set source_code=${source.code},source_name=${source.name},platform_code=${item.platform},campaign_name=${clean(campaign?.name) || null},
       extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
         socialEngagement: true,
-        engagementType: "comment",
+        engagementType: item.engagementType,
         publishedPostId: post.id,
         providerPostId: post.provider_post_id,
         providerMediaId: post.provider_media_id,
         latestEngagementId: item.eventId,
         latestEngagementText: item.text,
+        socialActorId: item.actorId,
+        commentId: commentId || null,
+        messagingParticipantId: messagingParticipantId || null,
+        messagingStatus,
       } as any)}::jsonb,updated_at=now()
     where id=${leadId}::uuid
   `;
   return { leadId, reused: Boolean(classification.reused) };
 }
 
-async function markCommentRemoved(sql: ReturnType<typeof getSql>, post: any, eventId: string) {
+async function ensureExistingSocialLeadAssignment(
+  sql: ReturnType<typeof getSql>,
+  leadId: string,
+  item: CrmSocialEngagementInput,
+) {
+  const [row] = await sql<any[]>`
+    select l.id::text,l.assigned_to::text,l.contact_id::text,
+      c.id::text as conversation_id
+    from crm.leads l
+    left join lateral (
+      select cv.id
+      from crm.conversations cv
+      where cv.contact_id=l.contact_id
+        and cv.channel_code=${item.platform}
+        and (cv.page_id=${item.accountId} or cv.page_id is null)
+      order by case when cv.status='open' then 0 else 1 end,cv.updated_at desc
+      limit 1
+    ) c on true
+    where l.id=${leadId}::uuid and l.is_deleted=false
+    limit 1
+  `;
+  if (!row || row.assigned_to || !row.conversation_id) return;
+  const source = socialEngagementSource(item);
+  await classifyConversationService({
+    conversationId: row.conversation_id,
+    serviceKey: "cash",
+    sourceCode: source.code,
+    classificationMethod: item.engagementType === "comment" ? "meta_post_comment" : "meta_post_reaction",
+    eventKey: `${item.platform}:${item.engagementType}:${item.eventId}:assignment`,
+    skipAutomaticTemplate: true,
+    assignPrimary: true,
+    assignCallCenter: false,
+  });
+}
+
+async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql>) {
+  await sql.begin(async (tx) => {
+    const [claimed] = await tx<any[]>`
+      insert into marketing.data_migrations(migration_key,details)
+      values('20260817_social_messaging_identity_v1233',${tx.json({ scope: 'facebook_instagram_post_engagement', purpose: 'separate_social_identity_from_messaging_identity' } as any)})
+      on conflict(migration_key) do nothing
+      returning migration_key
+    `;
+    if (!claimed) return;
+
+    await tx`
+      update crm.contact_identities
+      set participant_id=null,
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when metadata->>'engagementType'='comment' then 'private_reply_available' else 'social_only' end),
+          updated_at=now()
+      where channel_code='facebook'
+        and metadata->>'origin'='post_engagement'
+        and coalesce(metadata->>'messagingReady','false')<>'true'
+        and coalesce(participant_id,'')=coalesce(external_id,'')
+    `;
+
+    await tx`
+      update crm.conversations
+      set participant_id=null,
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when metadata->>'engagementType'='comment' then 'private_reply_available' else 'social_only' end),
+          updated_at=now()
+      where channel_code='facebook'
+        and metadata->>'origin'='post_engagement'
+        and coalesce(metadata->>'messagingReady','false')<>'true'
+        and coalesce(participant_id,'')=coalesce(metadata->>'socialActorId','')
+        and (legacy_id like 'post-engagement:facebook:%' or legacy_id like 'post-comment:facebook:%')
+    `;
+
+    await tx`
+      with latest_comment as (
+        select distinct on(pe.crm_lead_id) pe.crm_lead_id,pe.provider_event_id,pe.actor_id
+        from marketing.post_engagements pe
+        where pe.crm_lead_id is not null and pe.platform in ('facebook','instagram') and pe.engagement_type='comment' and pe.is_deleted=false
+        order by pe.crm_lead_id,coalesce(pe.engaged_at,pe.created_at) desc
+      )
+      update crm.conversations c
+      set metadata=coalesce(c.metadata,'{}'::jsonb)||jsonb_build_object(
+        'commentId',latest_comment.provider_event_id,
+        'socialActorId',latest_comment.actor_id,
+        'messagingStatus',case when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready' else 'private_reply_available' end
+      ),updated_at=now()
+      from latest_comment
+      where c.lead_id=latest_comment.crm_lead_id and c.channel_code in ('facebook','instagram') and c.metadata->>'origin'='post_engagement'
+    `;
+  });
+}
+
+async function repairUnassignedSocialEngagementAssignments(sql: ReturnType<typeof getSql>) {
+  const rows = await sql<any[]>`
+    select distinct on(l.id) l.id::text as lead_id,pe.engagement_type,pe.provider_event_id,pe.actor_id,pe.actor_name,pe.event_text,pe.engaged_at,
+      pp.platform,pp.account_id,pp.provider_post_id,pp.provider_media_id
+    from marketing.post_engagements pe
+    join marketing.published_posts pp on pp.id=pe.published_post_id and pp.is_deleted=false
+    join crm.leads l on l.id=pe.crm_lead_id and l.is_deleted=false
+    where pe.is_deleted=false and pe.engagement_type in ('comment','like') and pe.processing_status in ('created','reused')
+      and l.assigned_to is null and pp.platform in ('facebook','instagram')
+    order by l.id,coalesce(pe.engaged_at,pe.created_at) desc
+    limit 500
+  `;
+  let assigned = 0;
+  for (const row of rows) {
+    const item: CrmSocialEngagementInput = {
+      platform: row.platform,
+      accountId: clean(row.account_id),
+      postIds: [clean(row.provider_post_id), clean(row.provider_media_id)].filter(Boolean),
+      eventId: clean(row.provider_event_id),
+      actorId: clean(row.actor_id),
+      actorName: clean(row.actor_name),
+      text: clean(row.event_text),
+      engagedAt: commentTimestamp(row.engaged_at),
+      raw: {},
+      messagingParticipantId: clean(row.platform) === "instagram" && clean(row.engagement_type) === "comment" ? clean(row.actor_id) : "",
+      engagementType: clean(row.engagement_type) === "like" ? "like" : "comment",
+    };
+    if (!item.accountId || !item.actorId || !item.eventId) continue;
+    await ensureExistingSocialLeadAssignment(sql, clean(row.lead_id), item);
+    assigned += 1;
+  }
+  return assigned;
+}
+
+async function upsertSocialEngagementAndCrm(sql: ReturnType<typeof getSql>, post: any, item: CrmSocialEngagementInput) {
+  if (!item.eventId || !item.actorId || item.actorId === item.accountId) {
+    return { status: "ignored" as const, leadId: "", createdEvent: false };
+  }
+
+  const [existing] = await sql<any[]>`
+    select *,id::text,crm_lead_id::text from marketing.post_engagements
+    where platform=${item.platform} and engagement_type=${item.engagementType} and provider_event_id=${item.eventId}
+    limit 1
+  `;
+
+  const [eventRow] = await sql<any[]>`
+    insert into marketing.post_engagements(
+      published_post_id,platform,engagement_type,provider_event_id,provider_post_id,account_id,actor_id,actor_name,event_text,engaged_at,raw_payload
+    ) values(
+      ${post.id}::uuid,${item.platform},${item.engagementType},${item.eventId},${item.postIds[0] || post.provider_post_id || post.provider_media_id || null},${item.accountId},
+      ${item.actorId},${item.actorName},${item.text || null},${item.engagedAt}::timestamptz,${sql.json(item.raw as any)}
+    ) on conflict(platform,engagement_type,provider_event_id) do update set
+      published_post_id=excluded.published_post_id,
+      provider_post_id=coalesce(excluded.provider_post_id,marketing.post_engagements.provider_post_id),
+      account_id=excluded.account_id,
+      actor_id=excluded.actor_id,
+      actor_name=coalesce(nullif(excluded.actor_name,''),marketing.post_engagements.actor_name),
+      event_text=coalesce(excluded.event_text,marketing.post_engagements.event_text),
+      engaged_at=coalesce(excluded.engaged_at,marketing.post_engagements.engaged_at),
+      raw_payload=coalesce(marketing.post_engagements.raw_payload,'{}'::jsonb)||excluded.raw_payload,
+      is_deleted=case when marketing.post_engagements.deleted_by is null then false else marketing.post_engagements.is_deleted end,
+      deleted_at=case when marketing.post_engagements.deleted_by is null then null else marketing.post_engagements.deleted_at end,
+      updated_at=now()
+    returning *,id::text,crm_lead_id::text
+  `;
+
+  if (existing?.deleted_by) return { status: "hidden" as const, leadId: clean(existing.crm_lead_id), createdEvent: false };
+  const existingLeadId = clean(eventRow?.crm_lead_id || existing?.crm_lead_id);
+  if (existingLeadId && ["created", "reused"].includes(clean(eventRow?.processing_status || existing?.processing_status))) {
+    await ensureExistingSocialLeadAssignment(sql, existingLeadId, item);
+    return { status: "duplicate" as const, leadId: existingLeadId, createdEvent: !existing };
+  }
+
+  try {
+    const lead = await createCrmLeadFromSocialEngagement(sql, post, item);
+    await sql`
+      update marketing.post_engagements
+      set crm_lead_id=${lead.leadId}::uuid,processing_status=${lead.reused ? 'reused' : 'created'},processing_error=null,updated_at=now()
+      where id=${eventRow.id}::uuid
+    `;
+    if (!lead.reused) {
+      await emitSocialEngagementLeadNotification({
+        eventKey: item.eventId,
+        leadId: lead.leadId,
+        publishedPostId: post.id,
+        platform: item.platform,
+        engagementType: item.engagementType,
+        actorId: item.actorId,
+        actorName: item.actorName,
+        eventText: item.text,
+        engagedAt: item.engagedAt,
+      }).catch((notificationError: unknown) => console.error("Post engagement CRM notification failed", {
+        eventId: item.eventId,
+        leadId: lead.leadId,
+        engagementType: item.engagementType,
+        notificationError,
+      }));
+    }
+    return { status: lead.reused ? "reused" as const : "created" as const, leadId: lead.leadId, createdEvent: !existing };
+  } catch (error: any) {
+    const message = clean(error?.message) || "تعذر تحويل التفاعل إلى CRM";
+    await sql`
+      update marketing.post_engagements
+      set processing_status='failed',processing_error=${message},updated_at=now()
+      where id=${eventRow.id}::uuid
+    `;
+    throw error;
+  }
+}
+
+async function upsertCommentAndCrm(sql: ReturnType<typeof getSql>, post: any, item: CommentEngagementInput) {
+  return upsertSocialEngagementAndCrm(sql, post, { ...item, engagementType: "comment" });
+}
+
+async function markSocialEngagementRemoved(
+  sql: ReturnType<typeof getSql>,
+  post: any,
+  engagementType: "comment" | "like",
+  eventId: string,
+) {
   const removed = await sql<any[]>`
     update marketing.post_engagements
     set is_deleted=true,deleted_at=coalesce(deleted_at,now()),processing_error=null,updated_at=now()
-    where published_post_id=${post.id}::uuid and engagement_type='comment' and provider_event_id=${eventId} and is_deleted=false and deleted_by is null
+    where published_post_id=${post.id}::uuid and engagement_type=${engagementType} and provider_event_id=${eventId} and is_deleted=false and deleted_by is null
     returning id::text,crm_lead_id::text
   `;
   return removed.length;
@@ -1503,6 +1728,7 @@ function commentInputFromWebhook(item: NormalizedMetaEvent): CommentEngagementIn
     postIds: item.postIds,
     eventId: item.eventId,
     actorId: item.actorId,
+    messagingParticipantId: item.messagingParticipantId,
     actorName: item.actorName,
     text: item.text,
     engagedAt: item.engagedAt,
@@ -1513,6 +1739,7 @@ function commentInputFromWebhook(item: NormalizedMetaEvent): CommentEngagementIn
 export async function processMetaEngagementWebhook(payload: any) {
   await Promise.all([ensureMarketingSchema(), ensureCrmSchema()]);
   const sql = getSql();
+  await repairLegacySocialMessagingIdentity(sql);
   const events = normalizeWebhook(payload);
   const results: any[] = [];
 
@@ -1525,21 +1752,34 @@ export async function processMetaEngagementWebhook(payload: any) {
       }
 
       if (item.kind === "metrics_changed") {
-        // Reactions/likes and shares are aggregate metrics only. Never create an identity,
-        // engagement row, Contact, Conversation, or Lead for them. Refresh authoritative counts.
+        let stored: { status?: string; leadId?: string } | null = null;
+        let removed = 0;
+        if (item.platform === "facebook" && item.metric === "reaction" && item.actorId && item.actorId !== item.accountId) {
+          if (item.verb === "remove") {
+            removed = await markSocialEngagementRemoved(sql, post, "like", item.eventId);
+          } else {
+            stored = await upsertSocialEngagementAndCrm(sql, post, {
+              ...commentInputFromWebhook(item),
+              engagementType: "like",
+            });
+          }
+        }
         const refreshed = await refreshOne(sql, post);
         results.push({
           eventId: item.eventId,
           kind: item.kind,
           metric: item.metric,
-          status: refreshed.ok ? "metrics_synced" : "metrics_sync_failed",
+          engagementType: item.metric === "reaction" && item.platform === "facebook" ? "like" : undefined,
+          status: stored?.status || (removed ? "like_removed" : refreshed.ok ? "metrics_synced" : "metrics_sync_failed"),
+          leadId: stored?.leadId || undefined,
+          removed: removed || undefined,
           error: refreshed.ok ? undefined : refreshed.error,
         });
         continue;
       }
 
       if (item.kind === "comment_removed") {
-        const removed = await markCommentRemoved(sql, post, item.eventId);
+        const removed = await markSocialEngagementRemoved(sql, post, "comment", item.eventId);
         const refreshed = await refreshOne(sql, post);
         results.push({
           eventId: item.eventId,

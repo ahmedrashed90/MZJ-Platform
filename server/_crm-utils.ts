@@ -33,6 +33,13 @@ export function branchForDepartment(key: string) {
   return "";
 }
 
+export function distributionSourceCode(value: unknown) {
+  const source = clean(value).toLowerCase();
+  if (source === "facebook_post") return "facebook";
+  if (source === "instagram_post") return "instagram";
+  return source;
+}
+
 export function isCrmManager(user: SessionUser) {
   return [
     "crm.customer.bulk_transfer","crm.manual_lead.view_all","crm.manual_lead.duplicate.approve",
@@ -172,6 +179,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   const sql = getSql();
   const requested = clean(requestedBranch);
   const source = clean(sourceCode);
+  const routingSource = distributionSourceCode(source);
 
   const matchingRules = await sql<any[]>`
     select r.id::text,r.name,r.branch_code,r.source_codes,r.assignment_mode,r.prevent_consecutive,r.sort_order,r.created_at,
@@ -183,7 +191,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     where r.is_active=true
       and r.department_code=${departmentCode}
       and (${requested || null}::text is null or r.branch_code is null or r.branch_code=${requested || null})
-      and (coalesce(array_length(r.source_codes,1),0)=0 or ${source}=any(r.source_codes))
+      and (coalesce(array_length(r.source_codes,1),0)=0 or ${source}=any(r.source_codes) or ${routingSource}=any(r.source_codes))
     order by branch_specificity,source_specificity,r.sort_order,r.created_at,r.id
   `;
   if (!matchingRules.length) return null;
@@ -298,7 +306,7 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   });
   if (!candidates.length) return null;
 
-  const poolKey = `rules:${departmentCode}:${requested || "auto"}:${source || "all"}:${ruleIds.slice().sort().join(",")}`;
+  const poolKey = `rules:${departmentCode}:${requested || "auto"}:${routingSource || source || "all"}:${ruleIds.slice().sort().join(",")}`;
   const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
   const lastIndex = candidates.findIndex((candidate) => candidate.user_id === state?.last_user_id);
   const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];

@@ -300,7 +300,7 @@ export function EngagementPage() {
 
   return <MarketingPage
     title="تفاعل النشر"
-    description="متابعة أرقام النشر والتفاعل؛ الإعجابات والمشاركات أرقام مجمعة، والتعليقات فقط تدخل مسار CRM."
+    description="متابعة أرقام النشر والتفاعل؛ تعليقات Facebook وInstagram وتفاعلات Facebook ذات الهوية تدخل مسار CRM وتُوزّع حسب قواعد مبيعات الكاش."
     actions={<div className="marketing-engagement-actions">
       {canSubscribeWebhook ? <button type="button" className="secondary-button" disabled={loading} onClick={subscribe}><ChatCircleDots size={18} /> تفعيل استقبال التعليقات</button> : null}
       {data && canViewWebhookStatus ? <button type="button" className="secondary-button" onClick={() => setSubscriptionOpen(true)}><CheckCircle size={18} /> حالة استقبال التعليقات</button> : null}
@@ -321,10 +321,10 @@ export function EngagementPage() {
       {view === "engagement" ? <>
         <section className="marketing-engagement-stats">
           <article><LinkSimple size={24} /><span>المنشورات النشطة</span><strong>{count(summary.posts)}</strong><small>منشورات السيستم فقط</small></article>
-          <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
+          <article><Heart size={24} /><span>إجمالي الإعجابات</span><strong>{count(summary.likes)}</strong><small>{count(summary.likeEvents)} تفاعل Facebook محفوظ بهوية صاحبه ومربوط بالسيستم</small></article>
           <article><ChatCircleDots size={24} /><span>إجمالي التعليقات</span><strong>{count(summary.comments)}</strong><small>{count(summary.commentEvents)} تعليق محفوظ ومربوط بالسيستم</small></article>
           <article><ShareNetwork size={24} /><span>إجمالي المشاركات</span><strong>{count(summary.shares)}</strong><small>رقم مباشر من المنصة — لا ينشئ عميل CRM</small></article>
-          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{count(summary.crmLeads)}</strong><small>من {count(summary.commentEvents)} تعليق محفوظ</small></article>
+          <article><UsersThree size={24} /><span>عملاء CRM</span><strong>{count(summary.crmLeads)}</strong><small>من {count(summary.commentEvents + summary.likeEvents)} تفاعل محفوظ بهوية صاحبه</small></article>
         </section>
 
         <section className="panel marketing-engagement-panel marketing-posts-panel">
@@ -339,7 +339,7 @@ export function EngagementPage() {
           <div className="marketing-engagement-control-panel">
             <div className="marketing-engagement-search"><MagnifyingGlass size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث بالحملة، الكرييتيف، العميل أو نص التعليق" /></div>
             <label><span>المنصة</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="">كل المنصات</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="snapchat">Snapchat</option></select></label>
-            <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>البحث والمنصة والحالة تعمل على نفس بيانات الحملات والأجندات، وسجل العملاء هنا للتعليقات فقط.</small></div>
+            <div className="marketing-engagement-filter-note"><strong>مصدر نتائج موحد</strong><small>البحث والمنصة والحالة تعمل على نفس بيانات الحملات والأجندات، وسجل العملاء هنا للتعليقات وتفاعلات Facebook المعرّفة بالهوية.</small></div>
           </div>
           <div className="marketing-engagement-table-wrap"><table className="marketing-engagement-table"><thead><tr><th>المنصة</th><th>الحملة / الأجندة</th><th>الكرييتيف</th><th>تاريخ النشر</th><th>لايك</th><th>كومنت</th><th>مشاركة</th><th>الوصول</th><th>المزامنة</th><th>المنشور</th><th>إجراء</th></tr></thead><tbody>
             {rows.map((row: any) => <tr key={row.id} className={row.archived_at ? "is-archived" : ""}>
@@ -363,19 +363,21 @@ export function EngagementPage() {
 
         <section className="panel marketing-engagement-panel marketing-interactions-panel">
           <header>
-            <div><h3>التعليقات والعملاء</h3><p>التعليقات فقط تُحفظ بهوية صاحبها وتدخل مسار CRM؛ الإعجابات والمشاركات تبقى أرقامًا مجمعة من المنصة.</p></div>
+            <div><h3>التفاعلات والعملاء</h3><p>تعليقات Facebook وInstagram وتفاعلات Facebook التي ترسل Meta هوية صاحبها تدخل CRM وتُوزّع على مناديب مبيعات الكاش. إعجابات Instagram تبقى رقمًا مجمعًا لأن Meta لا ترسل هوية أصحابها عبر هذا الربط.</p></div>
             <div className="marketing-engagement-section-filters">
-              <div className="marketing-segmented" aria-label="فلتر حالة التعليقات"><button type="button" className={engagementStatus === "active" ? "active" : ""} onClick={() => setEngagementStatus("active")}>النشطة</button><button type="button" className={engagementStatus === "archived" ? "active" : ""} onClick={() => setEngagementStatus("archived")}>الأرشيف</button><button type="button" className={engagementStatus === "all" ? "active" : ""} onClick={() => setEngagementStatus("all")}>الكل</button></div>
+              <div className="marketing-segmented" aria-label="فلتر حالة التفاعلات"><button type="button" className={engagementStatus === "active" ? "active" : ""} onClick={() => setEngagementStatus("active")}>النشطة</button><button type="button" className={engagementStatus === "archived" ? "active" : ""} onClick={() => setEngagementStatus("archived")}>الأرشيف</button><button type="button" className={engagementStatus === "all" ? "active" : ""} onClick={() => setEngagementStatus("all")}>الكل</button></div>
             </div>
           </header>
           <div className="marketing-engagement-feed">
-            {engagements.map((item: any) => <article key={item.id} className={item.archived_at ? "is-archived" : ""}>
-              <div className={`marketing-engagement-event-icon ${item.platform} comment`}>
-                <ChatCircleDots size={22} weight="fill" />
+            {engagements.map((item: any) => {
+              const isLike = item.engagement_type === "like";
+              return <article key={item.id} className={item.archived_at ? "is-archived" : ""}>
+              <div className={`marketing-engagement-event-icon ${item.platform} ${isLike ? "like" : "comment"}`}>
+                {isLike ? <Heart size={22} weight="fill" /> : <ChatCircleDots size={22} weight="fill" />}
               </div>
               <div className="marketing-engagement-event-main">
-                <header><div><b>{item.actor_name || item.customer_name || "حساب غير معروف"}</b><span className="marketing-engagement-type comment">تعليق</span><span className={`marketing-platform-mini ${item.platform}`}>{platformIcon(item.platform, 13)}{platformLabel(item.platform)}</span></div><time>{marketingDate(item.engaged_at || item.created_at, true)}</time></header>
-                <p>{item.event_text || "تعليق بدون نص"}</p>
+                <header><div><b>{item.actor_name || item.customer_name || "حساب غير معروف"}</b><span className={`marketing-engagement-type ${isLike ? "like" : "comment"}`}>{isLike ? "إعجاب" : "تعليق"}</span><span className={`marketing-platform-mini ${item.platform}`}>{platformIcon(item.platform, 13)}{platformLabel(item.platform)}</span></div><time>{marketingDate(item.engaged_at || item.created_at, true)}</time></header>
+                <p>{item.event_text || (isLike ? "إعجاب على المنشور" : "تعليق بدون نص")}</p>
                 <footer><span>{item.campaign_name} — {item.creative_name}</span><strong>{sourceLabel(item.platform)}</strong></footer>
               </div>
               <div className="marketing-engagement-crm-card">
@@ -383,15 +385,15 @@ export function EngagementPage() {
                 {item.crm_lead_id ? <><b>{item.customer_name || item.actor_name}</b><small>{item.crm_source_name || sourceLabel(item.platform)}</small><small>{item.branch_code || "جارٍ التوزيع"} — {item.assigned_name || "غير موزع"}</small></> : null}
                 {item.processing_error ? <details className="marketing-error-compact"><summary>سبب فشل التحويل</summary><p>{item.processing_error}</p></details> : null}
               </div>
-              <div className="marketing-engagement-row-action">{canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات التعليق"><DotsThreeVertical size={20} weight="bold" /></summary><div>
+              <div className="marketing-engagement-row-action">{canManage ? <details className="marketing-action-menu"><summary aria-label="إجراءات التفاعل"><DotsThreeVertical size={20} weight="bold" /></summary><div>
                 {item.archived_at
                   ? <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "restore", item)}><ArrowCounterClockwise size={16} /> استعادة</button>
                   : <button type="button" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "archive", item)}><Archive size={16} /> أرشفة</button>}
-                <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "delete", item)}><Trash size={16} /> مسح التعليق</button>
+                <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "delete", item)}><Trash size={16} /> مسح التفاعل</button>
                 {canDeleteCustomer && item.crm_lead_id && item.processing_status === "created" && !item.crm_is_deleted ? <button type="button" className="danger" disabled={Boolean(busyKey)} onClick={() => void manage("engagement", "delete_customer", item)}><Trash size={16} /> مسح العميل من CRM</button> : null}
               </div></details> : null}</div>
-            </article>)}
-            {!engagements.length ? <div className="empty-cell">{loading ? "جاري التحميل..." : engagementStatus === "archived" ? "لا توجد تعليقات في الأرشيف" : "لم تصل تعليقات مطابقة بعد"}</div> : null}
+            </article>;})}
+            {!engagements.length ? <div className="empty-cell">{loading ? "جاري التحميل..." : engagementStatus === "archived" ? "لا توجد تفاعلات في الأرشيف" : "لم تصل تفاعلات مطابقة بعد"}</div> : null}
           </div>
         </section>
       </> : <>

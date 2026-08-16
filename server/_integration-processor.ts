@@ -133,27 +133,47 @@ function identityData(source: string, payload: any) {
   const wa = nestedWhatsapp(payload);
   const msg = wa?.messages?.[0] || {};
   const contact = wa?.contacts?.[0] || {};
-  const pageId = first(payload.pageId, payload.page_id);
+  const pageId = source === "instagram"
+    ? first(payload.instagramAccountId, payload.instagram_account_id, payload.pageId, payload.page_id)
+    : first(payload.pageId, payload.page_id);
   const requestedConversationId = first(payload.conversationId, payload.conversation_id, payload.convId);
   const parsedFacebookPsid = source === "facebook" && requestedConversationId.startsWith("facebook:")
+    ? requestedConversationId.split(":").slice(2).join(":")
+    : "";
+  const parsedInstagramScopedId = source === "instagram" && requestedConversationId.startsWith("instagram:")
     ? requestedConversationId.split(":").slice(2).join(":")
     : "";
   const facebookPsid = first(
     payload.facebookPsid, payload.facebook_psid, payload.fbPsid, payload.fb_psid,
     payload.metaSenderId, payload.meta_sender_id, parsedFacebookPsid,
   );
+  const instagramScopedId = first(
+    payload.instagramScopedId, payload.instagram_scoped_id, payload.igsid, payload.igSid, payload.ig_sid, payload.igId, payload.ig_id,
+    payload.metaSenderId, payload.meta_sender_id,
+    source === "instagram" ? payload.participantId : "", source === "instagram" ? payload.participant_id : "",
+    parsedInstagramScopedId,
+  );
   const manychatContactId = first(
     payload.manychatContactId, payload.manychat_contact_id,
     payload.subscriberId, payload.subscriber_id,
   );
-  const participant = source === "facebook" ? facebookPsid : first(
-    payload.participantId, payload.participant_id,
-    payload.user_id, payload.userId, payload.igId, payload.tiktokId,
-    payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId,
-    payload.waId, msg?.from, contact?.wa_id,
-  );
+  const participant = source === "facebook"
+    ? facebookPsid
+    : source === "instagram"
+      ? instagramScopedId
+      : first(
+          payload.participantId, payload.participant_id,
+          payload.user_id, payload.userId, payload.tiktokId,
+          payload.subscriber_id, payload.subscriberId, payload.contact_id, payload.contactId,
+          payload.waId, msg?.from, contact?.wa_id,
+        );
   const aliases = [...new Set((source === "facebook" ? [
     facebookPsid,
+    manychatContactId,
+    ...listValues(payload.identityAliases),
+    ...listValues(payload.identity_aliases),
+  ] : source === "instagram" ? [
+    instagramScopedId,
     manychatContactId,
     ...listValues(payload.identityAliases),
     ...listValues(payload.identity_aliases),
@@ -170,10 +190,28 @@ function identityData(source: string, payload: any) {
   const externalId = participant || first(payload.externalCustomerId, payload.external_customer_id, requestedConversationId) || crypto.randomUUID();
   const conversationExternalId = source === "facebook"
     ? (pageId && facebookPsid ? `facebook:${pageId}:${facebookPsid}` : "")
-    : (requestedConversationId || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`));
+    : source === "instagram"
+      ? (pageId && instagramScopedId ? `instagram:${pageId}:${instagramScopedId}` : "")
+      : (requestedConversationId || (source === "whatsapp" ? externalId : `${source}:${pageId || "default"}:${externalId}`));
   const phone = first(payload.phone, payload.mobile, payload.phoneNumber, payload.phone_number, payload.clientNumber, payload.leadPhone, payload.lead_phone, msg?.from, contact?.wa_id);
   const displayName = first(payload.leadName, payload.lead_name, payload.customerName, payload.customer_name, payload.displayName, payload.display_name, payload.full_name, payload.fullName, payload.name, contact?.profile?.name, "عميل");
-  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName, aliases, facebookPsid, manychatContactId };
+  return { participant, pageId, externalId, conversationExternalId, phone, phoneNormalized: normalizePhone(phone), displayName, aliases, facebookPsid, instagramScopedId, manychatContactId };
+}
+
+function socialReferenceData(payload: any) {
+  const replyTo = payload?.replyTo || payload?.reply_to || payload?.message?.reply_to || {};
+  return {
+    commentId: first(
+      payload.commentId, payload.comment_id, payload.facebookCommentId, payload.facebook_comment_id,
+      payload.instagramCommentId, payload.instagram_comment_id, payload.socialCommentId, payload.social_comment_id,
+      payload?.referral?.comment_id, payload?.referral?.commentId,
+    ),
+    socialActorId: first(payload.socialActorId, payload.social_actor_id),
+    replyToProviderMessageId: first(
+      payload.replyToProviderMessageId, payload.reply_to_provider_message_id,
+      replyTo?.mid, replyTo?.message_id, replyTo?.messageId,
+    ),
+  };
 }
 
 function capturedLeadData(payload: any, identity: ReturnType<typeof identityData>) {
@@ -284,6 +322,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId,
   );
   let providerMessageId = first(payload.providerMessageId, payload.provider_message_id, payload.messageId, payload.message_id, payload.mid, whatsappMessage(payload)?.id, eventId);
+  const socialReference = socialReferenceData(payload);
   const occurredAt = dateValue(payload);
   const inboundFingerprint = inboundMessageFingerprint({
     source,
@@ -297,18 +336,110 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
     storageKey: media.storageKey,
   });
 
+  let linkedSocialConversation: any = null;
+  if (["facebook", "instagram"].includes(source)) {
+    const correlationIds = [...new Set([
+      socialReference.replyToProviderMessageId,
+      direction === "out" ? providerMessageId : "",
+    ].map(clean).filter(Boolean))];
+
+    if (correlationIds.length) {
+      [linkedSocialConversation] = await sql<any[]>`
+        select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
+        from crm.messages m
+        join crm.conversations c on c.id=m.conversation_id
+        where c.channel_code=${source}
+          and m.provider_message_id=any(${correlationIds}::text[])
+        order by m.created_at desc
+        limit 1
+      `;
+    }
+
+    if (!linkedSocialConversation && socialReference.commentId) {
+      [linkedSocialConversation] = await sql<any[]>`
+        select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
+        from crm.conversations c
+        where c.channel_code=${source}
+          and c.metadata->>'origin'='post_engagement'
+          and c.metadata->>'commentId'=${socialReference.commentId}
+          and (${identity.pageId || null}::text is null or c.page_id is null or c.page_id=${identity.pageId || null})
+        order by c.updated_at desc
+        limit 1
+      `;
+    }
+
+    if (!linkedSocialConversation) {
+      const socialAliases = [...new Set([socialReference.socialActorId, ...identity.aliases].map(clean).filter(Boolean))];
+      if (socialAliases.length) {
+        [linkedSocialConversation] = await sql<any[]>`
+          select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text
+          from crm.conversations c
+          where c.channel_code=${source}
+            and c.metadata->>'origin'='post_engagement'
+            and coalesce(c.metadata->>'socialActorId','')=any(${socialAliases}::text[])
+            and (${identity.pageId || null}::text is null or c.page_id is null or c.page_id=${identity.pageId || null})
+          order by c.updated_at desc
+          limit 1
+        `;
+      }
+    }
+  }
+
+  let linkedAliases: string[] = identity.aliases.map((value: unknown) => clean(value)).filter((value: string) => Boolean(value));
+  if (linkedSocialConversation?.contact_id) {
+    const rows = await sql<any[]>`
+      select external_id,participant_id from crm.contact_identities
+      where contact_id=${linkedSocialConversation.contact_id}::uuid and channel_code=${source}
+    `;
+    linkedAliases = Array.from(new Set<string>([
+      ...linkedAliases,
+      socialReference.socialActorId,
+      clean(linkedSocialConversation?.metadata?.socialActorId),
+      ...rows.flatMap((row: any) => [row.external_id, row.participant_id]),
+    ].map((value: unknown) => clean(value)).filter((value: string) => Boolean(value))));
+  }
+
+  const messagingIdentityMetadata = {
+    routeSource,
+    lastEventId: eventId,
+    identityAliases: linkedAliases,
+    facebookPsid: identity.facebookPsid || null,
+    instagramScopedId: identity.instagramScopedId || null,
+    manychatContactId: identity.manychatContactId || null,
+    messagingParticipantId: identity.participant || null,
+    messagingReady: Boolean(identity.participant),
+    messagingStatus: identity.participant ? "ready" : "identity_pending",
+    linkedFromSocialEngagement: Boolean(linkedSocialConversation),
+  };
+
   const { contact } = await ensureContactIdentity({
     channelCode: source,
     externalId: identity.externalId,
     participantId: identity.participant,
+    participantIdMode: ["facebook", "instagram"].includes(source) ? "explicit" : "default",
     pageId: identity.pageId,
     phone: identity.phone,
     displayName: identity.displayName,
-    aliases: identity.aliases,
-    metadata: { routeSource, lastEventId: eventId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null },
+    aliases: linkedAliases,
+    metadata: messagingIdentityMetadata,
   });
   let openRequest = await findOpenServiceRequest(contact.id);
   let matchedLead: any = await syncCapturedLeadData(sql, contact.id, payload, identity);
+  if (["facebook", "instagram"].includes(source) && identity.participant) {
+    await sql`
+      update crm.leads set
+        extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
+          messagingParticipantId: identity.participant,
+          facebookPsid: identity.facebookPsid || null,
+          instagramScopedId: identity.instagramScopedId || null,
+          manychatContactId: identity.manychatContactId || null,
+          messagingReady: true,
+          messagingStatus: "ready",
+        })}::jsonb,
+        updated_at=now()
+      where contact_id=${contact.id}::uuid and is_deleted=false
+    `;
+  }
 
   // Mersal currently sends the WhatsApp phone number in conversationId. That value
   // identifies the provider contact, not necessarily the PostgreSQL conversation UUID.
@@ -347,6 +478,13 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
   }
 
   let conversation: any = null;
+
+  if (linkedSocialConversation?.id && source !== "whatsapp") {
+    [conversation] = await sql<any[]>`
+      select *,id::text,lead_id::text,contact_id::text,service_request_id::text
+      from crm.conversations where id=${linkedSocialConversation.id}::uuid limit 1
+    `;
+  }
 
   if (source === "whatsapp" && openRequest?.conversation_id) {
     [conversation] = await sql<any[]>`
@@ -452,7 +590,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         ${identity.conversationExternalId},${openRequest?.lead_id || matchedLead?.id || null}::uuid,${contact.id}::uuid,${openRequest?.id || null}::uuid,${source},${identity.displayName},${identity.participant || identity.externalId},'open',
         ${text || null},0,${occurredAt}::timestamptz,${openRequest?.service_key || null},${openRequest?.department_code || null},${openRequest?.branch_code || null},
         ${openRequest?.assigned_to || null}::uuid,${openRequest?.call_center_assigned_to || null}::uuid,${first(payload.provider, routeSource)},${identity.pageId || null},
-        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null })}
+        ${openRequest ? 'classified' : 'new'},${direction === "in" ? occurredAt : null}::timestamptz,${sql.json({ ...messagingIdentityMetadata, providerConversationId: identity.conversationExternalId, commentId: socialReference.commentId || undefined, replyToProviderMessageId: socialReference.replyToProviderMessageId || undefined })}
       ) returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
     `;
   } else if (!existingMessage) {
@@ -478,7 +616,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
         classification_state=case when ${Boolean(openRequest)} then 'classified' when classification_state='closed' then 'new' else classification_state end,
         last_customer_message_at=case when ${direction === "in"} then ${occurredAt}::timestamptz else last_customer_message_at end,
         last_human_reply_at=case when ${direction === "out" && senderType === "human"} then ${occurredAt}::timestamptz else last_human_reply_at end,
-        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ routeSource, lastEventId: eventId, providerConversationId: identity.conversationExternalId, identityAliases: identity.aliases, facebookPsid: identity.facebookPsid || null })}::jsonb,
+        metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ ...messagingIdentityMetadata, providerConversationId: identity.conversationExternalId, commentId: socialReference.commentId || undefined, replyToProviderMessageId: socialReference.replyToProviderMessageId || undefined })}::jsonb,
         updated_at=now()
       where id=${conversation.id}::uuid
       returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
@@ -491,7 +629,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       [message] = await sql<any[]>`
         update crm.messages
         set direction='in',provider_status='received',sender_type='customer',
-            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId })}::jsonb
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ inboundFingerprint, rawProviderMessageId, replyToProviderMessageId: socialReference.replyToProviderMessageId || null })}::jsonb
         where id=${existingMessage.id}::uuid
         returning *,id::text,conversation_id::text
       `;
@@ -504,7 +642,7 @@ export async function processIntegrationEvent(routeSource: string, eventId: stri
       ) values(
         ${conversation.id}::uuid,${providerMessageId},${direction},${media.hasAttachment ? media.type : first(payload.messageType, payload.message_type, "text")},${text || null},
         ${media.storageKey ? null : media.url || null},${media.type || null},${media.fileName || null},${media.mimeType || null},${media.fileSize},${media.storageKey || null},${media.hasAttachment ? 'ready' : null},${media.isSensitive},
-        ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId })}
+        ${direction === "in" ? 'received' : 'sent'},${providerMessageId},${senderType},${media.caption || null},${occurredAt}::timestamptz,${sql.json({ source, routeSource, eventId, mediaId: media.mediaId || null, inboundFingerprint, rawProviderMessageId, replyToProviderMessageId: socialReference.replyToProviderMessageId || null, commentId: socialReference.commentId || null })}
       ) returning *,id::text,conversation_id::text
     `;
 

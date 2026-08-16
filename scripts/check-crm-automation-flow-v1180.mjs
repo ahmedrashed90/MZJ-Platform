@@ -17,7 +17,7 @@ const pageModel = read("src/crm/automationModel.ts");
 const admin = read("src/crm/pages/CrmAdminPage.tsx");
 const api = read("api/index.ts");
 const worker = read("facebook-worker/src/index.js");
-const workerCopy = read("workers/MZJ-Facebook-Worker-v2.0.0-FULL.js");
+const workerCopy = read("workers/MZJ-Facebook-Worker-v2.0.2-FULL.js");
 const db = read("server/_db.ts");
 const integrationRoute = read("server/integrations/[source].ts");
 
@@ -275,12 +275,12 @@ requireTokens("Facebook Worker", worker, [
   '"/webhook/facebook"',
   '"/automation"',
   '"/send/facebook"',
-  "verifySignature",
+  "verifyXHubSignature256",
   "normalizeMetaEvents",
   "participantId",
   "provider_message_id",
   "quick_replies",
-  "sendGraph",
+  "sendFacebookGraphMessage",
   "sendManyChatText",
   "PLATFORM_INBOUND_URL",
 ]);

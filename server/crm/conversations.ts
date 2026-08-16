@@ -81,7 +81,9 @@ async function ensureConversationForLead(sql: any, lead: any) {
     : preferredChannel;
 
   if (identity && channelCode) {
-    const participantId = clean(identity.participant_id || identity.external_id);
+    const identityMetadata = identity?.metadata && typeof identity.metadata === "object" ? identity.metadata : {};
+    const provisionalSocialIdentity = clean(identityMetadata.origin) === "post_engagement" && !clean(identity.participant_id);
+    const participantId = provisionalSocialIdentity ? "" : clean(identity.participant_id || identity.external_id);
     const externalId = clean(identity.external_id || participantId);
     const pageId = clean(identity.page_id);
     if (participantId && externalId) {

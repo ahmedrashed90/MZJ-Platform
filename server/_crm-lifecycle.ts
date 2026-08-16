@@ -17,6 +17,7 @@ export type ContactIdentityInput = {
   channelCode: string;
   externalId: string;
   participantId?: string;
+  participantIdMode?: "default" | "explicit" | "none";
   pageId?: string;
   phone?: string;
   displayName?: string;
@@ -88,6 +89,8 @@ export async function ensureContactIdentity(input: ContactIdentityInput) {
   const phoneNormalized = normalizePhone(input.phone);
   const aliases = uniqueIdentityValues(input);
   const pageId = clean(input.pageId);
+  const participantIdMode = input.participantIdMode || "default";
+  const explicitParticipantId = clean(input.participantId);
 
   return sql.begin(async (tx) => {
     const identityContacts = aliases.length ? await tx<any[]>`
@@ -134,11 +137,17 @@ export async function ensureContactIdentity(input: ContactIdentityInput) {
 
     let savedIdentity: any = null;
     for (const alias of aliases) {
+      const participantId = participantIdMode === "none"
+        ? null
+        : participantIdMode === "explicit"
+          ? (explicitParticipantId || null)
+          : (explicitParticipantId || alias);
       const [row] = await tx<any[]>`
         insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
-        values (${contact.id}::uuid,${channelCode},${alias},${clean(input.participantId)||alias},${pageId||null},${clean(input.displayName)||null},${tx.json((input.metadata || {}) as any)})
+        values (${contact.id}::uuid,${channelCode},${alias},${participantId},${pageId||null},${clean(input.displayName)||null},${tx.json((input.metadata || {}) as any)})
         on conflict(channel_code,external_id) do update set
-          contact_id=excluded.contact_id,participant_id=coalesce(nullif(excluded.participant_id,''),crm.contact_identities.participant_id),
+          contact_id=excluded.contact_id,
+          participant_id=case when ${participantIdMode === "none"}::boolean then null else coalesce(nullif(excluded.participant_id,''),crm.contact_identities.participant_id) end,
           page_id=coalesce(nullif(excluded.page_id,''),crm.contact_identities.page_id),display_name=coalesce(nullif(excluded.display_name,''),crm.contact_identities.display_name),
           metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
         returning *,id::text,contact_id::text

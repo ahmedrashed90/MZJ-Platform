@@ -25,6 +25,7 @@ export type ConversationContext = {
   service_key?: string | null;
   page_id?: string | null;
   metadata?: Record<string, unknown> | null;
+  manychat_contact_id?: string | null;
 };
 
 export type TemplateRow = {
@@ -178,6 +179,15 @@ function providerMessageIdFrom(data: any) {
   );
 }
 
+function providerRecipientIdFrom(data: any) {
+  return clean(
+    data?.recipient_id || data?.recipientId ||
+    data?.raw?.recipient_id || data?.raw?.recipientId ||
+    data?.raw?.data?.recipient_id || data?.raw?.data?.recipientId ||
+    data?.data?.recipient_id || data?.data?.recipientId || "",
+  );
+}
+
 function workerAccepted(delivery: Awaited<ReturnType<typeof postToWorker>>, data: any, providerMessageId: string) {
   const rawStatus = normalized(data?.provider_status || data?.providerStatus || data?.status || data?.raw?.status || data?.raw?.data?.status || "");
   const failed = ["error", "failed", "failure", "rejected", "invalid"].includes(rawStatus);
@@ -245,7 +255,53 @@ async function finishWorkerDelivery(input: BackgroundDeliveryInput) {
       `;
     }
 
-    if (input.conversationId) await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
+    if (input.conversationId) {
+      const recipientId = providerRecipientIdFrom(data);
+      const privateReply = input.payload?.privateReply === true || input.payload?.private_reply === true;
+      const route = clean(input.payload?.deliveryChannel || input.payload?.platform || input.payload?.channel).toLowerCase();
+      const commentId = clean(input.payload?.commentId || input.payload?.comment_id);
+      const manychatContactId = clean(data?.manychatContactId || data?.manychat_contact_id);
+
+      if (providerStatus === "sent" && privateReply && route === "instagram" && recipientId) {
+        const [conversation] = await sql<any[]>`
+          update crm.conversations set
+            participant_id=${recipientId},
+            metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
+              messagingParticipantId: recipientId,
+              messagingReady: false,
+              messagingStatus: "private_reply_sent",
+              privateReplyCommentId: commentId || null,
+              privateReplyProviderMessageId: providerMessageId || null,
+              privateReplySentAt: new Date().toISOString(),
+            })}::jsonb,
+            updated_at=now()
+          where id=${input.conversationId}::uuid
+          returning id::text,contact_id::text,page_id
+        `;
+        if (conversation?.contact_id) {
+          await sql`
+            insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,page_id,display_name,metadata)
+            select ${conversation.contact_id}::uuid,'instagram',${recipientId},${recipientId},${clean(conversation.page_id) || null},c.display_name,
+              ${sql.json({ origin: "instagram_private_reply", messagingReady: false, messagingStatus: "private_reply_sent", commentId: commentId || null, manychatContactId: manychatContactId || null })}::jsonb
+            from crm.contacts c where c.id=${conversation.contact_id}::uuid
+            on conflict(channel_code,external_id) do update set
+              contact_id=excluded.contact_id,participant_id=excluded.participant_id,page_id=coalesce(excluded.page_id,crm.contact_identities.page_id),
+              metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
+          `;
+          await sql`
+            update crm.leads set extra_data=coalesce(extra_data,'{}'::jsonb)||${sql.json({
+              messagingParticipantId: recipientId,
+              messagingReady: false,
+              messagingStatus: "private_reply_sent",
+              privateReplyProviderMessageId: providerMessageId || null,
+            })}::jsonb,updated_at=now()
+            where contact_id=${conversation.contact_id}::uuid and is_deleted=false
+          `;
+        }
+      } else {
+        await sql`update crm.conversations set updated_at=now() where id=${input.conversationId}::uuid`;
+      }
+    }
     return { providerStatus, providerMessageId, providerResponse: data, errorMessage, httpStatus: delivery.provider?.status || 0, workerRoute: delivery.usedUrl, attempts };
   } catch (error: any) {
     const errorMessage = clean(error?.message || error) || "تعذر إكمال إرسال الرسالة";
@@ -276,10 +332,20 @@ function startWorkerDelivery(input: BackgroundDeliveryInput) {
   waitUntil(finishWorkerDelivery(input));
 }
 
+function conversationMetadata(conversation: ConversationContext) {
+  return conversation.metadata && typeof conversation.metadata === "object" ? conversation.metadata : {};
+}
+
 function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
   const conversationId = clean(conversation.legacy_id) || conversation.id;
   const participantId = clean(conversation.participant_id);
+  const metadata = conversationMetadata(conversation);
   const displayName = conversation.lead_customer_name || conversation.customer_name || "عميل";
+  const commentId = clean(metadata.commentId || metadata.privateReplyCommentId);
+  const engagementType = clean(metadata.engagementType).toLowerCase();
+  const origin = clean(metadata.origin).toLowerCase();
+  const manychatContactId = clean(conversation.manychat_contact_id || metadata.manychatContactId);
+
   if (route === "whatsapp") {
     const phone = normalizePhone(conversation.phone_normalized || conversation.phone || participantId);
     if (!phone) throw new Error("رقم واتساب غير موجود أو غير صالح");
@@ -289,8 +355,37 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
     const subscriber = participantId || conversationId.replace(/^tiktok[_:]/i, "");
     return { subscriber_id: subscriber, subscriberId: subscriber, participantId: subscriber, conversationId, convId: conversationId, displayName, serviceKey: conversation.service_key || "" };
   }
-  if (route === "instagram") return { subscriber_id: participantId, participantId, manychatContactId: participantId, igId: participantId, pageId: conversation.page_id || "", conversationId, convId: conversationId, displayName, serviceKey: conversation.service_key || "" };
-  return { convId: conversationId, conversationId, participantId, pageId: conversation.page_id || "" };
+  if (route === "instagram") {
+    if (manychatContactId) {
+      return {
+        subscriber_id: manychatContactId, subscriberId: manychatContactId, manychatContactId,
+        participantId, instagramScopedId: participantId, igId: participantId, instagramAccountId: conversation.page_id || "", pageId: conversation.page_id || "",
+        conversationId, convId: conversationId, displayName, serviceKey: conversation.service_key || "",
+      };
+    }
+    if (commentId && origin === "post_engagement" && engagementType === "comment") {
+      return {
+        participantId, instagramScopedId: participantId, igId: participantId, instagramAccountId: conversation.page_id || "", pageId: conversation.page_id || "",
+        commentId, comment_id: commentId, privateReply: true, private_reply: true,
+        conversationId, convId: conversationId, displayName, serviceKey: conversation.service_key || "",
+      };
+    }
+    throw new Error("حساب Instagram غير جاهز للمراسلة: ManyChat Contact ID غير مربوط بالمحادثة بعد");
+  }
+
+  if (!participantId) {
+    if (origin === "post_engagement" && engagementType === "like") {
+      throw new Error("عميل Facebook الناتج من Like لا يملك PSID للمراسلة بعد؛ يبدأ الشات عندما يراسل الصفحة");
+    }
+    if (origin === "post_engagement" && engagementType === "comment") {
+      throw new Error("تعليق Facebook مسجل كـ Lead، لكن PSID الخاص بـ Messenger غير متاح بعد؛ يبدأ الشات عند وصول هوية Messenger الحقيقية");
+    }
+    throw new Error("Facebook PSID غير موجود للمحادثة");
+  }
+  return {
+    convId: conversationId, conversationId, participantId, facebookPsid: participantId,
+    pageId: conversation.page_id || "", manychatContactId: manychatContactId || undefined,
+  };
 }
 
 function deliveryPayload(input: { route: DeliveryRoute; conversation: ConversationContext; text: string; template?: TemplateRow | null; media?: MediaDelivery | null; policy: DeliveryPolicy; buttons?: unknown[]; header?: string; footer?: string }) {
@@ -320,8 +415,19 @@ async function loadConversation(conversationId: string): Promise<ConversationCon
   const sql = getSql();
   const [row] = await sql<any[]>`
     select c.*,c.id::text,c.lead_id::text,c.contact_id::text,c.service_request_id::text,
-      l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.car_name,l.status_label,l.source_code,l.source_name,l.platform_code,l.service_key
-    from crm.conversations c left join crm.leads l on l.id=c.lead_id
+      l.phone,l.phone_normalized,l.customer_name as lead_customer_name,l.car_name,l.status_label,l.source_code,l.source_name,l.platform_code,l.service_key,
+      identity.manychat_contact_id
+    from crm.conversations c
+    left join crm.leads l on l.id=c.lead_id
+    left join lateral (
+      select nullif(ci.metadata->>'manychatContactId','') as manychat_contact_id
+      from crm.contact_identities ci
+      where ci.contact_id=c.contact_id and ci.channel_code=c.channel_code
+        and (c.page_id is null or ci.page_id is null or ci.page_id=c.page_id)
+        and coalesce(ci.metadata->>'manychatContactId','')<>''
+      order by ci.updated_at desc
+      limit 1
+    ) identity on true
     where c.id=${conversationId}::uuid limit 1
   `;
   return row || null;
@@ -347,9 +453,19 @@ export async function deliverCrmMessage(input: {
   const finalText = clean(input.text || input.media?.caption || input.template?.content);
   if (!finalText && !input.media) throw new Error("اكتب الرسالة أو اختر قالبًا أو ملفًا صالحًا");
 
-  const conversation = input.conversation;
+  const hydratedConversation = input.conversation?.id ? await loadConversation(input.conversation.id) : null;
+  const conversation = hydratedConversation || input.conversation;
   const policy = await resolveDeliveryPolicy(conversation);
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";
+  const metadata = conversationMetadata(conversation);
+  const needsInstagramPrivateReply = policy.route === "instagram"
+    && !clean(conversation.manychat_contact_id || metadata.manychatContactId)
+    && clean(metadata.origin) === "post_engagement"
+    && clean(metadata.engagementType) === "comment"
+    && Boolean(clean(metadata.commentId || metadata.privateReplyCommentId));
+  if (needsInstagramPrivateReply && (kind !== "text" || (Array.isArray(input.buttons) && input.buttons.length))) {
+    throw new Error("أول رسالة خاصة لعميل Instagram القادم من تعليق يجب أن تكون رسالة نصية فقط");
+  }
   const { endpoint, urls } = await resolveEndpoint(policy.route, kind);
   const idempotencyKey = clean(input.idempotencyKey) || `crm:${conversation.id}:${kind}:${crypto.randomUUID()}`;
   const proposedJobId = crypto.randomUUID();
