@@ -6834,11 +6834,11 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .crm-report-agent-multi-select > summary::-webkit-details-marker { display:none; }
 .crm-report-agent-multi-select > summary::after { content:"⌄"; margin-inline-start:auto; color:#7d5c51; font-size:14px; }
 .crm-report-agent-multi-select[open] > summary { border-color:#ad725f; background:#fff; box-shadow:0 0 0 4px rgba(132,60,47,.08); }
-.crm-report-agent-multi-options { position:absolute; z-index:40; inset-inline:0; top:calc(100% + 6px); max-height:280px; overflow:auto; display:grid; gap:5px; padding:8px; border:1px solid #dfcec6; border-radius:12px; background:#fff; box-shadow:0 14px 34px rgba(73,42,33,.16); }
-.crm-reports-filters-pro .crm-report-agent-multi-options label { min-height:36px; display:flex; align-items:center; gap:8px; padding:7px 9px; border:1px solid transparent; border-radius:9px; cursor:pointer; }
+.crm-report-agent-multi-options { position:static; max-height:420px; margin-top:8px; overflow:auto; display:grid; gap:7px; padding:10px; border:1px solid #dfcec6; border-radius:12px; background:#fff; box-shadow:0 14px 34px rgba(73,42,33,.16); }
+.crm-reports-filters-pro .crm-report-agent-multi-options label { min-height:44px; display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid transparent; border-radius:9px; cursor:pointer; }
 .crm-reports-filters-pro .crm-report-agent-multi-options label:hover,.crm-reports-filters-pro .crm-report-agent-multi-options label.selected { border-color:#ead4c8; background:#fff5ef; }
-.crm-reports-filters-pro .crm-report-agent-multi-options input[type="checkbox"] { width:16px; min-height:16px; height:16px; flex:0 0 16px; margin:0; padding:0; box-shadow:none; accent-color:#9a4937; }
-.crm-reports-filters-pro .crm-report-agent-multi-options label > span { min-width:0; color:#4b2b22; font-size:10px; font-weight:850; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.crm-reports-filters-pro .crm-report-agent-multi-options input[type="checkbox"] { width:18px; min-height:18px; height:18px; flex:0 0 18px; margin:0; padding:0; box-shadow:none; accent-color:#9a4937; }
+.crm-reports-filters-pro .crm-report-agent-multi-options label > span { min-width:0; color:#4b2b22; font-size:12px; font-weight:850; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .crm-report-search { min-height:45px; border:1px solid #dfcec6; border-radius:12px; background:#fffdfc; padding-inline:11px; }
 .crm-report-search input { min-height:42px; border:0; padding:0; box-shadow:none !important; background:transparent; }
 
