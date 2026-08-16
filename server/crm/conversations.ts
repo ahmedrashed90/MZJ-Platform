@@ -246,11 +246,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         actor: user,
         senderType: "human",
         reason: "manual",
+        awaitProviderResult: true,
       });
       if (media && delivery.message?.id) await sql`update crm.media_assets set message_id=${delivery.message.id}::uuid,status='ready',updated_at=now() where id=${media.id}::uuid`;
       await publishBackgroundEvent({
         eventKey: `crm-message-sent:${delivery.message?.id || delivery.jobId}`,
-        eventType: delivery.providerStatus === "queued" ? "message.queued" : "message.sent",
+        eventType: delivery.providerStatus === "failed" ? "message.failed" : delivery.providerStatus === "queued" ? "message.queued" : "message.sent",
         source: conversation.channel_code,
         contactId: conversation.contact_id || null,
         conversationId,
@@ -259,7 +260,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         payload: { direction: "out", senderType: "human", text: finalText, messageId: delivery.message?.id || null, providerStatus: delivery.providerStatus },
         actor: user,
       });
-      await audit(user, "message_sent", "conversation", conversationId, {
+      await audit(user, delivery.providerStatus === "failed" ? "message_failed" : "message_sent", "conversation", conversationId, {
         channel: delivery.routing?.route || conversation.channel_code,
         source: delivery.routing?.sourceArabic || conversation.source_name,
         providerStatus: delivery.providerStatus,

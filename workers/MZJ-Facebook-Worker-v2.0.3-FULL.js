@@ -18,7 +18,7 @@
  * This Worker contains no business-flow messages or distribution logic.
  */
 
-const VERSION = "mzj-facebook-worker-v2.0.2-social-chat-identity";
+const VERSION = "mzj-facebook-worker-v2.0.3-provider-confirmed-send";
 const WORKER_CODE = "facebook";
 const DEFAULT_PLATFORM_INBOUND_URL =
   "https://mzj-platform.vercel.app/api/integrations/facebook";
@@ -1961,6 +1961,7 @@ async function handleFacebookSend(request, env, ctx) {
   if (type === "media") {
     result = await sendFacebookMedia(env, {
       participantId: target.participantId,
+      pageId: target.pageId,
       mediaUrl: clean(
         first(
           body?.media_url,
@@ -2167,6 +2168,7 @@ async function sendFacebookTextOrButtons(env, target, body) {
 
   const graph = await sendFacebookGraphMessage(env, {
     participantId: target.participantId,
+    pageId: target.pageId,
     message,
     messagingType: clean(
       first(body?.messaging_type, body?.messagingType, "RESPONSE"),
@@ -2248,6 +2250,7 @@ async function sendFacebookMedia(env, input) {
 
   const result = await sendFacebookGraphMessage(env, {
     participantId,
+    pageId: clean(input?.pageId),
     message: {
       attachment,
     },
@@ -2316,6 +2319,7 @@ async function sendManyChatText(subscriberId, textValue, env) {
 async function sendFacebookGraphMessage(env, input) {
   const pageToken = clean(env?.FB_PAGE_ACCESS_TOKEN);
   const participantId = clean(input?.participantId);
+  const pageId = clean(input?.pageId || env?.FB_PAGE_ID);
 
   if (!pageToken) {
     return failedProviderResult("FB_PAGE_ACCESS_TOKEN missing");
@@ -2343,7 +2347,8 @@ async function sendFacebookGraphMessage(env, input) {
   }
 
   try {
-    const response = await fetch(facebookSendEndpoint(env), {
+    const endpoint = facebookSendEndpoint(env, pageId);
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -2355,15 +2360,30 @@ async function sendFacebookGraphMessage(env, input) {
 
     const rawText = await response.text();
     const raw = parseJson(rawText);
-
-    return normalizeProviderResponse(
+    const normalized = normalizeProviderResponse(
       response.status,
       response.ok,
       raw,
       rawText,
     );
+
+    if (!normalized.ok) {
+      console.error("Facebook Graph send rejected", {
+        endpoint,
+        httpStatus: normalized.httpStatus,
+        code: raw?.error?.code || null,
+        subcode: raw?.error?.error_subcode || null,
+        type: raw?.error?.type || null,
+        message: normalized.error,
+        fbtraceId: raw?.error?.fbtrace_id || null,
+      });
+    }
+
+    return normalized;
   } catch (error) {
-    return failedProviderResult(errorMessage(error));
+    const failed = failedProviderResult(errorMessage(error));
+    console.error("Facebook Graph send request failed", failed.error);
+    return failed;
   }
 }
 
@@ -2863,12 +2883,15 @@ function graphBase(env) {
   return `https://graph.facebook.com/${version}`;
 }
 
-function facebookSendEndpoint(env) {
+function facebookSendEndpoint(env, pageId = "") {
   const override = clean(env?.FACEBOOK_SEND_URL);
 
   if (override) return override;
 
-  return `${graphBase(env)}/me/messages`;
+  const resolvedPageId = clean(pageId || env?.FB_PAGE_ID);
+  return resolvedPageId
+    ? `${graphBase(env)}/${encodeURIComponent(resolvedPageId)}/messages`
+    : `${graphBase(env)}/me/messages`;
 }
 
 function manychatSendEndpoint(env) {

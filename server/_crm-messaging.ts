@@ -336,6 +336,45 @@ function conversationMetadata(conversation: ConversationContext) {
   return conversation.metadata && typeof conversation.metadata === "object" ? conversation.metadata : {};
 }
 
+function metadataFlag(value: unknown) {
+  if (value === true) return true;
+  return ["1", "true", "yes", "on"].includes(clean(value).toLowerCase());
+}
+
+function isPostEngagementConversation(conversation: ConversationContext) {
+  const metadata = conversationMetadata(conversation);
+  const legacyId = clean(conversation.legacy_id).toLowerCase();
+  return clean(metadata.origin).toLowerCase() === "post_engagement"
+    || legacyId.startsWith("post-engagement:")
+    || legacyId.startsWith("post-comment:");
+}
+
+function socialMessagingReady(conversation: ConversationContext) {
+  return metadataFlag(conversationMetadata(conversation).messagingReady);
+}
+
+async function normalizeProvisionalFacebookMessagingIdentity(
+  sql: ReturnType<typeof getSql>,
+  conversation: ConversationContext,
+  route: DeliveryRoute,
+) {
+  if (route !== "facebook" || !isPostEngagementConversation(conversation) || socialMessagingReady(conversation)) return;
+  if (!clean(conversation.participant_id)) return;
+
+  const metadata = conversationMetadata(conversation);
+  const engagementType = clean(metadata.engagementType).toLowerCase();
+  const messagingStatus = engagementType === "comment" ? "identity_pending" : "social_only";
+  await sql`
+    update crm.conversations set
+      participant_id=null,
+      metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({ messagingReady: false, messagingStatus } as any)}::jsonb,
+      updated_at=now()
+    where id=${conversation.id}::uuid
+  `;
+  conversation.participant_id = null;
+  conversation.metadata = { ...metadata, messagingReady: false, messagingStatus };
+}
+
 function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
   const conversationId = clean(conversation.legacy_id) || conversation.id;
   const participantId = clean(conversation.participant_id);
@@ -344,6 +383,9 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
   const commentId = clean(metadata.commentId || metadata.privateReplyCommentId);
   const engagementType = clean(metadata.engagementType).toLowerCase();
   const origin = clean(metadata.origin).toLowerCase();
+  const socialConversation = isPostEngagementConversation(conversation);
+  const messagingReady = socialMessagingReady(conversation);
+  const socialActorId = clean(metadata.socialActorId);
   const manychatContactId = clean(conversation.manychat_contact_id || metadata.manychatContactId);
 
   if (route === "whatsapp") {
@@ -373,15 +415,28 @@ function basePayload(route: DeliveryRoute, conversation: ConversationContext) {
     throw new Error("حساب Instagram غير جاهز للمراسلة: ManyChat Contact ID غير مربوط بالمحادثة بعد");
   }
 
-  if (!participantId) {
-    if (origin === "post_engagement" && engagementType === "like") {
-      throw new Error("عميل Facebook الناتج من Like لا يملك PSID للمراسلة بعد؛ يبدأ الشات عندما يراسل الصفحة");
+  if (socialConversation && !messagingReady) {
+    if (manychatContactId) {
+      return {
+        pageId: conversation.page_id || "",
+        manychatContactId,
+        manychat_contact_id: manychatContactId,
+        commentId: commentId || undefined,
+        comment_id: commentId || undefined,
+        socialActorId: socialActorId || undefined,
+        social_actor_id: socialActorId || undefined,
+      };
     }
-    if (origin === "post_engagement" && engagementType === "comment") {
-      throw new Error("تعليق Facebook مسجل كـ Lead، لكن PSID الخاص بـ Messenger غير متاح بعد؛ يبدأ الشات عند وصول هوية Messenger الحقيقية");
+    if (engagementType === "like") {
+      throw new Error("عميل Facebook الناتج من Like لم يبدأ محادثة Messenger بعد؛ لا يمكن إرسال رسالة حتى تتوفر هوية PSID حقيقية");
     }
-    throw new Error("Facebook PSID غير موجود للمحادثة");
+    if (engagementType === "comment") {
+      throw new Error("عميل Facebook القادم من تعليق لم يصبح جاهزًا للمراسلة بعد؛ يجب ربط PSID الحقيقي من Messenger/ManyChat أولًا");
+    }
+    throw new Error("عميل Facebook الاجتماعي لم يصبح جاهزًا للمراسلة بعد");
   }
+
+  if (!participantId) throw new Error("Facebook PSID غير موجود للمحادثة");
   return {
     convId: conversationId, conversationId, participantId, facebookPsid: participantId,
     pageId: conversation.page_id || "", manychatContactId: manychatContactId || undefined,
@@ -456,6 +511,7 @@ export async function deliverCrmMessage(input: {
   const hydratedConversation = input.conversation?.id ? await loadConversation(input.conversation.id) : null;
   const conversation = hydratedConversation || input.conversation;
   const policy = await resolveDeliveryPolicy(conversation);
+  await normalizeProvisionalFacebookMessagingIdentity(sql, conversation, policy.route);
   const kind: DeliveryKind = input.media ? "media" : input.template ? "template" : "text";
   const metadata = conversationMetadata(conversation);
   const needsInstagramPrivateReply = policy.route === "instagram"

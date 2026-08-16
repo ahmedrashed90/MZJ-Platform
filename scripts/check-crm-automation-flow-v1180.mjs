@@ -17,7 +17,7 @@ const pageModel = read("src/crm/automationModel.ts");
 const admin = read("src/crm/pages/CrmAdminPage.tsx");
 const api = read("api/index.ts");
 const worker = read("facebook-worker/src/index.js");
-const workerCopy = read("workers/MZJ-Facebook-Worker-v2.0.2-FULL.js");
+const workerCopy = read("workers/MZJ-Facebook-Worker-v2.0.3-FULL.js");
 const db = read("server/_db.ts");
 const integrationRoute = read("server/integrations/[source].ts");
 

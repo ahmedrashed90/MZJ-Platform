@@ -1389,7 +1389,9 @@ async function socialEngagementConversation(
   const preview = socialEngagementPreview(item);
   const messagingParticipantId = item.platform === "instagram" ? clean(item.messagingParticipantId) : "";
   const commentId = item.engagementType === "comment" ? clean(item.eventId) : "";
-  const messagingStatus = item.engagementType === "comment" ? "private_reply_available" : "social_only";
+  const messagingStatus = item.engagementType === "comment"
+    ? (item.platform === "instagram" ? "private_reply_available" : "identity_pending")
+    : "social_only";
   const metadata = {
     origin: "post_engagement",
     engagementType: item.engagementType,
@@ -1449,7 +1451,9 @@ async function createCrmLeadFromSocialEngagement(sql: ReturnType<typeof getSql>,
   const source = socialEngagementSource(item);
   const messagingParticipantId = item.platform === "instagram" ? clean(item.messagingParticipantId) : "";
   const commentId = item.engagementType === "comment" ? clean(item.eventId) : "";
-  const messagingStatus = item.engagementType === "comment" ? "private_reply_available" : "social_only";
+  const messagingStatus = item.engagementType === "comment"
+    ? (item.platform === "instagram" ? "private_reply_available" : "identity_pending")
+    : "social_only";
   const { contact } = await ensureContactIdentity({
     channelCode: item.platform,
     externalId: item.actorId,
@@ -1542,18 +1546,16 @@ async function ensureExistingSocialLeadAssignment(
 
 async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql>) {
   await sql.begin(async (tx) => {
-    const [claimed] = await tx<any[]>`
+    await tx<any[]>`
       insert into marketing.data_migrations(migration_key,details)
       values('20260817_social_messaging_identity_v1233',${tx.json({ scope: 'facebook_instagram_post_engagement', purpose: 'separate_social_identity_from_messaging_identity' } as any)})
       on conflict(migration_key) do nothing
-      returning migration_key
     `;
-    if (!claimed) return;
 
     await tx`
       update crm.contact_identities
       set participant_id=null,
-          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when metadata->>'engagementType'='comment' then 'private_reply_available' else 'social_only' end),
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when channel_code='instagram' and metadata->>'engagementType'='comment' then 'private_reply_available' when metadata->>'engagementType'='comment' then 'identity_pending' else 'social_only' end),
           updated_at=now()
       where channel_code='facebook'
         and metadata->>'origin'='post_engagement'
@@ -1564,7 +1566,7 @@ async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql
     await tx`
       update crm.conversations
       set participant_id=null,
-          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when metadata->>'engagementType'='comment' then 'private_reply_available' else 'social_only' end),
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('messagingReady',false,'messagingStatus',case when channel_code='instagram' and metadata->>'engagementType'='comment' then 'private_reply_available' when metadata->>'engagementType'='comment' then 'identity_pending' else 'social_only' end),
           updated_at=now()
       where channel_code='facebook'
         and metadata->>'origin'='post_engagement'
