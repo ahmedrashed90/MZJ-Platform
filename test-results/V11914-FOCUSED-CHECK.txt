@@ -1,0 +1,26 @@
+PASS: release version is 1.19.14
+PASS: CRM navigation is renamed to customer registry
+PASS: customer registry separates cash, finance, and finance differences
+PASS: customer registry sends a first-class customer type
+PASS: CRM history classifies cash and finance from the canonical service fields
+PASS: legacy call-center customers remain in the finance registry
+PASS: cash and finance rows and counts use the same classifier
+PASS: status differences are finance-only
+PASS: completed sales-order tab is removed
+PASS: sales-order title and explanatory block are removed
+PASS: branch dropdown is driven by the canonical API branch list
+PASS: operations API resolves one effective branch
+PASS: effective branch also resolves the vehicle location branch
+PASS: access scope and explicit filter use the same effective branch
+PASS: branch options are sourced from canonical active branches
+PASS: campaign detail exposes create or edit budget action
+PASS: campaign budget uses the professional overview
+PASS: budget editor supports inline Funnel creation
+PASS: budget editor links one item to multiple creatives without multiplying its total
+PASS: campaign budget save uses the canonical marketing API
+PASS: server saves each budget item total exactly once
+PASS: server replaces the campaign budget transactionally without duplicate side storage
+PASS: gateway permission protects campaign budget editing
+PASS: no release-specific migration or patch file was introduced
+PASS: Funnel budget simulation remains 12,000 with four creatives
+Customer registry + operations + budget checks: 25/25 passed
