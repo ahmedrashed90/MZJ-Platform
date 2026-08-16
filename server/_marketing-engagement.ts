@@ -1378,6 +1378,42 @@ function socialEngagementPreview(item: CrmSocialEngagementInput) {
   return item.text ? `تفاعل ${item.text} على منشور` : "إعجاب على منشور";
 }
 
+async function persistSocialEngagementChatMessage(
+  sql: ReturnType<typeof getSql>,
+  conversation: any,
+  post: any,
+  item: CrmSocialEngagementInput,
+) {
+  const providerMessageId = `social-engagement:${item.platform}:${item.eventId}`;
+  const body = socialEngagementPreview(item);
+  const messageType = item.engagementType === "comment" ? "comment" : "reaction";
+  await sql`
+    insert into crm.messages(
+      conversation_id,legacy_id,direction,message_type,body,provider_status,provider_message_id,sender_type,created_at,metadata
+    ) values(
+      ${conversation.id}::uuid,${providerMessageId},'in',${messageType},${body},'received',${providerMessageId},'customer',${item.engagedAt}::timestamptz,
+      ${sql.json({
+        origin: "post_engagement",
+        socialEngagement: true,
+        engagementType: item.engagementType,
+        providerEventId: item.eventId,
+        publishedPostId: post.id,
+        providerPostId: post.provider_post_id,
+        providerMediaId: post.provider_media_id,
+        socialActorId: item.actorId,
+        commentId: item.engagementType === "comment" ? item.eventId : null,
+        messagingReady: false,
+        messagingStatus: item.engagementType === "comment"
+          ? (item.platform === "instagram" ? "private_reply_available" : "identity_pending")
+          : "social_only",
+      } as any)}
+    )
+    on conflict(conversation_id,provider_message_id) where provider_message_id is not null do update set
+      body=excluded.body,message_type=excluded.message_type,provider_status='received',
+      metadata=coalesce(crm.messages.metadata,'{}'::jsonb)||excluded.metadata
+  `;
+}
+
 async function socialEngagementConversation(
   sql: ReturnType<typeof getSql>,
   contactId: string,
@@ -1426,6 +1462,7 @@ async function socialEngagementConversation(
       where id=${existing.id}::uuid
       returning *,id::text,contact_id::text,lead_id::text,service_request_id::text
     `;
+    await persistSocialEngagementChatMessage(sql, conversation, post, item);
     return conversation;
   }
   const [conversation] = await sql<any[]>`
@@ -1444,6 +1481,7 @@ async function socialEngagementConversation(
       metadata=coalesce(crm.conversations.metadata,'{}'::jsonb)||excluded.metadata,updated_at=now()
     returning *,id::text,contact_id::text,lead_id::text,service_request_id::text
   `;
+  await persistSocialEngagementChatMessage(sql, conversation, post, item);
   return conversation;
 }
 
@@ -1586,11 +1624,73 @@ async function repairLegacySocialMessagingIdentity(sql: ReturnType<typeof getSql
       set metadata=coalesce(c.metadata,'{}'::jsonb)||jsonb_build_object(
         'commentId',latest_comment.provider_event_id,
         'socialActorId',latest_comment.actor_id,
-        'messagingStatus',case when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready' else 'private_reply_available' end
+        'messagingStatus',case when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready' when c.channel_code='instagram' then 'private_reply_available' else 'identity_pending' end
       ),updated_at=now()
       from latest_comment
       where c.lead_id=latest_comment.crm_lead_id and c.channel_code in ('facebook','instagram') and c.metadata->>'origin'='post_engagement'
     `;
+
+    const appliedChatVisibility = await tx<any[]>`
+      insert into marketing.data_migrations(migration_key,details)
+      values('20260817_social_engagement_chat_visibility_v1235',${tx.json({ scope: 'facebook_instagram_post_engagement', purpose: 'persist_social_engagement_as_real_crm_chat_messages' } as any)})
+      on conflict(migration_key) do nothing
+      returning migration_key
+    `;
+
+    if (appliedChatVisibility.length) {
+      await tx`
+        insert into crm.messages(
+          conversation_id,legacy_id,direction,message_type,body,provider_status,provider_message_id,sender_type,created_at,metadata
+        )
+        select
+          c.id,
+          'social-engagement:'||pe.platform||':'||pe.provider_event_id,
+          'in',
+          case when pe.engagement_type='comment' then 'comment' else 'reaction' end,
+          case
+            when pe.engagement_type='comment' then coalesce(nullif(pe.event_text,''),'تعليق على منشور')
+            when coalesce(nullif(pe.event_text,''),'')<>'' then 'تفاعل '||pe.event_text||' على منشور'
+            else 'إعجاب على منشور'
+          end,
+          'received',
+          'social-engagement:'||pe.platform||':'||pe.provider_event_id,
+          'customer',
+          coalesce(pe.engaged_at,pe.created_at),
+          jsonb_build_object(
+            'origin','post_engagement',
+            'socialEngagement',true,
+            'engagementType',pe.engagement_type,
+            'providerEventId',pe.provider_event_id,
+            'publishedPostId',pe.published_post_id::text,
+            'providerPostId',pe.provider_post_id,
+            'socialActorId',pe.actor_id,
+            'commentId',case when pe.engagement_type='comment' then pe.provider_event_id else null end,
+            'messagingReady',coalesce(c.metadata->>'messagingReady','false')='true',
+            'messagingStatus',case
+              when coalesce(c.metadata->>'messagingReady','false')='true' then 'ready'
+              when pe.engagement_type<>'comment' then 'social_only'
+              when pe.platform='instagram' then 'private_reply_available'
+              else 'identity_pending'
+            end
+          )
+        from marketing.post_engagements pe
+        join lateral (
+          select c1.*
+          from crm.conversations c1
+          where c1.lead_id=pe.crm_lead_id
+            and c1.channel_code=pe.platform
+            and c1.metadata->>'origin'='post_engagement'
+          order by c1.last_message_at desc nulls last,c1.updated_at desc
+          limit 1
+        ) c on true
+        where pe.crm_lead_id is not null
+          and pe.platform in ('facebook','instagram')
+          and pe.engagement_type in ('comment','like')
+          and pe.processing_status in ('created','reused')
+          and pe.is_deleted=false
+        on conflict(conversation_id,provider_message_id) where provider_message_id is not null do nothing
+      `;
+    }
   });
 }
 

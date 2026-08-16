@@ -14,6 +14,53 @@ function preferredChannelForLead(lead: any) {
   return lead?.phone_normalized || lead?.phone ? "whatsapp" : "";
 }
 
+async function ensureSocialEngagementChatMessageForLead(sql: any, lead: any, conversation: any) {
+  const extra = lead?.extra_data && typeof lead.extra_data === "object" ? lead.extra_data : {};
+  const metadata = conversation?.metadata && typeof conversation.metadata === "object" ? conversation.metadata : {};
+  const socialEngagement = extra.socialEngagement === true || metadata.origin === "post_engagement";
+  const channel = clean(conversation?.channel_code || lead?.platform_code).toLowerCase();
+  if (!socialEngagement || !["facebook", "instagram"].includes(channel) || !conversation?.id) return;
+
+  const engagementType = clean(extra.engagementType || metadata.engagementType).toLowerCase();
+  const eventId = clean(extra.latestEngagementId || metadata.commentId);
+  if (!eventId || !["comment", "like"].includes(engagementType)) return;
+
+  const body = clean(extra.latestEngagementText || conversation.preview_text)
+    || (engagementType === "comment" ? "تعليق على منشور" : "إعجاب على منشور");
+  const providerMessageId = `social-engagement:${channel}:${eventId}`;
+  const occurredAt = conversation.last_customer_message_at || conversation.last_message_at || lead.updated_at || lead.created_at || new Date().toISOString();
+  const inserted = await sql<any[]>`
+    insert into crm.messages(
+      conversation_id,legacy_id,direction,message_type,body,provider_status,provider_message_id,sender_type,created_at,metadata
+    ) values(
+      ${conversation.id}::uuid,${providerMessageId},'in',${engagementType === "comment" ? "comment" : "reaction"},${body},'received',${providerMessageId},'customer',${occurredAt}::timestamptz,
+      ${sql.json({
+        origin: "post_engagement",
+        socialEngagement: true,
+        engagementType,
+        providerEventId: eventId,
+        socialActorId: clean(extra.socialActorId || metadata.socialActorId),
+        commentId: engagementType === "comment" ? clean(extra.commentId || metadata.commentId || eventId) : null,
+        messagingReady: false,
+        messagingStatus: engagementType !== "comment" ? "social_only" : channel === "instagram" ? "private_reply_available" : "identity_pending",
+      })}
+    )
+    on conflict(conversation_id,provider_message_id) where provider_message_id is not null do nothing
+    returning id::text
+  `;
+  if (inserted.length) {
+    await sql`
+      update crm.conversations set
+        preview_text=coalesce(nullif(${body},''),preview_text),
+        unread_count=greatest(unread_count,1),
+        last_message_at=greatest(coalesce(last_message_at,'epoch'),${occurredAt}::timestamptz),
+        last_customer_message_at=greatest(coalesce(last_customer_message_at,'epoch'),${occurredAt}::timestamptz),
+        updated_at=now()
+      where id=${conversation.id}::uuid
+    `;
+  }
+}
+
 async function loadAccessibleLead(sql: any, scope: any, leadId: string) {
   const [lead] = await sql`
     select l.*,l.id::text,l.contact_id::text,l.current_request_id::text,l.assigned_to::text,l.call_center_assigned_to::text,
@@ -62,6 +109,7 @@ async function ensureConversationForLead(sql: any, lead: any) {
       returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
     `;
     if (lead.current_request_id) await sql`update crm.service_requests set conversation_id=${conversation.id}::uuid,lead_id=${lead.id}::uuid,updated_at=now() where id=${lead.current_request_id}::uuid`;
+    await ensureSocialEngagementChatMessageForLead(sql, lead, conversation);
     return conversation;
   }
 
@@ -86,25 +134,36 @@ async function ensureConversationForLead(sql: any, lead: any) {
     const participantId = provisionalSocialIdentity ? "" : clean(identity.participant_id || identity.external_id);
     const externalId = clean(identity.external_id || participantId);
     const pageId = clean(identity.page_id);
-    if (participantId && externalId) {
-      const legacyId = channelCode === "whatsapp" ? externalId : `${channelCode}:${pageId || "default"}:${externalId}`;
+    if (externalId && (participantId || provisionalSocialIdentity)) {
+      const legacyId = provisionalSocialIdentity
+        ? `post-engagement:${channelCode}:${pageId || "default"}:${externalId}`
+        : channelCode === "whatsapp"
+          ? externalId
+          : `${channelCode}:${pageId || "default"}:${externalId}`;
+      const socialPreview = provisionalSocialIdentity
+        ? clean(lead?.extra_data?.latestEngagementText) || (clean(identityMetadata.engagementType) === "comment" ? "تعليق على منشور" : "إعجاب على منشور")
+        : "";
       [conversation] = await sql`
         insert into crm.conversations(
-          legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,status,
-          service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,metadata,last_message_at
+          legacy_id,lead_id,contact_id,service_request_id,channel_code,customer_name,participant_id,status,preview_text,unread_count,
+          service_key,department_code,branch_code,assigned_to,call_center_assigned_to,provider,page_id,classification_state,metadata,last_message_at,last_customer_message_at
         ) values(
-          ${legacyId},${lead.id}::uuid,${lead.contact_id || null}::uuid,${lead.current_request_id || null}::uuid,${channelCode},${lead.customer_name || identity.display_name || "عميل"},${participantId},'open',
-          ${lead.service_key || null},${lead.department_code || null},${lead.branch_code || null},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,
-          ${channelCode},${pageId || null},${lead.current_request_id ? "classified" : "new"},${sql.json({ autoCreatedFromContactIdentity: true, identityId: identity.id, sourceCode: lead.source_code, sourceName: lead.source_name })},null
+          ${legacyId},${lead.id}::uuid,${lead.contact_id || null}::uuid,${lead.current_request_id || null}::uuid,${channelCode},${lead.customer_name || identity.display_name || "عميل"},${participantId || null},'open',
+          ${socialPreview || null},${provisionalSocialIdentity ? 1 : 0},${lead.service_key || null},${lead.department_code || null},${lead.branch_code || null},${lead.assigned_to || null}::uuid,${lead.call_center_assigned_to || null}::uuid,
+          ${channelCode},${pageId || null},${lead.current_request_id ? "classified" : "new"},${sql.json({ ...identityMetadata, autoCreatedFromContactIdentity: true, identityId: identity.id, sourceCode: lead.source_code, sourceName: lead.source_name })},
+          ${provisionalSocialIdentity ? (lead.updated_at || lead.created_at || null) : null}::timestamptz,${provisionalSocialIdentity ? (lead.updated_at || lead.created_at || null) : null}::timestamptz
         )
         on conflict (legacy_id) do update set
           lead_id=excluded.lead_id,contact_id=coalesce(excluded.contact_id,crm.conversations.contact_id),service_request_id=coalesce(excluded.service_request_id,crm.conversations.service_request_id),
-          customer_name=excluded.customer_name,participant_id=coalesce(excluded.participant_id,crm.conversations.participant_id),service_key=coalesce(excluded.service_key,crm.conversations.service_key),
+          customer_name=excluded.customer_name,participant_id=coalesce(excluded.participant_id,crm.conversations.participant_id),preview_text=coalesce(excluded.preview_text,crm.conversations.preview_text),
+          unread_count=greatest(crm.conversations.unread_count,excluded.unread_count),service_key=coalesce(excluded.service_key,crm.conversations.service_key),
           department_code=coalesce(excluded.department_code,crm.conversations.department_code),branch_code=coalesce(excluded.branch_code,crm.conversations.branch_code),
           assigned_to=excluded.assigned_to,call_center_assigned_to=excluded.call_center_assigned_to,page_id=coalesce(excluded.page_id,crm.conversations.page_id),
+          metadata=coalesce(crm.conversations.metadata,'{}'::jsonb)||excluded.metadata,
           classification_state=case when excluded.service_request_id is not null then 'classified' else crm.conversations.classification_state end,updated_at=now()
         returning *,id::text,lead_id::text,contact_id::text,service_request_id::text
       `;
+      await ensureSocialEngagementChatMessageForLead(sql, lead, conversation);
     }
   }
 
@@ -129,6 +188,7 @@ async function ensureConversationForLead(sql: any, lead: any) {
   }
 
   if (conversation && lead.current_request_id) await sql`update crm.service_requests set conversation_id=${conversation.id}::uuid,lead_id=${lead.id}::uuid,updated_at=now() where id=${lead.current_request_id}::uuid`;
+  if (conversation) await ensureSocialEngagementChatMessageForLead(sql, lead, conversation);
   return conversation || null;
 }
 
