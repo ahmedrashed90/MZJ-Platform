@@ -46,7 +46,7 @@ const checks = [
   ["Final upload no longer serializes files as base64", !files.client.includes("readAsDataURL") && !files.client.includes("base64") && !files.marketing.includes("base64")],
   ["Upload progress, speed and ETA are reported", files.client.includes("xhr.upload.onprogress") && files.client.includes("speedBytesPerSecond") && files.client.includes("etaSeconds")],
   ["Upload can be cancelled", files.client.includes("currentRequest?.abort()") && files.client.includes("UploadCancelledError") && files.modal.includes("cancelFinalUpload")],
-  ["Task details contain a visible upload panel", files.modal.includes("marketing-final-upload-dropzone") && files.modal.includes("اسحب الملفات هنا أو اضغط للاختيار") && files.css.includes(".marketing-final-upload-progress")],
+  ["Task details contain visible multi-file upload panels", files.modal.includes("marketing-final-upload-dropzone") && files.modal.includes("اسحب الملفات الأولية هنا أو اضغط للاختيار") && files.modal.includes("اسحب الملفات النهائية هنا أو اضغط للاختيار") && files.css.includes(".marketing-final-upload-progress")],
   ["Multiple images keep their selection order", files.client.includes("file = input.files[upload.orderIndex]") && files.marketing.includes("orderIndex:item.orderIndex")],
   ["Old Zoho Worker staging flow stays removed", oldGatewayTokens.every((token) => !liveSource.includes(token))],
   ["Carousel server records remain ordered", files.marketing.includes("multipleImages") && files.instagram.includes('media_type: "CAROUSEL"') && files.instagram.includes("for (const file of files)")],

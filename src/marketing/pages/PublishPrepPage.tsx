@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowSquareOut, CheckCircle, DownloadSimple, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, Trash, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, Funnel, MagnifyingGlass, PaperPlaneTilt, PencilSimple, SlidersHorizontal, SpinnerGap, Trash, UploadSimple, WarningCircle, X, XCircle, YoutubeLogo } from "@phosphor-icons/react";
 import { Modal } from "../../components/Modal";
 import { createMarketingFinalUploadCancellation, downloadMarketingFile, downloadMarketingFiles, marketingDate, marketingFetch, marketingQuery, uploadMarketingFinalFiles, type MarketingFinalUploadCancellation, type MarketingFinalUploadProgress } from "../api";
 import { MarketingAlert, MarketingPage, ProgressBar } from "../components/MarketingPage";
@@ -628,7 +628,7 @@ export function PublishPrepPage() {
               <small>الملف النهائي</small>
               {finalFiles.length ? <div className="marketing-publish-final-files">
                 <div className="marketing-publish-file-links">{finalFiles.map((file: any, index: number) => <button key={file.id || index} type="button" onClick={() => void openFinalFile(String(file.id))}><ArrowSquareOut size={16} />{finalFiles.length > 1 ? `${index + 1}. ${file.name || "ملف"}` : file.name || "فتح الملف النهائي"}</button>)}</div>
-                <button type="button" className="marketing-publish-download-files" onClick={() => downloadFinalFiles(finalFiles)}><DownloadSimple size={16} />{finalFiles.length > 1 ? "تحميل الملفات" : "تحميل الملف"}</button>
+                <button type="button" className="marketing-publish-download-files" onClick={() => downloadFinalFiles(finalFiles)}><span aria-hidden="true">↓</span>{finalFiles.length > 1 ? "تحميل الملفات" : "تحميل الملف"}</button>
               </div> : <strong>غير مرفوع</strong>}
             </div>
 

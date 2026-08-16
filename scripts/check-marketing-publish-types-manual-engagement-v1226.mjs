@@ -4,7 +4,6 @@ const read = (path) => fs.readFileSync(path, "utf8");
 const publishApi = read("server/marketing/index.ts");
 const engagementApi = read("server/_marketing-engagement.ts");
 const instagramPublisher = read("server/_instagram-publisher.ts");
-const facebookVideoPublisher = read("server/_facebook-video-publisher.ts");
 const publishPage = read("src/marketing/pages/PublishPrepPage.tsx");
 const engagementPage = read("src/marketing/pages/EngagementPage.tsx");
 const resultDetail = read("src/marketing/components/EngagementResultDetail.tsx");
@@ -15,8 +14,8 @@ const checks = [
   ["one canonical post-type normalizer", publishModel.includes("normalizeMarketingPublishFormat") && publishModel.includes('return "story"') && publishModel.includes('return "reel"') && publishModel.includes('return "short"') && publishModel.includes('return "photo_post"')],
   ["saved schedules preserve the selected publish format", publishApi.includes("format:item.publishFormat") && publishApi.includes("normalizeMarketingPublishFormat(postType.name)")],
   ["post type is verified against its selected platform", publishApi.includes("نوع النشر المحدد لا يتبع المنصة المختارة أو غير مفعّل") && publishApi.includes("clean(postType.platform_id)!==item.platformId")],
-  ["Facebook Reel uses the Reel publishing endpoint", facebookVideoPublisher.includes("/${pageId}/${endpoint}") && facebookVideoPublisher.includes('"video_reels"') && facebookVideoPublisher.includes('video_state: "PUBLISHED"') && publishApi.includes("publishFacebookReel(sql,{pageId,token,file,caption})")],
-  ["Facebook Story uses the dedicated Story endpoints", facebookVideoPublisher.includes('"video_stories"') && publishApi.includes("/${pageId}/photo_stories") && publishApi.includes("publishFacebookVideoStory(sql,{pageId,token,file})")],
+  ["Facebook Reel uses the Reel publishing endpoint", publishApi.includes("/${pageId}/video_reels") && publishApi.includes("upload_phase:'start'") && publishApi.includes("video_state:'PUBLISHED'")],
+  ["Facebook Story uses the dedicated Story endpoints", publishApi.includes("/${pageId}/video_stories") && publishApi.includes("/${pageId}/photo_stories")],
   ["Instagram Story is published as STORIES", instagramPublisher.includes('mediaType: "STORIES"') && instagramPublisher.includes('media_type: "STORIES"')],
   ["Instagram Reel is published as REELS", instagramPublisher.includes('mediaType: "REELS"') && instagramPublisher.includes('params.share_to_feed = input.shareToFeed !== false')],
   ["Instagram multi-image post is published as CAROUSEL", instagramPublisher.includes('media_type: "CAROUSEL"') && instagramPublisher.includes("is_carousel_item: true")],
