@@ -330,11 +330,6 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown) {
   }
 
   const sql = getSql();
-  const [existingOwner] = await sql<any[]>`
-    select id::text from owners.members where phone_normalized=${phone} and status='active' limit 1
-  `;
-  if (existingOwner) return { ok: false as const, status: 409, error: "هذا العميل سبق له الشراء ولا يستحق مكافأة عميل جديد" };
-
   const [existingBenefit] = await sql<any[]>`
     select id::text,website_order_id
     from owners.referral_purchase_benefits
@@ -345,16 +340,9 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown) {
     return { ok: false as const, status: 409, error: "سبق لهذا العميل الاستفادة من مكافأة كود الدعوة" };
   }
 
-  const [linkedReferral] = await sql<any[]>`
-    select id::text,referrer_member_id::text,status,crm_lead_id::text
-    from owners.referrals
-    where referred_phone_normalized=${phone}
-    limit 1
+  const [existingOwner] = await sql<any[]>`
+    select id::text from owners.members where phone_normalized=${phone} and status='active' limit 1
   `;
-  if (linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
-    return { ok: false as const, status: 409, error: "هذا العميل مرتبط بكود دعوة آخر بالفعل" };
-  }
-
   const [lead] = await sql<any[]>`
     select id::text
     from crm.leads
@@ -362,41 +350,72 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown) {
     order by created_at
     limit 1
   `;
+  let priorSale: any = null;
   if (lead) {
-    const [priorSale] = await sql<any[]>`
+    [priorSale] = await sql<any[]>`
       select id::text
       from crm.sales_transactions
       where lead_id=${lead.id}::uuid and coalesce(is_cancelled,false)=false
       limit 1
     `;
-    if (priorSale) return { ok: false as const, status: 409, error: "هذا العميل سبق له الشراء ولا يستحق مكافأة عميل جديد" };
+  }
+  const customerKind = existingOwner || priorSale ? "existing" as const : "new" as const;
+
+  const [linkedReferral] = await sql<any[]>`
+    select id::text,referrer_member_id::text,status,crm_lead_id::text
+    from owners.referrals
+    where referred_phone_normalized=${phone}
+    limit 1
+  `;
+  if (customerKind === "new" && linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
+    return { ok: false as const, status: 409, error: "هذا العميل مرتبط بكود دعوة آخر بالفعل" };
   }
 
-  return { ok: true as const, referrer, phone, linkedReferral: linkedReferral || null, lead: lead || null };
+  return {
+    ok: true as const,
+    referrer,
+    phone,
+    customerKind,
+    existingOwner: existingOwner || null,
+    linkedReferral: linkedReferral || null,
+    lead: lead || null,
+  };
 }
 
 function commerceRewardPayload(reward: any) {
+  const discountType = reward.reward_type === "discount" && reward.checkout_discount_type === "percentage" ? "percentage" : "amount";
+  const discountValue = reward.reward_type === "discount" ? Number(reward.checkout_discount_value || reward.checkout_discount_amount || 0) : 0;
   return {
     id: reward.id,
     name: reward.name,
     description: reward.description || "",
     type: reward.reward_type,
     value: reward.reward_value || "",
-    discountAmount: Number(reward.checkout_discount_amount || 0),
+    discountType,
+    discountValue,
+    discountAmount: discountType === "amount" ? discountValue : 0,
+    discountPercent: discountType === "percentage" ? discountValue : 0,
+    availableForNewCustomer: reward.available_for_referral_purchase === true,
+    availableForExistingCustomer: reward.available_for_existing_customer_purchase === true,
     startsAt: reward.starts_at || null,
     endsAt: reward.ends_at || null,
   };
 }
 
-async function getCommerceRewards(rewardId?: string) {
+async function getCommerceRewards(customerKind: "new" | "existing", rewardId?: string) {
   const sql = getSql();
   const rows = await sql<any[]>`
     select
-      id::text,name,description,reward_type,reward_value,checkout_discount_amount,
+      id::text,name,description,reward_type,reward_value,
+      available_for_referral_purchase,available_for_existing_customer_purchase,
+      checkout_discount_type,checkout_discount_value,checkout_discount_amount,
       stock_quantity,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
     from owners.rewards
     where is_active=true
-      and available_for_referral_purchase=true
+      and (
+        (${customerKind}='existing' and available_for_existing_customer_purchase=true)
+        or (${customerKind}='new' and (available_for_referral_purchase=true or available_for_existing_customer_purchase=true))
+      )
       and (starts_at is null or starts_at<=now())
       and (ends_at is null or ends_at>=now())
       and (stock_quantity is null or (redeemed_quantity+referral_purchase_redeemed_quantity)<stock_quantity)
@@ -412,12 +431,13 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
   const eligibility = await commerceEligibility(payload.code, payload.phone);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
 
-  const rewards = await getCommerceRewards();
+  const rewards = await getCommerceRewards(eligibility.customerKind);
   return response.status(200).json({
     ok: true,
     eligible: true,
     referralCode: eligibility.referrer.referral_code,
     referrerName: eligibility.referrer.customer_name || "عميل MZJ",
+    customerKind: eligibility.customerKind,
     rewards: rewards.map(commerceRewardPayload),
   });
 }
@@ -439,8 +459,9 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
   const sql = getSql();
   const [existingOrderBenefit] = await sql<any[]>`
     select
-      b.id::text,b.referral_id::text,b.reward_id::text,b.reward_name,b.reward_type,b.reward_value,
-      b.checkout_discount_amount,b.website_order_id,b.next_erp_sales_order,b.referred_phone_normalized
+      b.id::text,b.referral_id::text,b.reward_id::text,b.reward_name,b.reward_type,b.reward_value,b.customer_kind,
+      b.checkout_discount_type,b.checkout_discount_value,b.checkout_discount_amount,
+      b.website_order_id,b.next_erp_sales_order,b.referred_phone_normalized
     from owners.referral_purchase_benefits b
     where b.website_order_id=${websiteOrderId}
     limit 1
@@ -461,55 +482,68 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
       referralId: existingOrderBenefit.referral_id,
       benefitId: existingOrderBenefit.id,
       nextErpSalesOrder: nextErpSalesOrder || existingOrderBenefit.next_erp_sales_order || null,
+      customerKind: existingOrderBenefit.customer_kind || "new",
       reward: {
         id: existingOrderBenefit.reward_id,
         name: existingOrderBenefit.reward_name,
         type: existingOrderBenefit.reward_type,
         value: existingOrderBenefit.reward_value || "",
-        discountAmount: Number(existingOrderBenefit.checkout_discount_amount || 0),
+        discountType: existingOrderBenefit.checkout_discount_type === "percentage" ? "percentage" : "amount",
+        discountValue: Number(existingOrderBenefit.checkout_discount_value || existingOrderBenefit.checkout_discount_amount || 0),
+        discountAmount: existingOrderBenefit.checkout_discount_type === "percentage" ? 0 : Number(existingOrderBenefit.checkout_discount_value || existingOrderBenefit.checkout_discount_amount || 0),
+        discountPercent: existingOrderBenefit.checkout_discount_type === "percentage" ? Number(existingOrderBenefit.checkout_discount_value || 0) : 0,
       },
     });
   }
 
   const eligibility = await commerceEligibility(payload.code, phone);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
-  const rewards = await getCommerceRewards(rewardId);
+  const rewards = await getCommerceRewards(eligibility.customerKind, rewardId);
   const reward = rewards[0];
   if (!reward) return response.status(409).json({ ok: false, error: "المكافأة المختارة لم تعد متاحة" });
 
   const rewardSnapshot = commerceRewardPayload(reward);
-  const referralMetadata = {
-    source: "website_purchase",
-    websiteOrderId,
-    selectedReward: rewardSnapshot,
-  };
-  const leadMetadata = {
-    ownerReferralRewardId: rewardSnapshot.id,
-    ownerReferralRewardName: rewardSnapshot.name,
-    ownerReferralRewardType: rewardSnapshot.type,
-    ownerReferralRewardValue: rewardSnapshot.value,
-    ownerReferralDiscountAmount: rewardSnapshot.discountAmount,
-    ownerReferralWebsiteOrderId: websiteOrderId,
-  };
-
-  const registration = await registerReferralCore(
-    { code: payload.code, name: customerName, phone },
-    {
+  let referralId: string | null = null;
+  const referrerId = eligibility.referrer.id as string;
+  if (eligibility.customerKind === "new") {
+    const referralMetadata = {
       source: "website_purchase",
-      note: "تم التسجيل من كود دعوة أثناء طلب شراء سيارة من الموقع",
-      extraReferralMetadata: referralMetadata,
-      extraLeadMetadata: leadMetadata,
-      successMessage: "تم ربط كود الدعوة والمكافأة بطلب الشراء",
-    },
-  );
-  if (registration.status !== 200 || !registration.referralId || !registration.referrerId) {
-    return response.status(registration.status).json(registration.body);
+      websiteOrderId,
+      selectedReward: rewardSnapshot,
+    };
+    const leadMetadata = {
+      ownerReferralRewardId: rewardSnapshot.id,
+      ownerReferralRewardName: rewardSnapshot.name,
+      ownerReferralRewardType: rewardSnapshot.type,
+      ownerReferralRewardValue: rewardSnapshot.value,
+      ownerReferralDiscountType: rewardSnapshot.discountType,
+      ownerReferralDiscountValue: rewardSnapshot.discountValue,
+      ownerReferralDiscountAmount: rewardSnapshot.discountAmount,
+      ownerReferralDiscountPercent: rewardSnapshot.discountPercent,
+      ownerReferralWebsiteOrderId: websiteOrderId,
+    };
+
+    const registration = await registerReferralCore(
+      { code: payload.code, name: customerName, phone },
+      {
+        source: "website_purchase",
+        note: "تم التسجيل من كود دعوة أثناء طلب شراء سيارة من الموقع",
+        extraReferralMetadata: referralMetadata,
+        extraLeadMetadata: leadMetadata,
+        successMessage: "تم ربط كود الدعوة والمكافأة بطلب الشراء",
+      },
+    );
+    if (registration.status !== 200 || !registration.referralId || !registration.referrerId) {
+      return response.status(registration.status).json(registration.body);
+    }
+    referralId = registration.referralId;
   }
 
   try {
     const benefit = await sql.begin(async (tx) => {
       const [lockedReward] = await tx<any[]>`
-        select id::text,stock_quantity,redeemed_quantity,referral_purchase_redeemed_quantity,is_active,starts_at,ends_at,available_for_referral_purchase
+        select id::text,stock_quantity,redeemed_quantity,referral_purchase_redeemed_quantity,is_active,starts_at,ends_at,
+          available_for_referral_purchase,available_for_existing_customer_purchase
         from owners.rewards
         where id=${rewardId}::uuid
         for update
@@ -517,21 +551,24 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
       const now = Date.now();
       const available = lockedReward
         && lockedReward.is_active === true
-        && lockedReward.available_for_referral_purchase === true
+        && (eligibility.customerKind === "existing"
+          ? lockedReward.available_for_existing_customer_purchase === true
+          : (lockedReward.available_for_referral_purchase === true || lockedReward.available_for_existing_customer_purchase === true))
         && (!lockedReward.starts_at || new Date(lockedReward.starts_at).getTime() <= now)
         && (!lockedReward.ends_at || new Date(lockedReward.ends_at).getTime() >= now)
         && (lockedReward.stock_quantity == null
           || Number(lockedReward.redeemed_quantity || 0) + Number(lockedReward.referral_purchase_redeemed_quantity || 0) < Number(lockedReward.stock_quantity));
       if (!available) throw new Error("REWARD_NOT_AVAILABLE");
 
-      const metadata = { source: "website_purchase", referralCode: eligibility.referrer.referral_code } as OwnerJson;
+      const metadata = { source: "website_purchase", referralCode: eligibility.referrer.referral_code, customerKind: eligibility.customerKind } as OwnerJson;
       const [inserted] = await tx<any[]>`
         insert into owners.referral_purchase_benefits(
-          referral_id,referrer_member_id,referred_phone_normalized,reward_id,reward_name,reward_type,reward_value,
-          checkout_discount_amount,website_order_id,next_erp_sales_order,metadata
+          referral_id,referrer_member_id,referred_phone_normalized,customer_kind,reward_id,reward_name,reward_type,reward_value,
+          checkout_discount_type,checkout_discount_value,checkout_discount_amount,website_order_id,next_erp_sales_order,metadata
         ) values(
-          ${registration.referralId}::uuid,${registration.referrerId}::uuid,${phone},${rewardSnapshot.id}::uuid,
-          ${rewardSnapshot.name},${rewardSnapshot.type},${rewardSnapshot.value || null},${rewardSnapshot.discountAmount},
+          ${referralId}::uuid,${referrerId}::uuid,${phone},${eligibility.customerKind},${rewardSnapshot.id}::uuid,
+          ${rewardSnapshot.name},${rewardSnapshot.type},${rewardSnapshot.value || null},
+          ${rewardSnapshot.discountType},${rewardSnapshot.discountValue},${rewardSnapshot.discountAmount},
           ${websiteOrderId},${nextErpSalesOrder},${tx.json(metadata)}
         )
         returning id::text
@@ -542,20 +579,23 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
           updated_at=now()
         where id=${rewardSnapshot.id}::uuid
       `;
-      await tx`
-        update owners.referrals set
-          metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({ websitePurchaseBenefitId: inserted.id, websiteOrderId, selectedReward: rewardSnapshot } as OwnerJson)}::jsonb,
-          updated_at=now()
-        where id=${registration.referralId}::uuid
-      `;
+      if (referralId) {
+        await tx`
+          update owners.referrals set
+            metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({ websitePurchaseBenefitId: inserted.id, websiteOrderId, selectedReward: rewardSnapshot } as OwnerJson)}::jsonb,
+            updated_at=now()
+          where id=${referralId}::uuid
+        `;
+      }
       return inserted;
     });
 
     return response.status(200).json({
       ok: true,
-      referralId: registration.referralId,
+      referralId,
       benefitId: benefit.id,
       referralCode: eligibility.referrer.referral_code,
+      customerKind: eligibility.customerKind,
       reward: rewardSnapshot,
     });
   } catch (error) {

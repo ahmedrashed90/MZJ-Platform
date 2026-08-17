@@ -42,7 +42,9 @@ type RewardDraft = {
   rewardValue: string;
   showOnMemberCard: boolean;
   availableForReferralPurchase: boolean;
-  checkoutDiscountAmount: string;
+  availableForExistingCustomerPurchase: boolean;
+  checkoutDiscountType: "amount" | "percentage";
+  checkoutDiscountValue: string;
   pointsCost: number;
   stockQuantity: string;
   startsAt: string;
@@ -58,7 +60,9 @@ const emptyReward: RewardDraft = {
   rewardValue: "",
   showOnMemberCard: false,
   availableForReferralPurchase: false,
-  checkoutDiscountAmount: "",
+  availableForExistingCustomerPurchase: false,
+  checkoutDiscountType: "amount",
+  checkoutDiscountValue: "",
   pointsCost: 500,
   stockQuantity: "",
   startsAt: "",
@@ -170,6 +174,12 @@ export function OwnersCommunityPage() {
     if (saved) setReward(emptyReward);
   }
 
+  async function deleteReward(item: any) {
+    if (!window.confirm(`هل تريد حذف المكافأة «${item.name || ""}»؟`)) return;
+    const deleted = await act({ action: "delete_reward", id: item.id }, "تم حذف المكافأة");
+    if (deleted && reward.id === item.id) setReward(emptyReward);
+  }
+
   async function createTestMember() {
     const ok = await act({ action: "create_test_member", ...testMember }, "تمت إضافة العضو التجريبي");
     if (ok) setTestMember({ name: "", phone: "" });
@@ -231,7 +241,9 @@ export function OwnersCommunityPage() {
       rewardValue: item.reward_value || "",
       showOnMemberCard: item.show_on_member_card === true,
       availableForReferralPurchase: item.available_for_referral_purchase === true,
-      checkoutDiscountAmount: Number(item.checkout_discount_amount || 0) > 0 ? String(item.checkout_discount_amount) : "",
+      availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true,
+      checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount",
+      checkoutDiscountValue: Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? String(item.checkout_discount_value || item.checkout_discount_amount) : "",
       pointsCost: Number(item.points_cost || 1),
       stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity),
       startsAt: toLocalDateTime(item.starts_at),
@@ -410,10 +422,10 @@ export function OwnersCommunityPage() {
                     <p>{item.description || "تفاصيل المكافأة تظهر للعميل هنا"}</p>
                     <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
                     <small>{item.stock_quantity == null ? "كمية مفتوحة" : `المتبقي ${Math.max(0, Number(item.stock_quantity) - Number(item.redeemed_quantity || 0) - Number(item.referral_purchase_redeemed_quantity || 0))}`}</small>
-                    <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · متاحة بكود الدعوة" : ""}</small>
-                    {item.available_for_referral_purchase ? <small>استخدامات كود الدعوة: {Number(item.referral_purchase_redeemed_quantity || 0).toLocaleString("ar-SA-u-nu-latn")}</small> : null}
-                    {item.available_for_referral_purchase && item.reward_type === "discount" && Number(item.checkout_discount_amount || 0) > 0 ? <small>خصم طلب الموقع: {Number(item.checkout_discount_amount).toLocaleString("ar-SA-u-nu-latn")} ر.س</small> : null}
-                    {canManage ? <button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button> : null}
+                    <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}</small>
+                    {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase) ? <small>استخدامات كود الدعوة: {Number(item.referral_purchase_redeemed_quantity || 0).toLocaleString("ar-SA-u-nu-latn")}</small> : null}
+                    {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase) && item.reward_type === "discount" && Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? <small>خصم طلب الموقع: {item.checkout_discount_type === "percentage" ? `${Number(item.checkout_discount_value || 0).toLocaleString("ar-SA-u-nu-latn")}%` : `${Number(item.checkout_discount_value || item.checkout_discount_amount || 0).toLocaleString("ar-SA-u-nu-latn")} ر.س`}</small> : null}
+                    {canManage ? <div className="owners-actions"><button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button><button className="owners-link-btn danger" disabled={busy} onClick={() => void deleteReward(item)}><Trash size={16} /> حذف</button></div> : null}
                   </article>
                 ))}
               </div>
@@ -424,7 +436,7 @@ export function OwnersCommunityPage() {
                 <header><h2>{reward.id ? "تعديل المكافأة" : "إضافة مكافأة جديدة"}</h2>{reward.id ? <button className="owners-link-btn" onClick={() => setReward(emptyReward)}>إلغاء التعديل</button> : null}</header>
                 <div className="owners-form-grid">
                   <label><span>اسم المكافأة</span><input value={reward.name} onChange={(event) => setReward({ ...reward, name: event.target.value })} placeholder="اسم واضح يظهر للعميل" /></label>
-                  <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => { const rewardType = event.target.value as RewardDraft["rewardType"]; setReward({ ...reward, rewardType, rewardValue: "", checkoutDiscountAmount: rewardType === "discount" ? reward.checkoutDiscountAmount : "" }); }}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
+                  <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => { const rewardType = event.target.value as RewardDraft["rewardType"]; setReward({ ...reward, rewardType, rewardValue: "", checkoutDiscountValue: rewardType === "discount" ? reward.checkoutDiscountValue : "" }); }}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
                   <label><span>{rewardValueLabel(reward.rewardType)}</span><input value={reward.rewardValue} onChange={(event) => setReward({ ...reward, rewardValue: event.target.value })} placeholder={rewardValuePlaceholder(reward.rewardType)} /></label>
                   <label><span>النقاط المطلوبة</span><input type="number" min="1" value={reward.pointsCost} onChange={(event) => setReward({ ...reward, pointsCost: Number(event.target.value) })} /></label>
                   <label><span>الكمية المتاحة</span><input type="number" min="0" placeholder="اتركها فارغة لكمية مفتوحة" value={reward.stockQuantity} onChange={(event) => setReward({ ...reward, stockQuantity: event.target.value })} /></label>
@@ -432,8 +444,10 @@ export function OwnersCommunityPage() {
                   <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
                   <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
                   <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberCard} onChange={(event) => setReward({ ...reward, showOnMemberCard: event.target.checked })} /><span>إظهار المكافأة على ظهر بطاقة العضوية</span></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForReferralPurchase} onChange={(event) => setReward({ ...reward, availableForReferralPurchase: event.target.checked, checkoutDiscountAmount: event.target.checked ? reward.checkoutDiscountAmount : "" })} /><span>متاحة للعميل الجديد عند استخدام كود الدعوة في طلب الشراء</span></label>
-                  {reward.availableForReferralPurchase && reward.rewardType === "discount" ? <label><span>قيمة الخصم في طلب الموقع (ريال)</span><input type="number" min="0.01" step="0.01" value={reward.checkoutDiscountAmount} onChange={(event) => setReward({ ...reward, checkoutDiscountAmount: event.target.value })} placeholder="مثال: 1000" /></label> : null}
+                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForReferralPurchase} onChange={(event) => setReward({ ...reward, availableForReferralPurchase: event.target.checked })} /><span>متاحة للعميل الجديد عند استخدام كود الدعوة في طلب الشراء</span></label>
+                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForExistingCustomerPurchase} onChange={(event) => setReward({ ...reward, availableForExistingCustomerPurchase: event.target.checked })} /><span>متاحة للعميل القديم عند استخدام كود الدعوة في طلب الشراء</span></label>
+                  {(reward.availableForReferralPurchase || reward.availableForExistingCustomerPurchase) && reward.rewardType === "discount" ? <label><span>طريقة الخصم في طلب الموقع</span><select value={reward.checkoutDiscountType} onChange={(event) => setReward({ ...reward, checkoutDiscountType: event.target.value === "percentage" ? "percentage" : "amount" })}><option value="amount">قيمة خصم</option><option value="percentage">نسبة خصم</option></select></label> : null}
+                  {(reward.availableForReferralPurchase || reward.availableForExistingCustomerPurchase) && reward.rewardType === "discount" ? <label><span>{reward.checkoutDiscountType === "percentage" ? "نسبة الخصم في طلب الموقع (%)" : "قيمة الخصم في طلب الموقع (ريال)"}</span><input type="number" min="0.01" max={reward.checkoutDiscountType === "percentage" ? "100" : undefined} step="0.01" value={reward.checkoutDiscountValue} onChange={(event) => setReward({ ...reward, checkoutDiscountValue: event.target.value })} placeholder={reward.checkoutDiscountType === "percentage" ? "مثال: 10" : "مثال: 1000"} /></label> : null}
                   <label className="wide"><span>الوصف</span><textarea value={reward.description} onChange={(event) => setReward({ ...reward, description: event.target.value })} placeholder="اكتب الشروط أو التفاصيل التي يحتاج العميل معرفتها قبل الاستبدال أو الاختيار بكود الدعوة" /></label>
                 </div>
                 <button className="owners-primary" disabled={busy || !reward.name.trim() || !reward.rewardValue.trim()} onClick={() => void saveReward()}><Gift size={18} />{reward.id ? "حفظ التعديل" : "إضافة المكافأة"}</button>
@@ -446,7 +460,7 @@ export function OwnersCommunityPage() {
                 {rewards.length ? rewards.map((item: any) => (
                   <article key={item.id}>
                     <div><strong>{item.name}</strong><span>{rewardTypeLabel(item.reward_type)}{item.reward_value ? ` · ${item.reward_value}` : ""}</span></div>
-                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, availableForReferralPurchase: item.available_for_referral_purchase === true, checkoutDiscountAmount: item.checkout_discount_amount || "", pointsCost: item.points_cost, stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity), startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
+                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, availableForReferralPurchase: item.available_for_referral_purchase === true, availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true, checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount", checkoutDiscountValue: item.checkout_discount_value || item.checkout_discount_amount || "", pointsCost: item.points_cost, stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity), startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
                   </article>
                 )) : <p>أضف مكافآت أولًا ثم اختر ما يظهر منها على بطاقة العضوية.</p>}
               </div>

@@ -99,6 +99,9 @@ create table if not exists owners.rewards (
   reward_value text,
   show_on_member_card boolean not null default false,
   available_for_referral_purchase boolean not null default false,
+  available_for_existing_customer_purchase boolean not null default false,
+  checkout_discount_type text not null default 'amount' check(checkout_discount_type in ('amount','percentage')),
+  checkout_discount_value numeric(12,2) not null default 0 check(checkout_discount_value >= 0),
   checkout_discount_amount numeric(12,2) not null default 0 check(checkout_discount_amount >= 0),
   points_cost integer not null check(points_cost > 0),
   stock_quantity integer,
@@ -116,18 +119,27 @@ alter table owners.rewards add column if not exists reward_type text not null de
 alter table owners.rewards add column if not exists reward_value text;
 alter table owners.rewards add column if not exists show_on_member_card boolean not null default false;
 alter table owners.rewards add column if not exists available_for_referral_purchase boolean not null default false;
+alter table owners.rewards add column if not exists available_for_existing_customer_purchase boolean not null default false;
+alter table owners.rewards add column if not exists checkout_discount_type text not null default 'amount';
+alter table owners.rewards add column if not exists checkout_discount_value numeric(12,2) not null default 0;
 alter table owners.rewards add column if not exists checkout_discount_amount numeric(12,2) not null default 0;
 alter table owners.rewards add column if not exists referral_purchase_redeemed_quantity integer not null default 0;
+update owners.rewards
+set checkout_discount_value=checkout_discount_amount
+where checkout_discount_value=0 and checkout_discount_amount>0;
 
 create table if not exists owners.referral_purchase_benefits (
   id uuid primary key default gen_random_uuid(),
-  referral_id uuid not null references owners.referrals(id) on delete cascade,
+  referral_id uuid references owners.referrals(id) on delete cascade,
   referrer_member_id uuid not null references owners.members(id) on delete cascade,
   referred_phone_normalized text not null,
+  customer_kind text not null default 'new' check(customer_kind in ('new','existing')),
   reward_id uuid not null references owners.rewards(id),
   reward_name text not null,
   reward_type text not null,
   reward_value text,
+  checkout_discount_type text not null default 'amount' check(checkout_discount_type in ('amount','percentage')),
+  checkout_discount_value numeric(12,2) not null default 0 check(checkout_discount_value >= 0),
   checkout_discount_amount numeric(12,2) not null default 0,
   website_order_id text not null,
   next_erp_sales_order text,
@@ -139,6 +151,13 @@ create table if not exists owners.referral_purchase_benefits (
 );
 create index if not exists owners_referral_purchase_benefits_referrer_idx
   on owners.referral_purchase_benefits(referrer_member_id,created_at desc);
+alter table owners.referral_purchase_benefits alter column referral_id drop not null;
+alter table owners.referral_purchase_benefits add column if not exists customer_kind text not null default 'new';
+alter table owners.referral_purchase_benefits add column if not exists checkout_discount_type text not null default 'amount';
+alter table owners.referral_purchase_benefits add column if not exists checkout_discount_value numeric(12,2) not null default 0;
+update owners.referral_purchase_benefits
+set checkout_discount_value=checkout_discount_amount
+where checkout_discount_value=0 and checkout_discount_amount>0;
 create index if not exists owners_referral_purchase_benefits_reward_idx
   on owners.referral_purchase_benefits(reward_id,created_at desc);
 
@@ -216,7 +235,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1207,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1209,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -237,14 +256,20 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='reward_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_referral_purchase')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_existing_customer_purchase')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_type')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_amount')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='referral_purchase_redeemed_quantity')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='referral_purchase_benefits')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='customer_kind')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_type')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_value')
       as ready
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1207;
+  return Number(state?.version || 0) >= 1209;
 }
 
 export function ensureOwnersSchema() {
