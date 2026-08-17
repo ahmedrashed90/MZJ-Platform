@@ -425,6 +425,93 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({ ok: true });
   }
 
+  if (action === "reward_usage") {
+    const id = clean(payload.id);
+    if (!id) return response.status(400).json({ ok: false, error: "المكافأة غير محددة" });
+
+    const [reward] = await sql<any[]>`
+      select id::text,name,reward_type,reward_value,redeemed_quantity,referral_purchase_redeemed_quantity
+      from owners.rewards
+      where id=${id}::uuid
+      limit 1
+    `;
+    if (!reward) return response.status(404).json({ ok: false, error: "المكافأة غير موجودة" });
+
+    const [purchaseUsages, redemptionUsages] = await Promise.all([
+      sql<any[]>`
+        select
+          b.id::text,
+          'website_purchase'::text as usage_type,
+          coalesce(nullif(rf.referred_name,''),nullif(l.customer_name,''),nullif(om.customer_name,''),'عميل') as customer_name,
+          b.referred_phone_normalized as phone,
+          b.customer_kind,
+          b.website_order_id,
+          b.next_erp_sales_order,
+          b.created_at,
+          coalesce(nullif(b.metadata->>'referralCode',''),nullif(om.referral_code,''),nullif(lc.referral_code,''),'') as referral_code,
+          case when b.referrer_kind='member' then om.customer_name else lc.customer_name end as code_owner_name,
+          b.referrer_kind,
+          null::text as redemption_status,
+          null::integer as points_cost
+        from owners.referral_purchase_benefits b
+        left join owners.referrals rf on rf.id=b.referral_id
+        left join owners.members om on om.id=b.referrer_member_id
+        left join owners.legacy_customer_codes lc on lc.id=b.legacy_customer_code_id
+        left join lateral (
+          select lead.customer_name
+          from crm.leads lead
+          where lead.is_deleted=false and lead.phone_normalized=b.referred_phone_normalized
+          order by lead.updated_at desc,lead.created_at desc
+          limit 1
+        ) l on true
+        where b.reward_id=${id}::uuid
+        order by b.created_at desc
+        limit 1000
+      `,
+      sql<any[]>`
+        select
+          rd.id::text,
+          'member_redemption'::text as usage_type,
+          m.customer_name,
+          m.phone_normalized as phone,
+          'member'::text as customer_kind,
+          null::text as website_order_id,
+          null::text as next_erp_sales_order,
+          rd.created_at,
+          m.referral_code,
+          m.customer_name as code_owner_name,
+          'member'::text as referrer_kind,
+          rd.status as redemption_status,
+          rd.points_cost
+        from owners.redemptions rd
+        join owners.members m on m.id=rd.member_id
+        where rd.reward_id=${id}::uuid
+          and rd.status in ('requested','approved','delivered')
+        order by rd.created_at desc
+        limit 1000
+      `,
+    ]);
+
+    const usages = [...purchaseUsages, ...redemptionUsages]
+      .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    return response.status(200).json({
+      ok: true,
+      reward: {
+        id: reward.id,
+        name: reward.name,
+        type: reward.reward_type,
+        value: reward.reward_value || "",
+      },
+      counts: {
+        total: usages.length,
+        websitePurchases: purchaseUsages.length,
+        memberRedemptions: redemptionUsages.length,
+      },
+      usages,
+    });
+  }
+
   if (action === "delete_reward") {
     const id = clean(payload.id);
     if (!id) return response.status(400).json({ ok: false, error: "المكافأة غير محددة" });

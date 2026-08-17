@@ -12,6 +12,7 @@ import {
   UserPlus,
   UsersThree,
   Wallet,
+  X,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
@@ -144,6 +145,8 @@ export function OwnersCommunityPage() {
   const [importFileName, setImportFileName] = useState("");
   const [mapping, setMapping] = useState<ImportMapping>(emptyMapping);
   const [importSummary, setImportSummary] = useState<any>(null);
+  const [rewardUsage, setRewardUsage] = useState<any>(null);
+  const [usageBusy, setUsageBusy] = useState(false);
 
   async function load() {
     setData(await ownersAdminGet());
@@ -178,6 +181,19 @@ export function OwnersCommunityPage() {
     if (!window.confirm(`هل تريد حذف المكافأة «${item.name || ""}»؟`)) return;
     const deleted = await act({ action: "delete_reward", id: item.id }, "تم حذف المكافأة");
     if (deleted && reward.id === item.id) setReward(emptyReward);
+  }
+
+  async function openRewardUsage(item: any) {
+    setUsageBusy(true);
+    setMessage("");
+    try {
+      const usage = await ownersAdminPost({ action: "reward_usage", id: item.id });
+      setRewardUsage(usage);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setUsageBusy(false);
+    }
   }
 
   async function createTestMember() {
@@ -454,7 +470,8 @@ export function OwnersCommunityPage() {
                     <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
                     <small>{item.stock_quantity == null ? "كمية مفتوحة" : `المتبقي ${Math.max(0, Number(item.stock_quantity) - Number(item.redeemed_quantity || 0) - Number(item.referral_purchase_redeemed_quantity || 0))}`}</small>
                     <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}</small>
-                    {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase) ? <small>استخدامات كود الدعوة: {Number(item.referral_purchase_redeemed_quantity || 0).toLocaleString("ar-SA-u-nu-latn")}</small> : null}
+                    <small>استخدامات المكافأة: {(Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)).toLocaleString("ar-SA-u-nu-latn")}</small>
+                    {canManage ? <button className="owners-reward-usage-btn" disabled={usageBusy || (Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)) === 0} onClick={() => void openRewardUsage(item)}><UsersThree size={15} /> عرض من استخدم المكافأة</button> : null}
                     {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase) && item.reward_type === "discount" && Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? <small>خصم طلب الموقع: {item.checkout_discount_type === "percentage" ? `${Number(item.checkout_discount_value || 0).toLocaleString("ar-SA-u-nu-latn")}%` : `${Number(item.checkout_discount_value || item.checkout_discount_amount || 0).toLocaleString("ar-SA-u-nu-latn")} ر.س`}</small> : null}
                     {canManage ? <div className="owners-actions"><button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button><button className="owners-link-btn danger" disabled={busy} onClick={() => void deleteReward(item)}><Trash size={16} /> حذف</button></div> : null}
                   </article>
@@ -530,6 +547,45 @@ export function OwnersCommunityPage() {
             </table>
           </div>
         </section>
+      ) : null}
+
+      {rewardUsage ? (
+        <div className="owners-reward-usage-backdrop" role="presentation" onClick={() => setRewardUsage(null)}>
+          <section className="owners-reward-usage-dialog" role="dialog" aria-modal="true" aria-label={`استخدامات ${rewardUsage.reward?.name || "المكافأة"}`} onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <h2>استخدامات المكافأة</h2>
+                <p>{rewardUsage.reward?.name || "—"}</p>
+              </div>
+              <button type="button" className="owners-reward-usage-close" onClick={() => setRewardUsage(null)} aria-label="إغلاق"><X size={20} /></button>
+            </header>
+            <div className="owners-reward-usage-stats">
+              <span>الإجمالي <strong>{Number(rewardUsage.counts?.total || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></span>
+              <span>طلبات الموقع <strong>{Number(rewardUsage.counts?.websitePurchases || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></span>
+              <span>استبدال النقاط <strong>{Number(rewardUsage.counts?.memberRedemptions || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></span>
+            </div>
+            <div className="owners-table-wrap owners-reward-usage-table">
+              <table>
+                <thead><tr><th>العميل</th><th>الجوال</th><th>طريقة الاستخدام</th><th>نوع العميل</th><th>كود الدعوة</th><th>صاحب الكود</th><th>طلب الموقع</th><th>Next ERP</th><th>التاريخ</th></tr></thead>
+                <tbody>
+                  {(rewardUsage.usages || []).length ? (rewardUsage.usages || []).map((usage: any) => (
+                    <tr key={`${usage.usage_type}-${usage.id}`}>
+                      <td>{usage.customer_name || "—"}</td>
+                      <td>{usage.phone || "—"}</td>
+                      <td>{usage.usage_type === "website_purchase" ? "طلب شراء من الموقع" : "استبدال نقاط"}{usage.redemption_status ? <small className="owners-sub">{usage.redemption_status}</small> : null}</td>
+                      <td>{usage.customer_kind === "new" ? "عميل جديد" : usage.customer_kind === "existing" ? "عميل قديم" : "عضو"}</td>
+                      <td><code>{usage.referral_code || "—"}</code></td>
+                      <td>{usage.code_owner_name || "—"}</td>
+                      <td>{usage.website_order_id || "—"}</td>
+                      <td>{usage.next_erp_sales_order || "—"}</td>
+                      <td>{formatDate(usage.created_at)}</td>
+                    </tr>
+                  )) : <tr><td colSpan={9}>لا توجد استخدامات مسجلة لهذه المكافأة.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );

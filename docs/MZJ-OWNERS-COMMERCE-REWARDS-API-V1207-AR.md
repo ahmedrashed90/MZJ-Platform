@@ -60,20 +60,36 @@ Response ناجح:
   "eligible": true,
   "referralCode": "ABC123XYZ",
   "referrerName": "اسم صاحب العضوية",
-  "rewards": [
+  "newCustomerRewardIds": ["uuid-1", "uuid-2"],
+  "newCustomerRewards": [
     {
-      "id": "uuid",
-      "name": "خصم 1000 ريال",
+      "id": "uuid-1",
+      "name": "عازل حراري",
+      "description": "...",
+      "type": "gift",
+      "value": "عازل حراري",
+      "discountAmount": 0,
+      "startsAt": null,
+      "endsAt": null
+    },
+    {
+      "id": "uuid-2",
+      "name": "خصم 300 ريال",
       "description": "...",
       "type": "discount",
-      "value": "1000 ريال",
-      "discountAmount": 1000,
+      "value": "300 ريال",
+      "discountAmount": 300,
       "startsAt": null,
       "endsAt": null
     }
-  ]
+  ],
+  "existingCustomerRewards": [],
+  "rewards": []
 }
 ```
+
+
+> من الإصدار v1.21.6: `newCustomerRewards` تحتوي **كل** المكافآت التي حالتها مفعلة ومحددة كمكافأة عميل جديد، مع مراعاة تاريخ الصلاحية والكمية المتاحة. الحقل `primaryNewRewardId` ما زال موجودًا للتوافق فقط مع العملاء الأقدم ولا يعني قصر الـAPI على مكافأة واحدة. عند التأكيد يمكن إرسال أي `rewardId` صالح من `newCustomerRewards`.
 
 التحقق يرفض الحالات التالية من نفس قواعد Owners Community الحالية:
 

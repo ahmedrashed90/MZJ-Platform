@@ -498,11 +498,13 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
 
   const rewards = await getCommerceRewards(eligibility.customerKind);
-  const primaryNewReward = eligibility.customerKind === "new"
-    ? (rewards.find((reward: any) => reward.available_for_referral_purchase === true && reward.available_for_existing_customer_purchase !== true)
-      || rewards.find((reward: any) => reward.available_for_referral_purchase === true)
-      || null)
-    : null;
+  const newCustomerRewards = rewards
+    .filter((reward: any) => reward.available_for_referral_purchase === true)
+    .map(commerceRewardPayload);
+  const existingCustomerRewards = rewards
+    .filter((reward: any) => reward.available_for_existing_customer_purchase === true)
+    .map(commerceRewardPayload);
+  const primaryNewReward = eligibility.customerKind === "new" ? (newCustomerRewards[0] || null) : null;
   return response.status(200).json({
     ok: true,
     eligible: true,
@@ -511,7 +513,11 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
     referrerKind: eligibility.referrerKind,
     customerKind: eligibility.customerKind,
     selfUse: eligibility.selfUse === true,
+    // Backward-compatible field for older clients. New integrations should use newCustomerRewards.
     primaryNewRewardId: primaryNewReward?.id || null,
+    newCustomerRewardIds: newCustomerRewards.map((reward: any) => reward.id),
+    newCustomerRewards,
+    existingCustomerRewards,
     rewards: rewards.map(commerceRewardPayload),
   });
 }
@@ -775,12 +781,10 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
   let bonusReward: any = null;
 
   if (eligibility.customerKind === "new") {
-    const designated = primaryNewReward(availableRewards);
-    if (!designated) return response.status(409).json({ ok: false, error: "لا توجد مكافأة عميل جديد أساسية متاحة حاليًا" });
-    if (String(designated.id) !== primaryRewardId) {
-      return response.status(409).json({ ok: false, error: "مكافأة العميل الجديد تغيرت. أعد التحقق من كود الخصم" });
-    }
-    primaryReward = designated;
+    primaryReward = availableRewards.find((reward: any) =>
+      String(reward.id) === primaryRewardId && reward.available_for_referral_purchase === true
+    ) || null;
+    if (!primaryReward) return response.status(409).json({ ok: false, error: "مكافأة العميل الجديد المختارة لم تعد متاحة" });
     if (bonusRewardId) {
       bonusReward = availableRewards.find((reward: any) => String(reward.id) === bonusRewardId && reward.available_for_existing_customer_purchase === true) || null;
       if (!bonusReward) return response.status(409).json({ ok: false, error: "المكافأة الإضافية لم تعد متاحة" });
