@@ -11,6 +11,7 @@ import {
   syncOwnerReferralProgress,
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
+import { syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
 import { queueFirebaseSms } from "./_firebase-sms.js";
 
 function requestBody(request: VercelRequest) {
@@ -186,7 +187,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true, settings: settingsRows[0] || {} });
     }
 
-    const [settings, members, referrals, rewards, redemptions, stats] = await Promise.all([
+    await syncLegacyCustomerCodes();
+
+    const [settings, members, legacyCustomers, referrals, rewards, redemptions, stats] = await Promise.all([
       sql<any[]>`select * from owners.settings where id='default'`.then((rows) => rows[0] || {}),
       sql<any[]>`
         select
@@ -202,6 +205,21 @@ export default async function handler(request: VercelRequest, response: VercelRe
         group by m.id
         order by m.created_at desc
         limit 1000
+      `,
+      sql<any[]>`
+        select
+          c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.created_at,c.updated_at,
+          l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.payment_type,l.registered_at,
+          u.full_name as assigned_name,b.name as branch_name,src.name as catalog_source_name
+        from owners.legacy_customer_codes c
+        join crm.leads l on l.id=c.crm_lead_id and l.is_deleted=false
+        left join core.users u on u.id=l.assigned_to
+        left join core.branches b on b.code=l.branch_code
+        left join core.sources src on src.code=l.source_code
+        where c.status='active'
+          and coalesce(l.status_label,'') <> 'تم البيع'
+        order by l.updated_at desc,l.created_at desc
+        limit 5000
       `,
       sql<any[]>`
         select
@@ -231,6 +249,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql<any[]>`
         select
           (select count(*) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as members,
+          (select count(*) from owners.legacy_customer_codes c join crm.leads l on l.id=c.crm_lead_id where c.status='active' and l.is_deleted=false and coalesce(l.status_label,'')<>'تم البيع')::int as legacy_customers,
           (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where coalesce(m.metadata->>'memberKind','real')<>'test')::int as referrals,
           (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where r.status='sold' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as referral_sales,
           (select coalesce(sum(points_balance),0) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as outstanding_points,
@@ -241,6 +260,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       ok: true,
       settings,
       members,
+      legacyCustomers,
       referrals,
       rewards,
       redemptions,
@@ -288,6 +308,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (action === "sync_members") {
     const synced = await syncMembersFromCanonicalSales();
+    await syncLegacyCustomerCodes();
     const referrals = await syncOwnerReferralProgress();
     return response.status(200).json({ ok: true, synced, referrals });
   }

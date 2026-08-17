@@ -4,6 +4,7 @@ import { getSql } from "./_db.js";
 import { clean } from "./_crm-utils.js";
 import { normalizePhone } from "./_phone-utils.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
+import { markLegacyCustomerConvertedForLead } from "./_owners-customer-segments.js";
 
 export const OWNER_SESSION_COOKIE = "mzj_owner_session";
 const OWNER_SESSION_DAYS = 30;
@@ -138,6 +139,10 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const referralCode = randomReferralCode();
+    const [legacyCodeConflict] = await sql<any[]>`
+      select id::text from owners.legacy_customer_codes where referral_code=${referralCode} limit 1
+    `;
+    if (legacyCodeConflict) continue;
     try {
       const metadata: OwnerJson = { enrolledFrom: "canonical_sale" };
       const [member] = await sql<any[]>`
@@ -158,6 +163,7 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
           updated_at=now()
         returning *,id::text,crm_lead_id::text,source_sale_id::text
       `;
+      if (member) await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
       return member || null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

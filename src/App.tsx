@@ -26,6 +26,7 @@ const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((mod
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmContactsPage = lazy(() => import("./crm/pages/CrmContactsPage").then((module) => ({ default: module.CrmContactsPage })));
+const CashQrRegistrationPage = lazy(() => import("./crm/pages/CashQrRegistrationPage").then((module) => ({ default: module.CashQrRegistrationPage })));
 const TrackingLayout = lazy(() => import("./tracking/TrackingLayout").then((module) => ({ default: module.TrackingLayout })));
 const TrackingOrdersPage = lazy(() => import("./tracking/pages/TrackingOrdersPage").then((module) => ({ default: module.TrackingOrdersPage })));
 const TrackingDeletePage = lazy(() => import("./tracking/pages/TrackingDeletePage").then((module) => ({ default: module.TrackingDeletePage })));
@@ -159,6 +160,7 @@ export default function App() {
   const location = useLocation();
   const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
   const isPublicOwners = location.pathname === "/owners" || location.pathname.startsWith("/owners/invite/");
+  const isPublicCashQr = location.pathname === "/cash-register" || location.pathname === "/cash-register/";
 
   if (loading) return <PlatformLoadingPage />;
   if (isPublicTracking) {
@@ -179,6 +181,13 @@ export default function App() {
           <Route path="/owners" element={<OwnersPortalPage />} />
           <Route path="/owners/invite/:code" element={<OwnersInvitePage />} />
         </Routes>
+      </Suspense>
+    );
+  }
+  if (isPublicCashQr) {
+    return (
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل نموذج التسجيل...</div>}>
+        <Routes><Route path="/cash-register" element={<CashQrRegistrationPage />} /></Routes>
       </Suspense>
     );
   }

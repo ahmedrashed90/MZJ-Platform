@@ -20,6 +20,7 @@ import {
   type OwnerJson,
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
+import { findLegacyCustomerCodeByCode, syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -67,6 +68,25 @@ async function findReferrer(codeValue: unknown) {
     limit 1
   `;
   return member || null;
+}
+
+async function findCommerceCodeOwner(codeValue: unknown) {
+  const member = await findReferrer(codeValue);
+  if (member) return { ...member, referrer_kind: "member" as const, legacy_customer_code_id: null };
+  await syncLegacyCustomerCodes();
+  const legacy = await findLegacyCustomerCodeByCode(codeValue);
+  if (!legacy) return null;
+  return {
+    id: legacy.id,
+    customer_name: legacy.customer_name,
+    phone_normalized: legacy.phone_normalized,
+    referral_code: legacy.referral_code,
+    metadata: { memberKind: "legacy" },
+    member_kind: "legacy",
+    referrer_kind: "legacy" as const,
+    legacy_customer_code_id: legacy.id,
+    crm_lead_id: legacy.crm_lead_id,
+  };
 }
 
 async function recordUniqueVisit(request: VercelRequest, referrer: any, visitorValue: unknown) {
@@ -319,7 +339,7 @@ async function registerReferral(response: VercelResponse, payload: Record<string
 async function commerceEligibility(codeValue: unknown, phoneValue: unknown, currentWebsiteOrderId = "") {
   const settings = await getOwnerSettings();
   if (settings.is_enabled === false) return { ok: false as const, status: 403, error: "MZJ Owners Community غير متاح حاليًا" };
-  const referrer = await findReferrer(codeValue);
+  const referrer = await findCommerceCodeOwner(codeValue);
   if (!referrer || referrer.member_kind === "test") {
     return { ok: false as const, status: 404, error: "كود الدعوة غير صالح للاستخدام في طلب الشراء" };
   }
@@ -339,7 +359,7 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
     select id::text from owners.members where phone_normalized=${phone} and status='active' limit 1
   `;
   const [lead] = await sql<any[]>`
-    select id::text
+    select id::text,status_label
     from crm.leads
     where phone_normalized=${phone} and is_deleted=false
     order by created_at
@@ -354,33 +374,52 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
       limit 1
     `;
   }
-  const customerKind = existingOwner || priorSale || priorBenefit ? "existing" as const : "new" as const;
+
+  const referrerKind = referrer.referrer_kind === "legacy" ? "legacy" as const : "member" as const;
+  if (referrerKind === "legacy" && phone !== referrer.phone_normalized) {
+    return { ok: false as const, status: 409, error: "كود العميل القديم صالح لصاحب الكود فقط" };
+  }
+
+  const customerKind = referrerKind === "legacy"
+    ? "existing" as const
+    : (existingOwner || priorSale || priorBenefit ? "existing" as const : "new" as const);
   const selfUse = phone === referrer.phone_normalized;
 
-  // An owner may use his/her own referral code exactly once after becoming a
-  // real existing customer. Retries for the same website order are excluded
-  // from this guard so bundle confirmation stays idempotent.
   if (selfUse) {
-    if (customerKind !== "existing" || !existingOwner) {
+    if (referrerKind === "member" && (customerKind !== "existing" || !existingOwner)) {
       return { ok: false as const, status: 409, error: "كود الدعوة الشخصي متاح لعميل MZJ السابق فقط" };
     }
     const base = clean(currentWebsiteOrderId).slice(0, 160);
     const primaryOrderId = base ? `${base}:primary` : "";
     const bonusOrderId = base ? `${base}:bonus` : "";
-    const [priorSelfBenefit] = await sql<any[]>`
-      select id::text,website_order_id
-      from owners.referral_purchase_benefits
-      where referrer_member_id=${referrer.id}::uuid
-        and referred_phone_normalized=${phone}
-        and coalesce(metadata->>'selfUse','false')='true'
-        and (
-          ${base || null}::text is null
-          or website_order_id not in (${primaryOrderId || '__none__'},${bonusOrderId || '__none__'},${base || '__none__'})
-        )
-      order by created_at desc
-      limit 1
-    `;
-    if (priorSelfBenefit) {
+    const priorSelfRows = referrerKind === "legacy"
+      ? await sql<any[]>`
+          select id::text,website_order_id
+          from owners.referral_purchase_benefits
+          where legacy_customer_code_id=${referrer.id}::uuid
+            and referred_phone_normalized=${phone}
+            and coalesce(metadata->>'selfUse','false')='true'
+            and (
+              ${base || null}::text is null
+              or website_order_id not in (${primaryOrderId || '__none__'},${bonusOrderId || '__none__'},${base || '__none__'})
+            )
+          order by created_at desc
+          limit 1
+        `
+      : await sql<any[]>`
+          select id::text,website_order_id
+          from owners.referral_purchase_benefits
+          where referrer_member_id=${referrer.id}::uuid
+            and referred_phone_normalized=${phone}
+            and coalesce(metadata->>'selfUse','false')='true'
+            and (
+              ${base || null}::text is null
+              or website_order_id not in (${primaryOrderId || '__none__'},${bonusOrderId || '__none__'},${base || '__none__'})
+            )
+          order by created_at desc
+          limit 1
+        `;
+    if (priorSelfRows[0]) {
       return { ok: false as const, status: 409, error: "سبق استخدام كود الدعوة الخاص بك للاستفادة من مكافأة عميل قديم" };
     }
   }
@@ -391,13 +430,14 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
     where referred_phone_normalized=${phone}
     limit 1
   `;
-  if (customerKind === "new" && linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
+  if (referrerKind === "member" && customerKind === "new" && linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
     return { ok: false as const, status: 409, error: "هذا العميل مرتبط بكود دعوة آخر بالفعل" };
   }
 
   return {
     ok: true as const,
     referrer,
+    referrerKind,
     phone,
     customerKind,
     selfUse,
@@ -468,6 +508,7 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
     eligible: true,
     referralCode: eligibility.referrer.referral_code,
     referrerName: eligibility.referrer.customer_name || "عميل MZJ",
+    referrerKind: eligibility.referrerKind,
     customerKind: eligibility.customerKind,
     selfUse: eligibility.selfUse === true,
     primaryNewRewardId: primaryNewReward?.id || null,
@@ -537,8 +578,9 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
 
   const rewardSnapshot = commerceRewardPayload(reward);
   let referralId: string | null = null;
-  const referrerId = eligibility.referrer.id as string;
-  if (eligibility.customerKind === "new") {
+  const referrerId = eligibility.referrerKind === "member" ? eligibility.referrer.id as string : null;
+  const legacyCustomerCodeId = eligibility.referrerKind === "legacy" ? eligibility.referrer.id as string : null;
+  if (eligibility.customerKind === "new" && eligibility.referrerKind === "member") {
     const referralMetadata = {
       source: "website_purchase",
       websiteOrderId,
@@ -593,13 +635,13 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
           || Number(lockedReward.redeemed_quantity || 0) + Number(lockedReward.referral_purchase_redeemed_quantity || 0) < Number(lockedReward.stock_quantity));
       if (!available) throw new Error("REWARD_NOT_AVAILABLE");
 
-      const metadata = { source: "website_purchase", referralCode: eligibility.referrer.referral_code, customerKind: eligibility.customerKind, selfUse: eligibility.selfUse === true } as OwnerJson;
+      const metadata = { source: "website_purchase", referralCode: eligibility.referrer.referral_code, referrerKind: eligibility.referrerKind, customerKind: eligibility.customerKind, selfUse: eligibility.selfUse === true } as OwnerJson;
       const [inserted] = await tx<any[]>`
         insert into owners.referral_purchase_benefits(
-          referral_id,referrer_member_id,referred_phone_normalized,customer_kind,reward_id,reward_name,reward_type,reward_value,
+          referral_id,referrer_member_id,legacy_customer_code_id,referrer_kind,referred_phone_normalized,customer_kind,reward_id,reward_name,reward_type,reward_value,
           checkout_discount_type,checkout_discount_value,checkout_discount_amount,website_order_id,next_erp_sales_order,metadata
         ) values(
-          ${referralId}::uuid,${referrerId}::uuid,${phone},${eligibility.customerKind},${rewardSnapshot.id}::uuid,
+          ${referralId}::uuid,${referrerId}::uuid,${legacyCustomerCodeId}::uuid,${eligibility.referrerKind},${phone},${eligibility.customerKind},${rewardSnapshot.id}::uuid,
           ${rewardSnapshot.name},${rewardSnapshot.type},${rewardSnapshot.value || null},
           ${rewardSnapshot.discountType},${rewardSnapshot.discountValue},${rewardSnapshot.discountAmount},
           ${websiteOrderId},${nextErpSalesOrder},${tx.json(metadata)}
@@ -628,6 +670,7 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
       referralId,
       benefitId: benefit.id,
       referralCode: eligibility.referrer.referral_code,
+      referrerKind: eligibility.referrerKind,
       customerKind: eligibility.customerKind,
       selfUse: eligibility.selfUse === true,
       reward: rewardSnapshot,
@@ -751,7 +794,7 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
   const selectedRewards = [primaryReward, bonusReward].filter(Boolean);
   const rewardSnapshots = selectedRewards.map(commerceRewardPayload);
   let referralId: string | null = existingRows[0]?.referral_id || null;
-  if (eligibility.customerKind === "new" && !referralId) {
+  if (eligibility.customerKind === "new" && eligibility.referrerKind === "member" && !referralId) {
     const registration = await registerReferralCore(
       { code: payload.code, name: customerName, phone },
       {
@@ -808,6 +851,7 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
         const metadata = {
           source: "website_purchase",
           referralCode: eligibility.referrer.referral_code,
+          referrerKind: eligibility.referrerKind,
           customerKind: eligibility.customerKind,
           selfUse: eligibility.selfUse === true,
           baseWebsiteOrderId: websiteOrderId,
@@ -815,10 +859,10 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
         } as OwnerJson;
         const [inserted] = await tx<any[]>`
           insert into owners.referral_purchase_benefits(
-            referral_id,referrer_member_id,referred_phone_normalized,customer_kind,reward_id,reward_name,reward_type,reward_value,
+            referral_id,referrer_member_id,legacy_customer_code_id,referrer_kind,referred_phone_normalized,customer_kind,reward_id,reward_name,reward_type,reward_value,
             checkout_discount_type,checkout_discount_value,checkout_discount_amount,website_order_id,next_erp_sales_order,metadata
           ) values(
-            ${referralId}::uuid,${eligibility.referrer.id}::uuid,${phone},${eligibility.customerKind},${snapshot.id}::uuid,
+            ${referralId}::uuid,${eligibility.referrerKind === "member" ? eligibility.referrer.id : null}::uuid,${eligibility.referrerKind === "legacy" ? eligibility.referrer.id : null}::uuid,${eligibility.referrerKind},${phone},${eligibility.customerKind},${snapshot.id}::uuid,
             ${snapshot.name},${snapshot.type},${snapshot.value || null},${snapshot.discountType},${snapshot.discountValue},${snapshot.discountAmount},
             ${slotOrderId},${nextErpSalesOrder},${tx.json(metadata)}
           )
@@ -854,6 +898,7 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
       referralId,
       benefitIds: insertedRows.map((row: any) => row.id),
       referralCode: eligibility.referrer.referral_code,
+      referrerKind: eligibility.referrerKind,
       nextErpSalesOrder,
       customerKind: eligibility.customerKind,
       selfUse: eligibility.selfUse === true,

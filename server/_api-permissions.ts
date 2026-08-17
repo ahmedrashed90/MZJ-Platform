@@ -170,7 +170,7 @@ function trackingRequirement(route: string, request: VercelRequest): ApiPermissi
 
 export function resolveApiPermission(route: string, request: VercelRequest): ApiPermissionRequirement | null {
   if (route === "data-management") return req("platform.superadmin", "core", "settings", "data_management");
-  if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public", "owners/public"].includes(route)) return null;
+  if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public", "owners/public", "crm/cash-qr"].includes(route)) return null;
   if (route === "owners") {
     const payload = body(request);
     const settingsScope = clean(request.query.scope) === "settings" || clean(payload.action) === "save_settings";

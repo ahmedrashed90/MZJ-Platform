@@ -18,7 +18,7 @@ import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
 import { readXlsx } from "../crm/xlsxReader";
 
-type Tab = "members" | "import" | "referrals" | "rewards" | "redemptions";
+type Tab = "members" | "legacy" | "import" | "referrals" | "rewards" | "redemptions";
 type RewardsView = "catalog" | "memberCard";
 
 
@@ -255,6 +255,7 @@ export function OwnersCommunityPage() {
 
   const stats = data?.stats || {};
   const members = Array.isArray(data?.members) ? data.members : [];
+  const legacyCustomers = Array.isArray(data?.legacyCustomers) ? data.legacyCustomers : [];
   const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
@@ -287,7 +288,8 @@ export function OwnersCommunityPage() {
       {message ? <div className="owners-notice">{message}</div> : null}
 
       <section className="owners-stat-grid">
-        <article><UsersThree size={24} /><div><span>الأعضاء</span><strong>{Number(stats.members || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <article><UsersThree size={24} /><div><span>العملاء الجديدة</span><strong>{Number(stats.members || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <article><UsersThree size={24} /><div><span>العملاء القديمة</span><strong>{Number(stats.legacy_customers || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
         <article><ShareNetwork size={24} /><div><span>الدعوات المسجلة</span><strong>{Number(stats.referrals || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
         <article><CheckCircle size={24} /><div><span>مبيعات من الدعوات</span><strong>{Number(stats.referral_sales || 0).toLocaleString("ar-SA-u-nu-latn")} <small>{soldRate}%</small></strong></div></article>
         <article><Wallet size={24} /><div><span>النقاط القائمة</span><strong>{Number(stats.outstanding_points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
@@ -295,7 +297,8 @@ export function OwnersCommunityPage() {
       </section>
 
       <nav className="owners-tabs">
-        <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>الأعضاء</button>
+        <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>العملاء الجديدة</button>
+        <button className={tab === "legacy" ? "active" : ""} onClick={() => setTab("legacy")}>العملاء القديمة</button>
         {canManage ? <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}>استيراد العملاء السابقين</button> : null}
         <button className={tab === "referrals" ? "active" : ""} onClick={() => setTab("referrals")}>الدعوات</button>
         <button className={tab === "rewards" ? "active" : ""} onClick={() => setTab("rewards")}>المكافآت</button>
@@ -315,7 +318,7 @@ export function OwnersCommunityPage() {
             </section>
           ) : null}
           <section className="owners-table-card">
-            <header><h2>أعضاء MZJ Owners Community</h2><span>{members.length - testMembersCount} حقيقي · {testMembersCount} تجريبي</span></header>
+            <header><h2>العملاء الجديدة</h2><span>حالة تم البيع · {members.length - testMembersCount} حقيقي · {testMembersCount} تجريبي</span></header>
             <div className="owners-table-wrap">
               <table>
                 <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
@@ -347,6 +350,34 @@ export function OwnersCommunityPage() {
             </div>
           </section>
         </>
+      ) : null}
+
+      {tab === "legacy" ? (
+        <section className="owners-table-card">
+          <header><h2>العملاء القديمة</h2><span>كل عملاء CRM ماعدا حالة «تم البيع» · {legacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")}</span></header>
+          <div className="owners-table-wrap">
+            <table>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead>
+              <tbody>
+                {legacyCustomers.map((customer: any) => (
+                  <tr key={customer.id}>
+                    <td><strong>{customer.customer_name || "عميل MZJ"}</strong></td>
+                    <td>{customer.phone_normalized || "—"}</td>
+                    <td><code>{customer.referral_code}</code></td>
+                    <td>{customer.status_label || "عميل جديد"}</td>
+                    <td>{customer.branch_name || customer.branch_code || "—"}</td>
+                    <td>{customer.catalog_source_name || customer.source_name || customer.source_code || "—"}</td>
+                    <td>{customer.department_code === "cash_sales" ? "مبيعات الكاش" : customer.department_code === "finance_sales" ? "مبيعات التمويل" : customer.department_code === "customer_service" ? "خدمة العملاء" : customer.department_code || "—"}</td>
+                    <td>{customer.assigned_name || "—"}</td>
+                    <td>{formatDate(customer.registered_at || customer.created_at)}</td>
+                    <td>{formatDate(customer.updated_at)}</td>
+                  </tr>
+                ))}
+                {!legacyCustomers.length ? <tr><td colSpan={10}>لا يوجد عملاء في CRM خارج حالة تم البيع.</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : null}
 
       {tab === "import" && canManage ? (

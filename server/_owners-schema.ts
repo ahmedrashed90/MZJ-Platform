@@ -58,6 +58,24 @@ alter table owners.members add column if not exists lifetime_points integer not 
 create index if not exists owners_members_lead_idx on owners.members(crm_lead_id);
 create index if not exists owners_members_status_idx on owners.members(status,created_at desc);
 
+
+create table if not exists owners.legacy_customer_codes (
+  id uuid primary key default gen_random_uuid(),
+  crm_lead_id uuid not null unique references crm.leads(id) on delete cascade,
+  phone_normalized text,
+  customer_name text,
+  referral_code text not null unique,
+  status text not null default 'active' check(status in ('active','converted')),
+  converted_member_id uuid references owners.members(id) on delete set null,
+  converted_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists owners_legacy_customer_codes_phone_idx on owners.legacy_customer_codes(phone_normalized,status);
+create index if not exists owners_legacy_customer_codes_status_idx on owners.legacy_customer_codes(status,updated_at desc);
+alter table owners.legacy_customer_codes alter column phone_normalized drop not null;
+
 create table if not exists owners.referrals (
   id uuid primary key default gen_random_uuid(),
   referrer_member_id uuid not null references owners.members(id) on delete cascade,
@@ -155,6 +173,9 @@ create index if not exists owners_referral_purchase_benefits_phone_idx
 create index if not exists owners_referral_purchase_benefits_referrer_idx
   on owners.referral_purchase_benefits(referrer_member_id,created_at desc);
 alter table owners.referral_purchase_benefits alter column referral_id drop not null;
+alter table owners.referral_purchase_benefits alter column referrer_member_id drop not null;
+alter table owners.referral_purchase_benefits add column if not exists legacy_customer_code_id uuid references owners.legacy_customer_codes(id) on delete set null;
+alter table owners.referral_purchase_benefits add column if not exists referrer_kind text not null default 'member' check(referrer_kind in ('member','legacy'));
 alter table owners.referral_purchase_benefits add column if not exists customer_kind text not null default 'new';
 alter table owners.referral_purchase_benefits add column if not exists checkout_discount_type text not null default 'amount';
 alter table owners.referral_purchase_benefits add column if not exists checkout_discount_value numeric(12,2) not null default 0;
@@ -238,7 +259,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1209,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1212,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -265,9 +286,12 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_amount')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='referral_purchase_redeemed_quantity')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='referral_purchase_benefits')
+      and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='legacy_customer_codes')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='customer_kind')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_type')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_value')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='legacy_customer_code_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='referrer_kind')
       as ready
   `;
   if (!shape?.ready) return false;

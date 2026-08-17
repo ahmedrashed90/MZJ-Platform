@@ -20,6 +20,7 @@ import { sourceLabel } from "../sourceCatalog";
 import { CrmEntryRoutingSettings } from "../components/CrmEntryRoutingSettings";
 import { CrmAutomationSettings } from "../components/CrmAutomationSettings";
 import { CrmKpiAccessSettings } from "../components/CrmKpiAccessSettings";
+import { CrmCashQrSettings } from "../components/CrmCashQrSettings";
 import { downloadXlsx } from "../xlsx";
 import { readXlsx } from "../xlsxReader";
 import { useAuth } from "../../auth/AuthContext";
@@ -28,6 +29,7 @@ import { hasPermission } from "../../systemAccess";
 const tabs = [
   { key: "automation", label: "إعدادات الأوتوميشن", description: "قواعد استقبال الرسائل ومسارات التنفيذ التلقائي", group: "workflow" },
   { key: "entry_routing", label: "دخول العملاء", description: "بوابات الدخول والتوجيه الأولي للعملاء", group: "workflow" },
+  { key: "cash_qr", label: "إنشاء QR كود", description: "تسجيل عملاء الكاش بالاسم ورقم الجوال وتوزيعهم تلقائيًا", group: "workflow" },
   { key: "distribution", label: "توزيع العملاء", description: "قواعد الدور والمندوبين المؤهلين للتوزيع", group: "workflow" },
   { key: "statuses", label: "حالات العملاء", description: "حالات الداش بورد وترتيبها حسب القسم", group: "customer" },
   { key: "customer_fields", label: "بيانات العميل", description: "الحقول الإضافية ونسبة اكتمال الملف", group: "customer" },
@@ -480,6 +482,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       <fieldset className="settings-readonly-fieldset" disabled={readOnly && tab !== "data_review" && tab !== "entry_routing"}>
       {tab === "automation" ? <fieldset className="settings-readonly-fieldset" disabled={!canManageAutomation}><CrmAutomationSettings /></fieldset> : null}
       {tab === "entry_routing" ? <CrmEntryRoutingSettings /> : null}
+      {tab === "cash_qr" ? <CrmCashQrSettings /> : null}
       {tab === "kpi_access" ? <CrmKpiAccessSettings users={data.assignmentUsers || []} value={data.kpiSectionPermissions} onSaved={load} /> : null}
 
       {tab === "statuses" ? (
