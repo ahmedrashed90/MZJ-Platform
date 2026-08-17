@@ -161,38 +161,97 @@ export default async function handler(request: VercelRequest, response: VercelRe
     assignmentFallback: usedFallback,
   };
 
-  const [created] = await sql<any[]>`
-    insert into crm.leads(
-      customer_name,phone,phone_normalized,source_code,source_name,platform_code,
-      service_key,department_code,branch_code,status_label,payment_type,
-      assigned_to,responsible_name_snapshot,extra_data,registered_at,created_at,updated_at
-    ) values(
-      ${customerName},${phoneRaw || phone},${phone},'branch',${QR_SOURCE_NAME},'cash_qr',
-      'cash','cash_sales',${assignment.branchCode},'عميل جديد','كاش',
-      ${assignment.assignedTo}::uuid,${assignment.assignedName || null},${sql.json(extraData)},now(),now(),now()
-    )
-    returning id::text,customer_name,phone_normalized,branch_code,source_name,payment_type,status_label,department_code,assigned_to::text,registered_at,updated_at
-  `;
+  const created = await sql.begin(async (tx) => {
+    const contactMetadata = {
+      origin: "cash_qr",
+      intakeChannel: "cash_qr",
+      sourceName: QR_SOURCE_NAME,
+    };
 
-  await sql`
-    insert into crm.lead_events(
-      lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note
-    ) values(
-      ${created.id}::uuid,'lead_created','عميل جديد','cash_sales',${assignment.branchCode},
-      'QR كود مبيعات الكاش','public_qr','دخول العميل إلى CRM من QR كود مبيعات الكاش'
-    )
-  `;
+    let [contact] = await tx<any[]>`
+      select *,id::text
+      from crm.contacts
+      where primary_phone_normalized=${phone}
+      limit 1
+      for update
+    `;
 
-  if (usedFallback) {
-    await sql`
-      insert into crm.assignment_logs(
-        rule_id,lead_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action,actor_name
-      ) values(
-        null,${created.id}::uuid,'cash_sales',${assignment.branchCode},'cash_qr',
-        ${assignment.assignedTo}::uuid,${assignment.assignedName || null},'round_robin','cash_qr_fallback','QR كود مبيعات الكاش'
+    if (!contact) {
+      [contact] = await tx<any[]>`
+        insert into crm.contacts(contact_key,display_name,primary_phone,primary_phone_normalized,metadata)
+        values(
+          ${`phone:${phone}`},${customerName},${phoneRaw || phone},${phone},${tx.json(contactMetadata)}
+        )
+        on conflict(contact_key) do update set
+          display_name=coalesce(nullif(excluded.display_name,''),crm.contacts.display_name),
+          primary_phone=coalesce(nullif(excluded.primary_phone,''),crm.contacts.primary_phone),
+          primary_phone_normalized=coalesce(nullif(excluded.primary_phone_normalized,''),crm.contacts.primary_phone_normalized),
+          metadata=coalesce(crm.contacts.metadata,'{}'::jsonb)||excluded.metadata,
+          updated_at=now()
+        returning *,id::text
+      `;
+    } else {
+      [contact] = await tx<any[]>`
+        update crm.contacts set
+          display_name=coalesce(nullif(${customerName},''),display_name),
+          primary_phone=coalesce(nullif(${phoneRaw || phone},''),primary_phone),
+          primary_phone_normalized=coalesce(nullif(${phone},''),primary_phone_normalized),
+          metadata=coalesce(metadata,'{}'::jsonb)||${tx.json(contactMetadata)}::jsonb,
+          is_active=true,
+          updated_at=now()
+        where id=${contact.id}::uuid
+        returning *,id::text
+      `;
+    }
+
+    await tx`
+      insert into crm.contact_identities(contact_id,channel_code,external_id,participant_id,display_name,metadata)
+      values(
+        ${contact.id}::uuid,'cash_qr',${phone},${phone},${customerName},${tx.json(contactMetadata)}
       )
-    `.catch(() => undefined);
-  }
+      on conflict(channel_code,external_id) do update set
+        contact_id=excluded.contact_id,
+        participant_id=excluded.participant_id,
+        display_name=coalesce(nullif(excluded.display_name,''),crm.contact_identities.display_name),
+        metadata=coalesce(crm.contact_identities.metadata,'{}'::jsonb)||excluded.metadata,
+        updated_at=now()
+    `;
+
+    const [lead] = await tx<any[]>`
+      insert into crm.leads(
+        customer_name,phone,phone_normalized,contact_id,source_code,source_name,platform_code,
+        service_key,department_code,branch_code,status_label,payment_type,
+        assigned_to,responsible_name_snapshot,extra_data,registered_at,created_at,updated_at
+      ) values(
+        ${customerName},${phoneRaw || phone},${phone},${contact.id}::uuid,'branch',${QR_SOURCE_NAME},'cash_qr',
+        'cash','cash_sales',${assignment.branchCode},'عميل جديد','كاش',
+        ${assignment.assignedTo}::uuid,${assignment.assignedName || null},${tx.json(extraData)},now(),now(),now()
+      )
+      returning id::text,contact_id::text,customer_name,phone_normalized,branch_code,source_name,payment_type,status_label,department_code,assigned_to::text,registered_at,updated_at
+    `;
+
+    await tx`
+      insert into crm.lead_events(
+        lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note
+      ) values(
+        ${lead.id}::uuid,'lead_created','عميل جديد','cash_sales',${assignment.branchCode},
+        'QR كود مبيعات الكاش','public_qr','دخول العميل إلى CRM من QR كود مبيعات الكاش'
+      )
+    `;
+
+    if (usedFallback) {
+      await tx`
+        insert into crm.assignment_logs(
+          rule_id,lead_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action,actor_name
+        ) values(
+          null,${lead.id}::uuid,'cash_sales',${assignment.branchCode},'cash_qr',
+          ${assignment.assignedTo}::uuid,${assignment.assignedName || null},'round_robin','cash_qr_fallback','QR كود مبيعات الكاش'
+        )
+      `.catch(() => undefined);
+    }
+
+    return lead;
+  });
 
   await (async () => {
     await ensureOwnersSchema();

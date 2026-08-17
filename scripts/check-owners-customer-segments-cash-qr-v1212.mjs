@@ -40,6 +40,9 @@ expect('QR intake uses current cash assignment engine',qr.includes('chooseAssign
 expect('QR intake stores cash sales defaults',qr.includes(`'cash','${cashSales}'`) && qr.includes(`'${newStatus}','${cash}'`));
 expect('QR intake stores registration and update timestamps',qr.includes('registered_at,created_at,updated_at') && qr.includes('now(),now(),now()'));
 expect('QR intake immediately prepares old-customer code',qr.includes('ensureLegacyCustomerCodeForLead(created.id)'));
+expect('QR intake creates or reuses CRM contact',qr.includes('insert into crm.contacts') && qr.includes('primary_phone_normalized=${phone}'));
+expect('QR intake creates cash QR contact identity',qr.includes("'cash_qr',${phone},${phone}") && qr.includes('crm.contact_identities'));
+expect('QR lead is linked to CRM contact',qr.includes('customer_name,phone,phone_normalized,contact_id,source_code') && qr.includes('${contact.id}::uuid'));
 expect('QR asset exists',exists('public/cash-register-qr.svg'));
 expect('no release patch or migration file added',!fs.readdirSync(path.join(root,'migration-packages')).some((name)=>/1212|cash.?qr|legacy.?customer/i.test(name)));
 
