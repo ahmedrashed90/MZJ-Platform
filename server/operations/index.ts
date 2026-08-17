@@ -466,13 +466,38 @@ function nextRequestStage(status: string) {
   return currentIndex >= 0 ? requestStageOrder[currentIndex + 1] || "" : "";
 }
 
+type RequestAdvancePolicy = {
+  allowed: boolean;
+  requiresVehicleStatusAccess: boolean;
+};
+
+function requestAdvancePolicy(row: any, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, nextStatus = nextRequestStage(row.status)): RequestAdvancePolicy {
+  if (!nextStatus || row.cancelled_at) return { allowed: false, requiresVehicleStatusAccess: true };
+  if (nextStatus === "completed") {
+    const isPhotography = row.request_kind === "photography";
+    const permission = isPhotography ? "marketing.photo_request.complete" : "operations.request.finish_order";
+    return {
+      allowed: hasPermission(user, permission) && row.requested_by === user.id,
+      requiresVehicleStatusAccess: !isPhotography,
+    };
+  }
+  if (nextStatus === "request_received") return {
+    allowed: hasPermission(user, "operations.request.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code),
+    requiresVehicleStatusAccess: true,
+  };
+  if (nextStatus === "vehicle_sent") return {
+    allowed: hasPermission(user, "operations.request.send_car") && hasBranchAccess(user, row.source_branch_code, row.source_location_code),
+    requiresVehicleStatusAccess: true,
+  };
+  if (nextStatus === "vehicle_received") return {
+    allowed: hasPermission(user, "operations.request.receive_car") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code),
+    requiresVehicleStatusAccess: true,
+  };
+  return { allowed: false, requiresVehicleStatusAccess: true };
+}
+
 function canAdvanceRequest(row: any, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, nextStatus = nextRequestStage(row.status)) {
-  if (!nextStatus || row.cancelled_at) return false;
-  if (nextStatus === "completed") return hasPermission(user, "operations.request.finish_order") && row.requested_by === user.id;
-  if (nextStatus === "request_received") return hasPermission(user, "operations.request.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
-  if (nextStatus === "vehicle_sent") return hasPermission(user, "operations.request.send_car") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
-  if (nextStatus === "vehicle_received") return hasPermission(user, "operations.request.receive_car") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code);
-  return false;
+  return requestAdvancePolicy(row, user, nextStatus).allowed;
 }
 
 async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryRequest, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
@@ -1141,7 +1166,16 @@ async function createTransfer(sql: ReturnType<typeof getSql>, body: Record<strin
   });
 }
 
-async function transferAction(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {
+type TransferActionOptions = {
+  expectedRequestKind?: "transfer" | "photography";
+};
+
+async function transferAction(
+  sql: ReturnType<typeof getSql>,
+  body: Record<string, any>,
+  user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>,
+  options: TransferActionOptions = {},
+) {
   const id = clean(body.id);
   const action = clean(body.transferAction);
   const reason = clean(body.reason);
@@ -1157,10 +1191,17 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       for update of r
     `;
     if (!r) throw new OperationError(404, "CONFLICT", "الطلب غير موجود");
+    if (options.expectedRequestKind && r.request_kind !== options.expectedRequestKind) {
+      const expectedLabel = options.expectedRequestKind === "photography" ? "طلب التصوير" : "طلب النقل";
+      throw new OperationError(404, "CONFLICT", `${expectedLabel} غير موجود`);
+    }
     const requestLabel = r.request_kind === "photography" ? "طلب التصوير" : "طلب النقل";
     if (r.cancelled_at && action !== "delete") throw new OperationError(409, "CONFLICT", `${requestLabel} ملغي`);
     const items = await tx<any[]>`select rv.*,v.id::text,v.vin,v.car_name,v.statement,v.location_id,v.status_code from operations.transfer_request_vehicles rv join operations.vehicles v on v.id=rv.vehicle_id where rv.transfer_request_id=${id}::uuid order by v.vin`;
-    for (const item of items) assertVehicleStatusAccess(user, item.status_code, `لا تملك صلاحية تنفيذ إجراء على السيارة ${item.vin} بحالتها الحالية`);
+
+    function assertItemsVehicleStatusAccess() {
+      for (const item of items) assertVehicleStatusAccess(user, item.status_code, `لا تملك صلاحية تنفيذ إجراء على السيارة ${item.vin} بحالتها الحالية`);
+    }
 
     async function archiveEligibleItems() {
       if (r.request_kind !== "transfer") return [];
@@ -1173,6 +1214,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     }
 
     if (action === "delete") {
+      assertItemsVehicleStatusAccess();
       if (!hasPermission(user, "operations.transfer.delete")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية حذف الطلب");
       const cancelledRequest = Boolean(r.cancelled_at);
       if (!cancelledRequest) {
@@ -1196,6 +1238,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     }
 
     if (action === "cancel") {
+      assertItemsVehicleStatusAccess();
       if (!reason) throw new OperationError(400, "VALIDATION_ERROR", "سبب الإلغاء مطلوب");
       if (!hasPermission(user, "operations.transfer.cancel")) throw new OperationError(403, "FORBIDDEN", "لا توجد لديك صلاحية إلغاء الطلب");
       await tx`update operations.transfer_requests set cancelled_at=now(),cancelled_by=${who.id}::uuid,cancellation_reason=${reason},updated_at=now(),version=version+1 where id=${id}::uuid`;
@@ -1215,11 +1258,14 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
     if (!next || currentIndex < 0 || requestStageOrder.indexOf(next as typeof requestStageOrder[number]) !== currentIndex + 1) {
       throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل الطلب بالترتيب");
     }
-    if (!canAdvanceRequest(r, user, next)) {
+    const advancePolicy = requestAdvancePolicy(r, user, next);
+    if (!advancePolicy.allowed) {
+      if (next === "completed" && r.request_kind === "photography") throw new OperationError(403, "FORBIDDEN", "إنهاء طلب التصوير متاح لمنشئ الطلب الذي يملك صلاحية إنهاء طلب تصوير");
       if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء تتطلب الصلاحية المخصصة وتظل متاحة لمنشئ الطلب فقط");
       if (next === "vehicle_received") throw new OperationError(403, "FORBIDDEN", "مرحلة تم استلام السيارة خاصة بمسؤول المكان المستهدف");
       throw new OperationError(403, "FORBIDDEN", "هذه المرحلة خاصة بمسؤول مكان السيارة الحالي");
     }
+    if (advancePolicy.requiresVehicleStatusAccess) assertItemsVehicleStatusAccess();
 
     if (next === "vehicle_received") {
       if (!r.destination_location_id) throw new OperationError(409, "INVALID_DESTINATION_LOCATION", "المكان المستهدف غير محدد في الطلب");
@@ -1273,7 +1319,7 @@ export async function completePhotographyRequest(
     transferAction: "advance",
     nextStatus: "completed",
     note,
-  }, user);
+  }, user, { expectedRequestKind: "photography" });
 }
 
 async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>) {

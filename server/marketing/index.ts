@@ -3237,13 +3237,14 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
 }
 
 async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
-  const requestAccessFilter=marketingAccess(user).dataScope==="all"||hasPermission(user,"marketing.photo_request.complete")?sql`true`:sql`r.requested_by=${user.id}::uuid`;
+  const canCompletePhotoRequest=hasPermission(user,"marketing.photo_request.complete");
+  const requestAccessFilter=marketingAccess(user).dataScope==="all"||canCompletePhotoRequest?sql`true`:sql`r.requested_by=${user.id}::uuid`;
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
     sql<any[]>`
       select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.photography_date,r.note,r.cancelled_at,
         sl.name as source_location_name,dl.name as destination_location_name,
-        (r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
+        (${canCompletePhotoRequest}=true and r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
         coalesce((
           select json_agg(json_build_object(
             'vehicleId',v.id::text,
