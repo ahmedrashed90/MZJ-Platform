@@ -1,5 +1,6 @@
 import { normalizePhone } from "./_phone-utils.js";
 import { clean, numberValue } from "./_tracking-utils.js";
+import { normalizeRiyadhTimestamp } from "./_crm-sale-timestamp.js";
 
 type JsonRecord = Record<string, any>;
 
@@ -378,8 +379,11 @@ export function normalizeErpNextSalesOrder(input: unknown): NormalizedErpNextSal
     || "sales_order.submitted";
   const createdAt = pickText(doc, ["creation", "created_at", "createdAt", "Timestamp"])
     || pickText(body, ["Timestamp", "createdAt", "creation"]);
-  const erpCreatedAt = normalizedInstanceTimestamp(createdAt);
-  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${erpCreatedAt}`;
+  // Keep the historical source-instance identity stable, while storing the real
+  // ERP creation timestamp as Riyadh local time when the webhook omits an offset.
+  const sourceInstanceTimestamp = normalizedInstanceTimestamp(createdAt);
+  const erpCreatedAt = normalizeRiyadhTimestamp(createdAt) || "legacy";
+  const sourceInstanceKey = `next-erp:sales-order:${orderNo}:created:${sourceInstanceTimestamp}`;
   const crmSource = resolveCrmBusinessSource(doc, body);
   const isCancellation = cancellationEvent(erpEvent, erpStatus, pick(doc, ["docstatus"]));
   const isUpdateAfterSubmit = updateAfterSubmitEvent(erpEvent);

@@ -31,6 +31,18 @@ source = source
        const parsed = Number.parseFloat(normalized);
        return Number.isFinite(parsed) ? parsed : 0;
      }`,
+  )
+  .replace(
+    'import { normalizeRiyadhTimestamp } from "./_crm-sale-timestamp.js";',
+    `function normalizeRiyadhTimestamp(value: unknown) {
+       const raw = String(value ?? "").trim();
+       if (!raw) return null;
+       const naive = /^(\\d{4}-\\d{2}-\\d{2})[ T](\\d{2}:\\d{2}:\\d{2})(?:\\.(\\d+))?$/.exec(raw);
+       const parsed = naive
+         ? new Date(naive[1] + "T" + naive[2] + "." + (naive[3] || "").slice(0, 3).padEnd(3, "0") + "+03:00")
+         : new Date(raw);
+       return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+     }`,
   );
 
 const transpiled = ts.transpileModule(source, {

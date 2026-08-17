@@ -4,6 +4,7 @@ import { hasPermission } from "../../shared/access-control.js";
 import { getSql } from "../_db.js";
 import { ensureErpNextSalesOrderSchema } from "../_erpnext-integration-schema.js";
 import { cancelErpNextSalesOrder, refreshCrmLeadSalesSnapshot } from "../_erpnext-sales-order-sync.js";
+import { saleTimestampForOrder } from "../_crm-sale-timestamp.js";
 
 function scopeSql(scope: ReturnType<typeof userScope>, userId: string) {
   return {
@@ -184,8 +185,6 @@ async function syncSalesOrderTransaction(tx: any, input: {
         lead_id=${input.leadId}::uuid,
         sale_at=case
           when coalesce(metadata->>'soldDateOverride','false')='true' then sale_at
-          when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
-            then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
           else ${input.saleAt}::timestamptz
         end,
         quantity=${Math.max(1, Math.round(input.quantity))},
@@ -214,11 +213,7 @@ async function syncSalesOrderTransaction(tx: any, input: {
       car_name,car_category,created_by,updated_by,metadata,is_cancelled
     ) values(
       ${input.leadId}::uuid,${input.sourceType || "crm_contact_sales_order"},${input.salesOrderNo},
-      case
-        when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
-          then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
-        else ${input.saleAt}::timestamptz
-      end,
+      ${input.saleAt}::timestamptz,
       ${Math.max(1, Math.round(input.quantity))},${Math.max(0, Number(input.totalAmount || 0))},
       ${input.salesperson.id}::uuid,${input.salesperson.full_name},${input.salesperson.department_code},${input.salesperson.branch_code},
       ${clean(input.sourceCode) || null},${clean(input.sourceName) || null},${clean(input.carName) || null},${clean(input.carCategory) || null},
@@ -240,11 +235,7 @@ async function markLeadSoldWithoutReassignment(tx: any, input: {
   await tx`
     update crm.leads set
       status_code=null,status_label='تم البيع',
-      sold_at=case
-        when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
-          then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
-        else ${input.saleAt}::timestamptz
-      end,
+      sold_at=${input.saleAt}::timestamptz,
       updated_by=${input.actor.id}::uuid,updated_at=now()
     where id=${input.lead.id}::uuid
   `;
@@ -252,21 +243,13 @@ async function markLeadSoldWithoutReassignment(tx: any, input: {
     await tx`
       update crm.service_requests set
         status_label='تم البيع',request_state='closed',
-        closed_at=case
-          when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
-            then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
-          else ${input.saleAt}::timestamptz
-        end,
+        closed_at=${input.saleAt}::timestamptz,
         closed_by=${input.actor.id}::uuid,closure_reason='تم البيع',updated_at=now()
       where id=${input.lead.current_request_id}::uuid
     `;
     await tx`
       update crm.conversations set service_request_id=null,classification_state='closed',
-        closed_at=case
-          when ${input.saleAt}::text ~ '^\\d{4}-\\d{2}-\\d{2}$'
-            then (${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh')
-          else ${input.saleAt}::timestamptz
-        end,
+        closed_at=${input.saleAt}::timestamptz,
         updated_at=now()
       where service_request_id=${input.lead.current_request_id}::uuid
     `;
@@ -707,10 +690,11 @@ async function createSalesOrder(request: VercelRequest, response: VercelResponse
       returning *,id::text
     `;
 
+    const saleAt = saleTimestampForOrder(orderDate, order.received_at);
     const sale = await syncSalesOrderTransaction(tx, {
       leadId: lead.id,
       salesOrderNo: order.sales_order_no,
-      saleAt: orderDate,
+      saleAt,
       quantity: vehicleQty,
       totalAmount: totalInclVat,
       salesperson,
@@ -723,7 +707,7 @@ async function createSalesOrder(request: VercelRequest, response: VercelResponse
       metadata: { origin: "crm-contact-sales-order", integrationOrderId: order.id, contactId },
     });
 
-    await markLeadSoldWithoutReassignment(tx, { lead, saleAt: orderDate, salesOrderNo: order.sales_order_no, salesperson, actor: user });
+    await markLeadSoldWithoutReassignment(tx, { lead, saleAt, salesOrderNo: order.sales_order_no, salesperson, actor: user });
     return { order, vehicle, sale, leadId: lead.id, customerOwnerId: lead.assigned_to || null, customerDepartmentCode: lead.department_code || null, customerBranchCode: lead.branch_code || null };
   });
 
@@ -859,10 +843,14 @@ async function updateSalesOrder(request: VercelRequest, response: VercelResponse
     `;
     const activeVehicles = afterVehicles.filter((vehicle: any) => !vehicle.is_cancelled);
     const soldQuantity = Math.max(1, Math.round(activeVehicles.reduce((total: number, vehicle: any) => total + Number(vehicle.qty || 0), 0) || 1));
+    const saleAt = saleTimestampForOrder(
+      afterOrder.order_date,
+      afterOrder.erp_created_at || afterOrder.received_at || beforeOrder.received_at,
+    );
     await syncSalesOrderTransaction(tx, {
       leadId: afterOrder.crm_lead_id,
       salesOrderNo: afterOrder.sales_order_no,
-      saleAt: clean(afterOrder.order_date) || clean(afterOrder.received_at),
+      saleAt,
       quantity: soldQuantity,
       totalAmount: Number(afterOrder.total_incl_vat || 0),
       salesperson,

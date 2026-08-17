@@ -1,4 +1,5 @@
 import type { getSql } from "./_db.js";
+import { saleTimestampForOrder } from "./_crm-sale-timestamp.js";
 
 export type CrmSalesSql = ReturnType<typeof getSql>;
 export type CrmSalesMetadata = Parameters<CrmSalesSql["json"]>[0];
@@ -134,9 +135,10 @@ export async function correctLatestCanonicalSaleDate(
   if (!latest) return null;
 
   const correctedAt = new Date().toISOString();
+  const correctedSaleAt = saleTimestampForOrder(input.saleAt, latest.sale_at);
   const [transaction] = await sql<any[]>`
     update crm.sales_transactions set
-      sale_at=(${input.saleAt}::date::timestamp at time zone 'Asia/Riyadh'),
+      sale_at=${correctedSaleAt}::timestamptz,
       updated_by=${input.actorId}::uuid,
       metadata=coalesce(metadata,'{}'::jsonb)||${sql.json({
         soldDateOverride: true,

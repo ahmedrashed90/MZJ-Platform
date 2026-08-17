@@ -22,7 +22,7 @@ const erpSync = read("server/_erpnext-sales-order-sync.ts");
 assert(baseSchema.includes("sold_at timestamptz"), "CRM lead sold snapshot field is missing");
 assert(schema.includes("crm-sold-at-20260803") && schema.includes("add column if not exists sold_at timestamptz"), "sold_at migration is missing");
 assert(baseSchema.includes("create table if not exists crm.sales_transactions"), "canonical sales transaction table is missing");
-assert(erpSync.includes("const saleAt = dateTimeForOrder(normalized.orderDate)"), "ERP order date is not the canonical sale date");
+assert(erpSync.includes("const saleAt = saleTimestampForOrder(normalized.orderDate, saleEventAt)") && !erpSync.includes("T12:00:00+03:00"), "ERP sale timestamp does not preserve the order date with the real creation time");
 assert(erpSync.includes("else ${saleAt}::timestamptz") && erpSync.includes("${saleAt}::timestamptz,${quantity}"), "ERP link does not persist the real sale date or preserve an approved correction");
 assert(erpSync.includes("assigned_name=${mapping.full_name}"), "ERP salesperson snapshot is missing");
 assert(erpSync.includes("department_code=${input.departmentCode}"), "ERP department snapshot is missing");

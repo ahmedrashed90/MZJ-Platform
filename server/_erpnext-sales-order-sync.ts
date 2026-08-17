@@ -8,6 +8,7 @@ import { ensureTrackingSchema } from "./_tracking-schema.js";
 import { createNotification, notificationDedupe } from "./_notifications.js";
 import { processOwnerSaleForLead } from "./_owners.js";
 import { clean, dateValue, numberValue } from "./_tracking-utils.js";
+import { saleTimestampForOrder } from "./_crm-sale-timestamp.js";
 import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
 import type { ErpNextVehiclePayload, NormalizedErpNextSalesOrder } from "./_erpnext-sales-order-normalizer.js";
 import type { NormalizedErpNextPaymentEntry } from "./_erpnext-payment-entry-normalizer.js";
@@ -61,11 +62,6 @@ function paymentType(serviceKey: string) {
   return "كاش";
 }
 
-function dateTimeForOrder(orderDate: string) {
-  const normalized = dateValue(orderDate);
-  return normalized ? `${normalized}T12:00:00+03:00` : new Date().toISOString();
-}
-
 function erpSalesOrderQuantity(normalized: NormalizedErpNextSalesOrder) {
   const quantity = normalized.payloads.reduce((total, payload) => {
     const parsed = Math.floor(numberValue(payload.item?.qty) || 1);
@@ -80,14 +76,14 @@ async function upsertErpNextSalesTransaction(
     orderId: string;
     leadId: string;
     normalized: NormalizedErpNextSalesOrder;
+    saleAt: string;
     mapping: PlatformUserMapping;
     departmentCode: string;
     branchCode: string | null;
     firstPayload: ErpNextVehiclePayload;
   },
 ) {
-  const { normalized, mapping, firstPayload } = input;
-  const saleAt = dateTimeForOrder(normalized.orderDate);
+  const { normalized, mapping, firstPayload, saleAt } = input;
   const quantity = erpSalesOrderQuantity(normalized);
   const totalAmount = numberValue(normalized.grandTotal);
   const crmSourceCode = clean(normalized.crmSourceCode) || "next_erp";
@@ -376,7 +372,6 @@ async function linkCrmCustomer(input: {
 }) {
   const { normalized, mapping, firstPayload } = input;
   const sql = getSql();
-  const saleAt = dateTimeForOrder(normalized.orderDate);
   const serviceKey = serviceKeyFromDepartment(mapping.department_code);
   const departmentCode = clean(mapping.department_code)
     || (serviceKey === "finance" ? "finance_sales" : serviceKey === "service" ? "customer_service" : "cash_sales");
@@ -403,9 +398,30 @@ async function linkCrmCustomer(input: {
 
   return sql.begin(async (tx: any) => {
     const [integrationState] = await tx`
-      select crm_lead_id::text,crm_created_by_integration,crm_previous_state
-      from integrations.erpnext_sales_orders where id=${input.orderId}::uuid for update
+      select
+        so.crm_lead_id::text,so.crm_created_by_integration,so.crm_previous_state,
+        so.received_at,
+        (
+          select case
+            when (st.sale_at at time zone 'Asia/Riyadh')::time in (time '00:00:00',time '12:00:00') then st.created_at
+            else st.sale_at
+          end
+          from crm.sales_transactions st
+          where st.source_reference=${normalized.orderNo}
+            and coalesce(st.is_cancelled,false)=false
+          order by
+            case when st.source_type='erpnext_sales_order' then 0 else 1 end,
+            st.created_at asc,st.id asc
+          limit 1
+        ) as sales_transaction_event_at
+      from integrations.erpnext_sales_orders so
+      where so.id=${input.orderId}::uuid
+      for update
     `;
+    const saleEventAt = normalized.erpCreatedAt !== "legacy"
+      ? normalized.erpCreatedAt
+      : integrationState?.sales_transaction_event_at || integrationState?.received_at || new Date().toISOString();
+    const saleAt = saleTimestampForOrder(normalized.orderDate, saleEventAt);
     const identity = erpCustomerIdentity(normalized);
     const candidates = new Map<string, any>();
     const rememberCandidate = (candidate: any, priority = 1) => {
@@ -675,6 +691,7 @@ async function linkCrmCustomer(input: {
       orderId: input.orderId,
       leadId: lead.id,
       normalized,
+      saleAt,
       mapping,
       departmentCode,
       branchCode,

@@ -17,7 +17,7 @@ const versionAtLeast = (actual, minimum) => {
 };
 
 expect("Package version keeps ERPNext cancel tracking release or newer", versionAtLeast(JSON.parse(read("package.json")).version, "1.19.4"));
-expect("ERPNext instance identity includes creation", contains("server/_erpnext-sales-order-normalizer.ts", "sourceInstanceKey", "created:${erpCreatedAt}", "isCancellation"));
+expect("ERPNext instance identity includes creation", contains("server/_erpnext-sales-order-normalizer.ts", "sourceInstanceKey", "sourceInstanceTimestamp", "created:${sourceInstanceTimestamp}", "isCancellation"));
 expect("ERPNext cancel route uses the unified endpoint", contains("server/integrations/erpnext-sales-order.ts", "normalized.isCancellation", "cancelErpNextSalesOrder"));
 expect("Cancellation is idempotent", contains("server/_erpnext-sales-order-sync.ts", "alreadyCancelled", "ERP_CANCEL_ORDER_NOT_FOUND"));
 expect("Cancelled tracking orders are deleted with their related SMS rows", contains("server/_erpnext-sales-order-sync.ts", "delete from tracking.sms_messages", "delete from tracking.orders"));
