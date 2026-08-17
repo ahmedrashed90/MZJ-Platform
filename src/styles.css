@@ -7393,11 +7393,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 
 .cash-qr-public-page{min-height:100vh;display:grid;place-items:center;padding:24px;background:linear-gradient(145deg,#fbf5f1 0%,#fff 55%,#f6ece6 100%);font-family:inherit}
 .cash-qr-public-card{width:min(100%,520px);background:#fff;border:1px solid #ead8cd;border-radius:24px;box-shadow:0 24px 70px rgba(95,52,37,.12);padding:26px}
-.cash-qr-public-card>header{display:flex;align-items:center;gap:15px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #eee0d7}
-.cash-qr-public-card>header img{width:74px;height:74px;object-fit:contain}
-.cash-qr-public-card>header span{font-size:12px;color:#8b6b5f;font-weight:800}
-.cash-qr-public-card>header h1{margin:4px 0 5px;font-size:23px;color:#40251d}
-.cash-qr-public-card>header p{margin:0;color:#8b746b;font-size:12px;line-height:1.7}
+.cash-qr-public-card>header{display:flex;align-items:center;justify-content:center;text-align:center;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #eee0d7}
+.cash-qr-public-card>header span{display:block;width:100%;font-size:16px;color:#5b3024;font-weight:900;letter-spacing:.01em}
 .cash-qr-public-card form{display:grid;gap:14px}
 .cash-qr-public-card form label{display:grid;gap:7px}
 .cash-qr-public-card form label>span{font-size:12px;font-weight:900;color:#4d3027}
@@ -7414,4 +7411,4 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .cash-qr-honeypot{position:absolute!important;left:-10000px!important;width:1px!important;height:1px!important;opacity:0!important;pointer-events:none!important}
 
 @media(max-width:1200px){.owners-stat-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:760px){.crm-cash-qr-layout{grid-template-columns:1fr}.crm-cash-qr-preview img{width:min(100%,250px)}.cash-qr-public-page{padding:14px}.cash-qr-public-card{padding:19px;border-radius:19px}.cash-qr-public-card>header{align-items:flex-start}.cash-qr-public-card>header img{width:58px;height:58px}.cash-qr-public-card>header h1{font-size:20px}}
+@media(max-width:760px){.crm-cash-qr-layout{grid-template-columns:1fr}.crm-cash-qr-preview img{width:min(100%,250px)}.cash-qr-public-page{padding:14px}.cash-qr-public-card{padding:19px;border-radius:19px}.cash-qr-public-card>header{align-items:center;justify-content:center}.cash-qr-public-card>header span{font-size:15px}}

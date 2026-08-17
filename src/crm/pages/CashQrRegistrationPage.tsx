@@ -39,9 +39,8 @@ export function CashQrRegistrationPage() {
   return (
     <main className="cash-qr-public-page" dir="rtl">
       <section className="cash-qr-public-card">
-        <header>
-          <img src="/logo.png" alt="MZJ" />
-          <div><span>مجموعة محمد بن ذعار العجمي</span><h1>تسجيل عميل مبيعات الكاش</h1><p>اكتب الاسم ورقم الجوال وسيتم تسجيل طلبك مباشرة لدى فريق المبيعات.</p></div>
+        <header className="cash-qr-public-brand">
+          <span>مجموعة محمد بن ذعار العجمي</span>
         </header>
         {done ? (
           <div className="cash-qr-success"><CheckCircle size={44} weight="fill" /><h2>تم التسجيل بنجاح</h2><p>{message}</p></div>

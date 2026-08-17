@@ -6,7 +6,8 @@ import { normalizePhone } from "../_phone-utils.js";
 import { ensureOwnersSchema } from "../_owners-schema.js";
 import { ensureLegacyCustomerCodeForLead } from "../_owners-customer-segments.js";
 
-const QR_SOURCE_NAME = "\u0643\u0648\u062f QR \u0645\u0628\u064a\u0639\u0627\u062a \u0627\u0644\u0643\u0627\u0634";
+const QR_SOURCE_NAME = "كود QR مبيعات الكاش";
+const QR_FALLBACK_POOL_KEY = "cash_qr:fallback:cash_sales";
 
 function body(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -14,6 +15,99 @@ function body(request: VercelRequest) {
     try { return JSON.parse(request.body || "{}") as Record<string, unknown>; } catch { return {}; }
   }
   return {};
+}
+
+async function chooseCashQrFallbackAssignment(sql: any) {
+  const candidates = await sql<any[]>`
+    select u.id::text as user_id,u.full_name,
+      coalesce(
+        (
+          select b.code
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name
+          limit 1
+        ),
+        (
+          select b.code
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=u.id
+          order by ub.is_primary desc,b.sort_order,b.name
+          limit 1
+        )
+      ) as branch_code
+    from core.users u
+    where u.is_active=true
+      and u.can_receive_leads=true
+      and (
+        exists (
+          select 1
+          from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+          where usd.user_id=u.id and usd.system_code='crm' and d.code='cash_sales'
+        )
+        or (
+          not exists (
+            select 1 from core.user_system_departments usd0
+            where usd0.user_id=u.id and usd0.system_code='crm'
+          )
+          and exists (
+            select 1
+            from core.user_departments ud
+            join core.departments d on d.id=ud.department_id and d.is_active=true
+            where ud.user_id=u.id and d.code='cash_sales'
+          )
+        )
+      )
+      and coalesce(
+        (
+          select b.code
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name
+          limit 1
+        ),
+        (
+          select b.code
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=u.id
+          order by ub.is_primary desc,b.sort_order,b.name
+          limit 1
+        )
+      ) is not null
+    order by u.full_name,u.id::text
+  `;
+
+  if (!candidates.length) return null;
+
+  const [state] = await sql<any[]>`
+    select last_user_id::text
+    from crm.assignment_state
+    where pool_key=${QR_FALLBACK_POOL_KEY}
+    limit 1
+  `;
+  const lastIndex = candidates.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
+
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${QR_FALLBACK_POOL_KEY},${selected.user_id}::uuid,${selected.branch_code},now())
+    on conflict (pool_key) do update
+      set last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+
+  return {
+    assignedTo: selected.user_id,
+    assignedName: selected.full_name,
+    branchCode: selected.branch_code,
+    ruleId: null,
+    ruleName: "QR كاش - توزيع تلقائي من مناديب الكاش",
+    fallback: true,
+  };
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -40,15 +134,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (duplicate) {
     return response.status(409).json({
       ok: false,
-      error: "رقم الجوال مسجل بالفعل في CRM",
+      error: "رقم الجوال مسجل بالفعل",
       leadId: duplicate.id,
       status: duplicate.status_label || null,
     });
   }
 
-  const assignment = await chooseAssignment("cash", "", "branch");
+  let assignment: any = await chooseAssignment("cash", "", "branch");
+  let usedFallback = false;
   if (!assignment.assignedTo || !assignment.branchCode) {
-    return response.status(409).json({ ok: false, error: "لا توجد قاعدة توزيع كاش نشطة بمندوب وفرع مؤهلين حاليًا" });
+    const fallback = await chooseCashQrFallbackAssignment(sql);
+    if (fallback) {
+      assignment = fallback;
+      usedFallback = true;
+    }
+  }
+  if (!assignment.assignedTo || !assignment.branchCode) {
+    return response.status(409).json({ ok: false, error: "لا يوجد مندوب مبيعات كاش متاح حاليًا، حاول مرة أخرى لاحقًا" });
   }
 
   const extraData = {
@@ -56,6 +158,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     intakeChannel: "cash_qr",
     assignmentRuleId: assignment.ruleId || null,
     assignmentRuleName: assignment.ruleName || null,
+    assignmentFallback: usedFallback,
   };
 
   const [created] = await sql<any[]>`
@@ -79,6 +182,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
       'QR كود مبيعات الكاش','public_qr','دخول العميل إلى CRM من QR كود مبيعات الكاش'
     )
   `;
+
+  if (usedFallback) {
+    await sql`
+      insert into crm.assignment_logs(
+        rule_id,lead_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action,actor_name
+      ) values(
+        null,${created.id}::uuid,'cash_sales',${assignment.branchCode},'cash_qr',
+        ${assignment.assignedTo}::uuid,${assignment.assignedName || null},'round_robin','cash_qr_fallback','QR كود مبيعات الكاش'
+      )
+    `.catch(() => undefined);
+  }
 
   await (async () => {
     await ensureOwnersSchema();
