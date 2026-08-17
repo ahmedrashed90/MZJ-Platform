@@ -336,6 +336,66 @@ async function registerReferral(response: VercelResponse, payload: Record<string
   return response.status(result.status).json(result.body);
 }
 
+/**
+ * Website checkout rewards must never become the CRM acquisition source or owner.
+ * The canonical website -> Next ERP -> CRM flow owns source/branch/department/assignee.
+ * Here we only persist the Owners referral relation; processOwnerSaleForLead() links it
+ * to the canonical CRM lead later by phone when the website Sales Order is synchronized.
+ */
+async function ensureWebsitePurchaseReferral(input: {
+  referrerId: string;
+  customerName: string;
+  phone: string;
+  websiteOrderId: string;
+  selectedRewards: Record<string, unknown>[];
+}) {
+  const sql = getSql();
+  const metadata = {
+    source: "website_purchase",
+    websiteOrderId: input.websiteOrderId,
+    selectedRewards: input.selectedRewards,
+    crmOwnershipPreserved: true,
+  } as OwnerJson;
+
+  const [existing] = await sql<any[]>`
+    select id::text,referrer_member_id::text,crm_lead_id::text
+    from owners.referrals
+    where referred_phone_normalized=${input.phone}
+    limit 1
+  `;
+  if (existing && existing.referrer_member_id !== input.referrerId) {
+    throw new Error("REFERRAL_OWNER_CONFLICT");
+  }
+
+  const [referral] = await sql<any[]>`
+    insert into owners.referrals(
+      referrer_member_id,referred_name,referred_phone_normalized,status,registered_at,metadata
+    ) values(
+      ${input.referrerId}::uuid,${input.customerName},${input.phone},'registered',now(),${sql.json(metadata)}
+    )
+    on conflict(referred_phone_normalized) where referred_phone_normalized is not null do update set
+      referred_name=excluded.referred_name,
+      registered_at=coalesce(owners.referrals.registered_at,excluded.registered_at),
+      status=case when owners.referrals.status='rejected' then 'registered' else owners.referrals.status end,
+      metadata=coalesce(owners.referrals.metadata,'{}'::jsonb)||excluded.metadata,
+      updated_at=now()
+    returning id::text,crm_lead_id::text
+  `;
+
+  const settings = await getOwnerSettings();
+  await awardOwnerPoints({
+    memberId: input.referrerId,
+    points: Number(settings.points_registration || 0),
+    eventType: "registration",
+    eventKey: `registration:${referral.id}`,
+    referralId: referral.id,
+    description: "سجل صديق جديد من كود الدعوة أثناء طلب الموقع",
+    metadata: { source: "website_purchase", websiteOrderId: input.websiteOrderId } as OwnerJson,
+  });
+
+  return referral.id as string;
+}
+
 async function commerceEligibility(codeValue: unknown, phoneValue: unknown, currentWebsiteOrderId = "") {
   const settings = await getOwnerSettings();
   if (settings.is_enabled === false) return { ok: false as const, status: 403, error: "MZJ Owners Community غير متاح حاليًا" };
@@ -587,37 +647,20 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
   const referrerId = eligibility.referrerKind === "member" ? eligibility.referrer.id as string : null;
   const legacyCustomerCodeId = eligibility.referrerKind === "legacy" ? eligibility.referrer.id as string : null;
   if (eligibility.customerKind === "new" && eligibility.referrerKind === "member") {
-    const referralMetadata = {
-      source: "website_purchase",
-      websiteOrderId,
-      selectedReward: rewardSnapshot,
-    };
-    const leadMetadata = {
-      ownerReferralRewardId: rewardSnapshot.id,
-      ownerReferralRewardName: rewardSnapshot.name,
-      ownerReferralRewardType: rewardSnapshot.type,
-      ownerReferralRewardValue: rewardSnapshot.value,
-      ownerReferralDiscountType: rewardSnapshot.discountType,
-      ownerReferralDiscountValue: rewardSnapshot.discountValue,
-      ownerReferralDiscountAmount: rewardSnapshot.discountAmount,
-      ownerReferralDiscountPercent: rewardSnapshot.discountPercent,
-      ownerReferralWebsiteOrderId: websiteOrderId,
-    };
-
-    const registration = await registerReferralCore(
-      { code: payload.code, name: customerName, phone },
-      {
-        source: "website_purchase",
-        note: "تم التسجيل من كود دعوة أثناء طلب شراء سيارة من الموقع",
-        extraReferralMetadata: referralMetadata,
-        extraLeadMetadata: leadMetadata,
-        successMessage: "تم ربط كود الدعوة والمكافأة بطلب الشراء",
-      },
-    );
-    if (registration.status !== 200 || !registration.referralId || !registration.referrerId) {
-      return response.status(registration.status).json(registration.body);
+    try {
+      referralId = await ensureWebsitePurchaseReferral({
+        referrerId: eligibility.referrer.id,
+        customerName,
+        phone,
+        websiteOrderId,
+        selectedRewards: [rewardSnapshot],
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "REFERRAL_OWNER_CONFLICT") {
+        return response.status(409).json({ ok: false, error: "هذا العميل مرتبط بكود دعوة آخر بالفعل" });
+      }
+      throw error;
     }
-    referralId = registration.referralId;
   }
 
   try {
@@ -799,24 +842,20 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
   const rewardSnapshots = selectedRewards.map(commerceRewardPayload);
   let referralId: string | null = existingRows[0]?.referral_id || null;
   if (eligibility.customerKind === "new" && eligibility.referrerKind === "member" && !referralId) {
-    const registration = await registerReferralCore(
-      { code: payload.code, name: customerName, phone },
-      {
-        source: "website_purchase",
-        note: "تم التسجيل من كود دعوة أثناء طلب شراء سيارة من الموقع",
-        extraReferralMetadata: { source: "website_purchase", websiteOrderId, selectedRewards: rewardSnapshots },
-        extraLeadMetadata: {
-          ownerReferralRewardIds: rewardSnapshots.map((reward: any) => reward.id),
-          ownerReferralRewardNames: rewardSnapshots.map((reward: any) => reward.name),
-          ownerReferralWebsiteOrderId: websiteOrderId,
-        },
-        successMessage: "تم ربط كود الدعوة والمكافآت بطلب الشراء",
-      },
-    );
-    if (registration.status !== 200 || !registration.referralId || !registration.referrerId) {
-      return response.status(registration.status).json(registration.body);
+    try {
+      referralId = await ensureWebsitePurchaseReferral({
+        referrerId: eligibility.referrer.id,
+        customerName,
+        phone,
+        websiteOrderId,
+        selectedRewards: rewardSnapshots,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "REFERRAL_OWNER_CONFLICT") {
+        return response.status(409).json({ ok: false, error: "هذا العميل مرتبط بكود دعوة آخر بالفعل" });
+      }
+      throw error;
     }
-    referralId = registration.referralId;
   }
 
   try {
@@ -854,8 +893,7 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
 
         const metadata = {
           source: "website_purchase",
-          referralCode: eligibility.referrer.referral_code,
-          referrerKind: eligibility.referrerKind,
+            referrerKind: eligibility.referrerKind,
           customerKind: eligibility.customerKind,
           selfUse: eligibility.selfUse === true,
           baseWebsiteOrderId: websiteOrderId,
