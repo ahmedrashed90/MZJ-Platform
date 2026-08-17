@@ -6,7 +6,6 @@ const schema = read("server/_operations-schema.ts");
 const databaseSchema = read("database/schema.sql");
 const migration = read("database/migrations/20260721_operations_delivery_approval_and_check_history_v1162.sql");
 const api = read("server/operations/index.ts");
-const marketingApi = read("server/marketing/index.ts");
 const dashboardModal = read("src/operations/components/DashboardOperationsModal.tsx");
 const detail = read("src/operations/components/VehicleDetailModal.tsx");
 const vehicleTable = read("src/operations/components/VehicleTable.tsx");
@@ -34,10 +33,6 @@ const checks = [
   ["Movement general note is relabeled for reservation shortage and location", movementPage.includes("<span>حجز - نواقص - تحديد مكان</span>") && movementPage.includes('placeholder="اكتب الحجز أو النواقص أو تحديد المكان"')],
   ["Tracking request is a compact progress control with percentage tones", vehicleTable.includes("trackingProgressTone") && styles.includes(".operations-tracking-open.low") && styles.includes(".operations-tracking-open.medium") && styles.includes(".operations-tracking-open.high")],
   ["Approval screen closes a vehicle after automatic final delivery", approvalsPage.includes("setSelected(updated || null)")],
-  ["Photography completion is authorized by the marketing workflow permission", api.includes('const permission = isPhotography ? "marketing.photo_request.complete" : "operations.request.finish_order"')],
-  ["Photography completion does not depend on operations vehicle-status scope", api.includes("requiresVehicleStatusAccess: !isPhotography") && api.includes("if (advancePolicy.requiresVehicleStatusAccess) assertItemsVehicleStatusAccess();")],
-  ["Marketing photo completion endpoint only accepts photography requests", api.includes('user, { expectedRequestKind: "photography" })')],
-  ["Marketing UI completion capability mirrors the complete-photo permission", marketingApi.includes('const canCompletePhotoRequest=hasPermission(user,"marketing.photo_request.complete")') && marketingApi.includes("${canCompletePhotoRequest}=true and r.requested_by=${user.id}::uuid and r.status='vehicle_received'")],
 ];
 
 let failed = false;

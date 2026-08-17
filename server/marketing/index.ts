@@ -6,7 +6,6 @@ import { requireUser, requestIp, type SessionUser } from "../_auth.js";
 import { canAccessSystem, hasPermission } from "../../shared/system-access.js";
 import { getSystemAccess } from "../_access-control.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
-import { completePhotographyRequest } from "../operations/index.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
 import { buildMarketingStorageKey, createDeleteUrl, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
@@ -3292,6 +3291,66 @@ async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user
   });
 }
 
+async function completeMarketingPhotoRequest(sql:ReturnType<typeof getSql>,requestIdValue:string,user:SessionUser,note=""){
+  if(!hasPermission(user,"marketing.photo_request.complete"))throw new Error("لا توجد صلاحية لإنهاء طلب التصوير");
+  const requestId=clean(requestIdValue);
+  if(!requestId)throw new Error("طلب التصوير غير محدد");
+  return sql.begin(async tx=>{
+    const[request]=await tx<any[]>`
+      select r.*,r.id::text
+      from operations.transfer_requests r
+      where r.id=${requestId}::uuid and r.request_kind='photography' and r.is_deleted=false
+      for update
+    `;
+    if(!request)throw new Error("طلب التصوير غير موجود");
+    if(request.cancelled_at)throw new Error("طلب التصوير ملغي");
+    if(String(request.requested_by)!==String(user.id))throw new Error("لا توجد صلاحية لإنهاء طلب تصوير أنشأه مستخدم آخر");
+    if(request.status!=="vehicle_received")throw new Error("لا يمكن إنهاء طلب التصوير قبل اكتمال مرحلة استلام السيارة");
+
+    const items=await tx<any[]>`
+      select v.id::text,v.vin
+      from operations.transfer_request_vehicles rv
+      join operations.vehicles v on v.id=rv.vehicle_id
+      where rv.transfer_request_id=${requestId}::uuid
+      order by v.vin
+    `;
+    if(!items.length)throw new Error("طلب التصوير لا يحتوي على سيارات صالحة");
+
+    const vehicleIds=items.map((item)=>item.id);
+    await tx`
+      update operations.vehicles
+      set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1
+      where id in ${tx(vehicleIds)}
+    `;
+    await tx`
+      update operations.transfer_requests
+      set status='completed',completed_at=now(),updated_at=now(),version=version+1
+      where id=${requestId}::uuid
+    `;
+
+    const actorRole=user.roles[0]||"مستخدم التسويق";
+    const actorBranch=user.branches[0]||null;
+    try{
+      await tx.savepoint(async eventTx=>{
+        await eventTx`
+          insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,before_data,after_data)
+          values(${requestId}::uuid,'completed','stage_completed',${clean(note)||null},${user.id}::uuid,${user.fullName},${actorRole},${actorBranch},${eventTx.json(dbJson(request))},${eventTx.json(dbJson({status:'completed'}))})
+        `;
+      });
+    }catch(eventError){console.error("Marketing photo request stage event failed",{requestId,eventError});}
+    try{
+      await tx.savepoint(async eventTx=>{
+        await eventTx`
+          insert into operations.event_outbox(event_type,aggregate_type,aggregate_id,entity_type,entity_id,actor_id,actor_name,source_branch,destination_branch,title,description,metadata)
+          values('operations.request.completed','transfer_request',${requestId},'transfer_request',${requestId},${user.id}::uuid,${user.fullName},${request.source_branch_code||null},${request.destination_branch_code||null},'تحديث طلب التصوير',${request.request_no},${eventTx.json(dbJson({requestKind:'photography',status:'completed'}))})
+        `;
+      });
+    }catch(outboxError){console.error("Marketing photo request outbox failed",{requestId,outboxError});}
+
+    return{ok:true,message:"تم إنهاء طلب التصوير"};
+  });
+}
+
 async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const vehicles=arrayValue(body.vehicles).map((item:any)=>({vehicleId:clean(item.vehicleId),note:clean(item.note)})).filter((item:any)=>item.vehicleId);
   const destinationLocationId=clean(body.destinationLocationId);
@@ -3438,7 +3497,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
     else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
-    else if(action==='complete_photo_request')result=await completePhotographyRequest(sql,clean(body.id),user,clean(body.note));
+    else if(action==='complete_photo_request')result=await completeMarketingPhotoRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='create_raw_folders')result=await createRawFolders(body);
     else throw new Error("الإجراء غير مدعوم");
