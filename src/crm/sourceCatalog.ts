@@ -41,6 +41,8 @@ const SOURCE_LABELS: Record<string, string> = {
   manual: "إدخال يدوي",
   manual_entry: "إدخال يدوي",
   "manual-entry": "إدخال يدوي",
+  qr: "QR",
+  cash_qr: "QR",
 };
 
 const ARABIC_NORMALIZED: Record<string, string> = {

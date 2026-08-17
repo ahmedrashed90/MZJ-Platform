@@ -6,7 +6,8 @@ import { normalizePhone } from "../_phone-utils.js";
 import { ensureOwnersSchema } from "../_owners-schema.js";
 import { ensureLegacyCustomerCodeForLead } from "../_owners-customer-segments.js";
 
-const QR_SOURCE_NAME = "كود QR مبيعات الكاش";
+const QR_SOURCE_CODE = "qr";
+const QR_SOURCE_NAME = "QR";
 const QR_FALLBACK_POOL_KEY = "cash_qr:fallback:cash_sales";
 
 function body(request: VercelRequest) {
@@ -223,7 +224,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         service_key,department_code,branch_code,status_label,payment_type,
         assigned_to,responsible_name_snapshot,extra_data,registered_at,created_at,updated_at
       ) values(
-        ${customerName},${phoneRaw || phone},${phone},${contact.id}::uuid,'branch',${QR_SOURCE_NAME},'cash_qr',
+        ${customerName},${phoneRaw || phone},${phone},${contact.id}::uuid,${QR_SOURCE_CODE},${QR_SOURCE_NAME},'cash_qr',
         'cash','cash_sales',${assignment.branchCode},'عميل جديد','كاش',
         ${assignment.assignedTo}::uuid,${assignment.assignedName || null},${tx.json(extraData)},now(),now(),now()
       )

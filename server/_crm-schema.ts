@@ -335,6 +335,7 @@ insert into crm.sources(code, name, sort_order) values
 ('other_website','موقع آخر',100),
 ('website','Website',105),
 ('branch','خلال الفرع',110),
+('qr','QR',115),
 ('friend','صديق',120),
 ('unified_number','اتصال الرقم الموحد',130),
 ('next_erp','NEXT ERP',140)
@@ -423,6 +424,7 @@ insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_ro
 ('other_website','موقع آخر',100,true,array['crm','marketing'],'whatsapp',false,'direct'),
 ('website','Website',105,true,array['crm','marketing'],'whatsapp',false,'direct'),
 ('branch','خلال الفرع',110,true,array['crm','marketing'],'whatsapp',false,'direct'),
+('qr','QR',115,true,array['crm'],'whatsapp',false,'direct'),
 ('friend','صديق',120,true,array['crm','marketing'],'whatsapp',false,'direct'),
 ('unified_number','اتصال الرقم الموحد',130,true,array['crm','marketing'],'whatsapp',false,'digital'),
 ('manual','إدخال يدوي',140,true,array['crm'],'whatsapp',false,'direct')
@@ -1686,6 +1688,27 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-sales-history-20260806'
       `;
       if (!salesHistoryMigration) await runSqlScript(CRM_SALES_HISTORY_20260806_SQL);
+
+      // Cash QR has its own canonical CRM source. Keep both new and previously-created QR leads correct
+      // without affecting any other CRM source or flow.
+      await sql`
+        insert into crm.sources(code,name,sort_order,is_active)
+        values('qr','QR',115,true)
+        on conflict(code) do update set name='QR',sort_order=115,is_active=true
+      `;
+      await sql`
+        insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group,updated_at)
+        values('qr','QR',115,true,array['crm'],'whatsapp',false,'direct',now())
+        on conflict(code) do update set
+          name='QR',sort_order=115,is_active=true,system_codes=array['crm'],
+          delivery_route='whatsapp',allow_free_text=false,report_group='direct',updated_at=now()
+      `;
+      await sql`
+        update crm.leads
+        set source_code='qr',source_name='QR'
+        where platform_code='cash_qr'
+          and (source_code is distinct from 'qr' or source_name is distinct from 'QR')
+      `;
     })().catch((error) => {
       schemaPromise = null;
       throw error;
