@@ -468,7 +468,7 @@ function nextRequestStage(status: string) {
 
 function canAdvanceRequest(row: any, user: NonNullable<Awaited<ReturnType<typeof requireOperationsUser>>>, nextStatus = nextRequestStage(row.status)) {
   if (!nextStatus || row.cancelled_at) return false;
-  if (nextStatus === "completed") return hasPermission(user, "operations.request.finish_order") && row.requested_by === user.id;
+  if (nextStatus === "completed") return hasPermission(user, "operations.request.finish_order") && (row.requested_by === user.id || hasPermission(user, "platform.superadmin"));
   if (nextStatus === "request_received") return hasPermission(user, "operations.request.receive_order") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
   if (nextStatus === "vehicle_sent") return hasPermission(user, "operations.request.send_car") && hasBranchAccess(user, row.source_branch_code, row.source_location_code);
   if (nextStatus === "vehicle_received") return hasPermission(user, "operations.request.receive_car") && hasBranchAccess(user, row.destination_branch_code, row.destination_location_code);
@@ -1216,7 +1216,7 @@ async function transferAction(sql: ReturnType<typeof getSql>, body: Record<strin
       throw new OperationError(409, "CONFLICT", "يجب تنفيذ مراحل الطلب بالترتيب");
     }
     if (!canAdvanceRequest(r, user, next)) {
-      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء تتطلب الصلاحية المخصصة وتظل متاحة لمنشئ الطلب فقط");
+      if (next === "completed") throw new OperationError(403, "FORBIDDEN", "مرحلة تم الانتهاء تتطلب الصلاحية المخصصة وتتاح لمنشئ الطلب أو مدير النظام");
       if (next === "vehicle_received") throw new OperationError(403, "FORBIDDEN", "مرحلة تم استلام السيارة خاصة بمسؤول المكان المستهدف");
       throw new OperationError(403, "FORBIDDEN", "هذه المرحلة خاصة بمسؤول مكان السيارة الحالي");
     }

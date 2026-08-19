@@ -53,6 +53,16 @@ type StockVehicleRow = StockCar & {
   usage: any[];
 };
 
+type StockSummaryRow = {
+  key: string;
+  carName: string;
+  statement: string;
+  exteriorColor: string;
+  interiorColor: string;
+  modelYear: string;
+  quantity: number;
+};
+
 const requestStageOrder = ["request_received", "vehicle_sent", "vehicle_received", "completed"] as const;
 const requestStatusLabels: Record<string, string> = {
   created: "طلب جديد",
@@ -103,7 +113,7 @@ function toVehicleRow(row: StockVehicleRow): VehicleRow {
 
 export function StockPage() {
   const [data, setData] = useState<StockPayload | null>(null);
-  const [pageTab, setPageTab] = useState<"stock" | "requests">("stock");
+  const [pageTab, setPageTab] = useState<"stock" | "all" | "requests">("stock");
   const [requestTab, setRequestTab] = useState<"active" | "completed">("active");
   const [selectedRequest, setSelectedRequest] = useState<PhotoRequestRow | null>(null);
   const [filters, setFilters] = useState({
@@ -171,6 +181,27 @@ export function StockPage() {
     const matchesType = !filters.contentType || row.usage.some((item) => String(item?.contentType || item?.creativeType || "") === filters.contentType);
     return matchesSearch && matchesCar && matchesStatement && matchesPhoto && matchesAgenda && matchesMonth && matchesType;
   }), [stockRows, filters]);
+
+  const allCarsRows = useMemo<StockSummaryRow[]>(() => {
+    const groups = new Map<string, StockSummaryRow>();
+    for (const row of stockRows) {
+      const carName = String(row.car_name || "");
+      const statement = String(row.statement || "");
+      const exteriorColor = String(row.exterior_color || "");
+      const interiorColor = String(row.interior_color || "");
+      const modelYear = String(row.model_year || "");
+      const key = JSON.stringify([carName, statement, exteriorColor, interiorColor, modelYear]);
+      const current = groups.get(key);
+      if (current) current.quantity += 1;
+      else groups.set(key, { key, carName, statement, exteriorColor, interiorColor, modelYear, quantity: 1 });
+    }
+    return [...groups.values()].sort((left, right) =>
+      [left.carName, left.statement, left.exteriorColor, left.interiorColor, left.modelYear].join(" ").localeCompare(
+        [right.carName, right.statement, right.exteriorColor, right.interiorColor, right.modelYear].join(" "),
+        "ar",
+      ),
+    );
+  }, [stockRows]);
 
   const carNames = useMemo(
     () => [...new Set(stockRows.map((item) => item.car_name).filter(Boolean))] as string[],
@@ -388,6 +419,7 @@ export function StockPage() {
 
       <div className="operations-subtabs marketing-stock-tabs">
         <button type="button" className={pageTab === "stock" ? "active" : ""} onClick={() => setPageTab("stock")}>الاستوك</button>
+        <button type="button" className={pageTab === "all" ? "active" : ""} onClick={() => setPageTab("all")}>كل السيارات</button>
         <button type="button" className={pageTab === "requests" ? "active" : ""} onClick={() => setPageTab("requests")}>متابعة طلبات التصوير</button>
       </div>
 
@@ -436,6 +468,26 @@ export function StockPage() {
             </div>
           </section>
         </>
+      ) : pageTab === "all" ? (
+        <section className="marketing-card">
+          <div className="marketing-table-wrap">
+            <table>
+              <thead><tr><th>السيارة</th><th>البيان</th><th>اللون الخارجي</th><th>اللون الداخلي</th><th>الموديل</th><th>الكمية</th></tr></thead>
+              <tbody>
+                {allCarsRows.length ? allCarsRows.map((row) => (
+                  <tr key={row.key}>
+                    <td>{row.carName || "—"}</td>
+                    <td>{row.statement || "—"}</td>
+                    <td>{row.exteriorColor || "—"}</td>
+                    <td>{row.interiorColor || "—"}</td>
+                    <td>{row.modelYear || "—"}</td>
+                    <td>{row.quantity.toLocaleString("ar-SA-u-nu-latn")}</td>
+                  </tr>
+                )) : <tr><td colSpan={6}>لا توجد سيارات في الاستوك.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : (
         <>
           <div className="operations-subtabs marketing-photo-followup-tabs">

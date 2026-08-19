@@ -527,7 +527,7 @@ insert into crm.customer_field_definitions(
 ('department_code','القسم','department',40,'{}',true,true,true,'[]'::jsonb,true,true),
 ('department_transfer','تحويل لقسم آخر','transfer',50,'{}',true,false,false,'[]'::jsonb,true,true),
 ('customer_name','اسم العميل','text',60,'{}',true,true,true,'[]'::jsonb,true,true),
-('phone','رقم الجوال','phone',70,'{}',true,true,true,'[]'::jsonb,true,true),
+('phone','رقم الجوال','phone',70,'{}',true,false,true,'[]'::jsonb,true,true),
 ('age','العمر','number',80,'{}',true,false,true,'[]'::jsonb,true,false),
 ('salary','الراتب','number',90,'{}',true,false,true,'[]'::jsonb,true,true),
 ('obligation','الالتزام إن وجد','number',100,'{}',true,false,true,'[]'::jsonb,true,true),
@@ -1610,6 +1610,16 @@ values('crm-sales-history-20260806')
 on conflict(version) do nothing;
 `;
 
+const CRM_PHONE_OPTIONAL_20260820_SQL = String.raw`
+update crm.customer_field_definitions
+set is_required=false,updated_at=now()
+where field_key='phone' and is_required=true;
+
+insert into core.schema_migrations(version)
+values('crm-phone-optional-20260820')
+on conflict(version) do nothing;
+`;
+
 const CRM_SALES_ORDER_ACTUAL_TIME_20260817_SQL = String.raw`
 begin;
 
@@ -1754,6 +1764,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-sales-order-actual-time-20260817'
       `;
       if (!salesOrderActualTimeMigration) await runSqlScript(CRM_SALES_ORDER_ACTUAL_TIME_20260817_SQL);
+      const [phoneOptionalMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-phone-optional-20260820'
+      `;
+      if (!phoneOptionalMigration) await runSqlScript(CRM_PHONE_OPTIONAL_20260820_SQL);
 
       // Cash QR has its own canonical CRM source. Keep both new and previously-created QR leads correct
       // without affecting any other CRM source or flow.
