@@ -11,6 +11,7 @@ import {
   createOwnerSession,
   ensureOwnerMemberByPhone,
   ensureOwnerMemberForLead,
+  ensureOwnerPurchasePointsForMember,
   getOwnerSession,
   getOwnerSettings,
   ownerHash,
@@ -1132,6 +1133,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   let member = await getOwnerSession(request);
   if (!member) return response.status(401).json({ ok: false, error: "يجب تسجيل الدخول" });
   await syncOwnerReferralProgress(member.id);
+  await ensureOwnerPurchasePointsForMember(member.id);
   const [refreshedMember] = await sql<any[]>`
     select *,id::text,crm_lead_id::text,source_sale_id::text
     from owners.members
