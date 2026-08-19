@@ -202,7 +202,7 @@ export async function backfillOwnerPurchasePointsForExistingMembers() {
   const sql = getSql();
 
   return sql.begin(async (tx) => {
-    const inserted = await tx<any[]>`
+    const eligibleRows = await tx<any[]>`
       with eligible as (
         select
           m.id as member_id,
@@ -211,46 +211,81 @@ export async function backfillOwnerPurchasePointsForExistingMembers() {
         join lateral (
           select st.id
           from crm.sales_transactions st
+          join crm.leads l on l.id=st.lead_id and l.is_deleted=false
           where coalesce(st.is_cancelled,false)=false
             and (
               (m.source_sale_id is not null and st.id=m.source_sale_id)
-              or (m.source_sale_id is null and m.crm_lead_id is not null and st.lead_id=m.crm_lead_id)
+              or (m.crm_lead_id is not null and st.lead_id=m.crm_lead_id)
+              or (
+                nullif(m.phone_normalized,'') is not null
+                and nullif(l.phone_normalized,'') is not null
+                and l.phone_normalized=m.phone_normalized
+              )
             )
           order by st.sale_at desc,st.created_at desc,st.id desc
           limit 1
         ) sale on true
         where m.status='active'
           and coalesce(m.metadata->>'memberKind','real')<>'test'
+      ), inserted as (
+        insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
+        select
+          eligible.member_id,
+          ${points},
+          'purchase',
+          'purchase:' || eligible.sale_id::text,
+          'مكافأة إتمام عملية شراء',
+          jsonb_build_object('saleId',eligible.sale_id::text,'appliedFromSettings',true)
+        from eligible
+        on conflict(event_key) do nothing
+        returning member_id
+      ), credited as (
+        update owners.members member set
+          lifetime_points=member.lifetime_points+${points},
+          tier_code=case
+            when member.lifetime_points+${points}>=${platinum} then 'platinum'
+            when member.lifetime_points+${points}>=${gold} then 'gold'
+            when member.lifetime_points+${points}>=${silver} then 'silver'
+            else 'member'
+          end,
+          updated_at=now()
+        where member.id in (select inserted.member_id from inserted)
+        returning member.id
       )
-      insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
       select
-        eligible.member_id,
-        ${points},
-        'purchase',
-        'purchase:' || eligible.sale_id::text,
-        'مكافأة إتمام عملية شراء',
-        jsonb_build_object('saleId',eligible.sale_id::text,'appliedFromSettings',true)
+        eligible.member_id::text,
+        exists(select 1 from inserted i where i.member_id=eligible.member_id) as inserted,
+        exists(select 1 from credited c where c.id=eligible.member_id) as credited
       from eligible
-      on conflict(event_key) do nothing
-      returning member_id::text
     `;
-    if (!inserted.length) return 0;
 
-    const memberIds = inserted.map((row) => row.member_id);
+    // points_ledger is the immutable source of truth for the spendable balance.
+    // Reconcile purchaser balances as well so a purchase event that already exists
+    // can never leave the member card showing a stale zero balance.
     await tx`
-      update owners.members set
-        points_balance=greatest(0,points_balance+${points}),
-        lifetime_points=lifetime_points+${points},
-        tier_code=case
-          when lifetime_points+${points}>=${platinum} then 'platinum'
-          when lifetime_points+${points}>=${gold} then 'gold'
-          when lifetime_points+${points}>=${silver} then 'silver'
-          else 'member'
-        end,
+      with ledger_totals as (
+        select
+          ledger.member_id,
+          coalesce(sum(ledger.points),0)::int as points_balance
+        from owners.points_ledger ledger
+        where exists (
+          select 1
+          from owners.points_ledger purchase
+          where purchase.member_id=ledger.member_id
+            and purchase.event_type='purchase'
+        )
+        group by ledger.member_id
+      )
+      update owners.members member set
+        points_balance=greatest(0,ledger_totals.points_balance),
         updated_at=now()
-      where id=any(${memberIds}::uuid[])
+      from ledger_totals
+      where member.id=ledger_totals.member_id
+        and member.status='active'
+        and coalesce(member.metadata->>'memberKind','real')<>'test'
     `;
-    return inserted.length;
+
+    return eligibleRows.filter((row) => row.inserted === true).length;
   });
 }
 

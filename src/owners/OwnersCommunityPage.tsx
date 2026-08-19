@@ -233,7 +233,7 @@ export function OwnersCommunityPage() {
   }
 
   async function savePointsSettings() {
-    await act({ action: "save_points_settings", ...pointsDraft }, "تم حفظ إعدادات النقاط");
+    await act({ action: "save_points_settings", ...pointsDraft }, "تم حفظ إعدادات النقاط وتحديث أرصدة العملاء");
   }
 
   function setPointValue(key: keyof PointsDraft, value: string) {

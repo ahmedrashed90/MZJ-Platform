@@ -229,6 +229,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     await syncLegacyCustomerCodes();
+    // Keep purchaser balances self-healing for administrators when purchase points are enabled.
+    // This is idempotent: the ledger event key prevents duplicate awards.
+    if (hasPermission(actor, "owners.community.manage") || hasPermission(actor, "settings.owners.manage")) {
+      await backfillOwnerPurchasePointsForExistingMembers();
+    }
 
     const [settings, members, legacyCustomers, referrals, rewards, redemptions, stats] = await Promise.all([
       sql<any[]>`select * from owners.settings where id='default'`.then((rows) => rows[0] || {}),
@@ -380,10 +385,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where id='default'
       returning *
     `;
+    const purchasersSynced = settings?.points_purchase_enabled === true
+      ? await syncMembersFromCanonicalSales()
+      : 0;
     const purchasePointsApplied = settings?.points_purchase_enabled === true
       ? await backfillOwnerPurchasePointsForExistingMembers()
       : 0;
-    return response.status(200).json({ ok: true, settings, purchasePointsApplied });
+    return response.status(200).json({ ok: true, settings, purchasersSynced, purchasePointsApplied });
   }
 
   if (action === "save_points_settings") {
@@ -406,10 +414,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where id='default'
       returning *
     `;
+    const purchasersSynced = settings?.points_purchase_enabled === true
+      ? await syncMembersFromCanonicalSales()
+      : 0;
     const purchasePointsApplied = settings?.points_purchase_enabled === true
       ? await backfillOwnerPurchasePointsForExistingMembers()
       : 0;
-    return response.status(200).json({ ok: true, settings, purchasePointsApplied });
+    return response.status(200).json({ ok: true, settings, purchasersSynced, purchasePointsApplied });
   }
 
   if (action === "sync_members") {
