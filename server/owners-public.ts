@@ -542,7 +542,15 @@ function commerceRewardPayload(reward: any) {
   };
 }
 
-async function getCommerceRewards(customerKind: "new" | "existing", rewardId?: string) {
+type CommerceReferrerKind = "legacy" | "member";
+
+function rewardAvailableForReferrerKind(reward: any, referrerKind: CommerceReferrerKind) {
+  return referrerKind === "legacy"
+    ? reward?.available_for_referral_purchase === true
+    : reward?.available_for_existing_customer_purchase === true;
+}
+
+async function getCommerceRewards(referrerKind: CommerceReferrerKind, rewardId?: string) {
   const sql = getSql();
   const rows = await sql<any[]>`
     select
@@ -553,8 +561,8 @@ async function getCommerceRewards(customerKind: "new" | "existing", rewardId?: s
     from owners.rewards
     where is_active=true
       and (
-        (${customerKind}='existing' and available_for_existing_customer_purchase=true)
-        or (${customerKind}='new' and (available_for_referral_purchase=true or available_for_existing_customer_purchase=true))
+        (${referrerKind}='legacy' and available_for_referral_purchase=true)
+        or (${referrerKind}='member' and available_for_existing_customer_purchase=true)
       )
       and (starts_at is null or starts_at<=now())
       and (ends_at is null or ends_at>=now())
@@ -571,14 +579,14 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
   const eligibility = await commerceEligibility(payload.code, payload.phone);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
 
-  const rewards = await getCommerceRewards(eligibility.customerKind);
+  const rewards = await getCommerceRewards(eligibility.referrerKind);
   const newCustomerRewards = rewards
     .filter((reward: any) => reward.available_for_referral_purchase === true)
     .map(commerceRewardPayload);
   const existingCustomerRewards = rewards
     .filter((reward: any) => reward.available_for_existing_customer_purchase === true)
     .map(commerceRewardPayload);
-  const primaryNewReward = eligibility.customerKind === "new" ? (newCustomerRewards[0] || null) : null;
+  const primaryNewReward = eligibility.referrerKind === "legacy" ? (newCustomerRewards[0] || null) : null;
   return response.status(200).json({
     ok: true,
     eligible: true,
@@ -587,7 +595,7 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
     referrerKind: eligibility.referrerKind,
     customerKind: eligibility.customerKind,
     selfUse: eligibility.selfUse === true,
-    // Backward-compatible field for older clients. New integrations should use newCustomerRewards.
+    // Backward-compatible field for older clients. Reward audience is now selected by referrerKind.
     primaryNewRewardId: primaryNewReward?.id || null,
     newCustomerRewardIds: newCustomerRewards.map((reward: any) => reward.id),
     newCustomerRewards,
@@ -652,7 +660,7 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
 
   const eligibility = await commerceEligibility(payload.code, phone);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
-  const rewards = await getCommerceRewards(eligibility.customerKind, rewardId);
+  const rewards = await getCommerceRewards(eligibility.referrerKind, rewardId);
   const reward = rewards[0];
   if (!reward) return response.status(409).json({ ok: false, error: "المكافأة المختارة لم تعد متاحة" });
 
@@ -689,9 +697,7 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
       const now = Date.now();
       const available = lockedReward
         && lockedReward.is_active === true
-        && (eligibility.customerKind === "existing"
-          ? lockedReward.available_for_existing_customer_purchase === true
-          : (lockedReward.available_for_referral_purchase === true || lockedReward.available_for_existing_customer_purchase === true))
+        && rewardAvailableForReferrerKind(lockedReward, eligibility.referrerKind)
         && (!lockedReward.starts_at || new Date(lockedReward.starts_at).getTime() <= now)
         && (!lockedReward.ends_at || new Date(lockedReward.ends_at).getTime() >= now)
         && (lockedReward.stock_quantity == null
@@ -833,23 +839,24 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
 
   const eligibility = await commerceEligibility(payload.code, phone, websiteOrderId);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
-  const availableRewards = await getCommerceRewards(eligibility.customerKind);
+  const availableRewards = await getCommerceRewards(eligibility.referrerKind);
   let primaryReward: any = null;
   let bonusReward: any = null;
 
-  if (eligibility.customerKind === "new") {
-    primaryReward = availableRewards.find((reward: any) =>
-      String(reward.id) === primaryRewardId && reward.available_for_referral_purchase === true
-    ) || null;
-    if (!primaryReward) return response.status(409).json({ ok: false, error: "مكافأة العميل الجديد المختارة لم تعد متاحة" });
-    if (bonusRewardId) {
-      bonusReward = availableRewards.find((reward: any) => String(reward.id) === bonusRewardId && reward.available_for_existing_customer_purchase === true) || null;
-      if (!bonusReward) return response.status(409).json({ ok: false, error: "المكافأة الإضافية لم تعد متاحة" });
+  primaryReward = availableRewards.find((reward: any) =>
+    String(reward.id) === primaryRewardId && rewardAvailableForReferrerKind(reward, eligibility.referrerKind)
+  ) || null;
+  if (!primaryReward) {
+    return response.status(409).json({ ok: false, error: "المكافأة المختارة لا تطابق نوع الكود أو لم تعد متاحة" });
+  }
+  if (bonusRewardId) {
+    if (eligibility.customerKind !== "new") {
+      return response.status(400).json({ ok: false, error: "العميل القديم يمكنه اختيار مكافأة واحدة فقط" });
     }
-  } else {
-    if (bonusRewardId) return response.status(400).json({ ok: false, error: "العميل القديم يمكنه اختيار مكافأة واحدة فقط" });
-    primaryReward = availableRewards.find((reward: any) => String(reward.id) === primaryRewardId && reward.available_for_existing_customer_purchase === true) || null;
-    if (!primaryReward) return response.status(409).json({ ok: false, error: "مكافأة العميل القديم لم تعد متاحة" });
+    bonusReward = availableRewards.find((reward: any) =>
+      String(reward.id) === bonusRewardId && rewardAvailableForReferrerKind(reward, eligibility.referrerKind)
+    ) || null;
+    if (!bonusReward) return response.status(409).json({ ok: false, error: "المكافأة الإضافية لم تعد متاحة" });
   }
 
   const selectedRewards = [primaryReward, bonusReward].filter(Boolean);
@@ -893,9 +900,7 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
           for update
         `;
         const now = Date.now();
-        const audienceOk = eligibility.customerKind === "new"
-          ? (slot === "primary" ? lockedReward?.available_for_referral_purchase === true : lockedReward?.available_for_existing_customer_purchase === true)
-          : lockedReward?.available_for_existing_customer_purchase === true;
+        const audienceOk = rewardAvailableForReferrerKind(lockedReward, eligibility.referrerKind);
         const available = lockedReward
           && lockedReward.is_active === true
           && audienceOk
