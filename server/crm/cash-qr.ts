@@ -254,14 +254,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return lead;
   });
 
-  await (async () => {
+  const customerCode = await (async () => {
     await ensureOwnersSchema();
-    await ensureLegacyCustomerCodeForLead(created.id);
-  })().catch((error) => console.error("MZJ Owners legacy customer code sync failed", error));
+    return ensureLegacyCustomerCodeForLead(created.id);
+  })().catch((error) => {
+    console.error("MZJ Owners legacy customer code sync failed", error);
+    return null;
+  });
 
   return response.status(201).json({
     ok: true,
     message: "تم تسجيل بياناتك بنجاح وسيقوم فريق المبيعات بخدمتك",
     leadId: created.id,
+    customerCode: customerCode?.referral_code || null,
   });
 }

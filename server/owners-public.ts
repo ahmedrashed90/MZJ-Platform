@@ -21,7 +21,7 @@ import {
   type OwnerJson,
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
-import { findLegacyCustomerCodeByCode, syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
+import { ensureLegacyCustomerCodeForLead, findLegacyCustomerCodeByCode, syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -328,9 +328,17 @@ async function registerReferralCore(
     referralId: referral.id,
     description: "سجل صديق جديد من رابط الدعوة",
   });
+  const customerCode = await ensureLegacyCustomerCodeForLead(lead.id).catch((error) => {
+    console.error("Owners referral customer code creation failed", error);
+    return null;
+  });
   return {
     status: 200,
-    body: { ok: true, message: options.successMessage || "تم تسجيل بياناتك وسيقوم فريق MZJ بالتواصل معك" },
+    body: {
+      ok: true,
+      message: options.successMessage || "تم تسجيل بياناتك وسيقوم فريق MZJ بالتواصل معك",
+      customerCode: customerCode?.referral_code || null,
+    },
     referralId: referral.id,
     leadId: lead.id,
     referrerId: referrer.id,

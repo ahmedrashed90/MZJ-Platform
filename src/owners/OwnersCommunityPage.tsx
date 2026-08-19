@@ -21,6 +21,9 @@ import { readXlsx } from "../crm/xlsxReader";
 
 type Tab = "members" | "legacy" | "import" | "referrals" | "points" | "rewards" | "redemptions";
 type RewardsView = "catalog" | "memberCard";
+type MembersView = "all" | "points";
+type ReferralsView = "all" | "sold";
+type RedemptionsView = "all" | "ready";
 
 
 type ImportMapping = { name: string; phone: string; purchaseDate: string; vehicle: string; branch: string; orderId: string };
@@ -200,6 +203,9 @@ export function OwnersCommunityPage() {
   const [importSummary, setImportSummary] = useState<any>(null);
   const [rewardUsage, setRewardUsage] = useState<any>(null);
   const [usageBusy, setUsageBusy] = useState(false);
+  const [membersView, setMembersView] = useState<MembersView>("all");
+  const [referralsView, setReferralsView] = useState<ReferralsView>("all");
+  const [redemptionsView, setRedemptionsView] = useState<RedemptionsView>("all");
 
   async function load() {
     const next = await ownersAdminGet();
@@ -307,8 +313,30 @@ export function OwnersCommunityPage() {
       }
       setImportSummary(total);
       await load();
-      setMessage("اكتمل استيراد العملاء السابقين");
+      setMessage("اكتمل الاستيراد وتمت إضافة العملاء ضمن عملاء تم البيع");
     } catch (error) { setMessage(errorMessage(error)); } finally { setBusy(false); }
+  }
+
+  function openTab(next: Tab) {
+    setTab(next);
+    if (next === "members") setMembersView("all");
+    if (next === "referrals") setReferralsView("all");
+    if (next === "redemptions") setRedemptionsView("all");
+  }
+
+  function openMembersPoints() {
+    setMembersView("points");
+    setTab("members");
+  }
+
+  function openSoldReferrals() {
+    setReferralsView("sold");
+    setTab("referrals");
+  }
+
+  function openReadyRedemptions() {
+    setRedemptionsView("ready");
+    setTab("redemptions");
   }
 
   function editReward(item: any) {
@@ -339,6 +367,14 @@ export function OwnersCommunityPage() {
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
   const importHeaders = importRows.length ? Object.keys(importRows[0]) : [];
   const testMembersCount = members.filter((member: any) => member.member_kind === "test").length;
+  const visibleMembers = membersView === "points"
+    ? members
+        .filter((member: any) => member.member_kind !== "test" && Number(member.points_balance || 0) > 0)
+        .slice()
+        .sort((left: any, right: any) => Number(right.points_balance || 0) - Number(left.points_balance || 0))
+    : members;
+  const visibleReferrals = referralsView === "sold" ? referrals.filter((referral: any) => referral.status === "sold") : referrals;
+  const visibleRedemptions = redemptionsView === "ready" ? redemptions.filter((redemption: any) => redemption.status === "approved") : redemptions;
   const soldRate = useMemo(
     () => Number(stats.referrals || 0) ? Math.round(Number(stats.referral_sales || 0) * 100 / Number(stats.referrals || 1)) : 0,
     [stats.referrals, stats.referral_sales],
@@ -366,27 +402,27 @@ export function OwnersCommunityPage() {
       {message ? <div className="owners-notice">{message}</div> : null}
 
       <section className="owners-stat-grid">
-        <article><UsersThree size={24} /><div><span>العملاء الجديدة</span><strong>{Number(stats.members || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
-        <article><UsersThree size={24} /><div><span>العملاء القديمة</span><strong>{Number(stats.legacy_customers || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
-        <article><ShareNetwork size={24} /><div><span>الدعوات المسجلة</span><strong>{Number(stats.referrals || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
-        <article><CheckCircle size={24} /><div><span>مبيعات من الدعوات</span><strong>{Number(stats.referral_sales || 0).toLocaleString("ar-SA-u-nu-latn")} <small>{soldRate}%</small></strong></div></article>
-        <article><Wallet size={24} /><div><span>النقاط القائمة</span><strong>{Number(stats.outstanding_points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
-        <article><Gift size={24} /><div><span>استبدالات جاهزة للتسليم</span><strong>{Number(stats.ready_redemptions || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <button type="button" className="owners-stat-card" onClick={() => openTab("members")}><UsersThree size={24} /><div><span>عملاء تم البيع</span><strong>{Number(stats.members || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+        <button type="button" className="owners-stat-card" onClick={() => openTab("legacy")}><UsersThree size={24} /><div><span>العملاء الجديدة</span><strong>{Number(stats.legacy_customers || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+        <button type="button" className="owners-stat-card" onClick={() => openTab("referrals")}><ShareNetwork size={24} /><div><span>الدعوات المسجلة</span><strong>{Number(stats.referrals || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+        <button type="button" className="owners-stat-card" onClick={openSoldReferrals}><CheckCircle size={24} /><div><span>مبيعات من الدعوات</span><strong>{Number(stats.referral_sales || 0).toLocaleString("ar-SA-u-nu-latn")} <small>{soldRate}%</small></strong></div></button>
+        <button type="button" className="owners-stat-card" onClick={openMembersPoints}><Wallet size={24} /><div><span>النقاط القائمة</span><strong>{Number(stats.outstanding_points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
+        <button type="button" className="owners-stat-card" onClick={openReadyRedemptions}><Gift size={24} /><div><span>استبدالات جاهزة للتسليم</span><strong>{Number(stats.ready_redemptions || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></button>
       </section>
 
       <nav className="owners-tabs">
-        <button className={tab === "members" ? "active" : ""} onClick={() => setTab("members")}>العملاء الجديدة</button>
-        <button className={tab === "legacy" ? "active" : ""} onClick={() => setTab("legacy")}>العملاء القديمة</button>
-        {canManage ? <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}>استيراد العملاء السابقين</button> : null}
-        <button className={tab === "referrals" ? "active" : ""} onClick={() => setTab("referrals")}>الدعوات</button>
-        {canManage ? <button className={tab === "points" ? "active" : ""} onClick={() => setTab("points")}>إعدادات النقاط</button> : null}
-        <button className={tab === "rewards" ? "active" : ""} onClick={() => setTab("rewards")}>المكافآت</button>
-        <button className={tab === "redemptions" ? "active" : ""} onClick={() => setTab("redemptions")}>طلبات الاستبدال</button>
+        <button className={tab === "members" ? "active" : ""} onClick={() => openTab("members")}>عملاء تم البيع</button>
+        <button className={tab === "legacy" ? "active" : ""} onClick={() => openTab("legacy")}>العملاء الجديدة</button>
+        {canManage ? <button className={tab === "import" ? "active" : ""} onClick={() => openTab("import")}>استيراد العملاء السابقين</button> : null}
+        <button className={tab === "referrals" ? "active" : ""} onClick={() => openTab("referrals")}>الدعوات</button>
+        {canManage ? <button className={tab === "points" ? "active" : ""} onClick={() => openTab("points")}>إعدادات النقاط</button> : null}
+        <button className={tab === "rewards" ? "active" : ""} onClick={() => openTab("rewards")}>المكافآت</button>
+        <button className={tab === "redemptions" ? "active" : ""} onClick={() => openTab("redemptions")}>طلبات الاستبدال</button>
       </nav>
 
       {tab === "members" ? (
         <>
-          {canManage ? (
+          {canManage && membersView === "all" ? (
             <section className="owners-table-card owners-test-member-card">
               <header><div><h2>إضافة عضو تجريبي</h2><span>للاختبار فقط — لا يدخل في أرقام وتقارير البرنامج الفعلية ولا ينشئ Lead في CRM عند تجربة رابط الدعوة.</span></div></header>
               <div className="owners-inline-form">
@@ -397,15 +433,15 @@ export function OwnersCommunityPage() {
             </section>
           ) : null}
           <section className="owners-table-card">
-            <header><h2>العملاء الجديدة</h2><span>حالة تم البيع · {members.length - testMembersCount} حقيقي · {testMembersCount} تجريبي</span></header>
+            <header><h2>{membersView === "points" ? "تفاصيل النقاط القائمة" : "عملاء تم البيع"}</h2><span>{membersView === "points" ? `إجمالي الرصيد المتاح ${Number(stats.outstanding_points || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة` : `تم البيع · ${members.length - testMembersCount} حقيقي · ${testMembersCount} تجريبي`}</span></header>
             <div className="owners-table-wrap">
               <table>
                 <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
                 <tbody>
-                  {members.map((member: any) => (
+                  {visibleMembers.map((member: any) => (
                     <tr key={member.id}>
                       <td><strong>{member.customer_name || "عميل MZJ"}</strong></td>
-                      <td><span className={`owners-member-type ${member.member_kind === "test" ? "test" : "real"}`}>{member.member_kind === "test" ? "تجريبي" : member.enrollment_source?.startsWith("excel_import") ? "مستورد" : "حقيقي"}</span></td>
+                      <td><span className={`owners-member-type ${member.member_kind === "test" ? "test" : member.is_special_customer ? "special" : "real"}`}>{member.member_kind === "test" ? "تجريبي" : member.is_special_customer ? "عميل مميز" : member.enrollment_source?.startsWith("excel_import") ? "مستورد" : "حقيقي"}</span></td>
                       <td>{member.phone_normalized}</td>
                       <td><code>{member.referral_code}</code></td>
                       <td>{tierLabel(member.tier_code)}</td>
@@ -424,6 +460,7 @@ export function OwnersCommunityPage() {
                       </td>
                     </tr>
                   ))}
+                {!visibleMembers.length ? <tr><td colSpan={11}>{membersView === "points" ? "لا توجد أرصدة نقاط قائمة." : "لا يوجد عملاء تم البيع لهم."}</td></tr> : null}
                 </tbody>
               </table>
             </div>
@@ -433,7 +470,7 @@ export function OwnersCommunityPage() {
 
       {tab === "legacy" ? (
         <section className="owners-table-card">
-          <header><h2>العملاء القديمة</h2><span>كل عملاء CRM ماعدا حالة «تم البيع» · {legacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")}</span></header>
+          <header><h2>العملاء الجديدة</h2><span>عملاء CRM الذين لم يتم البيع لهم · {legacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")}</span></header>
           <div className="owners-table-wrap">
             <table>
               <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead>
@@ -452,7 +489,7 @@ export function OwnersCommunityPage() {
                     <td>{formatDate(customer.updated_at)}</td>
                   </tr>
                 ))}
-                {!legacyCustomers.length ? <tr><td colSpan={10}>لا يوجد عملاء في CRM خارج حالة تم البيع.</td></tr> : null}
+                {!legacyCustomers.length ? <tr><td colSpan={10}>لا يوجد عملاء جديدة في CRM حاليًا.</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -461,7 +498,7 @@ export function OwnersCommunityPage() {
 
       {tab === "import" && canManage ? (
         <section className="owners-table-card owners-import-card">
-          <header><div><h2>استيراد العملاء السابقين من Excel</h2><span>يتم منع التكرار برقم الجوال، ومطابقة العميل تلقائيًا مع المبيعات الحالية عند وجود تطابق.</span></div></header>
+          <header><div><h2>استيراد العملاء السابقين من Excel</h2><span>يتم منع التكرار برقم الجوال، ويظهر العميل المستورد ضمن «عملاء تم البيع» مع مطابقة المبيعات الحالية عند وجود تطابق.</span></div></header>
           <div className="owners-import-upload">
             <FileXls size={32} />
             <div><strong>{importFileName || "اختر ملف Excel بصيغة .xlsx"}</strong><span>الصف الأول يجب أن يحتوي على أسماء الأعمدة. الحد الأقصى 20MB.</span></div>
@@ -490,12 +527,12 @@ export function OwnersCommunityPage() {
 
       {tab === "referrals" ? (
         <section className="owners-table-card">
-          <header><h2>رحلة الدعوات</h2><span>مرتبطة بالـCRM والمبيعات</span></header>
+          <header><h2>{referralsView === "sold" ? "مبيعات من الدعوات" : "رحلة الدعوات"}</h2><span>{referralsView === "sold" ? `${visibleReferrals.length.toLocaleString("ar-SA-u-nu-latn")} دعوة تحولت إلى بيع` : "مرتبطة بالـCRM والمبيعات"}</span></header>
           <div className="owners-table-wrap">
             <table>
               <thead><tr><th>صاحب الدعوة</th><th>الصديق</th><th>الجوال</th><th>الحالة</th><th>التسجيل</th><th>التأهيل</th><th>البيع</th></tr></thead>
               <tbody>
-                {referrals.map((referral: any) => (
+                {visibleReferrals.map((referral: any) => (
                   <tr key={referral.id}>
                     <td>{referral.referrer_name}{referral.referrer_member_kind === "test" ? <span className="owners-member-type test">تجريبي</span> : null}<small className="owners-sub">{referral.referral_code}</small></td>
                     <td>{referral.referred_name || "—"}</td>
@@ -506,6 +543,7 @@ export function OwnersCommunityPage() {
                     <td>{formatDate(referral.sold_at)}</td>
                   </tr>
                 ))}
+              {!visibleReferrals.length ? <tr><td colSpan={7}>{referralsView === "sold" ? "لا توجد مبيعات من الدعوات." : "لا توجد دعوات مسجلة."}</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -517,7 +555,7 @@ export function OwnersCommunityPage() {
           <header><div><h2>إعدادات النقاط</h2><span>تحكم في نقاط الشراء والدعوات. تفعيل نقاط الشراء يضيفها للعملاء المشترين المسجلين الذين لم تُحتسب لهم من قبل.</span></div></header>
           <div className="owners-point-rules">
             <article className="owners-point-rule">
-              <div><strong>شراء العميل</strong><small>النقاط تضاف للعميل المشتري عند إتمام عملية شراء جديدة.</small></div>
+              <div><strong>شراء العميل</strong><small>النقاط تضاف مرة واحدة للعميل لكل طلب بيع مكتمل، بغض النظر عن عدد السيارات.</small></div>
               <select value={pointsDraft.pointsPurchaseEnabled ? "on" : "off"} onChange={(event) => setPointsDraft({ ...pointsDraft, pointsPurchaseEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
               <label><span>النقاط</span><input type="number" min="0" disabled={!pointsDraft.pointsPurchaseEnabled} value={pointsDraft.pointsPurchase} onChange={(event) => setPointValue("pointsPurchase", event.target.value)} /></label>
             </article>
@@ -617,12 +655,12 @@ export function OwnersCommunityPage() {
 
       {tab === "redemptions" ? (
         <section className="owners-table-card">
-          <header><h2>استبدالات النقاط</h2><span>الاستبدال الجديد يصبح جاهزًا مباشرة، والتسليم يتم من صفحة Owners Community داخل CRM.</span></header>
+          <header><h2>{redemptionsView === "ready" ? "استبدالات جاهزة للتسليم" : "استبدالات النقاط"}</h2><span>{redemptionsView === "ready" ? `${visibleRedemptions.length.toLocaleString("ar-SA-u-nu-latn")} طلب جاهز للتسليم` : "الاستبدال الجديد يصبح جاهزًا مباشرة، والتسليم يتم من صفحة Owners Community داخل CRM."}</span></header>
           <div className="owners-table-wrap">
             <table>
               <thead><tr><th>العميل</th><th>المكافأة</th><th>الكود</th><th>النقاط</th><th>الحالة</th><th>تاريخ الطلب</th><th>التسليم</th><th>الإجراء</th></tr></thead>
               <tbody>
-                {redemptions.map((redemption: any) => (
+                {visibleRedemptions.map((redemption: any) => (
                   <tr key={redemption.id}>
                     <td>{redemption.customer_name}<small className="owners-sub">{redemption.phone_normalized}</small></td>
                     <td>{redemption.reward_name}</td>

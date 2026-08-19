@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle, Phone, User } from "@phosphor-icons/react";
+import { CheckCircle, Copy, Phone, User } from "@phosphor-icons/react";
 
 async function submitLead(payload: Record<string, string>) {
   const response = await fetch("/api/crm/cash-qr", {
@@ -19,6 +19,8 @@ export function CashQrRegistrationPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [done, setDone] = useState(false);
+  const [customerCode, setCustomerCode] = useState("");
+  const [copied, setCopied] = useState(false);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -28,12 +30,20 @@ export function CashQrRegistrationPage() {
     try {
       const result = await submitLead({ name, phone, website });
       setDone(true);
+      setCustomerCode(String(result.customerCode || ""));
       setMessage(result.message || "تم تسجيل بياناتك بنجاح");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر تسجيل البيانات");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function copyCustomerCode() {
+    if (!customerCode) return;
+    await navigator.clipboard.writeText(customerCode);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
   }
 
   return (
@@ -43,7 +53,18 @@ export function CashQrRegistrationPage() {
           <span>مجموعة محمد بن ذعار العجمي</span>
         </header>
         {done ? (
-          <div className="cash-qr-success"><CheckCircle size={44} weight="fill" /><h2>تم التسجيل بنجاح</h2><p>{message}</p></div>
+          <div className="cash-qr-success">
+            <CheckCircle size={44} weight="fill" />
+            <h2>تم التسجيل بنجاح</h2>
+            <p>{message}</p>
+            {customerCode ? (
+              <div className="cash-qr-customer-code">
+                <span>احفظ كودك لاستخدامه لاحقًا</span>
+                <code dir="ltr">{customerCode}</code>
+                <button type="button" onClick={() => void copyCustomerCode()}><Copy size={17} />{copied ? "تم نسخ الكود" : "نسخ الكود"}</button>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <form onSubmit={submit}>
             <label><span>اسم العميل *</span><div><User size={20} /><input value={name} onChange={(event) => setName(event.target.value)} placeholder="اكتب الاسم" autoComplete="name" required /></div></label>

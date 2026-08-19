@@ -191,7 +191,7 @@ export function OwnersSettingsPanel() {
         <p className="owners-settings-hint">كل قاعدة مستقلة ويمكن تشغيلها أو إيقافها وتغيير نقاطها في أي وقت. تفعيل نقاط الشراء يضيفها للعملاء المشترين المسجلين الذين لم تُحتسب لهم من قبل.</p>
         <div className="owners-point-rules">
           <article className="owners-point-rule">
-            <div><strong>شراء العميل</strong><small>تضاف النقاط للعميل المشتري عند إتمام عملية شراء جديدة.</small></div>
+            <div><strong>شراء العميل</strong><small>تضاف النقاط مرة واحدة للعميل لكل طلب بيع مكتمل، بغض النظر عن عدد السيارات.</small></div>
             <select disabled={!editable} value={form.pointsPurchaseEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsPurchaseEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
             <label><span>النقاط</span><input disabled={!editable || !form.pointsPurchaseEnabled} type="number" min="0" value={form.pointsPurchase} onChange={(event) => numericField("pointsPurchase", event.target.value)} /></label>
           </article>

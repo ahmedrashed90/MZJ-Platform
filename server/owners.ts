@@ -243,12 +243,33 @@ export default async function handler(request: VercelRequest, response: VercelRe
           m.tier_code,m.first_sale_at,m.last_sale_at,m.last_login_at,m.welcome_sent_at,m.metadata,
           coalesce(m.metadata->>'memberKind','real') as member_kind,
           coalesce(m.metadata->>'enrollmentSource','canonical_sale') as enrollment_source,
+          coalesce(sale_summary.max_order_quantity,0)::int as max_order_quantity,
+          coalesce(sale_summary.has_multi_vehicle_order,false) as is_special_customer,
+          coalesce(sale_summary.active_sales_count,0)::int as active_sales_count,
           count(distinct r.id)::int as referrals_count,
           count(distinct r.id) filter(where r.status='sold')::int as sales_count
         from owners.members m
         left join owners.referrals r on r.referrer_member_id=m.id
+        left join lateral (
+          select
+            max(greatest(coalesce(st.quantity,1),1))::int as max_order_quantity,
+            bool_or(greatest(coalesce(st.quantity,1),1)>1) as has_multi_vehicle_order,
+            count(distinct st.id)::int as active_sales_count
+          from crm.sales_transactions st
+          join crm.leads sl on sl.id=st.lead_id and sl.is_deleted=false
+          where coalesce(st.is_cancelled,false)=false
+            and (
+              (m.source_sale_id is not null and st.id=m.source_sale_id)
+              or (m.crm_lead_id is not null and st.lead_id=m.crm_lead_id)
+              or (
+                nullif(m.phone_normalized,'') is not null
+                and nullif(sl.phone_normalized,'') is not null
+                and sl.phone_normalized=m.phone_normalized
+              )
+            )
+        ) sale_summary on true
         where m.status='active'
-        group by m.id
+        group by m.id,sale_summary.max_order_quantity,sale_summary.has_multi_vehicle_order,sale_summary.active_sales_count
         order by m.created_at desc
         limit 1000
       `,
@@ -264,6 +285,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
         left join core.sources src on src.code=l.source_code
         where c.status='active'
           and coalesce(l.status_label,'') <> 'تم البيع'
+          and not exists (
+            select 1
+            from owners.members member
+            where member.status='active'
+              and (member.crm_lead_id=l.id or (nullif(member.phone_normalized,'') is not null and member.phone_normalized=l.phone_normalized))
+          )
         order by l.updated_at desc,l.created_at desc
         limit 5000
       `,
@@ -296,7 +323,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql<any[]>`
         select
           (select count(*) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as members,
-          (select count(*) from owners.legacy_customer_codes c join crm.leads l on l.id=c.crm_lead_id where c.status='active' and l.is_deleted=false and coalesce(l.status_label,'')<>'تم البيع')::int as legacy_customers,
+          (select count(*) from owners.legacy_customer_codes c join crm.leads l on l.id=c.crm_lead_id where c.status='active' and l.is_deleted=false and coalesce(l.status_label,'')<>'تم البيع' and not exists (select 1 from owners.members member where member.status='active' and (member.crm_lead_id=l.id or (nullif(member.phone_normalized,'') is not null and member.phone_normalized=l.phone_normalized))))::int as legacy_customers,
           (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where coalesce(m.metadata->>'memberKind','real')<>'test')::int as referrals,
           (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where r.status='sold' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as referral_sales,
           (select coalesce(sum(points_balance),0) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as outstanding_points,

@@ -124,6 +124,8 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
     select
       st.id::text as sale_id,
       st.sale_at,
+      greatest(coalesce(st.quantity,1),1)::int as sale_quantity,
+      st.source_reference as sale_order_reference,
       l.id::text as lead_id,
       l.customer_name,
       l.phone,
@@ -177,7 +179,12 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
             eventType: "purchase",
             eventKey: `purchase:${sale.sale_id}`,
             description: "مكافأة إتمام عملية شراء",
-            metadata: { saleId: sale.sale_id } as OwnerJson,
+            metadata: {
+              saleId: sale.sale_id,
+              saleQuantity: Number(sale.sale_quantity || 1),
+              saleOrderReference: sale.sale_order_reference || null,
+              purchaseAwardPoints: Number(settings.points_purchase || 0),
+            } as OwnerJson,
           });
         }
       }
@@ -193,157 +200,227 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
 async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
   await ensureOwnersSchema();
   const settings = await getOwnerSettings();
-  const points = Math.trunc(Number(settings.points_purchase || 0));
-  if (settings.points_purchase_enabled !== true || points <= 0) return 0;
-
-  const silver = Math.max(0, Number(settings.silver_points || 1000));
-  const gold = Math.max(silver, Number(settings.gold_points || 3000));
-  const platinum = Math.max(gold, Number(settings.platinum_points || 7000));
+  const configuredPoints = Math.trunc(Number(settings.points_purchase || 0));
+  const purchaseEnabled = settings.points_purchase_enabled === true && configuredPoints > 0;
   const memberId = clean(memberIdValue);
   const sql = getSql();
 
   return sql.begin(async (tx) => {
-    const [summary] = await tx<any[]>`
-      with eligible_members as (
+    // Older releases could create one generic initial purchase ledger row before
+    // the concrete CRM sale id was attached. Bind that legacy row to the first
+    // actual order once so cancellation/restoration and later orders stay exact.
+    await tx`
+      with legacy_initial as (
         select
-          m.id,
-          m.phone_normalized,
-          m.crm_lead_id,
-          m.source_sale_id,
-          m.first_sale_at,
-          m.last_sale_at,
-          m.metadata
-        from owners.members m
-        where m.status='active'
-          and coalesce(m.metadata->>'memberKind','real')<>'test'
-          and (${memberId || null}::uuid is null or m.id=${memberId || null}::uuid)
-      ), canonical_sales as (
-        select member.id as member_id,st.id as sale_id,st.sale_at
-        from eligible_members member
-        join crm.sales_transactions st
-          on member.source_sale_id is not null
-         and st.id=member.source_sale_id
-         and coalesce(st.is_cancelled,false)=false
-        join crm.leads lead on lead.id=st.lead_id and lead.is_deleted=false
-
-        union
-
-        select member.id as member_id,st.id as sale_id,st.sale_at
-        from eligible_members member
-        join crm.sales_transactions st
-          on member.crm_lead_id is not null
-         and st.lead_id=member.crm_lead_id
-         and coalesce(st.is_cancelled,false)=false
-        join crm.leads lead on lead.id=st.lead_id and lead.is_deleted=false
-
-        union
-
-        select member.id as member_id,st.id as sale_id,st.sale_at
-        from eligible_members member
-        join crm.leads lead
-          on nullif(member.phone_normalized,'') is not null
-         and lead.is_deleted=false
-         and nullif(lead.phone_normalized,'') is not null
-         and lead.phone_normalized=member.phone_normalized
-        join crm.sales_transactions st
-          on st.lead_id=lead.id
-         and coalesce(st.is_cancelled,false)=false
-      ), ranked_sales as (
-        select
-          sale.member_id,
-          sale.sale_id,
+          ledger.id as ledger_id,
+          sale.id as sale_id,
           sale.sale_at,
-          row_number() over(
-            partition by sale.member_id
-            order by sale.sale_at,sale.sale_id
-          ) as sale_rank
-        from canonical_sales sale
-      ), canonical_awardable as (
-        select sale.member_id,sale.sale_id,sale.sale_at
-        from ranked_sales sale
-        where not (
-          sale.sale_rank=1
-          and exists (
-            select 1
-            from owners.points_ledger legacy_purchase
-            where legacy_purchase.member_id=sale.member_id
-              and legacy_purchase.event_type='purchase'
-              and legacy_purchase.event_key='purchase:member:'||sale.member_id::text||':initial'
-          )
+          greatest(coalesce(sale.quantity,1),1)::int as order_quantity,
+          sale.source_reference as order_reference
+        from owners.points_ledger ledger
+        join owners.members member on member.id=ledger.member_id
+        join lateral (
+          select st.id,st.sale_at,st.quantity,st.source_reference
+          from crm.sales_transactions st
+          join crm.leads lead on lead.id=st.lead_id and lead.is_deleted=false
+          where
+            (member.source_sale_id is not null and st.id=member.source_sale_id)
+            or (member.crm_lead_id is not null and st.lead_id=member.crm_lead_id)
+            or (
+              nullif(member.phone_normalized,'') is not null
+              and nullif(lead.phone_normalized,'') is not null
+              and lead.phone_normalized=member.phone_normalized
+            )
+          order by st.sale_at,st.created_at,st.id
+          limit 1
+        ) sale on true
+        where member.status='active'
+          and coalesce(member.metadata->>'memberKind','real')<>'test'
+          and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
+          and ledger.event_type='purchase'
+          and ledger.event_key='purchase:member:'||member.id::text||':initial'
+          and coalesce(ledger.metadata->>'importedPreviousCustomer','false')<>'true'
+          and not (ledger.metadata ? 'saleId')
+      )
+      update owners.points_ledger ledger set
+        metadata=coalesce(ledger.metadata,'{}'::jsonb)||jsonb_build_object(
+          'saleId',legacy.sale_id::text,
+          'saleAt',legacy.sale_at,
+          'saleQuantity',legacy.order_quantity,
+          'saleOrderReference',legacy.order_reference,
+          'purchaseAwardPoints',ledger.points,
+          'legacyInitialMapped',true
         )
-      ), canonical_inserted as (
-        insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
+      from legacy_initial legacy
+      where ledger.id=legacy.ledger_id
+    `;
+
+    // Keep the original award attached to the order itself. If that order is
+    // cancelled, only its purchase award becomes zero; the member and any
+    // unrelated referral points remain untouched. Restoring the same order
+    // restores the original award value rather than the current settings value.
+    await tx`
+      with scoped_purchase as (
         select
-          sale.member_id,
-          ${points},
-          'purchase',
-          'purchase:'||sale.sale_id::text,
-          'مكافأة إتمام عملية شراء',
-          jsonb_build_object(
-            'saleId',sale.sale_id::text,
-            'saleAt',sale.sale_at,
-            'appliedFromSettings',true
-          )
-        from canonical_awardable sale
-        on conflict(event_key) do nothing
-        returning member_id
-      ), fallback_candidates as (
-        select member.id as member_id,member.first_sale_at,member.last_sale_at
-        from eligible_members member
-        where not exists (
-          select 1 from canonical_sales sale where sale.member_id=member.id
+          ledger.id,
+          coalesce(sale.is_cancelled,false) as is_cancelled,
+          coalesce(
+            nullif(ledger.metadata->>'purchaseAwardPoints','')::int,
+            ledger.points
+          )::int as awarded_points
+        from owners.points_ledger ledger
+        join owners.members member on member.id=ledger.member_id
+        left join crm.sales_transactions sale
+          on sale.id=case
+            when coalesce(ledger.metadata->>'saleId','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+              then (ledger.metadata->>'saleId')::uuid
+            else null
+          end
+        where member.status='active'
+          and coalesce(member.metadata->>'memberKind','real')<>'test'
+          and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
+          and ledger.event_type='purchase'
+          and ledger.metadata ? 'saleId'
+      )
+      update owners.points_ledger ledger set
+        points=case when scoped.is_cancelled then 0 else scoped.awarded_points end,
+        description=case when scoped.is_cancelled then 'مكافأة شراء ملغاة' else 'مكافأة إتمام عملية شراء' end,
+        metadata=coalesce(ledger.metadata,'{}'::jsonb)||jsonb_build_object(
+          'purchaseAwardPoints',scoped.awarded_points,
+          'purchaseCancelled',scoped.is_cancelled
         )
-          and not exists (
+      from scoped_purchase scoped
+      where ledger.id=scoped.id
+    `;
+
+    let insertedCount = 0;
+    if (purchaseEnabled) {
+      const [summary] = await tx<any[]>`
+        with eligible_members as (
+          select
+            member.id,
+            member.phone_normalized,
+            member.crm_lead_id,
+            member.source_sale_id,
+            member.first_sale_at,
+            member.last_sale_at,
+            member.metadata
+          from owners.members member
+          where member.status='active'
+            and coalesce(member.metadata->>'memberKind','real')<>'test'
+            and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
+        ), canonical_sales as (
+          select distinct
+            member.id as member_id,
+            sale.id as sale_id,
+            sale.sale_at,
+            greatest(coalesce(sale.quantity,1),1)::int as order_quantity,
+            sale.source_reference as order_reference
+          from eligible_members member
+          join crm.sales_transactions sale
+            on coalesce(sale.is_cancelled,false)=false
+          join crm.leads lead
+            on lead.id=sale.lead_id
+           and lead.is_deleted=false
+          where
+            (member.source_sale_id is not null and sale.id=member.source_sale_id)
+            or (member.crm_lead_id is not null and sale.lead_id=member.crm_lead_id)
+            or (
+              nullif(member.phone_normalized,'') is not null
+              and nullif(lead.phone_normalized,'') is not null
+              and lead.phone_normalized=member.phone_normalized
+            )
+        ), ranked_sales as (
+          select
+            sale.*,
+            row_number() over(
+              partition by sale.member_id
+              order by sale.sale_at,sale.sale_id
+            ) as sale_rank
+          from canonical_sales sale
+        ), canonical_awardable as (
+          select sale.*
+          from ranked_sales sale
+          where not exists (
             select 1
             from owners.points_ledger existing_purchase
-            where existing_purchase.member_id=member.id
+            where existing_purchase.member_id=sale.member_id
               and existing_purchase.event_type='purchase'
+              and existing_purchase.metadata->>'saleId'=sale.sale_id::text
           )
-      ), fallback_inserted as (
-        insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
-        select
-          member.member_id,
-          ${points},
-          'purchase',
-          'purchase:member:'||member.member_id::text||':initial',
-          'مكافأة إتمام عملية شراء',
-          jsonb_build_object(
-            'saleAt',coalesce(member.first_sale_at,member.last_sale_at),
-            'appliedFromSettings',true,
-            'memberPurchaseFallback',true
-          )
-        from fallback_candidates member
-        on conflict(event_key) do nothing
-        returning member_id
-      ), inserted_counts as (
-        select inserted.member_id,count(*)::int as awards
-        from (
-          select member_id from canonical_inserted
-          union all
-          select member_id from fallback_inserted
-        ) inserted
-        group by inserted.member_id
-      ), credited as (
+        ), canonical_inserted as (
+          insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
+          select
+            sale.member_id,
+            ${configuredPoints},
+            'purchase',
+            'purchase:'||sale.sale_id::text,
+            'مكافأة إتمام عملية شراء',
+            jsonb_build_object(
+              'saleId',sale.sale_id::text,
+              'saleAt',sale.sale_at,
+              'saleQuantity',sale.order_quantity,
+              'saleOrderReference',sale.order_reference,
+              'purchaseAwardPoints',${configuredPoints},
+              'appliedFromSettings',true
+            )
+          from canonical_awardable sale
+          on conflict(event_key) do nothing
+          returning member_id
+        ), fallback_candidates as (
+          select member.id as member_id,member.first_sale_at,member.last_sale_at
+          from eligible_members member
+          where coalesce(member.metadata->>'enrollmentSource','') like 'excel_import%'
+            and not exists (
+              select 1 from canonical_sales sale where sale.member_id=member.id
+            )
+            and not exists (
+              select 1
+              from owners.points_ledger existing_purchase
+              where existing_purchase.member_id=member.id
+                and existing_purchase.event_type='purchase'
+            )
+        ), fallback_inserted as (
+          insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
+          select
+            member.member_id,
+            ${configuredPoints},
+            'purchase',
+            'purchase:member:'||member.member_id::text||':initial',
+            'مكافأة إتمام عملية شراء',
+            jsonb_build_object(
+              'saleAt',coalesce(member.first_sale_at,member.last_sale_at),
+              'purchaseAwardPoints',${configuredPoints},
+              'appliedFromSettings',true,
+              'memberPurchaseFallback',true,
+              'importedPreviousCustomer',true
+            )
+          from fallback_candidates member
+          on conflict(event_key) do nothing
+          returning member_id
+        ), inserted_counts as (
+          select inserted.member_id,count(*)::int as awards
+          from (
+            select member_id from canonical_inserted
+            union all
+            select member_id from fallback_inserted
+          ) inserted
+          group by inserted.member_id
+        )
         update owners.members member set
-          lifetime_points=member.lifetime_points+(inserted_counts.awards*${points}),
-          tier_code=case
-            when member.lifetime_points+(inserted_counts.awards*${points})>=${platinum} then 'platinum'
-            when member.lifetime_points+(inserted_counts.awards*${points})>=${gold} then 'gold'
-            when member.lifetime_points+(inserted_counts.awards*${points})>=${silver} then 'silver'
-            else 'member'
-          end,
+          lifetime_points=member.lifetime_points+(inserted_counts.awards*${configuredPoints}),
           updated_at=now()
         from inserted_counts
         where member.id=inserted_counts.member_id
-        returning member.id
-      )
-      select coalesce(sum(awards),0)::int as inserted_count
-      from inserted_counts
-    `;
+        returning inserted_counts.awards
+      `;
+      insertedCount = summary.reduce((total: number, row: any) => total + Number(row.awards || 0), 0);
+    }
 
-    // The ledger is the source of truth for the spendable balance. Rebuild only
-    // the scoped real members after purchase reconciliation so a valid purchase
-    // can never remain visible as a stale zero balance on the member card.
+    // The ledger remains the spendable-balance source of truth. Recalculate the
+    // scoped real members after order-state reconciliation so cancelled orders
+    // immediately lose only their purchase points and imported previous buyers
+    // stay consistent with their ledger.
     await tx`
       with scoped_members as (
         select member.id
@@ -351,19 +428,13 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
         where member.status='active'
           and coalesce(member.metadata->>'memberKind','real')<>'test'
           and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
-          and exists (
-            select 1
-            from owners.points_ledger purchase
-            where purchase.member_id=member.id
-              and purchase.event_type='purchase'
-          )
       ), ledger_totals as (
         select
-          ledger.member_id,
+          member.id as member_id,
           coalesce(sum(ledger.points),0)::int as points_balance
-        from owners.points_ledger ledger
-        join scoped_members member on member.id=ledger.member_id
-        group by ledger.member_id
+        from scoped_members member
+        left join owners.points_ledger ledger on ledger.member_id=member.id
+        group by member.id
       )
       update owners.members member set
         points_balance=greatest(0,ledger_totals.points_balance),
@@ -372,7 +443,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
       where member.id=ledger_totals.member_id
     `;
 
-    return Number(summary?.inserted_count || 0);
+    return insertedCount;
   });
 }
 

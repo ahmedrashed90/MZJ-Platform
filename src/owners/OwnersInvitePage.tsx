@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, ShareNetwork } from "@phosphor-icons/react";
+import { CheckCircle, Copy, ShareNetwork } from "@phosphor-icons/react";
 import { useParams } from "react-router-dom";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 
@@ -15,6 +15,8 @@ export function OwnersInvitePage() {
   const [message, setMessage] = useState("");
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [customerCode, setCustomerCode] = useState("");
+  const [copied, setCopied] = useState(false);
   const visitor = useMemo(() => {
     const key = "mzj_owner_visitor";
     let value = localStorage.getItem(key);
@@ -37,12 +39,20 @@ export function OwnersInvitePage() {
     try {
       const response = await ownersPublicPost({ action: "register_referral", code, name, phone });
       setMessage(response.message || "تم تسجيل بياناتك");
+      setCustomerCode(String(response.customerCode || ""));
       setDone(true);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function copyCustomerCode() {
+    if (!customerCode) return;
+    await navigator.clipboard.writeText(customerCode);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
   }
 
   return (
@@ -55,7 +65,18 @@ export function OwnersInvitePage() {
         <p>سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.</p>
         {message ? <div className="owners-public-message">{message}</div> : null}
         {done ? (
-          <div className="owners-success"><CheckCircle size={46} weight="fill" /><strong>تم تسجيل بياناتك</strong><span>مجموعة محمد بن ذعار العجمي تاريخ تثق به</span></div>
+          <div className="owners-success">
+            <CheckCircle size={46} weight="fill" />
+            <strong>تم تسجيل بياناتك</strong>
+            {customerCode ? (
+              <div className="owners-customer-code-box">
+                <span>احفظ كودك لاستخدامه لاحقًا</span>
+                <code dir="ltr">{customerCode}</code>
+                <button type="button" onClick={() => void copyCustomerCode()}><Copy size={17} />{copied ? "تم نسخ الكود" : "نسخ الكود"}</button>
+              </div>
+            ) : null}
+            <span>مجموعة محمد بن ذعار العجمي تاريخ تثق به</span>
+          </div>
         ) : (
           <div className="owners-invite-form">
             <label><span>الاسم</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
