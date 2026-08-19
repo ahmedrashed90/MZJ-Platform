@@ -6,6 +6,7 @@ import { clean } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 import { normalizePhone } from "./_phone-utils.js";
 import {
+  backfillOwnerPurchasePointsForExistingMembers,
   ensureOwnerMemberForLead,
   processOwnerSaleForLead,
   syncOwnerReferralProgress,
@@ -355,7 +356,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
         otp_resend_seconds=${integer(payload.otpResendSeconds, 60, 15, 600)},
         otp_max_attempts=${integer(payload.otpMaxAttempts, 5, 1, 20)},
         otp_hourly_limit=${integer(payload.otpHourlyLimit, 5, 1, 30)},
-        purchase_points_effective_at=case when points_purchase_enabled is distinct from ${payload.pointsPurchaseEnabled === true} or points_purchase is distinct from ${integer(payload.pointsPurchase, 500, 0, 1_000_000)} then now() else purchase_points_effective_at end,
         points_purchase_enabled=${payload.pointsPurchaseEnabled === true},
         points_purchase=${integer(payload.pointsPurchase, 500, 0, 1_000_000)},
         points_unique_open_enabled=${payload.pointsUniqueOpenEnabled !== false},
@@ -380,7 +380,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where id='default'
       returning *
     `;
-    return response.status(200).json({ ok: true, settings });
+    const purchasePointsApplied = settings?.points_purchase_enabled === true
+      ? await backfillOwnerPurchasePointsForExistingMembers()
+      : 0;
+    return response.status(200).json({ ok: true, settings, purchasePointsApplied });
   }
 
   if (action === "save_points_settings") {
@@ -388,7 +391,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const purchaseEnabled = payload.pointsPurchaseEnabled === true;
     const [settings] = await sql<any[]>`
       update owners.settings set
-        purchase_points_effective_at=case when points_purchase_enabled is distinct from ${purchaseEnabled} or points_purchase is distinct from ${purchasePoints} then now() else purchase_points_effective_at end,
         points_purchase_enabled=${purchaseEnabled},
         points_purchase=${purchasePoints},
         points_unique_open_enabled=${payload.pointsUniqueOpenEnabled !== false},
@@ -404,7 +406,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       where id='default'
       returning *
     `;
-    return response.status(200).json({ ok: true, settings });
+    const purchasePointsApplied = settings?.points_purchase_enabled === true
+      ? await backfillOwnerPurchasePointsForExistingMembers()
+      : 0;
+    return response.status(200).json({ ok: true, settings, purchasePointsApplied });
   }
 
   if (action === "sync_members") {
@@ -425,26 +430,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (["delete_member", "delete_test_member"].includes(action)) {
     const memberId = clean(payload.memberId);
-    const [member] = await sql<any[]>`
-      select id::text,crm_lead_id::text,source_sale_id::text,metadata,coalesce(metadata->>'enrollmentSource','canonical_sale') as enrollment_source
-      from owners.members where id=${memberId}::uuid limit 1
+    const [deleted] = await sql<any[]>`
+      delete from owners.members
+      where id=${memberId}::uuid
+      returning id::text
     `;
-    if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
-    const isTest = isTestMemberMetadata(member.metadata);
-    if (!isTest) {
-      const [usage] = await sql<any[]>`
-        select
-          (select count(*) from owners.referrals where referrer_member_id=${memberId}::uuid)::int as referrals,
-          (select count(*) from owners.points_ledger where member_id=${memberId}::uuid)::int as ledger,
-          (select count(*) from owners.redemptions where member_id=${memberId}::uuid)::int as redemptions,
-          (select count(*) from owners.referral_purchase_benefits where referrer_member_id=${memberId}::uuid)::int as purchase_benefits
-      `;
-      const safeImported = member.enrollment_source === "excel_import" && !member.crm_lead_id && !member.source_sale_id
-        && Number(usage?.referrals || 0) === 0 && Number(usage?.ledger || 0) === 0
-        && Number(usage?.redemptions || 0) === 0 && Number(usage?.purchase_benefits || 0) === 0;
-      if (!safeImported) return response.status(409).json({ ok: false, error: "لا يمكن حذف عميل مرتبط ببيع حقيقي أو دعوات أو نقاط أو استبدالات" });
-    }
-    await sql`delete from owners.members where id=${memberId}::uuid`;
+    if (!deleted) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
     return response.status(200).json({ ok: true });
   }
 

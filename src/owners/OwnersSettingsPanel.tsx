@@ -188,7 +188,7 @@ export function OwnersSettingsPanel() {
 
       <section className="owners-settings-card">
         <h3><Gift size={21} /> قواعد النقاط</h3>
-        <p className="owners-settings-hint">كل قاعدة مستقلة ويمكن تشغيلها أو إيقافها وتغيير نقاطها في أي وقت. التعديل يطبق على الأحداث الجديدة فقط.</p>
+        <p className="owners-settings-hint">كل قاعدة مستقلة ويمكن تشغيلها أو إيقافها وتغيير نقاطها في أي وقت. تفعيل نقاط الشراء يضيفها للعملاء المشترين المسجلين الذين لم تُحتسب لهم من قبل.</p>
         <div className="owners-point-rules">
           <article className="owners-point-rule">
             <div><strong>شراء العميل</strong><small>تضاف النقاط للعميل المشتري عند إتمام عملية شراء جديدة.</small></div>

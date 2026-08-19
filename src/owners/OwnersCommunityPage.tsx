@@ -418,7 +418,7 @@ export function OwnersCommunityPage() {
                         {canManage ? (
                           <div className="owners-actions">
                             <button className="owners-link-btn" disabled={busy || Boolean(member.welcome_sent_at)} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> {member.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button>
-                            {member.member_kind === "test" || (member.enrollment_source === "excel_import" && !member.crm_lead_id && !member.source_sale_id) ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من Owners Community؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button> : null}
+                            <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من Owners Community؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button>
                           </div>
                         ) : "—"}
                       </td>
@@ -514,7 +514,7 @@ export function OwnersCommunityPage() {
 
       {tab === "points" && canManage ? (
         <section className="owners-table-card owners-points-settings-card">
-          <header><div><h2>إعدادات النقاط</h2><span>تحكم في نقاط الشراء والدعوات. أي تعديل يطبق على الأحداث الجديدة فقط.</span></div></header>
+          <header><div><h2>إعدادات النقاط</h2><span>تحكم في نقاط الشراء والدعوات. تفعيل نقاط الشراء يضيفها للعملاء المشترين المسجلين الذين لم تُحتسب لهم من قبل.</span></div></header>
           <div className="owners-point-rules">
             <article className="owners-point-rule">
               <div><strong>شراء العميل</strong><small>النقاط تضاف للعميل المشتري عند إتمام عملية شراء جديدة.</small></div>

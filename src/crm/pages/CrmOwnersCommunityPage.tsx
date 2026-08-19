@@ -142,23 +142,25 @@ export function CrmOwnersCommunityPage() {
         <div>
           <span className="crm-page-kicker"><QrCode size={18} /> MZJ Owners Community</span>
           <h1>استعلام استبدال المكافآت</h1>
-          <p>امسح QR أو اكتب كود الاستبدال الرقمي للتأكد من صلاحيته، ثم أكد التسليم للعميل.</p>
         </div>
       </header>
 
       <section className="crm-panel crm-owners-redemption-lookup">
         <form onSubmit={(event) => { event.preventDefault(); void lookup(); }}>
-          <label>
+          <label className="crm-owners-redemption-code-field">
             <span>كود الاستبدال</span>
-            <input
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={8}
-              value={code}
-              onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 8))}
-              placeholder="00000000"
-              dir="ltr"
-            />
+            <div className="crm-owners-redemption-input-shell">
+              <QrCode size={20} />
+              <input
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={8}
+                value={code}
+                onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 8))}
+                placeholder="00000000"
+                dir="ltr"
+              />
+            </div>
           </label>
           <div className="crm-owners-redemption-actions">
             <button className="crm-primary-button" type="submit" disabled={busy || code.length !== 8}><MagnifyingGlass size={18} /> {busy ? "جاري الاستعلام..." : "استعلام"}</button>

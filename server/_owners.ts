@@ -15,7 +15,6 @@ export type OwnerJson = Parameters<SqlClient["json"]>[0];
 type OwnerSettingsRow = {
   points_purchase_enabled?: boolean | null;
   points_purchase?: number | string | null;
-  purchase_points_effective_at?: string | Date | null;
   points_qualified_enabled?: boolean | null;
   points_qualified?: number | string | null;
   points_sale_enabled?: boolean | null;
@@ -171,9 +170,7 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
       if (member) {
         await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
         const settings = await getOwnerSettings();
-        const effectiveAt = settings.purchase_points_effective_at ? new Date(settings.purchase_points_effective_at).getTime() : Date.now();
-        const saleAt = sale.sale_at ? new Date(sale.sale_at).getTime() : 0;
-        if (settings.points_purchase_enabled === true && saleAt >= effectiveAt) {
+        if (settings.points_purchase_enabled === true) {
           await awardOwnerPoints({
             memberId: member.id,
             points: Number(settings.points_purchase || 0),
@@ -191,6 +188,70 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
     }
   }
   throw new Error("تعذر إنشاء كود دعوة فريد للعميل");
+}
+
+export async function backfillOwnerPurchasePointsForExistingMembers() {
+  await ensureOwnersSchema();
+  const settings = await getOwnerSettings();
+  const points = Math.trunc(Number(settings.points_purchase || 0));
+  if (settings.points_purchase_enabled !== true || points <= 0) return 0;
+
+  const silver = Math.max(0, Number(settings.silver_points || 1000));
+  const gold = Math.max(silver, Number(settings.gold_points || 3000));
+  const platinum = Math.max(gold, Number(settings.platinum_points || 7000));
+  const sql = getSql();
+
+  return sql.begin(async (tx) => {
+    const inserted = await tx<any[]>`
+      with eligible as (
+        select
+          m.id as member_id,
+          sale.id as sale_id
+        from owners.members m
+        join lateral (
+          select st.id
+          from crm.sales_transactions st
+          where coalesce(st.is_cancelled,false)=false
+            and (
+              (m.source_sale_id is not null and st.id=m.source_sale_id)
+              or (m.source_sale_id is null and m.crm_lead_id is not null and st.lead_id=m.crm_lead_id)
+            )
+          order by st.sale_at desc,st.created_at desc,st.id desc
+          limit 1
+        ) sale on true
+        where m.status='active'
+          and coalesce(m.metadata->>'memberKind','real')<>'test'
+      )
+      insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
+      select
+        eligible.member_id,
+        ${points},
+        'purchase',
+        'purchase:' || eligible.sale_id::text,
+        'مكافأة إتمام عملية شراء',
+        jsonb_build_object('saleId',eligible.sale_id::text,'appliedFromSettings',true)
+      from eligible
+      on conflict(event_key) do nothing
+      returning member_id::text
+    `;
+    if (!inserted.length) return 0;
+
+    const memberIds = inserted.map((row) => row.member_id);
+    await tx`
+      update owners.members set
+        points_balance=greatest(0,points_balance+${points}),
+        lifetime_points=lifetime_points+${points},
+        tier_code=case
+          when lifetime_points+${points}>=${platinum} then 'platinum'
+          when lifetime_points+${points}>=${gold} then 'gold'
+          when lifetime_points+${points}>=${silver} then 'silver'
+          else 'member'
+        end,
+        updated_at=now()
+      where id=any(${memberIds}::uuid[])
+    `;
+    return inserted.length;
+  });
 }
 
 export async function ensureOwnerMemberByPhone(phoneValue: unknown) {
