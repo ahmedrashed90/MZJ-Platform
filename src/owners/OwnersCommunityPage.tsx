@@ -206,6 +206,7 @@ export function OwnersCommunityPage() {
   const [membersView, setMembersView] = useState<MembersView>("all");
   const [referralsView, setReferralsView] = useState<ReferralsView>("all");
   const [redemptionsView, setRedemptionsView] = useState<RedemptionsView>("all");
+  const [initialLoading, setInitialLoading] = useState(true);
 
   async function load() {
     const next = await ownersAdminGet();
@@ -214,8 +215,22 @@ export function OwnersCommunityPage() {
   }
 
   useEffect(() => {
-    void load().catch((error) => setMessage(errorMessage(error)));
+    void load()
+      .catch((error) => setMessage(errorMessage(error)))
+      .finally(() => setInitialLoading(false));
   }, []);
+
+  async function retryInitialLoad() {
+    setInitialLoading(true);
+    setMessage("");
+    try {
+      await load();
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setInitialLoading(false);
+    }
+  }
 
   async function act(payload: Record<string, unknown>, successMessage = "تم تنفيذ العملية بنجاح") {
     setBusy(true);
@@ -380,7 +395,25 @@ export function OwnersCommunityPage() {
     [stats.referrals, stats.referral_sales],
   );
 
-  if (!data) return <div className="module-page"><div className="owners-panel owners-loading">جاري تحميل MZJ Owners Community...</div></div>;
+  if (!data) {
+    return (
+      <div className="module-page">
+        <div className="owners-panel owners-loading">
+          {initialLoading ? (
+            "جاري تحميل MZJ Owners Community..."
+          ) : (
+            <>
+              <strong>تعذر تحميل MZJ Owners Community</strong>
+              <span>{message || "تعذر تحميل البيانات. حاول مرة أخرى."}</span>
+              <button type="button" className="owners-link-btn" onClick={() => void retryInitialLoad()}>
+                <ArrowsClockwise size={16} /> إعادة المحاولة
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="module-page owners-admin-page" dir="rtl">

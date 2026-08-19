@@ -228,13 +228,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true, settings: settingsRows[0] || {} });
     }
 
-    await syncLegacyCustomerCodes();
-    // Keep purchaser balances self-healing for administrators when purchase points are enabled.
-    // This is idempotent: the ledger event key prevents duplicate awards.
-    if (hasPermission(actor, "owners.community.manage") || hasPermission(actor, "settings.owners.manage")) {
-      await backfillOwnerPurchasePointsForExistingMembers();
-    }
-
+    // Dashboard loading is intentionally read-only. Heavy CRM/Owners synchronization
+    // runs only from the explicit sync action or when point settings are saved.
     const [settings, members, legacyCustomers, referrals, rewards, redemptions, stats] = await Promise.all([
       sql<any[]>`select * from owners.settings where id='default'`.then((rows) => rows[0] || {}),
       sql<any[]>`
@@ -454,7 +449,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const synced = await syncMembersFromCanonicalSales();
     await syncLegacyCustomerCodes();
     const referrals = await syncOwnerReferralProgress();
-    return response.status(200).json({ ok: true, synced, referrals });
+    const purchasePointsApplied = await backfillOwnerPurchasePointsForExistingMembers();
+    return response.status(200).json({ ok: true, synced, referrals, purchasePointsApplied });
   }
 
   if (action === "create_test_member") {

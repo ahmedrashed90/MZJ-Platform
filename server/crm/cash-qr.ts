@@ -5,6 +5,7 @@ import { ensureCrmSchema } from "../_crm-schema.js";
 import { normalizePhone } from "../_phone-utils.js";
 import { ensureOwnersSchema } from "../_owners-schema.js";
 import { ensureLegacyCustomerCodeForLead } from "../_owners-customer-segments.js";
+import { queueFirebaseSms } from "../_firebase-sms.js";
 
 const QR_SOURCE_CODE = "qr";
 const QR_SOURCE_NAME = "QR";
@@ -262,10 +263,38 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return null;
   });
 
+  let customerCodeSmsQueued = false;
+  if (customerCode?.referral_code) {
+    const referralCode = String(customerCode.referral_code);
+    const message = `كود دعوتك في MZJ Owners Community: ${referralCode}`;
+    try {
+      await queueFirebaseSms({
+        createdAt: new Date(),
+        message,
+        meta: {
+          type: "owners_customer_code",
+          purpose: "cash_qr_registration",
+          leadId: created.id,
+          referralCode,
+        },
+        phone,
+        source: "mzj_owners_community",
+        status: "queued",
+        to: phone,
+      });
+      customerCodeSmsQueued = true;
+    } catch (error) {
+      // Registration and the on-screen code must remain successful even if SMS+
+      // is temporarily unavailable; the customer can still save the shown code.
+      console.error("MZJ Owners customer-code SMS+ queue failed", error);
+    }
+  }
+
   return response.status(201).json({
     ok: true,
     message: "تم تسجيل بياناتك بنجاح وسيقوم فريق المبيعات بخدمتك",
     leadId: created.id,
     customerCode: customerCode?.referral_code || null,
+    customerCodeSmsQueued,
   });
 }
