@@ -173,7 +173,11 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
   if (["auth/login", "auth/logout", "auth/me", "setup/status", "setup/initialize", "tracking/public", "owners/public", "crm/cash-qr"].includes(route)) return null;
   if (route === "owners") {
     const payload = body(request);
-    const settingsScope = clean(request.query.scope) === "settings" || clean(payload.action) === "save_settings";
+    const ownersAction = clean(payload.action);
+    if (["lookup_redemption", "confirm_redemption"].includes(ownersAction)) {
+      return req("crm.owners_community.view", "crm", "owners_community", ownersAction);
+    }
+    const settingsScope = clean(request.query.scope) === "settings" || ["save_settings", "save_points_settings"].includes(ownersAction);
     if (settingsScope) {
       return req(
         request.method === "GET" ? "settings.owners.view" : "settings.owners.manage",

@@ -11,9 +11,15 @@ type OwnersSettingsForm = {
   otpResendSeconds: number;
   otpMaxAttempts: number;
   otpHourlyLimit: number;
+  pointsPurchaseEnabled: boolean;
+  pointsPurchase: number;
+  pointsUniqueOpenEnabled: boolean;
   pointsUniqueOpen: number;
+  pointsRegistrationEnabled: boolean;
   pointsRegistration: number;
+  pointsQualifiedEnabled: boolean;
   pointsQualified: number;
+  pointsSaleEnabled: boolean;
   pointsSale: number;
   dailyOpenPointsCap: number;
   silverPoints: number;
@@ -32,9 +38,15 @@ const emptyForm: OwnersSettingsForm = {
   otpResendSeconds: 60,
   otpMaxAttempts: 5,
   otpHourlyLimit: 5,
+  pointsPurchaseEnabled: false,
+  pointsPurchase: 500,
+  pointsUniqueOpenEnabled: true,
   pointsUniqueOpen: 1,
+  pointsRegistrationEnabled: true,
   pointsRegistration: 10,
+  pointsQualifiedEnabled: true,
   pointsQualified: 25,
+  pointsSaleEnabled: true,
   pointsSale: 500,
   dailyOpenPointsCap: 25,
   silverPoints: 1000,
@@ -68,9 +80,15 @@ export function OwnersSettingsPanel() {
       otpResendSeconds: Number(settings.otp_resend_seconds || 60),
       otpMaxAttempts: Number(settings.otp_max_attempts || 5),
       otpHourlyLimit: Number(settings.otp_hourly_limit || 5),
+      pointsPurchaseEnabled: settings.points_purchase_enabled === true,
+      pointsPurchase: Number(settings.points_purchase ?? 500),
+      pointsUniqueOpenEnabled: settings.points_unique_open_enabled !== false,
       pointsUniqueOpen: Number(settings.points_unique_open ?? 1),
+      pointsRegistrationEnabled: settings.points_registration_enabled !== false,
       pointsRegistration: Number(settings.points_registration ?? 10),
+      pointsQualifiedEnabled: settings.points_qualified_enabled !== false,
       pointsQualified: Number(settings.points_qualified ?? 25),
+      pointsSaleEnabled: settings.points_sale_enabled !== false,
       pointsSale: Number(settings.points_sale ?? 500),
       dailyOpenPointsCap: Number(settings.daily_open_points_cap ?? 25),
       silverPoints: Number(settings.silver_points ?? 1000),
@@ -170,11 +188,35 @@ export function OwnersSettingsPanel() {
 
       <section className="owners-settings-card">
         <h3><Gift size={21} /> قواعد النقاط</h3>
-        <div className="owners-form-grid four">
-          <label><span>فتح رابط فريد</span><input disabled={!editable} type="number" min="0" value={form.pointsUniqueOpen} onChange={(event) => numericField("pointsUniqueOpen", event.target.value)} /></label>
-          <label><span>تسجيل صديق</span><input disabled={!editable} type="number" min="0" value={form.pointsRegistration} onChange={(event) => numericField("pointsRegistration", event.target.value)} /></label>
-          <label><span>Lead مؤهل</span><input disabled={!editable} type="number" min="0" value={form.pointsQualified} onChange={(event) => numericField("pointsQualified", event.target.value)} /></label>
-          <label><span>إتمام البيع</span><input disabled={!editable} type="number" min="0" value={form.pointsSale} onChange={(event) => numericField("pointsSale", event.target.value)} /></label>
+        <p className="owners-settings-hint">كل قاعدة مستقلة ويمكن تشغيلها أو إيقافها وتغيير نقاطها في أي وقت. التعديل يطبق على الأحداث الجديدة فقط.</p>
+        <div className="owners-point-rules">
+          <article className="owners-point-rule">
+            <div><strong>شراء العميل</strong><small>تضاف النقاط للعميل المشتري عند إتمام عملية شراء جديدة.</small></div>
+            <select disabled={!editable} value={form.pointsPurchaseEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsPurchaseEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+            <label><span>النقاط</span><input disabled={!editable || !form.pointsPurchaseEnabled} type="number" min="0" value={form.pointsPurchase} onChange={(event) => numericField("pointsPurchase", event.target.value)} /></label>
+          </article>
+          <article className="owners-point-rule">
+            <div><strong>فتح رابط الدعوة</strong><small>تضاف لصاحب الدعوة عند الفتح الفريد.</small></div>
+            <select disabled={!editable} value={form.pointsUniqueOpenEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsUniqueOpenEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+            <label><span>النقاط</span><input disabled={!editable || !form.pointsUniqueOpenEnabled} type="number" min="0" value={form.pointsUniqueOpen} onChange={(event) => numericField("pointsUniqueOpen", event.target.value)} /></label>
+          </article>
+          <article className="owners-point-rule">
+            <div><strong>تسجيل الاسم ورقم الجوال</strong><small>تضاف لصاحب الدعوة بعد تسجيل الصديق بياناته.</small></div>
+            <select disabled={!editable} value={form.pointsRegistrationEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsRegistrationEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+            <label><span>النقاط</span><input disabled={!editable || !form.pointsRegistrationEnabled} type="number" min="0" value={form.pointsRegistration} onChange={(event) => numericField("pointsRegistration", event.target.value)} /></label>
+          </article>
+          <article className="owners-point-rule">
+            <div><strong>عميل مؤهل</strong><small>تضاف لصاحب الدعوة عندما يصبح العميل مؤهلًا في CRM.</small></div>
+            <select disabled={!editable} value={form.pointsQualifiedEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsQualifiedEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+            <label><span>النقاط</span><input disabled={!editable || !form.pointsQualifiedEnabled} type="number" min="0" value={form.pointsQualified} onChange={(event) => numericField("pointsQualified", event.target.value)} /></label>
+          </article>
+          <article className="owners-point-rule">
+            <div><strong>تم البيع من الدعوة</strong><small>تضاف لصاحب الدعوة عند إتمام بيع للعميل المدعو.</small></div>
+            <select disabled={!editable} value={form.pointsSaleEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsSaleEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+            <label><span>النقاط</span><input disabled={!editable || !form.pointsSaleEnabled} type="number" min="0" value={form.pointsSale} onChange={(event) => numericField("pointsSale", event.target.value)} /></label>
+          </article>
+        </div>
+        <div className="owners-form-grid">
           <label><span>حد نقاط فتح الروابط يوميًا</span><input disabled={!editable} type="number" min="0" value={form.dailyOpenPointsCap} onChange={(event) => numericField("dailyOpenPointsCap", event.target.value)} /></label>
           <label>
             <span>مسار العميل الافتراضي</span>

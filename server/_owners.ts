@@ -13,7 +13,12 @@ type SqlClient = ReturnType<typeof getSql>;
 export type OwnerJson = Parameters<SqlClient["json"]>[0];
 
 type OwnerSettingsRow = {
+  points_purchase_enabled?: boolean | null;
+  points_purchase?: number | string | null;
+  purchase_points_effective_at?: string | Date | null;
+  points_qualified_enabled?: boolean | null;
   points_qualified?: number | string | null;
+  points_sale_enabled?: boolean | null;
   points_sale?: number | string | null;
   silver_points?: number | string | null;
   gold_points?: number | string | null;
@@ -163,7 +168,22 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
           updated_at=now()
         returning *,id::text,crm_lead_id::text,source_sale_id::text
       `;
-      if (member) await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
+      if (member) {
+        await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
+        const settings = await getOwnerSettings();
+        const effectiveAt = settings.purchase_points_effective_at ? new Date(settings.purchase_points_effective_at).getTime() : Date.now();
+        const saleAt = sale.sale_at ? new Date(sale.sale_at).getTime() : 0;
+        if (settings.points_purchase_enabled === true && saleAt >= effectiveAt) {
+          await awardOwnerPoints({
+            memberId: member.id,
+            points: Number(settings.points_purchase || 0),
+            eventType: "purchase",
+            eventKey: `purchase:${sale.sale_id}`,
+            description: "مكافأة إتمام عملية شراء",
+            metadata: { saleId: sale.sale_id } as OwnerJson,
+          });
+        }
+      }
       return member || null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -254,7 +274,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         returning id::text
       `;
       if (updated.length) changed += 1;
-      await awardOwnerPoints({
+      if (settings.points_qualified_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_qualified || 0),
         eventType: "qualified",
@@ -262,7 +282,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         referralId: referral.id,
         description: "تحول الصديق إلى عميل مؤهل",
       });
-      await awardOwnerPoints({
+      if (settings.points_sale_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_sale || 0),
         eventType: "sale",
@@ -284,7 +304,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         returning id::text
       `;
       if (updated.length) changed += 1;
-      await awardOwnerPoints({
+      if (settings.points_qualified_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_qualified || 0),
         eventType: "qualified",
@@ -336,7 +356,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
         updated_at=now()
       where id=${referral.id}::uuid
     `;
-    await awardOwnerPoints({
+    if (settings.points_qualified_enabled !== false) await awardOwnerPoints({
       memberId: referral.referrer_member_id,
       points: Number(settings.points_qualified || 0),
       eventType: "qualified",
@@ -344,7 +364,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
       referralId: referral.id,
       description: "تحول الصديق إلى عميل مؤهل",
     });
-    await awardOwnerPoints({
+    if (settings.points_sale_enabled !== false) await awardOwnerPoints({
       memberId: referral.referrer_member_id,
       points: Number(settings.points_sale || 0),
       eventType: "sale",

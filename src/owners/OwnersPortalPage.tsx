@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
+import { RedemptionQr } from "./RedemptionQr";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تنفيذ الطلب";
@@ -39,6 +40,16 @@ function referralStatus(value: unknown) {
   if (status === "registered") return "تم التسجيل";
   if (status === "rejected") return "مرفوض";
   return "فتح الرابط";
+}
+
+function redemptionStatus(value: unknown) {
+  const status = String(value || "");
+  if (status === "approved") return "جاهز للاستبدال";
+  if (status === "delivered") return "تم الاستبدال";
+  if (status === "requested") return "بانتظار المراجعة";
+  if (status === "rejected") return "مرفوض";
+  if (status === "cancelled") return "ملغي";
+  return status || "—";
 }
 
 export function OwnersPortalPage() {
@@ -107,8 +118,8 @@ export function OwnersPortalPage() {
             </>
           ) : (
             <>
-              <label><span>رمز التحقق</span><input inputMode="numeric" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" /></label>
-              <button disabled={busy || code.length !== 6} onClick={() => void verifyOtp()}>{busy ? "جاري التحقق..." : "دخول الحساب"}</button>
+              <label><span>رمز التحقق</span><input inputMode="numeric" maxLength={4} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="0000" /></label>
+              <button disabled={busy || code.length !== 4} onClick={() => void verifyOtp()}>{busy ? "جاري التحقق..." : "دخول الحساب"}</button>
               <button className="owners-ghost" onClick={() => { setStage("phone"); setCode(""); setChallenge(""); }}>تغيير رقم الجوال</button>
             </>
           )}
@@ -132,13 +143,18 @@ export function OwnersPortalPage() {
     }
   }
 
-  async function redeem(rewardId: string) {
+  async function redeem(reward: any) {
+    const pointsCost = Number(reward?.points_cost || 0);
+    const currentPoints = Number(member.points || 0);
+    if (currentPoints < pointsCost) return;
+    const afterPoints = currentPoints - pointsCost;
+    if (!window.confirm(`تأكيد استبدال «${reward?.name || "المكافأة"}»؟\nسيتم خصم ${pointsCost.toLocaleString("ar-SA-u-nu-latn")} نقطة.\nرصيدك بعد الاستبدال: ${afterPoints.toLocaleString("ar-SA-u-nu-latn")} نقطة.`)) return;
     setBusy(true);
     setMessage("");
     try {
-      await ownersPublicPost({ action: "redeem", rewardId });
+      const response = await ownersPublicPost({ action: "redeem", rewardId: reward.id });
       await load();
-      setMessage("تم إرسال طلب الاستبدال");
+      setMessage(response?.redemption?.code ? `تم الاستبدال. كودك: ${response.redemption.code}` : "تم الاستبدال وأصبح جاهزًا للتسليم");
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -209,7 +225,7 @@ export function OwnersPortalPage() {
                 {reward.reward_value ? <div className="owners-public-reward-value">{reward.reward_value}</div> : null}
                 <p>{reward.description || "راجع تفاصيل المكافأة قبل الاستبدال"}</p>
                 <strong>{Number(reward.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong>
-                <button disabled={busy || Number(member.points) < Number(reward.points_cost)} onClick={() => void redeem(reward.id)}>استبدال النقاط</button>
+                {Number(member.points) >= Number(reward.points_cost) ? <button disabled={busy} onClick={() => void redeem(reward)}>استبدال {Number(reward.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</button> : <button disabled>تحتاج {(Number(reward.points_cost) - Number(member.points)).toLocaleString("ar-SA-u-nu-latn")} نقطة إضافية</button>}
               </article>
             )) : <p>لا توجد مكافآت متاحة حاليًا.</p>}
           </div>
@@ -226,9 +242,21 @@ export function OwnersPortalPage() {
 
         {redemptions.length ? (
           <section className="owners-public-section">
-            <h2>طلبات الاستبدال</h2>
-            <div className="owners-referral-list">
-              {redemptions.map((redemption: any) => <article key={redemption.id}><div><strong>{redemption.reward_name}</strong><span>{redemption.status}</span></div><small>{formatDate(redemption.created_at)}</small></article>)}
+            <h2>استبدالاتي</h2>
+            <div className="owners-redemption-cards">
+              {redemptions.map((redemption: any) => (
+                <article className={`owners-redemption-card ${redemption.status === "approved" ? "ready" : redemption.status === "delivered" ? "done" : ""}`} key={redemption.id}>
+                  <div className="owners-redemption-card-head"><div><strong>{redemption.reward_name}</strong><span>{redemptionStatus(redemption.status)}</span></div><small>{formatDate(redemption.created_at)}</small></div>
+                  <p>{Number(redemption.points_cost || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة</p>
+                  {redemption.status === "approved" && /^\d{8}$/.test(String(redemption.redemption_code || "")) ? (
+                    <div className="owners-redemption-ready">
+                      <RedemptionQr code={String(redemption.redemption_code)} size={176} />
+                      <div><span>كود الاستبدال</span><strong className="owners-redemption-code" dir="ltr">{redemption.redemption_code}</strong><small>اعرض QR أو الكود للمندوب عند استلام المكافأة.</small></div>
+                    </div>
+                  ) : null}
+                  {redemption.status === "delivered" ? <div className="owners-redemption-delivered"><strong>تم تسليم المكافأة</strong><span>{formatDate(redemption.reviewed_at)}{redemption.reviewed_by_name ? ` · ${redemption.reviewed_by_name}` : ""}</span></div> : null}
+                </article>
+              ))}
             </div>
           </section>
         ) : null}

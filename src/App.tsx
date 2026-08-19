@@ -24,6 +24,7 @@ const CrmFinanceHistoryPage = lazy(() => import("./crm/pages/CrmFinanceHistoryPa
 const CrmInboxAgentPage = lazy(() => import("./crm/pages/CrmInboxAgentPage").then((module) => ({ default: module.CrmInboxAgentPage })));
 const CrmReportsPage = lazy(() => import("./crm/pages/CrmReportsPage").then((module) => ({ default: module.CrmReportsPage })));
 const CrmKpiPage = lazy(() => import("./crm/pages/CrmKpiPage").then((module) => ({ default: module.CrmKpiPage })));
+const CrmOwnersCommunityPage = lazy(() => import("./crm/pages/CrmOwnersCommunityPage").then((module) => ({ default: module.CrmOwnersCommunityPage })));
 const CrmInboxPage = lazy(() => import("./crm/pages/CrmInboxPage").then((module) => ({ default: module.CrmInboxPage })));
 const CrmContactsPage = lazy(() => import("./crm/pages/CrmContactsPage").then((module) => ({ default: module.CrmContactsPage })));
 const CashQrRegistrationPage = lazy(() => import("./crm/pages/CashQrRegistrationPage").then((module) => ({ default: module.CashQrRegistrationPage })));
@@ -106,6 +107,7 @@ function PlatformRoutes() {
             <Route path="inbox-agent" element={<PermissionGuard permission="crm.inbox_agent.view"><CrmInboxAgentPage /></PermissionGuard>} />
             <Route path="reports" element={<PermissionGuard permission="crm.reports.view"><CrmReportsPage /></PermissionGuard>} />
             <Route path="kpi" element={<PermissionGuard permission="crm.kpi.view"><CrmKpiPage /></PermissionGuard>} />
+            <Route path="owners-community" element={<PermissionGuard permission="crm.owners_community.view"><CrmOwnersCommunityPage /></PermissionGuard>} />
             <Route path="admin" element={<Navigate to="/settings?section=crm" replace />} />
           </Route>
           <Route path="/marketing" element={<SystemGuard system="marketing"><MarketingLayout /></SystemGuard>}>

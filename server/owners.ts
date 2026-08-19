@@ -66,6 +66,10 @@ function randomReferralCode() {
   return crypto.randomBytes(7).toString("base64url").replace(/[-_]/g, "").toUpperCase().slice(0, 10);
 }
 
+function randomRedemptionCode() {
+  return crypto.randomInt(0, 100_000_000).toString().padStart(8, "0");
+}
+
 async function createManualOwnerMember(input: {
   name: unknown;
   phone: unknown;
@@ -146,6 +150,42 @@ async function createManualOwnerMember(input: {
   throw new Error("تعذر إنشاء كود دعوة فريد للعضو");
 }
 
+async function findRedemptionByCode(sql: ReturnType<typeof getSql>, codeValue: unknown) {
+  const code = clean(codeValue);
+  if (!/^\d{8}$/.test(code)) return null;
+  const [row] = await sql<any[]>`
+    select
+      rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.created_at,rd.reviewed_at,
+      m.customer_name,m.phone_normalized,r.name as reward_name,u.full_name as reviewed_by_name
+    from owners.redemptions rd
+    join owners.members m on m.id=rd.member_id
+    join owners.rewards r on r.id=rd.reward_id
+    left join core.users u on u.id=rd.reviewed_by
+    where rd.redemption_code=${code}
+    limit 1
+  `;
+  return row || null;
+}
+
+function redemptionLookupPayload(row: any) {
+  if (!row) return { ok: true, state: "invalid", message: "كود الاستبدال غير صحيح" };
+  const redemption = {
+    id: row.id,
+    code: row.redemption_code,
+    status: row.status,
+    pointsCost: Number(row.points_cost || 0),
+    createdAt: row.created_at,
+    redeemedAt: row.reviewed_at || null,
+    redeemedBy: row.reviewed_by_name || null,
+    customerName: row.customer_name || "عميل MZJ",
+    phone: row.phone_normalized || "",
+    rewardName: row.reward_name || "مكافأة",
+  };
+  if (row.status === "approved") return { ok: true, state: "valid", redemption };
+  if (row.status === "delivered") return { ok: true, state: "used", redemption };
+  return { ok: true, state: "unavailable", message: row.status === "cancelled" ? "تم إلغاء هذا الاستبدال" : row.status === "rejected" ? "تم رفض هذا الاستبدال" : "الاستبدال غير جاهز للتسليم", redemption };
+}
+
 async function syncMembersFromCanonicalSales() {
   const sql = getSql();
   const rows = await sql<any[]>`
@@ -193,7 +233,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql<any[]>`select * from owners.settings where id='default'`.then((rows) => rows[0] || {}),
       sql<any[]>`
         select
-          m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
+          m.id::text,m.crm_lead_id::text,m.source_sale_id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
           m.tier_code,m.first_sale_at,m.last_sale_at,m.last_login_at,m.welcome_sent_at,m.metadata,
           coalesce(m.metadata->>'memberKind','real') as member_kind,
           coalesce(m.metadata->>'enrollmentSource','canonical_sale') as enrollment_source,
@@ -238,11 +278,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `,
       sql<any[]>`
         select
-          rd.id::text,rd.status,rd.points_cost,rd.note,rd.created_at,rd.reviewed_at,
-          m.customer_name,m.phone_normalized,r.name as reward_name
+          rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.note,rd.created_at,rd.reviewed_at,
+          m.customer_name,m.phone_normalized,r.name as reward_name,u.full_name as reviewed_by_name
         from owners.redemptions rd
         join owners.members m on m.id=rd.member_id
         join owners.rewards r on r.id=rd.reward_id
+        left join core.users u on u.id=rd.reviewed_by
         order by rd.created_at desc
         limit 500
       `,
@@ -253,7 +294,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where coalesce(m.metadata->>'memberKind','real')<>'test')::int as referrals,
           (select count(*) from owners.referrals r join owners.members m on m.id=r.referrer_member_id where r.status='sold' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as referral_sales,
           (select coalesce(sum(points_balance),0) from owners.members where status='active' and coalesce(metadata->>'memberKind','real')<>'test')::int as outstanding_points,
-          (select count(*) from owners.redemptions rd join owners.members m on m.id=rd.member_id where rd.status='requested' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as pending_redemptions
+          (select count(*) from owners.redemptions rd join owners.members m on m.id=rd.member_id where rd.status='approved' and coalesce(m.metadata->>'memberKind','real')<>'test')::int as ready_redemptions
       `,
     ]);
     return response.status(200).json({
@@ -271,8 +312,37 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const canManageCommunity = hasPermission(actor, "owners.community.manage");
   const canManageSettings = hasPermission(actor, "settings.owners.manage") || canManageCommunity;
-  if (action === "save_settings" && !canManageSettings) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لتعديل إعدادات البرنامج" });
-  if (action !== "save_settings" && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
+  const canUseCrmOwnersCommunity = hasPermission(actor, "crm.owners_community.view");
+
+  if (["lookup_redemption", "confirm_redemption"].includes(action)) {
+    if (!canUseCrmOwnersCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية للدخول إلى Owners Community داخل CRM" });
+    const code = clean(payload.code);
+    if (!/^\d{8}$/.test(code)) return response.status(400).json({ ok: false, error: "كود الاستبدال يجب أن يكون 8 أرقام" });
+    if (action === "lookup_redemption") {
+      return response.status(200).json(redemptionLookupPayload(await findRedemptionByCode(sql, code)));
+    }
+    const result = await sql.begin(async (tx) => {
+      const [row] = await tx<any[]>`
+        select id::text,status,redemption_code
+        from owners.redemptions
+        where redemption_code=${code}
+        for update
+      `;
+      if (!row) return { status: 404, error: "كود الاستبدال غير صحيح" };
+      if (row.status === "delivered") return { status: 409, error: "تم استخدام هذا الكود مسبقًا" };
+      if (row.status !== "approved") return { status: 409, error: "هذا الاستبدال غير جاهز للتسليم" };
+      await tx`
+        update owners.redemptions set status='delivered',reviewed_by=${actor.id}::uuid,reviewed_at=now(),updated_at=now()
+        where id=${row.id}::uuid
+      `;
+      return { ok: true };
+    });
+    if ("error" in result) return response.status(result.status).json({ ok: false, error: result.error });
+    return response.status(200).json(redemptionLookupPayload(await findRedemptionByCode(sql, code)));
+  }
+
+  if (["save_settings", "save_points_settings"].includes(action) && !canManageSettings) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لتعديل إعدادات البرنامج" });
+  if (!["save_settings", "save_points_settings"].includes(action) && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
 
   if (action === "save_settings") {
     const silverPoints = integer(payload.silverPoints, 1000, 0, 1_000_000_000);
@@ -285,9 +355,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
         otp_resend_seconds=${integer(payload.otpResendSeconds, 60, 15, 600)},
         otp_max_attempts=${integer(payload.otpMaxAttempts, 5, 1, 20)},
         otp_hourly_limit=${integer(payload.otpHourlyLimit, 5, 1, 30)},
+        purchase_points_effective_at=case when points_purchase_enabled is distinct from ${payload.pointsPurchaseEnabled === true} or points_purchase is distinct from ${integer(payload.pointsPurchase, 500, 0, 1_000_000)} then now() else purchase_points_effective_at end,
+        points_purchase_enabled=${payload.pointsPurchaseEnabled === true},
+        points_purchase=${integer(payload.pointsPurchase, 500, 0, 1_000_000)},
+        points_unique_open_enabled=${payload.pointsUniqueOpenEnabled !== false},
         points_unique_open=${integer(payload.pointsUniqueOpen, 1, 0, 1_000_000)},
+        points_registration_enabled=${payload.pointsRegistrationEnabled !== false},
         points_registration=${integer(payload.pointsRegistration, 10, 0, 1_000_000)},
+        points_qualified_enabled=${payload.pointsQualifiedEnabled !== false},
         points_qualified=${integer(payload.pointsQualified, 25, 0, 1_000_000)},
+        points_sale_enabled=${payload.pointsSaleEnabled !== false},
         points_sale=${integer(payload.pointsSale, 500, 0, 1_000_000)},
         daily_open_points_cap=${integer(payload.dailyOpenPointsCap, 25, 0, 1_000_000)},
         silver_points=${silverPoints},
@@ -300,6 +377,30 @@ export default async function handler(request: VercelRequest, response: VercelRe
         welcome_message_enabled=${payload.welcomeMessageEnabled === true},
         updated_by=${actor.id}::uuid,
         updated_at=now()
+      where id='default'
+      returning *
+    `;
+    return response.status(200).json({ ok: true, settings });
+  }
+
+  if (action === "save_points_settings") {
+    const purchasePoints = integer(payload.pointsPurchase, 500, 0, 1_000_000);
+    const purchaseEnabled = payload.pointsPurchaseEnabled === true;
+    const [settings] = await sql<any[]>`
+      update owners.settings set
+        purchase_points_effective_at=case when points_purchase_enabled is distinct from ${purchaseEnabled} or points_purchase is distinct from ${purchasePoints} then now() else purchase_points_effective_at end,
+        points_purchase_enabled=${purchaseEnabled},
+        points_purchase=${purchasePoints},
+        points_unique_open_enabled=${payload.pointsUniqueOpenEnabled !== false},
+        points_unique_open=${integer(payload.pointsUniqueOpen, 1, 0, 1_000_000)},
+        points_registration_enabled=${payload.pointsRegistrationEnabled !== false},
+        points_registration=${integer(payload.pointsRegistration, 10, 0, 1_000_000)},
+        points_qualified_enabled=${payload.pointsQualifiedEnabled !== false},
+        points_qualified=${integer(payload.pointsQualified, 25, 0, 1_000_000)},
+        points_sale_enabled=${payload.pointsSaleEnabled !== false},
+        points_sale=${integer(payload.pointsSale, 500, 0, 1_000_000)},
+        daily_open_points_cap=${integer(payload.dailyOpenPointsCap, 25, 0, 1_000_000)},
+        updated_by=${actor.id}::uuid,updated_at=now()
       where id='default'
       returning *
     `;
@@ -322,11 +423,27 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({ ok: true, memberId: result.memberId });
   }
 
-  if (action === "delete_test_member") {
+  if (["delete_member", "delete_test_member"].includes(action)) {
     const memberId = clean(payload.memberId);
-    const [member] = await sql<any[]>`select id::text,metadata from owners.members where id=${memberId}::uuid limit 1`;
+    const [member] = await sql<any[]>`
+      select id::text,crm_lead_id::text,source_sale_id::text,metadata,coalesce(metadata->>'enrollmentSource','canonical_sale') as enrollment_source
+      from owners.members where id=${memberId}::uuid limit 1
+    `;
     if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
-    if (!isTestMemberMetadata(member.metadata)) return response.status(409).json({ ok: false, error: "الحذف متاح للأعضاء التجريبيين فقط" });
+    const isTest = isTestMemberMetadata(member.metadata);
+    if (!isTest) {
+      const [usage] = await sql<any[]>`
+        select
+          (select count(*) from owners.referrals where referrer_member_id=${memberId}::uuid)::int as referrals,
+          (select count(*) from owners.points_ledger where member_id=${memberId}::uuid)::int as ledger,
+          (select count(*) from owners.redemptions where member_id=${memberId}::uuid)::int as redemptions,
+          (select count(*) from owners.referral_purchase_benefits where referrer_member_id=${memberId}::uuid)::int as purchase_benefits
+      `;
+      const safeImported = member.enrollment_source === "excel_import" && !member.crm_lead_id && !member.source_sale_id
+        && Number(usage?.referrals || 0) === 0 && Number(usage?.ledger || 0) === 0
+        && Number(usage?.redemptions || 0) === 0 && Number(usage?.purchase_benefits || 0) === 0;
+      if (!safeImported) return response.status(409).json({ ok: false, error: "لا يمكن حذف عميل مرتبط ببيع حقيقي أو دعوات أو نقاط أو استبدالات" });
+    }
     await sql`delete from owners.members where id=${memberId}::uuid`;
     return response.status(200).json({ ok: true });
   }
@@ -382,6 +499,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       : 0;
     const checkoutDiscountAmount = checkoutDiscountType === "amount" ? checkoutDiscountValue : 0;
     const pointsCost = integer(payload.pointsCost, 1, 1, 1_000_000_000);
+    const hasStockQuantity = Object.prototype.hasOwnProperty.call(payload, "stockQuantity");
     const stockQuantity = payload.stockQuantity === "" || payload.stockQuantity == null
       ? null
       : integer(payload.stockQuantity, 0, 0, 1_000_000_000);
@@ -404,7 +522,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           show_on_member_card=${showOnMemberCard},available_for_referral_purchase=${availableForReferralPurchase},
           available_for_existing_customer_purchase=${availableForExistingCustomerPurchase},
           checkout_discount_type=${checkoutDiscountType},checkout_discount_value=${checkoutDiscountValue},
-          checkout_discount_amount=${checkoutDiscountAmount},points_cost=${pointsCost},stock_quantity=${stockQuantity},
+          checkout_discount_amount=${checkoutDiscountAmount},points_cost=${pointsCost},stock_quantity=case when ${hasStockQuantity} then ${stockQuantity} else stock_quantity end,
           starts_at=${startsAt}::timestamptz,ends_at=${endsAt}::timestamptz,is_active=${isActive},
           updated_by=${actor.id}::uuid,updated_at=now()
         where id=${id}::uuid
@@ -575,9 +693,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
         }
       }
 
+      let redemptionCode = clean(redemption.redemption_code);
+      if (status === "approved" && !redemptionCode) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const candidate = randomRedemptionCode();
+          const [exists] = await tx<any[]>`select 1 from owners.redemptions where redemption_code=${candidate} limit 1`;
+          if (!exists) { redemptionCode = candidate; break; }
+        }
+        if (!redemptionCode) return { error: "تعذر إنشاء كود استبدال فريد", status: 500 };
+      }
+
       await tx`
         update owners.redemptions set
-          status=${status},note=${clean(payload.note) || null},reviewed_by=${actor.id}::uuid,
+          status=${status},redemption_code=coalesce(redemption_code,${redemptionCode || null}),note=${clean(payload.note) || null},reviewed_by=${actor.id}::uuid,
           reviewed_at=now(),updated_at=now()
         where id=${id}::uuid
       `;

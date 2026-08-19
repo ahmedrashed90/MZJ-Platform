@@ -151,6 +151,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('crm','inbox_agent','وكيل صندوق الوارد','/crm/inbox-agent',70,true),
 ('crm','reports','التقارير','/crm/reports',80,true),
 ('crm','kpi','تقييم المناديب KPI','/crm/kpi',90,true),
+('crm','owners_community','Owners Community','/crm/owners-community',95,true),
 ('marketing','dashboard','الداش بورد','/marketing',10,true),
 ('marketing','create_campaign','إنشاء حملة','/marketing/create-campaign',20,true),
 ('marketing','create_agenda','إنشاء أجندة','/marketing/create-agenda',30,true),
@@ -217,6 +218,7 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('crm.inbox_agent.view','فتح وكيل صندوق الوارد','crm','inbox_agent','view','فتح وكيل صندوق الوارد','فتح وكيل صندوق الوارد','page',false,320,true),
 ('crm.reports.view','مشاهدة تقارير CRM','crm','reports','view','مشاهدة تقارير CRM','مشاهدة تقارير CRM','page',false,330,true),
 ('crm.kpi.view','مشاهدة KPI','crm','kpi','view','مشاهدة KPI','مشاهدة KPI','page',false,340,true),
+('crm.owners_community.view','دخول Owners Community','crm','owners_community','view','دخول Owners Community','استعلام أكواد استبدال MZJ Owners Community وتأكيد التسليم','page',false,350,true),
 ('crm.customer.view','فتح بيانات العميل','crm','database','customer_view','فتح بيانات العميل','فتح بيانات العميل','action',false,360,true),
 ('crm.customer.create','إنشاء عميل','crm','manual_leads','customer_create','إنشاء عميل','إنشاء عميل','action',false,370,true),
 ('crm.customer.update','تعديل بيانات العميل','crm','database','customer_update','تعديل بيانات العميل','تعديل بيانات العميل','action',false,380,true),
@@ -555,7 +557,8 @@ const REQUIRED_PAGE_PERMISSION_CATALOG_SQL = String.raw`
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
-('core','owners_community','MZJ Owners Community','/owners-community',60,true)
+('core','owners_community','MZJ Owners Community','/owners-community',60,true),
+('crm','owners_community','Owners Community','/crm/owners-community',95,true)
 on conflict(system_code,code) do update set
   name_ar=excluded.name_ar,
   route=excluded.route,
@@ -569,7 +572,8 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('owners.community.view','دخول MZJ Owners Community','core','owners_community','view','دخول MZJ Owners Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
 ('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
 ('settings.owners.view','مشاهدة إعدادات MZJ Owners Community','core','settings','owners_view','مشاهدة إعدادات MZJ Owners Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
-('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true)
+('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true),
+('crm.owners_community.view','دخول Owners Community','crm','owners_community','view','دخول Owners Community','استعلام أكواد استبدال MZJ Owners Community وتأكيد التسليم','page',false,350,true)
 on conflict(code) do update set
   name=excluded.name,
   system_code=excluded.system_code,
@@ -647,6 +651,17 @@ async function requiredPagePermissionCatalogReady() {
       and exists(select 1 from core.permissions where code='owners.community.manage' and is_active=true)
       and exists(select 1 from core.permissions where code='settings.owners.view' and is_active=true)
       and exists(select 1 from core.permissions where code='settings.owners.manage' and is_active=true)
+      and exists(
+        select 1 from core.system_pages
+        where system_code='crm' and code='owners_community' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='crm.owners_community.view'
+          and system_code='crm'
+          and page_code='owners_community'
+          and is_active=true
+      )
       as ready
   `;
   return Boolean(state?.ready);

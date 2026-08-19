@@ -19,7 +19,7 @@ import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
 import { readXlsx } from "../crm/xlsxReader";
 
-type Tab = "members" | "legacy" | "import" | "referrals" | "rewards" | "redemptions";
+type Tab = "members" | "legacy" | "import" | "referrals" | "points" | "rewards" | "redemptions";
 type RewardsView = "catalog" | "memberCard";
 
 
@@ -47,11 +47,54 @@ type RewardDraft = {
   checkoutDiscountType: "amount" | "percentage";
   checkoutDiscountValue: string;
   pointsCost: number;
-  stockQuantity: string;
   startsAt: string;
   endsAt: string;
   isActive: boolean;
 };
+
+type PointsDraft = {
+  pointsPurchaseEnabled: boolean;
+  pointsPurchase: number;
+  pointsUniqueOpenEnabled: boolean;
+  pointsUniqueOpen: number;
+  pointsRegistrationEnabled: boolean;
+  pointsRegistration: number;
+  pointsQualifiedEnabled: boolean;
+  pointsQualified: number;
+  pointsSaleEnabled: boolean;
+  pointsSale: number;
+  dailyOpenPointsCap: number;
+};
+
+const emptyPointsDraft: PointsDraft = {
+  pointsPurchaseEnabled: false,
+  pointsPurchase: 500,
+  pointsUniqueOpenEnabled: true,
+  pointsUniqueOpen: 1,
+  pointsRegistrationEnabled: true,
+  pointsRegistration: 10,
+  pointsQualifiedEnabled: true,
+  pointsQualified: 25,
+  pointsSaleEnabled: true,
+  pointsSale: 500,
+  dailyOpenPointsCap: 25,
+};
+
+function pointsDraftFromSettings(settings: any): PointsDraft {
+  return {
+    pointsPurchaseEnabled: settings?.points_purchase_enabled === true,
+    pointsPurchase: Number(settings?.points_purchase ?? 500),
+    pointsUniqueOpenEnabled: settings?.points_unique_open_enabled !== false,
+    pointsUniqueOpen: Number(settings?.points_unique_open ?? 1),
+    pointsRegistrationEnabled: settings?.points_registration_enabled !== false,
+    pointsRegistration: Number(settings?.points_registration ?? 10),
+    pointsQualifiedEnabled: settings?.points_qualified_enabled !== false,
+    pointsQualified: Number(settings?.points_qualified ?? 25),
+    pointsSaleEnabled: settings?.points_sale_enabled !== false,
+    pointsSale: Number(settings?.points_sale ?? 500),
+    dailyOpenPointsCap: Number(settings?.daily_open_points_cap ?? 25),
+  };
+}
 
 const emptyReward: RewardDraft = {
   id: "",
@@ -65,7 +108,6 @@ const emptyReward: RewardDraft = {
   checkoutDiscountType: "amount",
   checkoutDiscountValue: "",
   pointsCost: 500,
-  stockQuantity: "",
   startsAt: "",
   endsAt: "",
   isActive: true,
@@ -131,6 +173,16 @@ function referralStatusLabel(value: unknown) {
   return "فتح الرابط";
 }
 
+function redemptionStatusLabel(value: unknown) {
+  const status = String(value || "");
+  if (status === "approved") return "جاهز للاستبدال";
+  if (status === "delivered") return "تم الاستبدال";
+  if (status === "requested") return "طلب قديم بانتظار المراجعة";
+  if (status === "rejected") return "مرفوض";
+  if (status === "cancelled") return "ملغي";
+  return status || "—";
+}
+
 export function OwnersCommunityPage() {
   const { user } = useAuth();
   const canManage = hasPermission(user, "owners.community.manage");
@@ -139,6 +191,7 @@ export function OwnersCommunityPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [reward, setReward] = useState<RewardDraft>(emptyReward);
+  const [pointsDraft, setPointsDraft] = useState<PointsDraft>(emptyPointsDraft);
   const [rewardsView, setRewardsView] = useState<RewardsView>("catalog");
   const [testMember, setTestMember] = useState({ name: "", phone: "" });
   const [importRows, setImportRows] = useState<Record<string, string>[]>([]);
@@ -149,7 +202,9 @@ export function OwnersCommunityPage() {
   const [usageBusy, setUsageBusy] = useState(false);
 
   async function load() {
-    setData(await ownersAdminGet());
+    const next = await ownersAdminGet();
+    setData(next);
+    setPointsDraft(pointsDraftFromSettings(next?.settings));
   }
 
   useEffect(() => {
@@ -175,6 +230,14 @@ export function OwnersCommunityPage() {
   async function saveReward() {
     const saved = await act({ action: "save_reward", ...reward }, reward.id ? "تم تحديث المكافأة" : "تمت إضافة المكافأة");
     if (saved) setReward(emptyReward);
+  }
+
+  async function savePointsSettings() {
+    await act({ action: "save_points_settings", ...pointsDraft }, "تم حفظ إعدادات النقاط");
+  }
+
+  function setPointValue(key: keyof PointsDraft, value: string) {
+    setPointsDraft((current) => ({ ...current, [key]: Number(value) }));
   }
 
   async function deleteReward(item: any) {
@@ -261,7 +324,6 @@ export function OwnersCommunityPage() {
       checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount",
       checkoutDiscountValue: Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? String(item.checkout_discount_value || item.checkout_discount_amount) : "",
       pointsCost: Number(item.points_cost || 1),
-      stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity),
       startsAt: toLocalDateTime(item.starts_at),
       endsAt: toLocalDateTime(item.ends_at),
       isActive: item.is_active !== false,
@@ -309,7 +371,7 @@ export function OwnersCommunityPage() {
         <article><ShareNetwork size={24} /><div><span>الدعوات المسجلة</span><strong>{Number(stats.referrals || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
         <article><CheckCircle size={24} /><div><span>مبيعات من الدعوات</span><strong>{Number(stats.referral_sales || 0).toLocaleString("ar-SA-u-nu-latn")} <small>{soldRate}%</small></strong></div></article>
         <article><Wallet size={24} /><div><span>النقاط القائمة</span><strong>{Number(stats.outstanding_points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
-        <article><Gift size={24} /><div><span>استبدالات تنتظر المراجعة</span><strong>{Number(stats.pending_redemptions || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
+        <article><Gift size={24} /><div><span>استبدالات جاهزة للتسليم</span><strong>{Number(stats.ready_redemptions || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div></article>
       </section>
 
       <nav className="owners-tabs">
@@ -317,6 +379,7 @@ export function OwnersCommunityPage() {
         <button className={tab === "legacy" ? "active" : ""} onClick={() => setTab("legacy")}>العملاء القديمة</button>
         {canManage ? <button className={tab === "import" ? "active" : ""} onClick={() => setTab("import")}>استيراد العملاء السابقين</button> : null}
         <button className={tab === "referrals" ? "active" : ""} onClick={() => setTab("referrals")}>الدعوات</button>
+        {canManage ? <button className={tab === "points" ? "active" : ""} onClick={() => setTab("points")}>إعدادات النقاط</button> : null}
         <button className={tab === "rewards" ? "active" : ""} onClick={() => setTab("rewards")}>المكافآت</button>
         <button className={tab === "redemptions" ? "active" : ""} onClick={() => setTab("redemptions")}>طلبات الاستبدال</button>
       </nav>
@@ -355,7 +418,7 @@ export function OwnersCommunityPage() {
                         {canManage ? (
                           <div className="owners-actions">
                             <button className="owners-link-btn" disabled={busy || Boolean(member.welcome_sent_at)} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> {member.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button>
-                            {member.member_kind === "test" ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm("حذف العضو التجريبي وكل بيانات تجربته؟") && void act({ action: "delete_test_member", memberId: member.id }, "تم حذف العضو التجريبي") }><Trash size={16} /> حذف</button> : null}
+                            {member.member_kind === "test" || (member.enrollment_source === "excel_import" && !member.crm_lead_id && !member.source_sale_id) ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من Owners Community؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button> : null}
                           </div>
                         ) : "—"}
                       </td>
@@ -449,6 +512,43 @@ export function OwnersCommunityPage() {
         </section>
       ) : null}
 
+      {tab === "points" && canManage ? (
+        <section className="owners-table-card owners-points-settings-card">
+          <header><div><h2>إعدادات النقاط</h2><span>تحكم في نقاط الشراء والدعوات. أي تعديل يطبق على الأحداث الجديدة فقط.</span></div></header>
+          <div className="owners-point-rules">
+            <article className="owners-point-rule">
+              <div><strong>شراء العميل</strong><small>النقاط تضاف للعميل المشتري عند إتمام عملية شراء جديدة.</small></div>
+              <select value={pointsDraft.pointsPurchaseEnabled ? "on" : "off"} onChange={(event) => setPointsDraft({ ...pointsDraft, pointsPurchaseEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+              <label><span>النقاط</span><input type="number" min="0" disabled={!pointsDraft.pointsPurchaseEnabled} value={pointsDraft.pointsPurchase} onChange={(event) => setPointValue("pointsPurchase", event.target.value)} /></label>
+            </article>
+            <article className="owners-point-rule">
+              <div><strong>فتح رابط الدعوة</strong><small>النقاط تضاف لصاحب رابط الدعوة عند الفتح الفريد.</small></div>
+              <select value={pointsDraft.pointsUniqueOpenEnabled ? "on" : "off"} onChange={(event) => setPointsDraft({ ...pointsDraft, pointsUniqueOpenEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+              <label><span>النقاط</span><input type="number" min="0" disabled={!pointsDraft.pointsUniqueOpenEnabled} value={pointsDraft.pointsUniqueOpen} onChange={(event) => setPointValue("pointsUniqueOpen", event.target.value)} /></label>
+            </article>
+            <article className="owners-point-rule">
+              <div><strong>تسجيل الاسم ورقم الجوال</strong><small>النقاط تضاف لصاحب الدعوة بعد تسجيل الصديق بياناته.</small></div>
+              <select value={pointsDraft.pointsRegistrationEnabled ? "on" : "off"} onChange={(event) => setPointsDraft({ ...pointsDraft, pointsRegistrationEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+              <label><span>النقاط</span><input type="number" min="0" disabled={!pointsDraft.pointsRegistrationEnabled} value={pointsDraft.pointsRegistration} onChange={(event) => setPointValue("pointsRegistration", event.target.value)} /></label>
+            </article>
+            <article className="owners-point-rule">
+              <div><strong>عميل مؤهل</strong><small>النقاط تضاف لصاحب الدعوة عندما يصبح العميل مؤهلًا في CRM.</small></div>
+              <select value={pointsDraft.pointsQualifiedEnabled ? "on" : "off"} onChange={(event) => setPointsDraft({ ...pointsDraft, pointsQualifiedEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+              <label><span>النقاط</span><input type="number" min="0" disabled={!pointsDraft.pointsQualifiedEnabled} value={pointsDraft.pointsQualified} onChange={(event) => setPointValue("pointsQualified", event.target.value)} /></label>
+            </article>
+            <article className="owners-point-rule">
+              <div><strong>تم البيع من الدعوة</strong><small>النقاط تضاف لصاحب الدعوة عند إتمام البيع للعميل المدعو.</small></div>
+              <select value={pointsDraft.pointsSaleEnabled ? "on" : "off"} onChange={(event) => setPointsDraft({ ...pointsDraft, pointsSaleEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+              <label><span>النقاط</span><input type="number" min="0" disabled={!pointsDraft.pointsSaleEnabled} value={pointsDraft.pointsSale} onChange={(event) => setPointValue("pointsSale", event.target.value)} /></label>
+            </article>
+          </div>
+          <div className="owners-form-grid owners-points-cap-row">
+            <label><span>حد نقاط فتح روابط الدعوة يوميًا</span><input type="number" min="0" value={pointsDraft.dailyOpenPointsCap} onChange={(event) => setPointValue("dailyOpenPointsCap", event.target.value)} /></label>
+          </div>
+          <button className="owners-primary" disabled={busy} onClick={() => void savePointsSettings()}>{busy ? "جاري الحفظ..." : "حفظ إعدادات النقاط"}</button>
+        </section>
+      ) : null}
+
       {tab === "rewards" ? (
         <>
           <div className="owners-rewards-subtabs">
@@ -468,7 +568,6 @@ export function OwnersCommunityPage() {
                     {item.reward_value ? <div className="owners-reward-value">{item.reward_value}</div> : null}
                     <p>{item.description || "تفاصيل المكافأة تظهر للعميل هنا"}</p>
                     <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
-                    <small>{item.stock_quantity == null ? "كمية مفتوحة" : `المتبقي ${Math.max(0, Number(item.stock_quantity) - Number(item.redeemed_quantity || 0) - Number(item.referral_purchase_redeemed_quantity || 0))}`}</small>
                     <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}</small>
                     <small>استخدامات المكافأة: {(Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)).toLocaleString("ar-SA-u-nu-latn")}</small>
                     {canManage ? <button className="owners-reward-usage-btn" disabled={usageBusy || (Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)) === 0} onClick={() => void openRewardUsage(item)}><UsersThree size={15} /> عرض من استخدم المكافأة</button> : null}
@@ -487,7 +586,6 @@ export function OwnersCommunityPage() {
                   <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => { const rewardType = event.target.value as RewardDraft["rewardType"]; setReward({ ...reward, rewardType, rewardValue: "", checkoutDiscountValue: rewardType === "discount" ? reward.checkoutDiscountValue : "" }); }}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
                   <label><span>{rewardValueLabel(reward.rewardType)}</span><input value={reward.rewardValue} onChange={(event) => setReward({ ...reward, rewardValue: event.target.value })} placeholder={rewardValuePlaceholder(reward.rewardType)} /></label>
                   <label><span>النقاط المطلوبة</span><input type="number" min="1" value={reward.pointsCost} onChange={(event) => setReward({ ...reward, pointsCost: Number(event.target.value) })} /></label>
-                  <label><span>الكمية المتاحة</span><input type="number" min="0" placeholder="اتركها فارغة لكمية مفتوحة" value={reward.stockQuantity} onChange={(event) => setReward({ ...reward, stockQuantity: event.target.value })} /></label>
                   <label><span>تبدأ في</span><input type="datetime-local" value={reward.startsAt} onChange={(event) => setReward({ ...reward, startsAt: event.target.value })} /></label>
                   <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
                   <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
@@ -508,7 +606,7 @@ export function OwnersCommunityPage() {
                 {rewards.length ? rewards.map((item: any) => (
                   <article key={item.id}>
                     <div><strong>{item.name}</strong><span>{rewardTypeLabel(item.reward_type)}{item.reward_value ? ` · ${item.reward_value}` : ""}</span></div>
-                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, availableForReferralPurchase: item.available_for_referral_purchase === true, availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true, checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount", checkoutDiscountValue: item.checkout_discount_value || item.checkout_discount_amount || "", pointsCost: item.points_cost, stockQuantity: item.stock_quantity == null ? "" : String(item.stock_quantity), startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
+                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, availableForReferralPurchase: item.available_for_referral_purchase === true, availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true, checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount", checkoutDiscountValue: item.checkout_discount_value || item.checkout_discount_amount || "", pointsCost: item.points_cost, startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
                   </article>
                 )) : <p>أضف مكافآت أولًا ثم اختر ما يظهر منها على بطاقة العضوية.</p>}
               </div>
@@ -519,27 +617,27 @@ export function OwnersCommunityPage() {
 
       {tab === "redemptions" ? (
         <section className="owners-table-card">
-          <header><h2>طلبات استبدال النقاط</h2><span>الموافقة والتسليم بسجل واضح</span></header>
+          <header><h2>استبدالات النقاط</h2><span>الاستبدال الجديد يصبح جاهزًا مباشرة، والتسليم يتم من صفحة Owners Community داخل CRM.</span></header>
           <div className="owners-table-wrap">
             <table>
-              <thead><tr><th>العميل</th><th>المكافأة</th><th>النقاط</th><th>الحالة</th><th>تاريخ الطلب</th><th>الإجراء</th></tr></thead>
+              <thead><tr><th>العميل</th><th>المكافأة</th><th>الكود</th><th>النقاط</th><th>الحالة</th><th>تاريخ الطلب</th><th>التسليم</th><th>الإجراء</th></tr></thead>
               <tbody>
                 {redemptions.map((redemption: any) => (
                   <tr key={redemption.id}>
                     <td>{redemption.customer_name}<small className="owners-sub">{redemption.phone_normalized}</small></td>
                     <td>{redemption.reward_name}</td>
-                    <td>{redemption.points_cost}</td>
-                    <td>{redemption.status}</td>
+                    <td><code dir="ltr">{redemption.redemption_code || "—"}</code></td>
+                    <td>{Number(redemption.points_cost || 0).toLocaleString("ar-SA-u-nu-latn")}</td>
+                    <td>{redemptionStatusLabel(redemption.status)}</td>
                     <td>{formatDate(redemption.created_at)}</td>
+                    <td>{redemption.status === "delivered" ? <><strong>{redemption.reviewed_by_name || "—"}</strong><small className="owners-sub">{formatDate(redemption.reviewed_at)}</small></> : "—"}</td>
                     <td>
                       {canManage && redemption.status === "requested" ? (
                         <div className="owners-actions">
-                          <button disabled={busy} onClick={() => void act({ action: "redemption", id: redemption.id, status: "approved" }, "تم اعتماد طلب الاستبدال")}>اعتماد</button>
+                          <button disabled={busy} onClick={() => void act({ action: "redemption", id: redemption.id, status: "approved" }, "تم تحويل الطلب القديم إلى جاهز للاستبدال")}>تجهيز الطلب القديم</button>
                           <button disabled={busy} onClick={() => void act({ action: "redemption", id: redemption.id, status: "rejected" }, "تم رفض الطلب وإرجاع النقاط")}>رفض</button>
                         </div>
-                      ) : canManage && redemption.status === "approved" ? (
-                        <button className="owners-link-btn" disabled={busy} onClick={() => void act({ action: "redemption", id: redemption.id, status: "delivered" }, "تم تسجيل تسليم المكافأة")}>تم التسليم</button>
-                      ) : "—"}
+                      ) : redemption.status === "approved" ? "يُسلّم من CRM" : "—"}
                     </td>
                   </tr>
                 ))}

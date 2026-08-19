@@ -11,9 +11,16 @@ create table if not exists owners.settings (
   otp_resend_seconds integer not null default 60 check (otp_resend_seconds between 15 and 600),
   otp_max_attempts integer not null default 5 check (otp_max_attempts between 1 and 20),
   otp_hourly_limit integer not null default 5 check (otp_hourly_limit between 1 and 30),
+  points_purchase_enabled boolean not null default false,
+  points_purchase integer not null default 500 check (points_purchase >= 0),
+  purchase_points_effective_at timestamptz not null default now(),
+  points_unique_open_enabled boolean not null default true,
   points_unique_open integer not null default 1 check (points_unique_open >= 0),
+  points_registration_enabled boolean not null default true,
   points_registration integer not null default 10 check (points_registration >= 0),
+  points_qualified_enabled boolean not null default true,
   points_qualified integer not null default 25 check (points_qualified >= 0),
+  points_sale_enabled boolean not null default true,
   points_sale integer not null default 500 check (points_sale >= 0),
   daily_open_points_cap integer not null default 25 check (daily_open_points_cap >= 0),
   silver_points integer not null default 1000 check (silver_points >= 0),
@@ -30,6 +37,13 @@ create table if not exists owners.settings (
 insert into owners.settings(id) values('default') on conflict(id) do nothing;
 
 alter table owners.settings add column if not exists otp_hourly_limit integer not null default 5;
+alter table owners.settings add column if not exists points_purchase_enabled boolean not null default false;
+alter table owners.settings add column if not exists points_purchase integer not null default 500;
+alter table owners.settings add column if not exists purchase_points_effective_at timestamptz not null default now();
+alter table owners.settings add column if not exists points_unique_open_enabled boolean not null default true;
+alter table owners.settings add column if not exists points_registration_enabled boolean not null default true;
+alter table owners.settings add column if not exists points_qualified_enabled boolean not null default true;
+alter table owners.settings add column if not exists points_sale_enabled boolean not null default true;
 alter table owners.settings add column if not exists silver_points integer not null default 1000;
 alter table owners.settings add column if not exists gold_points integer not null default 3000;
 alter table owners.settings add column if not exists platinum_points integer not null default 7000;
@@ -206,12 +220,15 @@ create table if not exists owners.redemptions (
   reward_id uuid not null references owners.rewards(id),
   points_cost integer not null,
   status text not null default 'requested' check(status in ('requested','approved','delivered','rejected','cancelled')),
+  redemption_code text,
   note text,
   reviewed_by uuid references core.users(id) on delete set null,
   reviewed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table owners.redemptions add column if not exists redemption_code text;
+create unique index if not exists owners_redemptions_code_unique on owners.redemptions(redemption_code) where redemption_code is not null;
 create index if not exists owners_redemptions_status_idx on owners.redemptions(status,created_at desc);
 create index if not exists owners_redemptions_member_idx on owners.redemptions(member_id,created_at desc);
 
@@ -259,7 +276,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1212,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1218,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -276,6 +293,13 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='otp_challenges')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='schema_state')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_hourly_limit')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_purchase_enabled')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_purchase')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='purchase_points_effective_at')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_unique_open_enabled')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_registration_enabled')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_qualified_enabled')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_sale_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='reward_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
@@ -287,6 +311,7 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='referral_purchase_redeemed_quantity')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='referral_purchase_benefits')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='legacy_customer_codes')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='redemption_code')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='customer_kind')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_type')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_value')
@@ -296,7 +321,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1209;
+  return Number(state?.version || 0) >= 1218;
 }
 
 export function ensureOwnersSchema() {

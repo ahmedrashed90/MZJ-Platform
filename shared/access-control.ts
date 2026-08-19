@@ -174,6 +174,7 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("crm.inbox_agent.view", "فتح وكيل صندوق الوارد", "crm", "inbox_agent", "view", "page"),
   p("crm.reports.view", "مشاهدة تقارير CRM", "crm", "reports", "view", "page"),
   p("crm.kpi.view", "مشاهدة KPI", "crm", "kpi", "view", "page"),
+  p("crm.owners_community.view", "دخول Owners Community", "crm", "owners_community", "view", "page", "استعلام أكواد استبدال MZJ Owners Community وتأكيد التسليم"),
   p("crm.customer.view", "فتح بيانات العميل", "crm", "database", "customer_view", "action"),
   p("crm.customer.create", "إنشاء عميل", "crm", "manual_leads", "customer_create", "action"),
   p("crm.customer.update", "تعديل بيانات العميل", "crm", "database", "customer_update", "action"),

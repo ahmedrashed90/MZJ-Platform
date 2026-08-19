@@ -35,7 +35,11 @@ function requestBody(request: VercelRequest) {
 }
 
 function randomOtp() {
-  return crypto.randomInt(100000, 1000000).toString();
+  return crypto.randomInt(1000, 10000).toString();
+}
+
+function randomRedemptionCode() {
+  return crypto.randomInt(0, 100_000_000).toString().padStart(8, "0");
 }
 
 function requestIp(request: VercelRequest) {
@@ -106,6 +110,7 @@ async function recordUniqueVisit(request: VercelRequest, referrer: any, visitorV
   `;
   if (!inserted.length) return false;
 
+  if (settings.points_unique_open_enabled === false) return true;
   const configuredPoints = Math.max(0, Number(settings.points_unique_open || 0));
   const dailyCap = Math.max(0, Number(settings.daily_open_points_cap || 0));
   if (!configuredPoints || !dailyCap) return true;
@@ -225,7 +230,7 @@ async function registerReferralCore(
         updated_at=now()
       returning id::text
     `;
-    await awardOwnerPoints({
+    if (settings.points_registration_enabled !== false) await awardOwnerPoints({
       memberId: referrer.id,
       points: Number(settings.points_registration || 0),
       eventType: "registration",
@@ -314,7 +319,7 @@ async function registerReferralCore(
       updated_at=now()
     returning id::text
   `;
-  await awardOwnerPoints({
+  if (settings.points_registration_enabled !== false) await awardOwnerPoints({
     memberId: referrer.id,
     points: Number(settings.points_registration || 0),
     eventType: "registration",
@@ -383,7 +388,7 @@ async function ensureWebsitePurchaseReferral(input: {
   `;
 
   const settings = await getOwnerSettings();
-  await awardOwnerPoints({
+  if (settings.points_registration_enabled !== false) await awardOwnerPoints({
     memberId: input.referrerId,
     points: Number(settings.points_registration || 0),
     eventType: "registration",
@@ -1058,7 +1063,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     `;
     const expiryMinutes = Number(settings.otp_expiry_minutes || 5);
     try {
-      const message = `رمز التحقق الخاص بك في MZJ Owners Community هو: ${otp}. الرمز صالح لمدة ${expiryMinutes} دقائق. لا تشارك الرمز مع أي شخص.`;
+      const message = `رمز MZJ Owners Community: ${otp} صالح لمدة ${expiryMinutes} دقائق.`;
       await queueFirebaseSms({
         createdAt: new Date(),
         message,
@@ -1089,7 +1094,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const phone = normalizePhone(payload.phone);
     const code = clean(payload.code);
     const challengeId = clean(payload.challengeId);
-    if (!phone || !/^\d{6}$/.test(code) || !challengeId) {
+    if (!phone || !/^\d{4}$/.test(code) || !challengeId) {
       return response.status(400).json({ ok: false, error: "بيانات التحقق غير مكتملة" });
     }
     const [challenge] = await sql<any[]>`
@@ -1151,18 +1156,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 100
     `;
     const rewards = await sql<any[]>`
-      select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,stock_quantity,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
+      select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
       from owners.rewards
       where is_active=true
         and (starts_at is null or starts_at<=now())
         and (ends_at is null or ends_at>=now())
-        and (stock_quantity is null or (redeemed_quantity+referral_purchase_redeemed_quantity)<stock_quantity)
       order by points_cost,name
     `;
     const redemptions = await sql<any[]>`
-      select rd.id::text,rd.status,rd.points_cost,rd.created_at,r.name as reward_name
+      select rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.created_at,rd.reviewed_at,
+        r.name as reward_name,u.full_name as reviewed_by_name
       from owners.redemptions rd
       join owners.rewards r on r.id=rd.reward_id
+      left join core.users u on u.id=rd.reviewed_by
       where rd.member_id=${member.id}::uuid
       order by rd.created_at desc
       limit 50
@@ -1204,17 +1210,22 @@ export default async function handler(request: VercelRequest, response: VercelRe
         for update
       `;
       if (!reward) return { error: "المكافأة غير متاحة" };
-      if (reward.stock_quantity != null && Number(reward.redeemed_quantity || 0) + Number(reward.referral_purchase_redeemed_quantity || 0) >= Number(reward.stock_quantity)) {
-        return { error: "نفدت كمية المكافأة" };
-      }
       if (Number(lockedMember?.points_balance || 0) < Number(reward.points_cost)) {
         return { error: "رصيد النقاط غير كاف" };
       }
 
+      let redemptionCode = "";
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const candidate = randomRedemptionCode();
+        const [exists] = await tx<any[]>`select 1 from owners.redemptions where redemption_code=${candidate} limit 1`;
+        if (!exists) { redemptionCode = candidate; break; }
+      }
+      if (!redemptionCode) return { error: "تعذر إنشاء كود استبدال فريد" };
+
       const [redemption] = await tx<any[]>`
-        insert into owners.redemptions(member_id,reward_id,points_cost)
-        values(${member.id}::uuid,${rewardId}::uuid,${Number(reward.points_cost)})
-        returning id::text
+        insert into owners.redemptions(member_id,reward_id,points_cost,status,redemption_code)
+        values(${member.id}::uuid,${rewardId}::uuid,${Number(reward.points_cost)},'approved',${redemptionCode})
+        returning id::text,redemption_code
       `;
       await tx`
         insert into owners.points_ledger(member_id,points,event_type,event_key,reward_id,description)
@@ -1231,10 +1242,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         update owners.rewards set redeemed_quantity=redeemed_quantity+1,updated_at=now()
         where id=${rewardId}::uuid
       `;
-      return { ok: true };
+      return { ok: true, redemption: { id: redemption.id, code: redemption.redemption_code, status: 'approved', pointsCost: Number(reward.points_cost), rewardName: reward.name } };
     });
     if ("error" in result) return response.status(400).json({ ok: false, error: result.error });
-    return response.status(200).json({ ok: true });
+    return response.status(200).json(result);
   }
 
   return response.status(405).json({ ok: false, error: "Method not allowed" });
