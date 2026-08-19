@@ -595,7 +595,7 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
     referrerKind: eligibility.referrerKind,
     customerKind: eligibility.customerKind,
     selfUse: eligibility.selfUse === true,
-    // Backward-compatible field for older clients. Reward audience is now selected by referrerKind.
+    // Backward-compatible field for older clients. Reward audience is selected by the code source (new-customer tab vs sold-member tab).
     primaryNewRewardId: primaryNewReward?.id || null,
     newCustomerRewardIds: newCustomerRewards.map((reward: any) => reward.id),
     newCustomerRewards,
@@ -847,7 +847,10 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
     String(reward.id) === primaryRewardId && rewardAvailableForReferrerKind(reward, eligibility.referrerKind)
   ) || null;
   if (!primaryReward) {
-    return response.status(409).json({ ok: false, error: "المكافأة المختارة لا تطابق نوع الكود أو لم تعد متاحة" });
+    const error = eligibility.referrerKind === "legacy"
+      ? "مكافأة العميل الجديد المختارة لم تعد متاحة"
+      : "مكافأة العميل القديم المختارة لم تعد متاحة";
+    return response.status(409).json({ ok: false, error });
   }
   if (bonusRewardId) {
     if (eligibility.customerKind !== "new") {

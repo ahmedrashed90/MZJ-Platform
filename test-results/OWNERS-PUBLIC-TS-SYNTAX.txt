@@ -1,1 +1,0 @@
-owners-public.ts TypeScript syntax transpile: OK
