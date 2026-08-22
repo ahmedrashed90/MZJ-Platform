@@ -517,9 +517,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const showOnMemberCard = payload.showOnMemberCard === true;
     const availableForReferralPurchase = payload.availableForReferralPurchase === true;
     const availableForExistingCustomerPurchase = payload.availableForExistingCustomerPurchase === true;
+    const availableForFriendReferralPurchase = payload.availableForFriendReferralPurchase === true;
     const checkoutDiscountType = clean(payload.checkoutDiscountType) === "percentage" ? "percentage" : "amount";
     const checkoutDiscountRaw = Number(payload.checkoutDiscountValue ?? payload.checkoutDiscountAmount);
-    const checkoutDiscountValue = rewardType === "discount" && (availableForReferralPurchase || availableForExistingCustomerPurchase)
+    const checkoutDiscountValue = rewardType === "discount" && (availableForReferralPurchase || availableForExistingCustomerPurchase || availableForFriendReferralPurchase)
       ? Math.round((Number.isFinite(checkoutDiscountRaw) ? checkoutDiscountRaw : 0) * 100) / 100
       : 0;
     const checkoutDiscountAmount = checkoutDiscountType === "amount" ? checkoutDiscountValue : 0;
@@ -533,7 +534,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const isActive = payload.isActive !== false;
     if (!name) return response.status(400).json({ ok: false, error: "اسم المكافأة مطلوب" });
     if (!rewardValue) return response.status(400).json({ ok: false, error: "حدد قيمة أو تفاصيل المكافأة التي ستظهر للعميل" });
-    if ((availableForReferralPurchase || availableForExistingCustomerPurchase) && rewardType === "discount" && !(checkoutDiscountValue > 0)) {
+    if ((availableForReferralPurchase || availableForExistingCustomerPurchase || availableForFriendReferralPurchase) && rewardType === "discount" && !(checkoutDiscountValue > 0)) {
       return response.status(400).json({ ok: false, error: "حدد قيمة الخصم أو نسبة الخصم للمكافأة المتاحة في طلب الموقع" });
     }
     if (rewardType === "discount" && checkoutDiscountType === "percentage" && checkoutDiscountValue > 100) {
@@ -546,6 +547,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           name=${name},description=${description || null},reward_type=${rewardType},reward_value=${rewardValue || null},
           show_on_member_card=${showOnMemberCard},available_for_referral_purchase=${availableForReferralPurchase},
           available_for_existing_customer_purchase=${availableForExistingCustomerPurchase},
+          available_for_friend_referral_purchase=${availableForFriendReferralPurchase},
           checkout_discount_type=${checkoutDiscountType},checkout_discount_value=${checkoutDiscountValue},
           checkout_discount_amount=${checkoutDiscountAmount},points_cost=${pointsCost},stock_quantity=case when ${hasStockQuantity} then ${stockQuantity} else stock_quantity end,
           starts_at=${startsAt}::timestamptz,ends_at=${endsAt}::timestamptz,is_active=${isActive},
@@ -555,11 +557,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else {
       await sql`
         insert into owners.rewards(
-          name,description,reward_type,reward_value,show_on_member_card,available_for_referral_purchase,available_for_existing_customer_purchase,
+          name,description,reward_type,reward_value,show_on_member_card,available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,
           checkout_discount_type,checkout_discount_value,checkout_discount_amount,
           points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
         ) values(
-          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${availableForReferralPurchase},${availableForExistingCustomerPurchase},
+          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},
           ${checkoutDiscountType},${checkoutDiscountValue},${checkoutDiscountAmount},${pointsCost},${stockQuantity},
           ${startsAt}::timestamptz,${endsAt}::timestamptz,${isActive},${actor.id}::uuid,${actor.id}::uuid
         )

@@ -132,6 +132,7 @@ create table if not exists owners.rewards (
   show_on_member_card boolean not null default false,
   available_for_referral_purchase boolean not null default false,
   available_for_existing_customer_purchase boolean not null default false,
+  available_for_friend_referral_purchase boolean not null default false,
   checkout_discount_type text not null default 'amount' check(checkout_discount_type in ('amount','percentage')),
   checkout_discount_value numeric(12,2) not null default 0 check(checkout_discount_value >= 0),
   checkout_discount_amount numeric(12,2) not null default 0 check(checkout_discount_amount >= 0),
@@ -152,6 +153,7 @@ alter table owners.rewards add column if not exists reward_value text;
 alter table owners.rewards add column if not exists show_on_member_card boolean not null default false;
 alter table owners.rewards add column if not exists available_for_referral_purchase boolean not null default false;
 alter table owners.rewards add column if not exists available_for_existing_customer_purchase boolean not null default false;
+alter table owners.rewards add column if not exists available_for_friend_referral_purchase boolean not null default false;
 alter table owners.rewards add column if not exists checkout_discount_type text not null default 'amount';
 alter table owners.rewards add column if not exists checkout_discount_value numeric(12,2) not null default 0;
 alter table owners.rewards add column if not exists checkout_discount_amount numeric(12,2) not null default 0;
@@ -305,6 +307,7 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_referral_purchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_existing_customer_purchase')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_friend_referral_purchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_type')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='checkout_discount_amount')
