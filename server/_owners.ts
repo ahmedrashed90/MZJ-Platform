@@ -296,7 +296,11 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
     let insertedCount = 0;
     if (purchaseEnabled) {
       const [summary] = await tx<any[]>`
-        with eligible_members as (
+        with runtime_values as (
+          select
+            ${memberId || null}::uuid as scope_member_id,
+            ${configuredPoints}::integer as purchase_award_points
+        ), eligible_members as (
           select
             member.id,
             member.phone_normalized,
@@ -306,9 +310,10 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
             member.last_sale_at,
             member.metadata
           from owners.members member
+          cross join runtime_values runtime
           where member.status='active'
             and coalesce(member.metadata->>'memberKind','real')<>'test'
-            and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
+            and (runtime.scope_member_id is null or member.id=runtime.scope_member_id)
         ), canonical_sales as (
           select distinct
             member.id as member_id,
@@ -352,7 +357,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
           select
             sale.member_id,
-            ${configuredPoints}::integer,
+            runtime.purchase_award_points,
             'purchase',
             'purchase:'||sale.sale_id::text,
             'مكافأة إتمام عملية شراء',
@@ -361,10 +366,11 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
               'saleAt',sale.sale_at,
               'saleQuantity',sale.order_quantity,
               'saleOrderReference',sale.order_reference,
-              'purchaseAwardPoints',${configuredPoints}::integer,
+              'purchaseAwardPoints',runtime.purchase_award_points,
               'appliedFromSettings',true
             )
           from canonical_awardable sale
+          cross join runtime_values runtime
           on conflict(event_key) do nothing
           returning member_id
         ), fallback_candidates as (
@@ -384,18 +390,19 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
           select
             member.member_id,
-            ${configuredPoints}::integer,
+            runtime.purchase_award_points,
             'purchase',
             'purchase:member:'||member.member_id::text||':initial',
             'مكافأة إتمام عملية شراء',
             jsonb_build_object(
               'saleAt',coalesce(member.first_sale_at,member.last_sale_at),
-              'purchaseAwardPoints',${configuredPoints}::integer,
+              'purchaseAwardPoints',runtime.purchase_award_points,
               'appliedFromSettings',true,
               'memberPurchaseFallback',true,
               'importedPreviousCustomer',true
             )
           from fallback_candidates member
+          cross join runtime_values runtime
           on conflict(event_key) do nothing
           returning member_id
         ), inserted_counts as (
@@ -408,9 +415,10 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           group by inserted.member_id
         )
         update owners.members member set
-          lifetime_points=member.lifetime_points+(inserted_counts.awards*${configuredPoints}::integer),
+          lifetime_points=member.lifetime_points+(inserted_counts.awards*runtime.purchase_award_points),
           updated_at=now()
         from inserted_counts
+        cross join runtime_values runtime
         where member.id=inserted_counts.member_id
         returning inserted_counts.awards
       `;

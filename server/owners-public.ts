@@ -1066,7 +1066,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const resendSeconds = Math.max(15, Number(settings.otp_resend_seconds || 60));
     const [limits] = await sql<any[]>`
       select
-        coalesce(max(created_at) > now()-${resendSeconds}*interval '1 second',false) as resend_blocked,
+        coalesce(max(created_at) > now()-${resendSeconds}::integer*interval '1 second',false) as resend_blocked,
         count(*) filter(where created_at>now()-interval '1 hour')::int as hourly_count
       from owners.otp_challenges
       where phone_normalized=${phone}
@@ -1084,7 +1084,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       insert into owners.otp_challenges(id,phone_normalized,code_hash,max_attempts,expires_at)
       values(
         ${challengeId}::uuid,${phone},${ownerOtpHash(challengeId, phone, otp)},
-        ${Number(settings.otp_max_attempts || 5)},now()+${expiryMinutes}*interval '1 minute'
+        ${Number(settings.otp_max_attempts || 5)},now()+${expiryMinutes}::integer*interval '1 minute'
       )
     `;
     try {
