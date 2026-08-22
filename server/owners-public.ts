@@ -35,9 +35,6 @@ function requestBody(request: VercelRequest) {
   return {};
 }
 
-// SMS+ is an asynchronous queue; keep a small server-side delivery grace so a freshly delivered code is not rejected.
-const OTP_SMS_QUEUE_GRACE_MINUTES = 5;
-
 function randomOtp() {
   return crypto.randomInt(1000, 10000).toString();
 }
@@ -1083,12 +1080,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const challengeId = crypto.randomUUID();
     const otp = randomOtp();
     const expiryMinutes = Math.max(1, Number(settings.otp_expiry_minutes || 5));
-    const serverValidityMinutes = expiryMinutes + OTP_SMS_QUEUE_GRACE_MINUTES;
     await sql`
       insert into owners.otp_challenges(id,phone_normalized,code_hash,max_attempts,expires_at)
       values(
         ${challengeId}::uuid,${phone},${ownerOtpHash(challengeId, phone, otp)},
-        ${Number(settings.otp_max_attempts || 5)},now()+${serverValidityMinutes}*interval '1 minute'
+        ${Number(settings.otp_max_attempts || 5)},now()+${expiryMinutes}*interval '1 minute'
       )
     `;
     try {
@@ -1123,7 +1119,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const phone = normalizePhone(payload.phone);
     const code = clean(payload.code);
     const challengeId = clean(payload.challengeId);
-    if (!phone || !/^\d{4}$/.test(code) || !challengeId) {
+    if (!phone || !/^\d{4}$/.test(code) || !isUuid(challengeId)) {
       return response.status(400).json({ ok: false, error: "بيانات التحقق غير مكتملة" });
     }
     const [challenge] = await sql<any[]>`

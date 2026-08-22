@@ -352,7 +352,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
           select
             sale.member_id,
-            ${configuredPoints},
+            ${configuredPoints}::integer,
             'purchase',
             'purchase:'||sale.sale_id::text,
             'مكافأة إتمام عملية شراء',
@@ -361,7 +361,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
               'saleAt',sale.sale_at,
               'saleQuantity',sale.order_quantity,
               'saleOrderReference',sale.order_reference,
-              'purchaseAwardPoints',${configuredPoints},
+              'purchaseAwardPoints',${configuredPoints}::integer,
               'appliedFromSettings',true
             )
           from canonical_awardable sale
@@ -384,13 +384,13 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
           select
             member.member_id,
-            ${configuredPoints},
+            ${configuredPoints}::integer,
             'purchase',
             'purchase:member:'||member.member_id::text||':initial',
             'مكافأة إتمام عملية شراء',
             jsonb_build_object(
               'saleAt',coalesce(member.first_sale_at,member.last_sale_at),
-              'purchaseAwardPoints',${configuredPoints},
+              'purchaseAwardPoints',${configuredPoints}::integer,
               'appliedFromSettings',true,
               'memberPurchaseFallback',true,
               'importedPreviousCustomer',true
@@ -408,7 +408,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           group by inserted.member_id
         )
         update owners.members member set
-          lifetime_points=member.lifetime_points+(inserted_counts.awards*${configuredPoints}),
+          lifetime_points=member.lifetime_points+(inserted_counts.awards*${configuredPoints}::integer),
           updated_at=now()
         from inserted_counts
         where member.id=inserted_counts.member_id
