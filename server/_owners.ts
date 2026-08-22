@@ -295,7 +295,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
 
     let insertedCount = 0;
     if (purchaseEnabled) {
-      const [summary] = await tx<any[]>`
+      const summary = await tx<{ awards: number }[]>`
         with runtime_values as (
           select
             ${memberId || null}::uuid as scope_member_id,
