@@ -5,6 +5,8 @@ import { requireTrackingUser } from "../_tracking-auth.js";
 import { hasPermission } from "../_access-control.js";
 import { trackingAccessScope } from "../_tracking-access.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
+import { ensureCrmSchema } from "../_crm-schema.js";
+import { queueOwnerWelcomeSms } from "../_owners-welcome.js";
 import { clean, normalizeSaudiPhone, publicTrackingUrl } from "../_tracking-utils.js";
 
 function formatMoney(value: unknown) {
@@ -34,7 +36,7 @@ function messageForStage(order: any, vehicle: any, stage: any, link: string) {
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
-  await ensureTrackingSchema();
+  await Promise.all([ensureTrackingSchema(), ensureCrmSchema()]);
   const user = await requireTrackingUser(request, response);
   if (!user) return;
 
@@ -76,6 +78,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صالح أو غير موجود" });
   const link = publicTrackingUrl(requestOrigin(request), row.tracking_token);
   const message = clean(body.message) || messageForStage(row, row, { name: row.stage_name, sort_order: row.sort_order }, link);
+  let automaticWelcomeEnabled = false;
+  if (Number(row.sort_order) === 10) {
+    const [settings] = await sql<any[]>`
+      select tracking_final_delivery_welcome_enabled
+      from crm.crm_runtime_settings
+      where id='default'
+      limit 1
+    `;
+    automaticWelcomeEnabled = settings?.tracking_final_delivery_welcome_enabled === true;
+  }
 
   try {
     const queued = await queueFirebaseSms({
@@ -102,7 +114,47 @@ export default async function handler(request: VercelRequest, response: VercelRe
       insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
       values (${user.id}::uuid,'tracking','sms_queued','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, firestoreDocumentId: queued.documentId })})
     `;
-    return response.status(200).json({ ok: true, status: "queued", documentId: queued.documentId, message: "تم إرسال الرسالة إلى SMS+ وجارٍ إرسالها من التطبيق" });
+
+    let welcome: { status: string; documentId?: string; error?: string } = {
+      status: automaticWelcomeEnabled ? "pending" : "disabled",
+    };
+    if (automaticWelcomeEnabled) {
+      try {
+        const welcomeResult = await queueOwnerWelcomeSms({
+          phone,
+          byUid: user.id,
+          portalUrl: `${requestOrigin(request)}/owners`,
+        });
+        welcome = { status: welcomeResult.status, documentId: welcomeResult.documentId };
+        await sql`
+          insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
+          values (${user.id}::uuid,'tracking','owners_welcome_auto','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, status: welcomeResult.status, firestoreDocumentId: welcomeResult.documentId || null })})
+        `;
+      } catch (welcomeError) {
+        const welcomeErrorMessage = welcomeError instanceof Error ? welcomeError.message : "تعذر إرسال رسالة الترحيب عبر SMS+";
+        welcome = { status: "failed", error: welcomeErrorMessage };
+        await sql`
+          insert into audit.activity_log(user_id,system_code,action,entity_type,entity_id,after_data)
+          values (${user.id}::uuid,'tracking','owners_welcome_auto_failed','tracking_order',${row.sales_order_no},${sql.json({ vehicleId, stageId, phone, error: welcomeErrorMessage })})
+        `.catch(() => undefined);
+      }
+    }
+
+    const responseMessage = welcome.status === "queued"
+      ? "تم إرسال رسالة التتبع إلى SMS+ وإضافة رسالة الترحيب تلقائيًا"
+      : welcome.status === "already_sent"
+        ? "تم إرسال رسالة التتبع إلى SMS+؛ رسالة الترحيب سبق إرسالها لهذا العميل"
+        : welcome.status === "failed"
+          ? "تم إرسال رسالة التتبع إلى SMS+، لكن تعذر إضافة رسالة الترحيب تلقائيًا"
+          : "تم إرسال الرسالة إلى SMS+ وجارٍ إرسالها من التطبيق";
+
+    return response.status(200).json({
+      ok: true,
+      status: "queued",
+      documentId: queued.documentId,
+      message: responseMessage,
+      welcome,
+    });
   } catch (error) {
     console.error("Firebase SMS queue failed", error);
     return response.status(500).json({ ok: false, error: error instanceof Error ? error.message : "تعذر إرسال الرسالة إلى SMS+" });

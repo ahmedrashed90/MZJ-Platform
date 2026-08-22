@@ -31,7 +31,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         order by m.department_code,m.status_label
       `,
       sql`select * from crm.report_quality_settings where id='default'`,
-      sql`select cash_total_customers_template_enabled,finance_call_center_template_enabled from crm.crm_runtime_settings where id='default'`,
+      sql`select cash_total_customers_template_enabled,finance_call_center_template_enabled,tracking_final_delivery_welcome_enabled from crm.crm_runtime_settings where id='default'`,
       sql`select * from crm.integration_endpoints order by display_name`,
       sql`select code,name,is_active,sort_order from core.branches order by sort_order,name`,
       sql`
@@ -149,7 +149,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       templates,
       mappings,
       quality: quality[0],
-      automaticTemplateSettings: automaticTemplateSettings[0] || { cash_total_customers_template_enabled: false, finance_call_center_template_enabled: false },
+      automaticTemplateSettings: automaticTemplateSettings[0] || { cash_total_customers_template_enabled: false, finance_call_center_template_enabled: false, tracking_final_delivery_welcome_enabled: false },
       endpoints,
       branches,
       sources,
@@ -369,9 +369,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       update crm.crm_runtime_settings set
         cash_total_customers_template_enabled=${body.cashTotalCustomersEnabled === true},
         finance_call_center_template_enabled=${body.financeCallCenterEnabled === true},
+        tracking_final_delivery_welcome_enabled=${body.trackingFinalDeliveryWelcomeEnabled === true},
+        updated_by=${user.id}::uuid,
         updated_at=now()
       where id='default'
-      returning cash_total_customers_template_enabled,finance_call_center_template_enabled
+      returning cash_total_customers_template_enabled,finance_call_center_template_enabled,tracking_final_delivery_welcome_enabled
     `;
     await audit(user, "crm_automatic_template_settings_saved", "crm_runtime_settings", "default", row);
     return response.status(200).json({ ok: true, row, message: "تم حفظ إعدادات الإرسال التلقائي" });

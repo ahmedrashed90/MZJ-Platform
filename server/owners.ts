@@ -13,7 +13,7 @@ import {
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
 import { syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
-import { queueFirebaseSms } from "./_firebase-sms.js";
+import { queueOwnerWelcomeSms } from "./_owners-welcome.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -744,34 +744,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (action === "send_welcome") {
     const memberId = clean(payload.memberId);
-    const [member] = await sql<any[]>`
-      select *,id::text
-      from owners.members
-      where id=${memberId}::uuid and status='active'
-      limit 1
-    `;
-    if (!member) return response.status(404).json({ ok: false, error: "العضو غير موجود" });
-    if (member.welcome_sent_at) return response.status(409).json({ ok: false, error: "تم إرسال رسالة الترحيب لهذا العضو مسبقًا" });
-
-    const portalUrl = `${publicBase(request)}/owners`;
-    const phone = normalizePhone(member.phone_normalized);
-    if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العضو غير صالح" });
-    const customerName = clean(member.customer_name) || "عميل مجموعة محمد بن ذعار العجمي";
-    const message = `مرحباً ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\n\nتاريخ تثق به`;
-
     try {
-      const queued = await queueFirebaseSms({
+      const result = await queueOwnerWelcomeSms({
+        memberId,
         byUid: actor.id,
-        createdAt: new Date(),
-        message,
-        meta: { type: "owners_welcome", purpose: "welcome", memberId: member.id },
-        phone,
-        source: "mzj_owners_community",
-        status: "queued",
-        to: phone,
+        portalUrl: `${publicBase(request)}/owners`,
       });
-      await sql`update owners.members set welcome_sent_at=now(),updated_at=now() where id=${member.id}::uuid`;
-      return response.status(200).json({ ok: true, status: "queued", documentId: queued.documentId });
+      if (result.status === "member_not_found") return response.status(404).json({ ok: false, error: "العضو غير موجود" });
+      if (result.status === "already_sent") return response.status(409).json({ ok: false, error: "تم إرسال رسالة الترحيب لهذا العضو مسبقًا" });
+      if (result.status === "invalid_phone") return response.status(400).json({ ok: false, error: "رقم جوال العضو غير صالح" });
+      return response.status(200).json({ ok: true, status: "queued", documentId: result.documentId });
     } catch (error) {
       return response.status(502).json({ ok: false, error: error instanceof Error ? error.message : "تعذر إرسال رسالة الترحيب عبر SMS+" });
     }

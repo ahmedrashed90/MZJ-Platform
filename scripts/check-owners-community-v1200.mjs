@@ -24,6 +24,7 @@ const schema = read("server/_owners-schema.ts");
 const core = read("server/_owners.ts");
 const publicApi = read("server/owners-public.ts");
 const adminApi = read("server/owners.ts");
+const welcomeApi = read("server/_owners-welcome.ts");
 const erp = read("server/_erpnext-sales-order-sync.ts");
 const mersalSync = read("server/crm/mersal-templates.ts");
 const crmMessaging = read("server/_crm-messaging.ts");
@@ -78,7 +79,7 @@ expect("admin settings keep SMS+ verification, point rules, levels and benefit c
 expect("member portal exposes points, invite link, referrals, rewards and ledger", ["member.inviteUrl", "owners-public-rewards", "owners-referral-list", "owners-ledger"].every((text) => portal.includes(text)));
 expect("public invite uses the full company name and no deprecated special-benefit headline", invite.includes("مجموعة محمد بن ذعار العجمي") && !invite.includes("ميزة خاصة من عميل MZJ"));
 expect("member portal keeps the referral link inside the customer page without the points-explanation note", portal.includes("شارك رابطك مع أصدقائك") && !portal.includes("كل صديق جديد يفتح الرابط أو يسجل أو يتأهل أو يشتري يضيف نقاطًا حسب إعدادات البرنامج."));
-expect("welcome SMS contains only the customer portal link and trusted-history slogan", adminApi.includes("تاريخ تثق به") && !adminApi.includes("رابط دعوتك الخاص لمشاركته مع أصدقائك") && !adminApi.includes("مع MZJ أنت نجم الطريق"));
+expect("welcome SMS contains only the customer portal link and trusted-history slogan", welcomeApi.includes("تاريخ تثق به") && !welcomeApi.includes("رابط دعوتك الخاص لمشاركته مع أصدقائك") && !welcomeApi.includes("مع MZJ أنت نجم الطريق"));
 expect("welcome SMS status is visible and repeat sending is locked", adminPage.includes("حالة الترحيب") && adminPage.includes("welcome_sent_at") && adminPage.includes("لم يتم الإرسال") && adminApi.includes("تم إرسال رسالة الترحيب لهذا العضو مسبقًا"));
 expect("membership card uses a compact bank-card ratio and branded brown front", read("src/styles.css").includes("aspect-ratio:1.586/1") && read("src/styles.css").includes("#6a4437") && read("src/styles.css").includes("#8a5a49"));
 expect("member portal removes public referral KPI cards and generic dashboard note", !portal.includes("أصدقاء مسجلون") && !portal.includes("عملاء مؤهلون") && !portal.includes("مبيعات ناجحة") && !portal.includes("كل شيء في حسابك أمامك بشكل واضح"));

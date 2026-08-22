@@ -165,7 +165,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const [endpointForm, setEndpointForm] = useState(blankEndpoint);
   const [ruleForm, setRuleForm] = useState(blankRule);
   const [quality, setQuality] = useState(dbToQuality(null));
-  const [automaticTemplates, setAutomaticTemplates] = useState({ cashTotalCustomersEnabled: false, financeCallCenterEnabled: false });
+  const [automaticTemplates, setAutomaticTemplates] = useState({ cashTotalCustomersEnabled: false, financeCallCenterEnabled: false, trackingFinalDeliveryWelcomeEnabled: false });
   const [dataReview, setDataReview] = useState<any | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewPreview, setReviewPreview] = useState<any | null>(null);
@@ -192,6 +192,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       setAutomaticTemplates({
         cashTotalCustomersEnabled: result.automaticTemplateSettings?.cash_total_customers_template_enabled === true,
         financeCallCenterEnabled: result.automaticTemplateSettings?.finance_call_center_template_enabled === true,
+        trackingFinalDeliveryWelcomeEnabled: result.automaticTemplateSettings?.tracking_final_delivery_welcome_enabled === true,
       });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "تعذر تحميل إعدادات CRM");
@@ -624,10 +625,11 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
 
       {tab === "automatic_templates" ? (
         <section className="crm-panel crm-form-panel">
-          <header><div><h2>الإرسال التلقائي للقالب</h2><p>الإعدادان مستقلان، والقيمة الافتراضية بعد النشر غير نشطة. الإرسال اليدوي يظل متاحًا دائمًا.</p></div></header>
+          <header><div><h2>الإرسال التلقائي للقالب</h2><p>الإعدادات مستقلة، والقيمة الافتراضية بعد النشر غير نشطة. الإرسال اليدوي يظل متاحًا دائمًا.</p></div></header>
           <div className="crm-form-grid crm-form-grid-wide">
             <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.cashTotalCustomersEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, cashTotalCustomersEnabled: event.target.checked }))} /><span>إرسال finance_request_received تلقائيًا عند دخول عميل جديد إلى إجمالي العملاء في مبيعات الكاش</span></label>
             <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.financeCallCenterEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, financeCallCenterEnabled: event.target.checked }))} /><span>إرسال finance_request_received تلقائيًا عند دخول عميل تمويل جديد إلى كارت الكول سنتر</span></label>
+            <label className="crm-switch-row"><input type="checkbox" checked={automaticTemplates.trackingFinalDeliveryWelcomeEnabled} onChange={(event) => setAutomaticTemplates((current) => ({ ...current, trackingFinalDeliveryWelcomeEnabled: event.target.checked }))} /><span>إرسال ترحيب MZJ Owners Community تلقائيًا مع SMS+ عند مرحلة إتمام عملية التسليم بنجاح</span></label>
           </div>
           <div className="crm-form-actions"><button className="crm-primary-button" onClick={() => void save("automatic_template_settings", automaticTemplates)}><FloppyDisk size={18} />حفظ إعدادات الإرسال التلقائي</button></div>
         </section>

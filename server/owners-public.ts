@@ -35,6 +35,9 @@ function requestBody(request: VercelRequest) {
   return {};
 }
 
+// SMS+ is an asynchronous queue; keep a small server-side delivery grace so a freshly delivered code is not rejected.
+const OTP_SMS_QUEUE_GRACE_MINUTES = 5;
+
 function randomOtp() {
   return crypto.randomInt(1000, 10000).toString();
 }
@@ -1063,17 +1066,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(404).json({ ok: false, error: "رقم الجوال غير مرتبط بعملية شراء مكتملة من MZJ" });
     }
 
+    const resendSeconds = Math.max(15, Number(settings.otp_resend_seconds || 60));
     const [limits] = await sql<any[]>`
       select
-        max(created_at) as last_created_at,
+        coalesce(max(created_at) > now()-${resendSeconds}*interval '1 second',false) as resend_blocked,
         count(*) filter(where created_at>now()-interval '1 hour')::int as hourly_count
       from owners.otp_challenges
       where phone_normalized=${phone}
     `;
-    if (
-      limits?.last_created_at
-      && Date.now() - new Date(limits.last_created_at).getTime() < Number(settings.otp_resend_seconds || 60) * 1000
-    ) {
+    if (limits?.resend_blocked === true) {
       return response.status(429).json({ ok: false, error: "انتظر قليلًا قبل طلب رمز جديد" });
     }
     if (Number(limits?.hourly_count || 0) >= Number(settings.otp_hourly_limit || 5)) {
@@ -1081,14 +1082,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
     const challengeId = crypto.randomUUID();
     const otp = randomOtp();
+    const expiryMinutes = Math.max(1, Number(settings.otp_expiry_minutes || 5));
+    const serverValidityMinutes = expiryMinutes + OTP_SMS_QUEUE_GRACE_MINUTES;
     await sql`
       insert into owners.otp_challenges(id,phone_normalized,code_hash,max_attempts,expires_at)
       values(
         ${challengeId}::uuid,${phone},${ownerOtpHash(challengeId, phone, otp)},
-        ${Number(settings.otp_max_attempts || 5)},now()+${Number(settings.otp_expiry_minutes || 5)}*interval '1 minute'
+        ${Number(settings.otp_max_attempts || 5)},now()+${serverValidityMinutes}*interval '1 minute'
       )
     `;
-    const expiryMinutes = Number(settings.otp_expiry_minutes || 5);
     try {
       const message = `رمز MZJ Owners Community: ${otp} صالح لمدة ${expiryMinutes} دقائق.`;
       await queueFirebaseSms({
@@ -1113,7 +1115,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return response.status(200).json({
       ok: true,
       challengeId,
-      expiresMinutes: Number(settings.otp_expiry_minutes || 5),
+      expiresMinutes: expiryMinutes,
     });
   }
 
@@ -1125,14 +1127,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(400).json({ ok: false, error: "بيانات التحقق غير مكتملة" });
     }
     const [challenge] = await sql<any[]>`
-      select *
+      select *,expires_at>now() as is_unexpired
       from owners.otp_challenges
       where id=${challengeId}::uuid
         and phone_normalized=${phone}
         and consumed_at is null
       limit 1
     `;
-    if (!challenge || new Date(challenge.expires_at).getTime() < Date.now()) {
+    if (!challenge || challenge.is_unexpired !== true) {
       return response.status(400).json({ ok: false, error: "رمز التحقق منتهي أو غير صالح" });
     }
     if (Number(challenge.attempts) >= Number(challenge.max_attempts)) {

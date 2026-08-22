@@ -118,7 +118,7 @@ export function OwnersPortalPage() {
             </>
           ) : (
             <>
-              <label><span>رمز التحقق</span><input inputMode="numeric" maxLength={4} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="0000" /></label>
+              <label><span>رمز التحقق</span><input inputMode="numeric" maxLength={4} value={code} onChange={(event) => setCode(event.target.value.replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit))).replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit))).replace(/\D/g, "").slice(0, 4))} placeholder="0000" /></label>
               <button disabled={busy || code.length !== 4} onClick={() => void verifyOtp()}>{busy ? "جاري التحقق..." : "دخول الحساب"}</button>
               <button className="owners-ghost" onClick={() => { setStage("phone"); setCode(""); setChallenge(""); }}>تغيير رقم الجوال</button>
             </>

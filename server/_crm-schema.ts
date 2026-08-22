@@ -1682,6 +1682,19 @@ commit;
 
 `;
 
+const CRM_TRACKING_FINAL_DELIVERY_WELCOME_20260822_SQL = String.raw`
+begin;
+
+alter table crm.crm_runtime_settings
+  add column if not exists tracking_final_delivery_welcome_enabled boolean not null default false;
+
+insert into core.schema_migrations(version)
+values('crm-tracking-final-delivery-welcome-20260822')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1768,6 +1781,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-phone-optional-20260820'
       `;
       if (!phoneOptionalMigration) await runSqlScript(CRM_PHONE_OPTIONAL_20260820_SQL);
+      const [trackingFinalDeliveryWelcomeMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-tracking-final-delivery-welcome-20260822'
+      `;
+      if (!trackingFinalDeliveryWelcomeMigration) await runSqlScript(CRM_TRACKING_FINAL_DELIVERY_WELCOME_20260822_SQL);
 
       // Cash QR has its own canonical CRM source. Keep both new and previously-created QR leads correct
       // without affecting any other CRM source or flow.
