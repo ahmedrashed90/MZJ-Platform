@@ -35,6 +35,12 @@ function cleanList(value: unknown) {
   return [...new Set(values.flatMap((item) => String(item ?? "").split(",")).map((item) => clean(item)).filter(Boolean))];
 }
 
+function canonicalReportSourceCode(value: unknown) {
+  const code = clean(value);
+  if (["manual", "manual_entry", "manual-entry"].includes(code.toLowerCase())) return "branch";
+  return code;
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "GET") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await requireCrmUser(request, response);
@@ -42,6 +48,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
   await ensureErpNextSalesOrderSchema();
   const sql = getSql();
   const scope = userScope(user);
+  const leadReportSourceCodeSql = sql`
+    case
+      when lower(coalesce(l.source_code,'')) in ('manual','manual_entry','manual-entry') then 'branch'
+      else l.source_code
+    end
+  `;
+  const transactionReportSourceCodeSql = sql`
+    case
+      when lower(coalesce(st.source_code,l.source_code,'')) in ('manual','manual_entry','manual-entry') then 'branch'
+      else coalesce(st.source_code,l.source_code)
+    end
+  `;
   const from = clean(request.query.from);
   const to = clean(request.query.to);
   const q = clean(request.query.q);
@@ -50,7 +68,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const selectedAgentIds = cleanList(request.query.agent);
   const agent = selectedAgentIds.join(",");
   const callCenter = clean(request.query.callCenter);
-  const source = clean(request.query.source);
+  const source = canonicalReportSourceCode(request.query.source);
   const detailKind = clean(request.query.detailKind);
   const detailValue = clean(request.query.detailValue);
   const detailQ = clean(request.query.detailQ);
@@ -192,7 +210,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     left join core.branches current_branch on current_branch.code=current_effective.branch_code
     left join core.users cc on cc.id=l.call_center_assigned_to
     left join core.branches branch_row on branch_row.code=effective.branch_code
-    left join core.sources src on src.code=l.source_code
+    left join core.sources src on src.code=(${leadReportSourceCodeSql})
   `;
 
   const scopeSql = sql`
@@ -363,7 +381,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     and (${branch || null}::text is null or l.report_branch_code=${branch || null})
     and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
     and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-    and (${source || null}::text is null or l.source_code=${source || null})
+    and (${source || null}::text is null or (${leadReportSourceCodeSql})=${source || null})
     and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.report_assigned_name,l.report_call_center_name,l.report_branch_name) ilike ${q ? `%${q}%` : null})
   `;
 
@@ -373,7 +391,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     const detailMatch = sql`
       (
-        (${detailKind}='source' and l.report_department_code<>'customer_service' and coalesce(l.source_code,'__none__')=${detailValue})
+        (${detailKind}='source' and l.report_department_code<>'customer_service' and coalesce((${leadReportSourceCodeSql}),'__none__')=${detailValue})
         or (${detailKind}='department_branch' and (coalesce(l.report_department_code,'__none__') || '|' || coalesce(l.report_branch_code,'__none__'))=${detailValue})
         or (${detailKind}='agent' and coalesce(l.current_assigned_to::text,'__none__')=${detailValue})
         or (${detailKind}='service' and l.report_department_code='customer_service')
@@ -392,7 +410,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const soldDetailMatchSql = detailKind === "source"
         ? sql`
             (${transactionDepartmentCodeSql})<>'customer_service'
-            and coalesce(st.source_code,l.source_code,'__none__')=${detailValue}
+            and coalesce((${transactionReportSourceCodeSql}),'__none__')=${detailValue}
           `
         : sql`
             (coalesce((${transactionDepartmentCodeSql}),'__none__') || '|' || coalesce((${transactionBranchCodeSql}),'__none__'))=${detailValue}
@@ -427,7 +445,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-            and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
+            and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
             and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,l.report_assigned_name,assigned_primary_branch.name,${transactionBranchCodeSql},${transactionDepartmentCodeSql},st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
             and ${soldDetailMatchSql}
           group by st.lead_id
@@ -448,6 +466,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       const detailTotal = Number(soldDetailRows[0]?.total_count || 0);
       for (const lead of soldDetailRows) {
+        lead.source_code = canonicalReportSourceCode(lead.source_code);
         lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
         lead.sold_quantity = Math.max(1, Number(lead.sold_quantity || 1));
         delete lead.catalog_source_name;
@@ -500,7 +519,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-            and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
+            and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
             and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,sold_user.full_name,transaction_branch.name,${transactionBranchCodeSql},${transactionDepartmentCodeSql},st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
         ),
         agent_sales as (
@@ -537,6 +556,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       const detailTotal = Number(soldAgentDetailRows[0]?.total_count || 0);
       for (const lead of soldAgentDetailRows) {
+        lead.source_code = canonicalReportSourceCode(lead.source_code);
         lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
         lead.sold_quantity = Math.max(1, Number(lead.sold_quantity || 1));
         delete lead.catalog_source_name;
@@ -576,7 +596,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-            and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
+            and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
             and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,l.current_assigned_name,assigned_primary_branch.name,${transactionBranchCodeSql},l.current_department_code,st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
         ),
         agent_sales as (
@@ -601,7 +621,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and (${branch || null}::text is null or l.current_branch_code=${branch || null})
             and (${selectedAgentIds.length === 0}::boolean or l.current_assigned_to=any(${selectedAgentIds}::uuid[]))
             and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-            and (${source || null}::text is null or l.source_code=${source || null})
+            and (${source || null}::text is null or (${leadReportSourceCodeSql})=${source || null})
             and (${q || null}::text is null or concat_ws(' ',l.customer_name,l.phone,l.phone_normalized,l.car_name,l.source_name,l.source_code,l.status_label,l.notes,l.current_assigned_name,l.report_call_center_name,l.current_branch_name) ilike ${q ? `%${q}%` : null})
         ),
         combined_ids as (
@@ -636,6 +656,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `;
       const detailTotal = Number(agentDetailRows[0]?.total_count || 0);
       for (const lead of agentDetailRows) {
+        lead.source_code = canonicalReportSourceCode(lead.source_code);
         lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
         lead.sold_quantity = lead.sold_quantity == null ? null : Math.max(1, Number(lead.sold_quantity || 1));
         delete lead.catalog_source_name;
@@ -672,6 +693,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit ${detailPageSize} offset ${detailOffset}
     `;
     for (const lead of detailRows) {
+      lead.source_code = canonicalReportSourceCode(lead.source_code);
       lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
       lead.sold_quantity = norm(lead.status_label) === norm("تم البيع") ? Math.max(1, Number(lead.sold_quantity || 1)) : null;
       delete lead.catalog_source_name;
@@ -695,6 +717,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   `;
 
   for (const lead of leads) {
+    lead.source_code = canonicalReportSourceCode(lead.source_code);
     lead.source_name = sourceLabel(lead.source_code, lead.catalog_source_name || lead.source_name);
     lead.sold_quantity = norm(lead.status_label) === norm("تم البيع") ? Math.max(1, Number(lead.sold_quantity || 1)) : null;
     delete lead.catalog_source_name;
@@ -714,7 +737,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       st.lead_id::text as lead_id,
       greatest(coalesce(st.quantity,1),1)::int as quantity,
       coalesce(st.total_amount,0)::float as total_amount,
-      coalesce(st.source_code,l.source_code) as source_code,
+      (${transactionReportSourceCodeSql}) as source_code,
       coalesce(src.name,st.source_name,l.source_name) as source_name,
       coalesce(src.report_group,'other') as source_report_group,
       (${transactionDepartmentCodeSql}) as department_code,
@@ -739,7 +762,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by usb.is_primary desc,branch_row.sort_order,branch_row.name
       limit 1
     ) assigned_primary_branch on true
-    left join core.sources src on src.code=coalesce(st.source_code,l.source_code)
+    left join core.sources src on src.code=(${transactionReportSourceCodeSql})
     left join core.users u on u.id=st.assigned_to
     left join core.branches b on b.code=(${transactionBranchCodeSql})
     left join core.users current_sales on current_sales.id=l.assigned_to
@@ -756,7 +779,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       and (${branch || null}::text is null or (${transactionBranchCodeSql})=${branch || null})
       and (${selectedAgentIds.length === 0}::boolean or st.assigned_to=any(${selectedAgentIds}::uuid[]))
       and (${callCenter || null}::uuid is null or l.call_center_assigned_to=${callCenter || null}::uuid)
-      and (${source || null}::text is null or coalesce(st.source_code,l.source_code)=${source || null})
+      and (${source || null}::text is null or (${transactionReportSourceCodeSql})=${source || null})
       and (${q || null}::text is null or concat_ws(' ',st.source_reference,l.customer_name,l.phone,st.assigned_name,u.full_name,b.name,${transactionBranchCodeSql},${transactionDepartmentCodeSql},st.source_name,l.source_name) ilike ${q ? `%${q}%` : null})
   `;
 

@@ -377,13 +377,17 @@ async function update(request: VercelRequest, response: VercelResponse, user: an
   const statusChangeRequested = changedText(body, ["status", "statusLabel", "status_label"], previousStatusLabel)
     || changedDate(body, ["followUpAt", "follow_up_at"], before.follow_up_at)
     || changedNumber(body, ["soldQuantity", "sold_quantity"], previousSoldQuantity);
+  const sourceChangeRequested = changedText(body, ["sourceCode", "source_code", "source"], before.source_code);
+  if (sourceChangeRequested && !databaseEdit) {
+    return response.status(403).json({ ok: false, error: "لا يمكن تغيير مصدر العميل من لوحة المتابعة" });
+  }
   const noteAdditionRequested = Boolean(newNote);
   const previousExtraData = before.extra_data && typeof before.extra_data === "object" ? before.extra_data : {};
   const customFieldsChanged = Object.entries(customFieldPatch).some(([key, next]) => clean(next) !== clean(previousExtraData[key]));
   const generalDataChangeRequested = soldDateChangeRequested || customFieldsChanged || [
     changedText(body, ["customerName", "customer_name", "name", "fullName", "full_name"], before.customer_name),
     changedText(body, ["phone", "mobile", "phone_number", "phoneNumber"], before.phone_normalized, normalizePhone),
-    changedText(body, ["sourceCode", "source_code", "source"], before.source_code),
+    sourceChangeRequested,
     changedText(body, ["serviceKey", "service_key"], previousServiceKey, departmentKey),
     changedText(body, ["departmentCode", "department_code"], previousDepartmentCode),
     changedText(body, ["branchCode", "branch_code"], previousBranchCode),

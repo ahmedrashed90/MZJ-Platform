@@ -99,7 +99,7 @@ export function CrmManualLeadsPage() {
     setForm({
       customerName: row.customer_name || "",
       phone: row.phone || "",
-      sourceCode: row.source_code || "branch",
+      sourceCode: "branch",
       serviceKey: row.service_key || (row.payment_type === "تمويل" ? "finance" : row.payment_type === "خدمة عملاء" ? "service" : "cash"),
       carName: row.car_name || "",
       carCategory: row.car_category || "",
@@ -159,7 +159,7 @@ export function CrmManualLeadsPage() {
           <div className="crm-form-grid crm-manual-form-grid">
             <label><span>اسم العميل</span><input value={form.customerName} onChange={(event) => set("customerName", event.target.value)} /></label>
             <label><span>رقم الجوال</span><input value={form.phone} onChange={(event) => set("phone", event.target.value)} placeholder="05xxxxxxxx" /></label>
-            <label><span>المصدر</span><select value={form.sourceCode} onChange={(event) => set("sourceCode", event.target.value)}>{(meta?.sources || []).map((source) => <option key={source.code} value={source.code}>{sourceLabel(source.code, source.name)}</option>)}</select></label>
+            <label><span>المصدر</span><select value="branch" disabled><option value="branch">{sourceLabel("branch")}</option></select></label>
             <label><span>السيارة</span><input value={form.carName} onChange={(event) => set("carName", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الفئة</span><input value={form.carCategory} onChange={(event) => set("carCategory", event.target.value)} placeholder="اختياري" /></label>
             <label><span>الموديل</span><input value={form.carModel} onChange={(event) => set("carModel", event.target.value)} placeholder="اختياري" /></label>
