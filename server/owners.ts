@@ -67,6 +67,7 @@ function randomReferralCode() {
   return crypto.randomBytes(7).toString("base64url").replace(/[-_]/g, "").toUpperCase().slice(0, 10);
 }
 
+
 function randomRedemptionCode() {
   return crypto.randomInt(0, 100_000_000).toString().padStart(8, "0");
 }
@@ -340,10 +341,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const canManageCommunity = hasPermission(actor, "owners.community.manage");
   const canManageSettings = hasPermission(actor, "settings.owners.manage") || canManageCommunity;
-  const canUseCrmOwnersCommunity = hasPermission(actor, "crm.owners_community.view");
-
   if (["lookup_redemption", "confirm_redemption"].includes(action)) {
-    if (!canUseCrmOwnersCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية للدخول إلى Owners Community داخل CRM" });
+    if (!canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
     const code = clean(payload.code);
     if (!/^\d{8}$/.test(code)) return response.status(400).json({ ok: false, error: "كود الاستبدال يجب أن يكون 8 أرقام" });
     if (action === "lookup_redemption") {
@@ -518,9 +517,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const availableForReferralPurchase = payload.availableForReferralPurchase === true;
     const availableForExistingCustomerPurchase = payload.availableForExistingCustomerPurchase === true;
     const availableForFriendReferralPurchase = payload.availableForFriendReferralPurchase === true;
+    const availableForRepurchase = payload.availableForRepurchase === true;
     const checkoutDiscountType = clean(payload.checkoutDiscountType) === "percentage" ? "percentage" : "amount";
     const checkoutDiscountRaw = Number(payload.checkoutDiscountValue ?? payload.checkoutDiscountAmount);
-    const checkoutDiscountValue = rewardType === "discount" && (availableForReferralPurchase || availableForExistingCustomerPurchase || availableForFriendReferralPurchase)
+    const checkoutDiscountValue = rewardType === "discount" && (availableForReferralPurchase || availableForExistingCustomerPurchase || availableForFriendReferralPurchase || availableForRepurchase)
       ? Math.round((Number.isFinite(checkoutDiscountRaw) ? checkoutDiscountRaw : 0) * 100) / 100
       : 0;
     const checkoutDiscountAmount = checkoutDiscountType === "amount" ? checkoutDiscountValue : 0;
@@ -534,7 +534,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const isActive = payload.isActive !== false;
     if (!name) return response.status(400).json({ ok: false, error: "اسم المكافأة مطلوب" });
     if (!rewardValue) return response.status(400).json({ ok: false, error: "حدد قيمة أو تفاصيل المكافأة التي ستظهر للعميل" });
-    if ((availableForReferralPurchase || availableForExistingCustomerPurchase || availableForFriendReferralPurchase) && rewardType === "discount" && !(checkoutDiscountValue > 0)) {
+    if ((availableForReferralPurchase || availableForExistingCustomerPurchase || availableForFriendReferralPurchase || availableForRepurchase) && rewardType === "discount" && !(checkoutDiscountValue > 0)) {
       return response.status(400).json({ ok: false, error: "حدد قيمة الخصم أو نسبة الخصم للمكافأة المتاحة في طلب الموقع" });
     }
     if (rewardType === "discount" && checkoutDiscountType === "percentage" && checkoutDiscountValue > 100) {
@@ -547,7 +547,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           name=${name},description=${description || null},reward_type=${rewardType},reward_value=${rewardValue || null},
           show_on_member_card=${showOnMemberCard},available_for_referral_purchase=${availableForReferralPurchase},
           available_for_existing_customer_purchase=${availableForExistingCustomerPurchase},
-          available_for_friend_referral_purchase=${availableForFriendReferralPurchase},
+          available_for_friend_referral_purchase=${availableForFriendReferralPurchase},available_for_repurchase=${availableForRepurchase},
           checkout_discount_type=${checkoutDiscountType},checkout_discount_value=${checkoutDiscountValue},
           checkout_discount_amount=${checkoutDiscountAmount},points_cost=${pointsCost},stock_quantity=case when ${hasStockQuantity} then ${stockQuantity} else stock_quantity end,
           starts_at=${startsAt}::timestamptz,ends_at=${endsAt}::timestamptz,is_active=${isActive},
@@ -557,11 +557,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else {
       await sql`
         insert into owners.rewards(
-          name,description,reward_type,reward_value,show_on_member_card,available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,
+          name,description,reward_type,reward_value,show_on_member_card,available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,available_for_repurchase,
           checkout_discount_type,checkout_discount_value,checkout_discount_amount,
           points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
         ) values(
-          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},
+          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},${availableForRepurchase},
           ${checkoutDiscountType},${checkoutDiscountValue},${checkoutDiscountAmount},${pointsCost},${stockQuantity},
           ${startsAt}::timestamptz,${endsAt}::timestamptz,${isActive},${actor.id}::uuid,${actor.id}::uuid
         )

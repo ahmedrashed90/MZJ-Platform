@@ -22,13 +22,14 @@ export function canAccessCrm(user: AuthUser | null | undefined) { return sharedC
 export function canAccessMarketing(user: AuthUser | null | undefined) { return sharedCanAccessSystem(user, "marketing"); }
 export function canAccessOperations(user: AuthUser | null | undefined) { return sharedCanAccessSystem(user, "operations"); }
 export function canAccessTracking(user: AuthUser | null | undefined) { return sharedCanAccessSystem(user, "tracking"); }
+export function canAccessWebsite(user: AuthUser | null | undefined) { return sharedCanAccessSystem(user, "website"); }
 export function canAccessSystem(user: AuthUser | null | undefined, system: PlatformSystem) { return sharedCanAccessSystem(user, system); }
 export function canOpenSettings(user: AuthUser | null | undefined) { return sharedCanOpenSettings(user); }
 
 export function defaultSystemPath(user: AuthUser | null | undefined) {
   if (!user) return "/help";
   if (hasPermission(user, "platform.dashboard.view")) return "/";
-  for (const system of ["crm", "marketing", "operations", "tracking"] as PlatformSystem[]) {
+  for (const system of ["crm", "marketing", "operations", "tracking", "website"] as PlatformSystem[]) {
     if (sharedCanAccessSystem(user, system)) return firstAllowedPage(user, system);
   }
   if (hasPermission(user, "owners.community.view")) return "/owners-community";

@@ -28,6 +28,7 @@ function randomReferralCode() {
   return crypto.randomBytes(7).toString("base64url").replace(/[-_]/g, "").toUpperCase().slice(0, 10);
 }
 
+
 function sha256(value: string) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -171,22 +172,7 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
       `;
       if (member) {
         await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
-        const settings = await getOwnerSettings();
-        if (settings.points_purchase_enabled === true) {
-          await awardOwnerPoints({
-            memberId: member.id,
-            points: Number(settings.points_purchase || 0),
-            eventType: "purchase",
-            eventKey: `purchase:${sale.sale_id}`,
-            description: "مكافأة إتمام عملية شراء",
-            metadata: {
-              saleId: sale.sale_id,
-              saleQuantity: Number(sale.sale_quantity || 1),
-              saleOrderReference: sale.sale_order_reference || null,
-              purchaseAwardPoints: Number(settings.points_purchase || 0),
-            } as OwnerJson,
-          });
-        }
+        await reconcileOwnerPurchasePoints(member.id);
       }
       return member || null;
     } catch (error) {
@@ -284,7 +270,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
       )
       update owners.points_ledger ledger set
         points=case when scoped.is_cancelled then 0 else scoped.awarded_points end,
-        description=case when scoped.is_cancelled then 'مكافأة شراء ملغاة' else 'مكافأة إتمام عملية شراء' end,
+        description=case when scoped.is_cancelled then 'شراء ملغي' else ledger.description end,
         metadata=coalesce(ledger.metadata,'{}'::jsonb)||jsonb_build_object(
           'purchaseAwardPoints',scoped.awarded_points,
           'purchaseCancelled',scoped.is_cancelled
@@ -360,9 +346,10 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
             runtime.purchase_award_points,
             'purchase',
             'purchase:'||sale.sale_id::text,
-            'مكافأة إتمام عملية شراء',
+            case when sale.sale_rank=1 then 'شراء العميل' else 'إعادة شراء' end,
             jsonb_build_object(
               'saleId',sale.sale_id::text,
+              'purchaseKind',case when sale.sale_rank=1 then 'first' else 'repurchase' end,
               'saleAt',sale.sale_at,
               'saleQuantity',sale.order_quantity,
               'saleOrderReference',sale.order_reference,
@@ -393,9 +380,10 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
             runtime.purchase_award_points,
             'purchase',
             'purchase:member:'||member.member_id::text||':initial',
-            'مكافأة إتمام عملية شراء',
+            'شراء العميل',
             jsonb_build_object(
               'saleAt',coalesce(member.first_sale_at,member.last_sale_at),
+              'purchaseKind','first',
               'purchaseAwardPoints',runtime.purchase_award_points,
               'appliedFromSettings',true,
               'memberPurchaseFallback',true,
@@ -424,6 +412,49 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
       `;
       insertedCount = summary.reduce((total: number, row: any) => total + Number(row.awards || 0), 0);
     }
+
+    // Label every active purchase from its real order rank. The configured purchase
+    // points value is reused for every qualifying order; only the description changes
+    // between the first purchase and later repurchases.
+    await tx`
+      with eligible_members as (
+        select member.id,member.phone_normalized,member.crm_lead_id,member.source_sale_id
+        from owners.members member
+        where member.status='active'
+          and coalesce(member.metadata->>'memberKind','real')<>'test'
+          and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
+      ), canonical_sales as (
+        select distinct
+          member.id as member_id,
+          sale.id as sale_id,
+          sale.sale_at
+        from eligible_members member
+        join crm.sales_transactions sale on coalesce(sale.is_cancelled,false)=false
+        join crm.leads lead on lead.id=sale.lead_id and lead.is_deleted=false
+        where
+          (member.source_sale_id is not null and sale.id=member.source_sale_id)
+          or (member.crm_lead_id is not null and sale.lead_id=member.crm_lead_id)
+          or (
+            nullif(member.phone_normalized,'') is not null
+            and nullif(lead.phone_normalized,'') is not null
+            and lead.phone_normalized=member.phone_normalized
+          )
+      ), ranked_sales as (
+        select
+          sale.*,
+          row_number() over(partition by sale.member_id order by sale.sale_at,sale.sale_id) as sale_rank
+        from canonical_sales sale
+      )
+      update owners.points_ledger ledger set
+        description=case when sale.sale_rank=1 then 'شراء العميل' else 'إعادة شراء' end,
+        metadata=coalesce(ledger.metadata,'{}'::jsonb)||jsonb_build_object(
+          'purchaseKind',case when sale.sale_rank=1 then 'first' else 'repurchase' end
+        )
+      from ranked_sales sale
+      where ledger.member_id=sale.member_id
+        and ledger.event_type='purchase'
+        and ledger.metadata->>'saleId'=sale.sale_id::text
+    `;
 
     // The ledger remains the spendable-balance source of truth. Recalculate the
     // scoped real members after order-state reconciliation so cancelled orders
@@ -558,7 +589,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         eventType: "sale",
         eventKey: `sale:${referral.sale_id}`,
         referralId: referral.id,
-        description: "أتم الصديق عملية شراء",
+        description: "الصديق تم البيع",
       });
       if (referral.crm_lead_id) await ensureOwnerMemberForLead(referral.crm_lead_id, referral.sale_id);
       continue;
@@ -640,7 +671,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
       eventType: "sale",
       eventKey: `sale:${sale.id}`,
       referralId: referral.id,
-      description: "أتم الصديق عملية شراء",
+      description: "الصديق تم البيع",
     });
   }
   return member;

@@ -13,7 +13,7 @@ type OverrideEffect = "inherit" | "allow" | "deny";
 type UserForm = { id: string; employeeNo: string; fullName: string; email: string; mobile: string; nextErpUserId: string; password: string; isActive: boolean; canReceiveLeads: boolean; canReceiveTasks: boolean; roleIds: string[]; systems: UserSystemForm[]; overrides: Record<string, OverrideEffect>; reason: string };
 type RoleGroup = { key: string; name: string; canonical: RoleItem; roleIds: string[] };
 
-const systemOrder: PlatformSystem[] = ["operations", "tracking", "marketing", "crm"];
+const systemOrder: PlatformSystem[] = ["operations", "tracking", "marketing", "crm", "website"];
 const roleSystemOrder: AccessSystemCode[] = ["core", ...systemOrder];
 const tabLabels: Record<Tab, string> = {
   users: "المستخدمون",

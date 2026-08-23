@@ -130,7 +130,8 @@ insert into core.systems(code,name_ar,sort_order,is_active) values
 ('operations','العمليات',10,true),
 ('tracking','التراكينج',20,true),
 ('marketing','التسويق',30,true),
-('crm','CRM',40,true)
+('crm','CRM',40,true),
+('website','الموقع الإلكتروني',50,true)
 on conflict(code) do update set name_ar=excluded.name_ar,sort_order=excluded.sort_order,is_active=true,updated_at=now();
 
 insert into core.systems(code,name_ar,sort_order,is_active) values ('core','المنصة المركزية',0,true) on conflict(code) do update set name_ar=excluded.name_ar,is_active=true,updated_at=now();
@@ -142,6 +143,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('core','settings','الإعدادات','/settings',40,true),
 ('core','activity','سجل النشاط','/activity',50,true),
 ('core','owners_community','MZJ Owners Community','/owners-community',60,true),
+('website','stock','الاستوك في الموقع','/website',10,true),
 ('crm','dashboard','الداش بورد','/crm',10,true),
 ('crm','database','قاعدة البيانات','/crm/database',20,true),
 ('crm','manual_leads','إضافة العملاء','/crm/manual-leads',30,true),
@@ -151,7 +153,6 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('crm','inbox_agent','وكيل صندوق الوارد','/crm/inbox-agent',70,true),
 ('crm','reports','التقارير','/crm/reports',80,true),
 ('crm','kpi','تقييم المناديب KPI','/crm/kpi',90,true),
-('crm','owners_community','Owners Community','/crm/owners-community',95,true),
 ('marketing','dashboard','الداش بورد','/marketing',10,true),
 ('marketing','create_campaign','إنشاء حملة','/marketing/create-campaign',20,true),
 ('marketing','create_agenda','إنشاء أجندة','/marketing/create-agenda',30,true),
@@ -208,6 +209,8 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,242,true),
 ('owners.community.view','دخول MZJ Owners Community','core','owners_community','view','دخول MZJ Owners Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,243,true),
 ('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,244,true),
+('system.website.access','دخول نظام الموقع الإلكتروني','website','stock','access','دخول نظام الموقع الإلكتروني','دخول نظام الموقع الإلكتروني','system',false,245,true),
+('website.stock.view','مشاهدة الاستوك في الموقع','website','stock','view','مشاهدة الاستوك في الموقع','متابعة سيارات الموقع وحالة الصور و CompareKey','page',false,246,true),
 ('system.crm.access','دخول نظام CRM','crm','dashboard','access','دخول نظام CRM','دخول نظام CRM','system',false,250,true),
 ('crm.dashboard.view','مشاهدة داش بورد CRM','crm','dashboard','view','مشاهدة داش بورد CRM','مشاهدة داش بورد CRM','page',false,260,true),
 ('crm.database.view','مشاهدة قاعدة بيانات CRM','crm','database','view','مشاهدة قاعدة بيانات CRM','مشاهدة قاعدة بيانات CRM','page',false,270,true),
@@ -218,7 +221,6 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('crm.inbox_agent.view','فتح وكيل صندوق الوارد','crm','inbox_agent','view','فتح وكيل صندوق الوارد','فتح وكيل صندوق الوارد','page',false,320,true),
 ('crm.reports.view','مشاهدة تقارير CRM','crm','reports','view','مشاهدة تقارير CRM','مشاهدة تقارير CRM','page',false,330,true),
 ('crm.kpi.view','مشاهدة KPI','crm','kpi','view','مشاهدة KPI','مشاهدة KPI','page',false,340,true),
-('crm.owners_community.view','دخول Owners Community','crm','owners_community','view','دخول Owners Community','استعلام أكواد استبدال MZJ Owners Community وتأكيد التسليم','page',false,350,true),
 ('crm.customer.view','فتح بيانات العميل','crm','database','customer_view','فتح بيانات العميل','فتح بيانات العميل','action',false,360,true),
 ('crm.customer.create','إنشاء عميل','crm','manual_leads','customer_create','إنشاء عميل','إنشاء عميل','action',false,370,true),
 ('crm.customer.update','تعديل بيانات العميل','crm','database','customer_update','تعديل بيانات العميل','تعديل بيانات العميل','action',false,380,true),
@@ -510,7 +512,7 @@ select u.id,s.code,true,
     else 'branch_and_department'
   end
 from core.users u cross join core.systems s
-where s.code in ('crm','marketing','operations','tracking')
+where s.code in ('crm','marketing','operations','tracking','website')
   and (
     exists(select 1 from core.user_roles ur join core.roles r on r.id=ur.role_id where ur.user_id=u.id and r.code in ('admin','system_admin'))
     or exists(select 1 from core.user_departments ud join core.departments d on d.id=ud.department_id where ud.user_id=u.id and d.system_code=s.code)
@@ -554,11 +556,15 @@ on conflict(id) do update set version=greatest(core.access_control_schema_state.
 
 
 const REQUIRED_PAGE_PERMISSION_CATALOG_SQL = String.raw`
+insert into core.systems(code,name_ar,sort_order,is_active) values
+('website','الموقع الإلكتروني',50,true)
+on conflict(code) do update set name_ar=excluded.name_ar,sort_order=excluded.sort_order,is_active=true,updated_at=now();
+
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
 ('core','owners_community','MZJ Owners Community','/owners-community',60,true),
-('crm','owners_community','Owners Community','/crm/owners-community',95,true)
+('website','stock','الاستوك في الموقع','/website',10,true)
 on conflict(system_code,code) do update set
   name_ar=excluded.name_ar,
   route=excluded.route,
@@ -573,7 +579,8 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
 ('settings.owners.view','مشاهدة إعدادات MZJ Owners Community','core','settings','owners_view','مشاهدة إعدادات MZJ Owners Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
 ('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true),
-('crm.owners_community.view','دخول Owners Community','crm','owners_community','view','دخول Owners Community','استعلام أكواد استبدال MZJ Owners Community وتأكيد التسليم','page',false,350,true)
+('system.website.access','دخول نظام الموقع الإلكتروني','website','stock','access','دخول نظام الموقع الإلكتروني','دخول نظام الموقع الإلكتروني','system',false,1940,true),
+('website.stock.view','مشاهدة الاستوك في الموقع','website','stock','view','مشاهدة الاستوك في الموقع','متابعة سيارات الموقع وحالة الصور و CompareKey','page',false,1950,true)
 on conflict(code) do update set
   name=excluded.name,
   system_code=excluded.system_code,
@@ -585,6 +592,35 @@ on conflict(code) do update set
   is_sensitive=excluded.is_sensitive,
   sort_order=excluded.sort_order,
   is_active=true;
+
+update core.system_pages
+set is_active=false,updated_at=now()
+where system_code='crm' and code='owners_community';
+
+update core.permissions
+set is_active=false
+where code='crm.owners_community.view';
+
+delete from core.role_permissions rp
+using core.permissions p
+where rp.permission_id=p.id and p.code='crm.owners_community.view';
+
+insert into core.role_permissions(role_id,permission_id)
+select r.id,p.id
+from core.roles r
+join core.permissions p on p.code in ('system.website.access','website.stock.view')
+where r.code in ('admin','system_admin')
+on conflict do nothing;
+
+insert into core.user_systems(user_id,system_code,is_enabled,role_id,data_scope)
+select u.id,'website',true,null,'all'
+from core.users u
+where exists(
+  select 1 from core.user_roles ur
+  join core.roles r on r.id=ur.role_id
+  where ur.user_id=u.id and r.code in ('admin','system_admin')
+)
+on conflict(user_id,system_code) do update set is_enabled=true,data_scope='all',updated_at=now();
 `;
 
 
@@ -651,16 +687,37 @@ async function requiredPagePermissionCatalogReady() {
       and exists(select 1 from core.permissions where code='owners.community.manage' and is_active=true)
       and exists(select 1 from core.permissions where code='settings.owners.view' and is_active=true)
       and exists(select 1 from core.permissions where code='settings.owners.manage' and is_active=true)
+      and exists(select 1 from core.systems where code='website' and is_active=true)
       and exists(
         select 1 from core.system_pages
-        where system_code='crm' and code='owners_community' and is_active=true
+        where system_code='website' and code='stock' and is_active=true
       )
       and exists(
         select 1 from core.permissions
-        where code='crm.owners_community.view'
-          and system_code='crm'
-          and page_code='owners_community'
-          and is_active=true
+        where code='system.website.access' and system_code='website' and is_active=true
+      )
+      and exists(
+        select 1 from core.permissions
+        where code='website.stock.view' and system_code='website' and page_code='stock' and is_active=true
+      )
+      and not exists(
+        select 1 from core.system_pages
+        where system_code='crm' and code='owners_community' and is_active=true
+      )
+      and not exists(
+        select 1 from core.permissions
+        where code='crm.owners_community.view' and is_active=true
+      )
+      and not exists(
+        select 1 from core.users u
+        where exists(
+          select 1 from core.user_roles ur join core.roles r on r.id=ur.role_id
+          where ur.user_id=u.id and r.code in ('admin','system_admin')
+        )
+        and not exists(
+          select 1 from core.user_systems us
+          where us.user_id=u.id and us.system_code='website' and us.is_enabled=true
+        )
       )
       as ready
   `;

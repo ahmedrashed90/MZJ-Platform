@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Calculator, CarProfile, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 import { RedemptionQr } from "./RedemptionQr";
 
@@ -52,6 +52,12 @@ function redemptionStatus(value: unknown) {
   return status || "—";
 }
 
+function ledgerDescription(entry: any) {
+  if (entry?.event_type === "unique_open") return "إرسال دعوة لصديق";
+  if (entry?.event_type === "sale") return "الصديق تم البيع";
+  return entry?.description || entry?.event_type || "حركة نقاط";
+}
+
 export function OwnersPortalPage() {
   const [me, setMe] = useState<any>(null);
   const [phone, setPhone] = useState("");
@@ -61,6 +67,7 @@ export function OwnersPortalPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [cardFlipped, setCardFlipped] = useState(false);
+  const [calculatorVehicleId, setCalculatorVehicleId] = useState("");
 
   async function load() {
     try {
@@ -132,7 +139,11 @@ export function OwnersPortalPage() {
   const referrals = Array.isArray(me.referrals) ? me.referrals : [];
   const rewards = Array.isArray(me.rewards) ? me.rewards : [];
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
-  const cardRewards = rewards.filter((reward: any) => reward.show_on_member_card === true);
+  const cardRewards = Array.isArray(me.cardRewards) ? me.cardRewards : rewards.filter((reward: any) => reward.show_on_member_card === true);
+  const websiteCars = Array.isArray(me.websiteCars) ? me.websiteCars : [];
+  const calculatorCar = websiteCars.find((car: any) => String(car.vehicleId) === calculatorVehicleId) || null;
+  const calculatorRawDiscount = calculatorCar ? Number(calculatorCar.priceBeforeTax || 0) * 0.01 : 0;
+  const calculatorDiscount = calculatorRawDiscount > 0 ? Math.ceil(calculatorRawDiscount / 100) * 100 : 0;
 
   async function copyInvite() {
     try {
@@ -148,13 +159,13 @@ export function OwnersPortalPage() {
     const currentPoints = Number(member.points || 0);
     if (currentPoints < pointsCost) return;
     const afterPoints = currentPoints - pointsCost;
-    if (!window.confirm(`تأكيد استبدال «${reward?.name || "المكافأة"}»؟\nسيتم خصم ${pointsCost.toLocaleString("ar-SA-u-nu-latn")} نقطة.\nرصيدك بعد الاستبدال: ${afterPoints.toLocaleString("ar-SA-u-nu-latn")} نقطة.`)) return;
+    if (!window.confirm(`تأكيد الحصول على كود «${reward?.name || "المكافأة"}»؟\nسيتم خصم ${pointsCost.toLocaleString("ar-SA-u-nu-latn")} نقطة.\nرصيدك بعد إصدار الكود: ${afterPoints.toLocaleString("ar-SA-u-nu-latn")} نقطة.`)) return;
     setBusy(true);
     setMessage("");
     try {
       const response = await ownersPublicPost({ action: "redeem", rewardId: reward.id });
       await load();
-      setMessage(response?.redemption?.code ? `تم الاستبدال. كودك: ${response.redemption.code}` : "تم الاستبدال وأصبح جاهزًا للتسليم");
+      setMessage(response?.redemption?.code ? `تم إصدار كود المكافأة: ${response.redemption.code}` : "تم إصدار كود المكافأة");
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -199,6 +210,27 @@ export function OwnersPortalPage() {
           </div>
         </section>
 
+        <section className="owners-public-section owners-points-list-section">
+          <h2>قائمة النقاط</h2>
+          <div className="owners-ledger">
+            {(me.ledger || []).length ? (me.ledger || []).map((entry: any) => (
+              <article key={entry.id}><span>{ledgerDescription(entry)}</span><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{entry.points}</strong><small>{formatDate(entry.created_at)}</small></article>
+            )) : <p>لا توجد حركات نقاط حتى الآن.</p>}
+          </div>
+        </section>
+
+        <section className="owners-public-section owners-code-calculator">
+          <div className="owners-calculator-head"><Calculator size={26} /><div><h2>حاسبة كود الخصم</h2><p>اختر أي سيارة لمعرفة قيمة الخصم المتوقعة بكودك الشخصي. الاختيار للحساب فقط ولا يربط الكود بالسيارة.</p></div></div>
+          <label className="owners-calculator-select"><span>اختر السيارة</span><div><CarProfile size={20} /><select value={calculatorVehicleId} onChange={(event) => setCalculatorVehicleId(event.target.value)}><option value="">اختر السيارة</option>{websiteCars.map((car: any) => <option key={`${car.vehicleId}-${car.title}`} value={car.vehicleId}>{car.title} · {car.vehicleId}</option>)}</select></div></label>
+          {calculatorCar ? <div className="owners-calculator-result">
+            <div><span>سعر السيارة قبل الضريبة</span><strong>{Number(calculatorCar.priceBeforeTax || 0).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 })} ر.س</strong></div>
+            <div><span>قيمة 1%</span><strong>{calculatorRawDiscount.toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 })} ر.س</strong></div>
+            <div className="highlight"><span>خصم كودك بعد التقريب لأعلى</span><strong>{calculatorDiscount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
+            <div><span>كودك الشخصي</span><strong dir="ltr">{member.referralCode || "—"}</strong></div>
+          </div> : null}
+          {!websiteCars.length ? <p className="owners-calculator-empty">تعذر تحميل سيارات الموقع حاليًا. حاول مرة أخرى لاحقًا.</p> : null}
+        </section>
+
         <section className="owners-public-welcome owners-public-welcome-compact">
           <span>مرحبًا {member.name || "بك"}</span>
           <div className="owners-mini-badges"><span><Star size={16} weight="fill" /> {tierLabel(member.tier)}</span><span><Ticket size={16} /> {redemptions.length} طلب استبدال</span></div>
@@ -225,7 +257,7 @@ export function OwnersPortalPage() {
                 {reward.reward_value ? <div className="owners-public-reward-value">{reward.reward_value}</div> : null}
                 <p>{reward.description || "راجع تفاصيل المكافأة قبل الاستبدال"}</p>
                 <strong>{Number(reward.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong>
-                {Number(member.points) >= Number(reward.points_cost) ? <button disabled={busy} onClick={() => void redeem(reward)}>استبدال {Number(reward.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</button> : <button disabled>تحتاج {(Number(reward.points_cost) - Number(member.points)).toLocaleString("ar-SA-u-nu-latn")} نقطة إضافية</button>}
+                <button disabled={busy} onClick={() => void redeem(reward)}>احصل على الكود</button>
               </article>
             )) : <p>لا توجد مكافآت متاحة حاليًا.</p>}
           </div>
@@ -251,7 +283,7 @@ export function OwnersPortalPage() {
                   {redemption.status === "approved" && /^\d{8}$/.test(String(redemption.redemption_code || "")) ? (
                     <div className="owners-redemption-ready">
                       <RedemptionQr code={String(redemption.redemption_code)} size={176} />
-                      <div><span>كود الاستبدال</span><strong className="owners-redemption-code" dir="ltr">{redemption.redemption_code}</strong><small>اعرض QR أو الكود للمندوب عند استلام المكافأة.</small></div>
+                      <div><span>كود المكافأة</span><strong className="owners-redemption-code" dir="ltr">{redemption.redemption_code}</strong><small>احتفظ بالكود لاستخدام المكافأة.</small></div>
                     </div>
                   ) : null}
                   {redemption.status === "delivered" ? <div className="owners-redemption-delivered"><strong>تم تسليم المكافأة</strong><span>{formatDate(redemption.reviewed_at)}{redemption.reviewed_by_name ? ` · ${redemption.reviewed_by_name}` : ""}</span></div> : null}
@@ -261,14 +293,6 @@ export function OwnersPortalPage() {
           </section>
         ) : null}
 
-        <section className="owners-public-section">
-          <h2>كشف النقاط</h2>
-          <div className="owners-ledger">
-            {(me.ledger || []).map((entry: any) => (
-              <article key={entry.id}><span>{entry.description || entry.event_type}</span><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{entry.points}</strong><small>{formatDate(entry.created_at)}</small></article>
-            ))}
-          </div>
-        </section>
       </main>
     </div>
   );

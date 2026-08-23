@@ -1,4 +1,4 @@
-export type PlatformSystem = "crm" | "marketing" | "operations" | "tracking";
+export type PlatformSystem = "crm" | "marketing" | "operations" | "tracking" | "website";
 export type AccessSystemCode = PlatformSystem | "core";
 export type DataScope =
   | "self"
@@ -70,6 +70,7 @@ export const SYSTEM_CATALOG: Array<{ code: PlatformSystem; name: string; sortOrd
   { code: "tracking", name: "التراكينج", sortOrder: 20 },
   { code: "marketing", name: "التسويق", sortOrder: 30 },
   { code: "crm", name: "CRM", sortOrder: 40 },
+  { code: "website", name: "الموقع الإلكتروني", sortOrder: 50 },
 ];
 
 export const PAGE_CATALOG: CatalogPage[] = [
@@ -79,6 +80,8 @@ export const PAGE_CATALOG: CatalogPage[] = [
   { system: "core", code: "settings", name: "الإعدادات", route: "/settings", sortOrder: 40 },
   { system: "core", code: "activity", name: "سجل النشاط", route: "/activity", sortOrder: 50 },
   { system: "core", code: "owners_community", name: "MZJ Owners Community", route: "/owners-community", sortOrder: 60 },
+
+  { system: "website", code: "stock", name: "الاستوك في الموقع", route: "/website", sortOrder: 10 },
 
   { system: "crm", code: "dashboard", name: "الداش بورد", route: "/crm", sortOrder: 10 },
   { system: "crm", code: "database", name: "قاعدة البيانات", route: "/crm/database", sortOrder: 20 },
@@ -164,6 +167,9 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("owners.community.view", "دخول MZJ Owners Community", "core", "owners_community", "view", "page", "فتح لوحة إدارة مجتمع ملاك MZJ", true),
   p("owners.community.manage", "إدارة MZJ Owners Community", "core", "owners_community", "manage", "action", "إدارة الأعضاء والدعوات والمكافآت والاستبدالات", true),
 
+  p("system.website.access", "دخول نظام الموقع الإلكتروني", "website", "stock", "access", "system"),
+  p("website.stock.view", "مشاهدة الاستوك في الموقع", "website", "stock", "view", "page"),
+
   p("system.crm.access", "دخول نظام CRM", "crm", "dashboard", "access", "system"),
   p("crm.dashboard.view", "مشاهدة داش بورد CRM", "crm", "dashboard", "view", "page"),
   p("crm.database.view", "مشاهدة قاعدة بيانات CRM", "crm", "database", "view", "page"),
@@ -174,7 +180,6 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("crm.inbox_agent.view", "فتح وكيل صندوق الوارد", "crm", "inbox_agent", "view", "page"),
   p("crm.reports.view", "مشاهدة تقارير CRM", "crm", "reports", "view", "page"),
   p("crm.kpi.view", "مشاهدة KPI", "crm", "kpi", "view", "page"),
-  p("crm.owners_community.view", "دخول Owners Community", "crm", "owners_community", "view", "page", "استعلام أكواد استبدال MZJ Owners Community وتأكيد التسليم"),
   p("crm.customer.view", "فتح بيانات العميل", "crm", "database", "customer_view", "action"),
   p("crm.customer.create", "إنشاء عميل", "crm", "manual_leads", "customer_create", "action"),
   p("crm.customer.update", "تعديل بيانات العميل", "crm", "database", "customer_update", "action"),

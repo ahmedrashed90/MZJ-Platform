@@ -120,7 +120,7 @@ export async function getEffectiveAccess(userId: string): Promise<EffectiveAcces
 
   const systemAccess: EffectiveAccessSnapshot["systemAccess"] = {};
   for (const row of systemRows) {
-    if (!["crm", "marketing", "operations", "tracking"].includes(row.system_code)) continue;
+    if (!["crm", "marketing", "operations", "tracking", "website"].includes(row.system_code)) continue;
     systemAccess[row.system_code] = {
       enabled: Boolean(row.is_enabled),
       dataScope: row.data_scope,
@@ -178,7 +178,7 @@ export async function logSecurityEvent(input: {
   const sql = getSql();
   const role = input.userRole || input.user?.roles?.[0] || input.user?.roleCodes?.[0] || null;
   const primarySystem = input.systemCode as PlatformSystem;
-  const scope = input.user && ["crm", "marketing", "operations", "tracking"].includes(input.systemCode)
+  const scope = input.user && ["crm", "marketing", "operations", "tracking", "website"].includes(input.systemCode)
     ? getSystemAccess(input.user, primarySystem)
     : null;
   await sql`

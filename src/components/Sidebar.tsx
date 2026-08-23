@@ -1,8 +1,8 @@
 import { NavLink } from "react-router-dom";
-import { ChartBar, Crown, Database, Gear, House, MapPin, Megaphone, Pulse, Question, SignOut, SuitcaseSimple, UsersThree } from "@phosphor-icons/react";
+import { ChartBar, Crown, Database, Gear, Globe, House, MapPin, Megaphone, Pulse, Question, SignOut, SuitcaseSimple, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { NotificationBell } from "../notifications/NotificationBell";
-import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canOpenSettings, hasPermission } from "../systemAccess";
+import { canAccessCrm, canAccessMarketing, canAccessOperations, canAccessTracking, canAccessWebsite, canOpenSettings, hasPermission } from "../systemAccess";
 import { firstAllowedPage } from "../../shared/access-control";
 
 const items = [
@@ -11,6 +11,7 @@ const items = [
   { href: "/marketing", label: "التسويق", icon: Megaphone, system: "marketing" },
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, system: "operations" },
   { href: "/tracking", label: "التراكينج", icon: MapPin, system: "tracking" },
+  { href: "/website", label: "الموقع الإلكتروني", icon: Globe, system: "website" },
   { href: "/owners-community", label: "MZJ Owners", icon: Crown, permission: "owners.community.view" },
 ] as const;
 const supportItems = [
@@ -28,7 +29,7 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
-  const systemAllowed: Record<string, boolean> = { crm: canAccessCrm(user), marketing: canAccessMarketing(user), operations: canAccessOperations(user), tracking: canAccessTracking(user) };
+  const systemAllowed: Record<string, boolean> = { crm: canAccessCrm(user), marketing: canAccessMarketing(user), operations: canAccessOperations(user), tracking: canAccessTracking(user), website: canAccessWebsite(user) };
   const visibleItems = items.filter((item) => "permission" in item ? hasPermission(user, item.permission) : systemAllowed[item.system]);
   const resolvedItems = visibleItems.map((item) => "system" in item ? { ...item, href: firstAllowedPage(user, item.system) } : item);
   const visibleSupport = supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));

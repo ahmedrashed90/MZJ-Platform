@@ -9,7 +9,6 @@ import {
   Robot,
   ChatsCircle,
   AddressBook,
-  Crown,
 } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
@@ -24,7 +23,6 @@ const items = [
   { href: "/crm/inbox-agent", label: "وكيل صندوق الوارد", icon: Robot, permission: "crm.inbox_agent.view" },
   { href: "/crm/reports", label: "التقارير", icon: ChartBar, permission: "crm.reports.view" },
   { href: "/crm/kpi", label: "تقييم المناديب KPI", icon: ChatCircleDots, permission: "crm.kpi.view" },
-  { href: "/crm/owners-community", label: "Owners Community", icon: Crown, permission: "crm.owners_community.view" },
 ];
 
 export function CrmLayout() {

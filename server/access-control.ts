@@ -24,7 +24,7 @@ function bool(value: unknown, fallback = false) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 function array(value: unknown) { return Array.isArray(value) ? value.map(clean).filter(Boolean) : []; }
-function validSystem(value: unknown): value is PlatformSystem { return ["crm", "marketing", "operations", "tracking"].includes(clean(value)); }
+function validSystem(value: unknown): value is PlatformSystem { return ["crm", "marketing", "operations", "tracking", "website"].includes(clean(value)); }
 function validScope(value: unknown): value is DataScope { return DATA_SCOPE_OPTIONS.some((item) => item.code === clean(value)); }
 function safeRoleCode(value: unknown) { return clean(value).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80); }
 

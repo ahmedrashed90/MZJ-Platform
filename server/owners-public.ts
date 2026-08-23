@@ -22,6 +22,7 @@ import {
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
 import { ensureLegacyCustomerCodeForLead, findLegacyCustomerCodeByCode, syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
+import { getWebsiteStock } from "./_website-stock.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -130,7 +131,7 @@ async function recordUniqueVisit(request: VercelRequest, referrer: any, visitorV
       points,
       eventType: "unique_open",
       eventKey: `visit:${inserted[0].id}`,
-      description: "فتح صديق جديد رابط الدعوة",
+      description: "إرسال دعوة لصديق",
       metadata: { visitorHash } as OwnerJson,
     });
   }
@@ -538,6 +539,7 @@ function commerceRewardPayload(reward: any) {
     availableForNewCustomer: reward.available_for_referral_purchase === true,
     availableForExistingCustomer: reward.available_for_existing_customer_purchase === true,
     availableForFriendReferral: reward.available_for_friend_referral_purchase === true,
+    availableForRepurchase: reward.available_for_repurchase === true,
     startsAt: reward.starts_at || null,
     endsAt: reward.ends_at || null,
   };
@@ -557,7 +559,7 @@ async function getCommerceRewards(referrerKind: CommerceReferrerKind, selfUse: b
   const rows = await sql<any[]>`
     select
       id::text,name,description,reward_type,reward_value,
-      available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,
+      available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,available_for_repurchase,
       checkout_discount_type,checkout_discount_value,checkout_discount_amount,
       stock_quantity,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
     from owners.rewards
@@ -1185,6 +1187,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
       from owners.rewards
       where is_active=true
+        and points_cost<=${Number(member.points_balance || 0)}
+        and (starts_at is null or starts_at<=now())
+        and (ends_at is null or ends_at>=now())
+        and (stock_quantity is null or redeemed_quantity<stock_quantity)
+      order by points_cost,name
+    `;
+    const cardRewards = await sql<any[]>`
+      select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,starts_at,ends_at
+      from owners.rewards
+      where is_active=true and show_on_member_card=true
         and (starts_at is null or starts_at<=now())
         and (ends_at is null or ends_at>=now())
       order by points_cost,name
@@ -1199,6 +1211,18 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by rd.created_at desc
       limit 50
     `;
+    let websiteCars: Array<{ vehicleId: string; title: string; price: number; priceBeforeTax: number }> = [];
+    let websiteCarsWarning = "";
+    try {
+      const websiteStock = await getWebsiteStock();
+      websiteCars = websiteStock.cars
+        .filter((car) => car.price > 0)
+        .map((car) => ({ vehicleId: car.vehicleId, title: car.title, price: car.price, priceBeforeTax: car.priceBeforeTax }));
+      websiteCarsWarning = websiteStock.warning || "";
+    } catch (error) {
+      websiteCarsWarning = error instanceof Error ? error.message : "تعذر تحميل سيارات الموقع";
+    }
+
     return response.status(200).json({
       ok: true,
       member: {
@@ -1214,7 +1238,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       referrals,
       ledger,
       rewards,
+      cardRewards,
       redemptions,
+      websiteCars,
+      websiteCarsWarning,
     });
   }
 

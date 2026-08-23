@@ -257,7 +257,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const customerCode = await (async () => {
     await ensureOwnersSchema();
-    return ensureLegacyCustomerCodeForLead(created.id);
+    return ensureLegacyCustomerCodeForLead(created.id, { sd96: true });
   })().catch((error) => {
     console.error("MZJ Owners legacy customer code sync failed", error);
     return null;

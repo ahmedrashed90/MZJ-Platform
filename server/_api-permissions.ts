@@ -175,7 +175,7 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
     const payload = body(request);
     const ownersAction = clean(payload.action);
     if (["lookup_redemption", "confirm_redemption"].includes(ownersAction)) {
-      return req("crm.owners_community.view", "crm", "owners_community", ownersAction);
+      return req("owners.community.manage", "core", "owners_community", ownersAction);
     }
     const settingsScope = clean(request.query.scope) === "settings" || ["save_settings", "save_points_settings"].includes(ownersAction);
     if (settingsScope) {
@@ -193,6 +193,7 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
       request.method === "GET" ? "view" : "manage",
     );
   }
+  if (route === "website") return req("website.stock.view", "website", "stock", "view");
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");
   if (route === "activity" && request.method === "GET") return req("platform.activity.view", "core", "activity", "view");

@@ -1,6 +1,7 @@
 import { clean } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
 import { normalizePhone } from "./_phone-utils.js";
+import { uniqueOwnerCode } from "./_owners-code.js";
 
 export type LegacyCustomerCode = {
   id: string;
@@ -61,17 +62,18 @@ export async function syncLegacyCustomerCodes() {
   return true;
 }
 
-export async function ensureLegacyCustomerCodeForLead(leadIdValue: unknown) {
+export async function ensureLegacyCustomerCodeForLead(leadIdValue: unknown, options: { sd96?: boolean } = {}) {
   const leadId = clean(leadIdValue);
   if (!leadId) return null;
   const sql = getSql();
+  const sd96Code = options.sd96 === true ? await uniqueOwnerCode() : null;
   const [row] = await sql<any[]>`
     insert into owners.legacy_customer_codes(
       crm_lead_id,phone_normalized,customer_name,referral_code,status,metadata,created_at,updated_at
     )
     select
       l.id,l.phone_normalized,nullif(l.customer_name,''),
-      ('L' || upper(substr(md5(l.id::text),1,9))),
+      case when ${options.sd96 === true} then ${sd96Code} else ('L' || upper(substr(md5(l.id::text),1,9))) end,
       'active',
       jsonb_build_object('source','crm_non_sold','statusLabel',coalesce(l.status_label,'')),
       now(),now()

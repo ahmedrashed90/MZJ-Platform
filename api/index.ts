@@ -55,6 +55,7 @@ import notificationSettingsHandler from "../server/notification-settings.js";
 import dataManagementHandler from "../server/data-management.js";
 import ownersHandler from "../server/owners.js";
 import ownersPublicHandler from "../server/owners-public.js";
+import websiteHandler from "../server/website.js";
 import { ensureRequestId, logApiWriteIfMissing } from "../server/_activity.js";
 import { getSessionUser } from "../server/_auth.js";
 import type { PermissionUser } from "../server/_access-control.js";
@@ -122,6 +123,7 @@ const routes = new Map<string, ApiHandler>([
   ["data-management", dataManagementHandler],
   ["owners", ownersHandler],
   ["owners/public", ownersPublicHandler],
+  ["website", websiteHandler],
 ]);
 
 function valueAsPath(value: string | string[] | undefined) {
