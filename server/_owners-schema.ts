@@ -232,9 +232,32 @@ create table if not exists owners.redemptions (
   updated_at timestamptz not null default now()
 );
 alter table owners.redemptions add column if not exists redemption_code text;
+alter table owners.redemptions add column if not exists website_order_id text;
+alter table owners.redemptions add column if not exists next_erp_sales_order text;
+alter table owners.redemptions add column if not exists used_channel text;
+alter table owners.redemptions add column if not exists used_by_phone_normalized text;
 create unique index if not exists owners_redemptions_code_unique on owners.redemptions(redemption_code) where redemption_code is not null;
+create unique index if not exists owners_redemptions_website_order_unique on owners.redemptions(website_order_id) where website_order_id is not null;
 create index if not exists owners_redemptions_status_idx on owners.redemptions(status,created_at desc);
 create index if not exists owners_redemptions_member_idx on owners.redemptions(member_id,created_at desc);
+
+create table if not exists owners.personal_code_uses (
+  id uuid primary key default gen_random_uuid(),
+  member_id uuid not null references owners.members(id) on delete cascade,
+  code_snapshot text not null,
+  used_by_phone_normalized text not null,
+  self_use boolean not null default false,
+  website_order_id text not null,
+  vehicle_id text,
+  car_pre_tax numeric(14,2) not null default 0 check(car_pre_tax >= 0),
+  discount_amount numeric(14,2) not null default 0 check(discount_amount >= 0),
+  next_erp_sales_order text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(member_id),
+  unique(website_order_id)
+);
+create index if not exists owners_personal_code_uses_phone_idx on owners.personal_code_uses(used_by_phone_normalized,created_at desc);
 
 create table if not exists owners.otp_challenges (
   id uuid primary key,
