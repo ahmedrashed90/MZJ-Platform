@@ -303,7 +303,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1218,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1219,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -341,6 +341,16 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='referral_purchase_benefits')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='legacy_customer_codes')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='redemption_code')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='website_order_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='next_erp_sales_order')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='used_channel')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='used_by_phone_normalized')
+      and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='personal_code_uses')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='member_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='website_order_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='car_pre_tax')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='discount_amount')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='next_erp_sales_order')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='customer_kind')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_type')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_value')
@@ -350,7 +360,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1218;
+  return Number(state?.version || 0) >= 1219;
 }
 
 export function ensureOwnersSchema() {
