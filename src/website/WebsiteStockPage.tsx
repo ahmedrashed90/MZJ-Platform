@@ -78,7 +78,7 @@ export function WebsiteStockPage() {
   return (
     <div className="module-page website-stock-page" dir="rtl">
       <header className="website-stock-head">
-        <div><h1>الاستوك في الموقع</h1><p>كل السيارات المنشورة في الموقع الإلكتروني، مع حالة الصور و CompareKey.</p></div>
+        <div><h1>الاستوك في الموقع</h1><p>كل سيارات الموقع الإلكتروني، مع حالة الصور و CompareKey.</p></div>
         <div className="website-stock-actions">
           <button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load(true)}><ArrowsClockwise size={18} /> تحديث</button>
           <button type="button" className="crm-primary-button" disabled={!filteredCars.length} onClick={exportExcel}><FileXls size={18} /> تصدير Excel</button>

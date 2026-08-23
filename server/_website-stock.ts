@@ -31,7 +31,7 @@ type BridgePage = {
 };
 
 const CACHE_MS = 120_000;
-const DEFAULT_BRIDGE_URL = "https://mzjcars.com/wp-json/mzj-platform/v1/cars";
+const DEFAULT_BRIDGE_URL = "https://mzjcars.com/wp-json/mzj-platform/v2/cars";
 let cached: { expiresAt: number; value: WebsiteStockResult } | null = null;
 
 function bridgeUrl() {
