@@ -61,18 +61,17 @@ export function WebsiteStockPage() {
   function exportExcel() {
     downloadXlsx(
       `MZJ-Website-Stock-${new Date().toISOString().slice(0, 10)}.xlsx`,
-      filteredCars.map((car) => ({
+      filteredCars.map((car, index) => ({
+        "مسلسل": index + 1,
         "Vehicle ID": car.vehicleId,
         "السيارة": car.title,
         "السعر": car.price,
         "الاستوك": car.stock == null ? "—" : car.stock,
         "الصور": car.hasImages ? "مكتملة" : "ناقص صور",
         "CompareKey": car.hasCompareKey ? "موجود" : "ناقص CompareKey",
-        "رابط الصورة": car.imageUrl || "",
-        "رابط السيارة": car.url || "",
       })),
       "الاستوك في الموقع",
-      ["Vehicle ID", "السيارة", "السعر", "الاستوك", "الصور", "CompareKey", "رابط الصورة", "رابط السيارة"],
+      ["مسلسل", "Vehicle ID", "السيارة", "السعر", "الاستوك", "الصور", "CompareKey"],
     );
   }
 
@@ -104,15 +103,15 @@ export function WebsiteStockPage() {
       <section className="website-stock-table-card">
         <div className="website-stock-table-wrap">
           <table>
-            <thead><tr><th>الصورة</th><th>Vehicle ID</th><th>السيارة</th><th>السعر</th><th>الاستوك</th><th>الصور</th><th>CompareKey</th></tr></thead>
+            <thead><tr><th>مسلسل</th><th>Vehicle ID</th><th>السيارة</th><th>السعر</th><th>الاستوك</th><th>الصور</th><th>CompareKey</th></tr></thead>
             <tbody>
               {loading && !cars.length ? <tr><td colSpan={7} className="website-stock-empty">جاري تحميل استوك الموقع...</td></tr> : null}
               {!loading && !filteredCars.length ? <tr><td colSpan={7} className="website-stock-empty">لا توجد سيارات مطابقة.</td></tr> : null}
-              {filteredCars.map((car) => (
+              {filteredCars.map((car, index) => (
                 <tr key={`${car.postId}-${car.vehicleId}`} className={!car.hasImages || !car.hasCompareKey ? "needs-attention" : ""}>
-                  <td><a href={car.url} target="_blank" rel="noreferrer" className="website-stock-thumb">{car.imageUrl ? <img src={car.imageUrl} alt={car.title} loading="lazy" /> : <span>—</span>}</a></td>
+                  <td>{(index + 1).toLocaleString("ar-SA-u-nu-latn")}</td>
                   <td><code dir="ltr">{car.vehicleId}</code></td>
-                  <td><a href={car.url} target="_blank" rel="noreferrer"><strong>{car.title}</strong></a></td>
+                  <td><strong>{car.title}</strong></td>
                   <td>{money(car.price)}</td>
                   <td>{car.stock == null ? "—" : Number(car.stock).toLocaleString("ar-SA-u-nu-latn")}</td>
                   <td><span className={`website-stock-state ${car.hasImages ? "ok" : "bad"}`}>{car.hasImages ? "مكتملة" : "ناقص صور"}</span></td>

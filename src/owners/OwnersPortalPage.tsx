@@ -137,6 +137,19 @@ export function OwnersPortalPage() {
 
   const member = me.member || {};
   const referrals = Array.isArray(me.referrals) ? me.referrals : [];
+  const referralVisits = Array.isArray(me.referralVisits) ? me.referralVisits : [];
+  const referralActivity = [
+    ...referralVisits.map((visit: any) => ({ id: `visit-${visit.id}`, label: "رابط الدعوة", status: "فتح الرابط", occurredAt: visit.created_at })),
+    ...referrals.flatMap((referral: any) => {
+      const label = referral.referred_name || "صديق من دعوتك";
+      const events: any[] = [];
+      if (referral.registered_at) events.push({ id: `registered-${referral.id}`, label, status: "تم التسجيل", occurredAt: referral.registered_at });
+      if (referral.qualified_at) events.push({ id: `qualified-${referral.id}`, label, status: "مؤهل", occurredAt: referral.qualified_at });
+      if (referral.sold_at) events.push({ id: `sold-${referral.id}`, label, status: "تم البيع", occurredAt: referral.sold_at });
+      if (!events.length || referral.status === "rejected") events.push({ id: `status-${referral.id}`, label, status: referralStatus(referral.status), occurredAt: referral.created_at });
+      return events;
+    }),
+  ].sort((a: any, b: any) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
   const rewards = Array.isArray(me.rewards) ? me.rewards : [];
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
   const cardRewards = Array.isArray(me.cardRewards) ? me.cardRewards : rewards.filter((reward: any) => reward.show_on_member_card === true);
@@ -220,12 +233,10 @@ export function OwnersPortalPage() {
         </section>
 
         <section className="owners-public-section owners-code-calculator">
-          <div className="owners-calculator-head"><Calculator size={26} /><div><h2>حاسبة كود الخصم</h2><p>اختر أي سيارة لمعرفة قيمة الخصم المتوقعة بكودك الشخصي. الاختيار للحساب فقط ولا يربط الكود بالسيارة.</p></div></div>
+          <div className="owners-calculator-head"><Calculator size={26} /><div><h2>احسب خصمك</h2></div></div>
           <label className="owners-calculator-select"><span>اختر السيارة</span><div><CarProfile size={20} /><select value={calculatorVehicleId} onChange={(event) => setCalculatorVehicleId(event.target.value)}><option value="">اختر السيارة</option>{websiteCars.map((car: any) => <option key={`${car.vehicleId}-${car.title}`} value={car.vehicleId}>{car.title} · {car.vehicleId}</option>)}</select></div></label>
           {calculatorCar ? <div className="owners-calculator-result">
-            <div><span>سعر السيارة قبل الضريبة</span><strong>{Number(calculatorCar.priceBeforeTax || 0).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 })} ر.س</strong></div>
-            <div><span>قيمة 1%</span><strong>{calculatorRawDiscount.toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 })} ر.س</strong></div>
-            <div className="highlight"><span>خصم كودك بعد التقريب لأعلى</span><strong>{calculatorDiscount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
+            <div className="highlight"><span>الخصم</span><strong>{calculatorDiscount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
             <div><span>كودك الشخصي</span><strong dir="ltr">{member.referralCode || "—"}</strong></div>
           </div> : null}
           {!websiteCars.length ? <p className="owners-calculator-empty">تعذر تحميل سيارات الموقع حاليًا. حاول مرة أخرى لاحقًا.</p> : null}
@@ -264,11 +275,11 @@ export function OwnersPortalPage() {
         </section>
 
         <section className="owners-public-section">
-          <h2>رحلة دعوتك</h2>
+          <h2>سجل الدعوات</h2>
           <div className="owners-referral-list">
-            {referrals.length ? referrals.map((referral: any) => (
-              <article key={referral.id}><div><strong>{referral.referred_name || "صديق من دعوتك"}</strong><span>{referralStatus(referral.status)}</span></div><small>{formatDate(referral.registered_at || referral.created_at)}</small></article>
-            )) : <p>لا توجد دعوات مسجلة حتى الآن.</p>}
+            {referralActivity.length ? referralActivity.map((activity: any) => (
+              <article key={activity.id}><div><strong>{activity.label}</strong><span>{activity.status}</span></div><small>{formatDate(activity.occurredAt)}</small></article>
+            )) : <p>لا توجد أنشطة مرتبطة برابط الدعوة حتى الآن.</p>}
           </div>
         </section>
 

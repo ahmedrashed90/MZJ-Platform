@@ -1176,6 +1176,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by created_at desc
       limit 100
     `;
+    const referralVisits = await sql<any[]>`
+      select id::text,created_at
+      from owners.referral_visits
+      where referrer_member_id=${member.id}::uuid
+      order by created_at desc
+      limit 100
+    `;
     const ledger = await sql<any[]>`
       select id::text,points,event_type,description,created_at
       from owners.points_ledger
@@ -1236,6 +1243,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         inviteUrl: `${publicBase(request)}/owners/invite/${member.referral_code}`,
       },
       referrals,
+      referralVisits,
       ledger,
       rewards,
       cardRewards,
