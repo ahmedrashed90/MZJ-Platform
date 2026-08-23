@@ -1,0 +1,62 @@
+import fs from 'node:fs';
+
+const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+const checks = [];
+function check(name, value) { checks.push({ name, ok: Boolean(value) }); }
+
+const schema = read('server/_marketing-schema.ts');
+const crmSchema = read('server/_crm-schema.ts');
+const crmUtils = read('server/_crm-utils.ts');
+const engagement = read('server/_marketing-engagement.ts');
+const webhook = read('server/integrations/meta-engagement-webhook.ts');
+const apiWebhook = read('api/meta-engagement-webhook.ts');
+const marketing = read('server/marketing/index.ts');
+const permissions = read('server/_api-permissions.ts');
+const connections = read('server/_platform-connections.ts');
+const page = read('src/marketing/pages/EngagementPage.tsx');
+const layout = read('src/marketing/MarketingLayout.tsx');
+const app = read('src/App.tsx');
+const vercel = read('vercel.json');
+
+check('published posts schema', schema.includes('create table if not exists marketing.published_posts'));
+check('Facebook Page Post id may be resolved after video publish', schema.includes('provider_post_id text,') && schema.includes('alter table marketing.published_posts alter column provider_post_id drop not null'));
+check('general engagement schema is idempotent', schema.includes('create table if not exists marketing.post_engagements') && schema.includes('unique(platform,engagement_type,provider_event_id)'));
+check('legacy comments migrate into unified engagement table', schema.includes('from marketing.post_comments pc') && schema.includes("pc.platform,'comment'"));
+check('daily engagement snapshots', schema.includes('create table if not exists marketing.engagement_snapshots'));
+check('CRM exact Facebook post source', crmSchema.includes("('facebook_post','بوست فيس بوك'"));
+check('CRM exact Instagram post source', crmSchema.includes("('instagram_post','بوست انستجرام'"));
+check('successful publish registers provider post', marketing.includes('recordPublishedPost(sql,schedule,result)'));
+check('engagement report API', marketing.includes("resource==='engagement'"));
+check('engagement refresh action', marketing.includes("action==='refresh_engagement'"));
+check('webhook subscription action', marketing.includes("action==='subscribe_engagement_webhooks'"));
+check('Facebook comments and aggregate reaction/share changes are normalized separately', engagement.includes('item === "comment"') && engagement.includes('item === "reaction" || item === "share"') && engagement.includes('kind: "metrics_changed"'));
+check('Facebook removed comments are normalized', engagement.includes('kind: "comment_removed"') && engagement.includes('verb === "remove"'));
+check('Instagram comments are normalized independently', engagement.includes('object === "instagram" && field === "comments"') && engagement.includes('platform: "instagram"'));
+check('direct and changes webhook payloads supported', engagement.includes('function normalizedChanges') && engagement.includes('entry?.field'));
+check('Facebook identified reactions enter CRM while shares stay aggregate-only', engagement.includes('item.platform === "facebook" && item.metric === "reaction"') && engagement.includes('engagementType: "like"') && !engagement.includes('engagementType: "share"'));
+check('comments and Facebook reactions share one CRM engagement entry point', engagement.includes('createCrmLeadFromSocialEngagement') && engagement.includes('upsertSocialEngagementAndCrm') && engagement.includes('engagementType: "comment"') && engagement.includes('engagementType: "like"'));
+check('own account comments excluded from CRM', engagement.includes('own_account_comment'));
+check('comment identity dedupe', engagement.includes('ensureContactIdentity') && engagement.includes('externalId: item.actorId'));
+check('cash CRM distribution reused for identified social engagements', engagement.includes('serviceKey: "cash"') && engagement.includes('assignPrimary: true') && engagement.includes('assignCallCenter: false'));
+check('post-specific social sources route through canonical Facebook and Instagram distribution sources', crmUtils.includes('distributionSourceCode') && crmUtils.includes('source === "facebook_post"') && crmUtils.includes('source === "instagram_post"') && crmUtils.includes('routingSource'));
+check('new CRM status comes from lifecycle', engagement.includes('classifyConversationService'));
+check('exact CRM source selected by social platform', engagement.includes('function socialEngagementSource') && engagement.includes('{ code: "facebook_post", name: "بوست فيس بوك" }') && engagement.includes('{ code: "instagram_post", name: "بوست انستجرام" }'));
+check('campaign name copied to CRM', engagement.includes('campaign_name='));
+check('manual refresh synchronizes comment identities from both platforms', engagement.includes('syncRemoteComments') && engagement.includes('/comments') && engagement.includes('remoteCommentInput'));
+check('deleted comments are reconciled without deleting CRM customers', engagement.includes('reconcileRemovedComments') && engagement.includes('is_deleted=true') && engagement.includes('deleted_by is null'));
+check('Facebook real Page Post id is resolved from Page collections', engagement.includes('\"published_posts\", \"feed\"') && engagement.includes('attachments{target}') && engagement.includes('resolveFacebookPagePostId'));
+check('Facebook refresh does not call a missing or guessed Page Post id', engagement.includes('بانتظار ظهور معرف Page Post الحقيقي من Facebook') && engagement.includes('resolved.postId'));
+check('Instagram aggregate metrics use media fields', engagement.includes('like_count,comments_count') && engagement.includes('graphHostForConnection'));
+check('webhook signature HMAC', webhook.includes('x-hub-signature-256') && webhook.includes('createHmac("sha256"'));
+check('raw webhook body parser disabled', apiWebhook.includes('bodyParser: false'));
+check('dedicated webhook rewrite', vercel.includes('/api/integrations/meta/engagement-webhook'));
+check('required Meta comment permissions', connections.includes('pages_manage_metadata') && connections.includes('instagram_manage_comments'));
+check('central API permissions mapped', permissions.includes('refresh_engagement: "marketing.engagement.refresh"') && permissions.includes('subscribe_engagement_webhooks: "marketing.engagement.subscribe"'));
+check('engagement page shows comment and identified Facebook-like CRM feed', page.includes('data?.engagements') && page.includes('التفاعلات والعملاء') && page.includes('item.engagement_type === "like"') && page.includes('تُوزّع على مناديب مبيعات الكاش'));
+check('new engagement navigation', layout.includes('/marketing/engagement'));
+check('new engagement route', app.includes('EngagementPage') && app.includes('path="engagement"'));
+
+const failed = checks.filter((item) => !item.ok);
+for (const item of checks) console.log(`${item.ok ? 'PASS' : 'FAIL'} ${item.name}`);
+console.log(`\n${checks.length - failed.length}/${checks.length} checks passed`);
+if (failed.length) process.exit(1);
