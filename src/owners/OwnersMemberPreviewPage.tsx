@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, ArrowsClockwise, Gift, IdentificationCard, ShareNetwork, Sparkle, Star, Ticket } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ownersAdminGet } from "./api";
+import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تحميل صفحة عضوية العميل";
@@ -82,6 +83,7 @@ export function OwnersMemberPreviewPage() {
   const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
   const referralVisits = Array.isArray(data?.referralVisits) ? data.referralVisits : [];
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
+  const websiteCars = Array.isArray(data?.websiteCars) ? data.websiteCars : [];
 
   const referralActivity = useMemo(() => [
     ...referralVisits.map((visit: any) => ({ id: `visit-${visit.id}`, label: "إرسال دعوة لصديق", status: "فتح الرابط", occurredAt: visit.created_at })),
@@ -145,6 +147,8 @@ export function OwnersMemberPreviewPage() {
               )) : <p>لا توجد حركات نقاط حتى الآن.</p>}
             </div>
           </section>
+
+          <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
 
           <section className="owners-public-section">
             <h2>المكافآت المتاحة حسب رصيد النقاط</h2>

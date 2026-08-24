@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ArrowCounterClockwise, Calculator, CarProfile, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 import { RedemptionQr } from "./RedemptionQr";
+import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تنفيذ الطلب";
@@ -68,7 +69,6 @@ export function OwnersPortalPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [cardFlipped, setCardFlipped] = useState(false);
-  const [calculatorVehicleId, setCalculatorVehicleId] = useState("");
 
   async function load() {
     try {
@@ -155,9 +155,6 @@ export function OwnersPortalPage() {
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
   const cardRewards = Array.isArray(me.cardRewards) ? me.cardRewards : rewards.filter((reward: any) => reward.show_on_member_card === true);
   const websiteCars = Array.isArray(me.websiteCars) ? me.websiteCars : [];
-  const calculatorCar = websiteCars.find((car: any) => String(car.vehicleId) === calculatorVehicleId) || null;
-  const calculatorRawDiscount = calculatorCar ? Number(calculatorCar.priceBeforeTax || 0) * 0.01 : 0;
-  const calculatorDiscount = calculatorRawDiscount > 0 ? Math.ceil(calculatorRawDiscount / 100) * 100 : 0;
 
   async function copyInvite() {
     try {
@@ -233,15 +230,7 @@ export function OwnersPortalPage() {
           </div>
         </section>
 
-        <section className="owners-public-section owners-code-calculator">
-          <div className="owners-calculator-head"><Calculator size={26} /><div><h2>احسب خصمك</h2></div></div>
-          <label className="owners-calculator-select"><span>اختر السيارة</span><div><CarProfile size={20} /><select value={calculatorVehicleId} onChange={(event) => setCalculatorVehicleId(event.target.value)}><option value="">اختر السيارة</option>{websiteCars.map((car: any) => <option key={`${car.vehicleId}-${car.title}`} value={car.vehicleId}>{car.title} · {car.vehicleId}</option>)}</select></div></label>
-          {calculatorCar ? <div className="owners-calculator-result">
-            <div className="highlight"><span>الخصم</span><strong>{calculatorDiscount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
-            <div><span>كودك الشخصي</span><strong dir="ltr">{member.referralCode || "—"}</strong></div>
-          </div> : null}
-          {!websiteCars.length ? <p className="owners-calculator-empty">تعذر تحميل سيارات الموقع حاليًا. حاول مرة أخرى لاحقًا.</p> : null}
-        </section>
+        <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
 
         <section className="owners-public-welcome owners-public-welcome-compact">
           <span>مرحبًا {member.name || "بك"}</span>

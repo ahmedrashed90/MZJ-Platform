@@ -14,6 +14,7 @@ import {
 import { ensureOwnersSchema } from "./_owners-schema.js";
 import { syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
 import { queueOwnerWelcomeSms } from "./_owners-welcome.js";
+import { getWebsiteStock } from "./_website-stock.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -74,6 +75,23 @@ function randomReferralCode() {
 
 function randomRedemptionCode() {
   return crypto.randomInt(0, 100_000_000).toString().padStart(8, "0");
+}
+
+async function websiteCarsForDiscountCalculator() {
+  try {
+    const websiteStock = await getWebsiteStock();
+    return {
+      cars: websiteStock.cars
+        .filter((car) => car.price > 0)
+        .map((car) => ({ vehicleId: car.vehicleId, title: car.title, price: car.price, priceBeforeTax: car.priceBeforeTax })),
+      warning: websiteStock.warning || "",
+    };
+  } catch (error) {
+    return {
+      cars: [] as Array<{ vehicleId: string; title: string; price: number; priceBeforeTax: number }>,
+      warning: error instanceof Error ? error.message : "تعذر تحميل سيارات الموقع",
+    };
+  }
 }
 
 async function createManualOwnerMember(input: {
@@ -253,6 +271,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           limit 1
         `;
         if (!customer) return response.status(404).json({ ok: false, error: "العميل غير موجود ضمن العملاء الجديدة" });
+        const websiteCars = await websiteCarsForDiscountCalculator();
         return response.status(200).json({
           ok: true,
           profileKind: "legacy",
@@ -276,6 +295,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
           rewards: [],
           cardRewards: [],
           redemptions: [],
+          websiteCars: websiteCars.cars,
+          websiteCarsWarning: websiteCars.warning,
         });
       }
 
@@ -341,6 +362,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         `,
       ]);
 
+      const websiteCars = await websiteCarsForDiscountCalculator();
       return response.status(200).json({
         ok: true,
         profileKind: "member",
@@ -362,6 +384,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         rewards,
         cardRewards,
         redemptions,
+        websiteCars: websiteCars.cars,
+        websiteCarsWarning: websiteCars.warning,
       });
     }
 
