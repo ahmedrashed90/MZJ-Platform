@@ -270,7 +270,7 @@ export function OwnersPortalPage() {
                       <div><span>كود المكافأة</span><strong className="owners-redemption-code" dir="ltr">{redemption.redemption_code}</strong><small>احتفظ بالكود لاستخدام المكافأة.</small></div>
                     </div>
                   ) : null}
-                  {redemption.status === "delivered" ? <div className="owners-redemption-delivered"><strong>تم تسليم المكافأة</strong><span>{formatDate(redemption.reviewed_at)}{redemption.reviewed_by_name ? ` · ${redemption.reviewed_by_name}` : ""}</span></div> : null}
+                  {redemption.status === "delivered" ? <div className="owners-redemption-delivered"><strong>تم الاستبدال</strong><span>{formatDate(redemption.reviewed_at)}{redemption.reviewed_by_name ? ` · ${redemption.reviewed_by_name}` : ""}</span></div> : null}
                 </article>
               ))}
             </div>
