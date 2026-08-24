@@ -318,6 +318,10 @@ on conflict(id) do nothing;
 
 -- v1222: finish the experimental points period once, reset existing members to a
 -- single 500-point opening purchase row, and start the new configurable menu values.
+-- The opening event key belongs to the member, not the historical sale. This is
+-- intentional: legacy CRM data can resolve the same sale to more than one member,
+-- while points_ledger.event_key is globally unique. Sale metadata is still kept so
+-- normal purchase reconciliation does not award the same historical purchase again.
 do $$
 declare
   current_version integer := 0;
@@ -370,15 +374,13 @@ begin
       member.id,
       500,
       'purchase',
-      case when first_sales.sale_id is not null
-        then 'purchase:'||first_sales.sale_id::text
-        else 'purchase:member:'||member.id::text||':initial'
-      end,
+      'purchase:member:'||member.id::text||':initial',
       'شراء العميل',
       jsonb_build_object(
         'purchaseKind','first',
         'purchaseAwardPoints',500,
         'pointsResetVersion',1222,
+        'pointsResetBaseline',true,
         'baseline',true,
         'saleId',case when first_sales.sale_id is not null then first_sales.sale_id::text else null end,
         'saleAt',first_sales.sale_at,

@@ -273,6 +273,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           and (${memberId || null}::uuid is null or member.id=${memberId || null}::uuid)
           and ledger.event_type='purchase'
           and ledger.metadata ? 'saleId'
+          and coalesce(ledger.metadata->>'pointsResetBaseline','false')<>'true'
       )
       update owners.points_ledger ledger set
         points=case when scoped.is_cancelled then 0 else scoped.awarded_points end,
