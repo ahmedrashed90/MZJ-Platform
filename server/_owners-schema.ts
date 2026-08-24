@@ -11,17 +11,19 @@ create table if not exists owners.settings (
   otp_resend_seconds integer not null default 60 check (otp_resend_seconds between 15 and 600),
   otp_max_attempts integer not null default 5 check (otp_max_attempts between 1 and 20),
   otp_hourly_limit integer not null default 5 check (otp_hourly_limit between 1 and 30),
-  points_purchase_enabled boolean not null default false,
+  points_purchase_enabled boolean not null default true,
   points_purchase integer not null default 500 check (points_purchase >= 0),
   purchase_points_effective_at timestamptz not null default now(),
+  points_repurchase_enabled boolean not null default true,
+  points_repurchase integer not null default 500 check (points_repurchase >= 0),
   points_unique_open_enabled boolean not null default true,
-  points_unique_open integer not null default 1 check (points_unique_open >= 0),
+  points_unique_open integer not null default 50 check (points_unique_open >= 0),
   points_registration_enabled boolean not null default true,
   points_registration integer not null default 10 check (points_registration >= 0),
   points_qualified_enabled boolean not null default true,
   points_qualified integer not null default 25 check (points_qualified >= 0),
   points_sale_enabled boolean not null default true,
-  points_sale integer not null default 500 check (points_sale >= 0),
+  points_sale integer not null default 700 check (points_sale >= 0),
   daily_open_points_cap integer not null default 25 check (daily_open_points_cap >= 0),
   silver_points integer not null default 1000 check (silver_points >= 0),
   gold_points integer not null default 3000 check (gold_points >= 0),
@@ -37,10 +39,15 @@ create table if not exists owners.settings (
 insert into owners.settings(id) values('default') on conflict(id) do nothing;
 
 alter table owners.settings add column if not exists otp_hourly_limit integer not null default 5;
-alter table owners.settings add column if not exists points_purchase_enabled boolean not null default false;
+alter table owners.settings add column if not exists points_purchase_enabled boolean not null default true;
 alter table owners.settings add column if not exists points_purchase integer not null default 500;
 alter table owners.settings add column if not exists purchase_points_effective_at timestamptz not null default now();
+alter table owners.settings add column if not exists points_repurchase_enabled boolean not null default true;
+alter table owners.settings add column if not exists points_repurchase integer not null default 500;
 alter table owners.settings add column if not exists points_unique_open_enabled boolean not null default true;
+alter table owners.settings alter column points_purchase_enabled set default true;
+alter table owners.settings alter column points_unique_open set default 50;
+alter table owners.settings alter column points_sale set default 700;
 alter table owners.settings add column if not exists points_registration_enabled boolean not null default true;
 alter table owners.settings add column if not exists points_qualified_enabled boolean not null default true;
 alter table owners.settings add column if not exists points_sale_enabled boolean not null default true;
@@ -306,8 +313,95 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1221,now())
-on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
+insert into owners.schema_state(id,version,updated_at) values(1,0,now())
+on conflict(id) do nothing;
+
+-- v1222: finish the experimental points period once, reset existing members to a
+-- single 500-point opening purchase row, and start the new configurable menu values.
+do $$
+declare
+  current_version integer := 0;
+begin
+  select coalesce(version,0) into current_version from owners.schema_state where id=1;
+  if current_version < 1222 then
+    update owners.settings set
+      points_purchase_enabled=true,
+      points_purchase=500,
+      purchase_points_effective_at=now(),
+      points_repurchase_enabled=true,
+      points_repurchase=500,
+      points_unique_open_enabled=true,
+      points_unique_open=50,
+      points_sale_enabled=true,
+      points_sale=700,
+      daily_open_points_cap=greatest(daily_open_points_cap,50),
+      updated_at=now()
+    where id='default';
+
+    delete from owners.points_ledger;
+
+    with first_sales as (
+      select
+        member.id as member_id,
+        sale.id as sale_id,
+        sale.sale_at,
+        sale.source_reference as sale_order_reference
+      from owners.members member
+      left join lateral (
+        select st.id,st.sale_at,st.source_reference
+        from crm.sales_transactions st
+        join crm.leads lead on lead.id=st.lead_id and lead.is_deleted=false
+        where coalesce(st.is_cancelled,false)=false
+          and (
+            (member.source_sale_id is not null and st.id=member.source_sale_id)
+            or (member.crm_lead_id is not null and st.lead_id=member.crm_lead_id)
+            or (
+              nullif(member.phone_normalized,'') is not null
+              and nullif(lead.phone_normalized,'') is not null
+              and lead.phone_normalized=member.phone_normalized
+            )
+          )
+        order by st.sale_at,st.created_at,st.id
+        limit 1
+      ) sale on true
+    )
+    insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata,created_at)
+    select
+      member.id,
+      500,
+      'purchase',
+      case when first_sales.sale_id is not null
+        then 'purchase:'||first_sales.sale_id::text
+        else 'purchase:member:'||member.id::text||':initial'
+      end,
+      'شراء العميل',
+      jsonb_build_object(
+        'purchaseKind','first',
+        'purchaseAwardPoints',500,
+        'pointsResetVersion',1222,
+        'baseline',true,
+        'saleId',case when first_sales.sale_id is not null then first_sales.sale_id::text else null end,
+        'saleAt',first_sales.sale_at,
+        'saleOrderReference',first_sales.sale_order_reference
+      ),
+      coalesce(first_sales.sale_at,member.activated_at,member.created_at,now())
+    from owners.members member
+    left join first_sales on first_sales.member_id=member.id;
+
+    update owners.members member set
+      points_balance=500,
+      lifetime_points=500,
+      tier_code=case
+        when 500 >= (select platinum_points from owners.settings where id='default') then 'platinum'
+        when 500 >= (select gold_points from owners.settings where id='default') then 'gold'
+        when 500 >= (select silver_points from owners.settings where id='default') then 'silver'
+        else 'member'
+      end,
+      updated_at=now();
+  end if;
+end $$;
+
+update owners.schema_state set version=greatest(version,1222),updated_at=now() where id=1;
 `;
 
 let schemaPromise: Promise<void> | null = null;
@@ -326,6 +420,8 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_purchase_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_purchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='purchase_points_effective_at')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_repurchase_enabled')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_repurchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_unique_open_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_registration_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_qualified_enabled')
@@ -364,7 +460,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1221;
+  return Number(state?.version || 0) >= 1222;
 }
 
 export function ensureOwnersSchema() {

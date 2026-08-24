@@ -13,6 +13,8 @@ type OwnersSettingsForm = {
   otpHourlyLimit: number;
   pointsPurchaseEnabled: boolean;
   pointsPurchase: number;
+  pointsRepurchaseEnabled: boolean;
+  pointsRepurchase: number;
   pointsUniqueOpenEnabled: boolean;
   pointsUniqueOpen: number;
   pointsRegistrationEnabled: boolean;
@@ -38,17 +40,19 @@ const emptyForm: OwnersSettingsForm = {
   otpResendSeconds: 60,
   otpMaxAttempts: 5,
   otpHourlyLimit: 5,
-  pointsPurchaseEnabled: false,
+  pointsPurchaseEnabled: true,
   pointsPurchase: 500,
+  pointsRepurchaseEnabled: true,
+  pointsRepurchase: 500,
   pointsUniqueOpenEnabled: true,
-  pointsUniqueOpen: 1,
+  pointsUniqueOpen: 50,
   pointsRegistrationEnabled: true,
   pointsRegistration: 10,
   pointsQualifiedEnabled: true,
   pointsQualified: 25,
   pointsSaleEnabled: true,
-  pointsSale: 500,
-  dailyOpenPointsCap: 25,
+  pointsSale: 700,
+  dailyOpenPointsCap: 50,
   silverPoints: 1000,
   goldPoints: 3000,
   platinumPoints: 7000,
@@ -82,15 +86,17 @@ export function OwnersSettingsPanel() {
       otpHourlyLimit: Number(settings.otp_hourly_limit || 5),
       pointsPurchaseEnabled: settings.points_purchase_enabled === true,
       pointsPurchase: Number(settings.points_purchase ?? 500),
+      pointsRepurchaseEnabled: settings.points_repurchase_enabled !== false,
+      pointsRepurchase: Number(settings.points_repurchase ?? 500),
       pointsUniqueOpenEnabled: settings.points_unique_open_enabled !== false,
-      pointsUniqueOpen: Number(settings.points_unique_open ?? 1),
+      pointsUniqueOpen: Number(settings.points_unique_open ?? 50),
       pointsRegistrationEnabled: settings.points_registration_enabled !== false,
       pointsRegistration: Number(settings.points_registration ?? 10),
       pointsQualifiedEnabled: settings.points_qualified_enabled !== false,
       pointsQualified: Number(settings.points_qualified ?? 25),
       pointsSaleEnabled: settings.points_sale_enabled !== false,
-      pointsSale: Number(settings.points_sale ?? 500),
-      dailyOpenPointsCap: Number(settings.daily_open_points_cap ?? 25),
+      pointsSale: Number(settings.points_sale ?? 700),
+      dailyOpenPointsCap: Number(settings.daily_open_points_cap ?? 50),
       silverPoints: Number(settings.silver_points ?? 1000),
       goldPoints: Number(settings.gold_points ?? 3000),
       platinumPoints: Number(settings.platinum_points ?? 7000),
@@ -191,12 +197,17 @@ export function OwnersSettingsPanel() {
         <p className="owners-settings-hint">كل قاعدة مستقلة ويمكن تشغيلها أو إيقافها وتغيير نقاطها في أي وقت. تفعيل نقاط الشراء يضيفها للعملاء المشترين المسجلين الذين لم تُحتسب لهم من قبل.</p>
         <div className="owners-point-rules">
           <article className="owners-point-rule">
-            <div><strong>شراء العميل</strong><small>تضاف النقاط مرة واحدة للعميل لكل طلب بيع مكتمل، وتشمل الشراء الأول وإعادة الشراء، بغض النظر عن عدد السيارات.</small></div>
+            <div><strong>إتمام أول عملية شراء</strong><small>الرصيد الأساسي عند أول عملية شراء مكتملة.</small></div>
             <select disabled={!editable} value={form.pointsPurchaseEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsPurchaseEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
             <label><span>النقاط</span><input disabled={!editable || !form.pointsPurchaseEnabled} type="number" min="0" value={form.pointsPurchase} onChange={(event) => numericField("pointsPurchase", event.target.value)} /></label>
           </article>
           <article className="owners-point-rule">
-            <div><strong>فتح رابط الدعوة</strong><small>تضاف لصاحب الدعوة عند الفتح الفريد.</small></div>
+            <div><strong>إعادة الشراء</strong><small>تضاف للعميل عند كل عملية شراء جديدة بعد أول عملية شراء.</small></div>
+            <select disabled={!editable} value={form.pointsRepurchaseEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsRepurchaseEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
+            <label><span>النقاط</span><input disabled={!editable || !form.pointsRepurchaseEnabled} type="number" min="0" value={form.pointsRepurchase} onChange={(event) => numericField("pointsRepurchase", event.target.value)} /></label>
+          </article>
+          <article className="owners-point-rule">
+            <div><strong>إرسال دعوة لصديق</strong><small>تضاف لصاحب الدعوة عند أول فتح فريد للرابط من الصديق.</small></div>
             <select disabled={!editable} value={form.pointsUniqueOpenEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsUniqueOpenEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
             <label><span>النقاط</span><input disabled={!editable || !form.pointsUniqueOpenEnabled} type="number" min="0" value={form.pointsUniqueOpen} onChange={(event) => numericField("pointsUniqueOpen", event.target.value)} /></label>
           </article>
@@ -211,7 +222,7 @@ export function OwnersSettingsPanel() {
             <label><span>النقاط</span><input disabled={!editable || !form.pointsQualifiedEnabled} type="number" min="0" value={form.pointsQualified} onChange={(event) => numericField("pointsQualified", event.target.value)} /></label>
           </article>
           <article className="owners-point-rule">
-            <div><strong>تم البيع من الدعوة</strong><small>تضاف لصاحب الدعوة عند إتمام بيع للعميل المدعو.</small></div>
+            <div><strong>إرسال دعوة لصديق - تم الشراء</strong><small>تضاف لصاحب الدعوة عند إتمام شراء العميل المدعو.</small></div>
             <select disabled={!editable} value={form.pointsSaleEnabled ? "on" : "off"} onChange={(event) => setForm({ ...form, pointsSaleEnabled: event.target.value === "on" })}><option value="on">مفعل</option><option value="off">متوقف</option></select>
             <label><span>النقاط</span><input disabled={!editable || !form.pointsSaleEnabled} type="number" min="0" value={form.pointsSale} onChange={(event) => numericField("pointsSale", event.target.value)} /></label>
           </article>

@@ -15,6 +15,9 @@ export type OwnerJson = Parameters<SqlClient["json"]>[0];
 type OwnerSettingsRow = {
   points_purchase_enabled?: boolean | null;
   points_purchase?: number | string | null;
+  purchase_points_effective_at?: string | Date | null;
+  points_repurchase_enabled?: boolean | null;
+  points_repurchase?: number | string | null;
   points_qualified_enabled?: boolean | null;
   points_qualified?: number | string | null;
   points_sale_enabled?: boolean | null;
@@ -187,7 +190,10 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
   await ensureOwnersSchema();
   const settings = await getOwnerSettings();
   const configuredPoints = Math.trunc(Number(settings.points_purchase || 0));
+  const configuredRepurchasePoints = Math.trunc(Number(settings.points_repurchase || 0));
   const purchaseEnabled = settings.points_purchase_enabled === true && configuredPoints > 0;
+  const repurchaseEnabled = settings.points_repurchase_enabled !== false && configuredRepurchasePoints > 0;
+  const repurchaseEffectiveAt = settings.purchase_points_effective_at || null;
   const memberId = clean(memberIdValue);
   const sql = getSql();
 
@@ -280,12 +286,16 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
     `;
 
     let insertedCount = 0;
-    if (purchaseEnabled) {
+    if (purchaseEnabled || repurchaseEnabled) {
       const summary = await tx<{ awards: number }[]>`
         with runtime_values as (
           select
             ${memberId || null}::uuid as scope_member_id,
-            ${configuredPoints}::integer as purchase_award_points
+            ${configuredPoints}::integer as purchase_award_points,
+            ${configuredRepurchasePoints}::integer as repurchase_award_points,
+            ${purchaseEnabled}::boolean as purchase_enabled,
+            ${repurchaseEnabled}::boolean as repurchase_enabled,
+            ${repurchaseEffectiveAt}::timestamptz as repurchase_effective_at
         ), eligible_members as (
           select
             member.id,
@@ -332,38 +342,49 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
         ), canonical_awardable as (
           select sale.*
           from ranked_sales sale
-          where not exists (
-            select 1
-            from owners.points_ledger existing_purchase
-            where existing_purchase.member_id=sale.member_id
-              and existing_purchase.event_type='purchase'
-              and existing_purchase.metadata->>'saleId'=sale.sale_id::text
-          )
+          cross join runtime_values runtime
+          where (
+              (sale.sale_rank=1 and runtime.purchase_enabled)
+              or (
+                sale.sale_rank>1
+                and runtime.repurchase_enabled
+                and (runtime.repurchase_effective_at is null or sale.sale_at>=runtime.repurchase_effective_at)
+              )
+            )
+            and not exists (
+              select 1
+              from owners.points_ledger existing_purchase
+              where existing_purchase.member_id=sale.member_id
+                and existing_purchase.event_type='purchase'
+                and existing_purchase.metadata->>'saleId'=sale.sale_id::text
+            )
         ), canonical_inserted as (
           insert into owners.points_ledger(member_id,points,event_type,event_key,description,metadata)
           select
             sale.member_id,
-            runtime.purchase_award_points,
+            case when sale.sale_rank=1 then runtime.purchase_award_points else runtime.repurchase_award_points end,
             'purchase',
             'purchase:'||sale.sale_id::text,
-            case when sale.sale_rank=1 then 'شراء العميل' else 'إعادة شراء' end,
+            case when sale.sale_rank=1 then 'شراء العميل' else 'إعادة الشراء' end,
             jsonb_build_object(
               'saleId',sale.sale_id::text,
               'purchaseKind',case when sale.sale_rank=1 then 'first' else 'repurchase' end,
               'saleAt',sale.sale_at,
               'saleQuantity',sale.order_quantity,
               'saleOrderReference',sale.order_reference,
-              'purchaseAwardPoints',runtime.purchase_award_points,
+              'purchaseAwardPoints',case when sale.sale_rank=1 then runtime.purchase_award_points else runtime.repurchase_award_points end,
               'appliedFromSettings',true
             )
           from canonical_awardable sale
           cross join runtime_values runtime
           on conflict(event_key) do nothing
-          returning member_id
+          returning member_id,points
         ), fallback_candidates as (
           select member.id as member_id,member.first_sale_at,member.last_sale_at
           from eligible_members member
-          where coalesce(member.metadata->>'enrollmentSource','') like 'excel_import%'
+          cross join runtime_values runtime
+          where runtime.purchase_enabled
+            and coalesce(member.metadata->>'enrollmentSource','') like 'excel_import%'
             and not exists (
               select 1 from canonical_sales sale where sale.member_id=member.id
             )
@@ -392,30 +413,28 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           from fallback_candidates member
           cross join runtime_values runtime
           on conflict(event_key) do nothing
-          returning member_id
-        ), inserted_counts as (
-          select inserted.member_id,count(*)::int as awards
+          returning member_id,points
+        ), inserted_totals as (
+          select inserted.member_id,count(*)::int as awards,sum(inserted.points)::int as awarded_points
           from (
-            select member_id from canonical_inserted
+            select member_id,points from canonical_inserted
             union all
-            select member_id from fallback_inserted
+            select member_id,points from fallback_inserted
           ) inserted
           group by inserted.member_id
         )
         update owners.members member set
-          lifetime_points=member.lifetime_points+(inserted_counts.awards*runtime.purchase_award_points),
+          lifetime_points=member.lifetime_points+inserted_totals.awarded_points,
           updated_at=now()
-        from inserted_counts
-        cross join runtime_values runtime
-        where member.id=inserted_counts.member_id
-        returning inserted_counts.awards
+        from inserted_totals
+        where member.id=inserted_totals.member_id
+        returning inserted_totals.awards
       `;
       insertedCount = summary.reduce((total: number, row: any) => total + Number(row.awards || 0), 0);
     }
 
-    // Label every active purchase from its real order rank. The configured purchase
-    // points value is reused for every qualifying order; only the description changes
-    // between the first purchase and later repurchases.
+    // Label every active purchase from its real order rank while preserving the
+    // points amount stored for that order. Only the movement label is normalized.
     await tx`
       with eligible_members as (
         select member.id,member.phone_normalized,member.crm_lead_id,member.source_sale_id
@@ -446,7 +465,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
         from canonical_sales sale
       )
       update owners.points_ledger ledger set
-        description=case when sale.sale_rank=1 then 'شراء العميل' else 'إعادة شراء' end,
+        description=case when sale.sale_rank=1 then 'شراء العميل' else 'إعادة الشراء' end,
         metadata=coalesce(ledger.metadata,'{}'::jsonb)||jsonb_build_object(
           'purchaseKind',case when sale.sale_rank=1 then 'first' else 'repurchase' end
         )

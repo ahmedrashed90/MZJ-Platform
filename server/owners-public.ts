@@ -84,7 +84,7 @@ function personalCodeDiscountAmount(carPreTaxValue: unknown) {
   const carPreTax = Math.max(0, Number(carPreTaxValue || 0));
   if (!Number.isFinite(carPreTax) || carPreTax <= 0) return 0;
   const raw = carPreTax * 0.01;
-  return Math.min(carPreTax, Math.ceil((raw - 1e-9) / 100) * 100);
+  return Math.min(carPreTax, Math.floor((raw + 1e-9) / 100) * 100);
 }
 
 async function findReferrer(codeValue: unknown) {
@@ -660,8 +660,10 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
     personalCodeEligible: eligibility.referrerKind === "member",
     personalCodeDiscountRate: eligibility.referrerKind === "member" ? 1 : 0,
     personalCodeRoundingUnit: eligibility.referrerKind === "member" ? 100 : 0,
+    personalCodeRoundingMode: eligibility.referrerKind === "member" ? "floor" : "none",
     friendReferralDiscountRate: eligibility.referrerKind === "member" && eligibility.selfUse !== true ? 1 : 0,
     friendReferralRoundingUnit: eligibility.referrerKind === "member" && eligibility.selfUse !== true ? 100 : 0,
+    friendReferralRoundingMode: eligibility.referrerKind === "member" && eligibility.selfUse !== true ? "floor" : "none",
     rewards: rewards.map(commerceRewardPayload),
   });
 }
@@ -1073,7 +1075,7 @@ async function handleCommercePersonalCodeUse(request: VercelRequest, response: V
   if (!Number.isFinite(carPreTax) || carPreTax <= 0) return response.status(400).json({ ok: false, error: "سعر السيارة قبل الضريبة غير صحيح" });
   const expectedDiscount = personalCodeDiscountAmount(carPreTax);
   if (Math.abs(discountAmount - expectedDiscount) > 0.01) {
-    return response.status(409).json({ ok: false, error: "قيمة خصم الكود الشخصي لا تطابق قاعدة 1% والتقريب لأعلى" });
+    return response.status(409).json({ ok: false, error: "قيمة خصم الكود الشخصي لا تطابق قاعدة 1% والتقريب لأسفل" });
   }
   const owner = await findCommerceCodeOwner(code);
   if (!owner || owner.referrer_kind !== "member" || owner.member_kind === "test") {
@@ -1574,6 +1576,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (refreshedMember) member = refreshedMember;
 
   if (request.method === "GET" && action === "me") {
+    const settings = await getOwnerSettings();
     const referrals = await sql<any[]>`
       select id::text,referred_name,status,registered_at,qualified_at,sold_at,created_at
       from owners.referrals
@@ -1589,7 +1592,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 100
     `;
     const ledger = await sql<any[]>`
-      select id::text,points,event_type,description,created_at
+      select id::text,points,event_type,description,metadata,created_at
       from owners.points_ledger
       where member_id=${member.id}::uuid
       order by created_at desc
@@ -1653,6 +1656,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       rewards,
       cardRewards,
       redemptions,
+      pointsMenu: {
+        repurchase: Number(settings.points_repurchase ?? 500),
+        referralSale: Number(settings.points_sale ?? 700),
+        referralSend: Number(settings.points_unique_open ?? 50),
+      },
       websiteCars,
       websiteCarsWarning,
     });

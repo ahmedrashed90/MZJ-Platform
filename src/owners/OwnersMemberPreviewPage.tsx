@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, ArrowsClockwise, Gift, IdentificationCard, ShareNetwork, Sparkle, Star, Ticket } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
+import { ArrowRight, ArrowsClockwise, Gift, IdentificationCard, ShareNetwork, Sparkle, Star } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ownersAdminGet } from "./api";
 import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
@@ -33,21 +33,20 @@ function rewardTypeLabel(value: unknown) {
   return "هدية";
 }
 
-function referralStatus(value: unknown) {
-  const status = String(value || "");
-  if (status === "sold") return "تم الشراء";
-  if (status === "qualified") return "مؤهل";
-  if (status === "registered") return "تم التسجيل";
-  if (status === "rejected") return "مرفوض";
-  return "فتح الرابط";
+function movementLabel(entry: any) {
+  const type = String(entry?.event_type || "");
+  const description = String(entry?.description || "");
+  const purchaseKind = String(entry?.metadata?.purchaseKind || "");
+  if (type === "purchase" && (purchaseKind === "repurchase" || description.includes("إعادة شراء"))) return "إعادة الشراء";
+  if (type === "purchase") return "شراء العميل";
+  if (type === "unique_open") return "إرسال دعوة لصديق";
+  if (type === "sale") return "إرسال دعوة لصديق - تم الشراء";
+  if (type === "registration") return "تسجيل صديق";
+  if (type === "qualified") return "عميل مؤهل";
+  if (type === "redemption") return "استبدال مكافأة";
+  return description || type || "حركة نقاط";
 }
 
-function ledgerDescription(entry: any) {
-  if (entry?.event_type === "unique_open") return "إرسال دعوة لصديق";
-  if (entry?.event_type === "sale") return "إرسال دعوة لصديق - تم الشراء";
-  if (entry?.event_type === "purchase" && String(entry?.description || "").includes("إعادة شراء")) return "إعادة الشراء";
-  return entry?.description || entry?.event_type || "حركة نقاط";
-}
 
 export function OwnersMemberPreviewPage() {
   const navigate = useNavigate();
@@ -80,23 +79,9 @@ export function OwnersMemberPreviewPage() {
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
   const cardRewards = Array.isArray(data?.cardRewards) ? data.cardRewards : [];
   const ledger = Array.isArray(data?.ledger) ? data.ledger : [];
-  const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
-  const referralVisits = Array.isArray(data?.referralVisits) ? data.referralVisits : [];
+  const pointsMenu = data?.pointsMenu || {};
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
   const websiteCars = Array.isArray(data?.websiteCars) ? data.websiteCars : [];
-
-  const referralActivity = useMemo(() => [
-    ...referralVisits.map((visit: any) => ({ id: `visit-${visit.id}`, label: "إرسال دعوة لصديق", status: "فتح الرابط", occurredAt: visit.created_at })),
-    ...referrals.flatMap((referral: any) => {
-      const label = referral.referred_name || "صديق من دعوة العميل";
-      const events: any[] = [];
-      if (referral.registered_at) events.push({ id: `registered-${referral.id}`, label, status: "تم التسجيل", occurredAt: referral.registered_at });
-      if (referral.qualified_at) events.push({ id: `qualified-${referral.id}`, label, status: "مؤهل", occurredAt: referral.qualified_at });
-      if (referral.sold_at) events.push({ id: `sold-${referral.id}`, label, status: "تم الشراء", occurredAt: referral.sold_at });
-      if (!events.length || referral.status === "rejected") events.push({ id: `status-${referral.id}`, label, status: referralStatus(referral.status), occurredAt: referral.created_at });
-      return events;
-    }),
-  ].sort((left: any, right: any) => new Date(right.occurredAt || 0).getTime() - new Date(left.occurredAt || 0).getTime()), [referralVisits, referrals]);
 
   return (
     <div className="module-page owners-admin-page owners-member-preview" dir="rtl">
@@ -142,9 +127,9 @@ export function OwnersMemberPreviewPage() {
           <section className="owners-public-section owners-points-list-section">
             <h2>قائمة النقاط</h2>
             <div className="owners-ledger">
-              {ledger.length ? ledger.map((entry: any) => (
-                <article key={entry.id}><span>{ledgerDescription(entry)}</span><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{entry.points}</strong><small>{formatDate(entry.created_at)}</small></article>
-              )) : <p>لا توجد حركات نقاط حتى الآن.</p>}
+              <article><span>إعادة الشراء</span><strong>{Number(pointsMenu.repurchase ?? 500).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
+              <article><span>إرسال دعوة لصديق - تم الشراء</span><strong>{Number(pointsMenu.referralSale ?? 700).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
+              <article><span>إرسال دعوة لصديق</span><strong>{Number(pointsMenu.referralSend ?? 50).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
             </div>
           </section>
 
@@ -166,12 +151,13 @@ export function OwnersMemberPreviewPage() {
             </div>
           </section>
 
-          <section className="owners-public-section">
-            <h2>سجل الدعوات</h2>
-            <div className="owners-ledger owners-referral-ledger">
-              {referralActivity.length ? referralActivity.map((activity: any) => (
-                <article key={activity.id}><span>{activity.label}</span><strong>{activity.status}</strong><small>{formatDate(activity.occurredAt)}</small></article>
-              )) : <p>لا توجد أنشطة مرتبطة بالدعوات حتى الآن.</p>}
+          <section className="owners-public-section owners-movement-section">
+            <h2>سجل الحركة</h2>
+            <div className="owners-movement-table">
+              <div className="owners-movement-head"><span>الحركة</span><span>التاريخ</span><span>عدد النقاط</span></div>
+              {ledger.length ? ledger.map((entry: any) => (
+                <article key={entry.id}><span>{movementLabel(entry)}</span><small>{formatDate(entry.created_at)}</small><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+              )) : null}
             </div>
           </section>
 
@@ -191,10 +177,6 @@ export function OwnersMemberPreviewPage() {
             </section>
           ) : null}
 
-          <section className="owners-public-welcome owners-public-welcome-compact">
-            <span>{kind === "legacy" ? member.statusLabel || "عميل جديد" : "عضوية فعالة"}</span>
-            <div className="owners-mini-badges"><span><Star size={16} weight="fill" /> {tierLabel(member.tier)}</span><span><Ticket size={16} /> {redemptions.length} استبدال</span></div>
-          </section>
         </main>
       ) : null}
     </div>

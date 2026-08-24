@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, Ticket, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 import { RedemptionQr } from "./RedemptionQr";
 import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
@@ -34,13 +34,19 @@ function rewardTypeLabel(value: unknown) {
   return "هدية";
 }
 
-function referralStatus(value: unknown) {
-  const status = String(value || "");
-  if (status === "sold") return "تم البيع";
-  if (status === "qualified") return "مؤهل";
-  if (status === "registered") return "تم التسجيل";
-  if (status === "rejected") return "مرفوض";
-  return "فتح الرابط";
+
+function movementLabel(entry: any) {
+  const type = String(entry?.event_type || "");
+  const description = String(entry?.description || "");
+  const purchaseKind = String(entry?.metadata?.purchaseKind || "");
+  if (type === "purchase" && (purchaseKind === "repurchase" || description.includes("إعادة شراء"))) return "إعادة الشراء";
+  if (type === "purchase") return "شراء العميل";
+  if (type === "unique_open") return "إرسال دعوة لصديق";
+  if (type === "sale") return "إرسال دعوة لصديق - تم الشراء";
+  if (type === "registration") return "تسجيل صديق";
+  if (type === "qualified") return "عميل مؤهل";
+  if (type === "redemption") return "استبدال مكافأة";
+  return description || type || "حركة نقاط";
 }
 
 function redemptionStatus(value: unknown) {
@@ -130,20 +136,8 @@ export function OwnersPortalPage() {
   }
 
   const member = me.member || {};
-  const referrals = Array.isArray(me.referrals) ? me.referrals : [];
-  const referralVisits = Array.isArray(me.referralVisits) ? me.referralVisits : [];
-  const referralActivity = [
-    ...referralVisits.map((visit: any) => ({ id: `visit-${visit.id}`, label: "رابط الدعوة", status: "فتح الرابط", occurredAt: visit.created_at })),
-    ...referrals.flatMap((referral: any) => {
-      const label = referral.referred_name || "صديق من دعوتك";
-      const events: any[] = [];
-      if (referral.registered_at) events.push({ id: `registered-${referral.id}`, label, status: "تم التسجيل", occurredAt: referral.registered_at });
-      if (referral.qualified_at) events.push({ id: `qualified-${referral.id}`, label, status: "مؤهل", occurredAt: referral.qualified_at });
-      if (referral.sold_at) events.push({ id: `sold-${referral.id}`, label, status: "تم البيع", occurredAt: referral.sold_at });
-      if (!events.length || referral.status === "rejected") events.push({ id: `status-${referral.id}`, label, status: referralStatus(referral.status), occurredAt: referral.created_at });
-      return events;
-    }),
-  ].sort((a: any, b: any) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
+  const ledger = Array.isArray(me.ledger) ? me.ledger : [];
+  const pointsMenu = me.pointsMenu || {};
   const rewards = Array.isArray(me.rewards) ? me.rewards : [];
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
   const cardRewards = Array.isArray(me.cardRewards) ? me.cardRewards : rewards.filter((reward: any) => reward.show_on_member_card === true);
@@ -217,18 +211,13 @@ export function OwnersPortalPage() {
         <section className="owners-public-section owners-points-list-section">
           <h2>قائمة النقاط</h2>
           <div className="owners-ledger">
-            <article><span>إعادة الشراء</span><strong>500 نقطة</strong></article>
-            <article><span>إرسال دعوة لصديق - تم الشراء</span><strong>700 نقطة</strong></article>
-            <article><span>إرسال دعوة لصديق</span><strong>50 نقطة</strong></article>
+            <article><span>إعادة الشراء</span><strong>{Number(pointsMenu.repurchase ?? 500).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
+            <article><span>إرسال دعوة لصديق - تم الشراء</span><strong>{Number(pointsMenu.referralSale ?? 700).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
+            <article><span>إرسال دعوة لصديق</span><strong>{Number(pointsMenu.referralSend ?? 50).toLocaleString("ar-SA-u-nu-latn")} نقطة</strong></article>
           </div>
         </section>
 
         <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
-
-        <section className="owners-public-welcome owners-public-welcome-compact">
-          <span>مرحبًا {member.name || "بك"}</span>
-          <div className="owners-mini-badges"><span><Star size={16} weight="fill" /> {tierLabel(member.tier)}</span><span><Ticket size={16} /> {redemptions.length} طلب استبدال</span></div>
-        </section>
 
         <section className="owners-invite-card">
           <div><ShareNetwork size={28} /><div><h2 className="owners-invite-title">شارك رابطك مع أصدقائك</h2></div></div>
@@ -257,12 +246,13 @@ export function OwnersPortalPage() {
           </div>
         </section>
 
-        <section className="owners-public-section">
-          <h2>سجل الدعوات</h2>
-          <div className="owners-ledger owners-referral-ledger">
-            {referralActivity.length ? referralActivity.map((activity: any) => (
-              <article key={activity.id}><span>{activity.label}</span><strong>{activity.status}</strong><small>{formatDate(activity.occurredAt)}</small></article>
-            )) : <p>لا توجد أنشطة مرتبطة برابط الدعوة حتى الآن.</p>}
+        <section className="owners-public-section owners-movement-section">
+          <h2>سجل الحركة</h2>
+          <div className="owners-movement-table">
+            <div className="owners-movement-head"><span>الحركة</span><span>التاريخ</span><span>عدد النقاط</span></div>
+            {ledger.length ? ledger.map((entry: any) => (
+              <article key={entry.id}><span>{movementLabel(entry)}</span><small>{formatDate(entry.created_at)}</small><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+            )) : null}
           </div>
         </section>
 

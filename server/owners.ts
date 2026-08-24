@@ -272,6 +272,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         `;
         if (!customer) return response.status(404).json({ ok: false, error: "العميل غير موجود ضمن العملاء الجديدة" });
         const websiteCars = await websiteCarsForDiscountCalculator();
+        const [pointsSettings] = await sql<any[]>`select points_repurchase,points_sale,points_unique_open from owners.settings where id='default'`;
         return response.status(200).json({
           ok: true,
           profileKind: "legacy",
@@ -295,6 +296,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
           rewards: [],
           cardRewards: [],
           redemptions: [],
+          pointsMenu: {
+            repurchase: Number(pointsSettings?.points_repurchase ?? 500),
+            referralSale: Number(pointsSettings?.points_sale ?? 700),
+            referralSend: Number(pointsSettings?.points_unique_open ?? 50),
+          },
           websiteCars: websiteCars.cars,
           websiteCarsWarning: websiteCars.warning,
         });
@@ -326,7 +332,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           limit 100
         `,
         sql<any[]>`
-          select id::text,points,event_type,description,created_at
+          select id::text,points,event_type,description,metadata,created_at
           from owners.points_ledger
           where member_id=${id}::uuid
           order by created_at desc
@@ -363,6 +369,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       ]);
 
       const websiteCars = await websiteCarsForDiscountCalculator();
+      const [pointsSettings] = await sql<any[]>`select points_repurchase,points_sale,points_unique_open from owners.settings where id='default'`;
       return response.status(200).json({
         ok: true,
         profileKind: "member",
@@ -384,6 +391,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
         rewards,
         cardRewards,
         redemptions,
+        pointsMenu: {
+          repurchase: Number(pointsSettings?.points_repurchase ?? 500),
+          referralSale: Number(pointsSettings?.points_sale ?? 700),
+          referralSend: Number(pointsSettings?.points_unique_open ?? 50),
+        },
         websiteCars: websiteCars.cars,
         websiteCarsWarning: websiteCars.warning,
       });
@@ -535,6 +547,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const silverPoints = integer(payload.silverPoints, 1000, 0, 1_000_000_000);
     const goldPoints = Math.max(silverPoints, integer(payload.goldPoints, 3000, 0, 1_000_000_000));
     const platinumPoints = Math.max(goldPoints, integer(payload.platinumPoints, 7000, 0, 1_000_000_000));
+    const uniqueOpenPoints = integer(payload.pointsUniqueOpen, 50, 0, 1_000_000);
+    const salePoints = integer(payload.pointsSale, 700, 0, 1_000_000);
+    const dailyOpenPointsCap = Math.max(uniqueOpenPoints, integer(payload.dailyOpenPointsCap, 50, 0, 1_000_000));
     const [settings] = await sql<any[]>`
       update owners.settings set
         is_enabled=${payload.isEnabled !== false},
@@ -544,15 +559,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
         otp_hourly_limit=${integer(payload.otpHourlyLimit, 5, 1, 30)},
         points_purchase_enabled=${payload.pointsPurchaseEnabled === true},
         points_purchase=${integer(payload.pointsPurchase, 500, 0, 1_000_000)},
+        points_repurchase_enabled=${payload.pointsRepurchaseEnabled !== false},
+        points_repurchase=${integer(payload.pointsRepurchase, 500, 0, 1_000_000)},
         points_unique_open_enabled=${payload.pointsUniqueOpenEnabled !== false},
-        points_unique_open=${integer(payload.pointsUniqueOpen, 1, 0, 1_000_000)},
+        points_unique_open=${uniqueOpenPoints},
         points_registration_enabled=${payload.pointsRegistrationEnabled !== false},
         points_registration=${integer(payload.pointsRegistration, 10, 0, 1_000_000)},
         points_qualified_enabled=${payload.pointsQualifiedEnabled !== false},
         points_qualified=${integer(payload.pointsQualified, 25, 0, 1_000_000)},
         points_sale_enabled=${payload.pointsSaleEnabled !== false},
-        points_sale=${integer(payload.pointsSale, 500, 0, 1_000_000)},
-        daily_open_points_cap=${integer(payload.dailyOpenPointsCap, 25, 0, 1_000_000)},
+        points_sale=${salePoints},
+        daily_open_points_cap=${dailyOpenPointsCap},
         silver_points=${silverPoints},
         gold_points=${goldPoints},
         platinum_points=${platinumPoints},
@@ -569,7 +586,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const purchasersSynced = settings?.points_purchase_enabled === true
       ? await syncMembersFromCanonicalSales()
       : 0;
-    const purchasePointsApplied = settings?.points_purchase_enabled === true
+    const purchasePointsApplied = settings?.points_purchase_enabled === true || settings?.points_repurchase_enabled !== false
       ? await backfillOwnerPurchasePointsForExistingMembers()
       : 0;
     return response.status(200).json({ ok: true, settings, purchasersSynced, purchasePointsApplied });
@@ -578,19 +595,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (action === "save_points_settings") {
     const purchasePoints = integer(payload.pointsPurchase, 500, 0, 1_000_000);
     const purchaseEnabled = payload.pointsPurchaseEnabled === true;
+    const uniqueOpenPoints = integer(payload.pointsUniqueOpen, 50, 0, 1_000_000);
+    const salePoints = integer(payload.pointsSale, 700, 0, 1_000_000);
+    const dailyOpenPointsCap = Math.max(uniqueOpenPoints, integer(payload.dailyOpenPointsCap, 50, 0, 1_000_000));
     const [settings] = await sql<any[]>`
       update owners.settings set
         points_purchase_enabled=${purchaseEnabled},
         points_purchase=${purchasePoints},
+        points_repurchase_enabled=${payload.pointsRepurchaseEnabled !== false},
+        points_repurchase=${integer(payload.pointsRepurchase, 500, 0, 1_000_000)},
         points_unique_open_enabled=${payload.pointsUniqueOpenEnabled !== false},
-        points_unique_open=${integer(payload.pointsUniqueOpen, 1, 0, 1_000_000)},
+        points_unique_open=${uniqueOpenPoints},
         points_registration_enabled=${payload.pointsRegistrationEnabled !== false},
         points_registration=${integer(payload.pointsRegistration, 10, 0, 1_000_000)},
         points_qualified_enabled=${payload.pointsQualifiedEnabled !== false},
         points_qualified=${integer(payload.pointsQualified, 25, 0, 1_000_000)},
         points_sale_enabled=${payload.pointsSaleEnabled !== false},
-        points_sale=${integer(payload.pointsSale, 500, 0, 1_000_000)},
-        daily_open_points_cap=${integer(payload.dailyOpenPointsCap, 25, 0, 1_000_000)},
+        points_sale=${salePoints},
+        daily_open_points_cap=${dailyOpenPointsCap},
         updated_by=${actor.id}::uuid,updated_at=now()
       where id='default'
       returning *
@@ -598,7 +620,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const purchasersSynced = settings?.points_purchase_enabled === true
       ? await syncMembersFromCanonicalSales()
       : 0;
-    const purchasePointsApplied = settings?.points_purchase_enabled === true
+    const purchasePointsApplied = settings?.points_purchase_enabled === true || settings?.points_repurchase_enabled !== false
       ? await backfillOwnerPurchasePointsForExistingMembers()
       : 0;
     return response.status(200).json({ ok: true, settings, purchasersSynced, purchasePointsApplied });
