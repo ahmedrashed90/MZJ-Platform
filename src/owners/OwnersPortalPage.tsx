@@ -53,13 +53,6 @@ function redemptionStatus(value: unknown) {
   return status || "—";
 }
 
-function ledgerDescription(entry: any) {
-  if (entry?.event_type === "unique_open") return "إرسال دعوة لصديق";
-  if (entry?.event_type === "sale") return "إرسال دعوة لصديق - تم الشراء";
-  if (entry?.event_type === "purchase" && String(entry?.description || "").includes("إعادة شراء")) return "إعادة الشراء";
-  return entry?.description || entry?.event_type || "حركة نقاط";
-}
-
 export function OwnersPortalPage() {
   const [me, setMe] = useState<any>(null);
   const [phone, setPhone] = useState("");
@@ -224,9 +217,9 @@ export function OwnersPortalPage() {
         <section className="owners-public-section owners-points-list-section">
           <h2>قائمة النقاط</h2>
           <div className="owners-ledger">
-            {(me.ledger || []).length ? (me.ledger || []).map((entry: any) => (
-              <article key={entry.id}><span>{ledgerDescription(entry)}</span><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{entry.points}</strong><small>{formatDate(entry.created_at)}</small></article>
-            )) : <p>لا توجد حركات نقاط حتى الآن.</p>}
+            <article><span>إعادة الشراء</span><strong>500 نقطة</strong></article>
+            <article><span>إرسال دعوة لصديق - تم الشراء</span><strong>700 نقطة</strong></article>
+            <article><span>إرسال دعوة لصديق</span><strong>50 نقطة</strong></article>
           </div>
         </section>
 
