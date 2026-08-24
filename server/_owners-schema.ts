@@ -237,7 +237,8 @@ alter table owners.redemptions add column if not exists next_erp_sales_order tex
 alter table owners.redemptions add column if not exists used_channel text;
 alter table owners.redemptions add column if not exists used_by_phone_normalized text;
 create unique index if not exists owners_redemptions_code_unique on owners.redemptions(redemption_code) where redemption_code is not null;
-create unique index if not exists owners_redemptions_website_order_unique on owners.redemptions(website_order_id) where website_order_id is not null;
+drop index if exists owners.owners_redemptions_website_order_unique;
+create index if not exists owners_redemptions_website_order_idx on owners.redemptions(website_order_id) where website_order_id is not null;
 create index if not exists owners_redemptions_status_idx on owners.redemptions(status,created_at desc);
 create index if not exists owners_redemptions_member_idx on owners.redemptions(member_id,created_at desc);
 
@@ -303,7 +304,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1219,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1220,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -360,7 +361,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1219;
+  return Number(state?.version || 0) >= 1220;
 }
 
 export function ensureOwnersSchema() {

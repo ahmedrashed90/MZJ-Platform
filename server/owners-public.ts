@@ -1131,10 +1131,10 @@ async function commerceRedemptionByCode(codeValue: unknown) {
   if (!/^\d{8}$/.test(code)) return null;
   const [row] = await getSql()<any[]>`
     select rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.website_order_id,rd.next_erp_sales_order,
-      r.id::text as reward_id,r.name,r.description,r.reward_type,r.reward_value,
+      r.id::text as reward_id,r.name,r.description,r.reward_type,r.reward_value,r.is_active,
       r.available_for_referral_purchase,r.available_for_existing_customer_purchase,r.available_for_friend_referral_purchase,r.available_for_repurchase,
       r.checkout_discount_type,r.checkout_discount_value,r.checkout_discount_amount,r.starts_at,r.ends_at,
-      m.id::text as member_id,m.customer_name
+      m.id::text as member_id,m.customer_name,m.phone_normalized as owner_phone_normalized
     from owners.redemptions rd
     join owners.rewards r on r.id=rd.reward_id
     join owners.members m on m.id=rd.member_id
@@ -1144,13 +1144,47 @@ async function commerceRedemptionByCode(codeValue: unknown) {
   return row || null;
 }
 
+function commerceRedemptionRewardAvailable(row: any) {
+  if (!row || row.is_active === false) return false;
+  const now = Date.now();
+  if (row.starts_at && new Date(row.starts_at).getTime() > now) return false;
+  if (row.ends_at && new Date(row.ends_at).getTime() < now) return false;
+  return true;
+}
+
+async function handleCommerceRedemptionsForPhone(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
+  const auth = commerceApiAuthorized(request);
+  if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
+  const phone = normalizePhone(payload.phone);
+  if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صحيح" });
+  const rows = await getSql()<any[]>`
+    select rd.id::text
+    from owners.redemptions rd
+    join owners.members m on m.id=rd.member_id
+    join owners.rewards r on r.id=rd.reward_id
+    where m.phone_normalized=${phone}
+      and m.status='active'
+      and rd.status='approved'
+      and rd.redemption_code is not null
+      and r.is_active=true
+      and (r.starts_at is null or r.starts_at<=now())
+      and (r.ends_at is null or r.ends_at>=now())
+    order by rd.created_at,rd.id
+  `;
+  return response.status(200).json({ ok: true, count: rows.length });
+}
+
 async function handleCommerceRedemptionLookup(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
   const auth = commerceApiAuthorized(request);
   if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
+  const phone = normalizePhone(payload.phone);
+  if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صحيح" });
   const row = await commerceRedemptionByCode(payload.code);
-  if (!row) return response.status(404).json({ ok: false, error: "كود المكافأة غير صحيح" });
-  if (row.status === "delivered") return response.status(409).json({ ok: false, error: "تم استخدام كود المكافأة مسبقًا" });
-  if (row.status !== "approved") return response.status(409).json({ ok: false, error: "كود المكافأة غير متاح للاستخدام" });
+  if (!row) return response.status(404).json({ ok: false, error: "كود استبدال المكافأة غير صحيح" });
+  if (row.owner_phone_normalized !== phone) return response.status(409).json({ ok: false, error: "كود استبدال المكافأة لا يخص رقم الجوال المسجل في الطلب" });
+  if (row.status === "delivered") return response.status(409).json({ ok: false, error: "تم استخدام كود استبدال المكافأة مسبقًا" });
+  if (row.status !== "approved") return response.status(409).json({ ok: false, error: "كود استبدال المكافأة غير متاح للاستخدام" });
+  if (!commerceRedemptionRewardAvailable(row)) return response.status(409).json({ ok: false, error: "المكافأة المرتبطة بهذا الكود غير متاحة حاليًا" });
   return response.status(200).json({
     ok: true,
     eligible: true,
@@ -1183,27 +1217,31 @@ async function handleCommerceRedemptionConfirm(request: VercelRequest, response:
   const websiteOrderId = commerceOrderRoot(payload.websiteOrderId);
   const phone = normalizePhone(payload.phone);
   const nextErpSalesOrder = clean(payload.nextErpSalesOrder).slice(0, 160) || null;
-  if (!/^\d{8}$/.test(code)) return response.status(400).json({ ok: false, error: "كود المكافأة غير صحيح" });
+  if (!/^\d{8}$/.test(code)) return response.status(400).json({ ok: false, error: "كود استبدال المكافأة غير صحيح" });
   if (!websiteOrderId) return response.status(400).json({ ok: false, error: "رقم طلب الموقع مطلوب" });
   if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صحيح" });
   const sql = getSql();
   const result = await sql.begin(async (tx) => {
     const [row] = await tx<any[]>`
       select rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.website_order_id,rd.next_erp_sales_order,
-        r.id::text as reward_id,r.name,r.description,r.reward_type,r.reward_value,
+        r.id::text as reward_id,r.name,r.description,r.reward_type,r.reward_value,r.is_active,
         r.available_for_referral_purchase,r.available_for_existing_customer_purchase,r.available_for_friend_referral_purchase,r.available_for_repurchase,
-        r.checkout_discount_type,r.checkout_discount_value,r.checkout_discount_amount,r.starts_at,r.ends_at
+        r.checkout_discount_type,r.checkout_discount_value,r.checkout_discount_amount,r.starts_at,r.ends_at,
+        m.phone_normalized as owner_phone_normalized
       from owners.redemptions rd
       join owners.rewards r on r.id=rd.reward_id
+      join owners.members m on m.id=rd.member_id
       where rd.redemption_code=${code}
       for update
     `;
-    if (!row) return { status: 404, error: "كود المكافأة غير صحيح" };
+    if (!row) return { status: 404, error: "كود استبدال المكافأة غير صحيح" };
+    if (row.owner_phone_normalized !== phone) return { status: 409, error: "كود استبدال المكافأة لا يخص رقم الجوال المسجل في الطلب" };
     if (row.status === "delivered") {
       if (commerceOrderRoot(row.website_order_id) === websiteOrderId) return { ok: true, duplicate: true, row };
-      return { status: 409, error: "تم استخدام كود المكافأة مسبقًا" };
+      return { status: 409, error: "تم استخدام كود استبدال المكافأة مسبقًا" };
     }
-    if (row.status !== "approved") return { status: 409, error: "كود المكافأة غير متاح للاستخدام" };
+    if (row.status !== "approved") return { status: 409, error: "كود استبدال المكافأة غير متاح للاستخدام" };
+    if (!commerceRedemptionRewardAvailable(row)) return { status: 409, error: "المكافأة المرتبطة بهذا الكود غير متاحة حاليًا" };
     const [updated] = await tx<any[]>`
       update owners.redemptions set
         status='delivered',website_order_id=${websiteOrderId},next_erp_sales_order=${nextErpSalesOrder},
@@ -1237,6 +1275,92 @@ async function handleCommerceRedemptionConfirm(request: VercelRequest, response:
       starts_at: row.starts_at,
       ends_at: row.ends_at,
     }),
+  });
+}
+
+async function handleCommerceRedemptionsConfirm(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
+  const auth = commerceApiAuthorized(request);
+  if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
+  const phone = normalizePhone(payload.phone);
+  const websiteOrderId = commerceOrderRoot(payload.websiteOrderId);
+  const nextErpSalesOrder = clean(payload.nextErpSalesOrder).slice(0, 160) || null;
+  const rawCodes = Array.isArray(payload.codes) ? payload.codes : [];
+  const codes = Array.from(new Set(rawCodes.map((value) => clean(value)).filter(Boolean)));
+  if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صحيح" });
+  if (!websiteOrderId) return response.status(400).json({ ok: false, error: "رقم طلب الموقع مطلوب" });
+  if (!codes.length) return response.status(400).json({ ok: false, error: "أدخل كود استبدال مكافأة واحدًا على الأقل" });
+  if (codes.some((code) => !/^\d{8}$/.test(code))) return response.status(400).json({ ok: false, error: "يوجد كود استبدال مكافأة غير صحيح" });
+
+  const sql = getSql();
+  const result = await sql.begin(async (tx) => {
+    const locked: any[] = [];
+    for (const code of codes) {
+      const [row] = await tx<any[]>`
+        select rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.website_order_id,rd.next_erp_sales_order,
+          r.id::text as reward_id,r.name,r.description,r.reward_type,r.reward_value,r.is_active,
+          r.available_for_referral_purchase,r.available_for_existing_customer_purchase,r.available_for_friend_referral_purchase,r.available_for_repurchase,
+          r.checkout_discount_type,r.checkout_discount_value,r.checkout_discount_amount,r.starts_at,r.ends_at,
+          m.phone_normalized as owner_phone_normalized
+        from owners.redemptions rd
+        join owners.rewards r on r.id=rd.reward_id
+        join owners.members m on m.id=rd.member_id
+        where rd.redemption_code=${code}
+        for update
+      `;
+      if (!row) return { status: 404, error: "أحد أكواد استبدال المكافأة غير صحيح" };
+      if (row.owner_phone_normalized !== phone) return { status: 409, error: "أحد أكواد استبدال المكافأة لا يخص رقم الجوال المسجل في الطلب" };
+      if (row.status === "delivered") {
+        if (commerceOrderRoot(row.website_order_id) !== websiteOrderId) return { status: 409, error: "تم استخدام أحد أكواد استبدال المكافأة مسبقًا" };
+      } else if (row.status !== "approved") {
+        return { status: 409, error: "أحد أكواد استبدال المكافأة غير متاح للاستخدام" };
+      } else if (!commerceRedemptionRewardAvailable(row)) {
+        return { status: 409, error: "إحدى المكافآت المرتبطة بالأكواد غير متاحة حاليًا" };
+      }
+      locked.push(row);
+    }
+
+    const confirmed: any[] = [];
+    let duplicate = true;
+    for (const row of locked) {
+      if (row.status === "delivered") {
+        confirmed.push(row);
+        continue;
+      }
+      duplicate = false;
+      const [updated] = await tx<any[]>`
+        update owners.redemptions set
+          status='delivered',website_order_id=${websiteOrderId},next_erp_sales_order=${nextErpSalesOrder},
+          used_channel='website_purchase',used_by_phone_normalized=${phone},reviewed_at=now(),updated_at=now()
+        where id=${row.id}::uuid
+        returning id::text,status,points_cost,redemption_code,website_order_id,next_erp_sales_order
+      `;
+      confirmed.push({ ...row, ...updated });
+    }
+    return { ok: true, duplicate, rows: confirmed };
+  });
+  if ("error" in result) return response.status(result.status).json({ ok: false, error: result.error });
+  return response.status(200).json({
+    ok: true,
+    duplicate: result.duplicate,
+    redemptionCodes: result.rows.map((row: any) => row.redemption_code),
+    websiteOrderId,
+    nextErpSalesOrder,
+    rewards: result.rows.map((row: any) => commerceRewardPayload({
+      id: row.reward_id,
+      name: row.name,
+      description: row.description,
+      reward_type: row.reward_type,
+      reward_value: row.reward_value,
+      available_for_referral_purchase: row.available_for_referral_purchase,
+      available_for_existing_customer_purchase: row.available_for_existing_customer_purchase,
+      available_for_friend_referral_purchase: row.available_for_friend_referral_purchase,
+      available_for_repurchase: row.available_for_repurchase,
+      checkout_discount_type: row.checkout_discount_type,
+      checkout_discount_value: row.checkout_discount_value,
+      checkout_discount_amount: row.checkout_discount_amount,
+      starts_at: row.starts_at,
+      ends_at: row.ends_at,
+    })),
   });
 }
 
@@ -1308,12 +1432,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return handleCommercePersonalCodeUse(request, response, payload);
   }
 
+  if (request.method === "POST" && action === "commerce_redemptions_for_phone") {
+    return handleCommerceRedemptionsForPhone(request, response, payload);
+  }
+
   if (request.method === "POST" && action === "commerce_redemption_lookup") {
     return handleCommerceRedemptionLookup(request, response, payload);
   }
 
   if (request.method === "POST" && action === "commerce_redemption_confirm") {
     return handleCommerceRedemptionConfirm(request, response, payload);
+  }
+
+  if (request.method === "POST" && action === "commerce_redemptions_confirm") {
+    return handleCommerceRedemptionsConfirm(request, response, payload);
   }
 
   if (request.method === "POST" && action === "commerce_link_order") {
