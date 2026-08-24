@@ -660,6 +660,8 @@ async function handleCommerceRewards(request: VercelRequest, response: VercelRes
     personalCodeEligible: eligibility.referrerKind === "member",
     personalCodeDiscountRate: eligibility.referrerKind === "member" ? 1 : 0,
     personalCodeRoundingUnit: eligibility.referrerKind === "member" ? 100 : 0,
+    friendReferralDiscountRate: eligibility.referrerKind === "member" && eligibility.selfUse !== true ? 1 : 0,
+    friendReferralRoundingUnit: eligibility.referrerKind === "member" && eligibility.selfUse !== true ? 100 : 0,
     rewards: rewards.map(commerceRewardPayload),
   });
 }
@@ -1594,9 +1596,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       limit 100
     `;
     const rewards = await sql<any[]>`
-      select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
+      select id::text,name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,points_cost,redeemed_quantity,referral_purchase_redeemed_quantity,starts_at,ends_at
       from owners.rewards
-      where is_active=true
+      where is_active=true and show_on_member_page=true
         and points_cost<=${Number(member.points_balance || 0)}
         and (starts_at is null or starts_at<=now())
         and (ends_at is null or ends_at>=now())
@@ -1604,9 +1606,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       order by points_cost,name
     `;
     const cardRewards = await sql<any[]>`
-      select id::text,name,description,reward_type,reward_value,show_on_member_card,points_cost,starts_at,ends_at
+      select id::text,name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,points_cost,starts_at,ends_at
       from owners.rewards
-      where is_active=true and show_on_member_card=true
+      where is_active=true and show_on_member_page=true and show_on_member_card=true
         and (starts_at is null or starts_at<=now())
         and (ends_at is null or ends_at>=now())
       order by points_cost,name
@@ -1669,6 +1671,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         from owners.rewards
         where id=${rewardId}::uuid
           and is_active=true
+          and show_on_member_page=true
           and (starts_at is null or starts_at<=now())
           and (ends_at is null or ends_at>=now())
         for update

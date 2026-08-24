@@ -54,7 +54,8 @@ function redemptionStatus(value: unknown) {
 
 function ledgerDescription(entry: any) {
   if (entry?.event_type === "unique_open") return "إرسال دعوة لصديق";
-  if (entry?.event_type === "sale") return "الصديق تم البيع";
+  if (entry?.event_type === "sale") return "إرسال دعوة لصديق - تم الشراء";
+  if (entry?.event_type === "purchase" && String(entry?.description || "").includes("إعادة شراء")) return "إعادة الشراء";
   return entry?.description || entry?.event_type || "حركة نقاط";
 }
 
@@ -276,9 +277,9 @@ export function OwnersPortalPage() {
 
         <section className="owners-public-section">
           <h2>سجل الدعوات</h2>
-          <div className="owners-referral-list">
+          <div className="owners-ledger owners-referral-ledger">
             {referralActivity.length ? referralActivity.map((activity: any) => (
-              <article key={activity.id}><div><strong>{activity.label}</strong><span>{activity.status}</span></div><small>{formatDate(activity.occurredAt)}</small></article>
+              <article key={activity.id}><span>{activity.label}</span><strong>{activity.status}</strong><small>{formatDate(activity.occurredAt)}</small></article>
             )) : <p>لا توجد أنشطة مرتبطة برابط الدعوة حتى الآن.</p>}
           </div>
         </section>

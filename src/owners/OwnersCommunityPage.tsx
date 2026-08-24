@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ArrowsClockwise,
   CheckCircle,
   Crown,
   FileXls,
   Gift,
+  IdentificationCard,
   NotePencil,
   PaperPlaneTilt,
   ShareNetwork,
@@ -18,9 +20,8 @@ import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
 import { readXlsx } from "../crm/xlsxReader";
-import { OwnersRedemptionDesk } from "./OwnersRedemptionDesk";
 
-type Tab = "members" | "legacy" | "import" | "referrals" | "points" | "rewards" | "redemptions" | "delivery";
+type Tab = "members" | "legacy" | "import" | "referrals" | "points" | "rewards" | "redemptions";
 type RewardsView = "catalog" | "memberCard";
 type MembersView = "all" | "points";
 type ReferralsView = "all" | "sold";
@@ -46,6 +47,7 @@ type RewardDraft = {
   rewardType: "gift" | "discount" | "service" | "voucher";
   rewardValue: string;
   showOnMemberCard: boolean;
+  showOnMemberPage: boolean;
   availableForReferralPurchase: boolean;
   availableForExistingCustomerPurchase: boolean;
   availableForFriendReferralPurchase: boolean;
@@ -109,6 +111,7 @@ const emptyReward: RewardDraft = {
   rewardType: "gift",
   rewardValue: "",
   showOnMemberCard: false,
+  showOnMemberPage: false,
   availableForReferralPurchase: false,
   availableForExistingCustomerPurchase: false,
   availableForFriendReferralPurchase: false,
@@ -367,6 +370,7 @@ export function OwnersCommunityPage() {
       rewardType: ["gift", "discount", "service", "voucher"].includes(item.reward_type) ? item.reward_type : "gift",
       rewardValue: item.reward_value || "",
       showOnMemberCard: item.show_on_member_card === true,
+      showOnMemberPage: item.show_on_member_page === true,
       availableForReferralPurchase: item.available_for_referral_purchase === true,
       availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true,
       availableForFriendReferralPurchase: item.available_for_friend_referral_purchase === true,
@@ -458,7 +462,6 @@ export function OwnersCommunityPage() {
         {canManage ? <button className={tab === "points" ? "active" : ""} onClick={() => openTab("points")}>إعدادات النقاط</button> : null}
         <button className={tab === "rewards" ? "active" : ""} onClick={() => openTab("rewards")}>المكافآت</button>
         <button className={tab === "redemptions" ? "active" : ""} onClick={() => openTab("redemptions")}>طلبات الاستبدال</button>
-        {canManage ? <button className={tab === "delivery" ? "active" : ""} onClick={() => openTab("delivery")}>Owners Community</button> : null}
       </nav>
 
       {tab === "members" ? (
@@ -492,12 +495,11 @@ export function OwnersCommunityPage() {
                       <td>{formatDate(member.last_sale_at)}</td>
                       <td><span className={`owners-welcome-status ${member.welcome_sent_at ? "sent" : "pending"}`}>{member.welcome_sent_at ? "تم الإرسال" : "لم يتم الإرسال"}</span></td>
                       <td>
-                        {canManage ? (
-                          <div className="owners-actions">
-                            <button className="owners-link-btn" disabled={busy || Boolean(member.welcome_sent_at)} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> {member.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button>
-                            <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من Owners Community؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button>
-                          </div>
-                        ) : "—"}
+                        <div className="owners-actions">
+                          <Link className="owners-link-btn" to={`/owners-community/member/member/${member.id}`}><IdentificationCard size={16} /> صفحة العضوية</Link>
+                          {canManage ? <button className="owners-link-btn" disabled={busy || Boolean(member.welcome_sent_at)} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> {member.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button> : null}
+                          {canManage ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من MZJ Owners؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button> : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -514,7 +516,7 @@ export function OwnersCommunityPage() {
           <header><h2>العملاء الجديدة</h2><span>عملاء CRM الذين لم يتم البيع لهم · {legacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")}</span></header>
           <div className="owners-table-wrap">
             <table>
-              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th><th>الإجراءات</th></tr></thead>
               <tbody>
                 {legacyCustomers.map((customer: any) => (
                   <tr key={customer.id}>
@@ -528,9 +530,10 @@ export function OwnersCommunityPage() {
                     <td>{customer.assigned_name || "—"}</td>
                     <td>{formatDate(customer.registered_at || customer.created_at)}</td>
                     <td>{formatDate(customer.updated_at)}</td>
+                    <td><div className="owners-actions"><Link className="owners-link-btn" to={`/owners-community/member/legacy/${customer.id}`}><IdentificationCard size={16} /> صفحة العضوية</Link></div></td>
                   </tr>
                 ))}
-                {!legacyCustomers.length ? <tr><td colSpan={10}>لا يوجد عملاء جديدة في CRM حاليًا.</td></tr> : null}
+                {!legacyCustomers.length ? <tr><td colSpan={11}>لا يوجد عملاء جديدة في CRM حاليًا.</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -647,7 +650,7 @@ export function OwnersCommunityPage() {
                     {item.reward_value ? <div className="owners-reward-value">{item.reward_value}</div> : null}
                     <p>{item.description || "تفاصيل المكافأة تظهر للعميل هنا"}</p>
                     <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
-                    <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}{item.available_for_friend_referral_purchase ? " · مكافأة دعوة من صديق" : ""}{item.available_for_repurchase ? " · مكافأة إعادة الشراء" : ""}</small>
+                    <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_page ? " · تظهر في صفحة العميل بالنقاط" : ""}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}{item.available_for_friend_referral_purchase ? " · مكافأة دعوة من صديق" : ""}{item.available_for_repurchase ? " · مكافأة إعادة الشراء" : ""}</small>
                     <small>استخدامات المكافأة: {(Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)).toLocaleString("ar-SA-u-nu-latn")}</small>
                     {canManage ? <button className="owners-reward-usage-btn" disabled={usageBusy || (Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)) === 0} onClick={() => void openRewardUsage(item)}><UsersThree size={15} /> عرض من استخدم المكافأة</button> : null}
                     {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase || item.available_for_friend_referral_purchase || item.available_for_repurchase) && item.reward_type === "discount" && Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? <small>خصم طلب الموقع: {item.checkout_discount_type === "percentage" ? `${Number(item.checkout_discount_value || 0).toLocaleString("ar-SA-u-nu-latn")}%` : `${Number(item.checkout_discount_value || item.checkout_discount_amount || 0).toLocaleString("ar-SA-u-nu-latn")} ر.س`}</small> : null}
@@ -668,6 +671,7 @@ export function OwnersCommunityPage() {
                   <label><span>تبدأ في</span><input type="datetime-local" value={reward.startsAt} onChange={(event) => setReward({ ...reward, startsAt: event.target.value })} /></label>
                   <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
                   <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
+                  <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberPage} onChange={(event) => setReward({ ...reward, showOnMemberPage: event.target.checked })} /><span>إظهار المكافأة في صفحة العميل حسب رصيد النقاط</span></label>
                   <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberCard} onChange={(event) => setReward({ ...reward, showOnMemberCard: event.target.checked })} /><span>إظهار المكافأة على ظهر بطاقة العضوية</span></label>
                   <label className="owners-check-field"><input type="checkbox" checked={reward.availableForReferralPurchase} onChange={(event) => setReward({ ...reward, availableForReferralPurchase: event.target.checked })} /><span>متاحة للعميل الجديد عند استخدام كود الدعوة في طلب الشراء</span></label>
                   <label className="owners-check-field"><input type="checkbox" checked={reward.availableForExistingCustomerPurchase} onChange={(event) => setReward({ ...reward, availableForExistingCustomerPurchase: event.target.checked })} /><span>متاحة للعميل القديم عند استخدام كود الدعوة في طلب الشراء</span></label>
@@ -687,7 +691,7 @@ export function OwnersCommunityPage() {
                 {rewards.length ? rewards.map((item: any) => (
                   <article key={item.id}>
                     <div><strong>{item.name}</strong><span>{rewardTypeLabel(item.reward_type)}{item.reward_value ? ` · ${item.reward_value}` : ""}</span></div>
-                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, availableForReferralPurchase: item.available_for_referral_purchase === true, availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true, availableForFriendReferralPurchase: item.available_for_friend_referral_purchase === true, availableForRepurchase: item.available_for_repurchase === true, checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount", checkoutDiscountValue: item.checkout_discount_value || item.checkout_discount_amount || "", pointsCost: item.points_cost, startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
+                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, showOnMemberPage: item.show_on_member_page === true, availableForReferralPurchase: item.available_for_referral_purchase === true, availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true, availableForFriendReferralPurchase: item.available_for_friend_referral_purchase === true, availableForRepurchase: item.available_for_repurchase === true, checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount", checkoutDiscountValue: item.checkout_discount_value || item.checkout_discount_amount || "", pointsCost: item.points_cost, startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
                   </article>
                 )) : <p>أضف مكافآت أولًا ثم اختر ما يظهر منها على بطاقة العضوية.</p>}
               </div>
@@ -696,11 +700,10 @@ export function OwnersCommunityPage() {
         </>
       ) : null}
 
-      {tab === "delivery" && canManage ? <OwnersRedemptionDesk /> : null}
 
       {tab === "redemptions" ? (
         <section className="owners-table-card">
-          <header><h2>{redemptionsView === "ready" ? "استبدالات جاهزة للتسليم" : "استبدالات النقاط"}</h2><span>{redemptionsView === "ready" ? `${visibleRedemptions.length.toLocaleString("ar-SA-u-nu-latn")} طلب جاهز للتسليم` : "الاستبدال الجديد يصبح جاهزًا مباشرة، والتسليم يتم من تبويب Owners Community داخل MZJ Owners."}</span></header>
+          <header><h2>{redemptionsView === "ready" ? "استبدالات جاهزة للتسليم" : "استبدالات النقاط"}</h2><span>{redemptionsView === "ready" ? `${visibleRedemptions.length.toLocaleString("ar-SA-u-nu-latn")} طلب جاهز للتسليم` : "الاستبدال الجديد يصبح جاهزًا مباشرة."}</span></header>
           <div className="owners-table-wrap">
             <table>
               <thead><tr><th>العميل</th><th>المكافأة</th><th>الكود</th><th>النقاط</th><th>الحالة</th><th>تاريخ الطلب</th><th>التسليم</th><th>الإجراء</th></tr></thead>
@@ -720,7 +723,7 @@ export function OwnersCommunityPage() {
                           <button disabled={busy} onClick={() => void act({ action: "redemption", id: redemption.id, status: "approved" }, "تم تحويل الطلب القديم إلى جاهز للاستبدال")}>تجهيز الطلب القديم</button>
                           <button disabled={busy} onClick={() => void act({ action: "redemption", id: redemption.id, status: "rejected" }, "تم رفض الطلب وإرجاع النقاط")}>رفض</button>
                         </div>
-                      ) : redemption.status === "approved" ? "يُسلّم من تبويب Owners Community" : "—"}
+                      ) : redemption.status === "approved" ? "جاهز للاستبدال" : "—"}
                     </td>
                   </tr>
                 ))}

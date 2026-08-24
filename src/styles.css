@@ -7469,3 +7469,6 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .website-stock-state.bad{background:#fff0ed;color:#c23c2f}
 .website-stock-empty{text-align:center!important;padding:32px!important;color:#7c6960!important}
 @media(max-width:760px){.website-stock-head{align-items:flex-start;flex-direction:column}.website-stock-toolbar{align-items:stretch;flex-wrap:wrap}.website-stock-search{min-width:100%}.website-stock-toolbar>span{margin-inline-start:0}}
+
+/* MZJ Owners admin membership preview */
+.owners-member-preview-body{max-width:1180px;margin:0 auto;padding-bottom:24px}.owners-member-preview .owners-membership-shell{max-width:760px;margin:16px auto 0}.owners-member-preview .owners-public-section,.owners-member-preview .owners-invite-card{margin-left:auto;margin-right:auto}.owners-admin-invite-card{margin-top:14px}.owners-referral-ledger strong{color:#6a4437;font-size:12px}.owners-member-preview .owners-notice{margin-top:14px}.owners-member-preview .owners-loading{margin-top:14px}

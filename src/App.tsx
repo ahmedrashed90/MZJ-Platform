@@ -45,6 +45,7 @@ const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendar
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
 const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
 const OwnersCommunityPage = lazy(() => import("./owners/OwnersCommunityPage").then((module) => ({ default: module.OwnersCommunityPage })));
+const OwnersMemberPreviewPage = lazy(() => import("./owners/OwnersMemberPreviewPage").then((module) => ({ default: module.OwnersMemberPreviewPage })));
 const OwnersPortalPage = lazy(() => import("./owners/OwnersPortalPage").then((module) => ({ default: module.OwnersPortalPage })));
 const OwnersInvitePage = lazy(() => import("./owners/OwnersInvitePage").then((module) => ({ default: module.OwnersInvitePage })));
 const WebsiteLayout = lazy(() => import("./website/WebsiteLayout").then((module) => ({ default: module.WebsiteLayout })));
@@ -146,6 +147,7 @@ function PlatformRoutes() {
           <Route path="/website" element={<SystemGuard system="website"><WebsiteLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="website.stock.view"><WebsiteStockPage /></PermissionGuard>} />
           </Route>
+          <Route path="/owners-community/member/:kind/:id" element={<PermissionGuard permission="owners.community.view"><OwnersMemberPreviewPage /></PermissionGuard>} />
           <Route path="/owners-community" element={<PermissionGuard permission="owners.community.view"><OwnersCommunityPage /></PermissionGuard>} />
           <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
           <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />

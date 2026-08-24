@@ -130,6 +130,7 @@ create table if not exists owners.rewards (
   reward_type text not null default 'gift' check (reward_type in ('gift','discount','service','voucher')),
   reward_value text,
   show_on_member_card boolean not null default false,
+  show_on_member_page boolean not null default false,
   available_for_referral_purchase boolean not null default false,
   available_for_existing_customer_purchase boolean not null default false,
   available_for_friend_referral_purchase boolean not null default false,
@@ -152,6 +153,7 @@ create table if not exists owners.rewards (
 alter table owners.rewards add column if not exists reward_type text not null default 'gift';
 alter table owners.rewards add column if not exists reward_value text;
 alter table owners.rewards add column if not exists show_on_member_card boolean not null default false;
+alter table owners.rewards add column if not exists show_on_member_page boolean not null default false;
 alter table owners.rewards add column if not exists available_for_referral_purchase boolean not null default false;
 alter table owners.rewards add column if not exists available_for_existing_customer_purchase boolean not null default false;
 alter table owners.rewards add column if not exists available_for_friend_referral_purchase boolean not null default false;
@@ -304,7 +306,7 @@ create table if not exists owners.schema_state (
   version integer not null,
   updated_at timestamptz not null default now()
 );
-insert into owners.schema_state(id,version,updated_at) values(1,1220,now())
+insert into owners.schema_state(id,version,updated_at) values(1,1221,now())
 on conflict(id) do update set version=greatest(owners.schema_state.version,excluded.version),updated_at=now();
 `;
 
@@ -331,6 +333,7 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='members' and column_name='lifetime_points')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='reward_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_card')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='show_on_member_page')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_referral_purchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_existing_customer_purchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='available_for_friend_referral_purchase')
@@ -361,7 +364,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1220;
+  return Number(state?.version || 0) >= 1221;
 }
 
 export function ensureOwnersSchema() {

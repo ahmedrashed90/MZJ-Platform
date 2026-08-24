@@ -44,6 +44,10 @@ function optionalDate(value: unknown) {
   return normalized || null;
 }
 
+function isUuid(value: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value));
+}
+
 function safeImportedDate(value: unknown) {
   const text = clean(value);
   if (!text) return null;
@@ -227,6 +231,138 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (scope === "settings") {
       const settingsRows = await sql<any[]>`select * from owners.settings where id='default'`;
       return response.status(200).json({ ok: true, settings: settingsRows[0] || {} });
+    }
+
+    if (scope === "profile") {
+      const kind = clean(request.query.kind) === "legacy" ? "legacy" : "member";
+      const id = clean(request.query.id);
+      if (!isUuid(id)) return response.status(400).json({ ok: false, error: "العميل غير محدد بشكل صحيح" });
+
+      if (kind === "legacy") {
+        const [customer] = await sql<any[]>`
+          select
+            c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.created_at,c.updated_at,
+            l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.registered_at,
+            u.full_name as assigned_name,b.name as branch_name,src.name as catalog_source_name
+          from owners.legacy_customer_codes c
+          join crm.leads l on l.id=c.crm_lead_id and l.is_deleted=false
+          left join core.users u on u.id=l.assigned_to
+          left join core.branches b on b.code=l.branch_code
+          left join core.sources src on src.code=l.source_code
+          where c.id=${id}::uuid and c.status='active'
+          limit 1
+        `;
+        if (!customer) return response.status(404).json({ ok: false, error: "العميل غير موجود ضمن العملاء الجديدة" });
+        return response.status(200).json({
+          ok: true,
+          profileKind: "legacy",
+          member: {
+            id: customer.id,
+            name: customer.customer_name || "عميل MZJ",
+            phone: customer.phone_normalized || "",
+            points: 0,
+            lifetimePoints: 0,
+            tier: "member",
+            referralCode: customer.referral_code || "",
+            inviteUrl: "",
+            statusLabel: customer.status_label || "عميل جديد",
+            branchName: customer.branch_name || customer.branch_code || "",
+            sourceName: customer.catalog_source_name || customer.source_name || customer.source_code || "",
+            assignedName: customer.assigned_name || "",
+          },
+          referrals: [],
+          referralVisits: [],
+          ledger: [],
+          rewards: [],
+          cardRewards: [],
+          redemptions: [],
+        });
+      }
+
+      const [member] = await sql<any[]>`
+        select
+          m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
+          m.tier_code,m.first_sale_at,m.last_sale_at,m.welcome_sent_at,m.metadata
+        from owners.members m
+        where m.id=${id}::uuid and m.status='active'
+        limit 1
+      `;
+      if (!member) return response.status(404).json({ ok: false, error: "عضوية العميل غير موجودة" });
+
+      const [referrals, referralVisits, ledger, rewards, cardRewards, redemptions] = await Promise.all([
+        sql<any[]>`
+          select id::text,referred_name,status,registered_at,qualified_at,sold_at,created_at
+          from owners.referrals
+          where referrer_member_id=${id}::uuid
+          order by created_at desc
+          limit 100
+        `,
+        sql<any[]>`
+          select id::text,created_at
+          from owners.referral_visits
+          where referrer_member_id=${id}::uuid
+          order by created_at desc
+          limit 100
+        `,
+        sql<any[]>`
+          select id::text,points,event_type,description,created_at
+          from owners.points_ledger
+          where member_id=${id}::uuid
+          order by created_at desc
+          limit 100
+        `,
+        sql<any[]>`
+          select id::text,name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,points_cost,starts_at,ends_at
+          from owners.rewards
+          where is_active=true and show_on_member_page=true
+            and points_cost<=${Number(member.points_balance || 0)}
+            and (starts_at is null or starts_at<=now())
+            and (ends_at is null or ends_at>=now())
+            and (stock_quantity is null or redeemed_quantity<stock_quantity)
+          order by points_cost,name
+        `,
+        sql<any[]>`
+          select id::text,name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,points_cost,starts_at,ends_at
+          from owners.rewards
+          where is_active=true and show_on_member_page=true and show_on_member_card=true
+            and (starts_at is null or starts_at<=now())
+            and (ends_at is null or ends_at>=now())
+          order by points_cost,name
+        `,
+        sql<any[]>`
+          select rd.id::text,rd.status,rd.points_cost,rd.redemption_code,rd.created_at,rd.reviewed_at,
+            r.name as reward_name,u.full_name as reviewed_by_name
+          from owners.redemptions rd
+          join owners.rewards r on r.id=rd.reward_id
+          left join core.users u on u.id=rd.reviewed_by
+          where rd.member_id=${id}::uuid
+          order by rd.created_at desc
+          limit 50
+        `,
+      ]);
+
+      return response.status(200).json({
+        ok: true,
+        profileKind: "member",
+        member: {
+          id: member.id,
+          name: member.customer_name || "عميل MZJ",
+          phone: member.phone_normalized || "",
+          points: Number(member.points_balance || 0),
+          lifetimePoints: Number(member.lifetime_points || 0),
+          tier: member.tier_code || "member",
+          referralCode: member.referral_code || "",
+          inviteUrl: `${publicBase(request)}/owners/invite/${member.referral_code}`,
+          firstSaleAt: member.first_sale_at || null,
+          lastSaleAt: member.last_sale_at || null,
+        },
+        referrals,
+        referralVisits,
+        ledger,
+        rewards,
+        cardRewards,
+        redemptions,
+      });
     }
 
     // Dashboard loading is intentionally read-only. Heavy CRM/Owners synchronization
@@ -514,6 +650,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       : "gift";
     const rewardValue = clean(payload.rewardValue);
     const showOnMemberCard = payload.showOnMemberCard === true;
+    const showOnMemberPage = payload.showOnMemberPage === true;
     const availableForReferralPurchase = payload.availableForReferralPurchase === true;
     const availableForExistingCustomerPurchase = payload.availableForExistingCustomerPurchase === true;
     const availableForFriendReferralPurchase = payload.availableForFriendReferralPurchase === true;
@@ -545,7 +682,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       await sql`
         update owners.rewards set
           name=${name},description=${description || null},reward_type=${rewardType},reward_value=${rewardValue || null},
-          show_on_member_card=${showOnMemberCard},available_for_referral_purchase=${availableForReferralPurchase},
+          show_on_member_card=${showOnMemberCard},show_on_member_page=${showOnMemberPage},available_for_referral_purchase=${availableForReferralPurchase},
           available_for_existing_customer_purchase=${availableForExistingCustomerPurchase},
           available_for_friend_referral_purchase=${availableForFriendReferralPurchase},available_for_repurchase=${availableForRepurchase},
           checkout_discount_type=${checkoutDiscountType},checkout_discount_value=${checkoutDiscountValue},
@@ -557,11 +694,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } else {
       await sql`
         insert into owners.rewards(
-          name,description,reward_type,reward_value,show_on_member_card,available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,available_for_repurchase,
+          name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase,available_for_repurchase,
           checkout_discount_type,checkout_discount_value,checkout_discount_amount,
           points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
         ) values(
-          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},${availableForRepurchase},
+          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${showOnMemberPage},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},${availableForRepurchase},
           ${checkoutDiscountType},${checkoutDiscountValue},${checkoutDiscountAmount},${pointsCost},${stockQuantity},
           ${startsAt}::timestamptz,${endsAt}::timestamptz,${isActive},${actor.id}::uuid,${actor.id}::uuid
         )
