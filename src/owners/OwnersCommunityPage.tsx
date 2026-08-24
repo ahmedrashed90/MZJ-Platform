@@ -215,6 +215,7 @@ export function OwnersCommunityPage() {
   const [referralsView, setReferralsView] = useState<ReferralsView>("all");
   const [redemptionsView, setRedemptionsView] = useState<RedemptionsView>("all");
   const [initialLoading, setInitialLoading] = useState(true);
+  const [legacyStatusFilter, setLegacyStatusFilter] = useState("");
 
   async function load() {
     const next = await ownersAdminGet();
@@ -251,6 +252,36 @@ export function OwnersCommunityPage() {
     } catch (error) {
       setMessage(errorMessage(error));
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendLegacyWelcomeByStatus() {
+    if (!legacyStatusFilter) {
+      setMessage("اختر حالة محددة أولاً لإرسال الترحيب للعملاء الموجودين بها");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await ownersAdminPost({ action: "send_legacy_welcome_by_status", statusLabel: legacyStatusFilter });
+      await load();
+      const summary = result?.summary || {};
+      const queued = Number(summary.queued || 0);
+      const alreadySent = Number(summary.alreadySent || 0);
+      const invalidPhone = Number(summary.invalidPhone || 0);
+      const noLongerEligible = Number(summary.noLongerEligible || 0);
+      const failed = Number(summary.failed || 0);
+      const details = [
+        alreadySent ? `${alreadySent} سبق إرسال الترحيب لهم` : "",
+        invalidPhone ? `${invalidPhone} رقم جوال غير صالح` : "",
+        noLongerEligible ? `${noLongerEligible} لم يعودوا ضمن العملاء الجديدة` : "",
+        failed ? `${failed} تعذر إرسالهم` : "",
+      ].filter(Boolean).join(" · ");
+      setMessage(`${queued ? `تمت إضافة ${queued} رسالة ترحيب إلى SMS+` : "لم تتم إضافة رسائل ترحيب جديدة"}${details ? ` · ${details}` : ""}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -388,6 +419,12 @@ export function OwnersCommunityPage() {
   const stats = data?.stats || {};
   const members = Array.isArray(data?.members) ? data.members : [];
   const legacyCustomers = Array.isArray(data?.legacyCustomers) ? data.legacyCustomers : [];
+  const legacyStatuses = Array.from(new Set(legacyCustomers.map((customer: any) => String(customer.status_label || "عميل جديد")).filter(Boolean))) as string[];
+  legacyStatuses.sort((left, right) => left.localeCompare(right, "ar"));
+  const visibleLegacyCustomers = legacyStatusFilter
+    ? legacyCustomers.filter((customer: any) => String(customer.status_label || "عميل جديد") === legacyStatusFilter)
+    : legacyCustomers;
+  const legacyWelcomeEligibleCount = visibleLegacyCustomers.filter((customer: any) => !customer.welcome_sent_at && customer.phone_normalized).length;
   const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
@@ -514,11 +551,26 @@ export function OwnersCommunityPage() {
       {tab === "legacy" ? (
         <section className="owners-table-card">
           <header><h2>العملاء الجديدة</h2><span>عملاء CRM الذين لم يتم البيع لهم · {legacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")}</span></header>
+          <div className="owners-legacy-toolbar">
+            <label>
+              <span>الحالة</span>
+              <select value={legacyStatusFilter} onChange={(event) => setLegacyStatusFilter(event.target.value)}>
+                <option value="">كل الحالات</option>
+                {legacyStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </label>
+            <span className="owners-legacy-filter-count">{visibleLegacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")} عميل ظاهر</span>
+            {canManage ? (
+              <button className="owners-primary" disabled={busy || !legacyStatusFilter || legacyWelcomeEligibleCount === 0} onClick={() => void sendLegacyWelcomeByStatus()}>
+                <PaperPlaneTilt size={18} />{busy ? "جاري الإرسال..." : `إرسال الترحيب (${legacyWelcomeEligibleCount.toLocaleString("ar-SA-u-nu-latn")})`}
+              </button>
+            ) : null}
+          </div>
           <div className="owners-table-wrap">
             <table>
-              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th><th>الإجراءات</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
               <tbody>
-                {legacyCustomers.map((customer: any) => (
+                {visibleLegacyCustomers.map((customer: any) => (
                   <tr key={customer.id}>
                     <td><strong>{customer.customer_name || "عميل MZJ"}</strong></td>
                     <td>{customer.phone_normalized || "—"}</td>
@@ -530,10 +582,16 @@ export function OwnersCommunityPage() {
                     <td>{customer.assigned_name || "—"}</td>
                     <td>{formatDate(customer.registered_at || customer.created_at)}</td>
                     <td>{formatDate(customer.updated_at)}</td>
-                    <td><div className="owners-actions"><Link className="owners-link-btn" to={`/owners-community/member/legacy/${customer.id}`}><IdentificationCard size={16} /> صفحة العضوية</Link></div></td>
+                    <td><span className={`owners-welcome-status ${customer.welcome_sent_at ? "sent" : "pending"}`}>{customer.welcome_sent_at ? "تم الإرسال" : "لم يتم الإرسال"}</span></td>
+                    <td>
+                      <div className="owners-actions">
+                        <Link className="owners-link-btn" to={`/owners-community/member/legacy/${customer.id}`}><IdentificationCard size={16} /> صفحة العضوية</Link>
+                        {canManage ? <button className="owners-link-btn" disabled={busy || Boolean(customer.welcome_sent_at) || !customer.phone_normalized} onClick={() => void act({ action: "send_legacy_welcome", legacyCustomerId: customer.id }, "تمت إضافة رسالة الترحيب إلى SMS+")}><PaperPlaneTilt size={16} /> {customer.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button> : null}
+                      </div>
+                    </td>
                   </tr>
                 ))}
-                {!legacyCustomers.length ? <tr><td colSpan={11}>لا يوجد عملاء جديدة في CRM حاليًا.</td></tr> : null}
+                {!visibleLegacyCustomers.length ? <tr><td colSpan={12}>{legacyStatusFilter ? "لا يوجد عملاء بهذه الحالة." : "لا يوجد عملاء جديدة في CRM حاليًا."}</td></tr> : null}
               </tbody>
             </table>
           </div>

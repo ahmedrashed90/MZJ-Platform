@@ -96,6 +96,7 @@ create table if not exists owners.legacy_customer_codes (
 create index if not exists owners_legacy_customer_codes_phone_idx on owners.legacy_customer_codes(phone_normalized,status);
 create index if not exists owners_legacy_customer_codes_status_idx on owners.legacy_customer_codes(status,updated_at desc);
 alter table owners.legacy_customer_codes alter column phone_normalized drop not null;
+alter table owners.legacy_customer_codes add column if not exists welcome_sent_at timestamptz;
 
 create table if not exists owners.referrals (
   id uuid primary key default gen_random_uuid(),
@@ -442,6 +443,7 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='rewards' and column_name='referral_purchase_redeemed_quantity')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='referral_purchase_benefits')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='legacy_customer_codes')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='legacy_customer_codes' and column_name='welcome_sent_at')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='redemption_code')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='website_order_id')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='next_erp_sales_order')

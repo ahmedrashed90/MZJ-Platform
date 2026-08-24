@@ -13,8 +13,10 @@ import {
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
 import { syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
-import { queueOwnerWelcomeSms } from "./_owners-welcome.js";
+import { queueLegacyOwnerWelcomeSms, queueOwnerWelcomeSms } from "./_owners-welcome.js";
 import { getWebsiteStock } from "./_website-stock.js";
+
+const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/owners";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -443,7 +445,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       `,
       sql<any[]>`
         select
-          c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.created_at,c.updated_at,
+          c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.welcome_sent_at,c.created_at,c.updated_at,
           l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.payment_type,l.registered_at,
           u.full_name as assigned_name,b.name as branch_name,src.name as catalog_source_name
         from owners.legacy_customer_codes c
@@ -923,6 +925,82 @@ export default async function handler(request: VercelRequest, response: VercelRe
     });
     if ("error" in result) return response.status(result.status).json({ ok: false, error: result.error });
     return response.status(200).json({ ok: true });
+  }
+
+  if (action === "send_legacy_welcome") {
+    const legacyCustomerId = clean(payload.legacyCustomerId);
+    try {
+      const result = await queueLegacyOwnerWelcomeSms({
+        legacyCustomerId,
+        byUid: actor.id,
+        portalUrl: OWNERS_PORTAL_URL,
+        purpose: "manual_new_customer_welcome",
+      });
+      if (result.status === "customer_not_found") return response.status(404).json({ ok: false, error: "العميل غير موجود ضمن العملاء الجديدة" });
+      if (result.status === "already_sent") return response.status(409).json({ ok: false, error: "تم إرسال رسالة الترحيب لهذا العميل مسبقًا" });
+      if (result.status === "invalid_phone") return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صالح" });
+      return response.status(200).json({ ok: true, status: "queued", documentId: result.documentId });
+    } catch (error) {
+      return response.status(502).json({ ok: false, error: error instanceof Error ? error.message : "تعذر إرسال رسالة الترحيب عبر SMS+" });
+    }
+  }
+
+  if (action === "send_legacy_welcome_by_status") {
+    const statusLabel = clean(payload.statusLabel);
+    if (!statusLabel) return response.status(400).json({ ok: false, error: "اختر الحالة أولاً" });
+
+    const customers = await sql<any[]>`
+      select c.id::text,c.welcome_sent_at
+      from owners.legacy_customer_codes c
+      join crm.leads l on l.id=c.crm_lead_id and l.is_deleted=false
+      where c.status='active'
+        and coalesce(l.status_label,'')<>'تم البيع'
+        and coalesce(l.status_label,'')=${statusLabel}
+        and not exists (
+          select 1 from owners.members member
+          where member.status='active'
+            and (member.crm_lead_id=l.id or (nullif(member.phone_normalized,'') is not null and member.phone_normalized=l.phone_normalized))
+        )
+      order by l.updated_at desc,l.created_at desc
+      limit 5000
+    `;
+
+    const summary = {
+      matched: customers.length,
+      queued: 0,
+      alreadySent: 0,
+      invalidPhone: 0,
+      noLongerEligible: 0,
+      failed: 0,
+    };
+
+    for (let index = 0; index < customers.length; index += 20) {
+      const batch = customers.slice(index, index + 20);
+      const results = await Promise.all(batch.map(async (customer) => {
+        if (customer.welcome_sent_at) return { status: "already_sent" as const };
+        try {
+          return await queueLegacyOwnerWelcomeSms({
+            legacyCustomerId: customer.id,
+            byUid: actor.id,
+            portalUrl: OWNERS_PORTAL_URL,
+            purpose: "bulk_new_customer_welcome",
+          });
+        } catch (error) {
+          console.error("MZJ Owners bulk welcome SMS+ queue failed", { legacyCustomerId: customer.id, statusLabel, error });
+          return null;
+        }
+      }));
+
+      for (const result of results) {
+        if (!result) { summary.failed += 1; continue; }
+        if (result.status === "queued") summary.queued += 1;
+        else if (result.status === "already_sent") summary.alreadySent += 1;
+        else if (result.status === "invalid_phone") summary.invalidPhone += 1;
+        else if (result.status === "customer_not_found") summary.noLongerEligible += 1;
+      }
+    }
+
+    return response.status(200).json({ ok: true, statusLabel, summary });
   }
 
   if (action === "send_welcome") {

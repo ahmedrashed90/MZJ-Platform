@@ -11,6 +11,23 @@ export type OwnerWelcomeQueueResult = {
   documentId?: string;
 };
 
+export type LegacyOwnerWelcomeQueueResult = {
+  status: "queued" | "already_sent" | "customer_not_found" | "invalid_phone";
+  legacyCustomerId?: string;
+  documentId?: string;
+};
+
+function ownerWelcomeMessage(input: {
+  customerName: unknown;
+  portalUrl: unknown;
+  personalCode: unknown;
+}) {
+  const customerName = clean(input.customerName) || "عميل مجموعة محمد بن ذعار العجمي";
+  const portalUrl = clean(input.portalUrl);
+  const personalCode = clean(input.personalCode);
+  return `مرحباً : ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\nالكود الشخصي : ${personalCode}\n\nتاريخ تثق به`;
+}
+
 export async function queueOwnerWelcomeSms(input: {
   memberId?: unknown;
   phone?: unknown;
@@ -39,15 +56,17 @@ export async function queueOwnerWelcomeSms(input: {
   const phone = normalizePhone(member.phone_normalized || input.phone);
   if (!phone) return { status: "invalid_phone", memberId: member.id };
 
-  const customerName = clean(member.customer_name) || "عميل مجموعة محمد بن ذعار العجمي";
-  const portalUrl = clean(input.portalUrl);
-  const message = `مرحباً ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\n\nتاريخ تثق به`;
+  const message = ownerWelcomeMessage({
+    customerName: member.customer_name,
+    portalUrl: input.portalUrl,
+    personalCode: member.referral_code,
+  });
 
   const queued = await queueFirebaseSms({
     ...(input.byUid ? { byUid: input.byUid } : {}),
     createdAt: new Date(),
     message,
-    meta: { type: "owners_welcome", purpose: "welcome", memberId: member.id },
+    meta: { type: "owners_welcome", purpose: "welcome", memberId: member.id, referralCode: member.referral_code || "" },
     phone,
     source: "mzj_owners_community",
     status: "queued",
@@ -56,9 +75,77 @@ export async function queueOwnerWelcomeSms(input: {
 
   await sql`
     update owners.members
-    set welcome_sent_at=coalesce(welcome_sent_at,now()),updated_at=now()
+    set
+      welcome_sent_at=coalesce(welcome_sent_at,now()),
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('welcomeDocumentId',${queued.documentId},'welcomeChannel','sms_plus'),
+      updated_at=now()
     where id=${member.id}::uuid
   `;
 
   return { status: "queued", memberId: member.id, documentId: queued.documentId };
+}
+
+export async function queueLegacyOwnerWelcomeSms(input: {
+  legacyCustomerId: unknown;
+  byUid?: string | null;
+  portalUrl: string;
+  purpose?: string;
+}): Promise<LegacyOwnerWelcomeQueueResult> {
+  await ensureOwnersSchema();
+  const sql = getSql();
+  const legacyCustomerId = clean(input.legacyCustomerId);
+  if (!legacyCustomerId) return { status: "customer_not_found" };
+
+  const [customer] = await sql<any[]>`
+    select
+      c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.welcome_sent_at,
+      l.status_label
+    from owners.legacy_customer_codes c
+    join crm.leads l on l.id=c.crm_lead_id and l.is_deleted=false
+    where c.id=${legacyCustomerId}::uuid
+      and c.status='active'
+      and coalesce(l.status_label,'')<>'تم البيع'
+    limit 1
+  `;
+
+  if (!customer) return { status: "customer_not_found" };
+  if (customer.welcome_sent_at) return { status: "already_sent", legacyCustomerId: customer.id };
+
+  const phone = normalizePhone(customer.phone_normalized);
+  if (!phone) return { status: "invalid_phone", legacyCustomerId: customer.id };
+
+  const message = ownerWelcomeMessage({
+    customerName: customer.customer_name,
+    portalUrl: input.portalUrl,
+    personalCode: customer.referral_code,
+  });
+
+  const queued = await queueFirebaseSms({
+    ...(input.byUid ? { byUid: input.byUid } : {}),
+    createdAt: new Date(),
+    message,
+    meta: {
+      type: "owners_welcome",
+      purpose: clean(input.purpose) || "welcome",
+      legacyCustomerId: customer.id,
+      leadId: customer.crm_lead_id,
+      referralCode: customer.referral_code || "",
+      statusLabel: customer.status_label || "",
+    },
+    phone,
+    source: "mzj_owners_community",
+    status: "queued",
+    to: phone,
+  });
+
+  await sql`
+    update owners.legacy_customer_codes
+    set
+      welcome_sent_at=coalesce(welcome_sent_at,now()),
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('welcomeDocumentId',${queued.documentId},'welcomeChannel','sms_plus'),
+      updated_at=now()
+    where id=${customer.id}::uuid
+  `;
+
+  return { status: "queued", legacyCustomerId: customer.id, documentId: queued.documentId };
 }

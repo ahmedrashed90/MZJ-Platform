@@ -5,11 +5,12 @@ import { ensureCrmSchema } from "../_crm-schema.js";
 import { normalizePhone } from "../_phone-utils.js";
 import { ensureOwnersSchema } from "../_owners-schema.js";
 import { ensureLegacyCustomerCodeForLead } from "../_owners-customer-segments.js";
-import { queueFirebaseSms } from "../_firebase-sms.js";
+import { queueLegacyOwnerWelcomeSms } from "../_owners-welcome.js";
 
 const QR_SOURCE_CODE = "qr";
 const QR_SOURCE_NAME = "QR";
 const QR_FALLBACK_POOL_KEY = "cash_qr:fallback:cash_sales";
+const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/owners";
 
 function body(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -263,30 +264,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
     return null;
   });
 
-  let customerCodeSmsQueued = false;
-  if (customerCode?.referral_code) {
-    const referralCode = String(customerCode.referral_code);
-    const message = `كود دعوتك في MZJ Owners Community: ${referralCode}`;
+  let welcomeSmsQueued = false;
+  if (customerCode?.id && customerCode?.referral_code) {
     try {
-      await queueFirebaseSms({
-        createdAt: new Date(),
-        message,
-        meta: {
-          type: "owners_customer_code",
-          purpose: "cash_qr_registration",
-          leadId: created.id,
-          referralCode,
-        },
-        phone,
-        source: "mzj_owners_community",
-        status: "queued",
-        to: phone,
+      const welcomeResult = await queueLegacyOwnerWelcomeSms({
+        legacyCustomerId: customerCode.id,
+        portalUrl: OWNERS_PORTAL_URL,
+        purpose: "cash_qr_registration",
       });
-      customerCodeSmsQueued = true;
+      welcomeSmsQueued = welcomeResult.status === "queued" || welcomeResult.status === "already_sent";
     } catch (error) {
       // Registration and the on-screen code must remain successful even if SMS+
       // is temporarily unavailable; the customer can still save the shown code.
-      console.error("MZJ Owners customer-code SMS+ queue failed", error);
+      console.error("MZJ Owners welcome SMS+ queue failed", error);
     }
   }
 
@@ -295,6 +285,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     message: "تم تسجيل بياناتك بنجاح وسيقوم فريق المبيعات بخدمتك",
     leadId: created.id,
     customerCode: customerCode?.referral_code || null,
-    customerCodeSmsQueued,
+    welcomeSmsQueued,
+    customerCodeSmsQueued: welcomeSmsQueued,
   });
 }
