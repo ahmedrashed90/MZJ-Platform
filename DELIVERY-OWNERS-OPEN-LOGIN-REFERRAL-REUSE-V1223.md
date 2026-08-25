@@ -18,15 +18,3 @@ Clean full-source update based on the approved platform v20 source. No unrelated
 ## Schema
 
 Owners schema state: `1223`.
-
-## Runtime files changed
-
-- `server/_owners-schema.ts`
-- `server/_owners.ts`
-- `server/owners-public.ts`
-- `src/owners/OwnersPortalPage.tsx`
-
-## Verification
-
-- Targeted Owners open-login/referral-reuse static checks: 16/16 PASS.
-- TypeScript/TSX syntax transpilation: PASS for all four changed runtime files.

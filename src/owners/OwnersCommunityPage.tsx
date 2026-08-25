@@ -7,6 +7,7 @@ import {
   FileXls,
   Gift,
   IdentificationCard,
+  MagnifyingGlass,
   NotePencil,
   PaperPlaneTilt,
   ShareNetwork,
@@ -150,6 +151,10 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تنفيذ العملية";
 }
 
+function normalizeOwnerSearch(value: unknown) {
+  return String(value || "").trim().toLowerCase().replace(/[\s\-()+]/g, "");
+}
+
 function formatDate(value: unknown) {
   if (!value) return "—";
   try {
@@ -215,6 +220,8 @@ export function OwnersCommunityPage() {
   const [referralsView, setReferralsView] = useState<ReferralsView>("all");
   const [redemptionsView, setRedemptionsView] = useState<RedemptionsView>("all");
   const [initialLoading, setInitialLoading] = useState(true);
+  const [membersSearch, setMembersSearch] = useState("");
+  const [legacySearch, setLegacySearch] = useState("");
   const [legacyStatusFilter, setLegacyStatusFilter] = useState("");
 
   async function load() {
@@ -421,21 +428,33 @@ export function OwnersCommunityPage() {
   const legacyCustomers = Array.isArray(data?.legacyCustomers) ? data.legacyCustomers : [];
   const legacyStatuses = Array.from(new Set(legacyCustomers.map((customer: any) => String(customer.status_label || "عميل جديد")).filter(Boolean))) as string[];
   legacyStatuses.sort((left, right) => left.localeCompare(right, "ar"));
-  const visibleLegacyCustomers = legacyStatusFilter
+  const legacyCustomersByStatus = legacyStatusFilter
     ? legacyCustomers.filter((customer: any) => String(customer.status_label || "عميل جديد") === legacyStatusFilter)
     : legacyCustomers;
-  const legacyWelcomeEligibleCount = visibleLegacyCustomers.filter((customer: any) => !customer.welcome_sent_at && customer.phone_normalized).length;
+  const normalizedLegacySearch = normalizeOwnerSearch(legacySearch);
+  const visibleLegacyCustomers = normalizedLegacySearch
+    ? legacyCustomersByStatus.filter((customer: any) =>
+        normalizeOwnerSearch(customer.customer_name).includes(normalizedLegacySearch)
+        || normalizeOwnerSearch(customer.phone_normalized).includes(normalizedLegacySearch))
+    : legacyCustomersByStatus;
+  const legacyWelcomeEligibleCount = legacyCustomersByStatus.filter((customer: any) => !customer.welcome_sent_at && customer.phone_normalized).length;
   const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
   const importHeaders = importRows.length ? Object.keys(importRows[0]) : [];
   const testMembersCount = members.filter((member: any) => member.member_kind === "test").length;
-  const visibleMembers = membersView === "points"
+  const membersForCurrentView = membersView === "points"
     ? members
         .filter((member: any) => member.member_kind !== "test" && Number(member.points_balance || 0) > 0)
         .slice()
         .sort((left: any, right: any) => Number(right.points_balance || 0) - Number(left.points_balance || 0))
     : members;
+  const normalizedMembersSearch = normalizeOwnerSearch(membersSearch);
+  const visibleMembers = normalizedMembersSearch
+    ? membersForCurrentView.filter((member: any) =>
+        normalizeOwnerSearch(member.customer_name).includes(normalizedMembersSearch)
+        || normalizeOwnerSearch(member.phone_normalized).includes(normalizedMembersSearch))
+    : membersForCurrentView;
   const visibleReferrals = referralsView === "sold" ? referrals.filter((referral: any) => referral.status === "sold") : referrals;
   const visibleRedemptions = redemptionsView === "ready" ? redemptions.filter((redemption: any) => redemption.status === "approved") : redemptions;
   const soldRate = useMemo(
@@ -515,6 +534,14 @@ export function OwnersCommunityPage() {
           ) : null}
           <section className="owners-table-card">
             <header><h2>{membersView === "points" ? "تفاصيل النقاط القائمة" : "عملاء تم البيع"}</h2><span>{membersView === "points" ? `إجمالي الرصيد المتاح ${Number(stats.outstanding_points || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة` : `تم البيع · ${members.length - testMembersCount} حقيقي · ${testMembersCount} تجريبي`}</span></header>
+            <div className="owners-list-toolbar">
+              <div className="owners-list-search">
+                <MagnifyingGlass size={17} />
+                <input value={membersSearch} onChange={(event) => setMembersSearch(event.target.value)} placeholder="ابحث باسم العميل أو رقم الجوال" aria-label="البحث في عملاء تم البيع" />
+                {membersSearch ? <button type="button" className="owners-search-clear" onClick={() => setMembersSearch("")} aria-label="مسح البحث"><X size={15} /></button> : null}
+              </div>
+              <span className="owners-list-visible-count">{visibleMembers.length.toLocaleString("ar-SA-u-nu-latn")} عميل ظاهر</span>
+            </div>
             <div className="owners-table-wrap">
               <table>
                 <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
@@ -540,7 +567,7 @@ export function OwnersCommunityPage() {
                       </td>
                     </tr>
                   ))}
-                {!visibleMembers.length ? <tr><td colSpan={11}>{membersView === "points" ? "لا توجد أرصدة نقاط قائمة." : "لا يوجد عملاء تم البيع لهم."}</td></tr> : null}
+                {!visibleMembers.length ? <tr><td colSpan={11}>{membersSearch.trim() ? "لا توجد نتائج مطابقة لاسم العميل أو رقم الجوال." : membersView === "points" ? "لا توجد أرصدة نقاط قائمة." : "لا يوجد عملاء تم البيع لهم."}</td></tr> : null}
                 </tbody>
               </table>
             </div>
@@ -559,6 +586,11 @@ export function OwnersCommunityPage() {
                 {legacyStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
               </select>
             </label>
+            <div className="owners-list-search owners-legacy-search">
+              <MagnifyingGlass size={17} />
+              <input value={legacySearch} onChange={(event) => setLegacySearch(event.target.value)} placeholder="ابحث باسم العميل أو رقم الجوال" aria-label="البحث في العملاء الجديدة" />
+              {legacySearch ? <button type="button" className="owners-search-clear" onClick={() => setLegacySearch("")} aria-label="مسح البحث"><X size={15} /></button> : null}
+            </div>
             <span className="owners-legacy-filter-count">{visibleLegacyCustomers.length.toLocaleString("ar-SA-u-nu-latn")} عميل ظاهر</span>
             {canManage ? (
               <button className="owners-primary" disabled={busy || !legacyStatusFilter || legacyWelcomeEligibleCount === 0} onClick={() => void sendLegacyWelcomeByStatus()}>
@@ -591,7 +623,7 @@ export function OwnersCommunityPage() {
                     </td>
                   </tr>
                 ))}
-                {!visibleLegacyCustomers.length ? <tr><td colSpan={12}>{legacyStatusFilter ? "لا يوجد عملاء بهذه الحالة." : "لا يوجد عملاء جديدة في CRM حاليًا."}</td></tr> : null}
+                {!visibleLegacyCustomers.length ? <tr><td colSpan={12}>{legacySearch.trim() ? "لا توجد نتائج مطابقة لاسم العميل أو رقم الجوال." : legacyStatusFilter ? "لا يوجد عملاء بهذه الحالة." : "لا يوجد عملاء جديدة في CRM حاليًا."}</td></tr> : null}
               </tbody>
             </table>
           </div>
