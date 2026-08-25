@@ -16,6 +16,7 @@ import {
   getOwnerSettings,
   ownerHash,
   ownerOtpHash,
+  reverseOwnerCommerceForCancelledOrder,
   secureHashEquals,
   syncOwnerReferralProgress,
   type OwnerJson,
@@ -1368,6 +1369,46 @@ async function handleCommerceRedemptionsConfirm(request: VercelRequest, response
   });
 }
 
+async function handleCommerceCancelOrder(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
+  const auth = commerceApiAuthorized(request);
+  if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
+  const websiteOrderId = commerceOrderRoot(payload.websiteOrderId);
+  const nextErpSalesOrder = clean(payload.nextErpSalesOrder).slice(0, 160) || null;
+  if (!nextErpSalesOrder) {
+    return response.status(400).json({ ok: false, error: "رقم طلب البيع من NEXT ERP مطلوب لمطابقة الإلغاء" });
+  }
+
+  // WooCommerce is only a retry channel. NEXT ERP remains the authoritative
+  // cancellation source, so a manual Woo status change can never release an
+  // Owners code/reward while the ERP Sales Order is still active.
+  const [confirmedCancellation] = await getSql()<any[]>`
+    select 1 as confirmed
+    where exists(
+      select 1
+      from integrations.erpnext_sales_orders erp_order
+      where erp_order.sales_order_no=${nextErpSalesOrder}
+        and coalesce(erp_order.is_cancelled,false)=true
+    ) or exists(
+      select 1
+      from crm.sales_transactions sale
+      where sale.source_reference=${nextErpSalesOrder}
+        and coalesce(sale.is_cancelled,false)=true
+    )
+    limit 1
+  `;
+  if (!confirmedCancellation) {
+    return response.status(409).json({ ok: false, error: "لم يصل تأكيد إلغاء طلب البيع من NEXT ERP إلى المنصة بعد" });
+  }
+
+  const cancellation = await reverseOwnerCommerceForCancelledOrder({
+    websiteOrderId: websiteOrderId || null,
+    nextErpSalesOrder,
+    reason: clean(payload.reason) || "تم إلغاء طلب الشراء",
+    source: clean(payload.source) || "woocommerce_cancelled",
+  });
+  return response.status(200).json({ ok: true, cancellation });
+}
+
 async function handleCommerceLinkOrder(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
   const auth = commerceApiAuthorized(request);
   if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
@@ -1450,6 +1491,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (request.method === "POST" && action === "commerce_redemptions_confirm") {
     return handleCommerceRedemptionsConfirm(request, response, payload);
+  }
+
+  if (request.method === "POST" && action === "commerce_cancel_order") {
+    return handleCommerceCancelOrder(request, response, payload);
   }
 
   if (request.method === "POST" && action === "commerce_link_order") {

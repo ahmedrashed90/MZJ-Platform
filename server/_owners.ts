@@ -553,6 +553,318 @@ function qualifiedStatus(statusValue: unknown) {
   ].includes(status);
 }
 
+
+function ownerCommerceOrderRoot(value: unknown) {
+  let orderId = clean(value).slice(0, 180);
+  const suffixes = [":primary", ":bonus", ":friend", ":new-customer", ":old-customer", ":personal-code", ":redemption"];
+  let changed = true;
+  while (changed && orderId) {
+    changed = false;
+    for (const suffix of suffixes) {
+      if (!orderId.endsWith(suffix)) continue;
+      orderId = orderId.slice(0, -suffix.length);
+      changed = true;
+      break;
+    }
+  }
+  return orderId;
+}
+
+type OwnerCancellationSummary = {
+  websiteOrderId: string | null;
+  nextErpSalesOrder: string | null;
+  personalCodesReleased: number;
+  redemptionCodesRestored: number;
+  purchaseBenefitsReleased: number;
+  referralSalesReopened: number;
+  purchasePointMovementsCancelled: number;
+  referralSalePointMovementsCancelled: number;
+  affectedMembers: number;
+};
+
+/**
+ * Reverse only the MZJ Owners commerce effects that belong to a cancelled order.
+ *
+ * The ERP Sales Order remains the authoritative cancellation signal. Website order
+ * id is accepted as a fallback for the WooCommerce side so codes are never stranded
+ * if the ERP-link writeback was delayed. The operation is intentionally idempotent:
+ * repeated ERP/Woo cancellation notifications return success without double refunds.
+ */
+export async function reverseOwnerCommerceForCancelledOrder(input: {
+  nextErpSalesOrder?: string | null;
+  websiteOrderId?: string | null;
+  reason?: string | null;
+  source?: string | null;
+}): Promise<OwnerCancellationSummary> {
+  await ensureOwnersSchema();
+  const nextErpSalesOrder = clean(input.nextErpSalesOrder).slice(0, 160) || null;
+  const websiteOrderId = ownerCommerceOrderRoot(input.websiteOrderId) || null;
+  const reason = clean(input.reason).slice(0, 500) || "تم إلغاء طلب الشراء";
+  const source = clean(input.source).slice(0, 100) || "order_cancellation";
+
+  const empty: OwnerCancellationSummary = {
+    websiteOrderId,
+    nextErpSalesOrder,
+    personalCodesReleased: 0,
+    redemptionCodesRestored: 0,
+    purchaseBenefitsReleased: 0,
+    referralSalesReopened: 0,
+    purchasePointMovementsCancelled: 0,
+    referralSalePointMovementsCancelled: 0,
+    affectedMembers: 0,
+  };
+  if (!nextErpSalesOrder && !websiteOrderId) return empty;
+
+  const sql = getSql();
+  const websiteOrderPattern = websiteOrderId ? `${websiteOrderId}:%` : "__no_website_order__";
+  const cancellation = await sql.begin(async (tx) => {
+    const benefits = await tx<any[]>`
+      select id::text,reward_id::text,referral_id::text,referrer_member_id::text,website_order_id,next_erp_sales_order
+      from owners.referral_purchase_benefits
+      where (
+        (${nextErpSalesOrder}::text is not null and next_erp_sales_order=${nextErpSalesOrder})
+        or (${websiteOrderId}::text is not null and (website_order_id=${websiteOrderId} or website_order_id like ${websiteOrderPattern}))
+      )
+      for update
+    `;
+
+    const rewardCounts = new Map<string, number>();
+    for (const benefit of benefits) {
+      const rewardId = clean(benefit.reward_id);
+      if (rewardId) rewardCounts.set(rewardId, (rewardCounts.get(rewardId) || 0) + 1);
+    }
+    for (const [rewardId, count] of rewardCounts) {
+      await tx`
+        update owners.rewards set
+          referral_purchase_redeemed_quantity=greatest(0,referral_purchase_redeemed_quantity-${count}),
+          updated_at=now()
+        where id=${rewardId}::uuid
+      `;
+    }
+    if (benefits.length) {
+      const benefitIds = benefits.map((row: any) => clean(row.id)).filter(Boolean);
+      if (benefitIds.length) await tx`delete from owners.referral_purchase_benefits where id in ${tx(benefitIds)}`;
+    }
+
+    const personalCodes = await tx<any[]>`
+      delete from owners.personal_code_uses
+      where (
+        (${nextErpSalesOrder}::text is not null and next_erp_sales_order=${nextErpSalesOrder})
+        or (${websiteOrderId}::text is not null and website_order_id=${websiteOrderId})
+      )
+      returning id::text,member_id::text
+    `;
+
+    const restoredRedemptions = await tx<any[]>`
+      update owners.redemptions set
+        status='approved',website_order_id=null,next_erp_sales_order=null,
+        used_channel=null,used_by_phone_normalized=null,reviewed_by=null,reviewed_at=null,updated_at=now()
+      where status='delivered' and (
+        (${nextErpSalesOrder}::text is not null and next_erp_sales_order=${nextErpSalesOrder})
+        or (${websiteOrderId}::text is not null and website_order_id=${websiteOrderId})
+      )
+      returning id::text,member_id::text
+    `;
+
+    const cancelledSales = nextErpSalesOrder ? await tx<any[]>`
+      select id::text,lead_id::text,sale_at
+      from crm.sales_transactions
+      where source_reference=${nextErpSalesOrder}
+        and coalesce(is_cancelled,false)=true
+      order by sale_at,created_at,id
+    ` : [];
+    const cancelledSaleIds = cancelledSales.map((row: any) => clean(row.id)).filter(Boolean);
+
+    const purchaseRows = cancelledSaleIds.length ? await tx<any[]>`
+      select
+        ledger.id::text,
+        ledger.member_id::text,
+        case
+          when coalesce(ledger.metadata->>'purchaseAwardPoints','') ~ '^[0-9]+$'
+            then (ledger.metadata->>'purchaseAwardPoints')::integer
+          else greatest(0,ledger.points)
+        end as cancelled_points
+      from owners.points_ledger ledger
+      where ledger.event_type='purchase'
+        and coalesce(ledger.metadata->>'pointsResetBaseline','false')<>'true'
+        and coalesce(ledger.metadata->>'cancellationLifetimeAdjusted','false')<>'true'
+        and ledger.metadata->>'saleId' in ${tx(cancelledSaleIds)}
+        and (
+          ledger.points>0
+          or coalesce(ledger.metadata->>'purchaseCancelled','false')='true'
+        )
+      for update
+    ` : [];
+
+    const cancelledReferralPointRows = cancelledSaleIds.length ? await tx<any[]>`
+      with cancelled_sales as (
+        select id::text as sale_id
+        from crm.sales_transactions
+        where id in ${tx(cancelledSaleIds)}
+      ), scoped as (
+        select
+          ledger.id,
+          ledger.member_id,
+          case
+            when coalesce(ledger.metadata->>'saleAwardPoints','') ~ '^[0-9]+$'
+              then (ledger.metadata->>'saleAwardPoints')::integer
+            else greatest(0,ledger.points)
+          end as original_points
+        from owners.points_ledger ledger
+        join cancelled_sales sale on ledger.event_key='sale:'||sale.sale_id
+        where ledger.event_type='sale'
+          and coalesce(ledger.metadata->>'cancellationLifetimeAdjusted','false')<>'true'
+          and (
+            ledger.points>0
+            or coalesce(ledger.metadata->>'saleCancelled','false')='true'
+          )
+        for update of ledger
+      )
+      update owners.points_ledger ledger set
+        points=0,
+        description='الصديق - بيع ملغي',
+        metadata=coalesce(ledger.metadata,'{}'::jsonb)||jsonb_build_object(
+          'saleAwardPoints',scoped.original_points,
+          'saleCancelled',true,
+          'cancelledSalesOrder',${nextErpSalesOrder},
+          'cancellationReason',${reason},
+          'cancellationSource',${source}
+        )
+      from scoped
+      where ledger.id=scoped.id
+      returning ledger.id::text,ledger.member_id::text,scoped.original_points as cancelled_points
+    ` : [];
+
+    const reopenedReferrals: any[] = [];
+    if (cancelledSaleIds.length) {
+      const referralRows = await tx<any[]>`
+        select r.id::text,r.referrer_member_id::text,r.sale_transaction_id::text,l.status_label
+        from owners.referrals r
+        left join crm.leads l on l.id=r.crm_lead_id and l.is_deleted=false
+        where r.sale_transaction_id in ${tx(cancelledSaleIds)}
+        for update of r
+      `;
+      for (const referral of referralRows) {
+        const newStatus = qualifiedStatus(referral.status_label) ? "qualified" : "registered";
+        await tx`
+          update owners.referrals set
+            status=${newStatus},sale_transaction_id=null,sold_at=null,
+            qualified_at=case when ${newStatus}='qualified' then coalesce(qualified_at,now()) else null end,
+            metadata=coalesce(metadata,'{}'::jsonb)||${tx.json({
+              lastCancelledSalesOrder: nextErpSalesOrder,
+              cancelledSaleTransactionId: clean(referral.sale_transaction_id) || null,
+              cancellationReason: reason,
+              cancellationSource: source,
+            })}::jsonb,
+            updated_at=now()
+          where id=${referral.id}::uuid
+        `;
+        reopenedReferrals.push(referral);
+      }
+    }
+
+    const lifetimeDeductions = new Map<string, number>();
+    const purchaseMemberIds = new Set<string>();
+    for (const row of purchaseRows) {
+      const memberId = clean(row.member_id);
+      const points = Math.max(0, Math.trunc(Number(row.cancelled_points || 0)));
+      if (!memberId) continue;
+      purchaseMemberIds.add(memberId);
+      if (points) lifetimeDeductions.set(memberId, (lifetimeDeductions.get(memberId) || 0) + points);
+    }
+    for (const row of cancelledReferralPointRows) {
+      const memberId = clean(row.member_id);
+      const points = Math.max(0, Math.trunc(Number(row.cancelled_points || 0)));
+      if (!memberId || !points) continue;
+      lifetimeDeductions.set(memberId, (lifetimeDeductions.get(memberId) || 0) + points);
+    }
+
+    return {
+      benefits,
+      personalCodes,
+      restoredRedemptions,
+      reopenedReferrals,
+      purchaseRows,
+      cancelledReferralPointRows,
+      purchaseMemberIds: [...purchaseMemberIds],
+      lifetimeDeductions: [...lifetimeDeductions.entries()],
+    };
+  });
+
+  for (const memberId of cancellation.purchaseMemberIds) {
+    await reconcileOwnerPurchasePoints(memberId);
+  }
+  const reopenedReferrerIds: string[] = Array.from(new Set<string>(
+    cancellation.reopenedReferrals
+      .map((row: any) => String(clean(row.referrer_member_id) || ""))
+      .filter(Boolean),
+  ));
+  for (const referrerMemberId of reopenedReferrerIds) {
+    await syncOwnerReferralProgress(referrerMemberId);
+  }
+
+  const affectedMemberIds = Array.from(new Set([
+    ...cancellation.purchaseMemberIds,
+    ...cancellation.cancelledReferralPointRows.map((row: any) => clean(row.member_id)).filter(Boolean),
+  ]));
+
+  if (affectedMemberIds.length) {
+    const deductions = new Map<string, number>(cancellation.lifetimeDeductions as Array<[string, number]>);
+    await sql.begin(async (tx) => {
+      const [settings] = await tx<any[]>`select silver_points,gold_points,platinum_points from owners.settings where id='default'`;
+      const totals = await tx<any[]>`
+        select member.id::text as member_id,coalesce(sum(ledger.points),0)::int as points_balance
+        from owners.members member
+        left join owners.points_ledger ledger on ledger.member_id=member.id
+        where member.id in ${tx(affectedMemberIds)}
+        group by member.id
+      `;
+      for (const row of totals) {
+        const memberId = clean(row.member_id);
+        const deduction = Math.max(0, Math.trunc(Number(deductions.get(memberId) || 0)));
+        const [member] = await tx<any[]>`
+          update owners.members set
+            points_balance=greatest(0,${Number(row.points_balance || 0)}),
+            lifetime_points=greatest(0,lifetime_points-${deduction}),
+            updated_at=now()
+          where id=${memberId}::uuid
+          returning lifetime_points
+        `;
+        if (member) {
+          const tier = tierForLifetimePoints(Number(member.lifetime_points || 0), settings || {});
+          await tx`update owners.members set tier_code=${tier},updated_at=now() where id=${memberId}::uuid`;
+        }
+      }
+      const adjustedLedgerIds = [
+        ...cancellation.purchaseRows.map((row: any) => clean(row.id)).filter(Boolean),
+        ...cancellation.cancelledReferralPointRows.map((row: any) => clean(row.id)).filter(Boolean),
+      ];
+      if (adjustedLedgerIds.length) {
+        await tx`
+          update owners.points_ledger set
+            metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object(
+              'cancellationLifetimeAdjusted',true,
+              'cancellationLifetimeAdjustedAt',now()
+            )
+          where id in ${tx(adjustedLedgerIds)}
+        `;
+      }
+    });
+  }
+
+  return {
+    websiteOrderId,
+    nextErpSalesOrder,
+    personalCodesReleased: cancellation.personalCodes.length,
+    redemptionCodesRestored: cancellation.restoredRedemptions.length,
+    purchaseBenefitsReleased: cancellation.benefits.length,
+    referralSalesReopened: cancellation.reopenedReferrals.length,
+    purchasePointMovementsCancelled: cancellation.purchaseRows.length,
+    referralSalePointMovementsCancelled: cancellation.cancelledReferralPointRows.length,
+    affectedMembers: affectedMemberIds.length,
+  };
+}
+
 export async function syncOwnerReferralProgress(referrerMemberId?: string | null) {
   await ensureOwnersSchema();
   const sql = getSql();

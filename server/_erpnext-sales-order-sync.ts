@@ -6,7 +6,7 @@ import { ensureOperationsSchema } from "./_operations-schema.js";
 import { ensureActiveVehicleApprovalCycle, startFreshVehicleApprovalCycle } from "./_operations-approval-cycle.js";
 import { ensureTrackingSchema } from "./_tracking-schema.js";
 import { createNotification, notificationDedupe } from "./_notifications.js";
-import { processOwnerSaleForLead } from "./_owners.js";
+import { processOwnerSaleForLead, reverseOwnerCommerceForCancelledOrder } from "./_owners.js";
 import { clean, dateValue, numberValue } from "./_tracking-utils.js";
 import { saleTimestampForOrder } from "./_crm-sale-timestamp.js";
 import type { TrackingIngestResult } from "./integrations/tracking-orders.js";
@@ -1351,7 +1351,12 @@ export async function cancelErpNextSalesOrder(input: {
   });
 
   if ((result as any)?.crm?.leadId) await refreshCrmLeadSalesSnapshot((result as any).crm.leadId);
-  return { ...result, warnings: uniqueWarnings(warnings) };
+  const owners = await reverseOwnerCommerceForCancelledOrder({
+    nextErpSalesOrder: normalized.orderNo,
+    reason: cancellationReason,
+    source: "erpnext_sales_order_cancelled",
+  });
+  return { ...result, owners, warnings: uniqueWarnings(warnings) };
 }
 
 
