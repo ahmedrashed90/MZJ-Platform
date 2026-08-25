@@ -17,8 +17,6 @@ type StockCar = {
   url: string;
 };
 
-type StatusFilter = "all" | "needs_attention" | "missing_images" | "missing_compare" | "complete";
-
 function money(value: unknown) {
   return Number(value || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
@@ -28,7 +26,6 @@ export function WebsiteStockPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
 
   async function load(refresh = false) {
     setLoading(true);
@@ -47,16 +44,15 @@ export function WebsiteStockPage() {
   const cars: StockCar[] = Array.isArray(data?.cars) ? data.cars : [];
   const filteredCars = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return cars.filter((car) => {
-      const matchesQuery = !needle || `${car.vehicleId} ${car.title}`.toLowerCase().includes(needle);
-      if (!matchesQuery) return false;
-      if (status === "needs_attention") return !car.hasImages || !car.hasCompareKey;
-      if (status === "missing_images") return !car.hasImages;
-      if (status === "missing_compare") return !car.hasCompareKey;
-      if (status === "complete") return car.hasImages && car.hasCompareKey;
-      return true;
-    });
-  }, [cars, query, status]);
+    if (!needle) return cars;
+    return cars.filter((car) => `${car.vehicleId} ${car.title}`.toLowerCase().includes(needle));
+  }, [cars, query]);
+
+  const totalCars = cars.length;
+  const totalStock = useMemo(
+    () => cars.reduce((sum, car) => sum + (car.stock == null ? 0 : Math.max(0, Number(car.stock) || 0)), 0),
+    [cars],
+  );
 
   function exportExcel() {
     downloadXlsx(
@@ -78,7 +74,6 @@ export function WebsiteStockPage() {
   return (
     <div className="module-page website-stock-page" dir="rtl">
       <header className="website-stock-head">
-        <div><h1>الاستوك في الموقع</h1><p>كل سيارات الموقع الإلكتروني، مع حالة الصور و CompareKey.</p></div>
         <div className="website-stock-actions">
           <button type="button" className="crm-secondary-button" disabled={loading} onClick={() => void load(true)}><ArrowsClockwise size={18} /> تحديث</button>
           <button type="button" className="crm-primary-button" disabled={!filteredCars.length} onClick={exportExcel}><FileXls size={18} /> تصدير Excel</button>
@@ -90,14 +85,8 @@ export function WebsiteStockPage() {
 
       <section className="website-stock-toolbar">
         <label className="website-stock-search"><MagnifyingGlass size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث باسم السيارة أو Vehicle ID" /></label>
-        <select value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)}>
-          <option value="all">كل السيارات</option>
-          <option value="needs_attention">ناقص بيانات</option>
-          <option value="missing_images">ناقص صور</option>
-          <option value="missing_compare">ناقص CompareKey</option>
-          <option value="complete">مكتملة</option>
-        </select>
-        <span>{filteredCars.length.toLocaleString("ar-SA-u-nu-latn")} سيارة</span>
+        <div className="website-stock-count-box">عدد السيارات {totalCars.toLocaleString("ar-SA-u-nu-latn")} سيارة</div>
+        <span>عدد الاستوك {totalStock.toLocaleString("ar-SA-u-nu-latn")} سيارة</span>
       </section>
 
       <section className="website-stock-table-card">
