@@ -29,7 +29,7 @@ import { hasPermission } from "../../systemAccess";
 const tabs = [
   { key: "automation", label: "إعدادات الأوتوميشن", description: "قواعد استقبال الرسائل ومسارات التنفيذ التلقائي", group: "workflow" },
   { key: "entry_routing", label: "دخول العملاء", description: "بوابات الدخول والتوجيه الأولي للعملاء", group: "workflow" },
-  { key: "cash_qr", label: "إنشاء QR كود", description: "تسجيل عملاء الكاش بالاسم ورقم الجوال وتوزيعهم تلقائيًا", group: "workflow" },
+  { key: "cash_qr", label: "إنشاء QR كود", description: "تسجيل عملاء الكاش بالاسم ورقم الجوال وربطهم بالموقع الإلكتروني", group: "workflow" },
   { key: "distribution", label: "توزيع العملاء", description: "قواعد الدور والمندوبين المؤهلين للتوزيع", group: "workflow" },
   { key: "statuses", label: "حالات العملاء", description: "حالات الداش بورد وترتيبها حسب القسم", group: "customer" },
   { key: "customer_fields", label: "بيانات العميل", description: "الحقول الإضافية ونسبة اكتمال الملف", group: "customer" },

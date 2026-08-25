@@ -1786,25 +1786,69 @@ export async function ensureCrmSchema() {
       `;
       if (!trackingFinalDeliveryWelcomeMigration) await runSqlScript(CRM_TRACKING_FINAL_DELIVERY_WELCOME_20260822_SQL);
 
-      // Cash QR has its own canonical CRM source. Keep both new and previously-created QR leads correct
-      // without affecting any other CRM source or flow.
+      // Public cash-register / QR registrations are owned by the Website channel itself.
+      // They must never enter the sales-representative round-robin during initial registration.
       await sql`
         insert into crm.sources(code,name,sort_order,is_active)
-        values('qr','QR',115,true)
-        on conflict(code) do update set name='QR',sort_order=115,is_active=true
+        values('website','Website',105,true)
+        on conflict(code) do update set name='Website',sort_order=105,is_active=true
       `;
       await sql`
         insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group,updated_at)
-        values('qr','QR',115,true,array['crm'],'whatsapp',false,'direct',now())
+        values('website','Website',105,true,array['crm','marketing'],'whatsapp',false,'direct',now())
         on conflict(code) do update set
-          name='QR',sort_order=115,is_active=true,system_codes=array['crm'],
+          name='Website',sort_order=105,is_active=true,system_codes=array['crm','marketing'],
           delivery_route='whatsapp',allow_free_text=false,report_group='direct',updated_at=now()
       `;
       await sql`
-        update crm.leads
-        set source_code='qr',source_name='QR'
-        where platform_code='cash_qr'
-          and (source_code is distinct from 'qr' or source_name is distinct from 'QR')
+        insert into core.branches(code,name,sort_order,is_active,updated_at)
+        values('website','الموقع الإلكتروني',45,true,now())
+        on conflict(code) do update set
+          name='الموقع الإلكتروني',sort_order=45,is_active=true,updated_at=now()
+      `;
+      await sql`
+        insert into core.users(employee_no,full_name,is_active,can_receive_leads,can_receive_tasks,must_change_password,updated_at)
+        values('SYSTEM-WEBSITE','Website',true,false,false,false,now())
+        on conflict(employee_no) do update set
+          full_name='Website',is_active=true,can_receive_leads=false,can_receive_tasks=false,
+          must_change_password=false,updated_at=now()
+      `;
+      await sql`
+        insert into core.user_departments(user_id,department_id,is_primary)
+        select u.id,d.id,true
+        from core.users u
+        join core.departments d on d.code='cash_sales' and d.is_active=true
+        where u.employee_no='SYSTEM-WEBSITE'
+        on conflict(user_id,department_id) do update set is_primary=true
+      `;
+      await sql`
+        insert into core.user_branches(user_id,branch_id,is_primary)
+        select u.id,b.id,true
+        from core.users u
+        join core.branches b on b.code='website' and b.is_active=true
+        where u.employee_no='SYSTEM-WEBSITE'
+        on conflict(user_id,branch_id) do update set is_primary=true
+      `;
+      await sql`
+        update crm.leads l
+        set
+          source_code='website',
+          source_name='Website',
+          branch_code='website',
+          assigned_to=u.id,
+          responsible_name_snapshot='Website',
+          extra_data=coalesce(l.extra_data,'{}'::jsonb)||jsonb_build_object(
+            'cashQrIntake',true,
+            'intakeChannel','cash_qr',
+            'routingMode','fixed_website',
+            'routingBranch','website',
+            'routingOwner','Website'
+          ),
+          updated_at=now()
+        from core.users u
+        where l.platform_code='cash_qr'
+          and u.employee_no='SYSTEM-WEBSITE'
+          and (l.source_code in ('qr','cash_qr') or l.source_name='QR')
       `;
     })().catch((error) => {
       schemaPromise = null;

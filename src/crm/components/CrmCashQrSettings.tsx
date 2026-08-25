@@ -22,7 +22,7 @@ export function CrmCashQrSettings() {
           <ol>
             <li>العميل يمسح QR ويكتب الاسم ورقم الجوال.</li>
             <li>العميل يدخل CRM تلقائيًا بحالة «عميل جديد» وقسم «مبيعات الكاش» والدفع «كاش»، ويظهر له كوده بعد التسجيل ليحفظه.</li>
-            <li>المسؤول والفرع يتم تحديدهما من محرك توزيع مناديب الكاش الحالي.</li>
+            <li>يتم تسجيل العميل على فرع «الموقع الإلكتروني» ومصدر «website» ومسؤول «Website» بدون توزيعه تلقائيًا على مناديب المبيعات.</li>
           </ol>
           <label><span>رابط التسجيل</span><input value={PUBLIC_URL} readOnly dir="ltr" /></label>
           <div className="crm-cash-qr-actions">
