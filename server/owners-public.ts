@@ -507,20 +507,19 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
     return { ok: false as const, status: 409, error: "كود العميل القديم يجب أن يطابق رقم جوال صاحب العضوية" };
   }
 
+  // The sold customer's own code is reusable on later purchases. When an order
+  // id is available, expose only the row for that same order so repeated API
+  // calls remain idempotent without blocking a different future purchase.
   let personalCodeUse: any = null;
   if (referrerKind === "member" && useContext === "old_customer") {
-    [personalCodeUse] = await sql<any[]>`
-      select id::text,website_order_id,used_by_phone_normalized,self_use,discount_amount
-      from owners.personal_code_uses
-      where member_id=${referrer.id}::uuid
-      limit 1
-    `;
-    if (personalCodeUse) {
-      const requestedRoot = commerceOrderRoot(currentWebsiteOrderId);
-      const usedRoot = commerceOrderRoot(personalCodeUse.website_order_id);
-      if (!requestedRoot || requestedRoot !== usedRoot) {
-        return { ok: false as const, status: 409, error: "تم استخدام الكود الشخصي مسبقًا في طلب شراء" };
-      }
+    const requestedRoot = commerceOrderRoot(currentWebsiteOrderId);
+    if (requestedRoot) {
+      [personalCodeUse] = await sql<any[]>`
+        select id::text,website_order_id,used_by_phone_normalized,self_use,discount_amount
+        from owners.personal_code_uses
+        where member_id=${referrer.id}::uuid and website_order_id=${requestedRoot}
+        limit 1
+      `;
     }
   }
 
@@ -548,41 +547,11 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
 
   if (selfUse && useContext === "old_customer") {
     if (referrerKind === "member" && (customerKind !== "existing" || !existingOwner)) {
-      return { ok: false as const, status: 409, error: "كود الدعوة الشخصي متاح لعميل MZJ السابق فقط" };
+      return { ok: false as const, status: 409, error: "كود العميل القديم متاح لعميل MZJ السابق فقط" };
     }
-    const base = clean(currentWebsiteOrderId).slice(0, 160);
-    const primaryOrderId = base ? `${base}:primary` : "";
-    const bonusOrderId = base ? `${base}:bonus` : "";
-    const priorSelfRows = referrerKind === "legacy"
-      ? await sql<any[]>`
-          select id::text,website_order_id
-          from owners.referral_purchase_benefits
-          where legacy_customer_code_id=${referrer.id}::uuid
-            and referred_phone_normalized=${phone}
-            and coalesce(metadata->>'selfUse','false')='true'
-            and (
-              ${base || null}::text is null
-              or website_order_id not in (${primaryOrderId || '__none__'},${bonusOrderId || '__none__'},${base || '__none__'})
-            )
-          order by created_at desc
-          limit 1
-        `
-      : await sql<any[]>`
-          select id::text,website_order_id
-          from owners.referral_purchase_benefits
-          where referrer_member_id=${referrer.id}::uuid
-            and referred_phone_normalized=${phone}
-            and coalesce(metadata->>'selfUse','false')='true'
-            and (
-              ${base || null}::text is null
-              or website_order_id not in (${primaryOrderId || '__none__'},${bonusOrderId || '__none__'},${base || '__none__'})
-            )
-          order by created_at desc
-          limit 1
-        `;
-    if (priorSelfRows[0]) {
-      return { ok: false as const, status: 409, error: "سبق استخدام كود الدعوة الخاص بك للاستفادة من مكافأة عميل قديم" };
-    }
+    // No cross-order one-use check here: the same sold customer may use their
+    // own code again on a later purchase. Per-order uniqueness is enforced by
+    // the benefit and personal-code ledgers.
   }
 
   const [linkedReferral] = await sql<any[]>`
@@ -1265,18 +1234,19 @@ async function handleCommercePersonalCodeUse(request: VercelRequest, response: V
     return response.status(404).json({ ok: false, error: "كود العميل القديم غير صالح" });
   }
   const selfUse = phone === owner.phone_normalized;
+  if (!selfUse) return response.status(409).json({ ok: false, error: "كود العميل القديم يجب أن يطابق رقم جوال صاحب العضوية" });
   const sql = getSql();
   try {
     const result = await sql.begin(async (tx) => {
       const [existing] = await tx<any[]>`
-        select id::text,website_order_id,used_by_phone_normalized,self_use,vehicle_id,car_pre_tax,discount_amount,next_erp_sales_order
+        select id::text,member_id::text,website_order_id,used_by_phone_normalized,self_use,vehicle_id,car_pre_tax,discount_amount,next_erp_sales_order
         from owners.personal_code_uses
-        where member_id=${owner.id}::uuid
+        where website_order_id=${websiteOrderId}
         for update
       `;
       if (existing) {
-        if (commerceOrderRoot(existing.website_order_id) !== websiteOrderId) {
-          return { error: "تم استخدام الكود الشخصي مسبقًا في طلب شراء" };
+        if (existing.member_id !== owner.id) {
+          return { error: "رقم طلب الموقع مرتبط بكود عميل آخر" };
         }
         if (nextErpSalesOrder && existing.next_erp_sales_order !== nextErpSalesOrder) {
           await tx`update owners.personal_code_uses set next_erp_sales_order=${nextErpSalesOrder},updated_at=now() where id=${existing.id}::uuid`;
@@ -1287,9 +1257,9 @@ async function handleCommercePersonalCodeUse(request: VercelRequest, response: V
         insert into owners.personal_code_uses(
           member_id,code_snapshot,used_by_phone_normalized,self_use,website_order_id,vehicle_id,car_pre_tax,discount_amount,next_erp_sales_order
         ) values(
-          ${owner.id}::uuid,${owner.referral_code},${phone},${selfUse},${websiteOrderId},${vehicleId},${carPreTax},${expectedDiscount},${nextErpSalesOrder}
+          ${owner.id}::uuid,${owner.referral_code},${phone},true,${websiteOrderId},${vehicleId},${carPreTax},${expectedDiscount},${nextErpSalesOrder}
         )
-        returning id::text,website_order_id,used_by_phone_normalized,self_use,vehicle_id,car_pre_tax,discount_amount,next_erp_sales_order
+        returning id::text,member_id::text,website_order_id,used_by_phone_normalized,self_use,vehicle_id,car_pre_tax,discount_amount,next_erp_sales_order
       `;
       return { ok: true, duplicate: false, use: inserted };
     });
@@ -1308,7 +1278,7 @@ async function handleCommercePersonalCodeUse(request: VercelRequest, response: V
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/unique|personal_code_uses/i.test(message)) return response.status(409).json({ ok: false, error: "تم استخدام الكود الشخصي مسبقًا في طلب شراء" });
+    if (/unique|personal_code_uses/i.test(message)) return response.status(409).json({ ok: false, error: "تعذر تثبيت استخدام كود العميل لهذا الطلب" });
     throw error;
   }
 }

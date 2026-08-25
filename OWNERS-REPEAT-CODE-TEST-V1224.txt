@@ -1,0 +1,8 @@
+PASS: schema 1224
+PASS: old member unique removed
+PASS: per-order uniqueness kept
+PASS: old customer repeat block removed
+PASS: personal-code repeat block removed
+PASS: self-use still enforced
+PASS: friend per-buyer rule kept
+PASS: personal ledger idempotent by website order

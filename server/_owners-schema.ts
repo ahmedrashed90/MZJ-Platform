@@ -265,15 +265,19 @@ create table if not exists owners.personal_code_uses (
   next_erp_sales_order text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique(member_id),
   unique(website_order_id)
 );
+-- Canonical v1224 shape: a sold member may reuse their own customer code on
+-- later purchases. Keep one ledger row per website order for idempotency and
+-- audit history, but remove the former global one-use constraint per member.
+alter table owners.personal_code_uses drop constraint if exists personal_code_uses_member_id_key;
+create index if not exists owners_personal_code_uses_member_idx on owners.personal_code_uses(member_id,created_at desc);
 create index if not exists owners_personal_code_uses_phone_idx on owners.personal_code_uses(used_by_phone_normalized,created_at desc);
 
 -- A member invite code may be used by many different customers, but the same
 -- customer phone may use the same member invite code only once. This table is
--- deliberately separate from personal_code_uses, whose one-time rule belongs
--- to the member's own old-customer discount.
+-- deliberately separate from personal_code_uses, where the member's own code
+-- is reusable across separate purchases and remains idempotent per website order.
 create table if not exists owners.friend_code_uses (
   id uuid primary key default gen_random_uuid(),
   referrer_member_id uuid not null references owners.members(id) on delete cascade,
@@ -466,7 +470,7 @@ begin
   end if;
 end $$;
 
-update owners.schema_state set version=greatest(version,1223),updated_at=now() where id=1;
+update owners.schema_state set version=greatest(version,1224),updated_at=now() where id=1;
 `;
 
 let schemaPromise: Promise<void> | null = null;
@@ -531,7 +535,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1223;
+  return Number(state?.version || 0) >= 1224;
 }
 
 export function ensureOwnersSchema() {
