@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { attachLeadToContactAndOpenRequest } from "./_crm-lifecycle.js";
+import { ensureCrmSchema } from "./_crm-schema.js";
 import { queueFirebaseSms } from "./_firebase-sms.js";
 import { chooseAssignment, clean } from "./_crm-utils.js";
 import { getSql } from "./_db.js";
@@ -619,6 +620,103 @@ async function getCommerceRewards(referrerKind: CommerceReferrerKind, selfUse: b
     order by name,id
   `;
   return rows;
+}
+
+async function handleCommerceNewCustomerCode(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
+  const auth = commerceApiAuthorized(request);
+  if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
+
+  await ensureCrmSchema();
+  const customerName = clean(payload.name ?? payload.customerName ?? payload.customer_name);
+  const phoneRaw = clean(payload.phone ?? payload.mobile ?? payload.phoneNumber ?? payload.phone_number);
+  const phone = normalizePhone(phoneRaw);
+  if (!customerName) return response.status(400).json({ ok: false, error: "اسم العميل مطلوب" });
+  if (!phone) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
+
+  const sql = getSql();
+  let [lead] = await sql<any[]>`
+    select id::text,customer_name,phone_normalized,status_label,source_code,branch_code,assigned_to::text
+    from crm.leads
+    where phone_normalized=${phone} and is_deleted=false
+    order by created_at
+    limit 1
+  `;
+  let created = false;
+
+  if (lead) {
+    const [priorSale] = await sql<any[]>`
+      select id::text
+      from crm.sales_transactions
+      where lead_id=${lead.id}::uuid and coalesce(is_cancelled,false)=false
+      limit 1
+    `;
+    if (priorSale || clean(lead.status_label) === "تم البيع") {
+      return response.status(409).json({
+        ok: false,
+        error: "رقم الجوال مسجل كعميل قديم. اختر «عميل قديم» واستخدم الكود الشخصي.",
+      });
+    }
+  } else {
+    const [websiteOwner] = await sql<any[]>`
+      select id::text,full_name
+      from core.users
+      where employee_no='SYSTEM-WEBSITE' and is_active=true
+      limit 1
+    `;
+    if (!websiteOwner?.id) {
+      return response.status(500).json({ ok: false, error: "تعذر تهيئة مسؤول Website لتسجيل العميل" });
+    }
+
+    const leadMetadata = {
+      websiteDiscountCodeRequest: true,
+      intakeChannel: "website_checkout_discount",
+      routingMode: "fixed_website",
+      routingBranch: "website",
+      routingOwner: "Website",
+    } as OwnerJson;
+
+    [lead] = await sql<any[]>`
+      insert into crm.leads(
+        customer_name,phone,phone_normalized,source_code,source_name,platform_code,
+        service_key,department_code,branch_code,status_label,payment_type,
+        assigned_to,responsible_name_snapshot,registered_at,notes,extra_data
+      ) values(
+        ${customerName},${phoneRaw || phone},${phone},'website','Website','website_checkout_discount',
+        'cash','cash_sales','website','عميل جديد','كاش',
+        ${websiteOwner.id}::uuid,'Website',now(),'طلب كود خصم عميل جديد من صفحة شراء السيارة بالموقع',${sql.json(leadMetadata)}
+      )
+      returning id::text,customer_name,phone_normalized,status_label,source_code,branch_code,assigned_to::text
+    `;
+
+    await attachLeadToContactAndOpenRequest({
+      leadId: lead.id,
+      actor: null,
+      classificationMethod: "website_checkout_discount",
+    }).catch((error) => console.error("Website checkout discount CRM contact link failed", error));
+
+    await sql`
+      insert into crm.lead_events(
+        lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note
+      ) values(
+        ${lead.id}::uuid,'lead_created','عميل جديد','cash_sales','website',
+        'Website','website_checkout','تم تسجيل العميل من زر احصل على كود الخصم في صفحة شراء السيارة'
+      )
+    `;
+    created = true;
+  }
+
+  const customerCode = await ensureLegacyCustomerCodeForLead(lead.id, { sd96: true });
+  if (!customerCode?.referral_code) {
+    return response.status(500).json({ ok: false, error: "تم تسجيل العميل لكن تعذر إنشاء كود الخصم" });
+  }
+
+  return response.status(created ? 201 : 200).json({
+    ok: true,
+    created,
+    leadId: lead.id,
+    customerCode: customerCode.referral_code,
+    message: created ? "تم تسجيل بياناتك وتجهيز كود الخصم" : "تم العثور على بياناتك وتجهيز كود الخصم",
+  });
 }
 
 async function handleCommerceRewards(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
@@ -1459,6 +1557,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       benefitTitle: settings.friend_benefit_title,
       benefitText: settings.friend_benefit_text,
     });
+  }
+
+  if (request.method === "POST" && action === "commerce_new_customer_code") {
+    return handleCommerceNewCustomerCode(request, response, payload);
   }
 
   if (request.method === "POST" && action === "commerce_rewards") {
