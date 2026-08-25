@@ -3003,6 +3003,19 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .operations-row-delete:hover { background: #a92d35; color: #fff; }
 .operations-agency-checks { border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; background: linear-gradient(180deg,#fff 0%,#fcfaf9 100%); box-shadow: 0 8px 22px rgba(83,54,43,.04); }
 .operations-agency-checks summary { cursor: pointer; font-weight: 900; padding: 3px 0 11px; }
+.operations-agency-interior-color {
+  display: grid;
+  grid-template-columns: 120px minmax(220px, 360px);
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5d8d1;
+  border-radius: 11px;
+  background: #fffaf7;
+}
+.operations-agency-interior-color > span { font-size: 13px; font-weight: 900; color: #5c3b31; }
+.operations-agency-interior-color select { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 7px 10px; font: inherit; font-weight: 800; }
 .operations-check-editor .operations-check-edit-card { display: grid; grid-template-columns: 1fr; gap: 11px; border-color: #eadfd9; background: #fff; transition: border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
 .operations-check-editor .operations-check-edit-card.status-ok { border-color: #b9ddc3; box-shadow: 0 7px 20px rgba(45,129,71,.08); }
 .operations-check-editor .operations-check-edit-card.status-missing { border-color: #edc1c4; box-shadow: 0 7px 20px rgba(170,48,57,.07); }
@@ -7024,6 +7037,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   .operations-movement-page .operations-movement-panel { padding: 10px; }
   .operations-movement-targets { grid-template-columns: 1fr; padding: 9px; }
   .operations-check-editor { grid-template-columns: 1fr; }
+  .operations-agency-interior-color { grid-template-columns: 1fr; gap: 6px; }
   .operations-check-binary-option { min-height: 46px; padding: 6px 8px; }
   .operations-check-option-icon { width: 29px; height: 29px; flex-basis: 29px; }
   .operations-check-edit-card > label { grid-template-columns: 1fr; gap: 5px; }

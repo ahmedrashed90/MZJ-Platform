@@ -6,10 +6,13 @@ import { operationsFetch, queryString } from "../api";
 import type { VehicleRow } from "../types";
 import { useOperations } from "../useOperations";
 
+const AGENCY_INTERIOR_COLORS = ["احمر", "اسود", "برتقالي", "بني غامق", "بيج", "جملي", "رمادي"] as const;
+
 type SelectedVehicle = VehicleRow & {
   note: string;
   stateNote: string;
   shortageNote: string;
+  agencyInteriorColor: string;
   checks: Record<string, { status: string; note: string }>;
 };
 
@@ -49,6 +52,7 @@ export function MovementPage() {
       note: "",
       stateNote: row.state_note || "",
       shortageNote: row.shortage_note || "",
+      agencyInteriorColor: AGENCY_INTERIOR_COLORS.includes((row.interior_color || "") as (typeof AGENCY_INTERIOR_COLORS)[number]) ? String(row.interior_color) : "",
       checks: Object.fromEntries(meta.checkItems.map((item) => [item.code, { status: "ok", note: "" }])),
     }]);
     setSearch("");
@@ -96,6 +100,7 @@ export function MovementPage() {
             note: item.note,
             stateNote: item.stateNote,
             shortageNote: item.shortageNote,
+            agencyInteriorColor: item.location_code === "agency" ? item.agencyInteriorColor : undefined,
             checks: item.location_code === "agency" ? meta.checkItems.map((check) => {
               const value = item.checks[check.code] || { status: "ok", note: "" };
               return { itemCode: check.code, status: value.status, note: value.note };
@@ -150,6 +155,13 @@ export function MovementPage() {
             {selected.filter((item) => item.location_code === "agency").map((item) => (
               <details key={`checks-${item.id}`} className="operations-agency-checks">
                 <summary>تشيك الوكالة للسيارة <b dir="ltr">{item.vin}</b></summary>
+                <label className="operations-agency-interior-color">
+                  <span>اللون الداخلي</span>
+                  <select value={item.agencyInteriorColor} onChange={(event) => patch(item.id, { agencyInteriorColor: event.target.value })}>
+                    <option value="">اختر اللون الداخلي</option>
+                    {AGENCY_INTERIOR_COLORS.map((color) => <option key={color} value={color}>{color}</option>)}
+                  </select>
+                </label>
                 <div className="operations-check-editor">
                   {meta.checkItems.map((check) => {
                     const checkValue = item.checks[check.code] || { status: "ok", note: "" };

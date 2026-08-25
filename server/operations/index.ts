@@ -32,6 +32,8 @@ import {
 
 type QueryRequest = Pick<VercelRequest, "query">;
 
+const AGENCY_INTERIOR_COLORS = new Set(["احمر", "اسود", "برتقالي", "بني غامق", "بيج", "جملي", "رمادي"]);
+
 function pageValues(request: QueryRequest) {
   const page = Math.max(1, intValue(request.query.page, 1));
   const pageSize = Math.min(200, Math.max(10, intValue(request.query.pageSize, 50)));
@@ -918,6 +920,7 @@ type PendingDeliveryPayload = {
   stateNote?: string;
   shortageNote?: string;
   checks?: Array<{ itemCode: string; status: string; note?: string }>;
+  agencyInteriorColor?: string;
   requestedBy?: MovementActor;
   requestedAt?: string;
 };
@@ -940,6 +943,7 @@ async function persistVehicleMovement(
   const noteOnly = Boolean(input.noteOnly);
   const nextStateNote = raw.stateNote === undefined ? clean(vehicle.state_note) : clean(raw.stateNote);
   const nextShortageNote = raw.shortageNote === undefined ? clean(vehicle.shortage_note) : clean(raw.shortageNote);
+  const nextInteriorColor = raw.agencyInteriorColor === undefined ? clean(vehicle.interior_color) : clean(raw.agencyInteriorColor);
   const before = { ...vehicle };
   const [movement] = await tx`
     insert into operations.movements(vehicle_id,from_location_id,to_location_id,old_status,new_status,note,state_note,shortage_note,performed_by,performed_by_name,performed_by_role,performed_by_branch,batch_id,movement_type,before_data)
@@ -952,7 +956,7 @@ async function persistVehicleMovement(
         where id=${vehicle.id}::uuid returning *,id::text
       `
     : await tx`
-        update operations.vehicles set location_id=${destination.id}::uuid,status_code=${newStatus},state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null},
+        update operations.vehicles set location_id=${destination.id}::uuid,status_code=${newStatus},state_note=${nextStateNote||null},shortage_note=${nextShortageNote||null},interior_color=${nextInteriorColor||null},
           has_notes=${newStatus==='has_notes'},updated_by=${who.id}::uuid,updated_by_name=${who.name},updated_at=now(),version=version+1
         where id=${vehicle.id}::uuid returning *,id::text
       `;
@@ -1027,7 +1031,16 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
       const sharedMovementNote = clean(body.note);
       const effectiveShortageNote = sharedMovementNote || clean(raw.shortageNote);
       const effectiveStateNote = clean(raw.stateNote);
-      const persistenceRaw = { ...raw, shortageNote: effectiveShortageNote, stateNote: effectiveStateNote };
+      const agencyInteriorColor = v.location_code === "agency" ? clean(raw.agencyInteriorColor) : "";
+      if (agencyInteriorColor && !AGENCY_INTERIOR_COLORS.has(agencyInteriorColor)) {
+        throw new OperationError(400, "VALIDATION_ERROR", `اللون الداخلي للسيارة ${v.vin} غير موجود في قائمة تشيك الوكالة`);
+      }
+      const persistenceRaw = {
+        ...raw,
+        shortageNote: effectiveShortageNote,
+        stateNote: effectiveStateNote,
+        agencyInteriorColor: v.location_code === "agency" && agencyInteriorColor ? agencyInteriorColor : undefined,
+      };
       const hasNoteUpdate = Boolean(clean(raw.note) || sharedMovementNote)
         || effectiveShortageNote !== clean(v.shortage_note)
         || effectiveStateNote !== clean(v.state_note);
@@ -1061,6 +1074,7 @@ async function moveVehicles(sql: ReturnType<typeof getSql>, body: Record<string,
             stateNote: clean(raw.stateNote),
             shortageNote: effectiveShortageNote,
             checks: Array.isArray(raw.checks) ? raw.checks : [],
+            agencyInteriorColor: v.location_code === "agency" && agencyInteriorColor ? agencyInteriorColor : undefined,
             requestedBy: who,
             requestedAt: new Date().toISOString(),
           };
@@ -1347,6 +1361,7 @@ async function approvalAction(sql: ReturnType<typeof getSql>, body: Record<strin
           stateNote: pending.stateNote,
           shortageNote: pending.shortageNote,
           checks: Array.isArray(pending.checks) ? pending.checks : [],
+          agencyInteriorColor: pending.agencyInteriorColor,
         },
         generalNote: pending.note,
         who: movementWho,
