@@ -10,10 +10,12 @@ import {
   awardOwnerPoints,
   clearOwnerSession,
   createOwnerSession,
+  createLegacyOwnerSession,
   ensureOwnerMemberByPhone,
   ensureOwnerMemberForLead,
   ensureOwnerPurchasePointsForMember,
   getOwnerSession,
+  getLegacyOwnerSession,
   getOwnerSettings,
   ownerHash,
   ownerOtpHash,
@@ -23,7 +25,7 @@ import {
   type OwnerJson,
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
-import { ensureLegacyCustomerCodeForLead, findLegacyCustomerCodeByCode, syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
+import { ensureLegacyCustomerCodeForLead, findLegacyCustomerCodeByCode, findLegacyCustomerCodeByPhone, syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
 import { getWebsiteStock } from "./_website-stock.js";
 
 function requestBody(request: VercelRequest) {
@@ -437,7 +439,15 @@ async function ensureWebsitePurchaseReferral(input: {
   return referral.id as string;
 }
 
-async function commerceEligibility(codeValue: unknown, phoneValue: unknown, currentWebsiteOrderId = "") {
+type CommerceUseContext = "new_customer" | "old_customer" | "friend";
+
+function commerceUseContext(value: unknown): CommerceUseContext | "" {
+  const context = clean(value).toLowerCase();
+  if (context === "new_customer" || context === "old_customer" || context === "friend") return context;
+  return "";
+}
+
+async function commerceEligibility(codeValue: unknown, phoneValue: unknown, currentWebsiteOrderId = "", requestedContext: unknown = "") {
   const settings = await getOwnerSettings();
   if (settings.is_enabled === false) return { ok: false as const, status: 403, error: "MZJ Owners Community غير متاح حاليًا" };
   const referrer = await findCommerceCodeOwner(codeValue);
@@ -477,8 +487,28 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
   }
 
   const referrerKind = referrer.referrer_kind === "legacy" ? "legacy" as const : "member" as const;
+  const selfUse = phone === referrer.phone_normalized;
+  const inferredContext: CommerceUseContext = referrerKind === "legacy" ? "new_customer" : (selfUse ? "old_customer" : "friend");
+  const useContext = commerceUseContext(requestedContext) || inferredContext;
+
+  if (referrerKind === "legacy" && useContext !== "new_customer") {
+    return { ok: false as const, status: 409, error: "كود العميل الجديد يُستخدم داخل خيار «عميل جديد» فقط" };
+  }
+  if (referrerKind === "member" && useContext === "new_customer") {
+    return { ok: false as const, status: 409, error: "كود العميل الجديد يجب أن يكون من تبويب «العملاء الجديدة»" };
+  }
+  if (referrerKind === "legacy" && phone !== referrer.phone_normalized) {
+    return { ok: false as const, status: 409, error: "كود العميل الجديد صالح لصاحب الكود فقط" };
+  }
+  if (referrerKind === "member" && useContext === "friend" && selfUse) {
+    return { ok: false as const, status: 409, error: "لا يمكن استخدام كودك الشخصي كـ «دعوة من صديق»" };
+  }
+  if (referrerKind === "member" && useContext === "old_customer" && !selfUse) {
+    return { ok: false as const, status: 409, error: "كود العميل القديم يجب أن يطابق رقم جوال صاحب العضوية" };
+  }
+
   let personalCodeUse: any = null;
-  if (referrerKind === "member") {
+  if (referrerKind === "member" && useContext === "old_customer") {
     [personalCodeUse] = await sql<any[]>`
       select id::text,website_order_id,used_by_phone_normalized,self_use,discount_amount
       from owners.personal_code_uses
@@ -493,16 +523,30 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
       }
     }
   }
-  if (referrerKind === "legacy" && phone !== referrer.phone_normalized) {
-    return { ok: false as const, status: 409, error: "كود العميل الجديد صالح لصاحب الكود فقط" };
+
+  let friendCodeUse: any = null;
+  if (referrerKind === "member" && useContext === "friend") {
+    [friendCodeUse] = await sql<any[]>`
+      select id::text,website_order_id,next_erp_sales_order
+      from owners.friend_code_uses
+      where referrer_member_id=${referrer.id}::uuid
+        and used_by_phone_normalized=${phone}
+      limit 1
+    `;
+    if (friendCodeUse) {
+      const requestedRoot = commerceOrderRoot(currentWebsiteOrderId);
+      const usedRoot = commerceOrderRoot(friendCodeUse.website_order_id);
+      if (!requestedRoot || requestedRoot !== usedRoot) {
+        return { ok: false as const, status: 409, error: "سبق استخدام كود دعوة هذا الصديق مع رقم الجوال. استخدم كود دعوة من صديق آخر" };
+      }
+    }
   }
 
   const customerKind = referrerKind === "legacy"
     ? "existing" as const
     : (existingOwner || priorSale || priorBenefit ? "existing" as const : "new" as const);
-  const selfUse = phone === referrer.phone_normalized;
 
-  if (selfUse) {
+  if (selfUse && useContext === "old_customer") {
     if (referrerKind === "member" && (customerKind !== "existing" || !existingOwner)) {
       return { ok: false as const, status: 409, error: "كود الدعوة الشخصي متاح لعميل MZJ السابق فقط" };
     }
@@ -547,7 +591,7 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
     where referred_phone_normalized=${phone}
     limit 1
   `;
-  if (referrerKind === "member" && customerKind === "new" && linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
+  if (referrerKind === "member" && useContext === "friend" && customerKind === "new" && linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
     return { ok: false as const, status: 409, error: "هذا العميل مرتبط بكود دعوة آخر بالفعل" };
   }
 
@@ -558,9 +602,11 @@ async function commerceEligibility(codeValue: unknown, phoneValue: unknown, curr
     phone,
     customerKind,
     selfUse,
+    useContext,
     existingOwner: existingOwner || null,
     priorBenefit: priorBenefit || null,
     personalCodeUse: personalCodeUse || null,
+    friendCodeUse: friendCodeUse || null,
     linkedReferral: linkedReferral || null,
     lead: lead || null,
   };
@@ -722,7 +768,7 @@ async function handleCommerceNewCustomerCode(request: VercelRequest, response: V
 async function handleCommerceRewards(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
   const auth = commerceApiAuthorized(request);
   if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
-  const eligibility = await commerceEligibility(payload.code, payload.phone);
+  const eligibility = await commerceEligibility(payload.code, payload.phone, "", payload.context);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
 
   const rewards = await getCommerceRewards(eligibility.referrerKind, eligibility.selfUse === true);
@@ -821,7 +867,7 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
     });
   }
 
-  const eligibility = await commerceEligibility(payload.code, phone);
+  const eligibility = await commerceEligibility(payload.code, phone, websiteOrderId, payload.context);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
   const rewards = await getCommerceRewards(eligibility.referrerKind, eligibility.selfUse === true, rewardId);
   const reward = rewards[0];
@@ -850,6 +896,22 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
 
   try {
     const benefit = await sql.begin(async (tx) => {
+      if (eligibility.referrerKind === "member" && eligibility.useContext === "friend") {
+        const rootWebsiteOrderId = commerceOrderRoot(websiteOrderId);
+        const rows = await tx<any[]>`
+          insert into owners.friend_code_uses(
+            referrer_member_id,code_snapshot,used_by_phone_normalized,website_order_id,next_erp_sales_order
+          ) values(
+            ${eligibility.referrer.id}::uuid,${eligibility.referrer.referral_code},${phone},${rootWebsiteOrderId},${nextErpSalesOrder}
+          )
+          on conflict(referrer_member_id,used_by_phone_normalized) do update set
+            next_erp_sales_order=coalesce(owners.friend_code_uses.next_erp_sales_order,excluded.next_erp_sales_order),
+            updated_at=now()
+          where owners.friend_code_uses.website_order_id=excluded.website_order_id
+          returning id::text
+        `;
+        if (!rows.length) throw new Error("FRIEND_CODE_ALREADY_USED_BY_PHONE");
+      }
       const [lockedReward] = await tx<any[]>`
         select id::text,stock_quantity,redeemed_quantity,referral_purchase_redeemed_quantity,is_active,starts_at,ends_at,
           available_for_referral_purchase,available_for_existing_customer_purchase,available_for_friend_referral_purchase
@@ -911,6 +973,9 @@ async function handleCommerceConfirm(request: VercelRequest, response: VercelRes
     const message = error instanceof Error ? error.message : String(error);
     if (message === "REWARD_NOT_AVAILABLE") {
       return response.status(409).json({ ok: false, error: "المكافأة المختارة نفدت أو توقفت قبل تأكيد الطلب" });
+    }
+    if (message === "FRIEND_CODE_ALREADY_USED_BY_PHONE") {
+      return response.status(409).json({ ok: false, error: "سبق استخدام كود دعوة هذا الصديق مع رقم الجوال. استخدم كود دعوة من صديق آخر" });
     }
     if (/unique|duplicate|referral_purchase_benefits/i.test(message)) {
       return response.status(409).json({ ok: false, error: "\u0631\u0642\u0645 \u0637\u0644\u0628 \u0627\u0644\u0645\u0648\u0642\u0639 \u0645\u0633\u062a\u062e\u062f\u0645 \u0628\u0627\u0644\u0641\u0639\u0644" });
@@ -1000,7 +1065,7 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
     });
   }
 
-  const eligibility = await commerceEligibility(payload.code, phone, websiteOrderId);
+  const eligibility = await commerceEligibility(payload.code, phone, websiteOrderId, payload.context);
   if (!eligibility.ok) return response.status(eligibility.status).json({ ok: false, error: eligibility.error });
   const availableRewards = await getCommerceRewards(eligibility.referrerKind, eligibility.selfUse === true);
   let primaryReward: any = null;
@@ -1059,6 +1124,22 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
   try {
     const insertedRows = await sql.begin(async (tx) => {
       const result: any[] = [];
+      if (eligibility.referrerKind === "member" && eligibility.useContext === "friend") {
+        const rootWebsiteOrderId = commerceOrderRoot(websiteOrderId);
+        const rows = await tx<any[]>`
+          insert into owners.friend_code_uses(
+            referrer_member_id,code_snapshot,used_by_phone_normalized,website_order_id,next_erp_sales_order
+          ) values(
+            ${eligibility.referrer.id}::uuid,${eligibility.referrer.referral_code},${phone},${rootWebsiteOrderId},${nextErpSalesOrder}
+          )
+          on conflict(referrer_member_id,used_by_phone_normalized) do update set
+            next_erp_sales_order=coalesce(owners.friend_code_uses.next_erp_sales_order,excluded.next_erp_sales_order),
+            updated_at=now()
+          where owners.friend_code_uses.website_order_id=excluded.website_order_id
+          returning id::text
+        `;
+        if (!rows.length) throw new Error("FRIEND_CODE_ALREADY_USED_BY_PHONE");
+      }
       for (let index = 0; index < selectedRewards.length; index += 1) {
         const selected = selectedRewards[index];
         const snapshot = rewardSnapshots[index];
@@ -1150,6 +1231,9 @@ async function handleCommerceConfirmBundle(request: VercelRequest, response: Ver
     const message = error instanceof Error ? error.message : String(error);
     if (message === "REWARD_NOT_AVAILABLE") {
       return response.status(409).json({ ok: false, error: "إحدى المكافآت المختارة نفدت أو توقفت قبل تأكيد الطلب" });
+    }
+    if (message === "FRIEND_CODE_ALREADY_USED_BY_PHONE") {
+      return response.status(409).json({ ok: false, error: "سبق استخدام كود دعوة هذا الصديق مع رقم الجوال. استخدم كود دعوة من صديق آخر" });
     }
     if (/unique|duplicate|referral_purchase_benefits/i.test(message)) {
       return response.status(409).json({ ok: false, error: "رقم طلب الموقع مستخدم بالفعل" });
@@ -1526,12 +1610,17 @@ async function handleCommerceLinkOrder(request: VercelRequest, response: VercelR
     where website_order_id=${rootOrderId}
     returning id::text
   ` : [];
+  const friendRows = rootOrderId ? await sql<any[]>`
+    update owners.friend_code_uses set next_erp_sales_order=${nextErpSalesOrder},updated_at=now()
+    where website_order_id=${rootOrderId}
+    returning id::text
+  ` : [];
   const redemptionRows = rootOrderId ? await sql<any[]>`
     update owners.redemptions set next_erp_sales_order=${nextErpSalesOrder},updated_at=now()
     where website_order_id=${rootOrderId}
     returning id::text
   ` : [];
-  return response.status(200).json({ ok: true, updated: rows.length + personalRows.length + redemptionRows.length, nextErpSalesOrder });
+  return response.status(200).json({ ok: true, updated: rows.length + personalRows.length + friendRows.length + redemptionRows.length, nextErpSalesOrder });
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -1615,8 +1704,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(403).json({ ok: false, error: "MZJ Owners Community غير متاح حاليًا" });
     }
     const member = await ensureOwnerMemberByPhone(phone);
-    if (!member) {
-      return response.status(404).json({ ok: false, error: "رقم الجوال غير مرتبط بعملية شراء مكتملة من MZJ" });
+    const legacyCustomer = member ? null : await findLegacyCustomerCodeByPhone(phone);
+    if (!member && !legacyCustomer) {
+      return response.status(404).json({ ok: false, error: "رقم الجوال غير مسجل في MZJ Owners Community" });
     }
 
     const resendSeconds = Math.max(15, Number(settings.otp_resend_seconds || 60));
@@ -1699,10 +1789,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
     }
 
     const member = await ensureOwnerMemberByPhone(phone);
-    if (!member) return response.status(404).json({ ok: false, error: "عضوية العميل غير موجودة" });
+    const legacyCustomer = member ? null : await findLegacyCustomerCodeByPhone(phone);
+    if (!member && !legacyCustomer) return response.status(404).json({ ok: false, error: "عضوية العميل غير موجودة" });
     await sql`update owners.otp_challenges set consumed_at=now() where id=${challengeId}::uuid`;
-    await createOwnerSession(response, member.id);
-    return response.status(200).json({ ok: true });
+    if (member) await createOwnerSession(response, member.id);
+    else await createLegacyOwnerSession(response, legacyCustomer!.id);
+    return response.status(200).json({ ok: true, profileKind: member ? "member" : "legacy" });
   }
 
   if (request.method === "POST" && action === "logout") {
@@ -1711,7 +1803,55 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   let member = await getOwnerSession(request);
-  if (!member) return response.status(401).json({ ok: false, error: "يجب تسجيل الدخول" });
+  const legacyCustomer = member ? null : await getLegacyOwnerSession(request);
+  if (!member && !legacyCustomer) return response.status(401).json({ ok: false, error: "يجب تسجيل الدخول" });
+
+  if (legacyCustomer) {
+    if (request.method === "GET" && action === "me") {
+      const settings = await getOwnerSettings();
+      let websiteCars: Array<{ vehicleId: string; title: string; price: number; priceBeforeTax: number }> = [];
+      let websiteCarsWarning = "";
+      try {
+        const websiteStock = await getWebsiteStock();
+        websiteCars = websiteStock.cars
+          .filter((car) => car.price > 0)
+          .map((car) => ({ vehicleId: car.vehicleId, title: car.title, price: car.price, priceBeforeTax: car.priceBeforeTax }));
+        websiteCarsWarning = websiteStock.warning || "";
+      } catch (error) {
+        websiteCarsWarning = error instanceof Error ? error.message : "تعذر تحميل سيارات الموقع";
+      }
+      return response.status(200).json({
+        ok: true,
+        profileKind: "legacy",
+        member: {
+          id: legacyCustomer.id,
+          name: legacyCustomer.customer_name || "عميل MZJ",
+          phone: legacyCustomer.phone_normalized || "",
+          points: 0,
+          lifetimePoints: 0,
+          tier: "member",
+          referralCode: legacyCustomer.referral_code || "",
+          inviteUrl: "",
+          statusLabel: legacyCustomer.status_label || "عميل جديد",
+        },
+        referrals: [],
+        referralVisits: [],
+        ledger: [],
+        rewards: [],
+        cardRewards: [],
+        redemptions: [],
+        pointsMenu: {
+          repurchase: Number(settings.points_repurchase ?? 500),
+          referralSale: Number(settings.points_sale ?? 700),
+          referralSend: Number(settings.points_unique_open ?? 50),
+        },
+        websiteCars,
+        websiteCarsWarning,
+      });
+    }
+    return response.status(403).json({ ok: false, error: "هذه العملية تتاح بعد اكتمال أول عملية شراء" });
+  }
+
   await syncOwnerReferralProgress(member.id);
   await ensureOwnerPurchasePointsForMember(member.id);
   const [refreshedMember] = await sql<any[]>`

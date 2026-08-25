@@ -574,6 +574,7 @@ type OwnerCancellationSummary = {
   websiteOrderId: string | null;
   nextErpSalesOrder: string | null;
   personalCodesReleased: number;
+  friendCodesReleased: number;
   redemptionCodesRestored: number;
   purchaseBenefitsReleased: number;
   referralSalesReopened: number;
@@ -606,6 +607,7 @@ export async function reverseOwnerCommerceForCancelledOrder(input: {
     websiteOrderId,
     nextErpSalesOrder,
     personalCodesReleased: 0,
+    friendCodesReleased: 0,
     redemptionCodesRestored: 0,
     purchaseBenefitsReleased: 0,
     referralSalesReopened: 0,
@@ -653,6 +655,15 @@ export async function reverseOwnerCommerceForCancelledOrder(input: {
         or (${websiteOrderId}::text is not null and website_order_id=${websiteOrderId})
       )
       returning id::text,member_id::text
+    `;
+
+    const friendCodes = await tx<any[]>`
+      delete from owners.friend_code_uses
+      where (
+        (${nextErpSalesOrder}::text is not null and next_erp_sales_order=${nextErpSalesOrder})
+        or (${websiteOrderId}::text is not null and website_order_id=${websiteOrderId})
+      )
+      returning id::text,referrer_member_id::text
     `;
 
     const restoredRedemptions = await tx<any[]>`
@@ -782,6 +793,7 @@ export async function reverseOwnerCommerceForCancelledOrder(input: {
     return {
       benefits,
       personalCodes,
+      friendCodes,
       restoredRedemptions,
       reopenedReferrals,
       purchaseRows,
@@ -856,6 +868,7 @@ export async function reverseOwnerCommerceForCancelledOrder(input: {
     websiteOrderId,
     nextErpSalesOrder,
     personalCodesReleased: cancellation.personalCodes.length,
+    friendCodesReleased: cancellation.friendCodes.length,
     redemptionCodesRestored: cancellation.restoredRedemptions.length,
     purchaseBenefitsReleased: cancellation.benefits.length,
     referralSalesReopened: cancellation.reopenedReferrals.length,
@@ -1014,8 +1027,23 @@ export async function createOwnerSession(response: VercelResponse, memberId: str
   const sql = getSql();
   const token = crypto.randomBytes(32).toString("hex");
   await sql`
-    insert into owners.sessions(token_hash,member_id,expires_at)
-    values(${sha256(token)},${memberId}::uuid,now()+${OWNER_SESSION_DAYS}*interval '1 day')
+    insert into owners.sessions(token_hash,member_id,legacy_customer_code_id,expires_at)
+    values(${sha256(token)},${memberId}::uuid,null,now()+${OWNER_SESSION_DAYS}*interval '1 day')
+  `;
+  const secure = process.env.VERCEL ? "; Secure" : "";
+  response.setHeader(
+    "Set-Cookie",
+    `${OWNER_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${OWNER_SESSION_DAYS * 86400}${secure}`,
+  );
+}
+
+export async function createLegacyOwnerSession(response: VercelResponse, legacyCustomerCodeId: string) {
+  await ensureOwnersSchema();
+  const sql = getSql();
+  const token = crypto.randomBytes(32).toString("hex");
+  await sql`
+    insert into owners.sessions(token_hash,member_id,legacy_customer_code_id,expires_at)
+    values(${sha256(token)},null,${legacyCustomerCodeId}::uuid,now()+${OWNER_SESSION_DAYS}*interval '1 day')
   `;
   const secure = process.env.VERCEL ? "; Secure" : "";
   response.setHeader(
@@ -1059,6 +1087,31 @@ export async function getOwnerSession(request: VercelRequest) {
     `.catch(() => undefined);
   }
   return member || null;
+}
+
+export async function getLegacyOwnerSession(request: VercelRequest) {
+  await ensureOwnersSchema();
+  const token = parseCookies(request.headers.cookie)[OWNER_SESSION_COOKIE];
+  if (!token) return null;
+  const tokenHash = sha256(token);
+  const sql = getSql();
+  const [customer] = await sql<any[]>`
+    select
+      c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.status,
+      l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.registered_at
+    from owners.sessions s
+    join owners.legacy_customer_codes c on c.id=s.legacy_customer_code_id and c.status='active'
+    join crm.leads l on l.id=c.crm_lead_id and l.is_deleted=false and coalesce(l.status_label,'')<>'تم البيع'
+    where s.token_hash=${tokenHash} and s.expires_at>now()
+    limit 1
+  `;
+  if (customer) {
+    await sql`
+      update owners.sessions set last_seen_at=now()
+      where token_hash=${tokenHash} and last_seen_at<now()-interval '5 minutes'
+    `.catch(() => undefined);
+  }
+  return customer || null;
 }
 
 export function ownerHash(value: string) {

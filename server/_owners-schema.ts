@@ -270,6 +270,47 @@ create table if not exists owners.personal_code_uses (
 );
 create index if not exists owners_personal_code_uses_phone_idx on owners.personal_code_uses(used_by_phone_normalized,created_at desc);
 
+-- A member invite code may be used by many different customers, but the same
+-- customer phone may use the same member invite code only once. This table is
+-- deliberately separate from personal_code_uses, whose one-time rule belongs
+-- to the member's own old-customer discount.
+create table if not exists owners.friend_code_uses (
+  id uuid primary key default gen_random_uuid(),
+  referrer_member_id uuid not null references owners.members(id) on delete cascade,
+  code_snapshot text not null,
+  used_by_phone_normalized text not null,
+  website_order_id text not null,
+  next_erp_sales_order text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(referrer_member_id,used_by_phone_normalized),
+  unique(website_order_id)
+);
+create index if not exists owners_friend_code_uses_phone_idx on owners.friend_code_uses(used_by_phone_normalized,created_at desc);
+create index if not exists owners_friend_code_uses_referrer_idx on owners.friend_code_uses(referrer_member_id,created_at desc);
+
+-- Preserve the one-use-per-phone rule for friend codes that were already used
+-- before this schema version. Historical purchase benefits are the source of truth.
+insert into owners.friend_code_uses(
+  referrer_member_id,code_snapshot,used_by_phone_normalized,website_order_id,next_erp_sales_order,created_at,updated_at
+)
+select distinct on (benefit.referrer_member_id,benefit.referred_phone_normalized)
+  benefit.referrer_member_id,
+  coalesce(nullif(benefit.metadata->>'referralCode',''),member.referral_code),
+  benefit.referred_phone_normalized,
+  regexp_replace(benefit.website_order_id,':(primary|bonus)$',''),
+  benefit.next_erp_sales_order,
+  benefit.created_at,
+  benefit.updated_at
+from owners.referral_purchase_benefits benefit
+join owners.members member on member.id=benefit.referrer_member_id
+where benefit.referrer_member_id is not null
+  and coalesce(benefit.referrer_kind,'member')='member'
+  and coalesce(benefit.metadata->>'selfUse','false')='false'
+  and coalesce(benefit.referred_phone_normalized,'')<>''
+order by benefit.referrer_member_id,benefit.referred_phone_normalized,benefit.created_at,benefit.id
+on conflict do nothing;
+
 create table if not exists owners.otp_challenges (
   id uuid primary key,
   phone_normalized text not null,
@@ -284,12 +325,33 @@ create index if not exists owners_otp_phone_idx on owners.otp_challenges(phone_n
 
 create table if not exists owners.sessions (
   token_hash text primary key,
-  member_id uuid not null references owners.members(id) on delete cascade,
+  member_id uuid references owners.members(id) on delete cascade,
+  legacy_customer_code_id uuid references owners.legacy_customer_codes(id) on delete cascade,
   expires_at timestamptz not null,
   created_at timestamptz not null default now(),
-  last_seen_at timestamptz not null default now()
+  last_seen_at timestamptz not null default now(),
+  constraint owners_sessions_identity_check check(member_id is not null or legacy_customer_code_id is not null)
 );
+alter table owners.sessions alter column member_id drop not null;
+alter table owners.sessions add column if not exists legacy_customer_code_id uuid references owners.legacy_customer_codes(id) on delete cascade;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint constraint_row
+    join pg_class table_row on table_row.oid=constraint_row.conrelid
+    join pg_namespace namespace_row on namespace_row.oid=table_row.relnamespace
+    where namespace_row.nspname='owners'
+      and table_row.relname='sessions'
+      and constraint_row.conname='owners_sessions_identity_check'
+  ) then
+    alter table owners.sessions
+      add constraint owners_sessions_identity_check
+      check(member_id is not null or legacy_customer_code_id is not null);
+  end if;
+end $$;
 create index if not exists owners_sessions_member_idx on owners.sessions(member_id,expires_at desc);
+create index if not exists owners_sessions_legacy_idx on owners.sessions(legacy_customer_code_id,expires_at desc);
 
 delete from owners.sessions where expires_at <= now();
 delete from owners.otp_challenges where expires_at < now() - interval '1 day';
@@ -404,7 +466,7 @@ begin
   end if;
 end $$;
 
-update owners.schema_state set version=greatest(version,1222),updated_at=now() where id=1;
+update owners.schema_state set version=greatest(version,1223),updated_at=now() where id=1;
 `;
 
 let schemaPromise: Promise<void> | null = null;
@@ -450,6 +512,11 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='used_channel')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='redemptions' and column_name='used_by_phone_normalized')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='personal_code_uses')
+      and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='friend_code_uses')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='friend_code_uses' and column_name='referrer_member_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='friend_code_uses' and column_name='used_by_phone_normalized')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='friend_code_uses' and column_name='website_order_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='sessions' and column_name='legacy_customer_code_id')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='member_id')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='website_order_id')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='personal_code_uses' and column_name='car_pre_tax')
@@ -464,7 +531,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1222;
+  return Number(state?.version || 0) >= 1223;
 }
 
 export function ensureOwnersSchema() {

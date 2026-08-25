@@ -116,7 +116,7 @@ export function OwnersPortalPage() {
           <img src="/logo.png" alt="MZJ" />
           <span className="owners-eyebrow">MZJ Owners Community</span>
           <h1>مجموعة محمد بن ذعار العجمي</h1>
-          <p>ادخل برقم الجوال المسجل في عملية الشراء، وسيصلك رمز تحقق على رقم الجوال المسجل.</p>
+          <p>ادخل برقم الجوال المسجل في MZJ Owners Community، وسيصلك رمز تحقق على رقم الجوال المسجل.</p>
           {message ? <div className="owners-public-message">{message}</div> : null}
           {stage === "phone" ? (
             <>
@@ -219,14 +219,16 @@ export function OwnersPortalPage() {
 
         <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
 
-        <section className="owners-invite-card">
-          <div><ShareNetwork size={28} /><div><h2 className="owners-invite-title">شارك رابطك مع أصدقائك</h2></div></div>
-          <div className="owners-invite-link">
-            <input readOnly value={member.inviteUrl || ""} />
-            <button onClick={() => void copyInvite()}><Copy size={18} /> نسخ</button>
-            <a href={`https://wa.me/?text=${encodeURIComponent(`رابط دعوتي من مجموعة محمد بن ذعار العجمي: ${member.inviteUrl || ""}`)}`} target="_blank" rel="noreferrer"><WhatsappLogo size={18} /> واتساب</a>
-          </div>
-        </section>
+        {member.inviteUrl ? (
+          <section className="owners-invite-card">
+            <div><ShareNetwork size={28} /><div><h2 className="owners-invite-title">شارك رابطك مع أصدقائك</h2></div></div>
+            <div className="owners-invite-link">
+              <input readOnly value={member.inviteUrl || ""} />
+              <button onClick={() => void copyInvite()}><Copy size={18} /> نسخ</button>
+              <a href={`https://wa.me/?text=${encodeURIComponent(`رابط دعوتي من مجموعة محمد بن ذعار العجمي: ${member.inviteUrl || ""}`)}`} target="_blank" rel="noreferrer"><WhatsappLogo size={18} /> واتساب</a>
+            </div>
+          </section>
+        ) : null}
 
 
         <section className="owners-public-section">
