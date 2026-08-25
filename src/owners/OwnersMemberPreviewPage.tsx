@@ -163,7 +163,7 @@ export function OwnersMemberPreviewPage() {
 
           {member.inviteUrl ? (
             <section className="owners-invite-card owners-admin-invite-card">
-              <div><ShareNetwork size={28} /><div><h2>رابط دعوة العميل</h2><p>{member.phone || ""}</p></div></div>
+              <div><ShareNetwork size={28} /><div><h2>إرسال الدعوة لصديق</h2><p>{member.phone || ""}</p></div></div>
               <div className="owners-invite-link"><input readOnly value={member.inviteUrl} /></div>
             </section>
           ) : null}

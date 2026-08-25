@@ -122,12 +122,10 @@ export function OwnersDiscountCalculator({ websiteCars, referralCode }: OwnersDi
           ) : null}
         </div>
       </div>
-      {selectedCar ? (
-        <div className="owners-calculator-result">
-          <div className="highlight"><span>الخصم</span><strong>{discount.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></div>
-          <div><span>كودك الشخصي</span><strong dir="ltr">{referralCode || "—"}</strong></div>
-        </div>
-      ) : null}
+      <div className="owners-calculator-result">
+        <div className="highlight"><span>الخصم</span><strong>{selectedCar ? `${discount.toLocaleString("ar-SA-u-nu-latn")} ر.س` : "—"}</strong></div>
+        <div><span>كود العميل</span><strong dir="ltr">{referralCode || "—"}</strong></div>
+      </div>
       {!websiteCars.length ? <p className="owners-calculator-empty">تعذر تحميل سيارات الموقع حاليًا. حاول مرة أخرى لاحقًا.</p> : null}
     </section>
   );
