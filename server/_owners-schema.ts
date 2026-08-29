@@ -488,6 +488,7 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='otp_challenges')
       and exists(select 1 from information_schema.tables where table_schema='owners' and table_name='schema_state')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='otp_hourly_limit')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='welcome_message_template')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_purchase_enabled')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='points_purchase')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='settings' and column_name='purchase_points_effective_at')

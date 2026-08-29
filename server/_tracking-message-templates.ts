@@ -27,8 +27,9 @@ const DEFAULT_TRACKING_SMS_TEMPLATES: Record<number, string> = {
 متابعة الطلب: {tracking_link}`,
   10: `عميلنا العزيز / {customer_name}
 نبارك لكم إتمام عملية التسليم بنجاح.
-يشرفنا في مجموعة محمد ذعار العجمي للسيارات خدمتكم، ونتمنى لكم قيادة آمنة وتجربة ممتعة.
-#نجم_الطريق`,
+كودك الشخصي في عضوية محمد ذعار العجمي للسيارات هو {personal_code}
+رابط العضوية {portal_url}
+نتمنى لكم قيادة آمنة وتجربة ممتعة.`,
 };
 
 export function defaultTrackingSmsTemplate(stageOrder: unknown) {

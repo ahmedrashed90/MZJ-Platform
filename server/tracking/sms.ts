@@ -7,6 +7,7 @@ import { trackingAccessScope } from "../_tracking-access.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureCrmSchema } from "../_crm-schema.js";
 import { queueOwnerWelcomeSms } from "../_owners-welcome.js";
+import { ensureOwnerMemberByPhone } from "../_owners.js";
 import { clean, normalizeSaudiPhone, publicTrackingUrl } from "../_tracking-utils.js";
 import { effectiveTrackingSmsTemplate, renderTrackingSmsTemplate } from "../_tracking-message-templates.js";
 
@@ -21,7 +22,7 @@ function requestOrigin(request: VercelRequest) {
   return `${protocol}://${host}`;
 }
 
-function messageForStage(order: any, vehicle: any, stage: any, link: string) {
+function messageForStage(order: any, vehicle: any, stage: any, link: string, club?: { personalCode?: unknown; portalUrl?: unknown }) {
   const customer = clean(order.customer_name) || "عميلنا العزيز";
   const template = effectiveTrackingSmsTemplate(stage.sort_order, stage.sms_message_template);
   if (template) {
@@ -36,6 +37,8 @@ function messageForStage(order: any, vehicle: any, stage: any, link: string) {
       subtotal_before_tax: formatMoney(order.subtotal_before_tax),
       tax_value: formatMoney(order.tax_value),
       total_incl_vat: formatMoney(order.total_incl_vat),
+      personal_code: clean(club?.personalCode),
+      portal_url: clean(club?.portalUrl),
     });
   }
   return `عميلنا العزيز / ${customer}\nتم تحديث طلبكم رقم ${order.sales_order_no}: ${stage.name}\nمتابعة الطلب: ${link}`;
@@ -83,8 +86,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const phone = normalizeSaudiPhone(row.customer_mobile);
   if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صالح أو غير موجود" });
-  const link = publicTrackingUrl(requestOrigin(request), row.tracking_token);
-  const message = clean(body.message) || messageForStage(row, row, { name: row.stage_name, sort_order: row.sort_order, sms_message_template: row.sms_message_template }, link);
+  const origin = requestOrigin(request);
+  const link = publicTrackingUrl(origin, row.tracking_token);
+  const clubPortalUrl = `${origin}/club`;
+  const stage10Member = Number(row.sort_order) === 10 ? await ensureOwnerMemberByPhone(row.customer_mobile) : null;
+  const message = clean(body.message) || messageForStage(
+    row,
+    row,
+    { name: row.stage_name, sort_order: row.sort_order, sms_message_template: row.sms_message_template },
+    link,
+    { personalCode: stage10Member?.referral_code, portalUrl: clubPortalUrl },
+  );
   let automaticWelcomeEnabled = false;
   if (Number(row.sort_order) === 10) {
     const [settings] = await sql<any[]>`
@@ -130,7 +142,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const welcomeResult = await queueOwnerWelcomeSms({
           phone,
           byUid: user.id,
-          portalUrl: `${requestOrigin(request)}/club`,
+          portalUrl: clubPortalUrl,
         });
         welcome = { status: welcomeResult.status, documentId: welcomeResult.documentId };
         await sql`

@@ -87,6 +87,7 @@ export function TrackingSettingsPanel({ readOnly = false }: { readOnly?: boolean
                     <small>
                       المتغيرات المتاحة: {"{customer_name}"}، {"{tracking_link}"}، {"{order_no}"}، {"{stage_name}"}، {"{car_name}"}، {"{vin}"}
                       {stage.sort_order === 1 ? <>، {"{vehicles_count}"}، {"{subtotal_before_tax}"}، {"{tax_value}"}، {"{total_incl_vat}"}</> : null}
+                      {stage.sort_order === 10 ? <>، {"{personal_code}"}، {"{portal_url}"}</> : null}
                     </small>
                   </label>
                 ) : null}
