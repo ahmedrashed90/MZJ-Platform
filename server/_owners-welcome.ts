@@ -98,7 +98,7 @@ export async function queueOwnerWelcomeSms(input: {
     update owners.members
     set
       welcome_sent_at=coalesce(welcome_sent_at,now()),
-      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('welcomeDocumentId',${queued.documentId},'welcomeChannel','sms_plus'),
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('welcomeDocumentId',${queued.documentId}::text,'welcomeChannel','sms_plus'),
       updated_at=now()
     where id=${member.id}::uuid
   `;
@@ -163,7 +163,7 @@ export async function queueLegacyOwnerWelcomeSms(input: {
     update owners.legacy_customer_codes
     set
       welcome_sent_at=coalesce(welcome_sent_at,now()),
-      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('welcomeDocumentId',${queued.documentId},'welcomeChannel','sms_plus'),
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('welcomeDocumentId',${queued.documentId}::text,'welcomeChannel','sms_plus'),
       updated_at=now()
     where id=${customer.id}::uuid
   `;
