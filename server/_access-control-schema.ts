@@ -142,7 +142,7 @@ insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_activ
 ('core','database','قاعدة البيانات الموحدة','/database',30,true),
 ('core','settings','الإعدادات','/settings',40,true),
 ('core','activity','سجل النشاط','/activity',50,true),
-('core','owners_community','MZJ Owners Community','/owners-community',60,true),
+('core','owners_community','MZJ Club Community','/owners-community',60,true),
 ('website','stock','الاستوك في الموقع','/website',10,true),
 ('crm','dashboard','الداش بورد','/crm',10,true),
 ('crm','database','قاعدة البيانات','/crm/database',20,true),
@@ -205,10 +205,10 @@ insert into core.permissions(code,name,system_code,page_code,action_code,name_ar
 ('settings.operations.manage','تعديل إعدادات العمليات','core','settings','operations_manage','تعديل إعدادات العمليات','تعديل إعدادات العمليات التشغيلية','settings',true,220,true),
 ('settings.tracking.view','مشاهدة إعدادات التتبع','core','settings','tracking_view','مشاهدة إعدادات التتبع','مشاهدة إعدادات التتبع','settings',false,230,true),
 ('settings.tracking.manage','تعديل إعدادات التتبع','core','settings','tracking_manage','تعديل إعدادات التتبع','تعديل إعدادات التتبع التشغيلية','settings',true,240,true),
-('settings.owners.view','مشاهدة إعدادات MZJ Owners Community','core','settings','owners_view','مشاهدة إعدادات MZJ Owners Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,241,true),
-('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,242,true),
-('owners.community.view','دخول MZJ Owners Community','core','owners_community','view','دخول MZJ Owners Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,243,true),
-('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,244,true),
+('settings.owners.view','مشاهدة إعدادات MZJ Club Community','core','settings','owners_view','مشاهدة إعدادات MZJ Club Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,241,true),
+('settings.owners.manage','تعديل إعدادات MZJ Club Community','core','settings','owners_manage','تعديل إعدادات MZJ Club Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,242,true),
+('owners.community.view','دخول MZJ Club Community','core','owners_community','view','دخول MZJ Club Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,243,true),
+('owners.community.manage','إدارة MZJ Club Community','core','owners_community','manage','إدارة MZJ Club Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,244,true),
 ('system.website.access','دخول نظام الموقع الإلكتروني','website','stock','access','دخول نظام الموقع الإلكتروني','دخول نظام الموقع الإلكتروني','system',false,245,true),
 ('website.stock.view','مشاهدة الاستوك في الموقع','website','stock','view','مشاهدة الاستوك في الموقع','متابعة سيارات الموقع وحالة الصور و CompareKey','page',false,246,true),
 ('system.crm.access','دخول نظام CRM','crm','dashboard','access','دخول نظام CRM','دخول نظام CRM','system',false,250,true),
@@ -563,7 +563,7 @@ on conflict(code) do update set name_ar=excluded.name_ar,sort_order=excluded.sor
 insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
 ('operations','sales_orders_followup','متابعة طلبات البيع','/operations/sales-orders',55,true),
 ('marketing','engagement','تفاعل النشر','/marketing/engagement',75,true),
-('core','owners_community','MZJ Owners Community','/owners-community',60,true),
+('core','owners_community','MZJ Club Community','/owners-community',60,true),
 ('website','stock','الاستوك في الموقع','/website',10,true)
 on conflict(system_code,code) do update set
   name_ar=excluded.name_ar,
@@ -575,10 +575,10 @@ on conflict(system_code,code) do update set
 insert into core.permissions(code,name,system_code,page_code,action_code,name_ar,description_ar,category,is_sensitive,sort_order,is_active) values
 ('operations.sales_orders_followup.view','مشاهدة متابعة طلبات البيع','operations','sales_orders_followup','view','مشاهدة متابعة طلبات البيع','التحكم في فتح صفحة متابعة طلبات البيع داخل سيستم العمليات','page',false,865,true),
 ('marketing.engagement.view','مشاهدة تفاعل النشر','marketing','engagement','view','مشاهدة تفاعل النشر','التحكم في فتح صفحة تفاعل النشر داخل سيستم التسويق','page',false,1501,true),
-('owners.community.view','دخول MZJ Owners Community','core','owners_community','view','دخول MZJ Owners Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
-('owners.community.manage','إدارة MZJ Owners Community','core','owners_community','manage','إدارة MZJ Owners Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
-('settings.owners.view','مشاهدة إعدادات MZJ Owners Community','core','settings','owners_view','مشاهدة إعدادات MZJ Owners Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
-('settings.owners.manage','تعديل إعدادات MZJ Owners Community','core','settings','owners_manage','تعديل إعدادات MZJ Owners Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true),
+('owners.community.view','دخول MZJ Club Community','core','owners_community','view','دخول MZJ Club Community','فتح لوحة إدارة مجتمع ملاك MZJ','page',true,1900,true),
+('owners.community.manage','إدارة MZJ Club Community','core','owners_community','manage','إدارة MZJ Club Community','إدارة الأعضاء والدعوات والمكافآت والاستبدالات','action',true,1910,true),
+('settings.owners.view','مشاهدة إعدادات MZJ Club Community','core','settings','owners_view','مشاهدة إعدادات MZJ Club Community','مشاهدة إعدادات برنامج مجتمع ملاك MZJ','settings',true,1920,true),
+('settings.owners.manage','تعديل إعدادات MZJ Club Community','core','settings','owners_manage','تعديل إعدادات MZJ Club Community','تعديل إعدادات النقاط والمكافآت والقوالب','settings',true,1930,true),
 ('system.website.access','دخول نظام الموقع الإلكتروني','website','stock','access','دخول نظام الموقع الإلكتروني','دخول نظام الموقع الإلكتروني','system',false,1940,true),
 ('website.stock.view','مشاهدة الاستوك في الموقع','website','stock','view','مشاهدة الاستوك في الموقع','متابعة سيارات الموقع وحالة الصور و CompareKey','page',false,1950,true)
 on conflict(code) do update set

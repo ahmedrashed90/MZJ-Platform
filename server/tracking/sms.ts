@@ -8,6 +8,7 @@ import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { ensureCrmSchema } from "../_crm-schema.js";
 import { queueOwnerWelcomeSms } from "../_owners-welcome.js";
 import { clean, normalizeSaudiPhone, publicTrackingUrl } from "../_tracking-utils.js";
+import { effectiveTrackingSmsTemplate, renderTrackingSmsTemplate } from "../_tracking-message-templates.js";
 
 function formatMoney(value: unknown) {
   const number = Number(value || 0);
@@ -22,14 +23,20 @@ function requestOrigin(request: VercelRequest) {
 
 function messageForStage(order: any, vehicle: any, stage: any, link: string) {
   const customer = clean(order.customer_name) || "عميلنا العزيز";
-  if (Number(stage.sort_order) === 1) {
-    return `عميلنا العزيز / ${customer}\nمرحباً بكم في مجموعة محمد ذعار العجمي للسيارات\nتم تسجيل طلب شرائكم بنجاح ✅\nعدد السيارات: ${Number(order.vehicles_count || 1)}\nالإجمالي قبل الضريبة: ${formatMoney(order.subtotal_before_tax)} ر.س\nقيمة الضريبة: ${formatMoney(order.tax_value)} ر.س\nالإجمالي شامل الضريبة: ${formatMoney(order.total_incl_vat)} ر.س\nيمكنكم متابعة حالة الطلب عبر الرابط التالي:\n${link}\nمع مجموعة محمد ذعار العجمي للسيارات أنت نجم الطريق ⭐\n📞 920014635\nرابط التواصل واتساب https://api.whatsapp.com/send?phone=966920014635`;
-  }
-  if (Number(stage.sort_order) === 9) {
-    return `عميلنا العزيز / ${customer}\nيسعدنا إبلاغك بجاهزية سيارتك، الآن يمكنك الحضور للاستلام أو طلب خدمة الشحن.\nنشكرك على ثقتك، مع محمد ذعار العجمي للسيارات أنت نجم الطريق ⭐\n\nمواعيد العمل:\nالفترة الصباحية من الساعة 9 صباحاً إلى 11 صباحاً\nالفترة المسائية من الساعة 4 مساءً إلى 9 مساءً\nيوم الجمعة المساء فقط\n\nمتابعة الطلب: ${link}`;
-  }
-  if (Number(stage.sort_order) === 10) {
-    return `عميلنا العزيز / ${customer}\nنبارك لكم إتمام عملية التسليم بنجاح.\nيشرفنا في مجموعة محمد ذعار العجمي للسيارات خدمتكم، ونتمنى لكم قيادة آمنة وتجربة ممتعة.\n#نجم_الطريق`;
+  const template = effectiveTrackingSmsTemplate(stage.sort_order, stage.sms_message_template);
+  if (template) {
+    return renderTrackingSmsTemplate(template, {
+      customer_name: customer,
+      tracking_link: link,
+      order_no: clean(order.sales_order_no),
+      stage_name: clean(stage.name),
+      car_name: clean(vehicle.car_name),
+      vin: clean(vehicle.vin).startsWith("PENDING-") ? "" : clean(vehicle.vin),
+      vehicles_count: Number(order.vehicles_count || 1),
+      subtotal_before_tax: formatMoney(order.subtotal_before_tax),
+      tax_value: formatMoney(order.tax_value),
+      total_incl_vat: formatMoney(order.total_incl_vat),
+    });
   }
   return `عميلنا العزيز / ${customer}\nتم تحديث طلبكم رقم ${order.sales_order_no}: ${stage.name}\nمتابعة الطلب: ${link}`;
 }
@@ -51,7 +58,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     select o.*,o.id::text,o.assigned_to::text,
       (select count(*) from tracking.order_vehicles vx where vx.order_id=o.id)::int as vehicles_count,
       v.id::text as vehicle_id,v.vin,v.item_no,v.car_name,
-      s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,o.tracking_token
+      s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,s.sms_message_template,o.tracking_token
     from tracking.orders o
     join tracking.order_vehicles v on v.order_id=o.id and v.id=${vehicleId}::uuid
     join tracking.stages s on s.id=${stageId}::uuid
@@ -77,7 +84,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const phone = normalizeSaudiPhone(row.customer_mobile);
   if (!phone) return response.status(400).json({ ok: false, error: "رقم جوال العميل غير صالح أو غير موجود" });
   const link = publicTrackingUrl(requestOrigin(request), row.tracking_token);
-  const message = clean(body.message) || messageForStage(row, row, { name: row.stage_name, sort_order: row.sort_order }, link);
+  const message = clean(body.message) || messageForStage(row, row, { name: row.stage_name, sort_order: row.sort_order, sms_message_template: row.sms_message_template }, link);
   let automaticWelcomeEnabled = false;
   if (Number(row.sort_order) === 10) {
     const [settings] = await sql<any[]>`
@@ -123,7 +130,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const welcomeResult = await queueOwnerWelcomeSms({
           phone,
           byUid: user.id,
-          portalUrl: `${requestOrigin(request)}/owners`,
+          portalUrl: `${requestOrigin(request)}/club`,
         });
         welcome = { status: welcomeResult.status, documentId: welcomeResult.documentId };
         await sql`

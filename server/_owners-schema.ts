@@ -33,12 +33,14 @@ create table if not exists owners.settings (
   friend_benefit_title text not null default 'دعوة من مجموعة محمد بن ذعار العجمي',
   friend_benefit_text text not null default 'سجل بياناتك من رابط الدعوة للاستفادة من المزايا المتاحة.',
   welcome_message_enabled boolean not null default false,
+  welcome_message_template text,
   updated_by uuid references core.users(id) on delete set null,
   updated_at timestamptz not null default now()
 );
 insert into owners.settings(id) values('default') on conflict(id) do nothing;
 
 alter table owners.settings add column if not exists otp_hourly_limit integer not null default 5;
+alter table owners.settings add column if not exists welcome_message_template text;
 alter table owners.settings add column if not exists points_purchase_enabled boolean not null default true;
 alter table owners.settings add column if not exists points_purchase integer not null default 500;
 alter table owners.settings add column if not exists purchase_points_effective_at timestamptz not null default now();
@@ -361,7 +363,7 @@ delete from owners.sessions where expires_at <= now();
 delete from owners.otp_challenges where expires_at < now() - interval '1 day';
 
 insert into core.sources(code,name,sort_order,is_active,system_codes,delivery_route,allow_free_text,report_group)
-values('owners_referral','MZJ Owners Community',990,true,array['crm','marketing'],'whatsapp',false,'direct')
+values('owners_referral','MZJ Club Community',990,true,array['crm','marketing'],'whatsapp',false,'direct')
 on conflict(code) do update set
   name=excluded.name,
   is_active=true,
@@ -372,7 +374,7 @@ on conflict(code) do update set
   updated_at=now();
 
 insert into crm.sources(code,name,sort_order,is_active)
-values('owners_referral','MZJ Owners Community',990,true)
+values('owners_referral','MZJ Club Community',990,true)
 on conflict(code) do update set name=excluded.name,is_active=true;
 
 create table if not exists owners.schema_state (

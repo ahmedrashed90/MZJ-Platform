@@ -12,7 +12,7 @@ const items = [
   { href: "/operations", label: "العمليات", icon: SuitcaseSimple, system: "operations" },
   { href: "/tracking", label: "التراكينج", icon: MapPin, system: "tracking" },
   { href: "/website", label: "الموقع الإلكتروني", icon: Globe, system: "website" },
-  { href: "/owners-community", label: "MZJ Owners", icon: Crown, permission: "owners.community.view" },
+  { href: "/owners-community", label: "MZJ Club Community", icon: Crown, permission: "owners.community.view" },
 ] as const;
 const supportItems = [
   { href: "/reports", label: "التقارير", icon: ChartBar, permission: "platform.reports.view" },

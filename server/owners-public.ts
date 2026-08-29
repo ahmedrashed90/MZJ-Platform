@@ -209,7 +209,7 @@ async function registerReferralCore(
 ): Promise<ReferralRegistrationResult> {
   const settings = await getOwnerSettings();
   if (settings.is_enabled === false) {
-    return { status: 403, body: { ok: false, error: "MZJ Owners Community غير متاح حاليًا" } };
+    return { status: 403, body: { ok: false, error: "MZJ Club Community غير متاح حاليًا" } };
   }
 
   const referrer = await findReferrer(payload.code);
@@ -227,7 +227,7 @@ async function registerReferralCore(
     select id::text from owners.members where phone_normalized=${phone} and status='active' limit 1
   `;
   if (existingOwner) {
-    return { status: 409, body: { ok: false, error: "هذا الرقم عضو بالفعل في MZJ Owners Community" } };
+    return { status: 409, body: { ok: false, error: "هذا الرقم عضو بالفعل في MZJ Club Community" } };
   }
 
   const [linkedReferral] = await sql<any[]>`
@@ -317,9 +317,9 @@ async function registerReferralCore(
         customer_name,phone,phone_normalized,source_code,source_name,service_key,department_code,
         branch_code,status_label,payment_type,assigned_to,responsible_name_snapshot,registered_at,notes,extra_data
       ) values(
-        ${name},${phone},${phone},'owners_referral','MZJ Owners Community',${service},${department},
+        ${name},${phone},${phone},'owners_referral','MZJ Club Community',${service},${department},
         ${assignment.branchCode || preferredBranch || null},'عميل جديد',${payment},${assignment.assignedTo || null}::uuid,
-        ${assignment.assignedName || null},now(),${options.note || 'تم التسجيل من رابط دعوة MZJ Owners Community'},${sql.json(leadMetadata)}
+        ${assignment.assignedName || null},now(),${options.note || 'تم التسجيل من رابط دعوة MZJ Club Community'},${sql.json(leadMetadata)}
       )
       returning id::text
     `;
@@ -449,7 +449,7 @@ function commerceUseContext(value: unknown): CommerceUseContext | "" {
 
 async function commerceEligibility(codeValue: unknown, phoneValue: unknown, currentWebsiteOrderId = "", requestedContext: unknown = "") {
   const settings = await getOwnerSettings();
-  if (settings.is_enabled === false) return { ok: false as const, status: 403, error: "MZJ Owners Community غير متاح حاليًا" };
+  if (settings.is_enabled === false) return { ok: false as const, status: 403, error: "MZJ Club Community غير متاح حاليًا" };
   const referrer = await findCommerceCodeOwner(codeValue);
   if (!referrer || referrer.member_kind === "test") {
     return { ok: false as const, status: 404, error: "كود الدعوة غير صالح للاستخدام في طلب الشراء" };
@@ -1603,7 +1603,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (request.method === "GET" && action === "invite") {
     const settings = await getOwnerSettings();
     if (settings.is_enabled === false) {
-      return response.status(403).json({ ok: false, error: "MZJ Owners Community غير متاح حاليًا" });
+      return response.status(403).json({ ok: false, error: "MZJ Club Community غير متاح حاليًا" });
     }
     const referrer = await findReferrer(request.query.code);
     if (!referrer) return response.status(404).json({ ok: false, error: "رابط الدعوة غير صالح" });
@@ -1671,12 +1671,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!phone) return response.status(400).json({ ok: false, error: "اكتب رقم جوال صحيح" });
     const settings = await getOwnerSettings();
     if (settings.is_enabled === false) {
-      return response.status(403).json({ ok: false, error: "MZJ Owners Community غير متاح حاليًا" });
+      return response.status(403).json({ ok: false, error: "MZJ Club Community غير متاح حاليًا" });
     }
     const member = await ensureOwnerMemberByPhone(phone);
     const legacyCustomer = member ? null : await findLegacyCustomerCodeByPhone(phone);
     if (!member && !legacyCustomer) {
-      return response.status(404).json({ ok: false, error: "رقم الجوال غير مسجل في MZJ Owners Community" });
+      return response.status(404).json({ ok: false, error: "رقم الجوال غير مسجل في MZJ Club Community" });
     }
 
     const resendSeconds = Math.max(15, Number(settings.otp_resend_seconds || 60));
@@ -1704,7 +1704,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       )
     `;
     try {
-      const message = `رمز MZJ Owners Community: ${otp} صالح لمدة ${expiryMinutes} دقائق.`;
+      const message = `رمز MZJ Club Community: ${otp} صالح لمدة ${expiryMinutes} دقائق.`;
       await queueFirebaseSms({
         createdAt: new Date(),
         message,
@@ -1905,7 +1905,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         lifetimePoints: Number(member.lifetime_points || 0),
         tier: member.tier_code,
         referralCode: member.referral_code,
-        inviteUrl: `${publicBase(request)}/owners/invite/${member.referral_code}`,
+        inviteUrl: `${publicBase(request)}/club/invite/${member.referral_code}`,
       },
       referrals,
       referralVisits,

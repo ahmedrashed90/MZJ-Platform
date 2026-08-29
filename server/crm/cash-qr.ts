@@ -12,7 +12,7 @@ const WEBSITE_SOURCE_NAME = "Website";
 const WEBSITE_BRANCH_CODE = "website";
 const WEBSITE_OWNER_EMPLOYEE_NO = "SYSTEM-WEBSITE";
 const WEBSITE_OWNER_NAME = "Website";
-const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/owners";
+const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/club";
 
 function body(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -158,7 +158,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     await ensureOwnersSchema();
     return ensureLegacyCustomerCodeForLead(created.id, { sd96: true });
   })().catch((error) => {
-    console.error("MZJ Owners legacy customer code sync failed", error);
+    console.error("MZJ Club Community legacy customer code sync failed", error);
     return null;
   });
 
@@ -174,7 +174,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     } catch (error) {
       // Registration and the on-screen code must remain successful even if SMS+
       // is temporarily unavailable; the customer can still save the shown code.
-      console.error("MZJ Owners welcome SMS+ queue failed", error);
+      console.error("MZJ Club Community welcome SMS+ queue failed", error);
     }
   }
 

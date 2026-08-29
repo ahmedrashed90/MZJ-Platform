@@ -7,6 +7,7 @@ import { ownersAdminGet, ownersAdminPost } from "./api";
 type OwnersSettingsForm = {
   isEnabled: boolean;
   welcomeMessageEnabled: boolean;
+  welcomeMessageTemplate: string;
   otpExpiryMinutes: number;
   otpResendSeconds: number;
   otpMaxAttempts: number;
@@ -33,9 +34,18 @@ type OwnersSettingsForm = {
   friendBenefitText: string;
 };
 
+const DEFAULT_WELCOME_MESSAGE_TEMPLATE = `مرحباً : {customer_name}
+أهلاً بك في MZJ Club Community.
+يمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:
+{portal_url}
+الكود الشخصي : {personal_code}
+
+تاريخ تثق به`;
+
 const emptyForm: OwnersSettingsForm = {
   isEnabled: true,
   welcomeMessageEnabled: false,
+  welcomeMessageTemplate: DEFAULT_WELCOME_MESSAGE_TEMPLATE,
   otpExpiryMinutes: 5,
   otpResendSeconds: 60,
   otpMaxAttempts: 5,
@@ -80,6 +90,7 @@ export function OwnersSettingsPanel() {
     setForm({
       isEnabled: settings.is_enabled !== false,
       welcomeMessageEnabled: settings.welcome_message_enabled === true,
+      welcomeMessageTemplate: settings.welcome_message_template || DEFAULT_WELCOME_MESSAGE_TEMPLATE,
       otpExpiryMinutes: Number(settings.otp_expiry_minutes || 5),
       otpResendSeconds: Number(settings.otp_resend_seconds || 60),
       otpMaxAttempts: Number(settings.otp_max_attempts || 5),
@@ -120,7 +131,7 @@ export function OwnersSettingsPanel() {
     setMessage("");
     try {
       await ownersAdminPost({ action: "save_settings", ...form });
-      setMessage("تم حفظ إعدادات MZJ Owners Community");
+      setMessage("تم حفظ إعدادات MZJ Club Community");
       await load();
     } catch (error) {
       setMessage(errorMessage(error));
@@ -133,7 +144,7 @@ export function OwnersSettingsPanel() {
     setForm((current) => ({ ...current, [key]: Number(value) }));
   }
 
-  if (!loaded) return <div className="owners-panel owners-loading">جاري تحميل إعدادات MZJ Owners Community...</div>;
+  if (!loaded) return <div className="owners-panel owners-loading">جاري تحميل إعدادات MZJ Club Community...</div>;
 
   return (
     <div className="owners-panel owners-settings" dir="rtl">
@@ -141,7 +152,7 @@ export function OwnersSettingsPanel() {
         <div>
           <ShieldCheck size={28} />
           <div>
-            <h2>إعدادات MZJ Owners Community</h2>
+            <h2>إعدادات MZJ Club Community</h2>
             <p>إدارة التحقق عبر SMS+، قواعد النقاط، مستويات العضوية ورحلة الدعوة من مكان واحد.</p>
           </div>
         </div>
@@ -188,6 +199,18 @@ export function OwnersSettingsPanel() {
               <option value="off">إرسال يدوي من لوحة الأعضاء</option>
               <option value="on">مسموح بها عند تشغيل الإرسال التلقائي</option>
             </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="owners-settings-card">
+        <h3><ChatCircleText size={21} /> رسالة الترحيب</h3>
+        <p className="owners-settings-hint">النص المستخدم عند الضغط على «إرسال الترحيب»، ويُستخدم أيضًا عند الإرسال التلقائي بعد المرحلة 10 إذا كان مفعّلًا.</p>
+        <div className="owners-form-grid">
+          <label className="wide">
+            <span>نص رسالة الترحيب</span>
+            <textarea disabled={!editable} rows={9} value={form.welcomeMessageTemplate} onChange={(event) => setForm({ ...form, welcomeMessageTemplate: event.target.value })} />
+            <small>المتغيرات المتاحة: {"{customer_name}"}، {"{portal_url}"}، {"{personal_code}"}. رابط العميل المعتمد هو https://mzj-platform.vercel.app/club</small>
           </label>
         </div>
       </section>

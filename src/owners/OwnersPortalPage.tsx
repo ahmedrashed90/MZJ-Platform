@@ -114,9 +114,9 @@ export function OwnersPortalPage() {
       <div className="owners-public" dir="rtl">
         <div className="owners-login-card">
           <img src="/logo.png" alt="MZJ" />
-          <span className="owners-eyebrow">MZJ Owners Community</span>
+          <span className="owners-eyebrow">MZJ Club Community</span>
           <h1>مجموعة محمد بن ذعار العجمي</h1>
-          <p>ادخل برقم الجوال المسجل في MZJ Owners Community، وسيصلك رمز تحقق على رقم الجوال المسجل.</p>
+          <p>ادخل برقم الجوال المسجل في MZJ Club Community، وسيصلك رمز تحقق على رقم الجوال المسجل.</p>
           {message ? <div className="owners-public-message">{message}</div> : null}
           {stage === "phone" ? (
             <>
@@ -182,7 +182,7 @@ export function OwnersPortalPage() {
   return (
     <div className="owners-public portal" dir="rtl">
       <header className="owners-public-head">
-        <div><img src="/logo.png" alt="MZJ" /><div><span>MZJ Owners Community</span><strong>أهلًا {member.name || "بك"} 👋</strong></div></div>
+        <div><img src="/logo.png" alt="MZJ" /><div><span>MZJ Club Community</span><strong>أهلًا {member.name || "بك"} 👋</strong></div></div>
         <button onClick={() => void logout()}><SignOut size={18} /> خروج</button>
       </header>
       <main>
@@ -190,7 +190,7 @@ export function OwnersPortalPage() {
         <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
           <div className="owners-membership-card">
             <div className="owners-membership-face front">
-              <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Owners Community</span><strong>بطاقة العضوية</strong></div></div>
+              <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Club Community</span><strong>بطاقة العضوية</strong></div></div>
               <div className="owners-card-name"><small>العضو</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
               <div className="owners-card-metrics">
                 <div><span>رصيد النقاط</span><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>

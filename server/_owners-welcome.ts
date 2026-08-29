@@ -17,15 +17,36 @@ export type LegacyOwnerWelcomeQueueResult = {
   documentId?: string;
 };
 
-function ownerWelcomeMessage(input: {
+export const DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE = `مرحباً : {customer_name}
+أهلاً بك في MZJ Club Community.
+يمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:
+{portal_url}
+الكود الشخصي : {personal_code}
+
+تاريخ تثق به`;
+
+function renderOwnerWelcomeMessage(template: unknown, input: {
   customerName: unknown;
   portalUrl: unknown;
   personalCode: unknown;
 }) {
-  const customerName = clean(input.customerName) || "عميل مجموعة محمد بن ذعار العجمي";
-  const portalUrl = clean(input.portalUrl);
-  const personalCode = clean(input.personalCode);
-  return `مرحباً : ${customerName}\nأهلاً بك في MZJ Owners Community.\nيمكنك الدخول إلى حسابك ومتابعة نقاطك ومكافآتك من هنا:\n${portalUrl}\nالكود الشخصي : ${personalCode}\n\nتاريخ تثق به`;
+  const values: Record<string, string> = {
+    customer_name: clean(input.customerName) || "عميل مجموعة محمد بن ذعار العجمي",
+    portal_url: clean(input.portalUrl),
+    personal_code: clean(input.personalCode),
+  };
+  const source = clean(template) || DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE;
+  return source.replace(/\{([a-z0-9_]+)\}/gi, (match, key: string) => values[key] ?? match);
+}
+
+async function configuredWelcomeTemplate(sql: ReturnType<typeof getSql>) {
+  const [settings] = await sql<any[]>`
+    select welcome_message_template
+    from owners.settings
+    where id='default'
+    limit 1
+  `;
+  return clean(settings?.welcome_message_template) || DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE;
 }
 
 export async function queueOwnerWelcomeSms(input: {
@@ -56,7 +77,7 @@ export async function queueOwnerWelcomeSms(input: {
   const phone = normalizePhone(member.phone_normalized || input.phone);
   if (!phone) return { status: "invalid_phone", memberId: member.id };
 
-  const message = ownerWelcomeMessage({
+  const message = renderOwnerWelcomeMessage(await configuredWelcomeTemplate(sql), {
     customerName: member.customer_name,
     portalUrl: input.portalUrl,
     personalCode: member.referral_code,
@@ -114,7 +135,7 @@ export async function queueLegacyOwnerWelcomeSms(input: {
   const phone = normalizePhone(customer.phone_normalized);
   if (!phone) return { status: "invalid_phone", legacyCustomerId: customer.id };
 
-  const message = ownerWelcomeMessage({
+  const message = renderOwnerWelcomeMessage(await configuredWelcomeTemplate(sql), {
     customerName: customer.customer_name,
     portalUrl: input.portalUrl,
     personalCode: customer.referral_code,

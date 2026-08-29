@@ -7501,3 +7501,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 
 /* MZJ Owners admin membership preview */
 .owners-member-preview-body{max-width:1180px;margin:0 auto;padding-bottom:24px}.owners-member-preview .owners-membership-shell{max-width:760px;margin:16px auto 0}.owners-member-preview .owners-public-section,.owners-member-preview .owners-invite-card{margin-left:auto;margin-right:auto}.owners-admin-invite-card{margin-top:14px}.owners-referral-ledger strong{color:#6a4437;font-size:12px}.owners-member-preview .owners-notice{margin-top:14px}.owners-member-preview .owners-loading{margin-top:14px}
+
+/* Tracking + MZJ Club Community editable SMS templates */
+.tracking-settings-message-template small,.owners-form-grid label>small{color:var(--muted);font-size:10px;line-height:1.7}
+.tracking-settings-message-template textarea{min-height:180px;line-height:1.75}

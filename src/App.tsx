@@ -166,7 +166,7 @@ export default function App() {
   const { loading, status, user } = useAuth();
   const location = useLocation();
   const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
-  const isPublicOwners = location.pathname === "/owners" || location.pathname.startsWith("/owners/invite/");
+  const isPublicOwners = ["/club", "/club/", "/owners", "/owners/"].includes(location.pathname) || location.pathname.startsWith("/club/invite/") || location.pathname.startsWith("/owners/invite/");
   const isPublicCashQr = location.pathname === "/cash-register" || location.pathname === "/cash-register/";
 
   if (loading) return <PlatformLoadingPage />;
@@ -183,8 +183,10 @@ export default function App() {
   }
   if (isPublicOwners) {
     return (
-      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل MZJ Owners Community...</div>}>
+      <Suspense fallback={<div className="crm-loading-panel">جاري تحميل MZJ Club Community...</div>}>
         <Routes>
+          <Route path="/club" element={<OwnersPortalPage />} />
+          <Route path="/club/invite/:code" element={<OwnersInvitePage />} />
           <Route path="/owners" element={<OwnersPortalPage />} />
           <Route path="/owners/invite/:code" element={<OwnersInvitePage />} />
         </Routes>

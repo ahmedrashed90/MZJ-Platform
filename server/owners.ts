@@ -13,10 +13,10 @@ import {
 } from "./_owners.js";
 import { ensureOwnersSchema } from "./_owners-schema.js";
 import { syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
-import { queueLegacyOwnerWelcomeSms, queueOwnerWelcomeSms } from "./_owners-welcome.js";
+import { DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE, queueLegacyOwnerWelcomeSms, queueOwnerWelcomeSms } from "./_owners-welcome.js";
 import { getWebsiteStock } from "./_website-stock.js";
 
-const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/owners";
+const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/club";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -247,7 +247,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const allowed = scope === "settings"
       ? hasPermission(actor, "settings.owners.view") || hasPermission(actor, "settings.owners.manage") || hasPermission(actor, "owners.community.manage")
       : hasPermission(actor, "owners.community.view") || hasPermission(actor, "owners.community.manage");
-    if (!allowed) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية للدخول إلى MZJ Owners Community" });
+    if (!allowed) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية للدخول إلى MZJ Club Community" });
     if (scope === "settings") {
       const settingsRows = await sql<any[]>`select * from owners.settings where id='default'`;
       return response.status(200).json({ ok: true, settings: settingsRows[0] || {} });
@@ -383,7 +383,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           lifetimePoints: Number(member.lifetime_points || 0),
           tier: member.tier_code || "member",
           referralCode: member.referral_code || "",
-          inviteUrl: `${publicBase(request)}/owners/invite/${member.referral_code}`,
+          inviteUrl: `${publicBase(request)}/club/invite/${member.referral_code}`,
           firstSaleAt: member.first_sale_at || null,
           lastSaleAt: member.last_sale_at || null,
         },
@@ -516,7 +516,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const canManageCommunity = hasPermission(actor, "owners.community.manage");
   const canManageSettings = hasPermission(actor, "settings.owners.manage") || canManageCommunity;
   if (["lookup_redemption", "confirm_redemption"].includes(action)) {
-    if (!canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
+    if (!canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Club Community" });
     const code = clean(payload.code);
     if (!/^\d{8}$/.test(code)) return response.status(400).json({ ok: false, error: "كود الاستبدال يجب أن يكون 8 أرقام" });
     if (action === "lookup_redemption") {
@@ -543,7 +543,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   }
 
   if (["save_settings", "save_points_settings"].includes(action) && !canManageSettings) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لتعديل إعدادات البرنامج" });
-  if (!["save_settings", "save_points_settings"].includes(action) && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Owners Community" });
+  if (!["save_settings", "save_points_settings"].includes(action) && !canManageCommunity) return response.status(403).json({ ok: false, error: "لا توجد لديك صلاحية لإدارة MZJ Club Community" });
 
   if (action === "save_settings") {
     const silverPoints = integer(payload.silverPoints, 1000, 0, 1_000_000_000);
@@ -580,6 +580,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         friend_benefit_title=${clean(payload.friendBenefitTitle) || "دعوة من مجموعة محمد بن ذعار العجمي"},
         friend_benefit_text=${clean(payload.friendBenefitText) || "سجل بياناتك من رابط الدعوة وسيقوم فريق مجموعة محمد بن ذعار العجمي بالتواصل معك."},
         welcome_message_enabled=${payload.welcomeMessageEnabled === true},
+        welcome_message_template=${clean(payload.welcomeMessageTemplate) || DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE},
         updated_by=${actor.id}::uuid,
         updated_at=now()
       where id='default'
@@ -1009,7 +1010,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const result = await queueOwnerWelcomeSms({
         memberId,
         byUid: actor.id,
-        portalUrl: `${publicBase(request)}/owners`,
+        portalUrl: `${publicBase(request)}/club`,
       });
       if (result.status === "member_not_found") return response.status(404).json({ ok: false, error: "العضو غير موجود" });
       if (result.status === "already_sent") return response.status(409).json({ ok: false, error: "تم إرسال رسالة الترحيب لهذا العضو مسبقًا" });

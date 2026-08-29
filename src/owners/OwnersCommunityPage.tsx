@@ -467,10 +467,10 @@ export function OwnersCommunityPage() {
       <div className="module-page">
         <div className="owners-panel owners-loading">
           {initialLoading ? (
-            "جاري تحميل MZJ Owners Community..."
+            "جاري تحميل MZJ Club Community..."
           ) : (
             <>
-              <strong>تعذر تحميل MZJ Owners Community</strong>
+              <strong>تعذر تحميل MZJ Club Community</strong>
               <span>{message || "تعذر تحميل البيانات. حاول مرة أخرى."}</span>
               <button type="button" className="owners-link-btn" onClick={() => void retryInitialLoad()}>
                 <ArrowsClockwise size={16} /> إعادة المحاولة
@@ -488,7 +488,7 @@ export function OwnersCommunityPage() {
         <div>
           <span className="owners-hero-icon"><Crown size={30} weight="duotone" /></span>
           <div>
-            <h1>MZJ Owners Community</h1>
+            <h1>MZJ Club Community</h1>
             <p>إدارة مجتمع ملاك MZJ، الدعوات، النقاط، المكافآت والمبيعات الناتجة من العملاء.</p>
           </div>
         </div>
@@ -562,7 +562,7 @@ export function OwnersCommunityPage() {
                         <div className="owners-actions">
                           <Link className="owners-link-btn" to={`/owners-community/member/member/${member.id}`}><IdentificationCard size={16} /> صفحة العضوية</Link>
                           {canManage ? <button className="owners-link-btn" disabled={busy || Boolean(member.welcome_sent_at)} onClick={() => void act({ action: "send_welcome", memberId: member.id }, "تمت إضافة رسالة الترحيب إلى SMS+") }><PaperPlaneTilt size={16} /> {member.welcome_sent_at ? "تم الإرسال" : "إرسال الترحيب"}</button> : null}
-                          {canManage ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من MZJ Owners؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button> : null}
+                          {canManage ? <button className="owners-link-btn danger" disabled={busy} onClick={() => window.confirm(`هل تريد حذف العميل «${member.customer_name || "عميل MZJ"}» من MZJ Club Community؟`) && void act({ action: "delete_member", memberId: member.id }, "تم حذف العميل") }><Trash size={16} /> مسح</button> : null}
                         </div>
                       </td>
                     </tr>

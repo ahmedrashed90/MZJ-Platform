@@ -93,7 +93,7 @@ export function OwnersMemberPreviewPage() {
             <p>{kind === "legacy" ? "معاينة العميل من تبويب العملاء الجديدة" : "معاينة عضوية العميل من تبويب عملاء تم البيع"}</p>
           </div>
         </div>
-        <button type="button" className="owners-link-btn" onClick={() => navigate("/owners-community")}><ArrowRight size={18} /> رجوع إلى MZJ Owners</button>
+        <button type="button" className="owners-link-btn" onClick={() => navigate("/owners-community")}><ArrowRight size={18} /> رجوع إلى MZJ Club Community</button>
       </header>
 
       {loading ? <div className="owners-panel owners-loading">جاري تحميل صفحة العضوية...</div> : null}
@@ -106,13 +106,13 @@ export function OwnersMemberPreviewPage() {
           <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
             <div className="owners-membership-card">
               <div className="owners-membership-face front">
-                <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Owners</span><strong>بطاقة العضوية</strong></div></div>
+                <div className="owners-card-brand"><img src="/logo.png" alt="مجموعة محمد بن ذعار العجمي" /><div><span>MZJ Club Community</span><strong>بطاقة العضوية</strong></div></div>
                 <div className="owners-card-name"><small>العميل</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
                 <div className="owners-card-metrics">
                   <div><span>رصيد النقاط</span><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
                   <div><span>المستوى</span><b><Star size={18} weight="fill" /> {tierLabel(member.tier)}</b><small>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة</small></div>
                 </div>
-                <div className="owners-card-footer"><span>{member.referralCode ? `الكود: ${member.referralCode}` : "MZJ Owners"}</span><small><ArrowsClockwise size={15} /> اضغط لعرض المزايا</small></div>
+                <div className="owners-card-footer"><span>{member.referralCode ? `الكود: ${member.referralCode}` : "MZJ Club Community"}</span><small><ArrowsClockwise size={15} /> اضغط لعرض المزايا</small></div>
               </div>
               <div className="owners-membership-face back">
                 <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>مزايا بطاقة العضوية</strong></div><img src="/logo.png" alt="MZJ" /></div>
