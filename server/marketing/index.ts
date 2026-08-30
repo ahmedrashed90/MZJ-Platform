@@ -1348,10 +1348,16 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
           `;
           if (started) throw new Error("بدأ تنفيذ هذا الكرييتيف؛ يمكن تعديل الميزانية وجدول النشر فقط دون تغيير بيانات التكليف");
           previousTemplates = await tx<any[]>`
-            select distinct on (content_user_id) *,id::text,content_user_id::text,file_id::text
-            from marketing.task_templates
-            where creative_id=${existingId}::uuid
-            order by content_user_id,created_at desc,id desc
+            select distinct on (tt.content_user_id)
+              tt.id::text as id,
+              tt.content_user_id::text as content_user_id,
+              tt.file_id::text as file_id,
+              tt.status,
+              tt.template_data,
+              tt.approved_data
+            from marketing.task_templates tt
+            where tt.creative_id=${existingId}::uuid
+            order by tt.content_user_id,tt.created_at desc,tt.id desc
           `;
           await tx`update marketing.tasks set is_deleted=true,updated_at=now() where creative_id=${existingId}::uuid and is_deleted=false`;
         }
@@ -1429,6 +1435,73 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
     await recalculateProgress(tx, sourceType, sourceId);
     await audit(tx as any,user,creativeId ? 'creative_updated' : 'creative_added',sourceType,sourceId,{ creativeIds:ids,creativeType:creativeType.name,creativeName },undefined,undefined);
     return { ok:true,id:sourceId,creativeIds:ids,message:creativeId ? "تم تعديل الكرييتيف وإنشاء مراجعة التكليف عند الحاجة" : "تمت إضافة الكرييتيف والتاسكات المرتبطة" };
+  });
+}
+
+async function deleteEntityCreative(sql: ReturnType<typeof getSql>, body: Record<string, any>, user: SessionUser) {
+  const sourceType = clean(body.sourceType) as "campaign" | "agenda";
+  const sourceId = clean(body.sourceId || body.id);
+  const creativeId = clean(body.creativeId);
+  if (!['campaign','agenda'].includes(sourceType) || !sourceId || !creativeId) throw new Error("بيانات الكرييتيف غير مكتملة");
+  const permission = sourceType === 'campaign' ? 'marketing.campaign.edit' : 'marketing.agenda.edit';
+  if (!hasPermission(user, permission)) throw new Error("لا توجد صلاحية لمسح الكرييتيف");
+  await assertMarketingEntityAccess(sql, user, sourceType, sourceId);
+
+  return sql.begin(async (tx) => {
+    const [creative] = await tx<any[]>`
+      select c.id::text,c.name,c.instance_code,c.creative_type
+      from marketing.creatives c
+      where c.id=${creativeId}::uuid
+        and ((${sourceType}='campaign' and c.campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and c.agenda_id=${sourceId}::uuid))
+      for update
+    `;
+    if (!creative) throw new Error("الكرييتيف غير موجود داخل السجل المحدد");
+
+    const [published] = await tx<any[]>`
+      select 1
+      from marketing.publish_schedule s
+      where s.creative_id=${creativeId}::uuid
+        and (s.status='published' or s.published_at is not null)
+      limit 1
+    `;
+    if (published) throw new Error("لا يمكن مسح كرييتيف تم نشره بالفعل");
+
+    const affectedBudgets = sourceType === 'campaign'
+      ? await tx<any[]>`
+          select distinct b.id::text
+          from marketing.budget_items b
+          left join marketing.budget_item_creatives bic on bic.budget_item_id=b.id
+          where b.campaign_id=${sourceId}::uuid
+            and (bic.creative_id=${creativeId}::uuid or b.creative_id=${creativeId}::uuid)
+        `
+      : [];
+
+    await tx`delete from marketing.creatives where id=${creativeId}::uuid`;
+
+    for (const item of affectedBudgets) {
+      const [remaining] = await tx<any[]>`
+        select bic.creative_id::text as creative_id
+        from marketing.budget_item_creatives bic
+        where bic.budget_item_id=${item.id}::uuid
+        order by bic.created_at,bic.creative_id
+        limit 1
+      `;
+      if (!remaining) await tx`delete from marketing.budget_items where id=${item.id}::uuid`;
+      else await tx`update marketing.budget_items set creative_id=${remaining.creative_id}::uuid where id=${item.id}::uuid`;
+    }
+
+    await recalculateProgress(tx, sourceType, sourceId);
+    await audit(
+      tx as any,
+      user,
+      'creative_deleted',
+      sourceType,
+      sourceId,
+      { creativeId, creativeName: clean(creative.name || creative.creative_type), instanceCode: clean(creative.instance_code) },
+      undefined,
+      undefined,
+    );
+    return { ok: true, id: sourceId, creativeId, message: "تم مسح الكرييتيف والبيانات التشغيلية المرتبطة به" };
   });
 }
 
@@ -3455,6 +3528,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='create_agenda')result=await createAgenda(sql,body,user);
     else if(action==='import_fresh_marketing_bundle')result=await importFreshMarketingBundle(sql,body,user);
     else if(action==='save_entity_creative')result=await saveEntityCreative(sql,body,user);
+    else if(action==='delete_entity_creative')result=await deleteEntityCreative(sql,body,user);
     else if(action==='save_campaign_budgets')result=await saveCampaignBudgets(sql,body,user);
     else if(action==='save_department')result=await saveDepartment(sql,body,user);
     else if(action==='save_assignment_action')result=await saveAssignmentAction(sql,body);

@@ -63,16 +63,19 @@ async function readJson(response: Response) {
   return payload;
 }
 
-async function invoiceParentsFromChildRows(salesOrder: string) {
+async function invoiceParentsFromChildRows(salesOrder: string): Promise<string[]> {
   const fields = JSON.stringify(["parent", "sales_order"]);
   const filters = JSON.stringify([["sales_order", "=", salesOrder]]);
   const path = `/api/resource/${encodeURIComponent("Sales Invoice Item")}?fields=${encodeURIComponent(fields)}&filters=${encodeURIComponent(filters)}&limit_page_length=100`;
   const payload = await readJson(await nextErpFetch(path));
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
-  return [...new Set(rows.map((row: any) => clean(row?.parent)).filter(Boolean))];
+  const rows: any[] = Array.isArray(payload?.data) ? payload.data : [];
+  const parents = rows
+    .map((row: any) => clean(row?.parent))
+    .filter((name: string): name is string => Boolean(name));
+  return [...new Set<string>(parents)];
 }
 
-async function invoiceParentsFromParentFilter(salesOrder: string) {
+async function invoiceParentsFromParentFilter(salesOrder: string): Promise<string[]> {
   const fields = JSON.stringify(["name", "posting_date", "grand_total", "status", "docstatus"]);
   const filters = JSON.stringify([
     ["Sales Invoice Item", "sales_order", "=", salesOrder],
@@ -80,8 +83,10 @@ async function invoiceParentsFromParentFilter(salesOrder: string) {
   ]);
   const path = `/api/resource/${encodeURIComponent("Sales Invoice")}?fields=${encodeURIComponent(fields)}&filters=${encodeURIComponent(filters)}&order_by=${encodeURIComponent("posting_date desc,creation desc")}&limit_page_length=20`;
   const payload = await readJson(await nextErpFetch(path));
-  const rows = Array.isArray(payload?.data) ? payload.data : [];
-  return rows.map((row: any) => clean(row?.name)).filter(Boolean);
+  const rows: any[] = Array.isArray(payload?.data) ? payload.data : [];
+  return rows
+    .map((row: any) => clean(row?.name))
+    .filter((name: string): name is string => Boolean(name));
 }
 
 async function getSalesInvoice(name: string) {

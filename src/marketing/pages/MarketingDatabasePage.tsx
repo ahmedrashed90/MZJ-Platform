@@ -415,6 +415,32 @@ export function MarketingDatabasePage() {
     }
   }
 
+  async function deleteCreative(row: any) {
+    if (!selected || !row?.id) return;
+    const creativeName = String(row.name || row.creative_type_name || row.creative_type || "الكرييتيف");
+    if (!window.confirm(`تأكيد مسح الكرييتيف «${creativeName}»؟ سيتم مسح التاسكات وجدول النشر والربط بالميزانية الخاصة به، ولا يمكن مسح كرييتيف تم نشره.`)) return;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "delete_entity_creative",
+          sourceType: selected.source_type,
+          sourceId: selected.id,
+          creativeId: row.id,
+        }),
+      });
+      setMessage(result.message);
+      await open(selected);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر مسح الكرييتيف");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function creativeSaved(savedMessage: string) {
     setMessage(savedMessage);
     if (selected) await open(selected);
@@ -621,7 +647,7 @@ export function MarketingDatabasePage() {
                     <td><div className="marketing-creative-counter"><strong>{executionTasks.length.toLocaleString("ar-SA-u-nu-latn")}</strong><small>{completedExecution.toLocaleString("ar-SA-u-nu-latn")} مكتمل</small></div></td>
                     <td><strong>{scheduleCount.toLocaleString("ar-SA-u-nu-latn")}</strong></td>
                     {selected?.source_type === "campaign" ? <td><strong>{budgetTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س</strong></td> : null}
-                    <td>{canEditCreatives ? <button type="button" className="marketing-creative-edit-button" onClick={() => setCreativeManager({ open: true, row: creative })}><PencilSimple size={17} />تعديل الكرييتيف</button> : <span className="marketing-readonly-label">عرض فقط</span>}</td>
+                    <td>{canEditCreatives ? <div className="marketing-creative-row-actions"><button type="button" className="marketing-creative-edit-button" onClick={() => setCreativeManager({ open: true, row: creative })}><PencilSimple size={17} />تعديل الكرييتيف</button><button type="button" className="marketing-creative-delete-button" disabled={loading} onClick={() => void deleteCreative(creative)}><Trash size={17} />مسح</button></div> : <span className="marketing-readonly-label">عرض فقط</span>}</td>
                   </tr>;
                 })}</tbody>
               </table>

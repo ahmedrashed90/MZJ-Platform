@@ -15,7 +15,7 @@ const checks = [
   ["creative update", server.includes("update marketing.creatives set")],
   ["task flow creation", server.includes("await createTasksForCreative(tx")],
   ["old active tasks preserved as revisions", server.includes("update marketing.tasks set is_deleted=true")],
-  ["latest template revision selected per writer", server.includes("select distinct on (content_user_id)")],
+  ["latest template revision selected per writer", server.includes("select distinct on (tt.content_user_id)")],
   ["approved template returns under review", server.includes("تم تعديل بيانات الكرييتيف ويحتاج إعادة اعتماد")],
   ["execution data waits for approval", server.includes("promoteCreativeRevisionForReview")],
   ["campaign budget replacement", server.includes("replaceCreativeBudgets")],
