@@ -7515,7 +7515,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .tracking-stage10-mode input{margin:0}
 .tracking-stage10-mode small,.tracking-stage10-variables{color:var(--muted);font-size:10px;line-height:1.7}
 
-/* MZJ Club v31: customer categories + membership/reward separation */
+/* MZJ Club v32: customer categories + membership/reward separation */
 .owners-customer-category{display:inline-flex;align-items:center;justify-content:center;min-width:72px;border-radius:999px;padding:6px 11px;font-size:10px;font-weight:900;border:1px solid transparent;white-space:nowrap}
 .owners-customer-category.distinction{background:#fff0e3;color:#9a4f1c;border-color:#efc9aa}
 .owners-customer-category.gold{background:#fff7cf;color:#856000;border-color:#e6cf72}
@@ -7542,7 +7542,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .owners-card-category.none{background:linear-gradient(135deg,#fff,#eee7e3);color:#75665f;border-color:#ddd2cc}
 @media(max-width:650px){.owners-category-rules{grid-template-columns:1fr}.owners-card-category{min-height:104px}.owners-card-category strong{font-size:28px}}
 
-/* MZJ Club v31: category filters, compact card-back details and purchase invoices */
+/* MZJ Club v32: category filters, compact card-back details and purchase invoices */
 .owners-category-filter{display:grid;gap:5px;min-width:165px}
 .owners-category-filter>span{font-size:10px;font-weight:900;color:#5c4036}
 .owners-category-filter select{min-height:40px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 11px;font:inherit;font-size:11px;color:inherit;outline:0}

@@ -80,5 +80,5 @@ expect("NEXT ERP invoice API credentials stay server side",
 expect("no QR was added to membership card",
   !portal.includes('qrcode') && !portal.includes('QrCode') && !preview.includes('QrCode'));
 
-console.log(`\nMZJ Club v31 focused checks: ${passed}/${passed + failed} passed.`);
+console.log(`\nMZJ Club v32 focused checks: ${passed}/${passed + failed} passed.`);
 if (failed) process.exit(1);
