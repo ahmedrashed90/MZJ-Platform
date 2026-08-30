@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, Star, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 import { RedemptionQr } from "./RedemptionQr";
 import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
+import { ownersCustomerCategoryFromPoints } from "./customerCategory";
+import { PurchaseInvoiceActions } from "./PurchaseInvoiceActions";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تنفيذ الطلب";
@@ -17,13 +19,6 @@ function formatDate(value: unknown) {
   }
 }
 
-function tierLabel(value: unknown) {
-  const tier = String(value || "member");
-  if (tier === "platinum") return "Platinum";
-  if (tier === "gold") return "Gold";
-  if (tier === "silver") return "Silver";
-  return "Member";
-}
 
 
 function rewardTypeLabel(value: unknown) {
@@ -140,8 +135,8 @@ export function OwnersPortalPage() {
   const pointsMenu = me.pointsMenu || {};
   const rewards = Array.isArray(me.rewards) ? me.rewards : [];
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
-  const cardRewards = Array.isArray(me.cardRewards) ? me.cardRewards : rewards.filter((reward: any) => reward.show_on_member_card === true);
   const websiteCars = Array.isArray(me.websiteCars) ? me.websiteCars : [];
+  const category = ownersCustomerCategoryFromPoints(member.lifetimePoints);
 
   async function copyInvite() {
     try {
@@ -194,14 +189,22 @@ export function OwnersPortalPage() {
               <div className="owners-card-name"><small>العضو</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
               <div className="owners-card-metrics">
                 <div><span>رصيد النقاط</span><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
-                <div><span>المستوى</span><b><Star size={18} weight="fill" /> {tierLabel(member.tier)}</b><small>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة</small></div>
+                <div><span>إجمالي النقاط المكتسبة</span><strong>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
               </div>
-              <div className="owners-card-footer"><span>مجموعة محمد بن ذعار العجمي</span><small><ArrowCounterClockwise size={15} /> اضغط لعرض مزايا البطاقة</small></div>
+              <div className="owners-card-footer"><span>مجموعة محمد بن ذعار العجمي</span><small><ArrowCounterClockwise size={15} /> اضغط لعرض فئة العميل</small></div>
             </div>
             <div className="owners-membership-face back">
-              <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>مزايا بطاقة العضوية</strong></div><img src="/logo.png" alt="MZJ" /></div>
-              <div className="owners-card-back-rewards">
-                {cardRewards.length ? cardRewards.slice(0, 4).map((reward: any) => <article key={reward.id}><span className="owners-card-reward-icon"><Gift size={16} weight="fill" /></span><div><strong>{reward.name}</strong><span>{rewardTypeLabel(reward.reward_type)}{reward.reward_value ? ` · ${reward.reward_value}` : ""}</span></div></article>) : <div className="owners-card-empty"><Sparkle size={22} weight="fill" /><strong>مزايا جديدة قريبًا تخصصها الإدارة لبطاقة العضوية</strong></div>}
+              <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>فئة العميل</strong></div><img src="/logo.png" alt="MZJ" /></div>
+              <div className={`owners-card-category ${category.category}`}>
+                <span>فئة العميل</span>
+                <strong>{category.label}</strong>
+                <small>{category.category === "none" ? "تبدأ فئة تميز من 1,000 نقطة مكتسبة" : `${Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة`}</small>
+              </div>
+              <div className="owners-card-back-details">
+                <div><span>كود العميل</span><strong dir="ltr">{member.referralCode || "—"}</strong></div>
+                <div><span>تاريخ الانضمام</span><strong>{formatDate(member.joinedAt)}</strong></div>
+                <div><span>عدد مرات الشراء</span><strong>{Number(member.purchaseCount || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+                <div><span>آخر شراء</span><strong>{formatDate(member.lastSaleAt)}</strong></div>
               </div>
               <div className="owners-card-footer"><span>تاريخ تثق به</span><small><ArrowCounterClockwise size={15} /> اضغط للعودة</small></div>
             </div>
@@ -253,7 +256,15 @@ export function OwnersPortalPage() {
           <div className="owners-movement-table">
             <div className="owners-movement-head"><span>الحركة</span><span>التاريخ</span><span>عدد النقاط</span></div>
             {ledger.length ? ledger.map((entry: any) => (
-              <article key={entry.id}><span>{movementLabel(entry)}</span><small>{formatDate(entry.created_at)}</small><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+              <article key={entry.id}>
+                <span className="owners-movement-main">
+                  <b>{movementLabel(entry)}</b>
+                  {entry?.purchase?.vehicleLabel ? <small className="owners-purchase-vehicle">{entry.purchase.vehicleLabel}</small> : null}
+                  {entry?.purchase?.invoiceEligible ? <PurchaseInvoiceActions mode="public" salesOrder={entry.purchase.salesOrderReference} /> : null}
+                </span>
+                <small>{formatDate(entry.created_at)}</small>
+                <strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong>
+              </article>
             )) : null}
           </div>
         </section>

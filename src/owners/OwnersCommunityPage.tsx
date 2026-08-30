@@ -21,9 +21,9 @@ import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../systemAccess";
 import { ownersAdminGet, ownersAdminPost } from "./api";
 import { readXlsx } from "../crm/xlsxReader";
+import { ownersCustomerCategoryFromPoints } from "./customerCategory";
 
-type Tab = "members" | "legacy" | "import" | "referrals" | "points" | "rewards" | "redemptions";
-type RewardsView = "catalog" | "memberCard";
+type Tab = "members" | "legacy" | "import" | "referrals" | "points" | "membership" | "rewards" | "redemptions";
 type MembersView = "all" | "points";
 type ReferralsView = "all" | "sold";
 type RedemptionsView = "all" | "ready";
@@ -47,7 +47,6 @@ type RewardDraft = {
   description: string;
   rewardType: "gift" | "discount" | "service" | "voucher";
   rewardValue: string;
-  showOnMemberCard: boolean;
   showOnMemberPage: boolean;
   availableForReferralPurchase: boolean;
   availableForExistingCustomerPurchase: boolean;
@@ -111,7 +110,6 @@ const emptyReward: RewardDraft = {
   description: "",
   rewardType: "gift",
   rewardValue: "",
-  showOnMemberCard: false,
   showOnMemberPage: false,
   availableForReferralPurchase: false,
   availableForExistingCustomerPurchase: false,
@@ -172,13 +170,6 @@ function toLocalDateTime(value: unknown) {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-function tierLabel(value: unknown) {
-  const tier = String(value || "member");
-  if (tier === "platinum") return "Platinum";
-  if (tier === "gold") return "Gold";
-  if (tier === "silver") return "Silver";
-  return "Member";
-}
 
 function referralStatusLabel(value: unknown) {
   const status = String(value || "");
@@ -208,7 +199,6 @@ export function OwnersCommunityPage() {
   const [message, setMessage] = useState("");
   const [reward, setReward] = useState<RewardDraft>(emptyReward);
   const [pointsDraft, setPointsDraft] = useState<PointsDraft>(emptyPointsDraft);
-  const [rewardsView, setRewardsView] = useState<RewardsView>("catalog");
   const [testMember, setTestMember] = useState({ name: "", phone: "" });
   const [importRows, setImportRows] = useState<Record<string, string>[]>([]);
   const [importFileName, setImportFileName] = useState("");
@@ -223,6 +213,8 @@ export function OwnersCommunityPage() {
   const [membersSearch, setMembersSearch] = useState("");
   const [legacySearch, setLegacySearch] = useState("");
   const [legacyStatusFilter, setLegacyStatusFilter] = useState("");
+  const [membersCategoryFilter, setMembersCategoryFilter] = useState("");
+  const [legacyCategoryFilter, setLegacyCategoryFilter] = useState("");
 
   async function load() {
     const next = await ownersAdminGet();
@@ -407,7 +399,6 @@ export function OwnersCommunityPage() {
       description: item.description || "",
       rewardType: ["gift", "discount", "service", "voucher"].includes(item.reward_type) ? item.reward_type : "gift",
       rewardValue: item.reward_value || "",
-      showOnMemberCard: item.show_on_member_card === true,
       showOnMemberPage: item.show_on_member_page === true,
       availableForReferralPurchase: item.available_for_referral_purchase === true,
       availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true,
@@ -431,13 +422,16 @@ export function OwnersCommunityPage() {
   const legacyCustomersByStatus = legacyStatusFilter
     ? legacyCustomers.filter((customer: any) => String(customer.status_label || "عميل جديد") === legacyStatusFilter)
     : legacyCustomers;
+  const legacyCustomersByCategory = legacyCategoryFilter
+    ? legacyCustomersByStatus.filter((customer: any) => ownersCustomerCategoryFromPoints(customer.lifetime_points || 0).category === legacyCategoryFilter)
+    : legacyCustomersByStatus;
   const normalizedLegacySearch = normalizeOwnerSearch(legacySearch);
   const visibleLegacyCustomers = normalizedLegacySearch
-    ? legacyCustomersByStatus.filter((customer: any) =>
+    ? legacyCustomersByCategory.filter((customer: any) =>
         normalizeOwnerSearch(customer.customer_name).includes(normalizedLegacySearch)
         || normalizeOwnerSearch(customer.phone_normalized).includes(normalizedLegacySearch))
-    : legacyCustomersByStatus;
-  const legacyWelcomeEligibleCount = legacyCustomersByStatus.filter((customer: any) => !customer.welcome_sent_at && customer.phone_normalized).length;
+    : legacyCustomersByCategory;
+  const legacyWelcomeEligibleCount = legacyCustomersByCategory.filter((customer: any) => !customer.welcome_sent_at && customer.phone_normalized).length;
   const referrals = Array.isArray(data?.referrals) ? data.referrals : [];
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
@@ -449,12 +443,15 @@ export function OwnersCommunityPage() {
         .slice()
         .sort((left: any, right: any) => Number(right.points_balance || 0) - Number(left.points_balance || 0))
     : members;
+  const membersByCategory = membersCategoryFilter
+    ? membersForCurrentView.filter((member: any) => ownersCustomerCategoryFromPoints(member.lifetime_points).category === membersCategoryFilter)
+    : membersForCurrentView;
   const normalizedMembersSearch = normalizeOwnerSearch(membersSearch);
   const visibleMembers = normalizedMembersSearch
-    ? membersForCurrentView.filter((member: any) =>
+    ? membersByCategory.filter((member: any) =>
         normalizeOwnerSearch(member.customer_name).includes(normalizedMembersSearch)
         || normalizeOwnerSearch(member.phone_normalized).includes(normalizedMembersSearch))
-    : membersForCurrentView;
+    : membersByCategory;
   const visibleReferrals = referralsView === "sold" ? referrals.filter((referral: any) => referral.status === "sold") : referrals;
   const visibleRedemptions = redemptionsView === "ready" ? redemptions.filter((redemption: any) => redemption.status === "approved") : redemptions;
   const soldRate = useMemo(
@@ -516,7 +513,8 @@ export function OwnersCommunityPage() {
         {canManage ? <button className={tab === "import" ? "active" : ""} onClick={() => openTab("import")}>استيراد العملاء السابقين</button> : null}
         <button className={tab === "referrals" ? "active" : ""} onClick={() => openTab("referrals")}>الدعوات</button>
         {canManage ? <button className={tab === "points" ? "active" : ""} onClick={() => openTab("points")}>إعدادات النقاط</button> : null}
-        <button className={tab === "rewards" ? "active" : ""} onClick={() => openTab("rewards")}>المكافآت</button>
+        <button className={tab === "membership" ? "active" : ""} onClick={() => openTab("membership")}>بطاقة العضوية</button>
+        <button className={tab === "rewards" ? "active" : ""} onClick={() => openTab("rewards")}>كتالوج المكافآت</button>
         <button className={tab === "redemptions" ? "active" : ""} onClick={() => openTab("redemptions")}>طلبات الاستبدال</button>
       </nav>
 
@@ -540,19 +538,21 @@ export function OwnersCommunityPage() {
                 <input value={membersSearch} onChange={(event) => setMembersSearch(event.target.value)} placeholder="ابحث باسم العميل أو رقم الجوال" aria-label="البحث في عملاء تم البيع" />
                 {membersSearch ? <button type="button" className="owners-search-clear" onClick={() => setMembersSearch("")} aria-label="مسح البحث"><X size={15} /></button> : null}
               </div>
+              <label className="owners-category-filter"><span>الفئة</span><select value={membersCategoryFilter} onChange={(event) => setMembersCategoryFilter(event.target.value)}><option value="">كل الفئات</option><option value="distinction">تميز</option><option value="gold">ذهبي</option><option value="special">خاصة</option></select></label>
               <span className="owners-list-visible-count">{visibleMembers.length.toLocaleString("ar-SA-u-nu-latn")} عميل ظاهر</span>
             </div>
             <div className="owners-table-wrap">
               <table>
-                <thead><tr><th>العميل</th><th>النوع</th><th>الجوال</th><th>كود الدعوة</th><th>المستوى</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
+                <thead><tr><th>العميل</th><th>الفئة</th><th>الجوال</th><th>كود الدعوة</th><th>النقاط</th><th>الدعوات</th><th>المبيعات</th><th>آخر شراء</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
                 <tbody>
-                  {visibleMembers.map((member: any) => (
+                  {visibleMembers.map((member: any) => {
+                    const category = ownersCustomerCategoryFromPoints(member.lifetime_points);
+                    return (
                     <tr key={member.id}>
-                      <td><strong>{member.customer_name || "عميل MZJ"}</strong></td>
-                      <td><span className={`owners-member-type ${member.member_kind === "test" ? "test" : member.is_special_customer ? "special" : "real"}`}>{member.member_kind === "test" ? "تجريبي" : member.is_special_customer ? "عميل مميز" : member.enrollment_source?.startsWith("excel_import") ? "مستورد" : "حقيقي"}</span></td>
+                      <td><strong>{member.customer_name || "عميل MZJ"}</strong>{member.member_kind === "test" ? <small className="owners-sub owners-test-label">تجريبي</small> : null}</td>
+                      <td><span className={`owners-customer-category ${category.category}`}>{category.label}</span></td>
                       <td>{member.phone_normalized}</td>
                       <td><code>{member.referral_code}</code></td>
-                      <td>{tierLabel(member.tier_code)}</td>
                       <td>{Number(member.points_balance || 0).toLocaleString("ar-SA-u-nu-latn")}</td>
                       <td>{member.referrals_count || 0}</td>
                       <td>{member.sales_count || 0}</td>
@@ -566,8 +566,9 @@ export function OwnersCommunityPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
-                {!visibleMembers.length ? <tr><td colSpan={11}>{membersSearch.trim() ? "لا توجد نتائج مطابقة لاسم العميل أو رقم الجوال." : membersView === "points" ? "لا توجد أرصدة نقاط قائمة." : "لا يوجد عملاء تم البيع لهم."}</td></tr> : null}
+                    );
+                  })}
+                {!visibleMembers.length ? <tr><td colSpan={10}>{membersSearch.trim() ? "لا توجد نتائج مطابقة لاسم العميل أو رقم الجوال." : membersView === "points" ? "لا توجد أرصدة نقاط قائمة." : "لا يوجد عملاء تم البيع لهم."}</td></tr> : null}
                 </tbody>
               </table>
             </div>
@@ -586,6 +587,12 @@ export function OwnersCommunityPage() {
                 {legacyStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
               </select>
             </label>
+            <label>
+              <span>الفئة</span>
+              <select value={legacyCategoryFilter} onChange={(event) => setLegacyCategoryFilter(event.target.value)}>
+                <option value="">كل الفئات</option><option value="distinction">تميز</option><option value="gold">ذهبي</option><option value="special">خاصة</option>
+              </select>
+            </label>
             <div className="owners-list-search owners-legacy-search">
               <MagnifyingGlass size={17} />
               <input value={legacySearch} onChange={(event) => setLegacySearch(event.target.value)} placeholder="ابحث باسم العميل أو رقم الجوال" aria-label="البحث في العملاء الجديدة" />
@@ -600,11 +607,14 @@ export function OwnersCommunityPage() {
           </div>
           <div className="owners-table-wrap">
             <table>
-              <thead><tr><th>العميل</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
+              <thead><tr><th>العميل</th><th>الفئة</th><th>الجوال</th><th>كود الدعوة</th><th>الحالة</th><th>الفرع</th><th>المصدر</th><th>القسم</th><th>المسؤول</th><th>تاريخ التسجيل</th><th>آخر تحديث</th><th>حالة الترحيب</th><th>الإجراءات</th></tr></thead>
               <tbody>
-                {visibleLegacyCustomers.map((customer: any) => (
+                {visibleLegacyCustomers.map((customer: any) => {
+                  const category = ownersCustomerCategoryFromPoints(customer.lifetime_points || 0);
+                  return (
                   <tr key={customer.id}>
                     <td><strong>{customer.customer_name || "عميل MZJ"}</strong></td>
+                    <td><span className={`owners-customer-category ${category.category}`}>{category.label}</span></td>
                     <td>{customer.phone_normalized || "—"}</td>
                     <td><code>{customer.referral_code}</code></td>
                     <td>{customer.status_label || "عميل جديد"}</td>
@@ -622,8 +632,9 @@ export function OwnersCommunityPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
-                {!visibleLegacyCustomers.length ? <tr><td colSpan={12}>{legacySearch.trim() ? "لا توجد نتائج مطابقة لاسم العميل أو رقم الجوال." : legacyStatusFilter ? "لا يوجد عملاء بهذه الحالة." : "لا يوجد عملاء جديدة في CRM حاليًا."}</td></tr> : null}
+                  );
+                })}
+                {!visibleLegacyCustomers.length ? <tr><td colSpan={13}>{legacySearch.trim() ? "لا توجد نتائج مطابقة لاسم العميل أو رقم الجوال." : legacyStatusFilter ? "لا يوجد عملاء بهذه الحالة." : "لا يوجد عملاء جديدة في CRM حاليًا."}</td></tr> : null}
               </tbody>
             </table>
           </div>
@@ -721,72 +732,64 @@ export function OwnersCommunityPage() {
         </section>
       ) : null}
 
+      {tab === "membership" ? (
+        <section className="owners-table-card owners-membership-admin">
+          <header><div><h2>بطاقة العضوية</h2><span>فئة العميل مستقلة بالكامل عن كتالوج المكافآت وتظهر على ظهر البطاقة تلقائيًا.</span></div></header>
+          <div className="owners-category-rules">
+            <article className="distinction"><span>تميز</span><strong>1,000 — 1,499</strong><small>نقطة مكتسبة</small></article>
+            <article className="gold"><span>ذهبي</span><strong>1,500 — 2,499</strong><small>نقطة مكتسبة</small></article>
+            <article className="special"><span>خاصة</span><strong>2,500+</strong><small>نقطة مكتسبة</small></article>
+          </div>
+          <div className="owners-category-policy">الفئة تعتمد على إجمالي النقاط المكتسبة طوال رحلة العميل، لذلك استبدال النقاط لا يخفض الفئة التي وصل إليها.</div>
+        </section>
+      ) : null}
+
       {tab === "rewards" ? (
         <>
-          <div className="owners-rewards-subtabs">
-            <button className={rewardsView === "catalog" ? "active" : ""} onClick={() => setRewardsView("catalog")}>كتالوج المكافآت</button>
-            <button className={rewardsView === "memberCard" ? "active" : ""} onClick={() => setRewardsView("memberCard")}>بطاقة العضوية</button>
-          </div>
+          <section className="owners-table-card">
+            <header><h2>كتالوج المكافآت</h2><span>الكتالوج مستقل عن بطاقة العضوية؛ إدارة المكافآت هنا لا تتطلب اختيار أي شيء من البطاقة.</span></header>
+            <div className="owners-rewards-grid">
+              {rewards.map((item: any) => (
+                <article key={item.id}>
+                  <div className="owners-reward-type">{rewardTypeLabel(item.reward_type)}</div>
+                  <Gift size={24} />
+                  <strong>{item.name}</strong>
+                  {item.reward_value ? <div className="owners-reward-value">{item.reward_value}</div> : null}
+                  <p>{item.description || "تفاصيل المكافأة تظهر للعميل هنا"}</p>
+                  <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
+                  <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_page ? " · تظهر في صفحة العميل بالنقاط" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}{item.available_for_friend_referral_purchase ? " · مكافأة دعوة من صديق" : ""}{item.available_for_repurchase ? " · مكافأة إعادة الشراء" : ""}</small>
+                  <small>استخدامات المكافأة: {(Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)).toLocaleString("ar-SA-u-nu-latn")}</small>
+                  {canManage ? <button className="owners-reward-usage-btn" disabled={usageBusy || (Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)) === 0} onClick={() => void openRewardUsage(item)}><UsersThree size={15} /> عرض من استخدم المكافأة</button> : null}
+                  {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase || item.available_for_friend_referral_purchase || item.available_for_repurchase) && item.reward_type === "discount" && Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? <small>خصم طلب الموقع: {item.checkout_discount_type === "percentage" ? `${Number(item.checkout_discount_value || 0).toLocaleString("ar-SA-u-nu-latn")}%` : `${Number(item.checkout_discount_value || item.checkout_discount_amount || 0).toLocaleString("ar-SA-u-nu-latn")} ر.س`}</small> : null}
+                  {canManage ? <div className="owners-actions"><button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button><button className="owners-link-btn danger" disabled={busy} onClick={() => void deleteReward(item)}><Trash size={16} /> حذف</button></div> : null}
+                </article>
+              ))}
+            </div>
+          </section>
 
-          {rewardsView === "catalog" ? <>
-            <section className="owners-table-card">
-              <header><h2>كتالوج المكافآت</h2><span>كل مكافأة تعرض للعميل بنوعها وقيمتها أو تفاصيلها بوضوح</span></header>
-              <div className="owners-rewards-grid">
-                {rewards.map((item: any) => (
-                  <article key={item.id}>
-                    <div className="owners-reward-type">{rewardTypeLabel(item.reward_type)}</div>
-                    <Gift size={24} />
-                    <strong>{item.name}</strong>
-                    {item.reward_value ? <div className="owners-reward-value">{item.reward_value}</div> : null}
-                    <p>{item.description || "تفاصيل المكافأة تظهر للعميل هنا"}</p>
-                    <b>{Number(item.points_cost).toLocaleString("ar-SA-u-nu-latn")} نقطة</b>
-                    <small>{item.is_active ? "مفعلة" : "متوقفة"}{item.show_on_member_page ? " · تظهر في صفحة العميل بالنقاط" : ""}{item.show_on_member_card ? " · تظهر على بطاقة العضوية" : ""}{item.available_for_referral_purchase ? " · مكافأة عميل جديد" : ""}{item.available_for_existing_customer_purchase ? " · مكافأة عميل قديم" : ""}{item.available_for_friend_referral_purchase ? " · مكافأة دعوة من صديق" : ""}{item.available_for_repurchase ? " · مكافأة إعادة الشراء" : ""}</small>
-                    <small>استخدامات المكافأة: {(Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)).toLocaleString("ar-SA-u-nu-latn")}</small>
-                    {canManage ? <button className="owners-reward-usage-btn" disabled={usageBusy || (Number(item.redeemed_quantity || 0) + Number(item.referral_purchase_redeemed_quantity || 0)) === 0} onClick={() => void openRewardUsage(item)}><UsersThree size={15} /> عرض من استخدم المكافأة</button> : null}
-                    {(item.available_for_referral_purchase || item.available_for_existing_customer_purchase || item.available_for_friend_referral_purchase || item.available_for_repurchase) && item.reward_type === "discount" && Number(item.checkout_discount_value || item.checkout_discount_amount || 0) > 0 ? <small>خصم طلب الموقع: {item.checkout_discount_type === "percentage" ? `${Number(item.checkout_discount_value || 0).toLocaleString("ar-SA-u-nu-latn")}%` : `${Number(item.checkout_discount_value || item.checkout_discount_amount || 0).toLocaleString("ar-SA-u-nu-latn")} ر.س`}</small> : null}
-                    {canManage ? <div className="owners-actions"><button className="owners-link-btn" onClick={() => editReward(item)}><NotePencil size={16} /> تعديل</button><button className="owners-link-btn danger" disabled={busy} onClick={() => void deleteReward(item)}><Trash size={16} /> حذف</button></div> : null}
-                  </article>
-                ))}
+          {canManage ? (
+            <section className="owners-table-card owners-reward-editor">
+              <header><h2>{reward.id ? "تعديل المكافأة" : "إضافة مكافأة جديدة"}</h2>{reward.id ? <button className="owners-link-btn" onClick={() => setReward(emptyReward)}>إلغاء التعديل</button> : null}</header>
+              <div className="owners-form-grid">
+                <label><span>اسم المكافأة</span><input value={reward.name} onChange={(event) => setReward({ ...reward, name: event.target.value })} placeholder="اسم واضح يظهر للعميل" /></label>
+                <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => { const rewardType = event.target.value as RewardDraft["rewardType"]; setReward({ ...reward, rewardType, rewardValue: "", checkoutDiscountValue: rewardType === "discount" ? reward.checkoutDiscountValue : "" }); }}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
+                <label><span>{rewardValueLabel(reward.rewardType)}</span><input value={reward.rewardValue} onChange={(event) => setReward({ ...reward, rewardValue: event.target.value })} placeholder={rewardValuePlaceholder(reward.rewardType)} /></label>
+                <label><span>النقاط المطلوبة</span><input type="number" min="1" value={reward.pointsCost} onChange={(event) => setReward({ ...reward, pointsCost: Number(event.target.value) })} /></label>
+                <label><span>تبدأ في</span><input type="datetime-local" value={reward.startsAt} onChange={(event) => setReward({ ...reward, startsAt: event.target.value })} /></label>
+                <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
+                <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
+                <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberPage} onChange={(event) => setReward({ ...reward, showOnMemberPage: event.target.checked })} /><span>إظهار المكافأة في صفحة العميل حسب رصيد النقاط</span></label>
+                <label className="owners-check-field"><input type="checkbox" checked={reward.availableForReferralPurchase} onChange={(event) => setReward({ ...reward, availableForReferralPurchase: event.target.checked })} /><span>متاحة للعميل الجديد عند استخدام كود الدعوة في طلب الشراء</span></label>
+                <label className="owners-check-field"><input type="checkbox" checked={reward.availableForExistingCustomerPurchase} onChange={(event) => setReward({ ...reward, availableForExistingCustomerPurchase: event.target.checked })} /><span>متاحة للعميل القديم عند استخدام كود الدعوة في طلب الشراء</span></label>
+                <label className="owners-check-field"><input type="checkbox" checked={reward.availableForFriendReferralPurchase} onChange={(event) => setReward({ ...reward, availableForFriendReferralPurchase: event.target.checked })} /><span>متاحة دعوة من صديق عند استخدام كود الدعوة في طلب الشراء</span></label>
+                <label className="owners-check-field"><input type="checkbox" checked={reward.availableForRepurchase} onChange={(event) => setReward({ ...reward, availableForRepurchase: event.target.checked })} /><span>متاحة كمكافأة إعادة شراء</span></label>
+                {(reward.availableForReferralPurchase || reward.availableForExistingCustomerPurchase || reward.availableForFriendReferralPurchase || reward.availableForRepurchase) && reward.rewardType === "discount" ? <label><span>طريقة الخصم في طلب الموقع</span><select value={reward.checkoutDiscountType} onChange={(event) => setReward({ ...reward, checkoutDiscountType: event.target.value === "percentage" ? "percentage" : "amount" })}><option value="amount">قيمة خصم</option><option value="percentage">نسبة خصم</option></select></label> : null}
+                {(reward.availableForReferralPurchase || reward.availableForExistingCustomerPurchase || reward.availableForFriendReferralPurchase || reward.availableForRepurchase) && reward.rewardType === "discount" ? <label><span>{reward.checkoutDiscountType === "percentage" ? "نسبة الخصم في طلب الموقع (%)" : "قيمة الخصم في طلب الموقع (ريال)"}</span><input type="number" min="0.01" max={reward.checkoutDiscountType === "percentage" ? "100" : undefined} step="0.01" value={reward.checkoutDiscountValue} onChange={(event) => setReward({ ...reward, checkoutDiscountValue: event.target.value })} placeholder={reward.checkoutDiscountType === "percentage" ? "مثال: 10" : "مثال: 1000"} /></label> : null}
+                <label className="wide"><span>الوصف</span><textarea value={reward.description} onChange={(event) => setReward({ ...reward, description: event.target.value })} placeholder="اكتب الشروط أو التفاصيل التي يحتاج العميل معرفتها قبل الاستبدال أو الاختيار بكود الدعوة" /></label>
               </div>
+              <button className="owners-primary" disabled={busy || !reward.name.trim() || !reward.rewardValue.trim()} onClick={() => void saveReward()}><Gift size={18} />{reward.id ? "حفظ التعديل" : "إضافة المكافأة"}</button>
             </section>
-
-            {canManage ? (
-              <section className="owners-table-card owners-reward-editor">
-                <header><h2>{reward.id ? "تعديل المكافأة" : "إضافة مكافأة جديدة"}</h2>{reward.id ? <button className="owners-link-btn" onClick={() => setReward(emptyReward)}>إلغاء التعديل</button> : null}</header>
-                <div className="owners-form-grid">
-                  <label><span>اسم المكافأة</span><input value={reward.name} onChange={(event) => setReward({ ...reward, name: event.target.value })} placeholder="اسم واضح يظهر للعميل" /></label>
-                  <label><span>نوع المكافأة</span><select value={reward.rewardType} onChange={(event) => { const rewardType = event.target.value as RewardDraft["rewardType"]; setReward({ ...reward, rewardType, rewardValue: "", checkoutDiscountValue: rewardType === "discount" ? reward.checkoutDiscountValue : "" }); }}><option value="gift">هدية</option><option value="discount">خصم</option><option value="service">خدمة</option><option value="voucher">قسيمة</option></select></label>
-                  <label><span>{rewardValueLabel(reward.rewardType)}</span><input value={reward.rewardValue} onChange={(event) => setReward({ ...reward, rewardValue: event.target.value })} placeholder={rewardValuePlaceholder(reward.rewardType)} /></label>
-                  <label><span>النقاط المطلوبة</span><input type="number" min="1" value={reward.pointsCost} onChange={(event) => setReward({ ...reward, pointsCost: Number(event.target.value) })} /></label>
-                  <label><span>تبدأ في</span><input type="datetime-local" value={reward.startsAt} onChange={(event) => setReward({ ...reward, startsAt: event.target.value })} /></label>
-                  <label><span>تنتهي في</span><input type="datetime-local" value={reward.endsAt} onChange={(event) => setReward({ ...reward, endsAt: event.target.value })} /></label>
-                  <label><span>الحالة</span><select value={reward.isActive ? "on" : "off"} onChange={(event) => setReward({ ...reward, isActive: event.target.value === "on" })}><option value="on">مفعلة</option><option value="off">متوقفة</option></select></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberPage} onChange={(event) => setReward({ ...reward, showOnMemberPage: event.target.checked })} /><span>إظهار المكافأة في صفحة العميل حسب رصيد النقاط</span></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.showOnMemberCard} onChange={(event) => setReward({ ...reward, showOnMemberCard: event.target.checked })} /><span>إظهار المكافأة على ظهر بطاقة العضوية</span></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForReferralPurchase} onChange={(event) => setReward({ ...reward, availableForReferralPurchase: event.target.checked })} /><span>متاحة للعميل الجديد عند استخدام كود الدعوة في طلب الشراء</span></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForExistingCustomerPurchase} onChange={(event) => setReward({ ...reward, availableForExistingCustomerPurchase: event.target.checked })} /><span>متاحة للعميل القديم عند استخدام كود الدعوة في طلب الشراء</span></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForFriendReferralPurchase} onChange={(event) => setReward({ ...reward, availableForFriendReferralPurchase: event.target.checked })} /><span>متاحة دعوة من صديق عند استخدام كود الدعوة في طلب الشراء</span></label>
-                  <label className="owners-check-field"><input type="checkbox" checked={reward.availableForRepurchase} onChange={(event) => setReward({ ...reward, availableForRepurchase: event.target.checked })} /><span>متاحة كمكافأة إعادة شراء</span></label>
-                  {(reward.availableForReferralPurchase || reward.availableForExistingCustomerPurchase || reward.availableForFriendReferralPurchase || reward.availableForRepurchase) && reward.rewardType === "discount" ? <label><span>طريقة الخصم في طلب الموقع</span><select value={reward.checkoutDiscountType} onChange={(event) => setReward({ ...reward, checkoutDiscountType: event.target.value === "percentage" ? "percentage" : "amount" })}><option value="amount">قيمة خصم</option><option value="percentage">نسبة خصم</option></select></label> : null}
-                  {(reward.availableForReferralPurchase || reward.availableForExistingCustomerPurchase || reward.availableForFriendReferralPurchase || reward.availableForRepurchase) && reward.rewardType === "discount" ? <label><span>{reward.checkoutDiscountType === "percentage" ? "نسبة الخصم في طلب الموقع (%)" : "قيمة الخصم في طلب الموقع (ريال)"}</span><input type="number" min="0.01" max={reward.checkoutDiscountType === "percentage" ? "100" : undefined} step="0.01" value={reward.checkoutDiscountValue} onChange={(event) => setReward({ ...reward, checkoutDiscountValue: event.target.value })} placeholder={reward.checkoutDiscountType === "percentage" ? "مثال: 10" : "مثال: 1000"} /></label> : null}
-                  <label className="wide"><span>الوصف</span><textarea value={reward.description} onChange={(event) => setReward({ ...reward, description: event.target.value })} placeholder="اكتب الشروط أو التفاصيل التي يحتاج العميل معرفتها قبل الاستبدال أو الاختيار بكود الدعوة" /></label>
-                </div>
-                <button className="owners-primary" disabled={busy || !reward.name.trim() || !reward.rewardValue.trim()} onClick={() => void saveReward()}><Gift size={18} />{reward.id ? "حفظ التعديل" : "إضافة المكافأة"}</button>
-              </section>
-            ) : null}
-          </> : (
-            <section className="owners-table-card owners-member-card-admin">
-              <header><h2>بطاقة العضوية</h2><span>حدد المكافآت التي تظهر على ظهر بطاقة العميل عند الضغط عليها</span></header>
-              <div className="owners-card-reward-list">
-                {rewards.length ? rewards.map((item: any) => (
-                  <article key={item.id}>
-                    <div><strong>{item.name}</strong><span>{rewardTypeLabel(item.reward_type)}{item.reward_value ? ` · ${item.reward_value}` : ""}</span></div>
-                    <label className="owners-card-toggle"><input type="checkbox" disabled={!canManage || busy} checked={item.show_on_member_card === true} onChange={() => void act({ action: "save_reward", id: item.id, name: item.name, description: item.description || "", rewardType: item.reward_type, rewardValue: item.reward_value || "", showOnMemberCard: item.show_on_member_card !== true, showOnMemberPage: item.show_on_member_page === true, availableForReferralPurchase: item.available_for_referral_purchase === true, availableForExistingCustomerPurchase: item.available_for_existing_customer_purchase === true, availableForFriendReferralPurchase: item.available_for_friend_referral_purchase === true, availableForRepurchase: item.available_for_repurchase === true, checkoutDiscountType: item.checkout_discount_type === "percentage" ? "percentage" : "amount", checkoutDiscountValue: item.checkout_discount_value || item.checkout_discount_amount || "", pointsCost: item.points_cost, startsAt: item.starts_at || "", endsAt: item.ends_at || "", isActive: item.is_active !== false }, item.show_on_member_card ? "تم إخفاء المكافأة من بطاقة العضوية" : "تمت إضافة المكافأة إلى بطاقة العضوية")} /><span>{item.show_on_member_card ? "ظاهرة على البطاقة" : "غير ظاهرة"}</span></label>
-                  </article>
-                )) : <p>أضف مكافآت أولًا ثم اختر ما يظهر منها على بطاقة العضوية.</p>}
-              </div>
-            </section>
-          )}
+          ) : null}
         </>
       ) : null}
 

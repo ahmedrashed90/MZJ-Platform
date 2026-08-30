@@ -7514,3 +7514,63 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .tracking-stage10-mode>div>label.is-selected{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand) inset}
 .tracking-stage10-mode input{margin:0}
 .tracking-stage10-mode small,.tracking-stage10-variables{color:var(--muted);font-size:10px;line-height:1.7}
+
+/* MZJ Club v31: customer categories + membership/reward separation */
+.owners-customer-category{display:inline-flex;align-items:center;justify-content:center;min-width:72px;border-radius:999px;padding:6px 11px;font-size:10px;font-weight:900;border:1px solid transparent;white-space:nowrap}
+.owners-customer-category.distinction{background:#fff0e3;color:#9a4f1c;border-color:#efc9aa}
+.owners-customer-category.gold{background:#fff7cf;color:#856000;border-color:#e6cf72}
+.owners-customer-category.special{background:#f9e8f1;color:#7b214d;border-color:#e3b4cb}
+.owners-customer-category.none{background:#f5f3f2;color:#796e69;border-color:#ddd7d4}
+.owners-test-label{color:#a75b11!important;font-weight:900}
+.owners-membership-admin>header>div{display:grid;gap:4px}
+.owners-category-rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.owners-category-rules article{display:grid;gap:5px;border-radius:16px;padding:16px 18px;border:1px solid var(--line);background:#fff}
+.owners-category-rules article span{font-size:16px;font-weight:900}
+.owners-category-rules article strong{font-size:22px}
+.owners-category-rules article small{font-size:10px;opacity:.78}
+.owners-category-rules article.distinction{background:#fff6ee;border-color:#efc9aa;color:#8e4819}
+.owners-category-rules article.gold{background:#fff9dc;border-color:#e2c967;color:#785700}
+.owners-category-rules article.special{background:#fceef5;border-color:#dfb0c7;color:#711e48}
+.owners-category-policy{margin-top:12px;border:1px solid #ead8cd;background:#fffaf7;border-radius:12px;padding:11px 13px;color:#5d3a2f;font-size:11px;font-weight:800;line-height:1.7}
+.owners-card-category{display:grid;place-items:center;text-align:center;align-content:center;gap:5px;min-height:128px;margin:10px 0;border-radius:18px;border:1px solid transparent;box-shadow:0 10px 24px rgba(89,51,37,.08)}
+.owners-card-category span{font-size:10px;font-weight:900;opacity:.8}
+.owners-card-category strong{font-size:34px;line-height:1.15}
+.owners-card-category small{font-size:10px;font-weight:800}
+.owners-card-category.distinction{background:linear-gradient(135deg,#fff4e9,#f5d4b8);color:#874515;border-color:#e7bc99}
+.owners-card-category.gold{background:linear-gradient(135deg,#fffbe9,#efd57a);color:#715100;border-color:#d9bc55}
+.owners-card-category.special{background:linear-gradient(135deg,#fff2f8,#e6b7cf);color:#67173f;border-color:#d59bb9}
+.owners-card-category.none{background:linear-gradient(135deg,#fff,#eee7e3);color:#75665f;border-color:#ddd2cc}
+@media(max-width:650px){.owners-category-rules{grid-template-columns:1fr}.owners-card-category{min-height:104px}.owners-card-category strong{font-size:28px}}
+
+/* MZJ Club v31: category filters, compact card-back details and purchase invoices */
+.owners-category-filter{display:grid;gap:5px;min-width:165px}
+.owners-category-filter>span{font-size:10px;font-weight:900;color:#5c4036}
+.owners-category-filter select{min-height:40px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 11px;font:inherit;font-size:11px;color:inherit;outline:0}
+.owners-card-category{min-height:72px;margin:6px 0;padding:8px 12px;border-radius:14px}
+.owners-card-category strong{font-size:25px}
+.owners-card-category small{font-size:9px}
+.owners-card-back-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;position:relative;z-index:1}
+.owners-card-back-details>div{min-width:0;border:1px solid rgba(180,139,119,.34);background:rgba(255,255,255,.7);border-radius:10px;padding:6px 8px;display:grid;gap:1px}
+.owners-card-back-details span{font-size:8px;color:#7a6259;font-weight:800}
+.owners-card-back-details strong{font-size:10px;color:#3b241d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.owners-movement-main{display:grid;gap:4px;min-width:0}
+.owners-purchase-vehicle{display:block!important;color:#6c4d42!important;font-size:10px!important;font-weight:800;line-height:1.55}
+.owners-purchase-invoice-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
+.owners-invoice-download,.owners-invoice-list button{border:1px solid #dfc8bc;background:#fffaf7;color:#713626;border-radius:8px;padding:6px 8px;font:inherit;font-size:9px;font-weight:900;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.owners-invoice-download:disabled{opacity:.55;cursor:not-allowed}
+.owners-invoice-message{color:#8b6254!important;font-size:9px!important;font-weight:800}
+.owners-invoice-list{display:flex;gap:5px;flex-wrap:wrap;width:100%}
+.owners-invoice-list button{background:#fff}
+.owners-invoice-list button span{font-weight:900}
+.owners-invoice-list button small{font-size:8px;color:#826d64}
+@media(max-width:650px){
+  .owners-category-filter{min-width:0;width:100%}
+  .owners-card-category{min-height:62px;margin:4px 0;padding:6px 9px}
+  .owners-card-category strong{font-size:22px}
+  .owners-card-back-details{gap:4px}
+  .owners-card-back-details>div{padding:5px 6px;border-radius:8px}
+  .owners-card-back-details span{font-size:7.5px}
+  .owners-card-back-details strong{font-size:9px}
+  .owners-purchase-invoice-actions{align-items:flex-start;flex-direction:column}
+  .owners-invoice-list{display:grid;grid-template-columns:1fr;width:100%}
+}

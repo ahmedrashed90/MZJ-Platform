@@ -15,6 +15,8 @@ import { ensureOwnersSchema } from "./_owners-schema.js";
 import { syncLegacyCustomerCodes } from "./_owners-customer-segments.js";
 import { DEFAULT_OWNER_WELCOME_MESSAGE_TEMPLATE, queueLegacyOwnerWelcomeSms, queueOwnerWelcomeSms } from "./_owners-welcome.js";
 import { getWebsiteStock } from "./_website-stock.js";
+import { ownerPurchaseLedger, ownerPurchaseSummary, ownerOwnsSalesOrder } from "./_owners-purchases.js";
+import { downloadNextErpSalesInvoicePdf, listNextErpSalesInvoices, ownerInvoiceError } from "./_owners-invoices.js";
 
 const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/club";
 
@@ -253,6 +255,32 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(200).json({ ok: true, settings: settingsRows[0] || {} });
     }
 
+    if (scope === "purchase_invoices" || scope === "invoice_pdf") {
+      const memberId = clean(request.query.memberId);
+      const salesOrder = clean(request.query.salesOrder);
+      if (!isUuid(memberId) || !salesOrder) return response.status(400).json({ ok: false, error: "العميل أو طلب البيع غير محدد" });
+      if (!await ownerOwnsSalesOrder(memberId, salesOrder)) {
+        return response.status(404).json({ ok: false, error: "طلب البيع غير مرتبط بهذه العضوية" });
+      }
+      try {
+        const invoices = await listNextErpSalesInvoices(salesOrder);
+        if (scope === "purchase_invoices") return response.status(200).json({ ok: true, salesOrder, invoices });
+        const invoiceName = clean(request.query.invoice);
+        if (!invoiceName || !invoices.some((invoice) => invoice.name === invoiceName)) {
+          return response.status(404).json({ ok: false, error: "الفاتورة غير مرتبطة بطلب البيع" });
+        }
+        const bytes = await downloadNextErpSalesInvoicePdf(invoiceName);
+        const safeName = invoiceName.replace(/[^A-Za-z0-9._-]+/g, "-") || "sales-invoice";
+        response.setHeader("Content-Type", "application/pdf");
+        response.setHeader("Content-Disposition", `attachment; filename="${safeName}.pdf"`);
+        response.setHeader("Content-Length", String(bytes.byteLength));
+        return response.status(200).send(Buffer.from(bytes));
+      } catch (error) {
+        const invoiceError = ownerInvoiceError(error);
+        return response.status(invoiceError.status).json({ ok: false, error: invoiceError.message });
+      }
+    }
+
     if (scope === "profile") {
       const kind = clean(request.query.kind) === "legacy" ? "legacy" : "member";
       const id = clean(request.query.id);
@@ -291,6 +319,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
             branchName: customer.branch_name || customer.branch_code || "",
             sourceName: customer.catalog_source_name || customer.source_name || customer.source_code || "",
             assignedName: customer.assigned_name || "",
+            joinedAt: customer.created_at || customer.registered_at || null,
+            purchaseCount: 0,
+            lastSaleAt: null,
           },
           referrals: [],
           referralVisits: [],
@@ -311,14 +342,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
       const [member] = await sql<any[]>`
         select
           m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.points_balance,m.lifetime_points,
-          m.tier_code,m.first_sale_at,m.last_sale_at,m.welcome_sent_at,m.metadata
+          m.tier_code,m.first_sale_at,m.last_sale_at,m.activated_at,m.created_at,m.welcome_sent_at,m.metadata
         from owners.members m
         where m.id=${id}::uuid and m.status='active'
         limit 1
       `;
       if (!member) return response.status(404).json({ ok: false, error: "عضوية العميل غير موجودة" });
 
-      const [referrals, referralVisits, ledger, rewards, cardRewards, redemptions] = await Promise.all([
+      const [referrals, referralVisits, ledger, rewards, redemptions, purchaseSummary] = await Promise.all([
         sql<any[]>`
           select id::text,referred_name,status,registered_at,qualified_at,sold_at,created_at
           from owners.referrals
@@ -333,29 +364,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
           order by created_at desc
           limit 100
         `,
+        ownerPurchaseLedger(id),
         sql<any[]>`
-          select id::text,points,event_type,description,metadata,created_at
-          from owners.points_ledger
-          where member_id=${id}::uuid
-          order by created_at desc
-          limit 100
-        `,
-        sql<any[]>`
-          select id::text,name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,points_cost,starts_at,ends_at
+          select id::text,name,description,reward_type,reward_value,show_on_member_page,points_cost,starts_at,ends_at
           from owners.rewards
           where is_active=true and show_on_member_page=true
             and points_cost<=${Number(member.points_balance || 0)}
             and (starts_at is null or starts_at<=now())
             and (ends_at is null or ends_at>=now())
             and (stock_quantity is null or redeemed_quantity<stock_quantity)
-          order by points_cost,name
-        `,
-        sql<any[]>`
-          select id::text,name,description,reward_type,reward_value,show_on_member_card,show_on_member_page,points_cost,starts_at,ends_at
-          from owners.rewards
-          where is_active=true and show_on_member_page=true and show_on_member_card=true
-            and (starts_at is null or starts_at<=now())
-            and (ends_at is null or ends_at>=now())
           order by points_cost,name
         `,
         sql<any[]>`
@@ -368,6 +385,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           order by rd.created_at desc
           limit 50
         `,
+        ownerPurchaseSummary(id),
       ]);
 
       const websiteCars = await websiteCarsForDiscountCalculator();
@@ -384,14 +402,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
           tier: member.tier_code || "member",
           referralCode: member.referral_code || "",
           inviteUrl: `${publicBase(request)}/club/invite/${member.referral_code}`,
-          firstSaleAt: member.first_sale_at || null,
-          lastSaleAt: member.last_sale_at || null,
+          firstSaleAt: purchaseSummary.firstSaleAt || member.first_sale_at || null,
+          lastSaleAt: purchaseSummary.lastSaleAt || member.last_sale_at || null,
+          joinedAt: member.activated_at || member.created_at || null,
+          purchaseCount: Number(purchaseSummary.purchaseCount || 0),
         },
         referrals,
         referralVisits,
         ledger,
         rewards,
-        cardRewards,
+        cardRewards: [],
         redemptions,
         pointsMenu: {
           repurchase: Number(pointsSettings?.points_repurchase ?? 500),
@@ -446,6 +466,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sql<any[]>`
         select
           c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.welcome_sent_at,c.created_at,c.updated_at,
+          0::int as lifetime_points,
           l.status_label,l.department_code,l.branch_code,l.source_code,l.source_name,l.payment_type,l.registered_at,
           u.full_name as assigned_name,b.name as branch_name,src.name as catalog_source_name
         from owners.legacy_customer_codes c
@@ -698,7 +719,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       ? clean(payload.rewardType)
       : "gift";
     const rewardValue = clean(payload.rewardValue);
-    const showOnMemberCard = payload.showOnMemberCard === true;
     const showOnMemberPage = payload.showOnMemberPage === true;
     const availableForReferralPurchase = payload.availableForReferralPurchase === true;
     const availableForExistingCustomerPurchase = payload.availableForExistingCustomerPurchase === true;
@@ -731,7 +751,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       await sql`
         update owners.rewards set
           name=${name},description=${description || null},reward_type=${rewardType},reward_value=${rewardValue || null},
-          show_on_member_card=${showOnMemberCard},show_on_member_page=${showOnMemberPage},available_for_referral_purchase=${availableForReferralPurchase},
+          show_on_member_page=${showOnMemberPage},available_for_referral_purchase=${availableForReferralPurchase},
           available_for_existing_customer_purchase=${availableForExistingCustomerPurchase},
           available_for_friend_referral_purchase=${availableForFriendReferralPurchase},available_for_repurchase=${availableForRepurchase},
           checkout_discount_type=${checkoutDiscountType},checkout_discount_value=${checkoutDiscountValue},
@@ -747,7 +767,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           checkout_discount_type,checkout_discount_value,checkout_discount_amount,
           points_cost,stock_quantity,starts_at,ends_at,is_active,created_by,updated_by
         ) values(
-          ${name},${description || null},${rewardType},${rewardValue || null},${showOnMemberCard},${showOnMemberPage},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},${availableForRepurchase},
+          ${name},${description || null},${rewardType},${rewardValue || null},false,${showOnMemberPage},${availableForReferralPurchase},${availableForExistingCustomerPurchase},${availableForFriendReferralPurchase},${availableForRepurchase},
           ${checkoutDiscountType},${checkoutDiscountValue},${checkoutDiscountAmount},${pointsCost},${stockQuantity},
           ${startsAt}::timestamptz,${endsAt}::timestamptz,${isActive},${actor.id}::uuid,${actor.id}::uuid
         )

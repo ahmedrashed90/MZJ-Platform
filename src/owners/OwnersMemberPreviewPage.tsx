@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, ArrowsClockwise, Gift, IdentificationCard, ShareNetwork, Sparkle, Star } from "@phosphor-icons/react";
+import { ArrowRight, ArrowsClockwise, Gift, IdentificationCard, ShareNetwork, Sparkle } from "@phosphor-icons/react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ownersAdminGet } from "./api";
 import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
+import { ownersCustomerCategoryFromPoints } from "./customerCategory";
+import { PurchaseInvoiceActions } from "./PurchaseInvoiceActions";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "تعذر تحميل صفحة عضوية العميل";
@@ -17,13 +19,6 @@ function formatDate(value: unknown) {
   }
 }
 
-function tierLabel(value: unknown) {
-  const tier = String(value || "member");
-  if (tier === "platinum") return "Platinum";
-  if (tier === "gold") return "Gold";
-  if (tier === "silver") return "Silver";
-  return "Member";
-}
 
 function rewardTypeLabel(value: unknown) {
   const type = String(value || "gift");
@@ -77,11 +72,11 @@ export function OwnersMemberPreviewPage() {
 
   const member = data?.member || {};
   const rewards = Array.isArray(data?.rewards) ? data.rewards : [];
-  const cardRewards = Array.isArray(data?.cardRewards) ? data.cardRewards : [];
   const ledger = Array.isArray(data?.ledger) ? data.ledger : [];
   const pointsMenu = data?.pointsMenu || {};
   const redemptions = Array.isArray(data?.redemptions) ? data.redemptions : [];
   const websiteCars = Array.isArray(data?.websiteCars) ? data.websiteCars : [];
+  const category = ownersCustomerCategoryFromPoints(member.lifetimePoints);
 
   return (
     <div className="module-page owners-admin-page owners-member-preview" dir="rtl">
@@ -110,14 +105,22 @@ export function OwnersMemberPreviewPage() {
                 <div className="owners-card-name"><small>العميل</small><h2>{member.name || "عميل مجموعة محمد بن ذعار العجمي"}</h2></div>
                 <div className="owners-card-metrics">
                   <div><span>رصيد النقاط</span><strong>{Number(member.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
-                  <div><span>المستوى</span><b><Star size={18} weight="fill" /> {tierLabel(member.tier)}</b><small>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة</small></div>
+                  <div><span>إجمالي النقاط المكتسبة</span><strong>{Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>نقطة</small></div>
                 </div>
-                <div className="owners-card-footer"><span>{member.referralCode ? `الكود: ${member.referralCode}` : "MZJ Club Community"}</span><small><ArrowsClockwise size={15} /> اضغط لعرض المزايا</small></div>
+                <div className="owners-card-footer"><span>{member.referralCode ? `الكود: ${member.referralCode}` : "MZJ Club Community"}</span><small><ArrowsClockwise size={15} /> اضغط لعرض فئة العميل</small></div>
               </div>
               <div className="owners-membership-face back">
-                <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>مزايا بطاقة العضوية</strong></div><img src="/logo.png" alt="MZJ" /></div>
-                <div className="owners-card-back-rewards">
-                  {cardRewards.length ? cardRewards.slice(0, 4).map((reward: any) => <article key={reward.id}><span className="owners-card-reward-icon"><Gift size={16} weight="fill" /></span><div><strong>{reward.name}</strong><span>{rewardTypeLabel(reward.reward_type)}{reward.reward_value ? ` · ${reward.reward_value}` : ""}</span></div></article>) : <div className="owners-card-empty"><Sparkle size={22} weight="fill" /><strong>لا توجد مزايا بطاقة ظاهرة لهذا العميل حاليًا</strong></div>}
+                <div className="owners-card-back-head"><div><Sparkle size={22} weight="fill" /><strong>فئة العميل</strong></div><img src="/logo.png" alt="MZJ" /></div>
+                <div className={`owners-card-category ${category.category}`}>
+                  <span>فئة العميل</span>
+                  <strong>{category.label}</strong>
+                  <small>{category.category === "none" ? "تبدأ فئة تميز من 1,000 نقطة مكتسبة" : `${Number(member.lifetimePoints || 0).toLocaleString("ar-SA-u-nu-latn")} نقطة مكتسبة`}</small>
+                </div>
+                <div className="owners-card-back-details">
+                  <div><span>كود العميل</span><strong dir="ltr">{member.referralCode || "—"}</strong></div>
+                  <div><span>تاريخ الانضمام</span><strong>{formatDate(member.joinedAt)}</strong></div>
+                  <div><span>عدد مرات الشراء</span><strong>{Number(member.purchaseCount || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></div>
+                  <div><span>آخر شراء</span><strong>{formatDate(member.lastSaleAt)}</strong></div>
                 </div>
                 <div className="owners-card-footer"><span>تاريخ تثق به</span><small><ArrowsClockwise size={15} /> اضغط للعودة</small></div>
               </div>
@@ -156,7 +159,15 @@ export function OwnersMemberPreviewPage() {
             <div className="owners-movement-table">
               <div className="owners-movement-head"><span>الحركة</span><span>التاريخ</span><span>عدد النقاط</span></div>
               {ledger.length ? ledger.map((entry: any) => (
-                <article key={entry.id}><span>{movementLabel(entry)}</span><small>{formatDate(entry.created_at)}</small><strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong></article>
+                <article key={entry.id}>
+                  <span className="owners-movement-main">
+                    <b>{movementLabel(entry)}</b>
+                    {entry?.purchase?.vehicleLabel ? <small className="owners-purchase-vehicle">{entry.purchase.vehicleLabel}</small> : null}
+                    {kind === "member" && entry?.purchase?.invoiceEligible ? <PurchaseInvoiceActions mode="admin" memberId={member.id} salesOrder={entry.purchase.salesOrderReference} /> : null}
+                  </span>
+                  <small>{formatDate(entry.created_at)}</small>
+                  <strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong>
+                </article>
               )) : null}
             </div>
           </section>
