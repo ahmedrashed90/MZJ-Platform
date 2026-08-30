@@ -1,6 +1,7 @@
 import { clean } from "./_tracking-utils.js";
 
 export const TRACKING_SMS_TEMPLATE_STAGES = new Set([1, 9, 10]);
+export const TRACKING_SMS_MESSAGE_MODES = new Set(["legacy", "new"]);
 
 const DEFAULT_TRACKING_SMS_TEMPLATES: Record<number, string> = {
   1: `عميلنا العزيز / {customer_name}
@@ -32,11 +33,36 @@ const DEFAULT_TRACKING_SMS_TEMPLATES: Record<number, string> = {
 نتمنى لكم قيادة آمنة وتجربة ممتعة.`,
 };
 
+const DEFAULT_TRACKING_LEGACY_SMS_TEMPLATES: Record<number, string> = {
+  10: `عميلنا العزيز / {customer_name}
+نبارك لكم إتمام عملية التسليم بنجاح.
+يشرفنا في مجموعة محمد ذعار العجمي للسيارات خدمتكم، ونتمنى لكم قيادة آمنة وتجربة ممتعة.
+#نجم_الطريق`,
+};
+
 export function defaultTrackingSmsTemplate(stageOrder: unknown) {
   return DEFAULT_TRACKING_SMS_TEMPLATES[Number(stageOrder || 0)] || "";
 }
 
-export function effectiveTrackingSmsTemplate(stageOrder: unknown, configuredTemplate: unknown) {
+export function defaultTrackingLegacySmsTemplate(stageOrder: unknown) {
+  return DEFAULT_TRACKING_LEGACY_SMS_TEMPLATES[Number(stageOrder || 0)] || "";
+}
+
+export function normalizeTrackingSmsMessageMode(value: unknown) {
+  const mode = clean(value).toLowerCase();
+  return TRACKING_SMS_MESSAGE_MODES.has(mode) ? mode : "new";
+}
+
+export function effectiveTrackingSmsTemplate(
+  stageOrder: unknown,
+  configuredTemplate: unknown,
+  legacyConfiguredTemplate?: unknown,
+  configuredMode?: unknown,
+) {
+  if (Number(stageOrder || 0) === 10 && normalizeTrackingSmsMessageMode(configuredMode) === "legacy") {
+    const legacyConfigured = clean(legacyConfiguredTemplate);
+    return legacyConfigured || defaultTrackingLegacySmsTemplate(stageOrder);
+  }
   const configured = clean(configuredTemplate);
   return configured || defaultTrackingSmsTemplate(stageOrder);
 }

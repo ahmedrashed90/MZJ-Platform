@@ -111,6 +111,9 @@ create index if not exists tracking_order_vehicles_vin_idx on tracking.order_veh
 
 alter table tracking.stages add column if not exists description text;
 alter table tracking.stages add column if not exists sms_message_template text;
+alter table tracking.stages add column if not exists sms_message_template_legacy text;
+alter table tracking.stages add column if not exists sms_message_mode text not null default 'new';
+update tracking.stages set sms_message_mode='new' where sms_message_mode is null or btrim(sms_message_mode) not in ('legacy','new');
 alter table tracking.stages add column if not exists updated_at timestamptz not null default now();
 
 create table if not exists tracking.vehicle_stages (

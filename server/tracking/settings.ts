@@ -4,7 +4,7 @@ import { hasPermission } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { ensureTrackingSchema } from "../_tracking-schema.js";
 import { clean } from "../_tracking-utils.js";
-import { defaultTrackingSmsTemplate, TRACKING_SMS_TEMPLATE_STAGES } from "../_tracking-message-templates.js";
+import { defaultTrackingLegacySmsTemplate, defaultTrackingSmsTemplate, normalizeTrackingSmsMessageMode, TRACKING_SMS_TEMPLATE_STAGES } from "../_tracking-message-templates.js";
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   await ensureTrackingSchema();
@@ -21,6 +21,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sms_message_template: TRACKING_SMS_TEMPLATE_STAGES.has(Number(stage.sort_order))
         ? (clean(stage.sms_message_template) || defaultTrackingSmsTemplate(stage.sort_order))
         : stage.sms_message_template,
+      sms_message_template_legacy: Number(stage.sort_order) === 10
+        ? (clean(stage.sms_message_template_legacy) || defaultTrackingLegacySmsTemplate(stage.sort_order))
+        : stage.sms_message_template_legacy,
+      sms_message_mode: Number(stage.sort_order) === 10
+        ? normalizeTrackingSmsMessageMode(stage.sms_message_mode)
+        : stage.sms_message_mode,
     }));
     return response.status(200).json({ ok: true, stages });
   }
@@ -32,12 +38,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const description = clean(body.description);
   if (!id || !name) return response.status(400).json({ ok: false, error: "اسم المرحلة مطلوب" });
 
-  const [current] = await sql<any[]>`select id::text,sort_order,sms_message_template from tracking.stages where id=${id}::uuid limit 1`;
+  const [current] = await sql<any[]>`select id::text,sort_order,sms_message_template,sms_message_template_legacy,sms_message_mode from tracking.stages where id=${id}::uuid limit 1`;
   if (!current) return response.status(404).json({ ok: false, error: "المرحلة غير موجودة" });
   const supportsEditableTemplate = TRACKING_SMS_TEMPLATE_STAGES.has(Number(current.sort_order));
   const smsMessageTemplate = supportsEditableTemplate
     ? (clean(body.smsMessageTemplate) || defaultTrackingSmsTemplate(current.sort_order))
     : current.sms_message_template;
+  const isStage10 = Number(current.sort_order) === 10;
+  const smsLegacyMessageTemplate = isStage10
+    ? (clean(body.smsLegacyMessageTemplate) || defaultTrackingLegacySmsTemplate(current.sort_order))
+    : current.sms_message_template_legacy;
+  const smsMessageMode = isStage10
+    ? normalizeTrackingSmsMessageMode(body.smsMessageMode)
+    : current.sms_message_mode;
 
   const [stage] = await sql<any[]>`
     update tracking.stages set
@@ -46,6 +59,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       sms_enabled=${body.smsEnabled===true},
       is_active=${body.isActive!==false},
       sms_message_template=${smsMessageTemplate||null},
+      sms_message_template_legacy=${smsLegacyMessageTemplate||null},
+      sms_message_mode=${smsMessageMode||'new'},
       updated_at=now()
     where id=${id}::uuid returning *,id::text
   `;

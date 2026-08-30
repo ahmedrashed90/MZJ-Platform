@@ -24,7 +24,7 @@ function requestOrigin(request: VercelRequest) {
 
 function messageForStage(order: any, vehicle: any, stage: any, link: string, club?: { personalCode?: unknown; portalUrl?: unknown }) {
   const customer = clean(order.customer_name) || "عميلنا العزيز";
-  const template = effectiveTrackingSmsTemplate(stage.sort_order, stage.sms_message_template);
+  const template = effectiveTrackingSmsTemplate(stage.sort_order, stage.sms_message_template, stage.sms_message_template_legacy, stage.sms_message_mode);
   if (template) {
     return renderTrackingSmsTemplate(template, {
       customer_name: customer,
@@ -61,7 +61,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     select o.*,o.id::text,o.assigned_to::text,
       (select count(*) from tracking.order_vehicles vx where vx.order_id=o.id)::int as vehicles_count,
       v.id::text as vehicle_id,v.vin,v.item_no,v.car_name,
-      s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,s.sms_message_template,o.tracking_token
+      s.id::text as stage_id,s.name as stage_name,s.sort_order,s.sms_enabled,s.sms_message_template,s.sms_message_template_legacy,s.sms_message_mode,o.tracking_token
     from tracking.orders o
     join tracking.order_vehicles v on v.order_id=o.id and v.id=${vehicleId}::uuid
     join tracking.stages s on s.id=${stageId}::uuid
@@ -93,7 +93,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const message = clean(body.message) || messageForStage(
     row,
     row,
-    { name: row.stage_name, sort_order: row.sort_order, sms_message_template: row.sms_message_template },
+    { name: row.stage_name, sort_order: row.sort_order, sms_message_template: row.sms_message_template, sms_message_template_legacy: row.sms_message_template_legacy, sms_message_mode: row.sms_message_mode },
     link,
     { personalCode: stage10Member?.referral_code, portalUrl: clubPortalUrl },
   );

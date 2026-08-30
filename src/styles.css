@@ -7505,3 +7505,12 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 /* Tracking + MZJ Club Community editable SMS templates */
 .tracking-settings-message-template small,.owners-form-grid label>small{color:var(--muted);font-size:10px;line-height:1.7}
 .tracking-settings-message-template textarea{min-height:180px;line-height:1.75}
+
+.tracking-stage10-message-settings{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--surface-soft)}
+.tracking-stage10-mode{display:grid;gap:8px}
+.tracking-stage10-mode>span{font-weight:800;color:var(--ink)}
+.tracking-stage10-mode>div{display:flex;flex-wrap:wrap;gap:8px}
+.tracking-stage10-mode>div>label{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);cursor:pointer}
+.tracking-stage10-mode>div>label.is-selected{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand) inset}
+.tracking-stage10-mode input{margin:0}
+.tracking-stage10-mode small,.tracking-stage10-variables{color:var(--muted);font-size:10px;line-height:1.7}
