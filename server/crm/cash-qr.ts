@@ -5,6 +5,7 @@ import { ensureCrmSchema } from "../_crm-schema.js";
 import { normalizePhone } from "../_phone-utils.js";
 import { ensureOwnersSchema } from "../_owners-schema.js";
 import { ensureLegacyCustomerCodeForLead } from "../_owners-customer-segments.js";
+import { uniqueOwnerCode } from "../_owners-code.js";
 import { queueLegacyOwnerWelcomeSms } from "../_owners-welcome.js";
 
 const WEBSITE_SOURCE_CODE = "website";
@@ -13,6 +14,7 @@ const WEBSITE_BRANCH_CODE = "website";
 const WEBSITE_OWNER_EMPLOYEE_NO = "SYSTEM-WEBSITE";
 const WEBSITE_OWNER_NAME = "Website";
 const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/club";
+const SOLD_STATUS = "تم البيع";
 
 function body(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -20,6 +22,24 @@ function body(request: VercelRequest) {
     try { return JSON.parse(request.body || "{}") as Record<string, unknown>; } catch { return {}; }
   }
   return {};
+}
+
+async function queueRegistrationWelcome(customerCode: any) {
+  let welcomeSmsQueued = false;
+  if (!customerCode?.id || !customerCode?.referral_code) return welcomeSmsQueued;
+  try {
+    const welcomeResult = await queueLegacyOwnerWelcomeSms({
+      legacyCustomerId: customerCode.id,
+      portalUrl: OWNERS_PORTAL_URL,
+      purpose: "cash_qr_registration",
+    });
+    welcomeSmsQueued = welcomeResult.status === "queued" || welcomeResult.status === "already_sent";
+  } catch (error) {
+    // The CRM + MZJ Club registration and customer code are already persisted.
+    // SMS+ remains retryable from MZJ Club Community if the provider is temporarily unavailable.
+    console.error("MZJ Club Community welcome SMS+ queue failed", error);
+  }
+  return welcomeSmsQueued;
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -36,14 +56,38 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (!customerName) return response.status(400).json({ ok: false, error: "اسم العميل مطلوب" });
   if (!phone) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
 
+  // The public QR flow depends on both CRM and MZJ Club. Prepare both schemas before
+  // creating a CRM lead so a schema problem can never leave a CRM-only registration.
+  await ensureOwnersSchema();
+
   const sql = getSql();
   const [duplicate] = await sql<any[]>`
-    select id::text,customer_name,status_label
+    select id::text,customer_name,status_label,platform_code,source_code,phone_normalized
     from crm.leads
     where phone_normalized=${phone} and is_deleted=false
     limit 1
   `;
   if (duplicate) {
+    // Self-heal QR registrations created by an older deployment where CRM committed
+    // before the MZJ Club customer-code step. Only our own cash_qr intake is recovered;
+    // every other existing CRM customer keeps the original duplicate protection.
+    if (clean(duplicate.platform_code) === "cash_qr" && clean(duplicate.status_label) !== SOLD_STATUS) {
+      const customerCode = await ensureLegacyCustomerCodeForLead(duplicate.id, { sd96: true });
+      if (!customerCode?.id || !customerCode?.referral_code) {
+        return response.status(500).json({ ok: false, error: "العميل موجود في CRM لكن تعذر استكمال تسجيله في MZJ Club Community" });
+      }
+      const welcomeSmsQueued = await queueRegistrationWelcome(customerCode);
+      return response.status(200).json({
+        ok: true,
+        recovered: true,
+        message: "تم استكمال تسجيل بياناتك بنجاح",
+        leadId: duplicate.id,
+        customerCode: customerCode.referral_code,
+        welcomeSmsQueued,
+        customerCodeSmsQueued: welcomeSmsQueued,
+      });
+    }
+
     return response.status(409).json({
       ok: false,
       error: "رقم الجوال مسجل بالفعل",
@@ -69,6 +113,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     routingBranch: WEBSITE_BRANCH_CODE,
     routingOwner: WEBSITE_OWNER_NAME,
   };
+  const preparedCustomerCode = await uniqueOwnerCode();
 
   const created = await sql.begin(async (tx) => {
     const contactMetadata = {
@@ -151,38 +196,40 @@ export default async function handler(request: VercelRequest, response: VercelRe
       )
     `;
 
-    return lead;
-  });
-
-  const customerCode = await (async () => {
-    await ensureOwnersSchema();
-    return ensureLegacyCustomerCodeForLead(created.id, { sd96: true });
-  })().catch((error) => {
-    console.error("MZJ Club Community legacy customer code sync failed", error);
-    return null;
-  });
-
-  let welcomeSmsQueued = false;
-  if (customerCode?.id && customerCode?.referral_code) {
-    try {
-      const welcomeResult = await queueLegacyOwnerWelcomeSms({
-        legacyCustomerId: customerCode.id,
-        portalUrl: OWNERS_PORTAL_URL,
-        purpose: "cash_qr_registration",
-      });
-      welcomeSmsQueued = welcomeResult.status === "queued" || welcomeResult.status === "already_sent";
-    } catch (error) {
-      // Registration and the on-screen code must remain successful even if SMS+
-      // is temporarily unavailable; the customer can still save the shown code.
-      console.error("MZJ Club Community welcome SMS+ queue failed", error);
+    // CRM lead + MZJ Club new-customer row are one database transaction. If either
+    // insert fails, neither side is committed, preventing CRM-only registrations.
+    const [customerCode] = await tx<any[]>`
+      insert into owners.legacy_customer_codes(
+        crm_lead_id,phone_normalized,customer_name,referral_code,status,metadata,created_at,updated_at
+      ) values(
+        ${lead.id}::uuid,${phone},${customerName},${preparedCustomerCode}::text,'active',
+        jsonb_build_object('source','crm_non_sold','statusLabel','عميل جديد','intakeChannel','cash_qr'),
+        now(),now()
+      )
+      on conflict(crm_lead_id) do update set
+        phone_normalized=excluded.phone_normalized,
+        customer_name=excluded.customer_name,
+        status='active',
+        converted_member_id=null,
+        converted_at=null,
+        metadata=coalesce(owners.legacy_customer_codes.metadata,'{}'::jsonb)||excluded.metadata,
+        updated_at=now()
+      returning id::text,crm_lead_id::text,customer_name,phone_normalized,referral_code,status,converted_member_id::text
+    `;
+    if (!customerCode?.id || !customerCode?.referral_code) {
+      throw new Error("MZJ Club Community customer code was not created");
     }
-  }
+
+    return { lead, customerCode };
+  });
+
+  const welcomeSmsQueued = await queueRegistrationWelcome(created.customerCode);
 
   return response.status(201).json({
     ok: true,
     message: "تم تسجيل بياناتك بنجاح وسيقوم فريق المبيعات بخدمتك",
-    leadId: created.id,
-    customerCode: customerCode?.referral_code || null,
+    leadId: created.lead.id,
+    customerCode: created.customerCode.referral_code,
     welcomeSmsQueued,
     customerCodeSmsQueued: welcomeSmsQueued,
   });

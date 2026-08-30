@@ -66,14 +66,53 @@ export async function ensureLegacyCustomerCodeForLead(leadIdValue: unknown, opti
   const leadId = clean(leadIdValue);
   if (!leadId) return null;
   const sql = getSql();
-  const sd96Code = options.sd96 === true ? await uniqueOwnerCode() : null;
+
+  const [existing] = await sql<any[]>`
+    select
+      c.id::text,c.crm_lead_id::text,c.customer_name,c.phone_normalized,c.referral_code,c.status,
+      c.converted_member_id::text
+    from owners.legacy_customer_codes c
+    join crm.leads l on l.id=c.crm_lead_id and l.is_deleted=false
+    where c.crm_lead_id=${leadId}::uuid
+      and coalesce(l.status_label,'') <> ${SOLD_STATUS}
+    limit 1
+  `;
+  if (existing) return existing;
+
+  if (options.sd96 === true) {
+    const sd96Code = await uniqueOwnerCode();
+    const [row] = await sql<any[]>`
+      insert into owners.legacy_customer_codes(
+        crm_lead_id,phone_normalized,customer_name,referral_code,status,metadata,created_at,updated_at
+      )
+      select
+        l.id,l.phone_normalized,nullif(l.customer_name,''),${sd96Code}::text,
+        'active',
+        jsonb_build_object('source','crm_non_sold','statusLabel',coalesce(l.status_label,'')),
+        now(),now()
+      from crm.leads l
+      where l.id=${leadId}::uuid
+        and l.is_deleted=false
+        and coalesce(l.status_label,'') <> ${SOLD_STATUS}
+      on conflict(crm_lead_id) do update set
+        phone_normalized=excluded.phone_normalized,
+        customer_name=excluded.customer_name,
+        status='active',
+        converted_member_id=null,
+        converted_at=null,
+        metadata=coalesce(owners.legacy_customer_codes.metadata,'{}'::jsonb) || excluded.metadata,
+        updated_at=now()
+      returning id::text,crm_lead_id::text,customer_name,phone_normalized,referral_code,status,converted_member_id::text
+    `;
+    return row || null;
+  }
+
   const [row] = await sql<any[]>`
     insert into owners.legacy_customer_codes(
       crm_lead_id,phone_normalized,customer_name,referral_code,status,metadata,created_at,updated_at
     )
     select
-      l.id,l.phone_normalized,nullif(l.customer_name,''),
-      case when ${options.sd96 === true} then ${sd96Code} else ('L' || upper(substr(md5(l.id::text),1,9))) end,
+      l.id,l.phone_normalized,nullif(l.customer_name,''),('L' || upper(substr(md5(l.id::text),1,9))),
       'active',
       jsonb_build_object('source','crm_non_sold','statusLabel',coalesce(l.status_label,'')),
       now(),now()
