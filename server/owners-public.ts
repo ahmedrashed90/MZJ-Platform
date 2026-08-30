@@ -637,6 +637,74 @@ async function getCommerceRewards(referrerKind: CommerceReferrerKind, selfUse: b
   return rows;
 }
 
+async function handleCommerceCustomerByPhone(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
+  const auth = commerceApiAuthorized(request);
+  if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
+  const phone = normalizePhone(payload.phone ?? payload.mobile ?? payload.phoneNumber ?? payload.phone_number);
+  if (!phone) return response.status(400).json({ ok: false, error: "اكتب رقم جوال سعودي صحيح بصيغة 05xxxxxxxx" });
+
+  await syncLegacyCustomerCodes();
+  const member = await ensureOwnerMemberByPhone(phone);
+  if (member?.id && member?.referral_code) {
+    return response.status(200).json({
+      ok: true,
+      found: true,
+      customerMode: "old_customer",
+      profileKind: "member",
+      referrerKind: "member",
+      memberId: member.id,
+      customerName: member.customer_name || "",
+      customerCode: member.referral_code,
+      message: "تم التعرف على العميل القديم وجلب الكود الشخصي",
+    });
+  }
+
+  const legacyCustomer = await findLegacyCustomerCodeByPhone(phone);
+  if (legacyCustomer?.id && legacyCustomer?.referral_code) {
+    return response.status(200).json({
+      ok: true,
+      found: true,
+      customerMode: "new_customer",
+      profileKind: "legacy",
+      referrerKind: "legacy",
+      leadId: legacyCustomer.crm_lead_id || "",
+      customerName: legacyCustomer.customer_name || "",
+      customerCode: legacyCustomer.referral_code,
+      message: "تم التعرف على العميل الجديد وجلب كود العميل",
+    });
+  }
+
+  return response.status(404).json({
+    ok: false,
+    found: false,
+    customerMode: "new_customer",
+    requiresRegistration: true,
+    error: "رقم الجوال غير مسجل بعد. استخدم احصل على كود الخصم لتسجيل العميل الجديد.",
+  });
+}
+
+async function queueCommerceCustomerCodeSms(input: { name: unknown; phone: unknown; code: unknown; leadId?: unknown }) {
+  const phone = normalizePhone(input.phone);
+  const code = clean(input.code).toUpperCase();
+  if (!phone || !code) throw new Error("بيانات رسالة كود الخصم غير مكتملة");
+  const customerName = clean(input.name) || "عميل MZJ CARS";
+  const message = `مرحباً : ${customerName}\nكود الخصم الخاص بك في MZJ CARS:\n${code}\n\nتاريخ تثق به`;
+  return await queueFirebaseSms({
+    createdAt: new Date(),
+    message,
+    meta: {
+      type: "owners_customer_code",
+      purpose: "website_checkout_discount_code",
+      leadId: clean(input.leadId),
+      referralCode: code,
+    },
+    phone,
+    source: "mzj_owners_community",
+    status: "queued",
+    to: phone,
+  });
+}
+
 async function handleCommerceNewCustomerCode(request: VercelRequest, response: VercelResponse, payload: Record<string, unknown>) {
   const auth = commerceApiAuthorized(request);
   if (!auth.ok) return response.status(auth.status).json({ ok: false, error: auth.error });
@@ -725,12 +793,34 @@ async function handleCommerceNewCustomerCode(request: VercelRequest, response: V
     return response.status(500).json({ ok: false, error: "تم تسجيل العميل لكن تعذر إنشاء كود الخصم" });
   }
 
+  let customerCodeSmsQueued = false;
+  let smsDocumentId = "";
+  let customerCodeSmsError = "";
+  try {
+    const queued = await queueCommerceCustomerCodeSms({
+      name: customerName,
+      phone,
+      code: customerCode.referral_code,
+      leadId: lead.id,
+    });
+    customerCodeSmsQueued = true;
+    smsDocumentId = clean(queued?.documentId);
+  } catch (error) {
+    customerCodeSmsError = error instanceof Error ? error.message : "تعذر إرسال كود الخصم عبر SMS+";
+    console.error("Website checkout customer-code SMS+ queue failed", error);
+  }
+
   return response.status(created ? 201 : 200).json({
     ok: true,
     created,
     leadId: lead.id,
     customerCode: customerCode.referral_code,
-    message: created ? "تم تسجيل بياناتك وتجهيز كود الخصم" : "تم العثور على بياناتك وتجهيز كود الخصم",
+    customerCodeSmsQueued,
+    smsDocumentId,
+    customerCodeSmsError: customerCodeSmsError || undefined,
+    message: customerCodeSmsQueued
+      ? (created ? "تم تسجيل بياناتك في CRM و MZJ Club وإرسال كود الخصم على الجوال" : "تم العثور على بياناتك وإرسال كود الخصم على الجوال")
+      : (created ? "تم تسجيل بياناتك وتجهيز كود الخصم لكن تعذر إرسال SMS+" : "تم العثور على بياناتك وتجهيز الكود لكن تعذر إرسال SMS+"),
   });
 }
 
@@ -1616,6 +1706,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
       benefitTitle: settings.friend_benefit_title,
       benefitText: settings.friend_benefit_text,
     });
+  }
+
+  if (request.method === "POST" && action === "commerce_customer_by_phone") {
+    return handleCommerceCustomerByPhone(request, response, payload);
   }
 
   if (request.method === "POST" && action === "commerce_new_customer_code") {
