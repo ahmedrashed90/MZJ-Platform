@@ -63,57 +63,67 @@ async function readJson(response: Response) {
   return payload;
 }
 
-async function invoiceParentsFromChildRows(salesOrder: string): Promise<string[]> {
-  const fields = JSON.stringify(["parent", "sales_order"]);
-  const filters = JSON.stringify([["sales_order", "=", salesOrder]]);
-  const path = `/api/resource/${encodeURIComponent("Sales Invoice Item")}?fields=${encodeURIComponent(fields)}&filters=${encodeURIComponent(filters)}&limit_page_length=100`;
-  const payload = await readJson(await nextErpFetch(path));
-  const rows: any[] = Array.isArray(payload?.data) ? payload.data : [];
-  const parents = rows
-    .map((row: any) => clean(row?.parent))
+function linkedInvoiceNames(payload: any): string[] {
+  const message = payload?.message && typeof payload.message === "object" ? payload.message : {};
+  const bucket = message?.["Sales Invoice"];
+  const docs = Array.isArray(bucket?.docs)
+    ? bucket.docs
+    : Array.isArray(bucket)
+      ? bucket
+      : [];
+
+  const names = docs
+    .map((doc: any) => clean(typeof doc === "string" ? doc : doc?.name))
     .filter((name: string): name is string => Boolean(name));
-  return [...new Set<string>(parents)];
+
+  return [...new Set<string>(names)];
 }
 
-async function invoiceParentsFromParentFilter(salesOrder: string): Promise<string[]> {
-  const fields = JSON.stringify(["name", "posting_date", "grand_total", "status", "docstatus"]);
-  const filters = JSON.stringify([
-    ["Sales Invoice Item", "sales_order", "=", salesOrder],
-    ["Sales Invoice", "docstatus", "=", 1],
-  ]);
-  const path = `/api/resource/${encodeURIComponent("Sales Invoice")}?fields=${encodeURIComponent(fields)}&filters=${encodeURIComponent(filters)}&order_by=${encodeURIComponent("posting_date desc,creation desc")}&limit_page_length=20`;
+/**
+ * Resolve the same Sales Invoice links shown by Frappe's Connections tab.
+ *
+ * Important: do not call /api/resource/Sales Invoice Item directly. Child-table
+ * DocTypes can raise frappe.exceptions.PermissionError through the generic REST
+ * resource API even when the token user is allowed to read Sales Invoice. The
+ * official linked_with endpoint resolves child-table references server-side and
+ * then applies permissions to the parent documents, which matches the ERP UI.
+ */
+async function invoiceNamesFromSalesOrderConnections(salesOrder: string): Promise<string[]> {
+  const params = new URLSearchParams({
+    doctype: "Sales Order",
+    docname: salesOrder,
+  });
+  const path = `/api/method/frappe.desk.form.linked_with.get?${params.toString()}`;
   const payload = await readJson(await nextErpFetch(path));
-  const rows: any[] = Array.isArray(payload?.data) ? payload.data : [];
-  return rows
-    .map((row: any) => clean(row?.name))
-    .filter((name: string): name is string => Boolean(name));
+  return linkedInvoiceNames(payload);
 }
 
 async function getSalesInvoice(name: string) {
-  const payload = await readJson(await nextErpFetch(`/api/resource/${encodeURIComponent("Sales Invoice")}/${encodeURIComponent(name)}`));
+  const payload = await readJson(
+    await nextErpFetch(`/api/resource/${encodeURIComponent("Sales Invoice")}/${encodeURIComponent(name)}`),
+  );
   return payload?.data || null;
 }
 
 export async function listNextErpSalesInvoices(salesOrderValue: unknown): Promise<OwnerSalesInvoice[]> {
   const salesOrder = clean(salesOrderValue);
   if (!salesOrder) return [];
-  let parents: string[] = [];
-  try {
-    parents = await invoiceParentsFromChildRows(salesOrder);
-  } catch (firstError) {
-    try {
-      parents = await invoiceParentsFromParentFilter(salesOrder);
-    } catch {
-      throw firstError;
-    }
-  }
 
+  const names = await invoiceNamesFromSalesOrderConnections(salesOrder);
   const invoices: OwnerSalesInvoice[] = [];
-  for (const name of [...new Set(parents)].slice(0, 20)) {
+
+  for (const name of names.slice(0, 20)) {
     try {
       const doc = await getSalesInvoice(name);
       if (!doc || Number(doc.docstatus || 0) !== 1) continue;
       if (clean(doc.status).toLowerCase() === "cancelled") continue;
+
+      // Defense in depth: the Connections endpoint already found the relation,
+      // but when item rows are present in the parent document, verify that this
+      // invoice still references the requested Sales Order before exposing it.
+      const items: any[] = Array.isArray(doc.items) ? doc.items : [];
+      if (items.length && !items.some((item: any) => clean(item?.sales_order) === salesOrder)) continue;
+
       invoices.push({
         name: clean(doc.name || name),
         postingDate: clean(doc.posting_date) || null,
@@ -126,14 +136,22 @@ export async function listNextErpSalesInvoices(salesOrderValue: unknown): Promis
     }
   }
 
-  invoices.sort((left, right) => String(right.postingDate || "").localeCompare(String(left.postingDate || "")) || right.name.localeCompare(left.name));
+  invoices.sort(
+    (left, right) =>
+      String(right.postingDate || "").localeCompare(String(left.postingDate || ""))
+      || right.name.localeCompare(left.name),
+  );
   return invoices;
 }
 
 export async function downloadNextErpSalesInvoicePdf(invoiceValue: unknown) {
   const invoice = clean(invoiceValue);
   if (!invoice) throw new NextErpInvoiceError(400, "رقم الفاتورة غير محدد");
-  const format = clean(process.env.NEXT_ERP_SALES_INVOICE_PRINT_FORMAT || process.env.ERPNEXT_SALES_INVOICE_PRINT_FORMAT || "Standard");
+  const format = clean(
+    process.env.NEXT_ERP_SALES_INVOICE_PRINT_FORMAT
+      || process.env.ERPNEXT_SALES_INVOICE_PRINT_FORMAT
+      || "Standard",
+  );
   const params = new URLSearchParams({
     doctype: "Sales Invoice",
     name: invoice,
@@ -145,7 +163,10 @@ export async function downloadNextErpSalesInvoicePdf(invoiceValue: unknown) {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new NextErpInvoiceError(response.status, clean(text).slice(0, 500) || "تعذر تحميل PDF الفاتورة من NEXT ERP");
+    throw new NextErpInvoiceError(
+      response.status,
+      clean(text).slice(0, 500) || "تعذر تحميل PDF الفاتورة من NEXT ERP",
+    );
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (!bytes.length) throw new NextErpInvoiceError(502, "NEXT ERP أعاد ملف فاتورة فارغ");
@@ -158,5 +179,8 @@ export async function downloadNextErpSalesInvoicePdf(invoiceValue: unknown) {
 
 export function ownerInvoiceError(error: unknown) {
   if (error instanceof NextErpInvoiceError) return { status: error.status, message: error.message };
-  return { status: 502, message: error instanceof Error ? error.message : "تعذر الاتصال بفواتير NEXT ERP" };
+  return {
+    status: 502,
+    message: error instanceof Error ? error.message : "تعذر الاتصال بفواتير NEXT ERP",
+  };
 }

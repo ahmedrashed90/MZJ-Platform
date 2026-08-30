@@ -65,8 +65,15 @@ expect("movement ledger displays the actual purchased vehicle",
   portal.includes('entry?.purchase?.vehicleLabel') && preview.includes('entry?.purchase?.vehicleLabel'));
 expect("invoice endpoint verifies the sales order belongs to the member before touching NEXT ERP",
   publicApi.includes('ownerOwnsSalesOrder(member.id, salesOrder)') && adminApi.includes('ownerOwnsSalesOrder(memberId, salesOrder)'));
-expect("NEXT ERP invoice lookup follows Sales Order to Sales Invoice Item parents",
-  invoices.includes('Sales Invoice Item') && invoices.includes('["sales_order", "=", salesOrder]') && invoices.includes('row?.parent'));
+expect("NEXT ERP invoice lookup uses the official Frappe Connections endpoint",
+  invoices.includes('frappe.desk.form.linked_with.get')
+  && invoices.includes('doctype: "Sales Order"')
+  && invoices.includes('message?.["Sales Invoice"]'));
+expect("invoice lookup never queries Sales Invoice Item through the generic REST resource API",
+  !invoices.includes('/api/resource/${encodeURIComponent("Sales Invoice Item")}')
+  && !invoices.includes('invoiceParentsFromChildRows'));
+expect("linked invoice parent documents are rechecked against their Sales Order item rows",
+  invoices.includes('items.some((item: any) => clean(item?.sales_order) === salesOrder)'));
 expect("only submitted non-cancelled Sales Invoices are returned",
   invoices.includes('Number(doc.docstatus || 0) !== 1') && invoices.includes('clean(doc.status).toLowerCase() === "cancelled"'));
 expect("invoice PDF is downloaded live from NEXT ERP print endpoint and validated as PDF",
@@ -80,5 +87,5 @@ expect("NEXT ERP invoice API credentials stay server side",
 expect("no QR was added to membership card",
   !portal.includes('qrcode') && !portal.includes('QrCode') && !preview.includes('QrCode'));
 
-console.log(`\nMZJ Club v32 focused checks: ${passed}/${passed + failed} passed.`);
+console.log(`\nMZJ Club v34 focused checks: ${passed}/${passed + failed} passed.`);
 if (failed) process.exit(1);
