@@ -171,6 +171,76 @@ async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user
 }
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
+
+async function observedCreativeSequenceFloor(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  const [row] = await tx<any[]>`
+    select greatest(
+      coalesce((
+        select max(nullif(substring(c.instance_code from '([0-9]+)$'),'')::bigint)
+        from marketing.creatives c
+        where ((${sourceType}='campaign' and c.campaign_id=${sourceId}::uuid)
+          or (${sourceType}='agenda' and c.agenda_id=${sourceId}::uuid))
+      ),0),
+      coalesce((
+        select max(nullif(substring(a.after_data->>'instanceCode' from '([0-9]+)$'),'')::bigint)
+        from audit.activity_log a
+        where a.system_code='marketing'
+          and a.action='creative_deleted'
+          and a.entity_type=${sourceType}
+          and a.entity_id=${sourceId}
+      ),0)
+    )::bigint + 1 as value
+  `;
+  return Math.max(1, Number(row?.value || 1));
+}
+
+async function observedTaskBatchFloor(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  const [row] = await tx<any[]>`
+    select coalesce(max(nullif(substring(tt.task_no from '_TPL_([0-9]+)_[0-9]+$'),'')::bigint),0)::bigint + 1 as value
+    from marketing.task_templates tt
+    where tt.source_type=${sourceType} and tt.source_id=${sourceId}::uuid
+  `;
+  return Math.max(1, Number(row?.value || 1));
+}
+
+async function allocateMarketingEntitySequence(
+  tx: any,
+  sourceType: "campaign" | "agenda",
+  sourceId: string,
+  kind: "creative" | "task",
+) {
+  const observed = kind === "creative"
+    ? await observedCreativeSequenceFloor(tx, sourceType, sourceId)
+    : await observedTaskBatchFloor(tx, sourceType, sourceId);
+  if (kind === "creative") {
+    const [row] = await tx<any[]>`
+      insert into marketing.entity_sequences(source_type,source_id,next_creative_index,next_task_batch,updated_at)
+      values(${sourceType},${sourceId}::uuid,${observed + 1},1,now())
+      on conflict(source_type,source_id) do update set
+        next_creative_index=greatest(marketing.entity_sequences.next_creative_index,${observed}) + 1,
+        updated_at=now()
+      returning next_creative_index - 1 as value
+    `;
+    return Math.max(1, Number(row?.value || observed));
+  }
+  const [row] = await tx<any[]>`
+    insert into marketing.entity_sequences(source_type,source_id,next_creative_index,next_task_batch,updated_at)
+    values(${sourceType},${sourceId}::uuid,1,${observed + 1},now())
+    on conflict(source_type,source_id) do update set
+      next_task_batch=greatest(marketing.entity_sequences.next_task_batch,${observed}) + 1,
+      updated_at=now()
+    returning next_task_batch - 1 as value
+  `;
+  return Math.max(1, Number(row?.value || observed));
+}
+
+async function allocateCreativeIndex(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  return allocateMarketingEntitySequence(tx, sourceType, sourceId, "creative");
+}
+
+async function allocateTaskBatch(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
+  return allocateMarketingEntitySequence(tx, sourceType, sourceId, "task");
+}
 function zohoFinalFileName(originalName: unknown, sourceType: unknown, sourceId: unknown, taskId: unknown, groupId: unknown, orderIndex: number) {
   const raw=(clean(originalName)||`file-${orderIndex+1}`).replace(/[\/\\\u0000-\u001f]/g,"-");
   const dot=raw.lastIndexOf(".");
@@ -586,13 +656,14 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
   };
 }
 
-async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeIndex: number; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
+async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
   const templates = new Map<string, string>();
+  const taskBatch = await allocateTaskBatch(tx, input.sourceType, input.sourceId);
   let templateIndex = 0;
   for (const content of input.contentAssignments) {
     const contentUserId = clean(content.userId); if (!contentUserId) continue;
     templateIndex += 1;
-    const taskNo = `${safeCode(input.sourceCode || input.sourceName)}_${input.sourceId.slice(0,8).toUpperCase()}_TPL_${input.creativeIndex}_${templateIndex}`;
+    const taskNo = `${safeCode(input.sourceCode || input.sourceName)}_${input.sourceId.slice(0,8).toUpperCase()}_TPL_${taskBatch}_${templateIndex}`;
     const [template] = await tx<any[]>`
       insert into marketing.task_templates(source_type,source_id,creative_id,content_user_id,task_no,status,progress,due_on,department_note,template_data)
       values (${input.sourceType},${input.sourceId}::uuid,${input.creativeId}::uuid,${contentUserId}::uuid,${taskNo},'not_started',0,${isoDate(content.dueOn)},${clean(content.note)||null},${tx.json(dbJson({ sourceName: input.sourceName, sourceCode: input.sourceCode, creativeName: input.creativeName, creativeType: input.creativeType, requiredFromContent: input.requiredFromContent || "" }))})
@@ -679,9 +750,8 @@ async function createCampaignInTransaction(
   }
   if (!campaign) throw new Error("تعذر إنشاء كود حملة فريد. أعد المحاولة مرة أخرى");
   const creativeMap = new Map<string, string>();
-  let creativeIndex = 0;
   for (const rawCreative of arrayValue(body.creatives)) {
-    creativeIndex += 1;
+    const creativeIndex = await allocateCreativeIndex(tx, "campaign", campaign.id);
     const creativeTypeId = clean(rawCreative.creativeTypeId);
     const [creativeType] = await tx<any[]>`select c.*,d.name as department_name from marketing.creative_types c left join marketing.departments d on d.id=c.primary_department_id where c.id=${creativeTypeId}::uuid`;
     if (!creativeType) continue;
@@ -696,7 +766,7 @@ async function createCampaignInTransaction(
       values (${campaign.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeName},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(arrayValue(rawCreative.contentAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.primaryAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.optionalAssignments)))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
     `;
     creativeMap.set(tempId, creative.id);
-    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeIndex, creativeName, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
+    await createTasksForCreative(tx, { sourceType: "campaign", sourceId: campaign.id, campaignId: campaign.id, sourceCode: code, sourceName: name, creativeId: creative.id, creativeName, creativeType: creativeType.name, contentDepartmentId: contentId, contentAssignments: arrayValue(rawCreative.contentAssignments), primaryDepartmentId: clean(creativeType.primary_department_id), primaryAssignments: arrayValue(rawCreative.primaryAssignments), optionalAssignments: arrayValue(rawCreative.optionalAssignments), requiredFromContent: clean(body.requiredFromContent), executionFolderCreation: body.executionFolders, creativeFolderLinkId: tempId });
   }
   for (const budget of arrayValue(body.budgets)) {
     const requestedCreativeIds = arrayValue<string>(budget.creativeTempIds).length
@@ -769,13 +839,12 @@ async function createAgendaInTransaction(tx: any, body: Record<string, any>, use
   const name = clean(body.name); const start = isoDate(body.publishStart); const end = isoDate(body.publishEnd); const monthKey = clean(body.monthKey);
   if (!name || !start || !end || !monthKey) throw new Error("بيانات الأجندة الأساسية غير مكتملة");
   const [agenda] = await tx<any[]>`insert into marketing.agendas(name,month_key,publish_start,publish_end,status,payload,progress,created_by) values (${name},${monthKey},${start},${end},'required',${tx.json(dbJson(body))},0,${user.id}::uuid) returning id::text`;
-  let creativeIndex = 0;
   for (const day of arrayValue(body.days)) {
     const dayDate = isoDate(day.date); if (!dayDate) continue;
     for (const rawCreative of arrayValue(day.creatives)) {
       const quantity = Math.max(1,numberValue(rawCreative.quantity,1));
       for (let instance=0; instance<quantity; instance += 1) {
-        creativeIndex += 1;
+        const creativeIndex = await allocateCreativeIndex(tx, "agenda", agenda.id);
         const creativeTypeId = clean(rawCreative.creativeTypeId);
         const [creativeType] = await tx<any[]>`select * from marketing.creative_types where id=${creativeTypeId}::uuid`;
         if (!creativeType) continue;
@@ -827,7 +896,7 @@ async function createAgendaInTransaction(tx: any, body: Record<string, any>, use
           insert into marketing.creatives(agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,schedule_day,notes)
           values (${agenda.id}::uuid,${creativeType.name},${creativeTypeId}::uuid,1,'required',${instanceCode},${creativeType.name},${creativeType.primary_department_id},${tx.json(dbJson(arrayValue(rawCreative.cars)))},${tx.json(dbJson(contentAssignments))},${tx.json(dbJson(primaryAssignments))},${tx.json(dbJson(optionalAssignments))},${tx.json(dbJson(arrayValue(rawCreative.platforms)))},${dayDate},${tx.json(dbJson(rawCreative.notes || {}))}) returning id::text
         `;
-        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeIndex,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:`${dayDate}__${clean(rawCreative.tempId)}__${instance + 1}` });
+        await createTasksForCreative(tx,{ sourceType:"agenda",sourceId:agenda.id,agendaId:agenda.id,sourceCode:monthKey,sourceName:name,creativeId:creative.id,creativeName:creativeType.name,creativeType:creativeType.name,contentDepartmentId:contentId,contentAssignments,primaryDepartmentId:clean(creativeType.primary_department_id),primaryAssignments,optionalAssignments,requiredFromContent:"",executionFolderCreation:body.executionFolders,creativeFolderLinkId:`${dayDate}__${clean(rawCreative.tempId)}__${instance + 1}` });
         const templatesWithoutExecution = await tx<any[]>`
           select tt.id::text
           from marketing.task_templates tt
@@ -1372,11 +1441,8 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
             notes=${tx.json(dbJson(rawCreative.notes || {}))},updated_at=now()
           where id=${existingId}::uuid
         `;
-        const [sequence] = await tx<any[]>`select count(*)::int + 1000 as value from marketing.task_templates where source_type=${sourceType} and source_id=${sourceId}::uuid`;
-        creativeIndex = Number(sequence?.value || 1001);
       } else {
-        const [sequence] = await tx<any[]>`select count(*)::int + 1 as value from marketing.creatives where (${sourceType}='campaign' and campaign_id=${sourceId}::uuid) or (${sourceType}='agenda' and agenda_id=${sourceId}::uuid)`;
-        creativeIndex = Number(sequence?.value || 1);
+        creativeIndex = await allocateCreativeIndex(tx, sourceType, sourceId);
         const instanceCode = `${safeCode(creativeType.short_code)}${String(creativeIndex).padStart(2,'0')}`;
         const [created] = await tx<any[]>`
           insert into marketing.creatives(campaign_id,agenda_id,creative_type,creative_type_id,quantity,status,instance_code,name,primary_department_id,cars,content_assignments,primary_assignments,optional_assignments,platform_assignments,notes)
@@ -1400,7 +1466,6 @@ async function saveEntityCreative(sql: ReturnType<typeof getSql>, body: Record<s
           sourceCode: entity.code || entity.name,
           sourceName: entity.name,
           creativeId: targetId,
-          creativeIndex,
           creativeName,
           creativeType: creativeType.name,
           contentDepartmentId: contentId,

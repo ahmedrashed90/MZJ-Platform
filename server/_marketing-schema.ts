@@ -280,6 +280,18 @@ alter table marketing.creatives add column if not exists platform_assignments js
 alter table marketing.creatives add column if not exists schedule_day date;
 alter table marketing.creatives add column if not exists notes jsonb not null default '{}'::jsonb;
 
+-- Persistent monotonic counters for creatives/task-template batches.
+-- These counters deliberately survive creative deletion so a later create never
+-- reuses a number that was already allocated inside the same campaign/agenda.
+create table if not exists marketing.entity_sequences (
+  source_type text not null check(source_type in ('campaign','agenda')),
+  source_id uuid not null,
+  next_creative_index bigint not null default 1 check(next_creative_index > 0),
+  next_task_batch bigint not null default 1 check(next_task_batch > 0),
+  updated_at timestamptz not null default now(),
+  primary key(source_type,source_id)
+);
+
 create table if not exists marketing.files (
   id uuid primary key default gen_random_uuid(),
   storage_key text not null unique,
