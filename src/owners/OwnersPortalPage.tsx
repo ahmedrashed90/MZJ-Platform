@@ -254,15 +254,15 @@ export function OwnersPortalPage() {
         <section className="owners-public-section owners-movement-section">
           <h2>سجل الحركة</h2>
           <div className="owners-movement-table">
-            <div className="owners-movement-head"><span>الحركة</span><span>التاريخ</span><span>عدد النقاط</span></div>
+            <div className="owners-movement-head"><span>التاريخ</span><span>البيان</span><span>النقاط</span></div>
             {ledger.length ? ledger.map((entry: any) => (
               <article key={entry.id}>
+                <small className="owners-movement-date">{formatDate(entry.created_at)}</small>
                 <span className="owners-movement-main">
                   <b>{movementLabel(entry)}</b>
                   {entry?.purchase?.vehicleLabel ? <small className="owners-purchase-vehicle">{entry.purchase.vehicleLabel}</small> : null}
                   {entry?.purchase?.invoiceEligible ? <PurchaseInvoiceActions mode="public" salesOrder={entry.purchase.salesOrderReference} /> : null}
                 </span>
-                <small>{formatDate(entry.created_at)}</small>
                 <strong className={Number(entry.points) >= 0 ? "plus" : "minus"}>{Number(entry.points) >= 0 ? "+" : ""}{Number(entry.points || 0).toLocaleString("ar-SA-u-nu-latn")}</strong>
               </article>
             )) : null}
