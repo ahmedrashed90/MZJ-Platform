@@ -8,6 +8,7 @@ import { normalizePhone } from "./_phone-utils.js";
 import {
   backfillOwnerPurchasePointsForExistingMembers,
   ensureOwnerMemberForLead,
+  ensureOwnerPurchasePointsForMember,
   processOwnerSaleForLead,
   syncOwnerReferralProgress,
 } from "./_owners.js";
@@ -168,6 +169,7 @@ async function createManualOwnerMember(input: {
         )
         returning id::text
       `;
+      if (input.source === "excel_import") await ensureOwnerPurchasePointsForMember(member.id);
       return { status: "created" as const, memberId: member.id };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

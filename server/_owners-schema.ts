@@ -472,7 +472,61 @@ begin
   end if;
 end $$;
 
-update owners.schema_state set version=greatest(version,1224),updated_at=now() where id=1;
+-- v1225: production launch reset for MZJ Club points.
+-- Everything before this release was an experimental period. Existing active
+-- sold members keep a virtual 500-point opening balance, while their movement
+-- ledger is cleared completely. The opening balance is stored on the member
+-- metadata rather than as a ledger movement so the customer starts with an
+-- empty production activity log. Historical sales before the launch timestamp
+-- must never be re-awarded by later syncs.
+do $$
+declare
+  current_version integer := 0;
+  launch_at timestamptz := now();
+begin
+  select coalesce(version,0) into current_version from owners.schema_state where id=1;
+  if current_version < 1225 then
+    update owners.settings set
+      points_purchase_enabled=true,
+      points_purchase=500,
+      purchase_points_effective_at=launch_at,
+      updated_at=now()
+    where id='default';
+
+    delete from owners.points_ledger ledger
+    where exists(
+      select 1 from owners.members member
+      where member.id=ledger.member_id and member.status='active'
+    );
+
+    update owners.members set
+      points_balance=500,
+      lifetime_points=500,
+      tier_code='member',
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object(
+        'pointsProductionReset',true,
+        'pointsProductionResetVersion',1225,
+        'pointsProductionOpeningBalance',500,
+        'pointsProductionOpeningAt',launch_at
+      ),
+      updated_at=now()
+    where status='active';
+
+    -- Existing referral records are retained, but tagged with the same launch
+    -- boundary so historical experimental referral conversions cannot recreate
+    -- points after the ledger reset.
+    update owners.referrals set
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object(
+        'pointsProductionResetVersion',1225,
+        'pointsProductionResetAt',launch_at
+      ),
+      updated_at=now();
+
+    update owners.schema_state set version=1225,updated_at=now() where id=1;
+  end if;
+end $$;
+
+update owners.schema_state set version=greatest(version,1225),updated_at=now() where id=1;
 `;
 
 let schemaPromise: Promise<void> | null = null;
@@ -538,7 +592,7 @@ async function ownersSchemaReady() {
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1224;
+  return Number(state?.version || 0) >= 1225;
 }
 
 export function ensureOwnersSchema() {

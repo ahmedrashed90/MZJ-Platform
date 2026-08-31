@@ -305,7 +305,14 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
             member.source_sale_id,
             member.first_sale_at,
             member.last_sale_at,
-            member.metadata
+            member.metadata,
+            coalesce(nullif(member.metadata->>'pointsProductionOpeningBalance','')::int,0)::int as production_opening_balance,
+            case
+              when coalesce(member.metadata->>'pointsProductionResetVersion','')='1225'
+                then nullif(member.metadata->>'pointsProductionOpeningAt','')::timestamptz
+              else null
+            end as production_opening_at,
+            coalesce(member.metadata->>'pointsProductionResetVersion','')='1225' as production_reset
           from owners.members member
           cross join runtime_values runtime
           where member.status='active'
@@ -317,10 +324,18 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
             sale.id as sale_id,
             sale.sale_at,
             greatest(coalesce(sale.quantity,1),1)::int as order_quantity,
-            sale.source_reference as order_reference
+            sale.source_reference as order_reference,
+            member.production_opening_balance,
+            member.production_opening_at,
+            member.production_reset
           from eligible_members member
           join crm.sales_transactions sale
             on coalesce(sale.is_cancelled,false)=false
+           and (
+             member.production_reset=false
+             or member.production_opening_at is null
+             or sale.sale_at>member.production_opening_at
+           )
           join crm.leads lead
             on lead.id=sale.lead_id
            and lead.is_deleted=false
@@ -338,7 +353,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
             row_number() over(
               partition by sale.member_id
               order by sale.sale_at,sale.sale_id
-            ) as sale_rank
+            ) + case when sale.production_reset then 1 else 0 end as sale_rank
           from canonical_sales sale
         ), canonical_awardable as (
           select sale.*
@@ -385,6 +400,7 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
           from eligible_members member
           cross join runtime_values runtime
           where runtime.purchase_enabled
+            and member.production_reset=false
             and coalesce(member.metadata->>'enrollmentSource','') like 'excel_import%'
             and not exists (
               select 1 from canonical_sales sale where sale.member_id=member.id
@@ -482,7 +498,9 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
     // stay consistent with their ledger.
     await tx`
       with scoped_members as (
-        select member.id
+        select
+          member.id,
+          coalesce(nullif(member.metadata->>'pointsProductionOpeningBalance','')::int,0)::int as production_opening_balance
         from owners.members member
         where member.status='active'
           and coalesce(member.metadata->>'memberKind','real')<>'test'
@@ -490,10 +508,10 @@ async function reconcileOwnerPurchasePoints(memberIdValue?: string | null) {
       ), ledger_totals as (
         select
           member.id as member_id,
-          coalesce(sum(ledger.points),0)::int as points_balance
+          member.production_opening_balance + coalesce(sum(ledger.points),0)::int as points_balance
         from scoped_members member
         left join owners.points_ledger ledger on ledger.member_id=member.id
-        group by member.id
+        group by member.id,member.production_opening_balance
       )
       update owners.members member set
         points_balance=greatest(0,ledger_totals.points_balance),
@@ -825,11 +843,14 @@ export async function reverseOwnerCommerceForCancelledOrder(input: {
     await sql.begin(async (tx) => {
       const [settings] = await tx<any[]>`select silver_points,gold_points,platinum_points from owners.settings where id='default'`;
       const totals = await tx<any[]>`
-        select member.id::text as member_id,coalesce(sum(ledger.points),0)::int as points_balance
+        select
+          member.id::text as member_id,
+          coalesce(nullif(member.metadata->>'pointsProductionOpeningBalance','')::int,0)
+            + coalesce(sum(ledger.points),0)::int as points_balance
         from owners.members member
         left join owners.points_ledger ledger on ledger.member_id=member.id
         where member.id in ${tx(affectedMemberIds)}
-        group by member.id
+        group by member.id,member.metadata
       `;
       for (const row of totals) {
         const memberId = clean(row.member_id);
@@ -889,6 +910,8 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
       r.status,
       r.referrer_member_id::text,
       r.crm_lead_id::text,
+      r.created_at,
+      r.metadata,
       l.status_label,
       st.id::text as sale_id,
       st.sale_at
@@ -920,7 +943,9 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         returning id::text
       `;
       if (updated.length) changed += 1;
-      if (settings.points_qualified_enabled !== false) await awardOwnerPoints({
+      const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
+      const saleAfterProductionReset = !resetAt || new Date(referral.sale_at).getTime() > new Date(resetAt).getTime();
+      if (saleAfterProductionReset && clean(referral.status) === "registered" && settings.points_qualified_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_qualified || 0),
         eventType: "qualified",
@@ -928,7 +953,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         referralId: referral.id,
         description: "تحول الصديق إلى عميل مؤهل",
       });
-      if (settings.points_sale_enabled !== false) await awardOwnerPoints({
+      if (saleAfterProductionReset && settings.points_sale_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_sale || 0),
         eventType: "sale",
@@ -950,7 +975,9 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         returning id::text
       `;
       if (updated.length) changed += 1;
-      if (settings.points_qualified_enabled !== false) await awardOwnerPoints({
+      const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
+      const referralCreatedAfterProductionReset = !resetAt || new Date(referral.created_at).getTime() > new Date(resetAt).getTime();
+      if (updated.length && referralCreatedAfterProductionReset && settings.points_qualified_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_qualified || 0),
         eventType: "qualified",
@@ -983,7 +1010,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
   if (!sale) return member;
 
   const [referral] = await sql<any[]>`
-    select id::text,referrer_member_id::text
+    select id::text,referrer_member_id::text,status,created_at,metadata
     from owners.referrals
     where crm_lead_id=${clean(leadId)}::uuid
        or referred_phone_normalized=${normalizePhone(sale.phone_normalized)}
@@ -1002,7 +1029,9 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
         updated_at=now()
       where id=${referral.id}::uuid
     `;
-    if (settings.points_qualified_enabled !== false) await awardOwnerPoints({
+    const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
+    const saleAfterProductionReset = !resetAt || new Date(sale.sale_at).getTime() > new Date(resetAt).getTime();
+    if (saleAfterProductionReset && clean(referral.status) === "registered" && settings.points_qualified_enabled !== false) await awardOwnerPoints({
       memberId: referral.referrer_member_id,
       points: Number(settings.points_qualified || 0),
       eventType: "qualified",
@@ -1010,7 +1039,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
       referralId: referral.id,
       description: "تحول الصديق إلى عميل مؤهل",
     });
-    if (settings.points_sale_enabled !== false) await awardOwnerPoints({
+    if (saleAfterProductionReset && settings.points_sale_enabled !== false) await awardOwnerPoints({
       memberId: referral.referrer_member_id,
       points: Number(settings.points_sale || 0),
       eventType: "sale",
