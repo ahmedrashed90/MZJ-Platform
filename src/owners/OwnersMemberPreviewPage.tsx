@@ -136,6 +136,23 @@ export function OwnersMemberPreviewPage() {
             </div>
           </section>
 
+          {member.inviteUrl ? (
+            <section className="owners-invite-card owners-admin-invite-card owners-member-invite-card">
+              <div>
+                <ShareNetwork size={28} />
+                <div>
+                  <h2>إرسال الدعوة لصديق</h2>
+                  <p className="owners-invite-description-alert">ارسل كود الدعوة الى أصدقائك وأستفد من هدايا النقاط وأجعلهم يستفيدوا من الخصم</p>
+                </div>
+              </div>
+              <div className="owners-invite-link owners-admin-invite-link"><input readOnly value={member.inviteUrl} aria-label="رابط الدعوة الكامل" /></div>
+              <div className="owners-invite-code">
+                <span>كود الدعوة</span>
+                <strong dir="ltr">{member.referralCode || "—"}</strong>
+              </div>
+            </section>
+          ) : null}
+
           <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
 
           <section className="owners-public-section">
@@ -171,13 +188,6 @@ export function OwnersMemberPreviewPage() {
               )) : null}
             </div>
           </section>
-
-          {member.inviteUrl ? (
-            <section className="owners-invite-card owners-admin-invite-card">
-              <div><ShareNetwork size={28} /><div><h2>إرسال الدعوة لصديق</h2><p>{member.phone || ""}</p></div></div>
-              <div className="owners-invite-link"><input readOnly value={member.inviteUrl} /></div>
-            </section>
-          ) : null}
 
           {redemptions.length ? (
             <section className="owners-public-section">

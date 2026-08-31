@@ -220,19 +220,28 @@ export function OwnersPortalPage() {
           </div>
         </section>
 
-        <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
-
         {member.inviteUrl ? (
-          <section className="owners-invite-card">
-            <div><ShareNetwork size={28} /><div><h2 className="owners-invite-title">شارك رابطك مع أصدقائك</h2></div></div>
+          <section className="owners-invite-card owners-member-invite-card">
+            <div>
+              <ShareNetwork size={28} />
+              <div>
+                <h2 className="owners-invite-title">إرسال الدعوة لصديق</h2>
+                <p className="owners-invite-description-alert">ارسل كود الدعوة الى أصدقائك وأستفد من هدايا النقاط وأجعلهم يستفيدوا من الخصم</p>
+              </div>
+            </div>
             <div className="owners-invite-link">
-              <input readOnly value={member.inviteUrl || ""} />
-              <button onClick={() => void copyInvite()}><Copy size={18} /> نسخ</button>
-              <a href={`https://wa.me/?text=${encodeURIComponent(`رابط دعوتي من مجموعة محمد بن ذعار العجمي: ${member.inviteUrl || ""}`)}`} target="_blank" rel="noreferrer"><WhatsappLogo size={18} /> واتساب</a>
+              <input readOnly value={member.inviteUrl || ""} aria-label="رابط الدعوة الكامل" />
+              <button onClick={() => void copyInvite()}><Copy size={18} /> نسخ الرابط</button>
+              <a href={`https://wa.me/?text=${encodeURIComponent(`رابط دعوتي من مجموعة محمد بن ذعار العجمي: ${member.inviteUrl || ""}`)}`} target="_blank" rel="noreferrer"><WhatsappLogo size={18} /> إرسال</a>
+            </div>
+            <div className="owners-invite-code">
+              <span>كود الدعوة</span>
+              <strong dir="ltr">{member.referralCode || "—"}</strong>
             </div>
           </section>
         ) : null}
 
+        <OwnersDiscountCalculator websiteCars={websiteCars} referralCode={member.referralCode} />
 
         <section className="owners-public-section">
           <h2>المكافآت المتاحة</h2>
