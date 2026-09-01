@@ -26,6 +26,7 @@ function reportBranchLabel(departmentCode: unknown, branchCode: unknown, branchN
   if (code === "hall") return "فرع الصالة";
   if (code === "multaqa") return "فرع الملتقى";
   if (code === "online") return "فرع الاونلاين";
+  if (code === "website") return "الموقع الإلكتروني";
   if (name) return `فرع ${name}`;
   return code ? `فرع ${code}` : "بدون فرع";
 }
@@ -906,6 +907,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
     })
     .filter((row) => !(norm(row.department) === norm("قسم الجملة") && norm(row.branch) === norm("فرع القادسية")));
 
+  // Keep the website branch visible in the department/branch report even before
+  // the first real website sale exists. This is a report dimension, not a
+  // synthetic customer or sale, so all metrics intentionally remain zero.
+  const websiteDepartmentDetail = "cash_sales|website";
+  const websiteDepartmentVisible = !department || ["cash", "cash_sales"].includes(department);
+  const websiteBranchVisible = !branch || branch === "website";
+  if (websiteDepartmentVisible && websiteBranchVisible && !departments.some((row) => row.detailValue === websiteDepartmentDetail)) {
+    departments.push({
+      name: "مبيعات الكاش - الموقع الإلكتروني",
+      department: "مبيعات الكاش",
+      branch: "الموقع الإلكتروني",
+      ...makeMetrics([], []),
+      detailKind: "department_branch",
+      detailValue: websiteDepartmentDetail,
+    });
+    departments.sort((a, b) => b.sold - a.sold || b.total - a.total || a.name.localeCompare(b.name, "ar"));
+  }
+
   /*
    * Representative identity is profile data, not a historical sales dimension.
    * Keep sold metrics attributed to crm.sales_transactions exactly as-is, while
@@ -913,7 +932,91 @@ export default async function handler(request: VercelRequest, response: VercelRe
    * This prevents old transactions or cross-system access from adding extra
    * departments/branches to the representative row.
    */
+  // Report representatives are a configured CRM dimension, so active sales
+  // representatives must appear even when they have zero customers in the
+  // selected period (or have never received a customer yet).
+  const eligibleAgentRows = await sql<any[]>`
+    select
+      u.id::text as user_id,
+      u.full_name,
+      effective_department.code as department_code,
+      effective_department.name as department_name,
+      effective_branch.code as branch_code,
+      effective_branch.name as branch_name
+    from core.users u
+    left join lateral (
+      select d.code,d.name
+      from core.user_system_departments usd
+      join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+      where usd.user_id=u.id and usd.system_code='crm'
+      order by usd.is_primary desc,d.created_at,d.code
+      limit 1
+    ) crm_department on true
+    left join lateral (
+      select d.code,d.name
+      from core.user_departments ud
+      join core.departments d on d.id=ud.department_id and d.is_active=true
+      where ud.user_id=u.id
+      order by ud.is_primary desc,d.created_at,d.code
+      limit 1
+    ) global_department on true
+    left join lateral (
+      select coalesce(crm_department.code,global_department.code) as code,
+        coalesce(crm_department.name,global_department.name) as name
+    ) effective_department on true
+    left join lateral (
+      select b.code,b.name,b.sort_order
+      from core.user_system_branches usb
+      join core.branches b on b.id=usb.branch_id and b.is_active=true
+      where usb.user_id=u.id and usb.system_code='crm'
+      order by usb.is_primary desc,b.sort_order,b.name
+      limit 1
+    ) crm_branch on true
+    left join lateral (
+      select b.code,b.name,b.sort_order
+      from core.user_branches ub
+      join core.branches b on b.id=ub.branch_id and b.is_active=true
+      where ub.user_id=u.id
+      order by ub.is_primary desc,b.sort_order,b.name
+      limit 1
+    ) global_branch on true
+    left join lateral (
+      select coalesce(crm_branch.code,global_branch.code) as code,
+        coalesce(crm_branch.name,global_branch.name) as name,
+        coalesce(crm_branch.sort_order,global_branch.sort_order,9999) as sort_order
+    ) effective_branch on true
+    where u.is_active=true
+      and effective_department.code in ('cash_sales','finance_sales','wholesale','wholesale_sales')
+      and (
+        u.can_receive_leads=true
+        or exists (
+          select 1 from core.user_systems us join core.roles r on r.id=us.role_id
+          where us.user_id=u.id and us.system_code='crm' and us.is_enabled=true and r.code='sales_user'
+        )
+        or exists (
+          select 1 from core.user_roles ur join core.roles r on r.id=ur.role_id
+          where ur.user_id=u.id and r.code='sales_user'
+        )
+      )
+      and (${selectedAgentIds.length === 0}::boolean or u.id=any(${selectedAgentIds}::uuid[]))
+      and (
+        ${department || null}::text is null
+        or (${department || null}='cash' and effective_department.code in ('cash_sales','wholesale','wholesale_sales'))
+        or (${department || null}='finance' and effective_department.code='finance_sales')
+        or (${department || null}='wholesale' and effective_department.code in ('wholesale','wholesale_sales'))
+        or (${department || null} in ('cash_sales','finance_sales') and effective_department.code=${department || null})
+      )
+      and (${branch || null}::text is null or effective_branch.code=${branch || null})
+      and (
+        ${scope.all}::boolean
+        or (${scope.includeAssigned}::boolean and not ${scope.callCenterOnly}::boolean and u.id=${scope.userId}::uuid)
+        or (not ${scope.includeAssigned}::boolean and effective_department.code=any(${scope.departmentCodes}::text[]) and (${scope.branchCodes.length === 0}::boolean or effective_branch.code=any(${scope.branchCodes}::text[])))
+      )
+    order by effective_branch.sort_order,u.full_name
+  `;
+
   const agentIds = [...new Set([
+    ...eligibleAgentRows.map((row) => String(row.user_id || "").trim()),
     ...salesRows.map((row) => String(row.current_assigned_to || "").trim()),
     ...salesOnlyFacts.map((fact) => String(fact.assigned_to || "").trim()),
   ].filter((value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)))];
@@ -952,6 +1055,12 @@ export default async function handler(request: VercelRequest, response: VercelRe
       branch: String(item.branch_name || item.branch_code || "").trim(),
     });
   }
+  for (const item of eligibleAgentRows) {
+    agentIdentity.set(String(item.user_id), {
+      department: String(item.department_name || item.department_code || "").trim(),
+      branch: String(item.branch_name || item.branch_code || "").trim(),
+    });
+  }
 
   // Fallback only to the customer's current CRM ownership; never to sale-history context.
   const currentAgentContext = new Map<string, { department: string; branch: string }>();
@@ -963,7 +1072,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     currentAgentContext.set(key, current);
   }
 
-  const agents = group(salesRows, salesOnlyFacts, "agent", (row) => row.current_assigned_to || "__none__", (row) => row.current_assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع")
+  const groupedAgents = group(salesRows, salesOnlyFacts, "agent", (row) => row.current_assigned_to || "__none__", (row) => row.current_assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع");
+  const agentsById = new Map(groupedAgents.map((row) => [String(row.detailValue || "__none__"), row]));
+  for (const item of eligibleAgentRows) {
+    const key = String(item.user_id);
+    if (agentsById.has(key)) continue;
+    agentsById.set(key, {
+      name: String(item.full_name || "مندوب"),
+      ...makeMetrics([], []),
+      detailKind: "agent",
+      detailValue: key,
+    });
+  }
+
+  const agents = [...agentsById.values()]
     .map((row) => {
       const key = String(row.detailValue || "__none__");
       const identity = agentIdentity.get(key);
