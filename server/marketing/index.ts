@@ -2144,10 +2144,11 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
   if(requested.length>30)throw new Error("الحد الأقصى 30 ملفًا داخل مجموعة الرفع الواحدة");
   const isVideo=(item:any)=>item.mimeType.startsWith('video/')||/\.(mp4|mov|m4v|webm)$/i.test(item.name);
   const isImage=(item:any)=>item.mimeType.startsWith('image/')||/\.(jpe?g|png|webp|gif|heic|heif)$/i.test(item.name);
-  if(requested.some((item)=>!isVideo(item)&&!isImage(item)))throw new Error("الملف النهائي يجب أن يكون صورة أو فيديو");
   const videoCount=requested.filter(isVideo).length;
+  const mediaOnly=requested.every((item)=>isVideo(item)||isImage(item));
   if(requested.some((item)=>item.size<=0))throw new Error("يوجد ملف فارغ ضمن الاختيار");
   if(task.task_kind==='manual_publish'){
+    if(!mediaOnly)throw new Error("ملفات النشر اليدوي يجب أن تكون صورًا أو فيديو");
     const expected=arrayValue<any>(task.approved_template_data?.manualFiles);
     const sameFiles=expected.length===requested.length&&expected.every((item:any,index:number)=>{
       const actual=requested[index];
@@ -2158,7 +2159,7 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     if(expected.length&&!sameFiles)throw new Error("الملفات المختارة لا تطابق ملفات النشر اليدوي المحفوظة. أعد إنشاء التجهيز بالملفات الحالية");
   }
 
-  const mediaKind=requested.length>1?'carousel':videoCount?'video':'image';
+  const mediaKind=mediaOnly?(requested.length>1?'carousel':videoCount?'video':'image'):'file';
   await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
   const[group]=await sql<any[]>`
     insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
@@ -2338,7 +2339,7 @@ async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user
     }
   });
   await recalculateProgress(sql,task.source_type,task.source_id);
-  return{ok:true,message:files.length>1?`تم رفع ${files.length} صور نهائية بالترتيب على Zoho WorkDrive`:`تم رفع الملف النهائي على Zoho WorkDrive`,groupId,files};
+  return{ok:true,message:files.length>1?`تم رفع ${files.length} ملفات نهائية بالترتيب على Zoho WorkDrive`:`تم رفع الملف النهائي على Zoho WorkDrive`,groupId,files};
 }
 
 async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -2916,8 +2917,11 @@ async function graphFileRequest(path:string,token:string,file:{bytes:Uint8Array;
   return payload;
 }
 function looksVideo(file:any){return /video|mp4|mov|webm/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
+function looksImage(file:any){return /image|jpe?g|png|webp|gif|heic|heif/i.test(`${file?.mime_type||''} ${file?.original_name||''}`);}
 function assertPublishMedia(platform:string,format:MarketingPublishFormat,files:any[]){
-  const videos=files.filter(looksVideo),images=files.filter((file:any)=>!looksVideo(file));
+  const unsupported=files.filter((file:any)=>!looksVideo(file)&&!looksImage(file));
+  if(unsupported.length)throw new Error("النشر على المنصات يدعم الصور والفيديو فقط. استخدم الملف العام داخل التاسك للمراجعة أو التسليم");
+  const videos=files.filter(looksVideo),images=files.filter(looksImage);
   if(videos.length>1||(videos.length&&files.length>1))throw new Error("الفيديو أو الريل يجب أن يكون ملفًا واحدًا فقط");
   if(publishFormatRequiresVideo(format)&&(files.length!==1||videos.length!==1))throw new Error("نوع النشر المحدد يتطلب ملف فيديو واحدًا فقط");
   if(publishFormatRequiresImages(format)&&videos.length)throw new Error("نوع النشر المحدد يقبل صورًا فقط");

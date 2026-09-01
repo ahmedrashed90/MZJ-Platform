@@ -909,7 +909,7 @@ create index if not exists marketing_zoho_oauth_states_expiry_idx on marketing.z
 create table if not exists marketing.final_media_groups (
   id uuid primary key default gen_random_uuid(),
   task_id uuid not null references marketing.tasks(id) on delete cascade,
-  media_kind text not null check(media_kind in ('image','carousel','video')),
+  media_kind text not null check(media_kind in ('image','carousel','video','file')),
   file_count integer not null default 0,
   status text not null default 'uploading',
   is_active boolean not null default true,
@@ -918,6 +918,8 @@ create table if not exists marketing.final_media_groups (
   updated_at timestamptz not null default now()
 );
 create index if not exists marketing_final_media_groups_task_idx on marketing.final_media_groups(task_id,is_active,created_at desc);
+alter table marketing.final_media_groups drop constraint if exists final_media_groups_media_kind_check;
+alter table marketing.final_media_groups add constraint final_media_groups_media_kind_check check(media_kind in ('image','carousel','video','file'));
 
 alter table marketing.tasks add column if not exists final_media_group_id uuid references marketing.final_media_groups(id) on delete set null;
 alter table marketing.files add column if not exists storage_provider text not null default 'r2';

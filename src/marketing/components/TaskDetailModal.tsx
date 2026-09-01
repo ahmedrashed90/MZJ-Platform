@@ -589,7 +589,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
           </section>
 
           {permissions.showFirstFile ? <section className="marketing-task-section marketing-final-upload-section">
-            <div className="marketing-task-section-heading"><div><h3>الملف الأول</h3><p>نسخ العمل الأولية للمراجعة قبل الملف النهائي. يمكن رفع أكثر من صورة أو فيديو، ومسح أي ملف بشكل مستقل.</p></div></div>
+            <div className="marketing-task-section-heading"><div><h3>الملف الأول</h3><p>نسخ العمل الأولية للمراجعة قبل الملف النهائي. يمكن رفع أكثر من ملف بأي صيغة، ومسح أي ملف بشكل مستقل.</p></div></div>
             <div className="marketing-final-upload-shell">
               {permissions.canUploadFirstFile ? <label
                 className={`marketing-final-upload-dropzone ${loading ? "disabled" : ""}`}
@@ -597,13 +597,13 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
                 onDrop={(event) => {
                   event.preventDefault();
                   if (loading) return;
-                  const files = Array.from(event.dataTransfer.files || []).filter((item) => item.type.startsWith("image/") || item.type.startsWith("video/"));
+                  const files = Array.from(event.dataTransfer.files || []);
                   if (files.length) void uploadFirstFiles(files);
                 }}
               >
                 <span className="marketing-final-upload-icon"><FileArrowUp size={28} weight="duotone" /></span>
-                <span><strong>{loading ? "جاري رفع الملفات الأولية" : "اسحب الملفات الأولية هنا أو اضغط للاختيار"}</strong><small>يمكن اختيار عدة صور أو فيديوهات للمراجعة قبل رفع الملف النهائي</small></span>
-                <input type="file" accept="image/*,video/*" multiple disabled={loading} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFirstFiles(files); event.currentTarget.value = ""; }} />
+                <span><strong>{loading ? "جاري رفع الملفات الأولية" : "اسحب الملفات الأولية هنا أو اضغط للاختيار"}</strong><small>يمكن اختيار عدة ملفات بأي صيغة للمراجعة قبل رفع الملف النهائي</small></span>
+                <input type="file" multiple disabled={loading} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFirstFiles(files); event.currentTarget.value = ""; }} />
               </label> : null}
 
               {Array.isArray(task.first_files) && task.first_files.length ? <div className="marketing-inline-actions marketing-final-files-actions">
@@ -627,13 +627,13 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
                 onDrop={(event) => {
                   event.preventDefault();
                   if (task.template_status !== "approved" || task.status === "completed" || finalUpload?.active) return;
-                  const files = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
+                  const files = Array.from(event.dataTransfer.files || []);
                   if (files.length) void uploadFinal(files);
                 }}
               >
                 <span className="marketing-final-upload-icon"><FileArrowUp size={28} weight="duotone" /></span>
-                <span><strong>{finalUpload?.active ? "جاري رفع الملفات النهائية" : "اسحب الملفات النهائية هنا أو اضغط للاختيار"}</strong><small>يمكن اختيار أكثر من صورة أو فيديو بالترتيب، حتى 30 ملفًا</small></span>
-                <input type="file" accept="image/*,video/*" multiple disabled={task.template_status !== "approved" || task.status === "completed" || Boolean(finalUpload?.active)} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFinal(files); event.currentTarget.value = ""; }} />
+                <span><strong>{finalUpload?.active ? "جاري رفع الملفات النهائية" : "اسحب الملفات النهائية هنا أو اضغط للاختيار"}</strong><small>يمكن اختيار حتى 30 ملفًا بأي صيغة وبالترتيب</small></span>
+                <input type="file" multiple disabled={task.template_status !== "approved" || task.status === "completed" || Boolean(finalUpload?.active)} onChange={(event) => { const files = Array.from(event.target.files || []); if (files.length) void uploadFinal(files); event.currentTarget.value = ""; }} />
               </label> : null}
 
               {finalUpload ? <div className={`marketing-final-upload-progress ${finalUpload.active ? "active" : "finished"}`}>

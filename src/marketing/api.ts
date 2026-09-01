@@ -248,7 +248,7 @@ export async function uploadMarketingFinalFiles(input: {
   const cancellation = input.cancellation || createMarketingFinalUploadCancellation();
   const prepared = await marketingFetch<{
     groupId: string;
-    mediaKind: "image" | "carousel" | "video";
+    mediaKind: "image" | "carousel" | "video" | "file";
     uploads: Array<{
       ticket: string;
       fileId: string;

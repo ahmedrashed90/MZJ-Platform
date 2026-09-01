@@ -823,7 +823,9 @@ export async function emitMarketingNotification(user: PermissionUser, action: st
       ? "فيديو / ريل"
       : clean(uploadRef.media_kind) === "carousel"
         ? "مجموعة صور مرتبة"
-        : "صورة";
+        : clean(uploadRef.media_kind) === "file"
+          ? "ملف / ملفات بأي صيغة"
+          : "صورة";
     const fileDetails = files.flatMap((file: any, index: number) => {
       const size = Number(file?.file_size || 0);
       const exactSize = Number.isFinite(size) && size >= 0 ? `${Math.trunc(size).toLocaleString("en-US")} بايت` : cleanOptional(file?.file_size);
