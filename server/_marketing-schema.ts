@@ -151,6 +151,7 @@ create table if not exists marketing.packages (
   cash_discount numeric(6,2) not null default 0,
   registration_fees boolean not null default false,
   insurance boolean not null default false,
+  insurance_description text,
   issuance_fees boolean not null default false,
   care_features jsonb not null default '[]'::jsonb,
   delivery_home boolean not null default false,
@@ -164,6 +165,7 @@ create table if not exists marketing.packages (
 alter table marketing.packages add column if not exists category_id uuid references marketing.package_categories(id) on delete set null;
 alter table marketing.packages add column if not exists sales_type text;
 alter table marketing.packages add column if not exists sales_type_id uuid references marketing.package_sales_types(id) on delete set null;
+alter table marketing.packages add column if not exists insurance_description text;
 update marketing.packages p set category_id=c.id from marketing.package_categories c where p.category_id is null and lower(btrim(p.category))=lower(btrim(c.name));
 update marketing.packages p set sales_type_id=s.id,sales_type=s.name from marketing.package_sales_types s where p.sales_type_id is null and lower(btrim(s.name))=lower(btrim(coalesce(p.sales_type,'مبيعات الكاش')));
 

@@ -29,6 +29,7 @@ import { ensureLegacyCustomerCodeForLead, findLegacyCustomerCodeByCode, findLega
 import { getWebsiteStock } from "./_website-stock.js";
 import { ownerPurchaseLedger, ownerPurchaseSummary, ownerOwnsSalesOrder } from "./_owners-purchases.js";
 import { downloadNextErpSalesInvoicePdf, listNextErpSalesInvoices, ownerInvoiceError } from "./_owners-invoices.js";
+import { ensureMarketingSchema } from "./_marketing-schema.js";
 
 function requestBody(request: VercelRequest) {
   if (request.body && typeof request.body === "object") return request.body as Record<string, unknown>;
@@ -58,6 +59,42 @@ function publicBase(request: VercelRequest) {
   const protocol = String(request.headers["x-forwarded-proto"] || "https").split(",")[0];
   const host = String(request.headers["x-forwarded-host"] || request.headers.host || "mzj-platform.vercel.app").split(",")[0];
   return `${protocol}://${host}`;
+}
+
+async function ownerPublicPackageCatalog() {
+  await ensureMarketingSchema();
+  const sql = getSql();
+  const [categories, rows] = await Promise.all([
+    sql<any[]>`select id::text,name,sort_order from marketing.package_categories where is_active=true order by sort_order,name`,
+    sql<any[]>`
+      select p.id::text,p.name,p.category_id::text,p.price,p.cash_discount,p.registration_fees,p.insurance,p.insurance_description,p.issuance_fees,p.care_features,p.delivery_home,p.delivery_region,
+        coalesce(c.name,p.category) as category_name,coalesce(c.sort_order,999) as category_sort,coalesce(s.name,p.sales_type,'—') as sales_type_name
+      from marketing.packages p
+      left join marketing.package_categories c on c.id=p.category_id
+      left join marketing.package_sales_types s on s.id=p.sales_type_id
+      where p.is_active=true
+      order by coalesce(c.sort_order,999),p.name
+    `,
+  ]);
+  return {
+    packageCategories: categories.map((row: any) => ({ id: row.id, name: row.name, sortOrder: Number(row.sort_order || 0) })),
+    packages: rows.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      categoryId: row.category_id || "",
+      categoryName: row.category_name || "",
+      salesTypeName: row.sales_type_name || "",
+      price: Number(row.price || 0),
+      cashDiscount: Number(row.cash_discount || 0),
+      registrationFees: row.registration_fees === true,
+      insurance: row.insurance === true,
+      insuranceDescription: clean(row.insurance_description),
+      issuanceFees: row.issuance_fees === true,
+      careFeatures: Array.isArray(row.care_features) ? row.care_features.map(clean).filter(Boolean) : [],
+      deliveryHome: row.delivery_home === true,
+      deliveryRegion: row.delivery_region === true,
+    })),
+  };
 }
 
 function allowedService(value: unknown) {
@@ -1875,6 +1912,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
   if (legacyCustomer) {
     if (request.method === "GET" && action === "me") {
       const settings = await getOwnerSettings();
+      const packageCatalog = await ownerPublicPackageCatalog();
       let websiteCars: Array<{ vehicleId: string; title: string; price: number; priceBeforeTax: number }> = [];
       let websiteCarsWarning = "";
       try {
@@ -1916,6 +1954,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         },
         websiteCars,
         websiteCarsWarning,
+        ...packageCatalog,
       });
     }
     return response.status(403).json({ ok: false, error: "هذه العملية تتاح بعد اكتمال أول عملية شراء" });
@@ -1972,6 +2011,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   if (request.method === "GET" && action === "me") {
     const settings = await getOwnerSettings();
+    const packageCatalog = await ownerPublicPackageCatalog();
     const referrals = await sql<any[]>`
       select id::text,referred_name,status,registered_at,qualified_at,sold_at,created_at
       from owners.referrals
@@ -2049,6 +2089,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       },
       websiteCars,
       websiteCarsWarning,
+      ...packageCatalog,
     });
   }
 

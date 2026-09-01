@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowCounterClockwise, Copy, Gift, ShareNetwork, SignOut, Sparkle, WhatsappLogo } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Copy, Gift, Package, ShareNetwork, SignOut, Sparkle, WhatsappLogo } from "@phosphor-icons/react";
 import { ownersPublicGet, ownersPublicPost } from "./api";
 import { RedemptionQr } from "./RedemptionQr";
 import { OwnersDiscountCalculator } from "./OwnersDiscountCalculator";
@@ -63,10 +63,14 @@ export function OwnersPortalPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [cardFlipped, setCardFlipped] = useState(false);
+  const [portalTab, setPortalTab] = useState<"home" | "packages">("home");
+  const [packageCategoryId, setPackageCategoryId] = useState("");
 
   async function load() {
     try {
-      setMe(await ownersPublicGet("me"));
+      const payload = await ownersPublicGet("me");
+      setMe(payload);
+      setPackageCategoryId((current) => current || (Array.isArray(payload?.packageCategories) ? payload.packageCategories[0]?.id || "" : ""));
     } catch {
       setMe(null);
     }
@@ -136,6 +140,10 @@ export function OwnersPortalPage() {
   const rewards = Array.isArray(me.rewards) ? me.rewards : [];
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
   const websiteCars = Array.isArray(me.websiteCars) ? me.websiteCars : [];
+  const packageCategories = Array.isArray(me.packageCategories) ? me.packageCategories : [];
+  const packages = Array.isArray(me.packages) ? me.packages : [];
+  const activePackageCategoryId = packageCategoryId || packageCategories[0]?.id || "";
+  const visiblePackages = packages.filter((item: any) => !activePackageCategoryId || item.categoryId === activePackageCategoryId);
   const category = ownersCustomerCategoryFromPoints(member.lifetimePoints);
 
   async function copyInvite() {
@@ -182,6 +190,11 @@ export function OwnersPortalPage() {
       </header>
       <main>
         {message ? <div className="owners-public-message">{message}</div> : null}
+        <nav className="owners-portal-tabs" aria-label="أقسام صفحة العضوية">
+          <button type="button" className={portalTab === "home" ? "active" : ""} onClick={() => setPortalTab("home")}>الرئيسية</button>
+          <button type="button" className={portalTab === "packages" ? "active" : ""} onClick={() => setPortalTab("packages")}><Package size={18} /> الباقات</button>
+        </nav>
+        {portalTab === "home" ? (<>
         <section className={`owners-membership-shell ${cardFlipped ? "flipped" : ""}`} onClick={() => setCardFlipped((value) => !value)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setCardFlipped((value) => !value); }}>
           <div className="owners-membership-card">
             <div className="owners-membership-face front">
@@ -298,6 +311,40 @@ export function OwnersPortalPage() {
             </div>
           </section>
         ) : null}
+        </>) : (
+          <section className="owners-public-section owners-packages-section">
+            <div className="owners-packages-head">
+              <div><Package size={26} /><div><h2>الباقات</h2><p>اختر التصنيف لعرض الباقات المتاحة داخله.</p></div></div>
+              <label><span>التصنيف</span><select value={activePackageCategoryId} onChange={(event) => setPackageCategoryId(event.target.value)}>{packageCategories.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            </div>
+            {!packageCategories.length ? <div className="owners-packages-empty">لا توجد تصنيفات باقات متاحة حاليًا.</div> : null}
+            {packageCategories.length && !visiblePackages.length ? <div className="owners-packages-empty">لا توجد باقات متاحة في هذا التصنيف حاليًا.</div> : null}
+            <div className="owners-package-grid">
+              {visiblePackages.map((item: any) => {
+                const hasProcedures = item.registrationFees || item.insurance || item.issuanceFees;
+                const hasCare = Array.isArray(item.careFeatures) && item.careFeatures.length > 0;
+                const hasDelivery = item.deliveryHome || item.deliveryRegion;
+                return (
+                  <article className="owners-package-card" key={item.id}>
+                    <div className="owners-package-card-summary">
+                      <div><span>{item.categoryName || "باقة"}</span><h3>{item.name}</h3></div>
+                      <div className="owners-package-card-price"><strong>{Number(item.price || 0).toLocaleString("ar-SA-u-nu-latn")}</strong><small>ر.س</small></div>
+                    </div>
+                    <div className="owners-package-discount"><span>خصم نقدي</span><strong>{Number(item.cashDiscount || 0).toLocaleString("ar-SA-u-nu-latn")}%</strong></div>
+                    <details>
+                      <summary>عرض تفاصيل الباقة</summary>
+                      <div className="owners-package-details">
+                        {hasProcedures ? <section><h4>الإجراءات</h4><ul>{item.registrationFees ? <li>رسوم التسجيل</li> : null}{item.insurance ? <li className="owners-package-insurance"><strong>التأمين</strong>{item.insuranceDescription ? <small>{item.insuranceDescription}</small> : null}</li> : null}{item.issuanceFees ? <li>رسوم الإصدار</li> : null}</ul></section> : null}
+                        {hasCare ? <section><h4>العناية بالسيارة</h4><ul>{item.careFeatures.map((feature: string) => <li key={feature}>{feature}</li>)}</ul></section> : null}
+                        {hasDelivery ? <section><h4>التوصيل</h4><ul>{item.deliveryHome ? <li>إلى باب البيت</li> : null}{item.deliveryRegion ? <li>إلى المنطقة</li> : null}</ul></section> : null}
+                      </div>
+                    </details>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
       </main>
     </div>
