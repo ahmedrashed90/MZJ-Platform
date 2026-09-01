@@ -590,11 +590,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if (assignmentMode === "percentage") {
         const invalidPercentageMember = eligibleIds.find((memberId) => {
           const value = Number(memberPercentageById.get(memberId) || 0);
-          return !Number.isFinite(value) || value <= 0 || value > 100;
+          return !Number.isFinite(value) || value < 0 || value > 100;
         });
         if (invalidPercentageMember) {
           const invalidUser = selectedUserById.get(invalidPercentageMember) as any;
-          return response.status(400).json({ ok: false, error: `اكتب نسبة صحيحة أكبر من 0 وأقل من أو تساوي 100 للمندوب ${invalidUser?.full_name || "المحدد"}` });
+          return response.status(400).json({ ok: false, error: `اكتب نسبة صحيحة من 0 إلى 100 للمندوب ${invalidUser?.full_name || "المحدد"}` });
         }
         const totalPercentage = eligibleIds.reduce((sum, memberId) => sum + Number(memberPercentageById.get(memberId) || 0), 0);
         if (Math.abs(totalPercentage - 100) > 0.01) {

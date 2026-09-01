@@ -308,11 +308,15 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   });
   if (!candidates.length) return null;
 
-  const percentageCandidates = candidates.filter((candidate) => (ruleById.get(candidate.rule_id) || firstRule).assignment_mode === "percentage" && Number(candidate.allocation_percentage || 0) > 0);
+  const percentageMode = candidates.every((candidate) => (ruleById.get(candidate.rule_id) || firstRule).assignment_mode === "percentage");
+  const percentageCandidates = percentageMode
+    ? candidates.filter((candidate) => Number(candidate.allocation_percentage || 0) > 0)
+    : [];
   let selected: any;
   let selectedRule: any;
   let poolKey = `rules:${departmentCode}:${requested || "auto"}:${routingSource || source || "all"}:${ruleIds.slice().sort().join(",")}`;
-  if (percentageCandidates.length && percentageCandidates.length === candidates.length) {
+  if (percentageMode) {
+    if (!percentageCandidates.length) return null;
     const totalWeight = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.allocation_percentage || 0), 0);
     const totalAssigned = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.weighted_assignment_count || 0), 0);
     selected = percentageCandidates.slice().sort((left, right) => {
