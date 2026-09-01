@@ -130,6 +130,21 @@ create table if not exists marketing.package_sales_types (
   updated_at timestamptz not null default now()
 );
 
+-- Legacy-safe upgrade: these lookup tables may already exist from older releases.
+-- CREATE TABLE IF NOT EXISTS does not add columns to an existing relation, so add
+-- every field used by the current package settings API explicitly and idempotently.
+alter table marketing.package_categories add column if not exists is_active boolean not null default true;
+alter table marketing.package_categories add column if not exists sort_order integer not null default 0;
+alter table marketing.package_categories add column if not exists created_by uuid references core.users(id);
+alter table marketing.package_categories add column if not exists created_at timestamptz not null default now();
+alter table marketing.package_categories add column if not exists updated_at timestamptz not null default now();
+
+alter table marketing.package_sales_types add column if not exists is_active boolean not null default true;
+alter table marketing.package_sales_types add column if not exists sort_order integer not null default 0;
+alter table marketing.package_sales_types add column if not exists created_by uuid references core.users(id);
+alter table marketing.package_sales_types add column if not exists created_at timestamptz not null default now();
+alter table marketing.package_sales_types add column if not exists updated_at timestamptz not null default now();
+
 insert into marketing.package_categories(name,sort_order)
 select seed.name,seed.sort_order
 from (values ('العناية',10),('الفضية',20),('الذهبية',30),('VIP',40)) as seed(name,sort_order)
