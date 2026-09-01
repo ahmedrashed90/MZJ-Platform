@@ -64,25 +64,28 @@ function publicBase(request: VercelRequest) {
 async function ownerPublicPackageCatalog() {
   await ensureMarketingSchema();
   const sql = getSql();
-  const [categories, rows] = await Promise.all([
+  const [categories, salesTypes, rows] = await Promise.all([
     sql<any[]>`select id::text,name,sort_order from marketing.package_categories where is_active=true order by sort_order,name`,
+    sql<any[]>`select id::text,name,sort_order from marketing.package_sales_types where is_active=true order by sort_order,name`,
     sql<any[]>`
-      select p.id::text,p.name,p.category_id::text,p.price,p.cash_discount,p.registration_fees,p.insurance,p.insurance_description,p.issuance_fees,p.care_features,p.delivery_home,p.delivery_region,
-        coalesce(c.name,p.category) as category_name,coalesce(c.sort_order,999) as category_sort,coalesce(s.name,p.sales_type,'—') as sales_type_name
+      select p.id::text,p.name,p.category_id::text,p.sales_type_id::text,p.price,p.cash_discount,p.registration_fees,p.insurance,p.insurance_description,p.issuance_fees,p.care_features,p.delivery_home,p.delivery_region,
+        coalesce(c.name,p.category) as category_name,coalesce(c.sort_order,999) as category_sort,coalesce(s.name,p.sales_type,'—') as sales_type_name,coalesce(s.sort_order,999) as sales_type_sort
       from marketing.packages p
       left join marketing.package_categories c on c.id=p.category_id
       left join marketing.package_sales_types s on s.id=p.sales_type_id
       where p.is_active=true
-      order by coalesce(c.sort_order,999),p.name
+      order by coalesce(s.sort_order,999),coalesce(c.sort_order,999),p.name
     `,
   ]);
   return {
     packageCategories: categories.map((row: any) => ({ id: row.id, name: row.name, sortOrder: Number(row.sort_order || 0) })),
+    packageSalesTypes: salesTypes.map((row: any) => ({ id: row.id, name: row.name, sortOrder: Number(row.sort_order || 0) })),
     packages: rows.map((row: any) => ({
       id: row.id,
       name: row.name,
       categoryId: row.category_id || "",
       categoryName: row.category_name || "",
+      salesTypeId: row.sales_type_id || "",
       salesTypeName: row.sales_type_name || "",
       price: Number(row.price || 0),
       cashDiscount: Number(row.cash_discount || 0),

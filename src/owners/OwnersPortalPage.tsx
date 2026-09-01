@@ -64,13 +64,33 @@ export function OwnersPortalPage() {
   const [busy, setBusy] = useState(false);
   const [cardFlipped, setCardFlipped] = useState(false);
   const [portalTab, setPortalTab] = useState<"home" | "packages">("home");
+  const [packageSalesTypeId, setPackageSalesTypeId] = useState("");
   const [packageCategoryId, setPackageCategoryId] = useState("");
 
   async function load() {
     try {
       const payload = await ownersPublicGet("me");
       setMe(payload);
-      setPackageCategoryId((current) => current || (Array.isArray(payload?.packageCategories) ? payload.packageCategories[0]?.id || "" : ""));
+      const salesTypes = Array.isArray(payload?.packageSalesTypes) ? payload.packageSalesTypes : [];
+      const packageRows = Array.isArray(payload?.packages) ? payload.packages : [];
+      const categories = Array.isArray(payload?.packageCategories) ? payload.packageCategories : [];
+      const salesTypeIdsWithPackages = new Set(packageRows.map((item: any) => String(item?.salesTypeId || "")).filter(Boolean));
+      const availableSalesTypes = salesTypes.filter((item: any) => salesTypeIdsWithPackages.has(String(item?.id || "")));
+      const nextSalesTypeId = availableSalesTypes.some((item: any) => String(item?.id || "") === packageSalesTypeId)
+        ? packageSalesTypeId
+        : String(availableSalesTypes[0]?.id || "");
+      const categoryIdsForSalesType = new Set(
+        packageRows
+          .filter((item: any) => !nextSalesTypeId || String(item?.salesTypeId || "") === nextSalesTypeId)
+          .map((item: any) => String(item?.categoryId || ""))
+          .filter(Boolean),
+      );
+      const availableCategories = categories.filter((item: any) => categoryIdsForSalesType.has(String(item?.id || "")));
+      const nextCategoryId = availableCategories.some((item: any) => String(item?.id || "") === packageCategoryId)
+        ? packageCategoryId
+        : String(availableCategories[0]?.id || "");
+      setPackageSalesTypeId(nextSalesTypeId);
+      setPackageCategoryId(nextCategoryId);
     } catch {
       setMe(null);
     }
@@ -141,9 +161,27 @@ export function OwnersPortalPage() {
   const redemptions = Array.isArray(me.redemptions) ? me.redemptions : [];
   const websiteCars = Array.isArray(me.websiteCars) ? me.websiteCars : [];
   const packageCategories = Array.isArray(me.packageCategories) ? me.packageCategories : [];
+  const packageSalesTypes = Array.isArray(me.packageSalesTypes) ? me.packageSalesTypes : [];
   const packages = Array.isArray(me.packages) ? me.packages : [];
-  const activePackageCategoryId = packageCategoryId || packageCategories[0]?.id || "";
-  const visiblePackages = packages.filter((item: any) => !activePackageCategoryId || item.categoryId === activePackageCategoryId);
+  const salesTypeIdsWithPackages = new Set(packages.map((item: any) => String(item?.salesTypeId || "")).filter(Boolean));
+  const visiblePackageSalesTypes = packageSalesTypes.filter((item: any) => salesTypeIdsWithPackages.has(String(item?.id || "")));
+  const activePackageSalesTypeId = visiblePackageSalesTypes.some((item: any) => String(item?.id || "") === packageSalesTypeId)
+    ? packageSalesTypeId
+    : String(visiblePackageSalesTypes[0]?.id || "");
+  const categoryIdsForSalesType = new Set(
+    packages
+      .filter((item: any) => !activePackageSalesTypeId || String(item?.salesTypeId || "") === activePackageSalesTypeId)
+      .map((item: any) => String(item?.categoryId || ""))
+      .filter(Boolean),
+  );
+  const visiblePackageCategories = packageCategories.filter((item: any) => categoryIdsForSalesType.has(String(item?.id || "")));
+  const activePackageCategoryId = visiblePackageCategories.some((item: any) => String(item?.id || "") === packageCategoryId)
+    ? packageCategoryId
+    : String(visiblePackageCategories[0]?.id || "");
+  const visiblePackages = packages.filter((item: any) =>
+    (!activePackageSalesTypeId || item.salesTypeId === activePackageSalesTypeId)
+    && (!activePackageCategoryId || item.categoryId === activePackageCategoryId),
+  );
   const category = ownersCustomerCategoryFromPoints(member.lifetimePoints);
 
   async function copyInvite() {
@@ -314,11 +352,36 @@ export function OwnersPortalPage() {
         </>) : (
           <section className="owners-public-section owners-packages-section">
             <div className="owners-packages-head">
-              <div><Package size={26} /><div><h2>الباقات</h2><p>اختر التصنيف لعرض الباقات المتاحة داخله.</p></div></div>
-              <label><span>التصنيف</span><select value={activePackageCategoryId} onChange={(event) => setPackageCategoryId(event.target.value)}>{packageCategories.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+              <div><Package size={26} /><div><h2>الباقات</h2><p>اختر نوع المبيعات أولًا، ثم اختر التصنيف لعرض الباقات المتاحة داخله.</p></div></div>
             </div>
-            {!packageCategories.length ? <div className="owners-packages-empty">لا توجد تصنيفات باقات متاحة حاليًا.</div> : null}
-            {packageCategories.length && !visiblePackages.length ? <div className="owners-packages-empty">لا توجد باقات متاحة في هذا التصنيف حاليًا.</div> : null}
+            {visiblePackageSalesTypes.length ? (
+              <div className="owners-package-sales-filter" aria-label="نوع مبيعات الباقة">
+                <span>نوع المبيعات</span>
+                <div>
+                  {visiblePackageSalesTypes.map((item: any) => (
+                    <button
+                      type="button"
+                      key={item.id}
+                      className={activePackageSalesTypeId === item.id ? "active" : ""}
+                      onClick={() => { setPackageSalesTypeId(item.id); setPackageCategoryId(""); }}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {visiblePackageCategories.length ? (
+              <label className="owners-package-category-filter">
+                <span>التصنيف</span>
+                <select value={activePackageCategoryId} onChange={(event) => setPackageCategoryId(event.target.value)}>
+                  {visiblePackageCategories.map((item: any) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+            ) : null}
+            {!visiblePackageSalesTypes.length ? <div className="owners-packages-empty">لا توجد باقات متاحة حاليًا.</div> : null}
+            {visiblePackageSalesTypes.length && !visiblePackageCategories.length ? <div className="owners-packages-empty">لا توجد تصنيفات متاحة لنوع المبيعات المختار.</div> : null}
+            {visiblePackageCategories.length && !visiblePackages.length ? <div className="owners-packages-empty">لا توجد باقات متاحة في هذا التصنيف حاليًا.</div> : null}
             <div className="owners-package-grid">
               {visiblePackages.map((item: any) => {
                 const hasProcedures = item.registrationFees || item.insurance || item.issuanceFees;
