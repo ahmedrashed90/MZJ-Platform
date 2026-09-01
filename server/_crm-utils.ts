@@ -202,13 +202,14 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
     Number(rule.branch_specificity) === Number(firstRule.branch_specificity)
     && Number(rule.source_specificity) === Number(firstRule.source_specificity)
     && Number(rule.sort_order || 0) === Number(firstRule.sort_order || 0)
+    && String(rule.assignment_mode || "round_robin") === String(firstRule.assignment_mode || "round_robin")
   );
   const ruleIds = activeRules.map((rule) => rule.id);
   const ruleById = new Map(activeRules.map((rule) => [rule.id, rule]));
 
   const candidateRows = await sql<any[]>`
-    select m.rule_id::text,u.id::text as user_id,u.full_name,m.priority,m.assignment_count,
-      r.branch_code as rule_branch_code,r.sort_order as rule_sort_order,
+    select m.rule_id::text,u.id::text as user_id,u.full_name,m.priority,m.assignment_count,m.allocation_percentage,m.weighted_assignment_count,
+      r.branch_code as rule_branch_code,r.sort_order as rule_sort_order,r.assignment_mode as rule_assignment_mode,
       coalesce(
         (
           select b.code
@@ -307,11 +308,28 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   });
   if (!candidates.length) return null;
 
-  const poolKey = `rules:${departmentCode}:${requested || "auto"}:${routingSource || source || "all"}:${ruleIds.slice().sort().join(",")}`;
-  const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
-  const lastIndex = candidates.findIndex((candidate) => candidate.user_id === state?.last_user_id);
-  const selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
-  const selectedRule = ruleById.get(selected.rule_id) || firstRule;
+  const percentageCandidates = candidates.filter((candidate) => (ruleById.get(candidate.rule_id) || firstRule).assignment_mode === "percentage" && Number(candidate.allocation_percentage || 0) > 0);
+  let selected: any;
+  let selectedRule: any;
+  let poolKey = `rules:${departmentCode}:${requested || "auto"}:${routingSource || source || "all"}:${ruleIds.slice().sort().join(",")}`;
+  if (percentageCandidates.length && percentageCandidates.length === candidates.length) {
+    const totalWeight = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.allocation_percentage || 0), 0);
+    const totalAssigned = percentageCandidates.reduce((sum, candidate) => sum + Number(candidate.weighted_assignment_count || 0), 0);
+    selected = percentageCandidates.slice().sort((left, right) => {
+      const leftDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(left.allocation_percentage || 0) / totalWeight) - Number(left.weighted_assignment_count || 0) : 0;
+      const rightDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(right.allocation_percentage || 0) / totalWeight) - Number(right.weighted_assignment_count || 0) : 0;
+      return rightDeficit - leftDeficit
+        || Number(left.rule_sort_order || 0) - Number(right.rule_sort_order || 0)
+        || Number(left.priority || 0) - Number(right.priority || 0)
+        || String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar");
+    })[0];
+    selectedRule = ruleById.get(selected.rule_id) || firstRule;
+  } else {
+    const [state] = await sql<any[]>`select last_user_id::text from crm.assignment_state where pool_key=${poolKey} limit 1`;
+    const lastIndex = candidates.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+    selected = candidates[(lastIndex + 1 + candidates.length) % candidates.length];
+    selectedRule = ruleById.get(selected.rule_id) || firstRule;
+  }
   const selectedBranch = clean(selected.primary_branch_code) || clean(selected.rule_branch_code) || requested;
 
   await sql`
@@ -326,7 +344,9 @@ async function chooseFromConfiguredRule(departmentCode: string, requestedBranch:
   `;
   await sql`
     update crm.assignment_rule_members
-    set assignment_count=assignment_count+1,last_assigned_at=now(),updated_at=now()
+    set assignment_count=assignment_count+1,
+        weighted_assignment_count=case when ${selectedRule.assignment_mode || "round_robin"}='percentage' then weighted_assignment_count+1 else weighted_assignment_count end,
+        last_assigned_at=now(),updated_at=now()
     where rule_id=${selected.rule_id}::uuid and user_id=${selected.user_id}::uuid
   `;
   await sql`

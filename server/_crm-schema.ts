@@ -1695,6 +1695,35 @@ on conflict(version) do nothing;
 commit;
 `;
 
+const CRM_PERCENTAGE_DISTRIBUTION_20260901_SQL = String.raw`
+begin;
+
+alter table crm.assignment_rule_members
+  add column if not exists allocation_percentage numeric(5,2) not null default 0;
+
+alter table crm.assignment_rule_members
+  add column if not exists weighted_assignment_count integer not null default 0;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='crm_assignment_rule_members_percentage_range'
+      and conrelid='crm.assignment_rule_members'::regclass
+  ) then
+    alter table crm.assignment_rule_members
+      add constraint crm_assignment_rule_members_percentage_range
+      check (allocation_percentage >= 0 and allocation_percentage <= 100);
+  end if;
+end $$;
+
+insert into core.schema_migrations(version)
+values('crm-percentage-distribution-20260901')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1785,6 +1814,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-tracking-final-delivery-welcome-20260822'
       `;
       if (!trackingFinalDeliveryWelcomeMigration) await runSqlScript(CRM_TRACKING_FINAL_DELIVERY_WELCOME_20260822_SQL);
+      const [percentageDistributionMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-percentage-distribution-20260901'
+      `;
+      if (!percentageDistributionMigration) await runSqlScript(CRM_PERCENTAGE_DISTRIBUTION_20260901_SQL);
 
       // Public cash-register / QR registrations are owned by the Website channel itself.
       // They must never enter the sales-representative round-robin during initial registration.

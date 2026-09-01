@@ -16,6 +16,20 @@ function departmentLabel(code: string) {
   return "مبيعات الكاش";
 }
 
+function reportBranchLabel(departmentCode: unknown, branchCode: unknown, branchName: unknown) {
+  const department = String(departmentCode || "").trim().toLowerCase();
+  const code = String(branchCode || "").trim().toLowerCase();
+  const name = String(branchName || "").trim();
+  if (["wholesale", "wholesale_sales"].includes(department) || ["wholesale", "wholesale_sales", "jumla", "jomla", "aljumla"].includes(code) || code.includes("wholesale")) return "فرع الجملة";
+  if (name.startsWith("فرع ")) return name;
+  if (code === "qadisiyah") return "فرع القادسية";
+  if (code === "hall") return "فرع الصالة";
+  if (code === "multaqa") return "فرع الملتقى";
+  if (code === "online") return "فرع الاونلاين";
+  if (name) return `فرع ${name}`;
+  return code ? `فرع ${code}` : "بدون فرع";
+}
+
 function percent(num: number, den: number) {
   return den > 0 ? Math.round((num / den) * 10000) / 100 : 0;
 }
@@ -875,8 +889,22 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const otherSources = sourceGroup("other");
   const salesRows = reportRows.filter((row) => row.current_assigned_is_call_center !== true);
   const salesOnlyFacts = reportFacts.filter((fact) => fact.department_code !== "customer_service");
-  const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${row.branch_name || row.branch_code || "بدون فرع"}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${fact.branch_name || fact.branch_code || "بدون فرع"}`)
-    .filter((row) => norm(row.name) !== norm("قسم الجملة - القادسية"));
+  const departmentContext = new Map<string, { departmentCode: string; branchCode: string; branchName: string }>();
+  for (const row of [...salesRows, ...salesOnlyFacts]) {
+    const key = `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`;
+    if (!departmentContext.has(key)) departmentContext.set(key, { departmentCode: String(row.department_code || ""), branchCode: String(row.branch_code || ""), branchName: String(row.branch_name || "") });
+  }
+  const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${reportBranchLabel(row.department_code, row.branch_code, row.branch_name)}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${reportBranchLabel(fact.department_code, fact.branch_code, fact.branch_name)}`)
+    .map((row) => {
+      const context = departmentContext.get(row.detailValue);
+      const [departmentCode = "", branchCode = ""] = String(row.detailValue || "").split("|");
+      const normalizedDepartmentCode = context?.departmentCode || (departmentCode === "__none__" ? "" : departmentCode);
+      const normalizedBranchCode = context?.branchCode || (branchCode === "__none__" ? "" : branchCode);
+      const department = departmentLabel(normalizedDepartmentCode);
+      const branch = reportBranchLabel(normalizedDepartmentCode, normalizedBranchCode, context?.branchName || "");
+      return { ...row, name: `${department} - ${branch}`, department, branch };
+    })
+    .filter((row) => !(norm(row.department) === norm("قسم الجملة") && norm(row.branch) === norm("فرع القادسية")));
 
   /*
    * Representative identity is profile data, not a historical sales dimension.

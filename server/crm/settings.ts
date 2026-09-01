@@ -59,6 +59,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
             'priority',m.priority,
             'is_active',m.is_active,
             'assignment_count',m.assignment_count,
+            'allocation_percentage',m.allocation_percentage,
+            'weighted_assignment_count',m.weighted_assignment_count,
             'last_assigned_at',m.last_assigned_at
           ) order by m.priority,u.full_name) filter (where m.user_id is not null),'[]'::json) as members
         from crm.assignment_rules r
@@ -138,8 +140,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
         if (branchCode && !(assignmentUser.branch_codes || []).includes(branchCode)) return false;
         return true;
       });
-      const currentIndex = activeMembers.findIndex((member: any) => member.user_id === rule.last_user_id);
-      const next = activeMembers.length ? activeMembers[(currentIndex + 1 + activeMembers.length) % activeMembers.length] : null;
+      let next: any = null;
+      if (rule.assignment_mode === "percentage") {
+        const weightedMembers = activeMembers.filter((member: any) => Number(member.allocation_percentage || 0) > 0);
+        const totalWeight = weightedMembers.reduce((sum: number, member: any) => sum + Number(member.allocation_percentage || 0), 0);
+        const totalAssigned = weightedMembers.reduce((sum: number, member: any) => sum + Number(member.weighted_assignment_count || 0), 0);
+        next = weightedMembers.slice().sort((left: any, right: any) => {
+          const leftDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(left.allocation_percentage || 0) / totalWeight) - Number(left.weighted_assignment_count || 0) : 0;
+          const rightDeficit = totalWeight > 0 ? ((totalAssigned + 1) * Number(right.allocation_percentage || 0) / totalWeight) - Number(right.weighted_assignment_count || 0) : 0;
+          return rightDeficit - leftDeficit || Number(left.priority || 0) - Number(right.priority || 0) || String(left.full_name || "").localeCompare(String(right.full_name || ""), "ar");
+        })[0] || null;
+      } else {
+        const currentIndex = activeMembers.findIndex((member: any) => member.user_id === rule.last_user_id);
+        next = activeMembers.length ? activeMembers[(currentIndex + 1 + activeMembers.length) % activeMembers.length] : null;
+      }
       return { ...rule, next_user_id: next?.user_id || null, next_user_name: next?.full_name || null };
     });
 
@@ -508,6 +522,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const memberIds = [...new Set(stringList(body.memberIds))];
     const branchCodes = [...new Set(stringList(body.branchCodes ?? (body.branchCode ? [body.branchCode] : [])))];
     const sourceCodes = [...new Set(stringList(body.sourceCodes))];
+    const assignmentMode = clean(body.assignmentMode) === "percentage" ? "percentage" : "round_robin";
+    const rawMemberPercentages = body.memberPercentages && typeof body.memberPercentages === "object" && !Array.isArray(body.memberPercentages) ? body.memberPercentages as Record<string, unknown> : {};
+    const memberPercentageById = new Map(memberIds.map((memberId) => [memberId, Number(rawMemberPercentages[memberId] || 0)]));
     if (!name || !departmentCode) return response.status(400).json({ ok: false, error: "اسم القاعدة والقسم مطلوبان" });
     if (!branchCodes.length) return response.status(400).json({ ok: false, error: "اختر فرعًا واحدًا على الأقل لقاعدة التوزيع" });
     if (!memberIds.length) return response.status(400).json({ ok: false, error: "اختار موظفًا واحدًا على الأقل في قاعدة التوزيع" });
@@ -517,7 +534,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       from core.branches
       where is_active=true and code=any(${branchCodes}::text[])
     `;
-    const validBranchByCode = new Map(validBranches.map((row: any) => [row.code, row]));
+    const validBranchByCode = new Map<string, any>(validBranches.map((row: any) => [row.code, row]));
     const invalidBranch = branchCodes.find((code) => !validBranchByCode.has(code));
     if (invalidBranch) return response.status(400).json({ ok: false, error: "يوجد فرع غير صالح ضمن فروع قاعدة التوزيع" });
 
@@ -554,7 +571,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       ) global_branches on true
       where u.id=any(${memberIds}::uuid[])
     `;
-    const selectedUserById = new Map(selectedUsers.map((row: any) => [row.id, row]));
+    const selectedUserById = new Map<string, any>(selectedUsers.map((row: any) => [row.id, row]));
     const eligibleMemberIdsByBranch = new Map<string, string[]>();
     for (const branchCode of branchCodes) {
       const eligibleIds = memberIds.filter((memberId) => {
@@ -570,6 +587,21 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const branchName = validBranchByCode.get(branchCode)?.name || branchCode;
         return response.status(400).json({ ok: false, error: `اختر مندوبًا مؤهلًا واحدًا على الأقل لفرع ${branchName}` });
       }
+      if (assignmentMode === "percentage") {
+        const invalidPercentageMember = eligibleIds.find((memberId) => {
+          const value = Number(memberPercentageById.get(memberId) || 0);
+          return !Number.isFinite(value) || value <= 0 || value > 100;
+        });
+        if (invalidPercentageMember) {
+          const invalidUser = selectedUserById.get(invalidPercentageMember) as any;
+          return response.status(400).json({ ok: false, error: `اكتب نسبة صحيحة أكبر من 0 وأقل من أو تساوي 100 للمندوب ${invalidUser?.full_name || "المحدد"}` });
+        }
+        const totalPercentage = eligibleIds.reduce((sum, memberId) => sum + Number(memberPercentageById.get(memberId) || 0), 0);
+        if (Math.abs(totalPercentage - 100) > 0.01) {
+          const branchName = validBranchByCode.get(branchCode)?.name || branchCode;
+          return response.status(400).json({ ok: false, error: `مجموع نسب المناديب في ${branchName} يجب أن يساوي 100% (الحالي ${totalPercentage.toFixed(2)}%)` });
+        }
+      }
       eligibleMemberIdsByBranch.set(branchCode, eligibleIds);
     }
 
@@ -583,7 +615,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     let orderedBranchCodes = branchCodes;
     let existingRule: any = null;
     if (id) {
-      [existingRule] = await sql<any[]>`select id::text,branch_code from crm.assignment_rules where id=${id}::uuid limit 1`;
+      [existingRule] = await sql<any[]>`select id::text,branch_code,assignment_mode from crm.assignment_rules where id=${id}::uuid limit 1`;
       if (!existingRule) return response.status(404).json({ ok: false, error: "قاعدة التوزيع غير موجودة" });
       if (existingRule.branch_code && branchCodes.includes(existingRule.branch_code)) {
         orderedBranchCodes = [existingRule.branch_code, ...branchCodes.filter((code) => code !== existingRule.branch_code)];
@@ -598,13 +630,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const [rule] = id && branchIndex === 0
           ? await tx<any[]>`
               update crm.assignment_rules
-              set name=${name},department_code=${departmentCode},branch_code=${branchCode},source_codes=${sourceCodes},assignment_mode='round_robin',prevent_consecutive=${body.preventConsecutive!==false},sort_order=${Number(body.sortOrder||0)},is_active=${body.isActive!==false},updated_by=${user.id}::uuid,updated_at=now()
+              set name=${name},department_code=${departmentCode},branch_code=${branchCode},source_codes=${sourceCodes},assignment_mode=${assignmentMode},prevent_consecutive=${assignmentMode === "percentage" ? false : body.preventConsecutive!==false},sort_order=${Number(body.sortOrder||0)},is_active=${body.isActive!==false},updated_by=${user.id}::uuid,updated_at=now()
               where id=${id}::uuid
               returning *,id::text
             `
           : await tx<any[]>`
               insert into crm.assignment_rules(name,department_code,branch_code,source_codes,assignment_mode,prevent_consecutive,sort_order,is_active,created_by,updated_by)
-              values (${name},${departmentCode},${branchCode},${sourceCodes},'round_robin',${body.preventConsecutive!==false},${Number(body.sortOrder||0)},${body.isActive!==false},${user.id}::uuid,${user.id}::uuid)
+              values (${name},${departmentCode},${branchCode},${sourceCodes},${assignmentMode},${assignmentMode === "percentage" ? false : body.preventConsecutive!==false},${Number(body.sortOrder||0)},${body.isActive!==false},${user.id}::uuid,${user.id}::uuid)
               returning *,id::text
             `;
 
@@ -614,13 +646,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
         await tx`delete from crm.assignment_rule_members where rule_id=${rule.id}::uuid and not (user_id = any(${eligibleMemberIds}::uuid[]))`;
         for (let memberIndex = 0; memberIndex < eligibleMemberIds.length; memberIndex += 1) {
           const memberId = eligibleMemberIds[memberIndex];
+          const allocationPercentage = assignmentMode === "percentage" ? Number(memberPercentageById.get(memberId) || 0) : 0;
           await tx`
-            insert into crm.assignment_rule_members(rule_id,user_id,priority,is_active,updated_at)
-            values (${rule.id}::uuid,${memberId}::uuid,${(memberIndex+1)*10},true,now())
-            on conflict (rule_id,user_id) do update set priority=excluded.priority,is_active=true,updated_at=now()
+            insert into crm.assignment_rule_members(rule_id,user_id,priority,is_active,allocation_percentage,weighted_assignment_count,updated_at)
+            values (${rule.id}::uuid,${memberId}::uuid,${(memberIndex+1)*10},true,${allocationPercentage},0,now())
+            on conflict (rule_id,user_id) do update set priority=excluded.priority,is_active=true,allocation_percentage=excluded.allocation_percentage,weighted_assignment_count=0,updated_at=now()
           `;
         }
-        rows.push({ ...rule, memberIds: eligibleMemberIds });
+        if (assignmentMode === "percentage" || existingRule?.assignment_mode === "percentage") {
+          await tx`delete from crm.assignment_state where pool_key=${`rule:${rule.id}`}`;
+        }
+        rows.push({ ...rule, memberIds: eligibleMemberIds, assignmentMode, memberPercentages: Object.fromEntries(eligibleMemberIds.map((memberId) => [memberId, Number(memberPercentageById.get(memberId) || 0)])) });
       }
       return rows;
     });

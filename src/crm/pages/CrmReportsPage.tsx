@@ -123,11 +123,21 @@ function columnsForSection(section: ReportSection): ReportColumn[] {
       { key: "customers", label: "تقارير العملاء", action: true },
     ];
   }
+  if (section.kind === "department") {
+    return [
+      { key: "serial", label: "مسلسل" },
+      { key: "department", label: "القسم" },
+      { key: "branch", label: "الفرع" },
+      ...metricColumns,
+      { key: "salesQuality", label: "جودة القسم / الفرع", percentage: true },
+      { key: "customers", label: "تقارير العملاء", action: true },
+    ];
+  }
   return [
     { key: "serial", label: "مسلسل" },
     { key: "name", label: section.firstColumn },
     ...metricColumns,
-    { key: "salesQuality", label: section.kind === "department" ? "جودة القسم / الفرع" : "جودة المبيعات", percentage: true },
+    { key: "salesQuality", label: "جودة المبيعات", percentage: true },
     { key: "customers", label: "تقارير العملاء", action: true },
   ];
 }
@@ -228,7 +238,7 @@ export function CrmReportsPage() {
     { title: "مصادر التسويق الرقمي", rows: data?.digitalSources || [], firstColumn: "المصدر", description: "المصادر الرقمية المصنفة من إعدادات المصدر، بما فيها حاسبة التقسيط واتصال الرقم الموحد.", kind: "source", countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.digitalSources },
     { title: "مصادر التسويق المباشر", rows: data?.directSources || [], firstColumn: "المصدر", description: "المصادر المباشرة المعتمدة في قاعدة البيانات بدون تصنيف نصي داخل الواجهة.", kind: "source", countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.directSources },
     ...(data?.otherSources?.length ? [{ title: "مصادر أخرى", rows: data.otherSources, firstColumn: "المصدر", description: "مصادر لم يتم تصنيفها بعد كرقمية أو مباشرة.", kind: "source" as const, countLabel: "إجمالي المصادر", summary: data?.sectionSummaries?.otherSources }] : []),
-    { title: "تقرير الأقسام والفروع", rows: data?.departments || [], firstColumn: "القسم / الفرع", description: "إجمالي حالات المبيعات حسب القسم والفرع.", kind: "department", countLabel: "إجمالي الأقسام والفروع", summary: data?.sectionSummaries?.departments },
+    { title: "تقرير الأقسام والفروع", rows: data?.departments || [], firstColumn: "القسم", description: "إجمالي حالات المبيعات حسب القسم والفرع بالمسمّيات المعتمدة.", kind: "department", countLabel: "إجمالي الأقسام والفروع", summary: data?.sectionSummaries?.departments },
     { title: "تقارير المناديب", rows: data?.agents || [], firstColumn: "المندوب", description: "أرقام كل مندوب مبيعات مع فتح تقرير العملاء المرتبطين به.", kind: "agent", countLabel: "إجمالي المناديب", summary: data?.sectionSummaries?.agents },
     { title: "تقرير خدمة العملاء", rows: data?.service ? [data.service] : [], firstColumn: "القسم", description: "متابعة جاري العمل وتم الانتهاء داخل خدمة العملاء.", kind: "service" },
   ];

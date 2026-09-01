@@ -1578,6 +1578,36 @@ button.small-metric { cursor: pointer; }
   opacity: .35;
   cursor: default;
 }
+
+.crm-switch-row.disabled { opacity:.58; }
+.crm-percentage-mode-note {
+  display:grid;
+  gap:4px;
+  padding:10px 12px;
+  border:1px solid #e7d4ca;
+  border-radius:10px;
+  background:#fff8f4;
+}
+.crm-percentage-mode-note strong { font-size:10px; color:#71382d; }
+.crm-percentage-mode-note span { font-size:9px; color:var(--muted); line-height:1.7; }
+.crm-percentage-total {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  margin-bottom:8px; padding:8px 10px; border-radius:9px; border:1px solid var(--line);
+  font-size:9px;
+}
+.crm-percentage-total strong { font-size:11px; }
+.crm-percentage-total.valid { background:#eef9f2; border-color:#bfe3ca; color:#17673a; }
+.crm-percentage-total.invalid { background:#fff0ee; border-color:#edc7c0; color:#a32922; }
+.crm-distribution-order-list.percentage article { grid-template-columns:30px minmax(0,1fr) 96px 34px; }
+.crm-member-percentage { display:flex; align-items:center; gap:4px; direction:ltr; }
+.crm-member-percentage input { width:72px; min-height:32px; padding:5px 7px; border:1px solid var(--line); border-radius:8px; background:#fff; text-align:center; font:inherit; }
+.crm-member-percentage span { font-weight:800; color:#6d3d33; }
+.crm-member-remove { width:29px; height:29px; display:grid; place-items:center; border:1px solid var(--line); border-radius:8px; background:#fff; color:#8a2d25; cursor:pointer; }
+.crm-percentage-branch-totals { display:grid; gap:6px; margin-top:9px; }
+.crm-percentage-branch-totals > span { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 9px; border:1px solid var(--line); border-radius:8px; font-size:9px; }
+.crm-percentage-branch-totals > span.valid { background:#eef9f2; border-color:#bfe3ca; color:#17673a; }
+.crm-percentage-branch-totals > span.invalid { background:#fff0ee; border-color:#edc7c0; color:#a32922; }
+.crm-percentage-branch-totals small { color:inherit; }
 .crm-distribution-preview {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1924,6 +1954,7 @@ button.small-metric { cursor: pointer; }
   .crm-bulk-confirmation {
     grid-template-columns: 1fr;
   }
+  .crm-distribution-order-list.percentage article { grid-template-columns:30px minmax(0,1fr) 88px 34px; }
   .crm-bulk-reallocation-head,
   .crm-bulk-agent-picker > header {
     align-items: stretch;
