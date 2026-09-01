@@ -31,6 +31,28 @@ function reportBranchLabel(departmentCode: unknown, branchCode: unknown, branchN
   return code ? `فرع ${code}` : "بدون فرع";
 }
 
+const CASH_BRANCH_ROLLUP_CODES = new Set(["qadisiyah", "hall", "multaqa"]);
+
+function departmentBranchDepartmentCode(departmentCode: unknown, branchCode: unknown) {
+  const department = String(departmentCode || "").trim().toLowerCase();
+  const branch = String(branchCode || "").trim().toLowerCase();
+  if (CASH_BRANCH_ROLLUP_CODES.has(branch) && ["cash_sales", "finance_sales", "call_center"].includes(department)) return "cash_sales";
+  return department;
+}
+
+function agentDepartmentMatchesFilter(departmentCode: unknown, selectedDepartment: unknown) {
+  const code = String(departmentCode || "").trim().toLowerCase();
+  const selected = String(selectedDepartment || "").trim().toLowerCase();
+  if (!selected) return true;
+  if (selected === "cash") return ["cash_sales", "wholesale", "wholesale_sales"].includes(code);
+  if (selected === "finance") return code === "finance_sales";
+  if (selected === "wholesale") return ["wholesale", "wholesale_sales"].includes(code);
+  if (selected === "service") return code === "customer_service";
+  if (selected === "call_center") return code === "call_center";
+  if (["cash_sales", "finance_sales", "customer_service"].includes(selected)) return code === selected;
+  return code === selected;
+}
+
 function percent(num: number, den: number) {
   return den > 0 ? Math.round((num / den) * 10000) / 100 : 0;
 }
@@ -339,6 +361,23 @@ export default async function handler(request: VercelRequest, response: VercelRe
     end
   `;
 
+  const departmentBranchLeadDepartmentCodeSql = sql`
+    case
+      when lower(coalesce(l.report_branch_code,'')) in ('qadisiyah','hall','multaqa')
+        and lower(coalesce(l.report_department_code,'')) in ('cash_sales','finance_sales','call_center')
+      then 'cash_sales'
+      else l.report_department_code
+    end
+  `;
+  const departmentBranchTransactionDepartmentCodeSql = sql`
+    case
+      when lower(coalesce((${transactionBranchCodeSql}),'')) in ('qadisiyah','hall','multaqa')
+        and lower(coalesce((${transactionDepartmentCodeSql}),'')) in ('cash_sales','finance_sales','call_center')
+      then 'cash_sales'
+      else (${transactionDepartmentCodeSql})
+    end
+  `;
+
   const leadDepartmentFilterSql = sql`
     (
       ${department || null}::text is null
@@ -407,7 +446,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const detailMatch = sql`
       (
         (${detailKind}='source' and l.report_department_code<>'customer_service' and coalesce((${leadReportSourceCodeSql}),'__none__')=${detailValue})
-        or (${detailKind}='department_branch' and (coalesce(l.report_department_code,'__none__') || '|' || coalesce(l.report_branch_code,'__none__'))=${detailValue})
+        or (${detailKind}='department_branch' and (coalesce((${departmentBranchLeadDepartmentCodeSql}),'__none__') || '|' || coalesce(l.report_branch_code,'__none__'))=${detailValue})
         or (${detailKind}='agent' and coalesce(l.current_assigned_to::text,'__none__')=${detailValue})
         or (${detailKind}='service' and l.report_department_code='customer_service')
       )
@@ -428,7 +467,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
             and coalesce((${transactionReportSourceCodeSql}),'__none__')=${detailValue}
           `
         : sql`
-            (coalesce((${transactionDepartmentCodeSql}),'__none__') || '|' || coalesce((${transactionBranchCodeSql}),'__none__'))=${detailValue}
+            (coalesce((${departmentBranchTransactionDepartmentCodeSql}),'__none__') || '|' || coalesce((${transactionBranchCodeSql}),'__none__'))=${detailValue}
           `;
 
       const soldDetailRows = await sql<any[]>`
@@ -892,10 +931,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const salesOnlyFacts = reportFacts.filter((fact) => fact.department_code !== "customer_service");
   const departmentContext = new Map<string, { departmentCode: string; branchCode: string; branchName: string }>();
   for (const row of [...salesRows, ...salesOnlyFacts]) {
-    const key = `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`;
-    if (!departmentContext.has(key)) departmentContext.set(key, { departmentCode: String(row.department_code || ""), branchCode: String(row.branch_code || ""), branchName: String(row.branch_name || "") });
+    const canonicalDepartmentCode = departmentBranchDepartmentCode(row.department_code, row.branch_code);
+    const key = `${canonicalDepartmentCode || "__none__"}|${row.branch_code || "__none__"}`;
+    if (!departmentContext.has(key)) departmentContext.set(key, { departmentCode: canonicalDepartmentCode, branchCode: String(row.branch_code || ""), branchName: String(row.branch_name || "") });
   }
-  const departments = group(salesRows, salesOnlyFacts, "department_branch", (row) => `${row.department_code || "__none__"}|${row.branch_code || "__none__"}`, (row) => `${departmentLabel(row.department_code)} - ${reportBranchLabel(row.department_code, row.branch_code, row.branch_name)}`, (fact) => `${fact.department_code || "__none__"}|${fact.branch_code || "__none__"}`, (fact) => `${departmentLabel(fact.department_code)} - ${reportBranchLabel(fact.department_code, fact.branch_code, fact.branch_name)}`)
+  const departments = group(
+    salesRows,
+    salesOnlyFacts,
+    "department_branch",
+    (row) => `${departmentBranchDepartmentCode(row.department_code, row.branch_code) || "__none__"}|${row.branch_code || "__none__"}`,
+    (row) => `${departmentLabel(departmentBranchDepartmentCode(row.department_code, row.branch_code))} - ${reportBranchLabel(departmentBranchDepartmentCode(row.department_code, row.branch_code), row.branch_code, row.branch_name)}`,
+    (fact) => `${departmentBranchDepartmentCode(fact.department_code, fact.branch_code) || "__none__"}|${fact.branch_code || "__none__"}`,
+    (fact) => `${departmentLabel(departmentBranchDepartmentCode(fact.department_code, fact.branch_code))} - ${reportBranchLabel(departmentBranchDepartmentCode(fact.department_code, fact.branch_code), fact.branch_code, fact.branch_name)}`,
+  )
     .map((row) => {
       const context = departmentContext.get(row.detailValue);
       const [departmentCode = "", branchCode = ""] = String(row.detailValue || "").split("|");
@@ -1048,23 +1096,36 @@ export default async function handler(request: VercelRequest, response: VercelRe
     where u.id=any(${agentIds}::uuid[])
   ` : [];
 
-  const agentIdentity = new Map<string, { department: string; branch: string }>();
+  const agentIdentity = new Map<string, { department: string; branch: string; departmentCode: string; branchCode: string }>();
   for (const item of agentIdentityRows) {
     agentIdentity.set(String(item.user_id), {
       department: String(item.department_name || item.department_code || "").trim(),
       branch: String(item.branch_name || item.branch_code || "").trim(),
+      departmentCode: String(item.department_code || "").trim(),
+      branchCode: String(item.branch_code || "").trim(),
     });
   }
   for (const item of eligibleAgentRows) {
     agentIdentity.set(String(item.user_id), {
       department: String(item.department_name || item.department_code || "").trim(),
       branch: String(item.branch_name || item.branch_code || "").trim(),
+      departmentCode: String(item.department_code || "").trim(),
+      branchCode: String(item.branch_code || "").trim(),
     });
   }
 
+  const agentIdentityMatchesActiveFilters = (userId: unknown) => {
+    const identity = agentIdentity.get(String(userId || ""));
+    if (!identity) return !branch && !department;
+    if (branch && identity.branchCode !== branch) return false;
+    return agentDepartmentMatchesFilter(identity.departmentCode, department);
+  };
+  const agentSalesRows = salesRows.filter((row) => agentIdentityMatchesActiveFilters(row.current_assigned_to));
+  const agentSalesFacts = salesOnlyFacts.filter((fact) => agentIdentityMatchesActiveFilters(fact.assigned_to));
+
   // Fallback only to the customer's current CRM ownership; never to sale-history context.
   const currentAgentContext = new Map<string, { department: string; branch: string }>();
-  for (const item of salesRows) {
+  for (const item of agentSalesRows) {
     const key = String(item.current_assigned_to || "__none__");
     const current = currentAgentContext.get(key) || { department: "", branch: "" };
     if (!current.department && item.current_department_code) current.department = departmentLabel(item.current_department_code);
@@ -1072,7 +1133,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     currentAgentContext.set(key, current);
   }
 
-  const groupedAgents = group(salesRows, salesOnlyFacts, "agent", (row) => row.current_assigned_to || "__none__", (row) => row.current_assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع");
+  const groupedAgents = group(agentSalesRows, agentSalesFacts, "agent", (row) => row.current_assigned_to || "__none__", (row) => row.current_assigned_name || "غير موزع", (fact) => fact.assigned_to || "__none__", (fact) => fact.assigned_name || "غير موزع");
   const agentsById = new Map(groupedAgents.map((row) => [String(row.detailValue || "__none__"), row]));
   for (const item of eligibleAgentRows) {
     const key = String(item.user_id);
@@ -1094,8 +1155,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
         ...row,
         department: identity?.department || fallback?.department || "غير محدد",
         branch: identity?.branch || fallback?.branch || "بدون فرع",
+        reportIdentityDepartmentCode: identity?.departmentCode || "",
+        reportIdentityBranchCode: identity?.branchCode || "",
       };
     })
+    .filter((row) => !branch || row.reportIdentityBranchCode === branch)
+    .filter((row) => agentDepartmentMatchesFilter(row.reportIdentityDepartmentCode, department))
+    .map(({ reportIdentityDepartmentCode: _departmentCode, reportIdentityBranchCode: _branchCode, ...row }) => row)
     .sort((a, b) => Number(b.sold || 0) - Number(a.sold || 0) || Number(b.total || 0) - Number(a.total || 0) || a.name.localeCompare(b.name, "ar"));
 
   const serviceRows = leads.filter((row) => row.department_code === "customer_service");
@@ -1127,7 +1193,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       directSources: directSources.summary,
       otherSources: otherSources.summary,
       departments: makeMetrics(salesRows, salesOnlyFacts),
-      agents: makeMetrics(salesRows, salesOnlyFacts),
+      agents: makeMetrics(agentSalesRows, agentSalesFacts),
     },
     quality: { ...quality, summary_cards: summaryCards },
   });
