@@ -3386,7 +3386,15 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
     loadOperationsCars(sql),
     sql<any[]>`
       select r.id::text,r.request_no,r.status,r.requested_by::text,r.requested_by_name,r.requested_at,r.completed_at,r.photography_date,r.note,r.cancelled_at,
-        sl.name as source_location_name,dl.name as destination_location_name,
+        coalesce((
+          select string_agg(source_names.name,'، ' order by source_names.name)
+          from (
+            select distinct source_location.name
+            from operations.transfer_request_vehicles source_rv
+            join operations.locations source_location on source_location.id=source_rv.source_location_id
+            where source_rv.transfer_request_id=r.id
+          ) source_names
+        ),sl.name) as source_location_name,dl.name as destination_location_name,
         (${canCompletePhotoRequest}=true and r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
         coalesce((
           select json_agg(json_build_object(
@@ -3394,10 +3402,12 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
             'vin',v.vin,
             'carName',v.car_name,
             'statement',v.statement,
+            'sourceLocationName',vehicle_source_location.name,
             'note',rv.item_note
           ) order by v.vin)
           from operations.transfer_request_vehicles rv
           join operations.vehicles v on v.id=rv.vehicle_id
+          left join operations.locations vehicle_source_location on vehicle_source_location.id=rv.source_location_id
           where rv.transfer_request_id=r.id
         ),'[]'::json) as vehicles,
         coalesce((
@@ -3521,7 +3531,7 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
       cars.push({...v,itemNote:item.note});
     }
     const source=cars[0];
-    if(cars.some((vehicle)=>String(vehicle.location_id)!==String(source.location_id)))throw new Error("يجب أن تكون كل سيارات طلب التصوير في المكان المصدر نفسه");
+    const sourceLocationIds=[...new Set(cars.map((vehicle)=>String(vehicle.location_id||"")).filter(Boolean))];
     const[sequence]=await tx<any[]>`select nextval('operations.transfer_request_no_seq')::bigint as n`;
     const requestNo=`PH-${new Date().toISOString().slice(0,10).replaceAll('-','')}-${String(sequence?.n||1).padStart(6,'0')}`;
     const[request]=await tx<any[]>`
@@ -3530,7 +3540,7 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
       returning *,id::text
     `;
     for(const car of cars)await tx`insert into operations.transfer_request_vehicles(transfer_request_id,vehicle_id,source_location_id,source_status,item_note) values(${request.id}::uuid,${car.id}::uuid,${car.location_id},${car.status_code},${car.itemNote||null})`;
-    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,photographyDate,vehicles}))})`;
+    await tx`insert into operations.transfer_request_events(transfer_request_id,stage,action,note,actor_id,actor_name,actor_role,actor_branch,after_data) values(${request.id}::uuid,'created','created',${clean(body.note)||null},${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${tx.json(dbJson({requestKind:'photography',destinationLocationId,photographyDate,sourceLocationIds,vehicles}))})`;
     return{ok:true,request,message:"تم إنشاء طلب التصوير"};
   });
 }

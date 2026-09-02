@@ -13,6 +13,7 @@ type PhotoRequestVehicle = {
   vin: string;
   carName?: string | null;
   statement?: string | null;
+  sourceLocationName?: string | null;
   note?: string | null;
 };
 
@@ -232,7 +233,6 @@ export function StockPage() {
   );
   const visibleRequests = requestTab === "active" ? activeRequests : completedRequests;
 
-  const selectedSourceLocationId = selectedCars[0]?.location_id || "";
   const destination = useMemo(
     () => data?.locations.find((item) => item.id === destinationLocationId),
     [data?.locations, destinationLocationId],
@@ -303,11 +303,6 @@ export function StockPage() {
       setError(`السيارة ${row.vin} مرتبطة بطلب نشط ولا يمكن إضافتها إلى طلب تصوير جديد`);
       return;
     }
-    if (selectedSourceLocationId && row.location_id !== selectedSourceLocationId) {
-      setError(`السيارة ${row.vin} موجودة في مكان مصدر مختلف. أنشئ لها طلب تصوير مستقل`);
-      return;
-    }
-
     setError("");
     setSelectedCars((current) => [...current, row]);
     setPickerSearch("");
@@ -562,8 +557,8 @@ export function StockPage() {
 
             <div className="marketing-table-wrap">
               <table>
-                <thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>ملاحظة السيارة</th></tr></thead>
-                <tbody>{selectedRequest.vehicles.map((vehicle) => <tr key={vehicle.vehicleId}><td dir="ltr">{vehicle.vin}</td><td>{vehicle.carName || "—"}</td><td>{vehicle.statement || "—"}</td><td>{vehicle.note || "—"}</td></tr>)}</tbody>
+                <thead><tr><th>رقم الهيكل</th><th>السيارة</th><th>البيان</th><th>المكان المصدر</th><th>ملاحظة السيارة</th></tr></thead>
+                <tbody>{selectedRequest.vehicles.map((vehicle) => <tr key={vehicle.vehicleId}><td dir="ltr">{vehicle.vin}</td><td>{vehicle.carName || "—"}</td><td>{vehicle.statement || "—"}</td><td>{vehicle.sourceLocationName || "—"}</td><td>{vehicle.note || "—"}</td></tr>)}</tbody>
               </table>
             </div>
 
