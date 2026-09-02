@@ -121,6 +121,9 @@ create unique index if not exists owners_referral_phone_unique
 create index if not exists owners_referrals_referrer_idx on owners.referrals(referrer_member_id,created_at desc);
 create index if not exists owners_referrals_lead_idx on owners.referrals(crm_lead_id);
 create index if not exists owners_referrals_status_idx on owners.referrals(status,created_at desc);
+alter table owners.referrals alter column referrer_member_id drop not null;
+alter table owners.referrals add column if not exists referrer_legacy_customer_code_id uuid references owners.legacy_customer_codes(id) on delete set null;
+create index if not exists owners_referrals_legacy_referrer_idx on owners.referrals(referrer_legacy_customer_code_id,created_at desc);
 
 create table if not exists owners.referral_visits (
   id uuid primary key default gen_random_uuid(),
@@ -132,6 +135,12 @@ create table if not exists owners.referral_visits (
   unique(referrer_member_id,visitor_hash)
 );
 create index if not exists owners_referral_visits_created_idx on owners.referral_visits(referrer_member_id,created_at desc);
+alter table owners.referral_visits alter column referrer_member_id drop not null;
+alter table owners.referral_visits add column if not exists referrer_legacy_customer_code_id uuid references owners.legacy_customer_codes(id) on delete set null;
+create index if not exists owners_referral_visits_legacy_referrer_idx on owners.referral_visits(referrer_legacy_customer_code_id,created_at desc);
+create unique index if not exists owners_referral_visits_legacy_unique
+  on owners.referral_visits(referrer_legacy_customer_code_id,visitor_hash)
+  where referrer_legacy_customer_code_id is not null;
 
 create table if not exists owners.rewards (
   id uuid primary key default gen_random_uuid(),
@@ -526,7 +535,8 @@ begin
   end if;
 end $$;
 
-update owners.schema_state set version=greatest(version,1225),updated_at=now() where id=1;
+-- v1226: pre-sale registered customers may own referral links without being promoted to sold members.
+update owners.schema_state set version=greatest(version,1226),updated_at=now() where id=1;
 `;
 
 let schemaPromise: Promise<void> | null = null;
@@ -588,11 +598,13 @@ async function ownersSchemaReady() {
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='checkout_discount_value')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='legacy_customer_code_id')
       and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_purchase_benefits' and column_name='referrer_kind')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referrals' and column_name='referrer_legacy_customer_code_id')
+      and exists(select 1 from information_schema.columns where table_schema='owners' and table_name='referral_visits' and column_name='referrer_legacy_customer_code_id')
       as ready
   `;
   if (!shape?.ready) return false;
   const [state] = await sql<{ version: number }[]>`select version::int from owners.schema_state where id=1`;
-  return Number(state?.version || 0) >= 1225;
+  return Number(state?.version || 0) >= 1226;
 }
 
 export function ensureOwnersSchema() {

@@ -136,20 +136,57 @@ export async function ensureLegacyCustomerCodeForLead(leadIdValue: unknown, opti
 export async function markLegacyCustomerConvertedForLead(leadIdValue: unknown, memberIdValue?: unknown) {
   const leadId = clean(leadIdValue);
   const memberId = clean(memberIdValue);
-  if (!leadId) return false;
+  if (!leadId) return { converted: false, transferredReferrals: 0 };
   const sql = getSql();
-  const updated = await sql<any[]>`
-    update owners.legacy_customer_codes
-    set
-      status='converted',
-      converted_member_id=coalesce(${memberId || null}::uuid,converted_member_id),
-      converted_at=coalesce(converted_at,now()),
-      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('convertedReason','sold'),
-      updated_at=now()
-    where crm_lead_id=${leadId}::uuid and status<>'converted'
-    returning id::text
-  `;
-  return updated.length > 0;
+  return sql.begin(async (tx) => {
+    const legacyRows = await tx<any[]>`
+      select id::text
+      from owners.legacy_customer_codes
+      where crm_lead_id=${leadId}::uuid
+      for update
+    `;
+    if (!legacyRows.length) return { converted: false, transferredReferrals: 0 };
+
+    const legacyIds = legacyRows.map((row: any) => row.id);
+    let transferredReferrals = 0;
+    if (memberId) {
+      const movedReferrals = await tx<any[]>`
+        update owners.referrals set
+          referrer_member_id=${memberId}::uuid,
+          referrer_legacy_customer_code_id=null,
+          metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('preSaleReferrerConverted',true),
+          updated_at=now()
+        where referrer_legacy_customer_code_id in ${tx(legacyIds)}
+        returning id::text
+      `;
+      transferredReferrals = movedReferrals.length;
+
+      await tx`
+        insert into owners.referral_visits(referrer_member_id,visitor_hash,ip_hash,user_agent,created_at)
+        select ${memberId}::uuid,visitor_hash,ip_hash,user_agent,created_at
+        from owners.referral_visits
+        where referrer_legacy_customer_code_id in ${tx(legacyIds)}
+        on conflict(referrer_member_id,visitor_hash) do nothing
+      `;
+      await tx`
+        delete from owners.referral_visits
+        where referrer_legacy_customer_code_id in ${tx(legacyIds)}
+      `;
+    }
+
+    const updated = await tx<any[]>`
+      update owners.legacy_customer_codes
+      set
+        status='converted',
+        converted_member_id=coalesce(${memberId || null}::uuid,converted_member_id),
+        converted_at=coalesce(converted_at,now()),
+        metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object('convertedReason','sold'),
+        updated_at=now()
+      where id in ${tx(legacyIds)}
+      returning id::text
+    `;
+    return { converted: updated.length > 0, transferredReferrals };
+  });
 }
 
 export async function findLegacyCustomerCodeByCode(codeValue: unknown): Promise<LegacyCustomerCode | null> {

@@ -174,8 +174,11 @@ export async function ensureOwnerMemberForLead(leadId: string, saleId?: string |
         returning *,id::text,crm_lead_id::text,source_sale_id::text
       `;
       if (member) {
-        await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
+        const legacyConversion = await markLegacyCustomerConvertedForLead(sale.lead_id, member.id);
         await reconcileOwnerPurchasePoints(member.id);
+        if (legacyConversion.transferredReferrals > 0) {
+          await reconcileOwnerReferralPointsForMember(member.id);
+        }
       }
       return member || null;
     } catch (error) {
@@ -899,6 +902,59 @@ export async function reverseOwnerCommerceForCancelledOrder(input: {
   };
 }
 
+async function reconcileOwnerReferralPointsForMember(memberIdValue: unknown) {
+  const memberId = clean(memberIdValue);
+  if (!memberId) return 0;
+  await ensureOwnersSchema();
+  const sql = getSql();
+  const settings = await getOwnerSettings();
+  const referrals = await sql<any[]>`
+    select id::text,status,sale_transaction_id::text,created_at,qualified_at,sold_at,metadata
+    from owners.referrals
+    where referrer_member_id=${memberId}::uuid
+    order by created_at
+  `;
+  let checked = 0;
+  for (const referral of referrals) {
+    const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
+    const resetMs = resetAt ? new Date(resetAt).getTime() : 0;
+    const afterReset = (value: unknown) => !resetMs || (value ? new Date(String(value)).getTime() > resetMs : false);
+
+    if (settings.points_registration_enabled !== false && afterReset(referral.created_at)) {
+      await awardOwnerPoints({
+        memberId,
+        points: Number(settings.points_registration || 0),
+        eventType: 'registration',
+        eventKey: `registration:${referral.id}`,
+        referralId: referral.id,
+        description: 'سجل صديق جديد من رابط الدعوة',
+      });
+    }
+    if ((referral.status === 'qualified' || referral.status === 'sold') && settings.points_qualified_enabled !== false && afterReset(referral.qualified_at || referral.sold_at)) {
+      await awardOwnerPoints({
+        memberId,
+        points: Number(settings.points_qualified || 0),
+        eventType: 'qualified',
+        eventKey: `qualified:${referral.id}`,
+        referralId: referral.id,
+        description: 'تحول الصديق إلى عميل مؤهل',
+      });
+    }
+    if (referral.status === 'sold' && referral.sale_transaction_id && settings.points_sale_enabled !== false && afterReset(referral.sold_at)) {
+      await awardOwnerPoints({
+        memberId,
+        points: Number(settings.points_sale || 0),
+        eventType: 'sale',
+        eventKey: `sale:${referral.sale_transaction_id}`,
+        referralId: referral.id,
+        description: 'الصديق تم البيع',
+      });
+    }
+    checked += 1;
+  }
+  return checked;
+}
+
 export async function syncOwnerReferralProgress(referrerMemberId?: string | null) {
   await ensureOwnersSchema();
   const sql = getSql();
@@ -945,7 +1001,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
       if (updated.length) changed += 1;
       const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
       const saleAfterProductionReset = !resetAt || new Date(referral.sale_at).getTime() > new Date(resetAt).getTime();
-      if (saleAfterProductionReset && clean(referral.status) === "registered" && settings.points_qualified_enabled !== false) await awardOwnerPoints({
+      if (referral.referrer_member_id && saleAfterProductionReset && clean(referral.status) === "registered" && settings.points_qualified_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_qualified || 0),
         eventType: "qualified",
@@ -953,7 +1009,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
         referralId: referral.id,
         description: "تحول الصديق إلى عميل مؤهل",
       });
-      if (saleAfterProductionReset && settings.points_sale_enabled !== false) await awardOwnerPoints({
+      if (referral.referrer_member_id && saleAfterProductionReset && settings.points_sale_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_sale || 0),
         eventType: "sale",
@@ -977,7 +1033,7 @@ export async function syncOwnerReferralProgress(referrerMemberId?: string | null
       if (updated.length) changed += 1;
       const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
       const referralCreatedAfterProductionReset = !resetAt || new Date(referral.created_at).getTime() > new Date(resetAt).getTime();
-      if (updated.length && referralCreatedAfterProductionReset && settings.points_qualified_enabled !== false) await awardOwnerPoints({
+      if (referral.referrer_member_id && updated.length && referralCreatedAfterProductionReset && settings.points_qualified_enabled !== false) await awardOwnerPoints({
         memberId: referral.referrer_member_id,
         points: Number(settings.points_qualified || 0),
         eventType: "qualified",
@@ -1031,7 +1087,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
     `;
     const resetAt = clean(referral?.metadata?.pointsProductionResetAt);
     const saleAfterProductionReset = !resetAt || new Date(sale.sale_at).getTime() > new Date(resetAt).getTime();
-    if (saleAfterProductionReset && clean(referral.status) === "registered" && settings.points_qualified_enabled !== false) await awardOwnerPoints({
+    if (referral.referrer_member_id && saleAfterProductionReset && clean(referral.status) === "registered" && settings.points_qualified_enabled !== false) await awardOwnerPoints({
       memberId: referral.referrer_member_id,
       points: Number(settings.points_qualified || 0),
       eventType: "qualified",
@@ -1039,7 +1095,7 @@ export async function processOwnerSaleForLead(leadId: string, saleId?: string | 
       referralId: referral.id,
       description: "تحول الصديق إلى عميل مؤهل",
     });
-    if (saleAfterProductionReset && settings.points_sale_enabled !== false) await awardOwnerPoints({
+    if (referral.referrer_member_id && saleAfterProductionReset && settings.points_sale_enabled !== false) await awardOwnerPoints({
       memberId: referral.referrer_member_id,
       points: Number(settings.points_sale || 0),
       eventType: "sale",

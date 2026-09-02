@@ -165,18 +165,66 @@ async function findCommerceCodeOwner(codeValue: unknown) {
   };
 }
 
+async function findPublicInviteReferrer(codeValue: unknown) {
+  const code = clean(codeValue).toUpperCase();
+  if (!code) return null;
+  const member = await findReferrer(code);
+  if (member) return { ...member, referrer_kind: 'member' as const };
+
+  const legacy = await findLegacyCustomerCodeByCode(code);
+  if (legacy) {
+    return {
+      id: legacy.id,
+      customer_name: legacy.customer_name,
+      phone_normalized: legacy.phone_normalized,
+      referral_code: legacy.referral_code,
+      metadata: { memberKind: 'registered' },
+      member_kind: 'registered',
+      referrer_kind: 'legacy' as const,
+    };
+  }
+
+  const [convertedAlias] = await getSql()<any[]>`
+    select
+      m.id::text,m.customer_name,m.phone_normalized,m.referral_code,m.metadata,
+      coalesce(m.metadata->>'memberKind','real') as member_kind
+    from owners.legacy_customer_codes legacy_code
+    join owners.members m on m.id=legacy_code.converted_member_id and m.status='active'
+    where legacy_code.referral_code=${code} and legacy_code.status='converted'
+    limit 1
+  `;
+  return convertedAlias ? { ...convertedAlias, referrer_kind: 'member' as const } : null;
+}
+
+function referralOwnedBy(row: any, referrer: any) {
+  if (!row || !referrer) return false;
+  if (referrer.referrer_kind === 'legacy') return clean(row.referrer_legacy_customer_code_id) === clean(referrer.id);
+  return clean(row.referrer_member_id) === clean(referrer.id);
+}
+
 async function recordUniqueVisit(request: VercelRequest, referrer: any, visitorValue: unknown) {
   const settings = await getOwnerSettings();
   const visitor = clean(visitorValue).slice(0, 180);
-  const userAgent = clean(request.headers["user-agent"]).slice(0, 500);
+  const userAgent = clean(request.headers['user-agent']).slice(0, 500);
   const ip = requestIp(request);
   const fallback = `${ip}|${userAgent}`;
-  const visitorHash = ownerHash(`${referrer.id}:${visitor || fallback || crypto.randomUUID()}`);
+  const visitorHash = ownerHash(`${referrer.referrer_kind || 'member'}:${referrer.id}:${visitor || fallback || crypto.randomUUID()}`);
   const ipHash = ip ? ownerHash(ip) : null;
   const sql = getSql();
+
+  if (referrer.referrer_kind === 'legacy') {
+    const inserted = await sql<any[]>`
+      insert into owners.referral_visits(referrer_member_id,referrer_legacy_customer_code_id,visitor_hash,ip_hash,user_agent)
+      values(null,${referrer.id}::uuid,${visitorHash},${ipHash},${userAgent || null})
+      on conflict(referrer_legacy_customer_code_id,visitor_hash) where referrer_legacy_customer_code_id is not null do nothing
+      returning id::text
+    `;
+    return inserted.length > 0;
+  }
+
   const inserted = await sql<any[]>`
-    insert into owners.referral_visits(referrer_member_id,visitor_hash,ip_hash,user_agent)
-    values(${referrer.id}::uuid,${visitorHash},${ipHash},${userAgent || null})
+    insert into owners.referral_visits(referrer_member_id,referrer_legacy_customer_code_id,visitor_hash,ip_hash,user_agent)
+    values(${referrer.id}::uuid,null,${visitorHash},${ipHash},${userAgent || null})
     on conflict(referrer_member_id,visitor_hash) do nothing
     returning id::text
   `;
@@ -199,9 +247,9 @@ async function recordUniqueVisit(request: VercelRequest, referrer: any, visitorV
     await awardOwnerPoints({
       memberId: referrer.id,
       points,
-      eventType: "unique_open",
+      eventType: 'unique_open',
       eventKey: `visit:${inserted[0].id}`,
-      description: "إرسال دعوة لصديق",
+      description: 'إرسال دعوة لصديق',
       metadata: { visitorHash } as OwnerJson,
     });
   }
@@ -254,7 +302,7 @@ async function registerReferralCore(
     return { status: 403, body: { ok: false, error: "MZJ Club Community غير متاح حاليًا" } };
   }
 
-  const referrer = await findReferrer(payload.code);
+  const referrer = await findPublicInviteReferrer(payload.code);
   if (!referrer) return { status: 404, body: { ok: false, error: "رابط الدعوة غير صالح" } };
   const name = clean(payload.name);
   const phone = normalizePhone(payload.phone);
@@ -273,16 +321,16 @@ async function registerReferralCore(
   }
 
   const [linkedReferral] = await sql<any[]>`
-    select id::text,referrer_member_id::text
+    select id::text,referrer_member_id::text,referrer_legacy_customer_code_id::text
     from owners.referrals
     where referred_phone_normalized=${phone}
     limit 1
   `;
-  if (linkedReferral && linkedReferral.referrer_member_id !== referrer.id) {
+  if (linkedReferral && !referralOwnedBy(linkedReferral, referrer)) {
     return { status: 409, body: { ok: false, error: "هذا الرقم مرتبط بدعوة سابقة" } };
   }
 
-  if (referrer.member_kind === "test") {
+  if (referrer.referrer_kind === "member" && referrer.member_kind === "test") {
     const testMetadata = {
       source: options.source || "test_invite",
       memberKind: "test",
@@ -328,7 +376,7 @@ async function registerReferralCore(
   `;
   const leadMetadata = {
     ownerReferralCode: referrer.referral_code,
-    referrerMemberId: referrer.id,
+    ...(referrer.referrer_kind === "member" ? { referrerMemberId: referrer.id } : { referrerLegacyCustomerCodeId: referrer.id }),
     ownersCommunity: true,
     ...(options.extraLeadMetadata || {}),
   } as OwnerJson;
@@ -378,9 +426,11 @@ async function registerReferralCore(
   } as OwnerJson;
   const [referral] = await sql<any[]>`
     insert into owners.referrals(
-      referrer_member_id,referred_name,referred_phone_normalized,crm_lead_id,status,registered_at,metadata
+      referrer_member_id,referrer_legacy_customer_code_id,referred_name,referred_phone_normalized,crm_lead_id,status,registered_at,metadata
     ) values(
-      ${referrer.id}::uuid,${name},${phone},${lead.id}::uuid,'registered',now(),${sql.json(referralMetadata)}
+      ${referrer.referrer_kind === "member" ? referrer.id : null}::uuid,
+      ${referrer.referrer_kind === "legacy" ? referrer.id : null}::uuid,
+      ${name},${phone},${lead.id}::uuid,'registered',now(),${sql.json(referralMetadata)}
     )
     on conflict(referred_phone_normalized) where referred_phone_normalized is not null do update set
       referred_name=excluded.referred_name,
@@ -391,7 +441,7 @@ async function registerReferralCore(
       updated_at=now()
     returning id::text
   `;
-  if (settings.points_registration_enabled !== false) await awardOwnerPoints({
+  if (referrer.referrer_kind === "member" && settings.points_registration_enabled !== false) await awardOwnerPoints({
     memberId: referrer.id,
     points: Number(settings.points_registration || 0),
     eventType: "registration",
@@ -1737,7 +1787,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (settings.is_enabled === false) {
       return response.status(403).json({ ok: false, error: "MZJ Club Community غير متاح حاليًا" });
     }
-    const referrer = await findReferrer(request.query.code);
+    const referrer = await findPublicInviteReferrer(request.query.code);
     if (!referrer) return response.status(404).json({ ok: false, error: "رابط الدعوة غير صالح" });
     await recordUniqueVisit(request, referrer, request.query.visitor).catch((error) => {
       console.error("Owners invite visit tracking failed", error);
@@ -1938,7 +1988,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
           lifetimePoints: 0,
           tier: "member",
           referralCode: legacyCustomer.referral_code || "",
-          inviteUrl: "",
+          inviteUrl: legacyCustomer.referral_code ? `${publicBase(request)}/club/invite/${legacyCustomer.referral_code}` : "",
           statusLabel: legacyCustomer.status_label || "عميل جديد",
           joinedAt: legacyCustomer.created_at || null,
           purchaseCount: 0,
