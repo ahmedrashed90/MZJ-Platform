@@ -50,6 +50,7 @@ const OwnersPortalPage = lazy(() => import("./owners/OwnersPortalPage").then((mo
 const OwnersInvitePage = lazy(() => import("./owners/OwnersInvitePage").then((module) => ({ default: module.OwnersInvitePage })));
 const WebsiteLayout = lazy(() => import("./website/WebsiteLayout").then((module) => ({ default: module.WebsiteLayout })));
 const WebsiteStockPage = lazy(() => import("./website/WebsiteStockPage").then((module) => ({ default: module.WebsiteStockPage })));
+const WebsiteImagesPage = lazy(() => import("./website/WebsiteImagesPage").then((module) => ({ default: module.WebsiteImagesPage })));
 
 const OperationsLayout = lazy(() => import("./operations/OperationsLayout").then((module) => ({ default: module.OperationsLayout })));
 const InventoryPage = lazy(() => import("./operations/pages/InventoryPage").then((module) => ({ default: module.InventoryPage })));
@@ -146,6 +147,7 @@ function PlatformRoutes() {
           </Route>
           <Route path="/website" element={<SystemGuard system="website"><WebsiteLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="website.stock.view"><WebsiteStockPage /></PermissionGuard>} />
+            <Route path="images" element={<PermissionGuard permission="website.stock.view"><WebsiteImagesPage /></PermissionGuard>} />
           </Route>
           <Route path="/owners-community/member/:kind/:id" element={<PermissionGuard permission="owners.community.view"><OwnersMemberPreviewPage /></PermissionGuard>} />
           <Route path="/owners-community" element={<PermissionGuard permission="owners.community.view"><OwnersCommunityPage /></PermissionGuard>} />
