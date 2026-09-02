@@ -116,7 +116,8 @@ function DashboardTaskCard({
 
     <div className="marketing-dashboard-task-meta">
       <div><span>القسم</span><strong>{task.department_name || "—"}</strong></div>
-      <div><span>الكرييتيف</span><strong>{task.creative_name || task.title || "—"}</strong></div>
+      <div><span>نوع الكرييتيف</span><strong>{task.creative_type_name || "—"}</strong></div>
+      <div className="marketing-dashboard-task-meta-name"><span>اسم الكرييتيف</span><strong>{task.creative_name || "—"}</strong></div>
     </div>
 
     <div className="marketing-dashboard-task-actions">

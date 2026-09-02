@@ -1648,6 +1648,8 @@ async function dashboardVersion(sql: ReturnType<typeof getSql>) {
       coalesce((select max(updated_at) from marketing.task_templates),'epoch'::timestamptz),
       coalesce((select max(updated_at) from marketing.campaigns),'epoch'::timestamptz),
       coalesce((select max(updated_at) from marketing.agendas),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.creatives),'epoch'::timestamptz),
+      coalesce((select max(updated_at) from marketing.creative_types),'epoch'::timestamptz),
       coalesce((select max(updated_at) from marketing.user_colors),'epoch'::timestamptz)
     )::text as version
   `;
@@ -1691,7 +1693,7 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.title,t.status,t.progress::float,t.due_at,t.received_at,t.completed_at,t.completed_by::text,t.note,
       done_by.full_name as completed_by_name,t.assigned_to::text,u.full_name as assigned_name,auc.color as assigned_user_color,
       t.paired_content_user_id::text,cu.full_name as content_user_name,cuc.color as content_user_color,
-      d.id::text as department_id,d.name as department_name,c.name as creative_name,c.instance_code,
+      d.id::text as department_id,d.name as department_name,c.name as creative_name,ct.name as creative_type_name,c.instance_code,
       coalesce(cam.name,ag.name) as source_name,cam.campaign_code,tt.status as template_status,tt.approved_data,
       f.id::text as final_file_id,f.original_name as final_file_name,
       (t.assigned_to=${user.id}::uuid or t.paired_content_user_id=${user.id}::uuid or ${canViewAllTasks(user)}=true) as can_complete_task
@@ -1701,6 +1703,7 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
     left join marketing.user_colors auc on auc.user_id=t.assigned_to
     left join marketing.user_colors cuc on cuc.user_id=t.paired_content_user_id
     left join marketing.departments d on d.id=t.department_id left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.creative_types ct on ct.id=c.creative_type_id
     left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
     left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
     left join marketing.task_templates tt on tt.id=t.task_template_id left join marketing.files f on f.id=t.final_file_id
