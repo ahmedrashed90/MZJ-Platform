@@ -7512,8 +7512,9 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .website-stock-count-box{min-height:42px;border:1px solid #e5d3ca;border-radius:10px;background:#fff;padding:0 12px;font:inherit;color:#34231d;display:flex;align-items:center;font-weight:700;white-space:nowrap}
 .website-stock-search{display:flex;align-items:center;gap:8px;flex:1;min-width:240px;border:1px solid #e5d3ca;border-radius:10px;padding:0 12px;background:#fff}
 .website-stock-search input{width:100%;min-height:40px;border:0;outline:0;background:transparent;font:inherit}
-.website-stock-limit{display:flex;align-items:center;gap:8px;min-height:42px;border:1px solid #e5d3ca;border-radius:10px;background:#fff;padding:0 10px;color:#6b554b;font-weight:800;white-space:nowrap}
-.website-stock-limit input{width:76px;min-height:40px;border:0;outline:0;background:transparent;font:inherit;color:#34231d;text-align:center;direction:ltr}
+.website-stock-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.website-stock-range label{display:flex;align-items:center;gap:8px;min-height:42px;border:1px solid #e5d3ca;border-radius:10px;background:#fff;padding:0 10px;color:#6b554b;font-weight:800;white-space:nowrap}
+.website-stock-range input{width:72px;min-height:40px;border:0;outline:0;background:transparent;font:inherit;color:#34231d;text-align:center;direction:ltr}
 .website-stock-warning{border:1px solid #eed6a8;background:#fff8e9;border-radius:12px;padding:10px 12px;color:#7b5a20;font-size:13px}
 .website-stock-table-card{background:#fff;border:1px solid #eadbd3;border-radius:16px;overflow:hidden}
 .website-stock-table-wrap{overflow:auto}
@@ -7530,7 +7531,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .website-stock-state.ok{background:#e8f6ea;color:#23743a}
 .website-stock-state.bad{background:#fff0ed;color:#c23c2f}
 .website-stock-empty{text-align:center!important;padding:32px!important;color:#7c6960!important}
-@media(max-width:760px){.website-stock-head{align-items:flex-start;flex-direction:column}.website-stock-toolbar{align-items:stretch;flex-wrap:wrap}.website-stock-search{min-width:100%}.website-stock-limit{flex:1;justify-content:space-between}.website-stock-limit input{flex:1;max-width:110px}.website-stock-toolbar>span{margin-inline-start:0}}
+@media(max-width:760px){.website-stock-head{align-items:flex-start;flex-direction:column}.website-stock-toolbar{align-items:stretch;flex-wrap:wrap}.website-stock-search{min-width:100%}.website-stock-range{width:100%}.website-stock-range label{flex:1;justify-content:space-between}.website-stock-range input{flex:1;max-width:110px}.website-stock-toolbar>span{margin-inline-start:0}}
 
 /* MZJ Owners admin membership preview */
 .owners-member-preview-body{max-width:1180px;margin:0 auto;padding-bottom:24px}.owners-member-preview .owners-membership-shell{max-width:760px;margin:16px auto 0}.owners-member-preview .owners-public-section,.owners-member-preview .owners-invite-card{margin-left:auto;margin-right:auto}.owners-admin-invite-card{margin-top:14px}.owners-referral-ledger strong{color:#6a4437;font-size:12px}.owners-member-preview .owners-notice{margin-top:14px}.owners-member-preview .owners-loading{margin-top:14px}

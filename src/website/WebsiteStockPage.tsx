@@ -35,7 +35,8 @@ export function WebsiteStockPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
-  const [stockLimit, setStockLimit] = useState("");
+  const [stockFrom, setStockFrom] = useState("");
+  const [stockTo, setStockTo] = useState("");
 
   async function load(refresh = false) {
     setLoading(true);
@@ -54,15 +55,21 @@ export function WebsiteStockPage() {
   const cars: StockCar[] = Array.isArray(data?.cars) ? data.cars : [];
   const filteredCars = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const rawLimit = stockLimit.trim();
-    const parsedLimit = rawLimit === "" ? null : Number(rawLimit);
-    const limit = parsedLimit !== null && Number.isFinite(parsedLimit) && parsedLimit >= 0 ? parsedLimit : null;
+    const rawFrom = stockFrom.trim();
+    const rawTo = stockTo.trim();
+    const parsedFrom = rawFrom === "" ? null : Number(rawFrom);
+    const parsedTo = rawTo === "" ? null : Number(rawTo);
+    const from = parsedFrom !== null && Number.isFinite(parsedFrom) && parsedFrom >= 0 ? parsedFrom : null;
+    const to = parsedTo !== null && Number.isFinite(parsedTo) && parsedTo >= 0 ? parsedTo : null;
     return cars.filter((car) => {
       if (needle && !`${car.vehicleId} ${car.title}`.toLowerCase().includes(needle)) return false;
-      if (limit !== null && (car.stock == null || Number(car.stock) >= limit)) return false;
+      if ((from !== null || to !== null) && car.stock == null) return false;
+      const stock = Number(car.stock);
+      if (from !== null && stock < from) return false;
+      if (to !== null && stock > to) return false;
       return true;
     });
-  }, [cars, query, stockLimit]);
+  }, [cars, query, stockFrom, stockTo]);
 
   const totalCars = cars.length;
   const totalStock = useMemo(
@@ -142,7 +149,10 @@ export function WebsiteStockPage() {
 
       <section className="website-stock-toolbar">
         <label className="website-stock-search"><MagnifyingGlass size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="بحث باسم السيارة أو Vehicle ID" /></label>
-        <label className="website-stock-limit"><span>الاستوك أقل من</span><input type="number" min="0" step="1" inputMode="numeric" value={stockLimit} onChange={(event) => setStockLimit(event.target.value)} placeholder="0" /></label>
+        <div className="website-stock-range">
+          <label><span>من</span><input type="number" min="0" step="1" inputMode="numeric" value={stockFrom} onChange={(event) => setStockFrom(event.target.value)} placeholder="0" /></label>
+          <label><span>إلى</span><input type="number" min="0" step="1" inputMode="numeric" value={stockTo} onChange={(event) => setStockTo(event.target.value)} placeholder="0" /></label>
+        </div>
         <div className="website-stock-count-box">عدد السيارات {totalCars.toLocaleString("ar-SA-u-nu-latn")} سيارة</div>
         <span>عدد الاستوك {totalStock.toLocaleString("ar-SA-u-nu-latn")} سيارة</span>
       </section>
