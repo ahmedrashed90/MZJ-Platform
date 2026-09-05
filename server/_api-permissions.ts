@@ -124,7 +124,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     create_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
-    save_user_colors: "settings.marketing.manage",
+    save_user_colors: "settings.marketing.manage", migrate_r2_storage_names: "platform.superadmin",
   };
   if (action === "prepare_upload" || action === "mark_file_ready") {
     const category = clean(payload.category);

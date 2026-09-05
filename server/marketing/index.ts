@@ -8,7 +8,7 @@ import { getSystemAccess } from "../_access-control.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
 import { ensureMarketingSchema } from "../_marketing-schema.js";
 import { ensureOperationsSchema } from "../_operations-schema.js";
-import { buildMarketingStorageKey, createDeleteUrl, createDownloadUrl, createUploadUrl, mediaStorageConfigured } from "../_media-storage.js";
+import { buildMarketingStorageKey, copyMediaObject, createDeleteUrl, createDownloadUrl, createUploadUrl, headMediaObject, mediaStorageConfigured } from "../_media-storage.js";
 import { emitMarketingNotification } from "../_notifications.js";
 import {
   decryptPlatformToken,
@@ -171,6 +171,69 @@ async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user
 }
 function canUseMarketing(user: SessionUser) { return canAccessSystem(user, "marketing"); }
 function safeCode(value: unknown) { return clean(value).toUpperCase().replace(/[^A-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48); }
+
+type MarketingStorageContext = {
+  sourceType: string;
+  sourceId: string;
+  sourceCode?: string;
+  sourceName?: string;
+  creativeId?: string;
+  creativeCode?: string;
+  creativeName?: string;
+  taskId?: string;
+  taskCode?: string;
+  taskName?: string;
+};
+
+async function marketingStorageContext(sql: ReturnType<typeof getSql>, sourceTypeValue: string, sourceIdValue: string, taskIdValue = ""): Promise<MarketingStorageContext> {
+  const sourceType = clean(sourceTypeValue);
+  const sourceId = clean(sourceIdValue);
+  const taskId = clean(taskIdValue);
+  if (taskId) {
+    const [row] = await sql<any[]>`
+      select
+        t.source_type,
+        t.source_id::text,
+        t.creative_id::text,
+        t.title as task_name,
+        tt.task_no as task_code,
+        c.instance_code as creative_code,
+        coalesce(nullif(c.name,''),nullif(c.creative_type,'')) as creative_name,
+        case when t.source_type='campaign' then cam.campaign_code else ag.month_key end as source_code,
+        coalesce(cam.name,ag.name) as source_name
+      from marketing.tasks t
+      left join marketing.task_templates tt on tt.id=t.task_template_id
+      left join marketing.creatives c on c.id=t.creative_id
+      left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+      left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+      where t.id=${taskId}::uuid
+      limit 1
+    `;
+    if (row) {
+      return {
+        sourceType: clean(row.source_type) || sourceType || "marketing",
+        sourceId: clean(row.source_id) || sourceId,
+        sourceCode: clean(row.source_code),
+        sourceName: clean(row.source_name),
+        creativeId: clean(row.creative_id),
+        creativeCode: clean(row.creative_code),
+        creativeName: clean(row.creative_name),
+        taskId,
+        taskCode: clean(row.task_code),
+        taskName: clean(row.task_name),
+      };
+    }
+  }
+  if (sourceId && sourceType === "campaign") {
+    const [row] = await sql<any[]>`select campaign_code as source_code,name as source_name from marketing.campaigns where id=${sourceId}::uuid limit 1`;
+    if (row) return { sourceType, sourceId, sourceCode: clean(row.source_code), sourceName: clean(row.source_name), taskId: taskId || undefined };
+  }
+  if (sourceId && sourceType === "agenda") {
+    const [row] = await sql<any[]>`select month_key as source_code,name as source_name from marketing.agendas where id=${sourceId}::uuid limit 1`;
+    if (row) return { sourceType, sourceId, sourceCode: clean(row.source_code), sourceName: clean(row.source_name), taskId: taskId || undefined };
+  }
+  return { sourceType: sourceType || "marketing", sourceId, taskId: taskId || undefined };
+}
 
 async function observedCreativeSequenceFloor(tx: any, sourceType: "campaign" | "agenda", sourceId: string) {
   const [row] = await tx<any[]>`
@@ -2172,13 +2235,12 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     returning id::text
   `;
   const uploads:any[]=[];
+  const storageContext=await marketingStorageContext(sql,task.source_type,task.source_id,taskId);
   try{
     for(const item of requested){
       const storageKey=buildMarketingStorageKey({
+        ...storageContext,
         category:'final-upload-staging',
-        sourceType:task.source_type,
-        sourceId:task.source_id,
-        taskId,
         fileName:item.name,
       });
       const[file]=await sql<any[]>`
@@ -2363,7 +2425,8 @@ async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:Session
     if(taskId&&!await canAccessMarketingTask(sql,user,taskId))throw new Error("التاسك خارج نطاق بياناتك");
     if(sourceId&&!taskId)await assertMarketingEntityAccess(sql,user,sourceType,sourceId);
   }
-  const storageKey=buildMarketingStorageKey({category,sourceType,sourceId,taskId,fileName});
+  const storageContext=await marketingStorageContext(sql,sourceType,sourceId,taskId);
+  const storageKey=buildMarketingStorageKey({...storageContext,category,fileName});
   const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;
   return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};
 }
@@ -2398,6 +2461,165 @@ async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
   }
   await sql`delete from marketing.files where id=${fileId}::uuid and category='first-file'`;
   return{ok:true,message:"تم مسح الملف الأولي"};
+}
+
+type MarketingR2MigrationPlan = {
+  fileId: string;
+  oldKey: string;
+  newKey?: string;
+  originalName: string;
+  category: string;
+  matched: boolean;
+  reason?: string;
+};
+
+async function legacyMarketingR2Rows(sql:ReturnType<typeof getSql>,limit:number){
+  return sql<any[]>`
+    select
+      f.id::text as file_id,
+      f.storage_key,
+      f.original_name,
+      f.mime_type,
+      f.file_size,
+      f.category,
+      f.source_type as file_source_type,
+      f.source_id::text as file_source_id,
+      f.task_id::text as file_task_id,
+      f.created_at,
+      t.id::text as resolved_task_id,
+      coalesce(t.source_type,f.source_type) as resolved_source_type,
+      coalesce(t.source_id,f.source_id)::text as resolved_source_id,
+      t.title as task_name,
+      tt.task_no as task_code,
+      t.creative_id::text as creative_id,
+      c.instance_code as creative_code,
+      coalesce(nullif(c.name,''),nullif(c.creative_type,'')) as creative_name,
+      case when coalesce(t.source_type,f.source_type)='campaign' then cam.campaign_code else ag.month_key end as source_code,
+      coalesce(cam.name,ag.name) as source_name
+    from marketing.files f
+    left join marketing.tasks t on t.id=f.task_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on coalesce(t.source_type,f.source_type)='campaign' and cam.id=coalesce(t.source_id,f.source_id)
+    left join marketing.agendas ag on coalesce(t.source_type,f.source_type)='agenda' and ag.id=coalesce(t.source_id,f.source_id)
+    where f.storage_provider='r2'
+      and f.status='ready'
+      and f.storage_key like 'marketing/%'
+      and f.storage_key !~ '/(01-FIRST-FILE|02-FINAL-FILE|03-TASK-TEMPLATE|04-CAMPAIGN-RESULT|05-[^/]+)/'
+    order by case
+      when coalesce(t.source_type,f.source_type) in ('campaign','agenda')
+        and coalesce(t.source_id,f.source_id) is not null
+        and coalesce(cam.name,ag.name) is not null
+        and (f.task_id is null or t.id is not null)
+      then 0 else 1 end,
+      f.created_at,f.id
+    limit ${limit}
+  `;
+}
+
+async function legacyMarketingR2Count(sql:ReturnType<typeof getSql>){
+  const[row]=await sql<any[]>`
+    select count(*)::int as count
+    from marketing.files f
+    where f.storage_provider='r2'
+      and f.status='ready'
+      and f.storage_key like 'marketing/%'
+      and f.storage_key !~ '/(01-FIRST-FILE|02-FINAL-FILE|03-TASK-TEMPLATE|04-CAMPAIGN-RESULT|05-[^/]+)/'
+  `;
+  return Number(row?.count||0);
+}
+
+function marketingR2MigrationPlan(row:any):MarketingR2MigrationPlan{
+  const fileId=clean(row.file_id),oldKey=clean(row.storage_key),originalName=clean(row.original_name)||'file',category=clean(row.category)||'file';
+  const sourceType=clean(row.resolved_source_type),sourceId=clean(row.resolved_source_id),sourceName=clean(row.source_name);
+  if(!fileId||!oldKey)return{fileId,oldKey,originalName,category,matched:false,reason:'بيانات الملف الأساسية ناقصة'};
+  if(!['campaign','agenda'].includes(sourceType)||!sourceId||!sourceName)return{fileId,oldKey,originalName,category,matched:false,reason:'تعذر مطابقة الملف مع الحملة أو الأجندة'};
+  if(clean(row.file_task_id)&&!clean(row.resolved_task_id))return{fileId,oldKey,originalName,category,matched:false,reason:'التاسك المرتبط بالملف غير موجود'};
+  const newKey=buildMarketingStorageKey({
+    category,
+    sourceType,
+    sourceId,
+    sourceCode:clean(row.source_code),
+    sourceName,
+    creativeId:clean(row.creative_id),
+    creativeCode:clean(row.creative_code),
+    creativeName:clean(row.creative_name),
+    taskId:clean(row.resolved_task_id),
+    taskCode:clean(row.task_code),
+    taskName:clean(row.task_name),
+    fileName:originalName,
+    createdAt:row.created_at,
+    uniqueId:fileId,
+  });
+  return{fileId,oldKey,newKey,originalName,category,matched:Boolean(newKey&&newKey!==oldKey),reason:newKey===oldKey?'المسار منظم بالفعل':undefined};
+}
+
+async function deleteMarketingR2Object(storageKey:string){
+  const response=await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'});
+  if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف المسار القديم من R2 (${response.status})`);
+}
+
+async function applyMarketingR2MigrationPlan(sql:ReturnType<typeof getSql>,plan:MarketingR2MigrationPlan,row:any){
+  if(!plan.matched||!plan.newKey)return{...plan,status:'unmatched'};
+  const source=await headMediaObject(plan.oldKey);
+  if(!source.exists)return{...plan,status:'missing_source',reason:'الملف غير موجود فعليًا في R2 ولم يتم تعديل قاعدة البيانات'};
+  const expectedSize=source.size>0?source.size:Number(row?.file_size||0);
+  const destination=await headMediaObject(plan.newKey);
+  if(destination.exists&&expectedSize>0&&destination.size!==expectedSize){
+    return{...plan,status:'conflict',reason:'المسار الجديد موجود بحجم مختلف؛ لم يتم لمس الملف القديم'};
+  }
+  if(!destination.exists)await copyMediaObject(plan.oldKey,plan.newKey);
+  const verified=await headMediaObject(plan.newKey);
+  if(!verified.exists||(expectedSize>0&&verified.size!==expectedSize)){
+    if(verified.exists)await deleteMarketingR2Object(plan.newKey).catch(()=>undefined);
+    return{...plan,status:'verification_failed',reason:'فشل التحقق من النسخة الجديدة؛ لم يتم تعديل قاعدة البيانات'};
+  }
+  const updated=await sql<any[]>`
+    update marketing.files
+    set storage_key=${plan.newKey},updated_at=now()
+    where id=${plan.fileId}::uuid and storage_provider='r2' and storage_key=${plan.oldKey}
+    returning id::text
+  `;
+  if(!updated.length)return{...plan,status:'changed_concurrently',reason:'تغير سجل الملف أثناء النقل؛ لم يتم حذف المسار القديم'};
+  try{
+    await deleteMarketingR2Object(plan.oldKey);
+  }catch(error:any){
+    try{await sql`update marketing.files set storage_key=${plan.oldKey},updated_at=now() where id=${plan.fileId}::uuid and storage_key=${plan.newKey}`;}catch{}
+    return{...plan,status:'cleanup_failed',reason:clean(error?.message)||'تعذر حذف المسار القديم وتمت إعادة مرجع قاعدة البيانات للمسار القديم'};
+  }
+  return{...plan,status:'migrated',sourceSize:source.size,verifiedSize:verified.size,fileSize:Number(row?.file_size||0),expectedSize};
+}
+
+async function migrateMarketingR2StorageNames(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,'platform.superadmin'))throw new Error('ترحيل مسارات R2 القديمة متاح لمدير النظام فقط');
+  if(!mediaStorageConfigured())throw new Error('تخزين الملفات R2 غير مضبوط في المنصة');
+  const mode=clean(body.mode)==='apply'?'apply':'preview';
+  const limit=Math.max(1,Math.min(mode==='apply'?50:200,Math.trunc(numberValue(body.limit,mode==='apply'?25:100))||1));
+  const totalBefore=await legacyMarketingR2Count(sql);
+  const rows=await legacyMarketingR2Rows(sql,limit);
+  const plans=rows.map(marketingR2MigrationPlan);
+  if(mode==='preview'){
+    return{ok:true,mode,total:totalBefore,matched:plans.filter((item)=>item.matched).length,unmatched:plans.filter((item)=>!item.matched).length,plans};
+  }
+  const results:any[]=[];
+  for(let index=0;index<rows.length;index+=1){
+    const plan=plans[index];
+    if(!plan.matched){results.push({...plan,status:'unmatched'});continue;}
+    try{results.push(await applyMarketingR2MigrationPlan(sql,plan,rows[index]));}
+    catch(error:any){results.push({...plan,status:'failed',reason:clean(error?.message)||'تعذر نقل الملف'});}
+  }
+  const remaining=await legacyMarketingR2Count(sql);
+  const migrated=results.filter((item)=>item.status==='migrated').length;
+  const failed=results.filter((item)=>!['migrated','unmatched'].includes(item.status)).length;
+  const unmatched=results.filter((item)=>item.status==='unmatched').length;
+  if(remaining===0){
+    await sql`
+      insert into marketing.data_migrations(migration_key,applied_at,details)
+      values('marketing-r2-readable-paths-v1',now(),${sql.json(dbJson({completed:true,migratedAt:new Date().toISOString()}))})
+      on conflict(migration_key) do update set applied_at=excluded.applied_at,details=excluded.details
+    `;
+  }
+  return{ok:true,mode,totalBefore,processed:results.length,migrated,unmatched,failed,remaining,done:remaining===0,results};
 }
 
 async function downloadableMarketingFile(sql:ReturnType<typeof getSql>,id:string,user:SessionUser){
@@ -3657,6 +3879,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
     else if(action==='complete_photo_request')result=await completeMarketingPhotoRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
+    else if(action==='migrate_r2_storage_names')result=await migrateMarketingR2StorageNames(sql,body,user);
     else if(action==='create_raw_folders')result=await createRawFolders(body);
     else throw new Error("الإجراء غير مدعوم");
     await audit(sql,user,action,'marketing',clean(result?.id||body.id)||null,result,undefined,requestIp(request)).catch(()=>undefined);
