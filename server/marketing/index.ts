@@ -130,8 +130,18 @@ const FIRST_FILE_EXECUTION_DEPARTMENTS = new Set([
   "قسم التصوير", "التصوير", "تصوير", "photography", "shooting",
   "قسم التصميم", "التصميم", "تصميم", "design",
 ]);
+const REJECTABLE_EXECUTION_DEPARTMENTS = new Set([
+  "قسم المونتاج", "المونتاج", "مونتاج", "montage",
+  "قسم التصميم", "التصميم", "تصميم", "design",
+]);
+function normalizedMarketingDepartment(value: unknown) {
+  return clean(value).toLowerCase().replace(/\s+/g, " ");
+}
 function isFirstFileExecutionDepartment(value: unknown) {
-  return FIRST_FILE_EXECUTION_DEPARTMENTS.has(clean(value).toLowerCase().replace(/\s+/g, " "));
+  return FIRST_FILE_EXECUTION_DEPARTMENTS.has(normalizedMarketingDepartment(value));
+}
+function isRejectableExecutionDepartment(value: unknown) {
+  return REJECTABLE_EXECUTION_DEPARTMENTS.has(normalizedMarketingDepartment(value));
 }
 async function requireFirstFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
   if (!taskId) throw new Error("رقم التاسك مطلوب");
@@ -146,6 +156,7 @@ async function requireFirstFileUploadAccess(sql: ReturnType<typeof getSql>, user
   if (!task || task.task_kind !== "execution" || !isFirstFileExecutionDepartment(task.department_name)) throw new Error("الملف الأول متاح فقط لتاسكات المونتاج والتصوير والتصميم");
   if (task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
   if (task.status === "completed") throw new Error("التاسك منتهي ولا يمكن تعديل الملف الأول");
+  if (task.status === "rejected") throw new Error("التاسك مرفوض ولا يمكن تعديل الملف الأول");
   if (task.assigned_to !== user.id && !canViewAllTasks(user)) throw new Error("الملف الأول متاح لمسؤول التاسك فقط");
   if (!hasPermission(user, "marketing.task.final_file.upload")) throw new Error("لا توجد صلاحية لرفع الملف الأول");
   return task;
@@ -154,7 +165,7 @@ async function requireFirstFileUploadAccess(sql: ReturnType<typeof getSql>, user
 async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user: SessionUser, taskId: string) {
   if (!taskId) throw new Error("رقم التاسك مطلوب");
   const [task] = await sql<any[]>`
-    select t.id::text,t.task_kind,t.source_type,t.source_id::text,t.assigned_to::text,
+    select t.id::text,t.task_kind,t.status,t.source_type,t.source_id::text,t.assigned_to::text,
       t.approved_template_data,tt.status as template_status
     from marketing.tasks t
     left join marketing.task_templates tt on tt.id=t.task_template_id
@@ -165,6 +176,7 @@ async function requireFinalFileUploadAccess(sql: ReturnType<typeof getSql>, user
   const permission = isManualPublish ? "marketing.publish_prep.manage" : "marketing.task.final_file.upload";
   if (!hasPermission(user, permission)) throw new Error(isManualPublish ? "لا توجد صلاحية لإنشاء نشر يدوي" : "لا توجد صلاحية لرفع الملف النهائي");
   if (!await canAccessMarketingTask(sql, user, taskId)) throw new Error("لا توجد صلاحية للوصول إلى هذا التكليف");
+  if (task.task_kind === "execution" && task.status === "rejected") throw new Error("التاسك مرفوض ولا يمكن رفع ملفات جديدة عليه");
   if (task.task_kind === "execution" && task.template_status !== "approved") throw new Error("في انتظار اعتماد Task Template");
   if (!isManualPublish && task.task_kind !== "execution") throw new Error("رفع الملف النهائي غير متاح لهذا النوع من التاسكات");
   return task;
@@ -1638,6 +1650,7 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
   const rows = await sql<any[]>`
     select coalesce(t.department_id::text,'content') as department_id,avg(t.progress)::float as progress
     from marketing.tasks t where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
+      and not (t.task_kind='execution' and t.status='rejected')
     group by coalesce(t.department_id::text,'content')
   `;
   const [completion] = await sql<any[]>`
@@ -1649,6 +1662,7 @@ async function recalculateProgress(sql: any, sourceType: string, sourceId: strin
       )::int as ready
     from marketing.tasks t
     where t.source_type=${sourceType} and t.source_id=${sourceId}::uuid and t.is_deleted=false and t.task_kind in ('task_template','execution')
+      and not (t.task_kind='execution' and t.status='rejected')
   `;
   const progress = rows.length ? rows.reduce((sum:number,row:any)=>sum+numberValue(row.progress),0)/rows.length : 0;
   const readyForPublishing = Number(completion?.total || 0) > 0 && Number(completion?.total || 0) === Number(completion?.ready || 0);
@@ -1794,8 +1808,8 @@ async function dashboard(sql: ReturnType<typeof getSql>, user: SessionUser) {
   return {
     ok:true,
     version,
-    required:tasks.filter((task)=>!task.received_at && task.status!=='completed'),
-    received:tasks.filter((task)=>task.received_at && task.status!=='completed'),
+    required:tasks.filter((task)=>!task.received_at && task.status!=='completed' && !(task.task_kind==='execution' && task.status==='rejected')),
+    received:tasks.filter((task)=>task.received_at && task.status!=='completed' && !(task.task_kind==='execution' && task.status==='rejected')),
     completed,
     entities,
     permissions:user.permissions.filter((code)=>code.startsWith("marketing.")),
@@ -1938,6 +1952,7 @@ async function taskDetail(sql: ReturnType<typeof getSql>, id: string, user: Sess
       canViewFeedback:hasPermission(user,"marketing.task_template.view_feedback") || task.assigned_to===user.id || task.paired_content_user_id===user.id,
       canExecuteAction:hasPermission(user,"marketing.assignment_action.execute"),
       canExecuteAdminAction:hasPermission(user,"marketing.assignment_action.admin"),
+      canRejectTask:task.task_kind==="execution" && isRejectableExecutionDepartment(task.department_name) && task.status!=="completed" && task.status!=="rejected" && hasPermission(user,"marketing.assignment_action.execute"),
       canUploadFinal:hasPermission(user,"marketing.task.final_file.upload"),
       canDownloadFile:hasPermission(user,"marketing.file.download"),
       showFirstFile:task.task_kind==="execution" && isFirstFileExecutionDepartment(task.department_name),
@@ -2124,8 +2139,8 @@ async function reviewTemplate(sql:ReturnType<typeof getSql>,body:any,user:Sessio
     await sql.begin(async tx=>{
       await tx`insert into marketing.task_review_history(task_template_id,action,note,before_data,after_data,actor_id,actor_name) values(${templateId}::uuid,'unapproved',${note},${tx.json(dbJson(template))},${tx.json({status:'not_started',fileId:null})},${user.id}::uuid,${user.fullName})`;
       await tx`update marketing.task_templates set status='not_started',progress=0,admin_note=${note},template_data='{}'::jsonb,approved_data='{}'::jsonb,file_id=null,reviewed_by=${user.id}::uuid,reviewed_at=now(),updated_at=now() where id=${templateId}::uuid`;
-      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,completed_by=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false`;
-      await tx`delete from marketing.task_action_progress where task_id in (select id from marketing.tasks where task_template_id=${templateId}::uuid and task_kind='execution' and is_deleted=false)`;
+      await tx`update marketing.tasks set status='required',progress=0,completed_at=null,completed_by=null,final_file_id=null,approved_template_data='{}'::jsonb,updated_at=now() where task_template_id=${templateId}::uuid and is_deleted=false and not (task_kind='execution' and status='rejected')`;
+      await tx`delete from marketing.task_action_progress where task_id in (select id from marketing.tasks where task_template_id=${templateId}::uuid and task_kind='execution' and is_deleted=false and status<>'rejected')`;
     });
     await recalculateProgress(sql,template.source_type,template.source_id);
     return{ok:true,message:"تم إلغاء اعتماد Task Template وإعادة التاسكات إلى انتظار الرفع"};
@@ -2150,6 +2165,7 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   const[record]=await sql<any[]>`select t.id::text,t.source_type,t.source_id::text,t.assigned_to::text,t.status as task_status,a.admin_only,tt.status as template_status from marketing.tasks t join marketing.assignment_actions a on a.id=${actionId}::uuid left join marketing.task_templates tt on tt.id=t.task_template_id where t.id=${taskId}::uuid and t.is_deleted=false`;
   if(!record)throw new Error("الإجراء أو التاسك غير موجود");
   if(record.task_status==='completed')throw new Error("التاسك منتهي ولا يمكن تعديل إجراءاته");
+  if(record.task_status==='rejected')throw new Error("التاسك مرفوض ولا يمكن تعديل إجراءاته");
   if(record.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
   const actionPermission=record.admin_only?"marketing.assignment_action.admin":"marketing.assignment_action.execute";
   if(!hasPermission(user,actionPermission))throw new Error(record.admin_only?"هذا الإجراء يحتاج صلاحية إجراء إداري":"لا توجد صلاحية لتنفيذ إجراء التكليف");
@@ -2160,6 +2176,28 @@ async function toggleTaskAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
   await sql`update marketing.tasks set progress=${progress},status=case when ${progress}>=100 then 'ready_to_complete' when ${progress}>0 then 'in_progress' when received_at is not null then 'received' else 'required' end,completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
   await recalculateProgress(sql,record.source_type,record.source_id);
   return{ok:true,progress,message:"تم تحديث إجراء التكليف"};
+}
+async function rejectTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  if(!taskId)throw new Error("رقم التاسك مطلوب");
+  if(!hasPermission(user,"marketing.assignment_action.execute"))throw new Error("لا توجد صلاحية لرفض التاسك");
+  const[task]=await sql<any[]>`
+    select t.id::text,t.source_type,t.source_id::text,t.task_kind,t.status,t.assigned_to::text,
+      d.name as department_name,tt.status as template_status
+    from marketing.tasks t
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.task_templates tt on tt.id=t.task_template_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if(!task)throw new Error("التاسك غير موجود");
+  if(task.task_kind!=="execution"||!isRejectableExecutionDepartment(task.department_name))throw new Error("رفض التاسك متاح فقط لتاسكات قسم التصميم أو قسم المونتاج");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لرفض هذا التاسك");
+  if(task.status==='completed')throw new Error("التاسك منتهي ولا يمكن رفضه");
+  if(task.status==='rejected')return{ok:true,message:"التاسك مرفوض بالفعل"};
+  if(task.template_status!=='approved')throw new Error("في انتظار اعتماد Task Template");
+  await sql`update marketing.tasks set status='rejected',progress=0,completed_at=null,completed_by=null,updated_at=now() where id=${taskId}::uuid`;
+  await recalculateProgress(sql,task.source_type,task.source_id);
+  return{ok:true,message:"تم رفض التاسك وإزالته من جاهزية المطلوب"};
 }
 async function completeTask(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const taskId=clean(body.taskId);
@@ -2176,6 +2214,7 @@ async function completeTask(sql:ReturnType<typeof getSql>,body:any,user:SessionU
   const assignedUser=task.assigned_to===user.id || task.paired_content_user_id===user.id;
   if(!assignedUser&&!canViewAllTasks(user))throw new Error("لا توجد صلاحية لإنهاء هذا التاسك");
   if(task.status==='completed')return{ok:true,message:"التاسك موجود بالفعل ضمن التاسكات المنتهية"};
+  if(task.status==='rejected')throw new Error("التاسك مرفوض ولا يمكن إنهاؤه");
   if(!task.received_at)throw new Error("يجب استلام التاسك أولًا");
   if(numberValue(task.progress)<100)throw new Error("لا يمكن إنهاء التاسك قبل وصول نسبة الإنجاز إلى 100%");
   await sql`update marketing.tasks set status='completed',completed_at=now(),completed_by=${user.id}::uuid,updated_at=now() where id=${taskId}::uuid`;
@@ -3848,6 +3887,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='upload_template')result=await uploadTemplate(sql,body,user);
     else if(action==='review_template')result=await reviewTemplate(sql,body,user);
     else if(action==='toggle_task_action')result=await toggleTaskAction(sql,body,user);
+    else if(action==='reject_task')result=await rejectTask(sql,body,user);
     else if(action==='complete_task')result=await completeTask(sql,body,user);
     else if(action==='move_to_publishing')result=await moveEntityToPublishing(sql,body,user);
     else if(action==='attach_final_file')result=await attachFinalFile(sql,body,user);

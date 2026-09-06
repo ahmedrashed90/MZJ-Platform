@@ -660,7 +660,7 @@ export function MarketingDatabasePage() {
               <table>
                 <thead><tr><th>الكرييتيف</th><th>اليوزر</th><th>القسم</th><th>الحالة</th><th>التقدم</th><th>التاريخ المطلوب</th><th>مختصر المطلوب</th></tr></thead>
                 <tbody>
-                  {detail.tasks.map((task: any) => <tr key={task.id}><td>{task.creative_name || "—"}</td><td>{task.assigned_name || "—"}</td><td>{task.department_name || "قسم المحتوى"}</td><td>{task.status}</td><td>{Number(task.progress).toLocaleString("ar-SA-u-nu-latn")}%</td><td>{marketingDate(task.due_at)}</td><td>{task.note || task.title || "—"}</td></tr>)}
+                  {detail.tasks.map((task: any) => <tr key={task.id}><td>{task.creative_name || "—"}</td><td>{task.assigned_name || "—"}</td><td>{task.department_name || "قسم المحتوى"}</td><td>{task.status === "rejected" ? "مرفوض" : task.status}</td><td>{Number(task.progress).toLocaleString("ar-SA-u-nu-latn")}%</td><td>{marketingDate(task.due_at)}</td><td>{task.note || task.title || "—"}</td></tr>)}
                   {!detail.tasks.length ? <tr><td colSpan={7}><div className="marketing-empty small">لا توجد تاسكات تنفيذية.</div></td></tr> : null}
                 </tbody>
               </table>

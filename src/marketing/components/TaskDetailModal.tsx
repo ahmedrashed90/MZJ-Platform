@@ -399,7 +399,11 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
   const finalUploadPercent = finalUploadTotalBytes ? Math.round((finalUploadLoadedBytes / finalUploadTotalBytes) * 100) : 0;
   const activeFinalUploadFile = finalUpload?.files.find((item) => item.status === "uploading" || item.status === "verifying") || null;
   const executionFolders = task?.task_kind === "execution" ? taskExecutionFolders(task.execution_folders) : null;
-  const executionDepartment = String(task?.department_name || "").trim().toLowerCase();
+  const executionDepartment = String(task?.department_name || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const rejectableExecutionTask = task?.task_kind === "execution" && [
+    "قسم التصميم", "التصميم", "تصميم", "design",
+    "قسم المونتاج", "المونتاج", "مونتاج", "montage",
+  ].includes(executionDepartment);
   const canDownloadScenesWord = task?.task_kind === "execution" && [
     "قسم التصميم", "التصميم", "تصميم", "design",
     "قسم المونتاج", "المونتاج", "مونتاج", "montage",
@@ -570,7 +574,7 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <div className="marketing-action-buttons">
               {payload.actions?.length ? payload.actions.map((item: any) => {
                 const allowed = item.admin_only ? permissions.canExecuteAdminAction : permissions.canExecuteAction;
-                const disabled = loading || task.status === "completed" || task.template_status !== "approved" || !allowed;
+                const disabled = loading || task.status === "completed" || task.status === "rejected" || task.template_status !== "approved" || !allowed;
                 return <button
                   key={item.id}
                   type="button"
@@ -585,6 +589,17 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
                   <b>{Number(item.percentage).toLocaleString("ar-SA-u-nu-latn")}%</b>
                 </button>;
               }) : <p>لا توجد إجراءات تكليف معرفة لهذا القسم.</p>}
+              {rejectableExecutionTask && task.status !== "rejected" && task.status !== "completed" ? <button
+                type="button"
+                className="marketing-action-button pending"
+                disabled={loading || task.status === "completed" || task.template_status !== "approved" || !permissions.canRejectTask}
+                title={!permissions.canRejectTask ? "لا توجد صلاحية لرفض هذا التاسك" : task.status === "completed" ? "التاسك منتهي" : task.template_status !== "approved" ? "في انتظار اعتماد Task Template" : "رفض التاسك وإزالته من جاهزية المطلوب"}
+                onClick={() => void action({ action: "reject_task", taskId: task.id })}
+              >
+                <span className="marketing-action-icon"><XCircle size={23} weight="fill" /></span>
+                <span className="marketing-action-copy"><strong>مرفوض</strong><small>إزالة التاسك من جاهزية المطلوب مع بقائه في بيانات الحملة</small></span>
+                <b>رفض</b>
+              </button> : null}
             </div>
           </section>
 
