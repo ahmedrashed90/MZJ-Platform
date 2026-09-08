@@ -41,6 +41,7 @@ type PhotoRequestRow = {
   vehicles: PhotoRequestVehicle[];
   events: PhotoRequestEvent[];
   can_complete?: boolean;
+  can_delete?: boolean;
 };
 
 type StockPayload = {
@@ -137,6 +138,7 @@ export function StockPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [completingRequestId, setCompletingRequestId] = useState("");
+  const [deletingRequestId, setDeletingRequestId] = useState("");
   const [markingStockId, setMarkingStockId] = useState("");
   const photographyDateInputRef = useRef<HTMLInputElement>(null);
 
@@ -364,6 +366,28 @@ export function StockPage() {
     }
   }
 
+  async function deletePhotoRequest(requestId: string, requestNo: string) {
+    if (!window.confirm(`هل تريد حذف طلب التصوير ${requestNo}؟`)) return;
+    setBusy(true);
+    setDeletingRequestId(requestId);
+    setError("");
+    setMessage("");
+    try {
+      const result = await marketingFetch<{ message: string }>("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "delete_photo_request", id: requestId }),
+      });
+      setMessage(result.message);
+      setSelectedRequest((current) => current?.id === requestId ? null : current);
+      await load();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "تعذر حذف طلب التصوير");
+    } finally {
+      setBusy(false);
+      setDeletingRequestId("");
+    }
+  }
+
   async function createRequest() {
     if (!selectedCars.length || !destinationLocationId || !photographyDate) return;
     setBusy(true);
@@ -505,7 +529,16 @@ export function StockPage() {
                       <td>{row.requested_by_name || "—"}</td>
                       <td>{marketingDate(row.requested_at, true)}</td>
                       <td>{row.vehicles.length.toLocaleString("ar-SA-u-nu-latn")}</td>
-                      <td><button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedRequest(row)}>عرض ومتابعة</button></td>
+                      <td>
+                        <div className="marketing-inline-actions">
+                          <button type="button" className="secondary marketing-request-action-button" onClick={() => setSelectedRequest(row)}>عرض ومتابعة</button>
+                          {row.can_delete ? (
+                            <button type="button" className="danger marketing-request-action-button" disabled={busy} onClick={() => void deletePhotoRequest(row.id, row.request_no)}>
+                              <Trash size={16} />{deletingRequestId === row.id ? "جاري المسح..." : "حذف"}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
                     </tr>
                   )) : <tr><td colSpan={9}>لا توجد طلبات في هذا التبويب.</td></tr>}
                 </tbody>

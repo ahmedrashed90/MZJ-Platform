@@ -3645,6 +3645,7 @@ async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:Sess
 
 async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const canCompletePhotoRequest=hasPermission(user,"marketing.photo_request.complete");
+  const canDeletePhotoRequest=hasPermission(user,"marketing.photo_request.create");
   const requestAccessFilter=marketingAccess(user).dataScope==="all"||canCompletePhotoRequest?sql`true`:sql`r.requested_by=${user.id}::uuid`;
   const [cars,requests,locations]=await Promise.all([
     loadOperationsCars(sql),
@@ -3660,6 +3661,7 @@ async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
           ) source_names
         ),sl.name) as source_location_name,dl.name as destination_location_name,
         (${canCompletePhotoRequest}=true and r.requested_by=${user.id}::uuid and r.status='vehicle_received' and r.cancelled_at is null) as can_complete,
+        (${canDeletePhotoRequest}=true and r.requested_by=${user.id}::uuid and (r.status='created' or r.cancelled_at is not null)) as can_delete,
         coalesce((
           select json_agg(json_build_object(
             'vehicleId',v.id::text,
@@ -3706,6 +3708,44 @@ async function markStockPhotographed(sql:ReturnType<typeof getSql>,body:any,user
     if(rows.length!==vehicleIds.length)throw new Error("إحدى السيارات غير موجودة أو مؤرشفة");
     await tx`update operations.vehicles set photographed=true,photographed_at=now(),photographed_by=${user.id}::uuid,updated_at=now(),version=version+1 where id in ${tx(vehicleIds)} and coalesce(photographed,false)=false`;
     return{ok:true,message:vehicleIds.length===1?"تم تحديث السيارة إلى تم التصوير":`تم تحديث ${vehicleIds.length.toLocaleString("ar-SA-u-nu-latn")} سيارة إلى تم التصوير`};
+  });
+}
+
+async function deleteMarketingPhotoRequest(sql:ReturnType<typeof getSql>,requestIdValue:string,user:SessionUser){
+  if(!hasPermission(user,"marketing.photo_request.create"))throw new Error("لا توجد صلاحية لحذف طلب التصوير");
+  const requestId=clean(requestIdValue);
+  if(!requestId)throw new Error("طلب التصوير غير محدد");
+  return sql.begin(async tx=>{
+    const[request]=await tx<any[]>`
+      select r.*,r.id::text
+      from operations.transfer_requests r
+      where r.id=${requestId}::uuid and r.request_kind='photography' and r.is_deleted=false
+      for update
+    `;
+    if(!request)throw new Error("طلب التصوير غير موجود");
+    if(String(request.requested_by)!==String(user.id))throw new Error("لا توجد صلاحية لحذف طلب تصوير أنشأه مستخدم آخر");
+    const cancelledRequest=Boolean(request.cancelled_at);
+    if(!cancelledRequest){
+      const[events]=await tx<{count:number}[]>`select count(*)::int as count from operations.transfer_request_events where transfer_request_id=${requestId}::uuid and action<>'created'`;
+      if(request.status!=="created"||Number(events?.count||0)>0)throw new Error("لا يمكن حذف طلب التصوير بعد بدء التنفيذ");
+    }
+    const items=await tx<any[]>`
+      select rv.vehicle_id::text,v.vin
+      from operations.transfer_request_vehicles rv
+      join operations.vehicles v on v.id=rv.vehicle_id
+      where rv.transfer_request_id=${requestId}::uuid
+      order by v.vin
+    `;
+    await tx`update operations.transfer_requests set is_deleted=true,deleted_at=now(),deleted_by=${user.id}::uuid,updated_at=now() where id=${requestId}::uuid`;
+    try{
+      await tx.savepoint(async eventTx=>{
+        await eventTx`
+          insert into operations.transfer_request_events(transfer_request_id,stage,action,actor_id,actor_name,actor_role,actor_branch,before_data)
+          values(${requestId}::uuid,${request.status},'deleted',${user.id}::uuid,${user.fullName},${user.roles[0]||'مستخدم التسويق'},${user.branches[0]||null},${eventTx.json(dbJson({request,items}))})
+        `;
+      });
+    }catch(eventError){console.error("Marketing photo request delete event failed",{requestId,eventError});}
+    return{ok:true,message:cancelledRequest?"تم حذف طلب التصوير الملغي":"تم حذف طلب التصوير"};
   });
 }
 
@@ -3916,6 +3956,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
     else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
+    else if(action==='delete_photo_request')result=await deleteMarketingPhotoRequest(sql,clean(body.id),user);
     else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);
     else if(action==='complete_photo_request')result=await completeMarketingPhotoRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
