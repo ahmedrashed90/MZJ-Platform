@@ -395,10 +395,10 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to})
       and (${status}='' or movement_state.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date)
-      and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
-      and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time)
-      and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
+      and (${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date)
+      and (${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
+      and (${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time)
+      and (${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
     order by m.created_at desc,m.id desc limit ${pageSize} offset ${offset}
@@ -453,8 +453,8 @@ async function listMovements(sql: ReturnType<typeof getSql>, request: VercelRequ
     where (${search}='' or v.vin ilike ${pattern} or coalesce(v.car_name,'') ilike ${pattern} or coalesce(v.statement,'') ilike ${pattern} or coalesce(m.note,'') ilike ${pattern})
       and (${from}='' or fl.code=${from}) and (${to}='' or tl.code=${to}) and (${status}='' or movement_state.new_status=${status})
       and (${userSearch}='' or coalesce(m.performed_by_name,'') ilike ${`%${userSearch}%`} or coalesce(erp_order.operations_admin_name,'') ilike ${`%${userSearch}%`})
-      and (${dateFrom}='' or m.created_at::date>=nullif(${dateFrom}::text,'')::date) and (${dateTo}='' or m.created_at::date<=nullif(${dateTo}::text,'')::date)
-      and (${timeFrom}='' or m.created_at::time>=nullif(${timeFrom}::text,'')::time) and (${timeTo}='' or m.created_at::time<=nullif(${timeTo}::text,'')::time)
+      and (${dateFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::date>=nullif(${dateFrom}::text,'')::date) and (${dateTo}='' or (m.created_at at time zone 'Asia/Riyadh')::date<=nullif(${dateTo}::text,'')::date)
+      and (${timeFrom}='' or (m.created_at at time zone 'Asia/Riyadh')::time>=nullif(${timeFrom}::text,'')::time) and (${timeTo}='' or (m.created_at at time zone 'Asia/Riyadh')::time<=nullif(${timeTo}::text,'')::time)
       and ${scope}
       and ${statusScope}
   `;
