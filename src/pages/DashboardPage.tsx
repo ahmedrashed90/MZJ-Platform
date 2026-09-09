@@ -867,7 +867,7 @@ export function DashboardPage() {
               <div className="inventory-tags">
                 <OperationMetric label="الوكالة" value={operations?.inventory.agency ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "agency", locationName: "الوكالة", metric: "actual_total", metricName: "الإجمالي الفعلي" })} />
                 <OperationMetric label="حجز" value={operations?.inventory.reserved ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "reserved", metricName: "حجز", branchesOnly: true })} />
-                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "available_for_sale", metricName: "متاح للبيع" })} />
+                <OperationMetric label="المتاح للبيع" value={operations?.inventory.availableForSale ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "available_for_sale", metricName: "متاح للبيع", branchesOnly: true })} />
                 <OperationMetric label="بها ملاحظات" value={operations?.inventory.hasNotes ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "has_notes", metricName: "بها ملاحظات" })} />
                 <OperationMetric label="مباع تحت التسليم" value={operations?.inventory.underDelivery ?? null} onOpen={() => setOperationsSelection({ mode: "vehicles", locationCode: "", locationName: "كل الفروع", metric: "under_delivery", metricName: "مباع تحت التسليم" })} />
               </div>
