@@ -515,7 +515,7 @@ async function listTransfers(sql: ReturnType<typeof getSql>, request: QueryReque
   const [count] = await sql<{ total: number }[]>`select count(*)::int as total from operations.transfer_requests r where ${where}`;
   const rows = await sql<any[]>`
     select r.id::text,r.request_no,r.request_kind,r.status,r.note,r.requested_by::text,r.requested_by_name,r.requested_by_role,r.requested_by_branch,
-      r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.cancelled_at,r.cancellation_reason,r.version,
+      r.source_branch_code,r.destination_branch_code,r.requested_at,r.completed_at,r.photography_date::text,r.cancelled_at,r.cancellation_reason,r.version,
       sl.code as source_location_code,sl.name as source_location_name,dl.code as destination_location_code,dl.name as destination_location_name,
       coalesce(cars.vehicles_count,0)::int as vehicles_count,coalesce(cars.vehicles,'[]'::json) as vehicles,
       coalesce(events.events,'[]'::json) as events

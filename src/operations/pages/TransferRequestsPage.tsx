@@ -27,6 +27,19 @@ function RequestIcon({ kind, size = 23 }: { kind: string; size?: number }) {
   return kind === "photography" ? <Camera size={size} /> : <Truck size={size} />;
 }
 
+function formatPhotographyDate(value?: string | null) {
+  const normalized = String(value || "").slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) return "—";
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (!Number.isFinite(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", {
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
 export function TransferRequestsPage() {
   const { meta } = useOperations();
   const [tab, setTab] = useState<"create" | "active" | "completed">("create");
@@ -302,6 +315,7 @@ export function TransferRequestsPage() {
               <div><small>الحالة الحالية</small><strong>{selected.cancelled_at ? "ملغي" : stageLabels[selected.status] || selected.status}</strong></div>
               <div><small>المنشئ</small><strong>{selected.requested_by_name || "—"}</strong></div>
               <div><small>تاريخ الإنشاء</small><strong>{formatOperationsDate(selected.requested_at)}</strong></div>
+              {selected.request_kind === "photography" ? <div><small>تاريخ التصوير</small><strong>{formatPhotographyDate(selected.photography_date)}</strong></div> : null}
             </div>
 
             <div className="operations-request-route">

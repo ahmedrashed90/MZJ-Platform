@@ -124,6 +124,7 @@ export type TransferRow = {
   destination_location_code?: string | null;
   requested_at: string;
   completed_at?: string | null;
+  photography_date?: string | null;
   cancelled_at?: string | null;
   cancellation_reason?: string | null;
   source_location_name?: string | null;
