@@ -21,8 +21,16 @@ import { normalizeMarketingPublishFormat, publishFormatRequiresImages, publishFo
 import { publishYouTubeVideo } from "../_youtube-publisher.js";
 import { publishInstagramContent } from "../_instagram-publisher.js";
 import { publishFacebookReel, publishFacebookVideoStory } from "../_facebook-video-publisher.js";
-import { createOpaqueTicket, getZohoFileInfo, getZohoRuntime, ticketHash } from "../_zoho-workdrive.js";
-import { prepareZohoUpload, uploadZohoWholeFile, type ZohoUploadStrategy } from "../_zoho-upload.js";
+import { getZohoFileInfo, getZohoRuntime } from "../_zoho-workdrive.js";
+import {
+  createGoogleDriveResumableUpload,
+  createGoogleDriveUploadTicket,
+  deleteGoogleDriveFile,
+  googleDriveTicketHash,
+  openGoogleDriveFile,
+  verifyGoogleDriveUploadedFile,
+} from "../_google-drive-storage.js";
+import { createGoogleDriveMediaDeliveryUrl } from "../_google-drive-media-delivery.js";
 import { backfillPublishedPosts, engagementData, engagementResultsData, manageEngagementItem, recordPublishedPost, refreshEngagementMetrics, subscribeMetaEngagementWebhooks } from "../_marketing-engagement.js";
 
 function clean(value: unknown) { return String(value ?? "").trim(); }
@@ -2238,7 +2246,6 @@ async function attachFinalFile(sql:ReturnType<typeof getSql>,body:any,user:Sessi
 
 
 async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
   const taskId=clean(body.taskId);
   const task=await requireFinalFileUploadAccess(sql,user,taskId);
   const requested=arrayValue<any>(body.files).map((item,index)=>({
@@ -2267,7 +2274,7 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
   }
 
   const mediaKind=mediaOnly?(requested.length>1?'carousel':videoCount?'video':'image'):'file';
-  await sql`delete from marketing.zoho_upload_tickets where expires_at<now()`;
+  await sql`delete from marketing.google_drive_upload_tickets where expires_at<now()`;
   const[group]=await sql<any[]>`
     insert into marketing.final_media_groups(task_id,media_kind,file_count,status,is_active,created_by)
     values(${taskId}::uuid,${mediaKind},${requested.length},'uploading',false,${user.id}::uuid)
@@ -2279,37 +2286,43 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
     for(const item of requested){
       const storageKey=buildMarketingStorageKey({
         ...storageContext,
-        category:'final-upload-staging',
+        category:'final-file',
         fileName:item.name,
       });
       const[file]=await sql<any[]>`
         insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider,final_media_group_id,order_index)
-        values(${storageKey},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'r2',${group.id}::uuid,${item.orderIndex})
+        values(${storageKey},${item.name},${item.mimeType},${item.size},'final-file',${task.source_type},${task.source_id}::uuid,${taskId}::uuid,'uploading',${user.id}::uuid,'google-drive',${group.id}::uuid,${item.orderIndex})
         returning id::text
       `;
-      const ticket=createOpaqueTicket();
-      const zohoFileName=zohoFinalFileName(item.name,task.source_type,task.source_id,taskId,group.id,item.orderIndex);
-      const transfer=await prepareZohoUpload(sql,{fileName:zohoFileName,fileSize:item.size});
+      const ticket=createGoogleDriveUploadTicket();
+      const transfer=await createGoogleDriveResumableUpload(sql,{
+        fileId:file.id,
+        fileName:item.name,
+        mimeType:item.mimeType,
+        fileSize:item.size,
+        category:'final-file',
+        storageKey,
+      });
       await sql`
-        insert into marketing.zoho_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,file_name,mime_type,file_size,parent_folder_id,upload_strategy,upload_id,status,expires_at,created_by)
-        values(${ticketHash(ticket)},${file.id}::uuid,${group.id}::uuid,${taskId}::uuid,${zohoFileName},${item.mimeType},${item.size},${transfer.parentId},${transfer.strategy},${transfer.uploadId},'prepared',now()+interval '7 days',${user.id}::uuid)
+        insert into marketing.google_drive_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,status,expires_at,created_by)
+        values(${googleDriveTicketHash(ticket)},${file.id}::uuid,${group.id}::uuid,${taskId}::uuid,'prepared',now()+interval '7 days',${user.id}::uuid)
       `;
       uploads.push({
         ticket,
         fileId:file.id,
         orderIndex:item.orderIndex,
         originalFileName:item.name,
-        fileName:zohoFileName,
+        fileName:item.name,
         mimeType:item.mimeType,
         fileSize:item.size,
-        uploadStrategy:transfer.strategy,
-        uploadUrl:createUploadUrl(storageKey,7200),
+        uploadStrategy:'resumable',
+        uploadUrl:transfer.uploadUrl,
       });
     }
   }catch(error:any){
     const message=clean(error?.message)||"تعذر تجهيز رفع الملف النهائي";
     await sql.begin(async tx=>{
-      await tx`update marketing.zoho_upload_tickets set status='failed',completed_at=now() where final_media_group_id=${group.id}::uuid and status in ('prepared','uploading')`;
+      await tx`update marketing.google_drive_upload_tickets set status='failed',completed_at=now() where final_media_group_id=${group.id}::uuid and status in ('prepared','uploading')`;
       await tx`update marketing.files set status='failed',upload_error=${message},updated_at=now() where final_media_group_id=${group.id}::uuid and status='uploading'`;
       await tx`update marketing.final_media_groups set status='failed',updated_at=now() where id=${group.id}::uuid`;
     }).catch(()=>undefined);
@@ -2320,79 +2333,49 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
 
 async function finalUploadTicket(sql:ReturnType<typeof getSql>,ticket:string,user:SessionUser){
   const[row]=await sql<any[]>`
-    select z.*,z.file_id::text,z.final_media_group_id::text,z.task_id::text,z.created_by::text,
-      f.storage_key as staging_storage_key,f.storage_provider as staging_storage_provider
-    from marketing.zoho_upload_tickets z
-    join marketing.files f on f.id=z.file_id
-    where z.ticket_hash=${ticketHash(ticket)} and z.expires_at>now() and z.status in ('prepared','uploading')
+    select g.*,g.file_id::text,g.final_media_group_id::text,g.task_id::text,g.created_by::text,
+      f.original_name,f.mime_type,f.file_size,f.storage_key,f.storage_provider
+    from marketing.google_drive_upload_tickets g
+    join marketing.files f on f.id=g.file_id
+    where g.ticket_hash=${googleDriveTicketHash(ticket)} and g.expires_at>now() and g.status in ('prepared','uploading')
   `;
   if(!row)throw new Error("جلسة رفع الملف منتهية أو غير صالحة");
   await requireFinalFileUploadAccess(sql,user,row.task_id);
   if(row.created_by!==user.id&&!canViewAllTasks(user))throw new Error("جلسة الرفع لا تخص هذا المستخدم");
+  if(clean(row.storage_provider)!=='google-drive')throw new Error("جلسة الرفع الحالية ليست جلسة Google Drive");
   return row;
-}
-
-function finalUploadStrategy(row:any):ZohoUploadStrategy{
-  const strategy=clean(row?.upload_strategy);
-  if(strategy==='standard'||strategy==='stream')return strategy;
-  throw new Error("جلسة الرفع قديمة. أعد اختيار الملف وابدأ الرفع من جديد");
 }
 
 async function deleteFinalUploadStaging(storageKey:string){
   const key=clean(storageKey);
   if(!key||key.startsWith('zoho:')||!mediaStorageConfigured())return;
   const response=await fetch(createDeleteUrl(key,900),{method:'DELETE'});
-  if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف المؤقت (${response.status})`);
+  if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف المؤقت القديم (${response.status})`);
 }
 
 async function commitFinalFileUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  const ticket=clean(body.ticket);
-  if(!ticket)throw new Error("بيانات جلسة رفع Zoho غير مكتملة");
+  const ticket=clean(body.ticket),externalId=clean(body.externalId);
+  if(!ticket||!externalId)throw new Error("بيانات تأكيد رفع Google Drive غير مكتملة");
   const row=await finalUploadTicket(sql,ticket,user);
-  const stagingStorageKey=clean(row.staging_storage_key);
-  if(!stagingStorageKey||clean(row.staging_storage_provider)!=='r2')throw new Error("الملف الكامل غير موجود في التخزين المؤقت");
-
-  let committed:any;
-  try{
-    committed=await uploadZohoWholeFile(sql,{
-      sourceUrl:createDownloadUrl(stagingStorageKey,7200),
-      fileName:clean(row.file_name)||'file',
-      mimeType:clean(row.mime_type)||'application/octet-stream',
-      fileSize:Number(row.file_size||0),
-      parentId:clean(row.parent_folder_id),
-      strategy:finalUploadStrategy(row),
-      uploadId:clean(row.upload_id)||null,
-    });
-  }catch(error:any){
-    const message=clean(error?.message)||"تعذر رفع الملف الكامل إلى Zoho";
-    await sql.begin(async tx=>{
-      await tx`update marketing.zoho_upload_tickets set status='failed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
-      await tx`update marketing.files set status='failed',upload_error=${message},updated_at=now() where id=${row.file_id}::uuid`;
-      await tx`update marketing.final_media_groups set status='failed',updated_at=now() where id=${row.final_media_group_id}::uuid`;
-    });
-    await deleteFinalUploadStaging(stagingStorageKey).catch(()=>undefined);
-    throw error;
-  }
-
-  let fileInfo:any={};
-  try{fileInfo=await getZohoFileInfo(sql,committed.resourceId);}catch{fileInfo={};}
-  const externalUrl=clean(fileInfo.permalink||committed.parsed.permalink)||null;
-  const finalName=clean(fileInfo.fileName||committed.parsed.fileName||row.file_name);
+  const info=await verifyGoogleDriveUploadedFile(sql,{externalId,fileId:row.file_id,expectedSize:Number(row.file_size||0)});
+  const parents=Array.isArray(info.parents)?info.parents:[];
+  const externalUrl=clean(info.webViewLink||info.webContentLink)||null;
+  const finalName=clean(info.name)||clean(row.original_name);
   await sql.begin(async tx=>{
     await tx`
       update marketing.files
-      set status='ready',storage_provider='zoho',storage_key=${`zoho:${committed.resourceId}`},external_id=${committed.resourceId},external_parent_id=${clean(fileInfo.parentId||committed.parsed.parentId||committed.parentId)},external_url=${externalUrl},original_name=${finalName||row.file_name},upload_error=null,updated_at=now()
+      set status='ready',storage_provider='google-drive',external_id=${externalId},external_parent_id=${clean(parents[0])||null},
+          external_url=${externalUrl},original_name=${finalName},upload_error=null,updated_at=now()
       where id=${row.file_id}::uuid
     `;
-    await tx`update marketing.zoho_upload_tickets set status='completed',completed_at=now() where ticket_hash=${ticketHash(ticket)}`;
+    await tx`update marketing.google_drive_upload_tickets set status='completed',completed_at=now() where ticket_hash=${googleDriveTicketHash(ticket)}`;
     const[counts]=await tx<any[]>`
       select count(*)::int as total,count(*) filter(where status='ready')::int as ready
       from marketing.files where final_media_group_id=${row.final_media_group_id}::uuid
     `;
     if(Number(counts?.total||0)>0&&Number(counts?.total||0)===Number(counts?.ready||0))await tx`update marketing.final_media_groups set status='ready',updated_at=now() where id=${row.final_media_group_id}::uuid`;
   });
-  await deleteFinalUploadStaging(stagingStorageKey).catch((error)=>console.error('Final upload staging cleanup failed',error));
-  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:committed.resourceId,fileName:finalName};
+  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:externalId,fileName:finalName};
 }
 
 async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -2408,6 +2391,7 @@ async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Ses
   `;
   await sql.begin(async tx=>{
     await tx`update marketing.zoho_upload_tickets set status='cancelled',completed_at=now() where final_media_group_id=${groupId}::uuid and status in ('prepared','uploading')`;
+    await tx`update marketing.google_drive_upload_tickets set status='cancelled',completed_at=now() where final_media_group_id=${groupId}::uuid and status in ('prepared','uploading')`;
     await tx`update marketing.files set status='cancelled',upload_error='تم إلغاء الرفع بواسطة المستخدم',updated_at=now() where final_media_group_id=${groupId}::uuid and status='uploading'`;
     await tx`update marketing.final_media_groups set status='cancelled',is_active=false,updated_at=now() where id=${groupId}::uuid`;
   });
@@ -2430,7 +2414,7 @@ async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user
     where final_media_group_id=${groupId}::uuid
     order by order_index,created_at,id
   `;
-  if(!files.length||files.some((file:any)=>file.status!=='ready'||!clean(file.external_id)))throw new Error("لم يكتمل رفع كل الملفات إلى Zoho WorkDrive");
+  if(!files.length||files.some((file:any)=>file.status!=='ready'||!clean(file.external_id)))throw new Error("لم يكتمل رفع كل الملفات إلى Google Drive");
   if(files.length!==Number(group.file_count||0))throw new Error("عدد الملفات المرفوعة لا يطابق مجموعة النشر");
   const firstFileId=clean(files[0]?.id);
   await sql.begin(async tx=>{
@@ -2445,11 +2429,10 @@ async function attachFinalMediaGroup(sql:ReturnType<typeof getSql>,body:any,user
     }
   });
   await recalculateProgress(sql,task.source_type,task.source_id);
-  return{ok:true,message:files.length>1?`تم رفع ${files.length} ملفات نهائية بالترتيب على Zoho WorkDrive`:`تم رفع الملف النهائي على Zoho WorkDrive`,groupId,files};
+  return{ok:true,message:files.length>1?`تم رفع ${files.length} ملفات نهائية بالترتيب على Google Drive`:`تم رفع الملف النهائي على Google Drive`,groupId,files};
 }
 
 async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
   const category=clean(body.category),sourceType=clean(body.sourceType),sourceId=clean(body.sourceId),taskId=clean(body.taskId),fileName=clean(body.fileName)||"file.bin",mimeType=clean(body.mimeType)||"application/octet-stream",fileSize=numberValue(body.fileSize)||null;
   if(!category)throw new Error("نوع الملف مطلوب");
   if(category==="task-template")await requireTaskTemplateUploadAccess(sql,user,taskId);
@@ -2466,13 +2449,37 @@ async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:Session
   }
   const storageContext=await marketingStorageContext(sql,sourceType,sourceId,taskId);
   const storageKey=buildMarketingStorageKey({...storageContext,category,fileName});
+
+  if(category==='first-file'||category==='final-file'){
+    const[file]=await sql<any[]>`
+      insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider)
+      values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid,'google-drive')
+      returning *,id::text
+    `;
+    try{
+      const transfer=await createGoogleDriveResumableUpload(sql,{
+        fileId:file.id,
+        fileName,
+        mimeType,
+        fileSize:Number(fileSize||0),
+        category,
+        storageKey,
+      });
+      return{ok:true,fileId:file.id,storageKey,storageProvider:'google-drive',uploadUrl:transfer.uploadUrl};
+    }catch(error){
+      await sql`delete from marketing.files where id=${file.id}::uuid and status='uploading'`.catch(()=>undefined);
+      throw error;
+    }
+  }
+
+  if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط في المنصة");
   const[file]=await sql<any[]>`insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by) values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid) returning *,id::text`;
-  return{ok:true,fileId:file.id,storageKey,uploadUrl:createUploadUrl(storageKey,900)};
+  return{ok:true,fileId:file.id,storageKey,storageProvider:'r2',uploadUrl:createUploadUrl(storageKey,900)};
 }
 
 async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const fileId=clean(body.fileId);
-  const[file]=await sql<any[]>`select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text from marketing.files where id=${fileId}::uuid`;
+  const[file]=await sql<any[]>`select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text,storage_provider,file_size from marketing.files where id=${fileId}::uuid`;
   if(!file)throw new Error("الملف غير موجود");
   if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لتحديث الملف");
   if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
@@ -2483,20 +2490,42 @@ async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:Session
     if(file.task_id&&!await canAccessMarketingTask(sql,user,file.task_id))throw new Error("التاسك خارج نطاق بياناتك");
     if(file.source_id&&!file.task_id)await assertMarketingEntityAccess(sql,user,clean(file.source_type),file.source_id);
   }
+
+  if(clean(file.storage_provider)==='google-drive'){
+    const externalId=clean(body.externalId);
+    if(!externalId)throw new Error("معرف ملف Google Drive غير موجود");
+    const info=await verifyGoogleDriveUploadedFile(sql,{externalId,fileId,expectedSize:Number(file.file_size||0)});
+    const parents=Array.isArray(info.parents)?info.parents:[];
+    const rows=await sql<any[]>`
+      update marketing.files
+      set status='ready',external_id=${externalId},external_parent_id=${clean(parents[0])||null},external_url=${clean(info.webViewLink||info.webContentLink)||null},updated_at=now()
+      where id=${fileId}::uuid and status='uploading'
+      returning id::text
+    `;
+    if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
+    return{ok:true,message:"تم حفظ الملف"};
+  }
+
   const rows=await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and status='uploading' returning id::text`;
   if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
 }
+
 async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const fileId=clean(body.fileId);
   if(!fileId)throw new Error("الملف الأول غير محدد");
-  const[file]=await sql<any[]>`select id::text,task_id::text,storage_key,storage_provider,status,uploaded_by::text from marketing.files where id=${fileId}::uuid and category='first-file'`;
+  const[file]=await sql<any[]>`select id::text,task_id::text,storage_key,storage_provider,external_id,status,uploaded_by::text from marketing.files where id=${fileId}::uuid and category='first-file'`;
   if(!file||file.status!=="ready"||!file.task_id)throw new Error("الملف الأول غير موجود");
   await requireFirstFileUploadAccess(sql,user,file.task_id);
-  const storageKey=clean(file.storage_key);
-  if(storageKey&&clean(file.storage_provider)!=='zoho'&&mediaStorageConfigured()){
-    const response=await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'});
-    if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف الأول من التخزين (${response.status})`);
+  const provider=clean(file.storage_provider);
+  if(provider==='google-drive'){
+    if(clean(file.external_id))await deleteGoogleDriveFile(sql,clean(file.external_id));
+  }else if(provider!=='zoho'){
+    const storageKey=clean(file.storage_key);
+    if(storageKey&&mediaStorageConfigured()){
+      const response=await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'});
+      if(!response.ok&&response.status!==404)throw new Error(`تعذر حذف الملف الأول من التخزين (${response.status})`);
+    }
   }
   await sql`delete from marketing.files where id=${fileId}::uuid and category='first-file'`;
   return{ok:true,message:"تم مسح الملف الأولي"};
@@ -2698,7 +2727,14 @@ async function pipeMarketingFileResponse(response:VercelResponse,upstream:Respon
 }
 async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:string,user:SessionUser,response:VercelResponse,forceDownload=false){
   const file=await downloadableMarketingFile(sql,id,user);
-  if(clean(file.storage_provider)!=='zoho'){
+  const provider=clean(file.storage_provider);
+  if(provider==='google-drive'){
+    const externalId=clean(file.external_id);
+    if(!externalId)throw new Error("معرف ملف Google Drive غير موجود");
+    const upstream=await openGoogleDriveFile(sql,externalId,'application/octet-stream,*/*');
+    return pipeMarketingFileResponse(response,upstream,file,forceDownload,"Google Drive");
+  }
+  if(provider!=='zoho'){
     if(!mediaStorageConfigured())throw new Error("تخزين الملفات R2 غير مضبوط");
     const url=createDownloadUrl(clean(file.storage_key),900);
     if(!url)throw new Error("تعذر تجهيز رابط الملف");
@@ -2720,6 +2756,7 @@ async function streamMarketingFileDownload(sql:ReturnType<typeof getSql>,id:stri
   });
   return pipeMarketingFileResponse(response,upstream,file,forceDownload,"Zoho");
 }
+
 
 async function publishPrep(sql:ReturnType<typeof getSql>,user:SessionUser) {
   const access=marketingAccess(user),unrestricted=access.dataScope==='all',departmentScoped=['department','departments','branch_and_department'].includes(access.dataScope),departmentCodes=marketingDepartmentCodes(user),createdByMe=access.dataScope==='created_by_me';
@@ -3210,7 +3247,7 @@ async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule
       where final_media_group_id=${schedule.final_media_group_id}::uuid and status='ready'
       order by order_index,created_at,id
     `;
-    if(!group||group.status!=='ready'||files.length!==Number(group.file_count||0))throw new Error("لم يكتمل رفع كل ملفات النشر إلى Zoho WorkDrive");
+    if(!group||group.status!=='ready'||files.length!==Number(group.file_count||0))throw new Error("لم يكتمل رفع كل ملفات النشر إلى Google Drive");
     if(files.length)return files;
   }
   if(!clean(schedule.final_file_id))return[];
@@ -3218,7 +3255,12 @@ async function finalMediaFilesForSchedule(sql:ReturnType<typeof getSql>,schedule
   return file?[file]:[];
 }
 async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
-  if(clean(file.storage_provider)==='zoho'){
+  const provider=clean(file.storage_provider);
+  if(provider==='google-drive'){
+    if(!clean(file.external_id))throw new Error(`معرف ملف Google Drive ${clean(file.original_name)||''} غير موجود`);
+    return createGoogleDriveMediaDeliveryUrl(file,7200);
+  }
+  if(provider==='zoho'){
     if(!clean(file.external_id))throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
     const info=await getZohoFileInfo(sql,clean(file.external_id));
     const url=clean(info.downloadUrl||info.permalink||file.external_url);
@@ -3228,6 +3270,7 @@ async function finalMediaDeliveryUrl(sql:ReturnType<typeof getSql>,file:any){
   if(!clean(file.storage_key))throw new Error(`مسار الملف النهائي ${clean(file.original_name)||''} غير موجود`);
   return createDownloadUrl(file.storage_key,7200);
 }
+
 function detectImageMime(bytes:Uint8Array){
   if(bytes.length>=8&&bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47&&bytes[4]===0x0d&&bytes[5]===0x0a&&bytes[6]===0x1a&&bytes[7]===0x0a)return'image/png';
   if(bytes.length>=3&&bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff)return'image/jpeg';
@@ -3236,36 +3279,47 @@ function detectImageMime(bytes:Uint8Array){
   return'';
 }
 async function finalMediaBinary(sql:ReturnType<typeof getSql>,file:any){
-  if(clean(file.storage_provider)!=='zoho')throw new Error(`النشر المباشر للملف ${clean(file.original_name)||''} غير مدعوم من مزود التخزين الحالي`);
-  const externalId=clean(file.external_id);
-  if(!externalId)throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
-  const runtime=await getZohoRuntime(sql);
-  const info=await getZohoFileInfo(sql,externalId);
-  const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
-  const response=await fetch(downloadUrl,{
-    redirect:'follow',
-    headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
-  });
+  const provider=clean(file.storage_provider);
+  let response:Response;
+  let externalId=clean(file.external_id);
+  let providerLabel='Zoho';
+  if(provider==='google-drive'){
+    if(!externalId)throw new Error(`معرف ملف Google Drive ${clean(file.original_name)||''} غير موجود`);
+    response=await openGoogleDriveFile(sql,externalId,'application/octet-stream,*/*');
+    providerLabel='Google Drive';
+  }else if(provider==='zoho'){
+    if(!externalId)throw new Error(`معرف ملف Zoho ${clean(file.original_name)||''} غير موجود`);
+    const runtime=await getZohoRuntime(sql);
+    const info=await getZohoFileInfo(sql,externalId);
+    const downloadUrl=clean(info.downloadUrl)||`${runtime.uploadDomain}/v1/workdrive/download/${encodeURIComponent(externalId)}`;
+    response=await fetch(downloadUrl,{
+      redirect:'follow',
+      headers:{Authorization:`Zoho-oauthtoken ${runtime.accessToken}`,Accept:'application/octet-stream,*/*'},
+    });
+  }else{
+    throw new Error(`النشر المباشر للملف ${clean(file.original_name)||''} غير مدعوم من مزود التخزين الحالي`);
+  }
   if(!response.ok){
     const message=clean(await response.text().catch(()=>''));
-    throw new Error(message||`تعذر تنزيل ملف Zoho ${clean(file.original_name)||''} (${response.status})`);
+    throw new Error(message||`تعذر تنزيل ملف ${providerLabel} ${clean(file.original_name)||''} (${response.status})`);
   }
   const contentType=clean(response.headers.get('content-type')).split(';')[0].trim().toLowerCase();
   if(contentType.includes('application/json')||contentType.includes('text/html')){
-    throw new Error(`Zoho لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}. أعد ربط Zoho بعد قبول صلاحية تنزيل الملفات`);
+    throw new Error(`${providerLabel} لم يرجع محتوى الملف الفعلي ${clean(file.original_name)||''}`);
   }
   const arrayBuffer=await response.arrayBuffer();
   const bytes=new Uint8Array(arrayBuffer);
-  if(!bytes.byteLength)throw new Error(`ملف Zoho ${clean(file.original_name)||''} فارغ`);
+  if(!bytes.byteLength)throw new Error(`ملف ${providerLabel} ${clean(file.original_name)||''} فارغ`);
   const detectedMimeType=detectImageMime(bytes);
   if(!detectedMimeType){
     const signature=Array.from(bytes.slice(0,12)).map(value=>value.toString(16).padStart(2,'0')).join(' ');
-    throw new Error(`محتوى ملف Zoho ${clean(file.original_name)||''} ليس صورة فعلية صالحة للنشر (نوع الاستجابة: ${contentType||'غير معروف'}، بصمة البداية: ${signature||'فارغة'})`);
+    throw new Error(`محتوى ملف ${providerLabel} ${clean(file.original_name)||''} ليس صورة فعلية صالحة للنشر (نوع الاستجابة: ${contentType||'غير معروف'}، بصمة البداية: ${signature||'فارغة'})`);
   }
   const storedMimeType=clean(file.mime_type).toLowerCase();
   const mimeType=contentType.startsWith('image/')?contentType:(detectedMimeType||storedMimeType);
   return{bytes,mimeType,fileName:clean(file.original_name)||`image-${externalId}`};
 }
+
 async function publishScheduleItem(sql:ReturnType<typeof getSql>,schedule:any,user:SessionUser){
   if(!clean(schedule.publish_date))throw new Error("ميعاد النشر غير موجود");
   if(!clean(schedule.platform_code))throw new Error("منصة النشر غير محددة");

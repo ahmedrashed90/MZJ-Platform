@@ -1,5 +1,6 @@
 import type { getSql } from "./_db.js";
 import { createDownloadUrl } from "./_media-storage.js";
+import { openGoogleDriveFile } from "./_google-drive-storage.js";
 import { getYouTubeAccessToken } from "./_platform-connections.js";
 import { getZohoFileInfo, getZohoRuntime } from "./_zoho-workdrive.js";
 import type { YouTubePublishOptions } from "../shared/youtube-publishing.js";
@@ -46,7 +47,11 @@ function videoMimeType(file: any, responseContentType: unknown) {
 
 async function openUploadSource(sql: Sql, file: any): Promise<UploadSource> {
   let response: Response;
-  if (clean(file.storage_provider) === "zoho") {
+  if (clean(file.storage_provider) === "google-drive") {
+    const externalId = clean(file.external_id);
+    if (!externalId) throw new Error(`معرف ملف Google Drive ${clean(file.original_name) || ""} غير موجود`);
+    response = await openGoogleDriveFile(sql, externalId, "application/octet-stream,*/*");
+  } else if (clean(file.storage_provider) === "zoho") {
     const externalId = clean(file.external_id);
     if (!externalId) throw new Error(`معرف ملف Zoho ${clean(file.original_name) || ""} غير موجود`);
     const runtime = await getZohoRuntime(sql);

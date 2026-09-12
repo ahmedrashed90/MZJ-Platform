@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { getSql } from "./_db.js";
 import { createDownloadUrl } from "./_media-storage.js";
+import { openGoogleDriveFile } from "./_google-drive-storage.js";
 import { getZohoFileInfo, getZohoRuntime } from "./_zoho-workdrive.js";
 
 type Sql = ReturnType<typeof getSql>;
@@ -96,6 +97,11 @@ function detectImageContentType(bytes: Buffer, headerContentType: string, stored
 }
 
 async function openStoredImage(sql: Sql, file: any) {
+  if (clean(file.storage_provider) === "google-drive") {
+    const externalId = clean(file.external_id);
+    if (!externalId) throw new Error("معرف ملف Google Drive غير موجود");
+    return openGoogleDriveFile(sql, externalId, "image/*,application/octet-stream,*/*");
+  }
   if (clean(file.storage_provider) === "zoho") {
     const externalId = clean(file.external_id);
     if (!externalId) throw new Error("معرف ملف Zoho غير موجود");

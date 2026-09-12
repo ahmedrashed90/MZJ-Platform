@@ -36,7 +36,7 @@ export async function uploadMarketingFile(input: {
   sourceId?: string;
   taskId?: string;
 }) {
-  const prepared = await marketingFetch<{ fileId: string; uploadUrl: string }>("/api/marketing", {
+  const prepared = await marketingFetch<{ fileId: string; uploadUrl: string; storageProvider?: string }>("/api/marketing", {
     method: "POST",
     body: JSON.stringify({
       action: "prepare_upload",
@@ -51,7 +51,10 @@ export async function uploadMarketingFile(input: {
   });
   const uploaded = await fetch(prepared.uploadUrl, { method: "PUT", body: input.file, headers: { "content-type": input.file.type || "application/octet-stream" } });
   if (!uploaded.ok) throw new Error("تعذر رفع الملف إلى التخزين");
-  await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "mark_file_ready", fileId: prepared.fileId, category: input.category, sourceType: input.sourceType, sourceId: input.sourceId, taskId: input.taskId }) });
+  const uploadedPayload = prepared.storageProvider === "google-drive" ? await uploaded.json().catch(() => ({} as Record<string, unknown>)) : {};
+  const externalId = String((uploadedPayload as Record<string, unknown>).id || "").trim();
+  if (prepared.storageProvider === "google-drive" && !externalId) throw new Error("تعذر تأكيد رفع الملف إلى Google Drive");
+  await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "mark_file_ready", fileId: prepared.fileId, category: input.category, sourceType: input.sourceType, sourceId: input.sourceId, taskId: input.taskId, externalId }) });
   return prepared.fileId;
 }
 
@@ -124,7 +127,7 @@ function uploadWholeFinalFile(input: {
   cancellation: MarketingFinalUploadCancellation;
   onProgress?: (progress: MarketingFinalUploadProgress) => void;
 }) {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
     if (input.cancellation.cancelled) return reject(uploadCancelledError());
     const xhr = new XMLHttpRequest();
     input.cancellation.currentRequest = xhr;
@@ -159,7 +162,9 @@ function uploadWholeFinalFile(input: {
         reject(new Error(`تعذر رفع الملف الكامل (${xhr.status})`));
         return;
       }
-      resolve();
+      let payload: Record<string, unknown> = {};
+      try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch { payload = {}; }
+      resolve(payload);
     };
 
     xhr.send(input.file);
@@ -168,7 +173,7 @@ function uploadWholeFinalFile(input: {
   });
 }
 
-async function uploadWholeFinalFileToZoho(input: {
+async function uploadWholeFinalFileToGoogleDrive(input: {
   file: File;
   fileIndex: number;
   fileCount: number;
@@ -192,7 +197,7 @@ async function uploadWholeFinalFileToZoho(input: {
     detail: "جاري تجهيز رفع الملف الكامل",
   });
 
-  await uploadWholeFinalFile({
+  const uploaded = await uploadWholeFinalFile({
     file: input.file,
     fileIndex: input.fileIndex,
     fileCount: input.fileCount,
@@ -214,12 +219,14 @@ async function uploadWholeFinalFileToZoho(input: {
     speedBytesPerSecond: input.file.size / elapsedSeconds,
     etaSeconds: 0,
     status: "verifying",
-    detail: "اكتمل رفع الملف كاملًا، جاري نقله كما هو إلى Zoho WorkDrive",
+    detail: "اكتمل رفع الملف كاملًا، جاري تأكيده على Google Drive",
   });
 
+  const externalId = String(uploaded.id || "").trim();
+  if (!externalId) throw new Error("تعذر تأكيد معرف الملف على Google Drive");
   const committed = await marketingFetch<Record<string, unknown>>("/api/marketing", {
     method: "POST",
-    body: JSON.stringify({ action: "commit_final_file_upload", ticket: input.ticket }),
+    body: JSON.stringify({ action: "commit_final_file_upload", ticket: input.ticket, externalId }),
   });
   input.onProgress?.({
     fileIndex: input.fileIndex,
@@ -231,7 +238,7 @@ async function uploadWholeFinalFileToZoho(input: {
     speedBytesPerSecond: input.file.size / elapsedSeconds,
     etaSeconds: 0,
     status: "completed",
-    detail: "تم رفع الملف كاملًا إلى Zoho WorkDrive",
+    detail: "تم رفع الملف كاملًا إلى Google Drive",
   });
   return committed;
 }
@@ -288,7 +295,7 @@ export async function uploadMarketingFinalFiles(input: {
         etaSeconds: null,
         status: "uploading",
       });
-      await uploadWholeFinalFileToZoho({
+      await uploadWholeFinalFileToGoogleDrive({
         file,
         fileIndex: index,
         fileCount: prepared.uploads.length,

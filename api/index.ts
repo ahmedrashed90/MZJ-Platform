@@ -45,10 +45,12 @@ import trackingIntegrationHandler from "../server/integrations/tracking-orders.j
 import erpNextSalesOrderIntegrationHandler from "../server/integrations/erpnext-sales-order.js";
 import erpNextVehicleStatusIntegrationHandler from "../server/integrations/erpnext-vehicle-status.js";
 import zohoIntegrationHandler from "../server/integrations/zoho.js";
+import googleDriveIntegrationHandler from "../server/integrations/google-drive.js";
 import operationsHandler from "../server/operations/index.js";
 import marketingHandler from "../server/marketing/index.js";
 import platformConnectionsHandler from "../server/marketing/platform-connections.js";
 import instagramMediaHandler from "../server/marketing/instagram-media.js";
+import googleDriveMediaHandler from "../server/marketing/google-drive-media.js";
 import activityHandler from "../server/activity.js";
 import notificationsHandler from "../server/notifications.js";
 import notificationSettingsHandler from "../server/notification-settings.js";
@@ -66,6 +68,13 @@ function platformConnectionCallback(provider: "meta" | "tiktok" | "youtube"): Ap
   return (request, response) => {
     request.query.provider = provider;
     return platformConnectionsHandler(request, response);
+  };
+}
+
+function googleDriveRoute(action: "connect" | "callback" | "status"): ApiHandler {
+  return (request, response) => {
+    request.query.googleDriveAction = action;
+    return googleDriveIntegrationHandler(request, response);
   };
 }
 
@@ -113,6 +122,10 @@ const routes = new Map<string, ApiHandler>([
   ["operations", operationsHandler],
   ["marketing", marketingHandler],
   ["marketing/instagram-media", instagramMediaHandler],
+  ["marketing/google-drive-media", googleDriveMediaHandler],
+  ["google-drive/connect", googleDriveRoute("connect")],
+  ["google-drive/callback", googleDriveRoute("callback")],
+  ["google-drive/status", googleDriveRoute("status")],
   ["marketing/platform-connections", platformConnectionsHandler],
   ["marketing/platform-connections/callback/meta", platformConnectionCallback("meta")],
   ["marketing/platform-connections/callback/tiktok", platformConnectionCallback("tiktok")],
