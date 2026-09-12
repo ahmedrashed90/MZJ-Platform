@@ -28,8 +28,11 @@ import {
   deleteGoogleDriveFile,
   ensureGoogleDriveFolder,
   findGoogleDriveUploadedFile,
+  getGoogleDriveFileInfo,
   googleDriveFolderUrl,
+  googleDrivePathWithinRoot,
   googleDriveTicketHash,
+  listGoogleDriveFolder,
   openGoogleDriveFile,
   verifyGoogleDriveUploadedFile,
 } from "../_google-drive-storage.js";
@@ -801,6 +804,132 @@ async function googleDriveTaskUploadParent(sql:ReturnType<typeof getSql>,taskId:
   const folders=repairedExecutionFolders(task?.execution_folders);
   if(clean(folders.type)!=="google_drive")return"";
   return clean(folders.userOutputFolderId||folders.outputFolderId||folders.creativeFolderId);
+}
+
+type TaskFolderKind = "raw" | "output";
+
+function taskFolderKind(value: unknown): TaskFolderKind {
+  return clean(value) === "raw" ? "raw" : "output";
+}
+
+async function taskFolderContext(sql:ReturnType<typeof getSql>,user:SessionUser,taskIdValue:string,kindValue:unknown){
+  const taskId=clean(taskIdValue);
+  if(!taskId)throw new Error("رقم التاسك مطلوب");
+  const[task]=await sql<any[]>`
+    select t.id::text,t.title,t.task_kind,t.assigned_to::text,t.paired_content_user_id::text,t.execution_folders,
+      u.full_name as assigned_name,d.name as department_name,c.name as creative_name,coalesce(cam.name,ag.name) as source_name
+    from marketing.tasks t
+    left join core.users u on u.id=t.assigned_to
+    left join marketing.departments d on d.id=t.department_id
+    left join marketing.creatives c on c.id=t.creative_id
+    left join marketing.campaigns cam on t.source_type='campaign' and cam.id=t.source_id
+    left join marketing.agendas ag on t.source_type='agenda' and ag.id=t.source_id
+    where t.id=${taskId}::uuid and t.is_deleted=false
+  `;
+  if(!task)throw new Error("التاسك غير موجود");
+  if(task.task_kind!=="execution")throw new Error("فولدرات التنفيذ متاحة للتاسكات التنفيذية فقط");
+  if(!await canAccessMarketingTask(sql,user,taskId))throw new Error("لا توجد صلاحية لعرض فولدرات هذا التاسك");
+  const folders=repairedExecutionFolders(task.execution_folders);
+  if(clean(folders.type)!=="google_drive")throw new Error("فولدرات Google Drive غير مرتبطة بهذا التاسك");
+  const kind=taskFolderKind(kindValue);
+  const rootFolderId=kind==="raw"
+    ? clean(folders.rawFolderId)
+    : clean(folders.userOutputFolderId||folders.outputFolderId);
+  if(!rootFolderId)throw new Error("فولدر التنفيذ غير موجود");
+  const canManageRaw=canViewAllTasks(user)
+    || hasPermission(user,"marketing.campaign.create")
+    || hasPermission(user,"marketing.campaign.edit")
+    || hasPermission(user,"marketing.agenda.create")
+    || hasPermission(user,"marketing.agenda.edit");
+  const canManageOutput=(task.assigned_to===user.id||canViewAllTasks(user))&&hasPermission(user,"marketing.task.final_file.upload");
+  return{
+    task,folders,kind,rootFolderId,
+    canUpload:kind==="raw"?canManageRaw:canManageOutput,
+    canDelete:kind==="raw"?canManageRaw:canManageOutput,
+  };
+}
+
+async function taskFolderData(sql:ReturnType<typeof getSql>,request:VercelRequest,user:SessionUser){
+  const taskId=clean(request.query.taskId);
+  const context=await taskFolderContext(sql,user,taskId,request.query.kind);
+  const requestedFolderId=clean(request.query.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,requestedFolderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const items=await listGoogleDriveFolder(sql,requestedFolderId);
+  const fileIds=items.filter((item)=>!item.isFolder).map((item)=>item.id);
+  const managedRows=fileIds.length?await sql<any[]>`
+    select distinct external_id from marketing.files
+    where task_id=${taskId}::uuid and status='ready' and external_id in ${sql(fileIds)}
+  `:[];
+  const managed=new Set(managedRows.map((row:any)=>clean(row.external_id)).filter(Boolean));
+  return{
+    ok:true,
+    task:{
+      id:context.task.id,
+      title:context.task.title,
+      sourceName:context.task.source_name,
+      creativeName:context.task.creative_name,
+      departmentName:context.task.department_name,
+      assignedName:context.task.assigned_name,
+    },
+    kind:context.kind,
+    rootFolderId:context.rootFolderId,
+    currentFolderId:requestedFolderId,
+    breadcrumbs:path.map((item:any,index:number)=>({id:item.id,name:index===0?(context.kind==="raw"?"فولدر الخام":"فولدر التسليم"):item.name})),
+    permissions:{canUpload:context.canUpload,canDelete:context.canDelete},
+    items:items.map((item)=>({...item,managedByTask:managed.has(item.id),canDelete:context.canDelete&&!item.isFolder&&!managed.has(item.id)})),
+  };
+}
+
+async function prepareTaskFolderUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  const context=await taskFolderContext(sql,user,taskId,body.kind);
+  if(!context.canUpload)throw new Error("لا توجد صلاحية لرفع ملفات داخل هذا الفولدر");
+  const parentFolderId=clean(body.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,parentFolderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const fileName=clean(body.fileName)||"file.bin";
+  const mimeType=clean(body.mimeType)||"application/octet-stream";
+  const fileSize=Math.max(0,numberValue(body.fileSize));
+  if(fileSize<=0)throw new Error("لا يمكن رفع ملف فارغ");
+  const token=createGoogleDriveUploadTicket();
+  const transfer=await createGoogleDriveResumableUpload(sql,{
+    fileId:`task-folder-${taskId}-${token.slice(0,18)}`,
+    fileName,
+    mimeType,
+    fileSize,
+    category:`execution-${context.kind}`,
+    storageKey:`marketing/task-folder/${taskId}/${context.kind}/${token}/${fileName}`,
+    parentFolderId,
+  });
+  return{ok:true,uploadUrl:transfer.uploadUrl,storageProvider:"google-drive",folderId:parentFolderId};
+}
+
+async function deleteTaskFolderItem(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId),fileId=clean(body.fileId);
+  const context=await taskFolderContext(sql,user,taskId,body.kind);
+  if(!context.canDelete)throw new Error("لا توجد صلاحية لمسح ملفات هذا الفولدر");
+  if(!fileId||fileId===context.rootFolderId)throw new Error("الملف المطلوب غير صالح");
+  const path=await googleDrivePathWithinRoot(sql,fileId,context.rootFolderId);
+  if(!path?.length)throw new Error("الملف خارج نطاق التاسك");
+  const info=await getGoogleDriveFileInfo(sql,fileId);
+  if(clean(info.mimeType)==="application/vnd.google-apps.folder")throw new Error("مسح الفولدرات من داخل التاسك غير متاح");
+  const[managed]=await sql<any[]>`select 1 from marketing.files where task_id=${taskId}::uuid and external_id=${fileId} and status='ready' limit 1`;
+  if(managed)throw new Error("هذا الملف مرتبط بالملف الأول أو النهائي. امسحه من مكانه المخصص داخل التاسك");
+  await deleteGoogleDriveFile(sql,fileId);
+  return{ok:true,message:"تم مسح الملف"};
+}
+
+async function streamTaskFolderFile(sql:ReturnType<typeof getSql>,request:VercelRequest,user:SessionUser,response:VercelResponse){
+  const taskId=clean(request.query.taskId),fileId=clean(request.query.fileId);
+  const context=await taskFolderContext(sql,user,taskId,request.query.kind);
+  if(!fileId)throw new Error("الملف غير محدد");
+  const path=await googleDrivePathWithinRoot(sql,fileId,context.rootFolderId);
+  if(!path?.length)throw new Error("الملف خارج نطاق التاسك");
+  const info=await getGoogleDriveFileInfo(sql,fileId);
+  if(clean(info.mimeType)==="application/vnd.google-apps.folder")throw new Error("العنصر المطلوب فولدر وليس ملفًا");
+  const upstream=await openGoogleDriveFile(sql,fileId,'application/octet-stream,*/*');
+  return pipeMarketingFileResponse(response,upstream,{original_name:clean(info.name)||"file",mime_type:clean(info.mimeType)},true,"Google Drive");
 }
 
 async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
@@ -4116,6 +4245,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
+      if(resource==='task_folder')return response.status(200).json(await taskFolderData(sql,request,user));
+      if(resource==='task_folder_file')return streamTaskFolderFile(sql,request,user,response);
       if(resource==='file'){const downloadQuery=Array.isArray(request.query.download)?request.query.download[0]:request.query.download;return streamMarketingFileDownload(sql,clean(request.query.id),user,response,bool(downloadQuery));}
       if(resource==='campaign_code'){if(!hasPermission(user,'marketing.campaign.create'))return response.status(403).json({ok:false,message:'لا توجد صلاحية لإنشاء حملة'});return response.status(200).json({ok:true,code:await nextCampaignCode(sql,clean(request.query.campaignTypeId))});}
       return response.status(404).json({ok:false,error:"المورد المطلوب غير موجود"});
@@ -4149,6 +4280,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='commit_final_file_upload')result=await commitFinalFileUpload(sql,body,user);
     else if(action==='cancel_final_upload')result=await cancelFinalUpload(sql,body,user);
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
+    else if(action==='prepare_task_folder_upload')result=await prepareTaskFolderUpload(sql,body,user);
+    else if(action==='delete_task_folder_item')result=await deleteTaskFolderItem(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
     else if(action==='cancel_file_upload')result=await cancelFileUpload(sql,body,user);

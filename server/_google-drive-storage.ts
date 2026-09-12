@@ -212,6 +212,68 @@ export async function getGoogleDriveRuntime(sql: Sql) {
   return { accessToken: await getGoogleDriveAccessToken(sql), rootFolderId: clean(row.root_folder_id) };
 }
 
+export type GoogleDriveFolderItem = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  createdTime: string | null;
+  modifiedTime: string | null;
+  isFolder: boolean;
+  parents: string[];
+};
+
+async function driveFileInfoWithToken(accessToken: string, fileId: string) {
+  return driveJson(accessToken, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(clean(fileId))}?fields=id,name,mimeType,size,parents,webViewLink,webContentLink,appProperties,trashed,createdTime,modifiedTime`);
+}
+
+export async function listGoogleDriveFolder(sql: Sql, folderId: string): Promise<GoogleDriveFolderItem[]> {
+  const id = clean(folderId);
+  if (!id) throw new Error("Google Drive folder is not specified");
+  const runtime = await getGoogleDriveRuntime(sql);
+  const url = new URL("https://www.googleapis.com/drive/v3/files");
+  url.searchParams.set("q", `'${driveQueryText(id)}' in parents and trashed=false`);
+  url.searchParams.set("spaces", "drive");
+  url.searchParams.set("pageSize", "1000");
+  url.searchParams.set("orderBy", "name_natural");
+  url.searchParams.set("fields", "files(id,name,mimeType,size,parents,createdTime,modifiedTime,trashed)");
+  const payload = await driveJson(runtime.accessToken, url.toString());
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  return files
+    .filter((item: any) => clean(item?.id) && item?.trashed !== true)
+    .map((item: any) => ({
+      id: clean(item.id),
+      name: clean(item.name) || "file",
+      mimeType: clean(item.mimeType) || "application/octet-stream",
+      size: Math.max(0, Number(item.size || 0) || 0),
+      createdTime: clean(item.createdTime) || null,
+      modifiedTime: clean(item.modifiedTime) || null,
+      isFolder: clean(item.mimeType) === FOLDER_MIME,
+      parents: Array.isArray(item.parents) ? item.parents.map(clean).filter(Boolean) : [],
+    }))
+    .sort((a: GoogleDriveFolderItem, b: GoogleDriveFolderItem) => Number(b.isFolder) - Number(a.isFolder) || a.name.localeCompare(b.name, "ar"));
+}
+
+export async function googleDrivePathWithinRoot(sql: Sql, itemId: string, rootFolderId: string) {
+  const item = clean(itemId), root = clean(rootFolderId);
+  if (!item || !root) return null;
+  const runtime = await getGoogleDriveRuntime(sql);
+  const reversed: Array<{ id: string; name: string; mimeType: string }> = [];
+  const visited = new Set<string>();
+  let current = item;
+  for (let depth = 0; depth < 30 && current; depth += 1) {
+    if (visited.has(current)) return null;
+    visited.add(current);
+    const info = await driveFileInfoWithToken(runtime.accessToken, current);
+    if (!clean(info.id) || info.trashed === true) return null;
+    reversed.push({ id: clean(info.id), name: clean(info.name) || "Folder", mimeType: clean(info.mimeType) });
+    if (clean(info.id) === root) return reversed.reverse();
+    const parents = Array.isArray(info.parents) ? info.parents.map(clean).filter(Boolean) : [];
+    current = parents[0] || "";
+  }
+  return null;
+}
+
 export async function ensureGoogleDriveFolder(sql: Sql, input: { parentId?: string; name: string; appProperties?: Record<string, string> }) {
   const runtime = await getGoogleDriveRuntime(sql);
   const parentId = clean(input.parentId) || runtime.rootFolderId;
@@ -287,7 +349,7 @@ export async function createGoogleDriveResumableUpload(sql: Sql, input: GoogleDr
 
 export async function getGoogleDriveFileInfo(sql: Sql, externalId: string) {
   const runtime = await getGoogleDriveRuntime(sql);
-  return driveJson(runtime.accessToken, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(clean(externalId))}?fields=id,name,mimeType,size,parents,webViewLink,webContentLink,appProperties,trashed`);
+  return driveFileInfoWithToken(runtime.accessToken, externalId);
 }
 
 export async function findGoogleDriveUploadedFile(sql: Sql, fileId: string) {

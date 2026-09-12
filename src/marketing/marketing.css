@@ -5708,3 +5708,22 @@
 .marketing-publish-final-files { display: grid; gap: 7px; }
 .marketing-publish-download-files { width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid #bcd9c8; border-radius: 8px; background: #eef9f2; color: #246d45; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: 11px; font-weight: 900; cursor: pointer; }
 .marketing-publish-download-files:hover { background: #e3f5e9; border-color: #9fcbb0; }
+
+/* Task execution folders are browsed inside MZJ Platform; Google Drive remains backend storage. */
+.marketing-task-folder-page{display:grid;gap:16px;direction:rtl}
+.marketing-task-folder-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;padding:20px;border:1px solid #eadbd3;border-radius:18px;background:#fff}
+.marketing-task-folder-head>div{display:grid;gap:7px;min-width:0}.marketing-task-folder-head h1{display:flex;align-items:center;gap:9px;margin:0;color:#4c251c;font-size:25px}.marketing-task-folder-head p{margin:0;color:#7b675e;font-weight:600}
+.marketing-task-folder-back{display:inline-flex;align-items:center;gap:6px;width:max-content;padding:0;border:0;background:transparent;color:#6c3329;font-weight:800;cursor:pointer}
+.marketing-task-folder-upload{display:inline-flex!important;align-items:center;justify-content:center;gap:7px;cursor:pointer;white-space:nowrap}.marketing-task-folder-upload input{display:none}
+.marketing-task-folder-upload-progress{display:grid;gap:12px;padding:16px 18px;border:1px solid #eadbd3;border-radius:16px;background:#fff}
+.marketing-task-folder-upload-progress-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.marketing-task-folder-upload-progress-head>div{display:grid;gap:3px}.marketing-task-folder-upload-progress-head strong{overflow:hidden;text-overflow:ellipsis}.marketing-task-folder-upload-progress-head span{font-size:12px;color:#826e65}
+.marketing-task-folder-upload-stats{display:flex;align-items:center;gap:18px;flex-wrap:wrap;color:#6f5a51;font-size:12px;font-weight:700}
+.marketing-task-folder-breadcrumbs{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.marketing-task-folder-breadcrumbs button{border:0;background:#f6eee9;color:#6c3329;border-radius:999px;padding:7px 11px;font-weight:800;cursor:pointer}.marketing-task-folder-breadcrumbs button:disabled{background:#6c3329;color:#fff;cursor:default}
+.marketing-task-folder-card{border:1px solid #eadbd3;border-radius:18px;background:#fff;overflow:hidden}.marketing-task-folder-list{display:grid}.marketing-task-folder-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 15px;border-top:1px solid #f2e9e5}.marketing-task-folder-row:first-child{border-top:0}.marketing-task-folder-row:hover{background:#fffaf7}
+.marketing-task-folder-main{display:flex;align-items:center;gap:12px;min-width:0;flex:1;border:0;background:transparent;text-align:right;cursor:pointer;color:inherit}.marketing-task-folder-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#f7eee9;color:#6c3329;flex:0 0 auto}.marketing-task-folder-name{display:grid;gap:4px;min-width:0}.marketing-task-folder-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.marketing-task-folder-name small{color:#88756c;font-weight:600}
+.marketing-task-folder-actions{display:flex;align-items:center;gap:7px;flex:0 0 auto}.marketing-task-folder-actions button{display:grid;place-items:center;min-width:38px;height:38px;padding:0}
+@media(max-width:760px){.marketing-task-folder-head{align-items:stretch;flex-direction:column}.marketing-task-folder-upload{width:100%}.marketing-task-folder-upload-progress-head{align-items:flex-start;flex-direction:column}.marketing-task-folder-row{align-items:flex-start}.marketing-task-folder-name strong{white-space:normal;overflow-wrap:anywhere}.marketing-task-folder-upload-stats{gap:10px}}
+.marketing-task-folder-upload{min-height:40px;padding:0 14px;border:1px solid #e2cfc7;border-radius:10px;background:#fff;color:#6c3329;font-weight:900;box-shadow:0 4px 12px rgba(81,44,34,.05)}
+.marketing-task-folder-upload:hover{background:#fff9f6;border-color:#cfa895}
+.marketing-task-folder-upload-progress-head button,.marketing-task-folder-actions button{border:1px solid #e2cfc7;border-radius:9px;background:#fff;color:#6c3329;cursor:pointer}
+.marketing-task-folder-upload-progress-head button.danger,.marketing-task-folder-actions button.danger{color:#b93d3d;background:#fff4f2;border-color:#f2ceca}

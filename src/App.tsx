@@ -46,6 +46,7 @@ const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCale
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
 const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
+const TaskFolderPage = lazy(() => import("./marketing/pages/TaskFolderPage").then((module) => ({ default: module.TaskFolderPage })));
 const OwnersCommunityPage = lazy(() => import("./owners/OwnersCommunityPage").then((module) => ({ default: module.OwnersCommunityPage })));
 const OwnersMemberPreviewPage = lazy(() => import("./owners/OwnersMemberPreviewPage").then((module) => ({ default: module.OwnersMemberPreviewPage })));
 const OwnersPortalPage = lazy(() => import("./owners/OwnersPortalPage").then((module) => ({ default: module.OwnersPortalPage })));
@@ -127,6 +128,7 @@ function PlatformRoutes() {
             <Route path="calendar" element={<PermissionGuard permission="marketing.calendar.view"><MarketingCalendarPage /></PermissionGuard>} />
             <Route path="receipt-calendar" element={<PermissionGuard permission="marketing.receipt_calendar.view"><ReceiptCalendarPage /></PermissionGuard>} />
             <Route path="stock" element={<PermissionGuard permission="marketing.stock.view"><StockPage /></PermissionGuard>} />
+            <Route path="task-folder" element={<TaskFolderPage />} />
             <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
             <Route path="attendance" element={<PermissionGuard permission="marketing.attendance.view"><AttendancePage /></PermissionGuard>} />
           </Route>

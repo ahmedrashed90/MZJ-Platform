@@ -155,23 +155,10 @@ function taskExecutionFolders(value: unknown): TaskExecutionFolders | null {
   return folders;
 }
 
-function normalizeExecutionWindowsPath(path: unknown) {
-  let value = String(path || "").trim().replace(/^['"]+|['"]+$/g, "");
-  try { value = decodeURIComponent(value); } catch { /* keep stored path */ }
-  value = value.replace(/^file:\/+/i, "").replace(/\//g, "\\").replace(/\\+$/g, "");
-  return /^[a-z]:\\/i.test(value) ? value : "";
-}
-
-function openExecutionFolder(path: unknown, fallbackUrl: unknown) {
-  const windowsPath = normalizeExecutionWindowsPath(path);
-  if (windowsPath) {
-    // Keep the protocol launch inside the user's click and do not send a trailing
-    // backslash; quoted Explorer arguments ending with a slash can open Documents.
-    window.location.href = `mzjfolder://open?path=${encodeURIComponent(windowsPath)}`;
-    return;
-  }
-  const url = String(fallbackUrl || "").trim();
-  if (url) window.open(url, "_blank", "noopener,noreferrer");
+function openExecutionFolder(taskId: unknown, kind: "raw" | "output") {
+  const id = String(taskId || "").trim();
+  if (!id) return;
+  window.location.assign(`/marketing/task-folder?taskId=${encodeURIComponent(id)}&kind=${kind}`);
 }
 
 
@@ -576,8 +563,8 @@ export function TaskDetailModal({ taskId, onClose, onChanged }: { taskId: string
             <div><h3><FolderOpen size={21} />ملفات التنفيذ</h3><p>فتح فولدر الخام للكرييتيف أو فولدر التسليم الخاص بك مباشرة.</p></div>
           </div>
           <div className="marketing-inline-actions">
-            <button type="button" className="secondary" title={executionFolders.rawWindowsPath} onClick={() => openExecutionFolder(executionFolders.rawWindowsPath, executionFolders.rawFolderUrl)}><FolderOpen size={18} />فتح فولدر RAW</button>
-            <button type="button" className="secondary" title={executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath} onClick={() => openExecutionFolder(executionFolders.userOutputWindowsPath || executionFolders.outputWindowsPath, executionFolders.userOutputFolderUrl || executionFolders.outputFolderUrl)}><FolderOpen size={18} />فتح فولدر OUTPUT</button>
+            <button type="button" className="secondary" onClick={() => openExecutionFolder(task.id, "raw")}><FolderOpen size={18} />فتح فولدر RAW</button>
+            <button type="button" className="secondary" onClick={() => openExecutionFolder(task.id, "output")}><FolderOpen size={18} />فتح فولدر OUTPUT</button>
           </div>
         </section> : null}
 
