@@ -226,7 +226,7 @@ export function TaskFolderPage() {
         if (cancelledRef.current) throw new Error("تم إلغاء رفع الملفات");
         const file = selected[index];
         setUpload({ fileName: file.name, fileIndex: index, fileCount: selected.length, loaded: 0, total: file.size, percent: 0, speed: 0, eta: null, status: "uploading" });
-        const prepared = await marketingFetch<{ uploadUrl: string }>("/api/marketing", {
+        const prepared = await marketingFetch<{ uploadUrl: string; verificationKey: string }>("/api/marketing", {
           method: "POST",
           body: JSON.stringify({
             action: "prepare_task_folder_upload",
@@ -238,7 +238,27 @@ export function TaskFolderPage() {
             fileSize: file.size,
           }),
         });
-        await putFile(file, prepared.uploadUrl, index, selected.length, requestRef, cancelledRef, setUpload);
+        try {
+          await putFile(file, prepared.uploadUrl, index, selected.length, requestRef, cancelledRef, setUpload);
+        } catch (failure) {
+          if (cancelledRef.current) throw failure;
+          // The binary can reach Drive successfully even when the browser cannot read
+          // the cross-origin PUT response. The backend verification below is authoritative.
+        }
+        if (cancelledRef.current) throw new Error("تم إلغاء رفع الملفات");
+        await marketingFetch("/api/marketing", {
+          method: "POST",
+          body: JSON.stringify({
+            action: "verify_task_folder_upload",
+            taskId,
+            kind,
+            folderId: payload.currentFolderId,
+            verificationKey: prepared.verificationKey,
+            fileName: file.name,
+            fileSize: file.size,
+          }),
+        });
+        setUpload((current) => current ? { ...current, loaded: file.size, total: file.size, percent: 100, eta: 0, status: "completed" } : current);
       }
       setMessage(selected.length > 1 ? `تم رفع ${selected.length.toLocaleString("ar-SA-u-nu-latn")} ملفات` : "تم رفع الملف");
       setUpload(null);

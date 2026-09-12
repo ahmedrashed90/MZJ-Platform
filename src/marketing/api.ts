@@ -207,16 +207,22 @@ export async function uploadMarketingFile(input: {
 
   let uploadCompleted = false;
   try {
-    const uploadedPayload = await uploadWholeFile({
-      file: input.file,
-      fileIndex,
-      fileCount,
-      uploadUrl: prepared.uploadUrl,
-      startedAt,
-      cancellation,
-      onProgress: input.onProgress,
-    });
-    uploadCompleted = true;
+    let uploadedPayload: Record<string, unknown> = {};
+    try {
+      uploadedPayload = await uploadWholeFile({
+        file: input.file,
+        fileIndex,
+        fileCount,
+        uploadUrl: prepared.uploadUrl,
+        startedAt,
+        cancellation,
+        onProgress: input.onProgress,
+      });
+    } catch (failure) {
+      if (prepared.storageProvider !== "google-drive" || cancellation.cancelled) throw failure;
+      // Google Drive can finish the binary PUT while the browser cannot read the cross-origin response.
+      // In that case the server verifies the uploaded file by the MZJ appProperties key below.
+    }
     if (cancellation.cancelled) throw uploadCancelledError();
 
     const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.2);
@@ -243,6 +249,7 @@ export async function uploadMarketingFile(input: {
       externalId: externalId || undefined,
       storageProvider: prepared.storageProvider,
     });
+    uploadCompleted = true;
 
     input.onProgress?.({
       fileIndex,
@@ -314,15 +321,22 @@ async function uploadWholeFinalFileToGoogleDrive(input: {
     detail: "جاري تجهيز رفع الملف",
   });
 
-  const uploaded = await uploadWholeFile({
-    file: input.file,
-    fileIndex: input.fileIndex,
-    fileCount: input.fileCount,
-    uploadUrl: input.uploadUrl,
-    startedAt,
-    cancellation: input.cancellation,
-    onProgress: input.onProgress,
-  });
+  let uploaded: Record<string, unknown> = {};
+  try {
+    uploaded = await uploadWholeFile({
+      file: input.file,
+      fileIndex: input.fileIndex,
+      fileCount: input.fileCount,
+      uploadUrl: input.uploadUrl,
+      startedAt,
+      cancellation: input.cancellation,
+      onProgress: input.onProgress,
+    });
+  } catch (failure) {
+    if (input.cancellation.cancelled) throw failure;
+    // Final-file uploads are verified by the server using the upload ticket even when
+    // the browser cannot read Google Drive's cross-origin PUT response.
+  }
 
   if (input.cancellation.cancelled) throw uploadCancelledError();
   const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.2);

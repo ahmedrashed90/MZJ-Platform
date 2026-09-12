@@ -893,8 +893,9 @@ async function prepareTaskFolderUpload(sql:ReturnType<typeof getSql>,body:any,us
   const fileSize=Math.max(0,numberValue(body.fileSize));
   if(fileSize<=0)throw new Error("لا يمكن رفع ملف فارغ");
   const token=createGoogleDriveUploadTicket();
+  const verificationKey=`task-folder-${taskId}-${token.slice(0,18)}`;
   const transfer=await createGoogleDriveResumableUpload(sql,{
-    fileId:`task-folder-${taskId}-${token.slice(0,18)}`,
+    fileId:verificationKey,
     fileName,
     mimeType,
     fileSize,
@@ -902,7 +903,23 @@ async function prepareTaskFolderUpload(sql:ReturnType<typeof getSql>,body:any,us
     storageKey:`marketing/task-folder/${taskId}/${context.kind}/${token}/${fileName}`,
     parentFolderId,
   });
-  return{ok:true,uploadUrl:transfer.uploadUrl,storageProvider:"google-drive",folderId:parentFolderId};
+  return{ok:true,uploadUrl:transfer.uploadUrl,storageProvider:"google-drive",folderId:parentFolderId,verificationKey};
+}
+
+async function verifyTaskFolderUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const taskId=clean(body.taskId);
+  const context=await taskFolderContext(sql,user,taskId,body.kind);
+  if(!context.canUpload)throw new Error("لا توجد صلاحية لرفع ملفات داخل هذا الفولدر");
+  const parentFolderId=clean(body.folderId)||context.rootFolderId;
+  const path=await googleDrivePathWithinRoot(sql,parentFolderId,context.rootFolderId);
+  if(!path?.length||clean(path[path.length-1]?.mimeType)!=="application/vnd.google-apps.folder")throw new Error("الفولدر المطلوب خارج نطاق التاسك");
+  const verificationKey=clean(body.verificationKey);
+  if(!verificationKey||!verificationKey.startsWith(`task-folder-${taskId}-`))throw new Error("بيانات تأكيد رفع الملف غير مكتملة");
+  const expectedSize=Math.max(0,numberValue(body.fileSize));
+  const info=await verifyGoogleDriveUploadedFile(sql,{fileId:verificationKey,expectedSize:expectedSize||null});
+  const parents=Array.isArray(info.parents)?info.parents.map(clean).filter(Boolean):[];
+  if(!parents.includes(parentFolderId))throw new Error("تم رفع الملف خارج الفولدر المطلوب");
+  return{ok:true,fileId:clean(info.id),fileName:clean(info.name)||clean(body.fileName)||"file",folderId:parentFolderId};
 }
 
 async function deleteTaskFolderItem(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -4281,6 +4298,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='cancel_final_upload')result=await cancelFinalUpload(sql,body,user);
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
     else if(action==='prepare_task_folder_upload')result=await prepareTaskFolderUpload(sql,body,user);
+    else if(action==='verify_task_folder_upload')result=await verifyTaskFolderUpload(sql,body,user);
     else if(action==='delete_task_folder_item')result=await deleteTaskFolderItem(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
