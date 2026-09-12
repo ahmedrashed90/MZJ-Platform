@@ -1,0 +1,21 @@
+MZJ Platform v1.16.6 — ERPNext email-only user mapping
+
+Changed:
+- package.json
+- api/index.ts
+- server/users.ts
+- src/pages/SettingsPage.tsx
+- server/_erpnext-sales-order-sync.ts
+- server/_erpnext-integration-schema.ts
+- server/_schema.ts
+- database/schema.sql
+- database/migrations/20260721_erpnext_unified_sales_link_v1166.sql
+- src/operations/components/VehicleDetailModal.tsx
+- scripts/check-erpnext-unified-sales-link-v1166.mjs
+- docs/ERPNEXT-WEBHOOK-IMPLEMENTATION-REPORT-AR.md
+- docs/ERPNEXT-WEBHOOK-TRACKING-AR.md
+- README.md
+
+Removed:
+- scripts/check-erpnext-unified-sales-link-v1164.mjs
+- database/migrations/20260721_erpnext_unified_sales_link_v1164.sql
