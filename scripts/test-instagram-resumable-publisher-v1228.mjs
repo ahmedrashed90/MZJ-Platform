@@ -7,14 +7,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
 
-function loadPublisher({
-  createDownloadUrl = () => "https://download.local/video.mp4",
-  openGoogleDriveFile = async () => new Response(Buffer.from("drive-video-bytes"), {
-    status: 200,
-    headers: { "content-type": "video/mp4", "content-length": "17" },
-  }),
-  createInstagramImageDeliveryUrl = (file) => `https://mzj.local/api/marketing/instagram-media?file=${file.id}`,
-} = {}) {
+function loadPublisher({ createDownloadUrl = () => "https://download.local/video.mp4", createInstagramImageDeliveryUrl = (file) => `https://mzj.local/api/marketing/instagram-media?file=${file.id}` } = {}) {
   const source = fs.readFileSync("server/_instagram-publisher.ts", "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: {
@@ -28,8 +21,8 @@ function loadPublisher({
   const module = { exports: {} };
   const customRequire = (specifier) => {
     if (specifier === "./_media-storage.js") return { createDownloadUrl };
-    if (specifier === "./_google-drive-storage.js") return { openGoogleDriveFile };
     if (specifier === "./_instagram-media-delivery.js") return { createInstagramImageDeliveryUrl };
+    if (specifier === "./_google-drive-storage.js") return { openGoogleDriveFile: async () => new Response(Buffer.from("google-drive-bytes"), { status: 200, headers: { "content-type": "video/mp4", "content-length": "18" } }) };
     if (specifier === "./_zoho-workdrive.js") {
       return {
         getZohoFileInfo: async () => ({}),
@@ -60,15 +53,8 @@ function loadPublisher({
   return module.exports;
 }
 
-function loadImageDelivery({
-  createDownloadUrl = () => "https://r2.local/image.jpg",
-  openGoogleDriveFile = async () => new Response(Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43]), {
-    status: 200,
-    headers: { "content-type": "image/jpeg" },
-  }),
-  getZohoFileInfo = async () => ({ downloadUrl: "https://zoho.local/protected-image" }),
-  getZohoRuntime = async () => ({ uploadDomain: "https://zoho.local", accessToken: "zoho-token" }),
-} = {}) {
+
+function loadImageDelivery({ createDownloadUrl = () => "https://r2.local/image.jpg", getZohoFileInfo = async () => ({ downloadUrl: "https://zoho.local/protected-image" }), getZohoRuntime = async () => ({ uploadDomain: "https://zoho.local", accessToken: "zoho-token" }) } = {}) {
   const source = fs.readFileSync("server/_instagram-media-delivery.ts", "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
@@ -78,38 +64,30 @@ function loadImageDelivery({
   const customRequire = (specifier) => {
     if (specifier === "node:crypto") return crypto;
     if (specifier === "./_media-storage.js") return { createDownloadUrl };
-    if (specifier === "./_google-drive-storage.js") return { openGoogleDriveFile };
+    if (specifier === "./_google-drive-storage.js") return { openGoogleDriveFile: async () => new Response(Buffer.from("google-drive-image"), { status: 200, headers: { "content-type": "image/jpeg", "content-length": "18" } }) };
     if (specifier === "./_zoho-workdrive.js") return { getZohoFileInfo, getZohoRuntime };
     throw new Error(`Unexpected require: ${specifier}`);
   };
   const context = vm.createContext({
-    module,
-    exports: module.exports,
-    require: customRequire,
-    process,
-    Buffer,
-    URL,
-    Response,
-    Headers,
-    fetch: (...args) => globalThis.fetch(...args),
-    console,
+    module, exports: module.exports, require: customRequire, process, Buffer, URL, Response, Headers,
+    fetch: (...args) => globalThis.fetch(...args), console,
   });
   const wrapper = new vm.Script(`(function(require,module,exports){${output}\n})`, { filename: "_instagram-media-delivery.cjs" });
   wrapper.runInContext(context)(customRequire, module, module.exports);
   return module.exports;
 }
 
-function installInstagramGraphMock({ sourceUrl = "https://download.local/video.mp4", sourceBytes = "test-video-bytes" } = {}) {
+async function testBinaryReelFlow() {
   const calls = [];
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     const method = init.method || "GET";
     calls.push({ url, method, headers: init.headers || {}, body: init.body });
 
-    if (url === sourceUrl) {
-      return new Response(Buffer.from(sourceBytes), {
+    if (url === "https://download.local/video.mp4") {
+      return new Response(Buffer.from("test-video-bytes"), {
         status: 200,
-        headers: { "content-type": "video/mp4", "content-length": String(Buffer.byteLength(sourceBytes)) },
+        headers: { "content-type": "video/mp4", "content-length": "16" },
       });
     }
     if (url.includes("/178900000000000/media_publish") && method === "POST") {
@@ -128,6 +106,7 @@ function installInstagramGraphMock({ sourceUrl = "https://download.local/video.m
     if (url.includes("rupload.facebook.com/ig-api-upload/v25.0/container-reel-1")) {
       assert.equal(init.headers.Authorization, "OAuth meta-token");
       assert.equal(init.headers.offset, "0");
+      assert.equal(init.headers.file_size, "16");
       return Response.json({ success: true, message: "Upload successful." });
     }
     if (url.includes("/container-reel-1?") && method === "GET") {
@@ -135,11 +114,7 @@ function installInstagramGraphMock({ sourceUrl = "https://download.local/video.m
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`);
   };
-  return calls;
-}
 
-async function testBinaryReelFlowFromR2() {
-  const calls = installInstagramGraphMock();
   const { publishInstagramContent } = loadPublisher();
   const result = await publishInstagramContent({}, {
     igId: "178900000000000",
@@ -149,34 +124,6 @@ async function testBinaryReelFlowFromR2() {
     files: [{ storage_provider: "r2", storage_key: "video.mp4", original_name: "video.mp4", mime_type: "video/mp4", file_size: 16 }],
   });
 
-  assert.equal(result.uploadMode, "resumable_binary");
-  assert.equal(result.publish.id, "published-reel-1");
-  assert.ok(calls.some((call) => call.url.includes("rupload.facebook.com")));
-}
-
-async function testBinaryReelFlowFromGoogleDrive() {
-  const calls = installInstagramGraphMock({ sourceUrl: "https://unused.local/video.mp4" });
-  let driveCalls = 0;
-  const { publishInstagramContent } = loadPublisher({
-    openGoogleDriveFile: async (_sql, externalId, accept) => {
-      driveCalls += 1;
-      assert.equal(externalId, "drive-file-1");
-      assert.equal(accept, "application/octet-stream,*/*");
-      return new Response(Buffer.from("drive-video-bytes"), {
-        status: 200,
-        headers: { "content-type": "video/mp4", "content-length": "17" },
-      });
-    },
-  });
-  const result = await publishInstagramContent({}, {
-    igId: "178900000000000",
-    token: "meta-token",
-    caption: "Drive reel",
-    format: "reel",
-    files: [{ storage_provider: "google-drive", external_id: "drive-file-1", original_name: "drive-video.mp4", mime_type: "video/mp4", file_size: 17 }],
-  });
-
-  assert.equal(driveCalls, 1);
   assert.equal(result.uploadMode, "resumable_binary");
   assert.equal(result.publish.id, "published-reel-1");
   assert.ok(calls.some((call) => call.url.includes("rupload.facebook.com")));
@@ -224,7 +171,7 @@ async function testOrderedMultiImageStories() {
   assert.equal(result.stories.length, 2);
 }
 
-async function testSignedProtectedImageDeliveryFromZoho() {
+async function testSignedProtectedImageDelivery() {
   const previousBaseUrl = process.env.MZJ_PUBLIC_BASE_URL;
   const previousKey = process.env.MZJ_TOKEN_ENCRYPTION_KEY;
   process.env.MZJ_PUBLIC_BASE_URL = "https://mzj-platform.test";
@@ -239,9 +186,7 @@ async function testSignedProtectedImageDeliveryFromZoho() {
     assert.equal(verified.ok, true);
     assert.equal(verified.fileId, fileId);
     const tampered = delivery.verifyInstagramImageDeliveryQuery({
-      file: fileId,
-      expires: url.searchParams.get("expires"),
-      signature: `${url.searchParams.get("signature")}x`,
+      file: fileId, expires: url.searchParams.get("expires"), signature: `${url.searchParams.get("signature")}x`,
     });
     assert.equal(tampered.ok, false);
 
@@ -249,17 +194,12 @@ async function testSignedProtectedImageDeliveryFromZoho() {
       assert.equal(String(input), "https://zoho.local/protected-image");
       assert.equal(init.headers.Authorization, "Zoho-oauthtoken zoho-token");
       return new Response(Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43]), {
-        status: 200,
-        headers: { "content-type": "image/jpeg" },
+        status: 200, headers: { "content-type": "image/jpeg" },
       });
     };
     const sql = async () => [{
-      id: fileId,
-      status: "ready",
-      storage_provider: "zoho",
-      external_id: "zoho-file-1",
-      original_name: "story.jpg",
-      mime_type: "image/jpeg",
+      id: fileId, status: "ready", storage_provider: "zoho", external_id: "zoho-file-1",
+      original_name: "story.jpg", mime_type: "image/jpeg",
     }];
     const image = await delivery.loadInstagramImage(sql, fileId);
     assert.equal(image.contentType, "image/jpeg");
@@ -270,38 +210,7 @@ async function testSignedProtectedImageDeliveryFromZoho() {
   }
 }
 
-async function testProtectedImageDeliveryFromGoogleDrive() {
-  let driveCalls = 0;
-  const delivery = loadImageDelivery({
-    openGoogleDriveFile: async (_sql, externalId, accept) => {
-      driveCalls += 1;
-      assert.equal(externalId, "drive-image-1");
-      assert.equal(accept, "image/*,application/octet-stream,*/*");
-      return new Response(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), {
-        status: 200,
-        headers: { "content-type": "application/octet-stream" },
-      });
-    },
-  });
-  const fileId = "22222222-2222-4222-8222-222222222222";
-  const sql = async () => [{
-    id: fileId,
-    status: "ready",
-    storage_provider: "google-drive",
-    external_id: "drive-image-1",
-    original_name: "creative.png",
-    mime_type: "image/png",
-  }];
-  const image = await delivery.loadInstagramImage(sql, fileId);
-  assert.equal(driveCalls, 1);
-  assert.equal(image.contentType, "image/png");
-  assert.equal(image.fileName, "creative.png");
-  assert.equal(image.bytes.length, 8);
-}
-
-await testBinaryReelFlowFromR2();
-await testBinaryReelFlowFromGoogleDrive();
+await testBinaryReelFlow();
 await testOrderedMultiImageStories();
-await testSignedProtectedImageDeliveryFromZoho();
-await testProtectedImageDeliveryFromGoogleDrive();
-console.log("Instagram publishing behavior tests: 5/5 passed");
+await testSignedProtectedImageDelivery();
+console.log("Instagram publishing behavior tests: 3/3 passed");

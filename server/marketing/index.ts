@@ -26,6 +26,9 @@ import {
   createGoogleDriveResumableUpload,
   createGoogleDriveUploadTicket,
   deleteGoogleDriveFile,
+  ensureGoogleDriveFolder,
+  findGoogleDriveUploadedFile,
+  googleDriveFolderUrl,
   googleDriveTicketHash,
   openGoogleDriveFile,
   verifyGoogleDriveUploadedFile,
@@ -626,10 +629,26 @@ function normalizedWindowsFolderPath(value: unknown) {
 function repairedExecutionFolders(value: unknown) {
   const folders = objectValue(value);
   if (!folders.linked) return folders;
+  const type = clean(folders.type);
+  if (type === "google_drive") {
+    const rawFolderId = clean(folders.rawFolderId);
+    const outputFolderId = clean(folders.outputFolderId);
+    const userOutputFolderId = clean(folders.userOutputFolderId) || outputFolderId;
+    return {
+      ...folders,
+      version: 5,
+      type: "google_drive",
+      rawFolderUrl: clean(folders.rawFolderUrl) || googleDriveFolderUrl(rawFolderId),
+      outputFolderUrl: clean(folders.outputFolderUrl) || googleDriveFolderUrl(outputFolderId),
+      userOutputFolderUrl: clean(folders.userOutputFolderUrl) || googleDriveFolderUrl(userOutputFolderId),
+      rawWindowsPath: "",
+      outputWindowsPath: "",
+      userOutputWindowsPath: "",
+    };
+  }
+
   const driveLetter = clean(folders.driveLetter) || "Z:";
   const roots = [folders.rawRoot, folders.rootPath, folders.basePath, "/var/www/mzj-raw"];
-  // Translate the exact filesystem paths returned by the RAW server first. The
-  // deterministic path is only a compatibility fallback for older task rows.
   const rawWindowsPath = raidrivePathFromServerPath(folders.rawServerPath, driveLetter, roots)
     || normalizedWindowsFolderPath(folders.rawWindowsPath)
     || raidriveFolderPath(driveLetter, [folders.monthKey, folders.campaignFolderName, folders.creativeFolderName, "01-RAW"]);
@@ -642,6 +661,7 @@ function repairedExecutionFolders(value: unknown) {
   return {
     ...folders,
     version: 4,
+    type: type || "raidrive_sftp",
     rawWindowsPath,
     outputWindowsPath,
     userOutputWindowsPath: userOutputWindowsPath || outputWindowsPath,
@@ -677,14 +697,54 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     || serverUsers.find((item) => normalizedFolderMatch(item.folderName) === normalizedFolderMatch(requestUser.folderName || requestUser.name));
   if (!serverUser) return null;
 
-  const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
   const monthKey = clean(result.monthKey || request.monthKey);
   const campaignCode = clean(result.campaignCode || request.campaignCode);
   const campaignFolderName = clean(result.campaignFolderName || request.campaignFolderName || request.campaignDisplayName || campaignCode);
   const creativeFolderName = clean(serverCreative.folderName || requestCreative.folderName || requestCreative.name);
   const userFolderName = clean(serverUser.folderName || requestUser.folderName || requestUser.name);
-  const rawRoots = [result.rawRoot, result.rootPath, result.basePath, request.remoteRoot, request.rawRoot];
+  const subFolders = objectValue(serverCreative.subFolders);
 
+  const googleDriveResult = clean(result.storageProvider || result.type) === "google-drive"
+    || clean(serverCreative.storageProvider || serverCreative.type) === "google-drive"
+    || Boolean(clean(serverCreative.rawFolderId));
+  if (googleDriveResult) {
+    const rawFolderId = clean(serverCreative.rawFolderId);
+    const outputFolderId = clean(serverCreative.outputFolderId);
+    const userOutputFolderId = clean(serverUser.folderId || serverUser.outputFolderId) || outputFolderId;
+    const rawFolderUrl = clean(serverCreative.rawFolderUrl || subFolders.raw) || googleDriveFolderUrl(rawFolderId);
+    const outputFolderUrl = clean(serverCreative.outputFolderUrl || subFolders.output) || googleDriveFolderUrl(outputFolderId);
+    const userOutputFolderUrl = clean(serverUser.outputFolderUrl || serverUser.folderUrl) || googleDriveFolderUrl(userOutputFolderId);
+    if (!rawFolderId || !userOutputFolderId || !rawFolderUrl || !userOutputFolderUrl) return null;
+    return {
+      linked: true,
+      version: 5,
+      type: "google_drive",
+      storageProvider: "google-drive",
+      monthKey,
+      campaignCode,
+      campaignFolderName,
+      creativeFolderName,
+      userFolderName,
+      creativeInstanceId: clean(serverCreative.creativeInstanceId || requestCreative.creativeInstanceId),
+      assignedUserId: assignedTo,
+      rootFolderId: clean(result.rootFolderId),
+      monthFolderId: clean(result.monthFolderId),
+      campaignFolderId: clean(result.campaignFolderId),
+      creativeFolderId: clean(serverCreative.folderId || serverCreative.creativeFolderId),
+      rawFolderId,
+      outputFolderId,
+      userOutputFolderId,
+      rawFolderUrl,
+      outputFolderUrl,
+      userOutputFolderUrl,
+      rawWindowsPath: "",
+      outputWindowsPath: "",
+      userOutputWindowsPath: "",
+    };
+  }
+
+  const driveLetter = clean(request.driveLetter || result.driveLetter) || "Z:";
+  const rawRoots = [result.rawRoot, result.rootPath, result.basePath, request.remoteRoot, request.rawRoot];
   const campaignServerPath = firstText(result, ["campaignFolderPath", "folderPath", "campaignPath"])
     || joinServerPath(firstText(result, ["rawRoot", "rootPath", "basePath"]) || request.remoteRoot || request.rawRoot, monthKey, campaignFolderName);
   const creativeServerPath = firstText(serverCreative, ["folderPath", "creativeFolderPath", "path"])
@@ -695,11 +755,6 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     || joinServerPath(creativeServerPath, "02-OUTPUT");
   const userOutputServerPath = firstText(serverUser, ["folderPath", "outputFolderPath", "path"])
     || joinServerPath(outputServerPath, userFolderName);
-
-  // The RAW server's folderPath values are authoritative because they contain
-  // its exact safeName output. Translate those paths to the RaiDrive mount; do
-  // not guess folder names from the form, which makes Explorer fall back to
-  // Documents when the guessed directory does not exist.
   const explicitRawWindowsPath = firstText(serverCreative, ["rawWindowsPath", "windowsRawPath"]);
   const explicitOutputWindowsPath = firstText(serverCreative, ["outputWindowsPath", "windowsOutputPath"]);
   const explicitUserOutputWindowsPath = firstText(serverUser, ["userOutputWindowsPath", "outputWindowsPath", "windowsPath"]);
@@ -714,7 +769,6 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     || raidriveFolderPath(driveLetter, [monthKey, campaignFolderName, creativeFolderName, "02-OUTPUT", userFolderName]);
   if (!rawWindowsPath || !userOutputWindowsPath) return null;
 
-  const subFolders = objectValue(serverCreative.subFolders);
   return {
     linked: true,
     version: 4,
@@ -737,6 +791,16 @@ function executionFoldersForTask(creationValue: unknown, input: ExecutionFolderL
     outputWindowsPath,
     userOutputWindowsPath,
   };
+}
+
+
+async function googleDriveTaskUploadParent(sql:ReturnType<typeof getSql>,taskId:string){
+  const id=clean(taskId);
+  if(!id)return"";
+  const[task]=await sql<any[]>`select execution_folders from marketing.tasks where id=${id}::uuid and is_deleted=false`;
+  const folders=repairedExecutionFolders(task?.execution_folders);
+  if(clean(folders.type)!=="google_drive")return"";
+  return clean(folders.userOutputFolderId||folders.outputFolderId||folders.creativeFolderId);
 }
 
 async function createTasksForCreative(tx: any, input: { sourceType: "campaign" | "agenda"; sourceId: string; campaignId?: string | null; agendaId?: string | null; sourceCode: string; sourceName: string; creativeId: string; creativeName: string; creativeType: string; contentDepartmentId: string; contentAssignments: any[]; primaryDepartmentId?: string; primaryAssignments: any[]; optionalAssignments: any[]; requiredFromContent?: string; executionFolderCreation?: unknown; creativeFolderLinkId?: string }) {
@@ -2282,6 +2346,7 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
   `;
   const uploads:any[]=[];
   const storageContext=await marketingStorageContext(sql,task.source_type,task.source_id,taskId);
+  const driveParentFolderId=await googleDriveTaskUploadParent(sql,taskId);
   try{
     for(const item of requested){
       const storageKey=buildMarketingStorageKey({
@@ -2302,6 +2367,7 @@ async function prepareFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:Se
         fileSize:item.size,
         category:'final-file',
         storageKey,
+        parentFolderId:driveParentFolderId||undefined,
       });
       await sql`
         insert into marketing.google_drive_upload_tickets(ticket_hash,file_id,final_media_group_id,task_id,status,expires_at,created_by)
@@ -2355,16 +2421,18 @@ async function deleteFinalUploadStaging(storageKey:string){
 
 async function commitFinalFileUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
   const ticket=clean(body.ticket),externalId=clean(body.externalId);
-  if(!ticket||!externalId)throw new Error("بيانات تأكيد رفع Google Drive غير مكتملة");
+  if(!ticket)throw new Error("بيانات تأكيد رفع Google Drive غير مكتملة");
   const row=await finalUploadTicket(sql,ticket,user);
-  const info=await verifyGoogleDriveUploadedFile(sql,{externalId,fileId:row.file_id,expectedSize:Number(row.file_size||0)});
+  const info=await verifyGoogleDriveUploadedFile(sql,{externalId:externalId||undefined,fileId:row.file_id,expectedSize:Number(row.file_size||0)});
+  const resolvedExternalId=clean(info.id);
+  if(!resolvedExternalId)throw new Error("تعذر تحديد ملف Google Drive بعد اكتمال الرفع");
   const parents=Array.isArray(info.parents)?info.parents:[];
   const externalUrl=clean(info.webViewLink||info.webContentLink)||null;
   const finalName=clean(info.name)||clean(row.original_name);
   await sql.begin(async tx=>{
     await tx`
       update marketing.files
-      set status='ready',storage_provider='google-drive',external_id=${externalId},external_parent_id=${clean(parents[0])||null},
+      set status='ready',storage_provider='google-drive',external_id=${resolvedExternalId},external_parent_id=${clean(parents[0])||null},
           external_url=${externalUrl},original_name=${finalName},upload_error=null,updated_at=now()
       where id=${row.file_id}::uuid
     `;
@@ -2375,7 +2443,7 @@ async function commitFinalFileUpload(sql:ReturnType<typeof getSql>,body:any,user
     `;
     if(Number(counts?.total||0)>0&&Number(counts?.total||0)===Number(counts?.ready||0))await tx`update marketing.final_media_groups set status='ready',updated_at=now() where id=${row.final_media_group_id}::uuid`;
   });
-  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:externalId,fileName:finalName};
+  return{ok:true,fileId:row.file_id,groupId:row.final_media_group_id,resourceId:resolvedExternalId,fileName:finalName};
 }
 
 async function cancelFinalUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -2451,6 +2519,7 @@ async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:Session
   const storageKey=buildMarketingStorageKey({...storageContext,category,fileName});
 
   if(category==='first-file'||category==='final-file'){
+    const driveParentFolderId=await googleDriveTaskUploadParent(sql,taskId);
     const[file]=await sql<any[]>`
       insert into marketing.files(storage_key,original_name,mime_type,file_size,category,source_type,source_id,task_id,status,uploaded_by,storage_provider)
       values(${storageKey},${fileName},${mimeType},${fileSize},${category},${sourceType||null},${sourceId?sql`${sourceId}::uuid`:null},${taskId?sql`${taskId}::uuid`:null},'uploading',${user.id}::uuid,'google-drive')
@@ -2464,6 +2533,7 @@ async function prepareUpload(sql:ReturnType<typeof getSql>,body:any,user:Session
         fileSize:Number(fileSize||0),
         category,
         storageKey,
+        parentFolderId:driveParentFolderId||undefined,
       });
       return{ok:true,fileId:file.id,storageKey,storageProvider:'google-drive',uploadUrl:transfer.uploadUrl};
     }catch(error){
@@ -2493,12 +2563,13 @@ async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:Session
 
   if(clean(file.storage_provider)==='google-drive'){
     const externalId=clean(body.externalId);
-    if(!externalId)throw new Error("معرف ملف Google Drive غير موجود");
-    const info=await verifyGoogleDriveUploadedFile(sql,{externalId,fileId,expectedSize:Number(file.file_size||0)});
+    const info=await verifyGoogleDriveUploadedFile(sql,{externalId:externalId||undefined,fileId,expectedSize:Number(file.file_size||0)});
+    const resolvedExternalId=clean(info.id);
+    if(!resolvedExternalId)throw new Error("تعذر تحديد ملف Google Drive بعد اكتمال الرفع");
     const parents=Array.isArray(info.parents)?info.parents:[];
     const rows=await sql<any[]>`
       update marketing.files
-      set status='ready',external_id=${externalId},external_parent_id=${clean(parents[0])||null},external_url=${clean(info.webViewLink||info.webContentLink)||null},updated_at=now()
+      set status='ready',external_id=${resolvedExternalId},external_parent_id=${clean(parents[0])||null},external_url=${clean(info.webViewLink||info.webContentLink)||null},updated_at=now()
       where id=${fileId}::uuid and status='uploading'
       returning id::text
     `;
@@ -2509,6 +2580,37 @@ async function markFileReady(sql:ReturnType<typeof getSql>,body:any,user:Session
   const rows=await sql<any[]>`update marketing.files set status='ready',updated_at=now() where id=${fileId}::uuid and status='uploading' returning id::text`;
   if(!rows.length)throw new Error(file.status==="ready"?"تم حفظ الملف مسبقًا":"تعذر تحديث حالة الملف");
   return{ok:true,message:"تم حفظ الملف"};
+}
+
+async function cancelFileUpload(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  const fileId=clean(body.fileId);
+  if(!fileId)throw new Error("الملف غير محدد");
+  const[file]=await sql<any[]>`
+    select id::text,category,task_id::text,source_type,source_id::text,status,uploaded_by::text,storage_provider,external_id
+    from marketing.files where id=${fileId}::uuid
+  `;
+  if(!file)return{ok:true,message:"تم إلغاء الرفع"};
+  if(file.uploaded_by!==user.id&&!hasPermission(user,"marketing.file.view_others"))throw new Error("لا توجد صلاحية لإلغاء رفع الملف");
+  if(file.category==="first-file")await requireFirstFileUploadAccess(sql,user,file.task_id);
+  else if(file.category==="final-file")await requireFinalFileUploadAccess(sql,user,file.task_id);
+  else if(file.category==="task-template")await requireTaskTemplateUploadAccess(sql,user,file.task_id);
+  else if(!hasPermission(user,"marketing.file.upload"))throw new Error("لا توجد صلاحية لإلغاء رفع الملف");
+  if(file.status==='ready')return{ok:true,message:"تم حفظ الملف مسبقًا"};
+
+  if(clean(file.storage_provider)==='google-drive'){
+    const externalId=clean(file.external_id);
+    if(externalId)await deleteGoogleDriveFile(sql,externalId).catch(()=>undefined);
+    else{
+      const driveFile=await findGoogleDriveUploadedFile(sql,fileId).catch(()=>null);
+      if(clean(driveFile?.id))await deleteGoogleDriveFile(sql,clean(driveFile.id)).catch(()=>undefined);
+    }
+  }else if(clean(file.storage_provider)!=='zoho'&&clean(file.storage_provider)!=='google-drive'){
+    const[row]=await sql<any[]>`select storage_key from marketing.files where id=${fileId}::uuid`;
+    const storageKey=clean(row?.storage_key);
+    if(storageKey&&mediaStorageConfigured())await fetch(createDeleteUrl(storageKey,900),{method:'DELETE'}).catch(()=>undefined);
+  }
+  await sql`delete from marketing.files where id=${fileId}::uuid and status<>'ready'`;
+  return{ok:true,message:"تم إلغاء الرفع"};
 }
 
 async function deleteFirstFile(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
@@ -3908,27 +4010,85 @@ async function createPhotoRequest(sql:ReturnType<typeof getSql>,body:any,user:Se
 async function userColors(sql:ReturnType<typeof getSql>){const rows=await sql<any[]>`select u.id::text,u.full_name,u.email,coalesce(c.color,'#6c3329') as color from core.users u left join marketing.user_colors c on c.user_id=u.id where u.is_active=true and coalesce(u.disabled_reason,'') not like 'ACCOUNT_DELETED:%' and exists(select 1 from core.user_system_departments du where du.user_id=u.id and du.system_code='marketing') order by u.full_name`;return{ok:true,rows};}
 async function saveUserColors(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){if(!hasPermission(user,"settings.marketing.manage"))throw new Error("لا توجد صلاحية لإدارة ألوان المستخدمين");for(const item of arrayValue(body.colors)){const userId=clean(item.userId),color=clean(item.color);if(!userId||!/^#[0-9a-fA-F]{6}$/.test(color))continue;await sql`insert into marketing.user_colors(user_id,color,updated_by,updated_at) values(${userId}::uuid,${color},${user.id}::uuid,now()) on conflict(user_id) do update set color=excluded.color,updated_by=excluded.updated_by,updated_at=now()`;}return{ok:true,message:"تم حفظ ألوان المسؤولين"};}
 
-function rawApiToken(){
-  const configured=clean(process.env.MZJ_RAW_API_TOKEN||process.env.MZJ_RAW_SECRET||process.env.RAW_API_TOKEN);
-  if(configured)return configured;
-  if(clean(process.env.MZJ_RAW_ALLOW_LEGACY_TOKEN).toLowerCase()==='false')return'';
-  return'MZJ_RAW_SECRET_2026_CHANGE_ME';
-}
-async function createRawFolders(body:any){
-  const url=clean(process.env.MZJ_RAW_API_URL)||'http://152.239.121.92:8080/api/create-raw-folders';
-  const token=rawApiToken();
-  if(!token)throw new Error("بيانات ربط سيرفر فولدرات الخام غير مكتملة");
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),30000);
-  try{
-    const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-api-token':token,authorization:`Bearer ${token}`},body:JSON.stringify(body.payload||body),signal:controller.signal});
-    const payload=await response.json().catch(()=>({}));
-    if(!response.ok||payload.ok===false)throw new Error(payload.message||payload.error||`تعذر إنشاء فولدرات الخام (${response.status})`);
-    return payload;
-  }catch(error:any){
-    if(error?.name==='AbortError')throw new Error("انتهت مهلة الاتصال بسيرفر فولدرات الخام");
-    throw error;
-  }finally{clearTimeout(timeout);}
+async function createRawFolders(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
+  if(!hasPermission(user,"marketing.campaign.create")&&!hasPermission(user,"marketing.agenda.create")&&!hasPermission(user,"marketing.campaign.edit")&&!hasPermission(user,"marketing.agenda.edit"))throw new Error("لا توجد صلاحية لإنشاء فولدرات الخام");
+  const payload=objectValue(body.payload||body);
+  const monthKey=clean(payload.monthKey);
+  const campaignCode=clean(payload.campaignCode);
+  const campaignFolderName=clean(payload.campaignFolderName||payload.campaignDisplayName||campaignCode);
+  const creatives=arrayValue<Record<string,any>>(payload.creatives);
+  if(!monthKey)throw new Error("شهر الحملة أو الأجندة غير محدد");
+  if(!campaignFolderName)throw new Error("اسم فولدر الحملة أو الأجندة غير محدد");
+  if(!creatives.length)throw new Error("لا توجد تاسكات لإنشاء فولدراتها");
+
+  const monthFolder=await ensureGoogleDriveFolder(sql,{name:monthKey,appProperties:{mzjKind:"month",mzjMonthKey:monthKey}});
+  const campaignFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(monthFolder.id),name:campaignFolderName,appProperties:{mzjKind:"source",mzjCode:campaignCode||monthKey}});
+  const rawFolders:Record<string,any>={};
+
+  for(const creative of creatives){
+    const creativeInstanceId=clean(creative.creativeInstanceId||creative.id||creative.folderName||creative.name);
+    const creativeFolderName=clean(creative.folderName||creative.name||creativeInstanceId)||"Task";
+    const creativeFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(campaignFolder.id),name:creativeFolderName,appProperties:{mzjKind:"task",mzjInstance:creativeInstanceId.slice(0,120)}});
+    const rawFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(creativeFolder.id),name:"01-RAW",appProperties:{mzjKind:"raw"}});
+    const outputFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(creativeFolder.id),name:"02-OUTPUT",appProperties:{mzjKind:"output"}});
+    const users:Record<string,any>={};
+    for(const rawUser of arrayValue<Record<string,any>>(creative.users)){
+      const uid=clean(rawUser.uid||rawUser.id);
+      if(!uid)continue;
+      const name=clean(rawUser.name||rawUser.fullName||rawUser.full_name||uid);
+      const userFolderName=clean(rawUser.folderName||name||uid);
+      const userFolder=await ensureGoogleDriveFolder(sql,{parentId:clean(outputFolder.id),name:userFolderName,appProperties:{mzjKind:"user-output",mzjUserId:uid.slice(0,120)}});
+      users[uid]={
+        uid,
+        name,
+        folderName:userFolderName,
+        folderId:clean(userFolder.id),
+        outputFolderId:clean(userFolder.id),
+        folderUrl:clean(userFolder.webViewLink)||googleDriveFolderUrl(userFolder.id),
+        outputFolderUrl:clean(userFolder.webViewLink)||googleDriveFolderUrl(userFolder.id),
+      };
+    }
+    const key=creativeInstanceId||creativeFolderName;
+    rawFolders[key]={
+      name:clean(creative.name)||creativeFolderName,
+      folderName:creativeFolderName,
+      creativeInstanceId,
+      creativeIndex:numberValue(creative.creativeIndex)||null,
+      storageProvider:"google-drive",
+      type:"google_drive",
+      folderId:clean(creativeFolder.id),
+      creativeFolderId:clean(creativeFolder.id),
+      folderUrl:clean(creativeFolder.webViewLink)||googleDriveFolderUrl(creativeFolder.id),
+      rawFolderId:clean(rawFolder.id),
+      outputFolderId:clean(outputFolder.id),
+      rawFolderUrl:clean(rawFolder.webViewLink)||googleDriveFolderUrl(rawFolder.id),
+      outputFolderUrl:clean(outputFolder.webViewLink)||googleDriveFolderUrl(outputFolder.id),
+      subFolders:{
+        raw:clean(rawFolder.webViewLink)||googleDriveFolderUrl(rawFolder.id),
+        output:clean(outputFolder.webViewLink)||googleDriveFolderUrl(outputFolder.id),
+      },
+      users,
+    };
+  }
+
+  const rootFolderId=clean(Array.isArray(monthFolder.parents)?monthFolder.parents[0]:"");
+  return{
+    ok:true,
+    message:"تم إنشاء فولدرات الخام والتسليم على Google Drive وربطها بالتاسكات",
+    storageProvider:"google-drive",
+    type:"google-drive",
+    monthKey,
+    campaignCode,
+    campaignFolderName,
+    rootFolderId,
+    monthFolderId:clean(monthFolder.id),
+    campaignFolderId:clean(campaignFolder.id),
+    campaignFolderPath:`${monthKey}/${campaignFolderName}`,
+    folderPath:`${monthKey}/${campaignFolderName}`,
+    campaignPath:`${monthKey}/${campaignFolderName}`,
+    campaignFolderUrl:clean(campaignFolder.webViewLink)||googleDriveFolderUrl(campaignFolder.id),
+    rawFolders,
+  };
 }
 
 export default async function handler(request: VercelRequest, response: VercelResponse) {
@@ -3991,6 +4151,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='attach_final_media_group')result=await attachFinalMediaGroup(sql,body,user);
     else if(action==='prepare_upload')result=await prepareUpload(sql,body,user);
     else if(action==='mark_file_ready')result=await markFileReady(sql,body,user);
+    else if(action==='cancel_file_upload')result=await cancelFileUpload(sql,body,user);
     else if(action==='delete_first_file')result=await deleteFirstFile(sql,body,user);
     else if(action==='save_publish_prep')result=await savePublishPrep(sql,body,user);
     else if(action==='create_manual_publish_entry')result=await createManualPublishEntry(sql,body,user);
@@ -4015,7 +4176,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='complete_photo_request')result=await completeMarketingPhotoRequest(sql,clean(body.id),user,clean(body.note));
     else if(action==='save_user_colors')result=await saveUserColors(sql,body,user);
     else if(action==='migrate_r2_storage_names')result=await migrateMarketingR2StorageNames(sql,body,user);
-    else if(action==='create_raw_folders')result=await createRawFolders(body);
+    else if(action==='create_raw_folders')result=await createRawFolders(sql,body,user);
     else throw new Error("الإجراء غير مدعوم");
     await audit(sql,user,action,'marketing',clean(result?.id||body.id)||null,result,undefined,requestIp(request)).catch(()=>undefined);
     await emitMarketingNotification(user, action, body, result).catch((error) => console.error("Marketing notification failed", error));

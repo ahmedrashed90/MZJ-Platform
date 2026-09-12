@@ -29,54 +29,6 @@ export function marketingDate(value: unknown, withTime = false) {
   return withTime ? date.toLocaleString("ar-SA-u-nu-latn") : date.toLocaleDateString("ar-SA-u-nu-latn");
 }
 
-export async function uploadMarketingFile(input: {
-  file: File;
-  category: string;
-  sourceType?: string;
-  sourceId?: string;
-  taskId?: string;
-}) {
-  const prepared = await marketingFetch<{ fileId: string; uploadUrl: string; storageProvider?: string }>("/api/marketing", {
-    method: "POST",
-    body: JSON.stringify({
-      action: "prepare_upload",
-      category: input.category,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-      taskId: input.taskId,
-      fileName: input.file.name,
-      mimeType: input.file.type || "application/octet-stream",
-      fileSize: input.file.size,
-    }),
-  });
-  const uploaded = await fetch(prepared.uploadUrl, { method: "PUT", body: input.file, headers: { "content-type": input.file.type || "application/octet-stream" } });
-  if (!uploaded.ok) throw new Error("تعذر رفع الملف إلى التخزين");
-  const uploadedPayload = prepared.storageProvider === "google-drive" ? await uploaded.json().catch(() => ({} as Record<string, unknown>)) : {};
-  const externalId = String((uploadedPayload as Record<string, unknown>).id || "").trim();
-  if (prepared.storageProvider === "google-drive" && !externalId) throw new Error("تعذر تأكيد رفع الملف إلى Google Drive");
-  await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "mark_file_ready", fileId: prepared.fileId, category: input.category, sourceType: input.sourceType, sourceId: input.sourceId, taskId: input.taskId, externalId }) });
-  return prepared.fileId;
-}
-
-export async function downloadMarketingFile(fileId: string) {
-  const url = `/api/marketing${marketingQuery({ resource: "file", id: fileId })}`;
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-export function downloadMarketingFiles(fileIds: string[]) {
-  const ids = [...new Set(fileIds.map((fileId) => String(fileId || "").trim()).filter(Boolean))];
-  ids.forEach((fileId, index) => {
-    window.setTimeout(() => {
-      const anchor = document.createElement("a");
-      anchor.href = `/api/marketing${marketingQuery({ resource: "file", id: fileId, download: 1 })}`;
-      anchor.download = "";
-      anchor.style.display = "none";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-    }, index * 120);
-  });
-}
 export type MarketingFinalUploadStatus = "pending" | "uploading" | "verifying" | "completed" | "cancelled" | "error";
 
 export type MarketingFinalUploadProgress = {
@@ -113,12 +65,12 @@ export function createMarketingFinalUploadCancellation(): MarketingFinalUploadCa
 }
 
 function uploadCancelledError() {
-  const error = new Error("تم إلغاء رفع الملف النهائي");
+  const error = new Error("تم إلغاء رفع الملف");
   error.name = "UploadCancelledError";
   return error;
 }
 
-function uploadWholeFinalFile(input: {
+function uploadWholeFile(input: {
   file: File;
   fileIndex: number;
   fileCount: number;
@@ -146,20 +98,20 @@ function uploadWholeFinalFile(input: {
         fileName: input.file.name,
         loaded,
         total: input.file.size,
-        percent: Math.min(100, Math.round((loaded / input.file.size) * 100)),
+        percent: input.file.size > 0 ? Math.min(100, Math.round((loaded / input.file.size) * 100)) : 100,
         speedBytesPerSecond,
         etaSeconds: speedBytesPerSecond > 0 ? Math.ceil(remaining / speedBytesPerSecond) : null,
         status: "uploading",
-        detail: "جاري رفع الملف كاملًا بدون تجزئة",
+        detail: "جاري رفع الملف إلى Google Drive",
       });
     };
 
-    xhr.onerror = () => reject(new Error("تعذر رفع الملف الكامل إلى التخزين المؤقت"));
-    xhr.ontimeout = () => reject(new Error("انتهت مهلة رفع الملف الكامل"));
+    xhr.onerror = () => reject(new Error("تعذر رفع الملف إلى التخزين"));
+    xhr.ontimeout = () => reject(new Error("انتهت مهلة رفع الملف"));
     xhr.onabort = () => reject(uploadCancelledError());
     xhr.onload = () => {
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(`تعذر رفع الملف الكامل (${xhr.status})`));
+        reject(new Error(`تعذر رفع الملف (${xhr.status})`));
         return;
       }
       let payload: Record<string, unknown> = {};
@@ -170,6 +122,171 @@ function uploadWholeFinalFile(input: {
     xhr.send(input.file);
   }).finally(() => {
     input.cancellation.currentRequest = null;
+  });
+}
+
+async function confirmMarketingFileReady(input: {
+  fileId: string;
+  category: string;
+  sourceType?: string;
+  sourceId?: string;
+  taskId?: string;
+  externalId?: string;
+  storageProvider?: string;
+}) {
+  const attempts = input.storageProvider === "google-drive" ? 4 : 1;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await marketingFetch("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "mark_file_ready",
+          fileId: input.fileId,
+          category: input.category,
+          sourceType: input.sourceType,
+          sourceId: input.sourceId,
+          taskId: input.taskId,
+          externalId: input.externalId || undefined,
+        }),
+      });
+      return;
+    } catch (failure) {
+      lastError = failure;
+      if (attempt + 1 < attempts) await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("تعذر تأكيد حفظ الملف");
+}
+
+export async function uploadMarketingFile(input: {
+  file: File;
+  category: string;
+  sourceType?: string;
+  sourceId?: string;
+  taskId?: string;
+  fileIndex?: number;
+  fileCount?: number;
+  cancellation?: MarketingFinalUploadCancellation;
+  onProgress?: (progress: MarketingFinalUploadProgress) => void;
+}) {
+  const fileIndex = Math.max(0, Number(input.fileIndex || 0));
+  const fileCount = Math.max(1, Number(input.fileCount || 1));
+  const cancellation = input.cancellation || createMarketingFinalUploadCancellation();
+  const prepared = await marketingFetch<{ fileId: string; uploadUrl: string; storageProvider?: string }>("/api/marketing", {
+    method: "POST",
+    body: JSON.stringify({
+      action: "prepare_upload",
+      category: input.category,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      taskId: input.taskId,
+      fileName: input.file.name,
+      mimeType: input.file.type || "application/octet-stream",
+      fileSize: input.file.size,
+    }),
+  });
+  if (cancellation.cancelled) {
+    await marketingFetch("/api/marketing", { method: "POST", body: JSON.stringify({ action: "cancel_file_upload", fileId: prepared.fileId }) }).catch(() => undefined);
+    throw uploadCancelledError();
+  }
+
+  const startedAt = performance.now();
+  input.onProgress?.({
+    fileIndex,
+    fileCount,
+    fileName: input.file.name,
+    loaded: 0,
+    total: input.file.size,
+    percent: 0,
+    speedBytesPerSecond: 0,
+    etaSeconds: null,
+    status: "pending",
+    detail: "جاري تجهيز رفع الملف",
+  });
+
+  let uploadCompleted = false;
+  try {
+    const uploadedPayload = await uploadWholeFile({
+      file: input.file,
+      fileIndex,
+      fileCount,
+      uploadUrl: prepared.uploadUrl,
+      startedAt,
+      cancellation,
+      onProgress: input.onProgress,
+    });
+    uploadCompleted = true;
+    if (cancellation.cancelled) throw uploadCancelledError();
+
+    const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.2);
+    const externalId = prepared.storageProvider === "google-drive" ? String(uploadedPayload.id || "").trim() : "";
+    input.onProgress?.({
+      fileIndex,
+      fileCount,
+      fileName: input.file.name,
+      loaded: input.file.size,
+      total: input.file.size,
+      percent: 100,
+      speedBytesPerSecond: input.file.size / elapsedSeconds,
+      etaSeconds: 0,
+      status: "verifying",
+      detail: prepared.storageProvider === "google-drive" ? "اكتمل الرفع، جاري تأكيد الملف على Google Drive" : "اكتمل الرفع، جاري حفظ الملف",
+    });
+
+    await confirmMarketingFileReady({
+      fileId: prepared.fileId,
+      category: input.category,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      taskId: input.taskId,
+      externalId: externalId || undefined,
+      storageProvider: prepared.storageProvider,
+    });
+
+    input.onProgress?.({
+      fileIndex,
+      fileCount,
+      fileName: input.file.name,
+      loaded: input.file.size,
+      total: input.file.size,
+      percent: 100,
+      speedBytesPerSecond: input.file.size / elapsedSeconds,
+      etaSeconds: 0,
+      status: "completed",
+      detail: prepared.storageProvider === "google-drive" ? "تم رفع الملف إلى Google Drive" : "تم رفع الملف",
+    });
+    return prepared.fileId;
+  } catch (failure) {
+    if (!uploadCompleted || cancellation.cancelled) {
+      await marketingFetch("/api/marketing", {
+        method: "POST",
+        body: JSON.stringify({ action: "cancel_file_upload", fileId: prepared.fileId }),
+      }).catch(() => undefined);
+    }
+    throw failure;
+  } finally {
+    cancellation.currentRequest = null;
+  }
+}
+
+export async function downloadMarketingFile(fileId: string) {
+  const url = `/api/marketing${marketingQuery({ resource: "file", id: fileId })}`;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+export function downloadMarketingFiles(fileIds: string[]) {
+  const ids = [...new Set(fileIds.map((fileId) => String(fileId || "").trim()).filter(Boolean))];
+  ids.forEach((fileId, index) => {
+    window.setTimeout(() => {
+      const anchor = document.createElement("a");
+      anchor.href = `/api/marketing${marketingQuery({ resource: "file", id: fileId, download: 1 })}`;
+      anchor.download = "";
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    }, index * 120);
   });
 }
 
@@ -194,10 +311,10 @@ async function uploadWholeFinalFileToGoogleDrive(input: {
     speedBytesPerSecond: 0,
     etaSeconds: null,
     status: "pending",
-    detail: "جاري تجهيز رفع الملف الكامل",
+    detail: "جاري تجهيز رفع الملف",
   });
 
-  const uploaded = await uploadWholeFinalFile({
+  const uploaded = await uploadWholeFile({
     file: input.file,
     fileIndex: input.fileIndex,
     fileCount: input.fileCount,
@@ -219,14 +336,13 @@ async function uploadWholeFinalFileToGoogleDrive(input: {
     speedBytesPerSecond: input.file.size / elapsedSeconds,
     etaSeconds: 0,
     status: "verifying",
-    detail: "اكتمل رفع الملف كاملًا، جاري تأكيده على Google Drive",
+    detail: "اكتمل الرفع، جاري تأكيد الملف على Google Drive",
   });
 
   const externalId = String(uploaded.id || "").trim();
-  if (!externalId) throw new Error("تعذر تأكيد معرف الملف على Google Drive");
   const committed = await marketingFetch<Record<string, unknown>>("/api/marketing", {
     method: "POST",
-    body: JSON.stringify({ action: "commit_final_file_upload", ticket: input.ticket, externalId }),
+    body: JSON.stringify({ action: "commit_final_file_upload", ticket: input.ticket, externalId: externalId || undefined }),
   });
   input.onProgress?.({
     fileIndex: input.fileIndex,
@@ -238,7 +354,7 @@ async function uploadWholeFinalFileToGoogleDrive(input: {
     speedBytesPerSecond: input.file.size / elapsedSeconds,
     etaSeconds: 0,
     status: "completed",
-    detail: "تم رفع الملف كاملًا إلى Google Drive",
+    detail: "تم رفع الملف إلى Google Drive",
   });
   return committed;
 }
@@ -284,17 +400,6 @@ export async function uploadMarketingFinalFiles(input: {
       const upload = prepared.uploads[index];
       const file = input.files[upload.orderIndex];
       if (!file) throw new Error(`تعذر مطابقة الملف ${upload.originalFileName}`);
-      input.onProgress?.({
-        fileIndex: index,
-        fileCount: prepared.uploads.length,
-        fileName: file.name,
-        loaded: 0,
-        total: file.size,
-        percent: 0,
-        speedBytesPerSecond: 0,
-        etaSeconds: null,
-        status: "uploading",
-      });
       await uploadWholeFinalFileToGoogleDrive({
         file,
         fileIndex: index,

@@ -14,6 +14,10 @@ function clean(value: unknown) { return String(value ?? "").trim(); }
 function object(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
 function sha256(value: string) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function randomToken(bytes = 32) { return crypto.randomBytes(bytes).toString("base64url"); }
+function driveQueryText(value: unknown) { return clean(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); }
+function folderName(value: unknown, fallback = "Folder") {
+  return (clean(value) || fallback).replace(/[\u0000-\u001f]/g, " ").replace(/[\\/]+/g, "-").replace(/\s+/g, " ").trim().slice(0, 180) || fallback;
+}
 
 function publicOrigin(request: VercelRequest) {
   const configured = clean(process.env.MZJ_PUBLIC_BASE_URL);
@@ -27,6 +31,11 @@ function publicOrigin(request: VercelRequest) {
 
 export function googleDriveRedirectUri(request: VercelRequest) {
   return clean(process.env.GOOGLE_DRIVE_REDIRECT_URI) || `${publicOrigin(request)}/api/google-drive/callback`;
+}
+
+export function googleDriveFolderUrl(folderId: unknown) {
+  const id = clean(folderId);
+  return id ? `https://drive.google.com/drive/folders/${encodeURIComponent(id)}` : "";
 }
 
 function staticConfig() {
@@ -105,7 +114,7 @@ async function driveJson(accessToken: string, url: string, init: RequestInit = {
   return payload;
 }
 
-async function ensureRootFolder(accessToken: string, existingId: string, folderName: string) {
+async function ensureRootFolder(accessToken: string, existingId: string, name: string) {
   if (existingId) {
     try {
       const existing = await driveJson(accessToken, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(existingId)}?fields=id,name,mimeType,trashed`);
@@ -114,10 +123,10 @@ async function ensureRootFolder(accessToken: string, existingId: string, folderN
       // Recreate below when the saved folder is no longer accessible.
     }
   }
-  return driveJson(accessToken, "https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType", {
+  return driveJson(accessToken, "https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,webViewLink", {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=UTF-8" },
-    body: JSON.stringify({ name: folderName, mimeType: FOLDER_MIME }),
+    body: JSON.stringify({ name: folderName(name, DEFAULT_ROOT_FOLDER_NAME), mimeType: FOLDER_MIME }),
   });
 }
 
@@ -203,6 +212,33 @@ export async function getGoogleDriveRuntime(sql: Sql) {
   return { accessToken: await getGoogleDriveAccessToken(sql), rootFolderId: clean(row.root_folder_id) };
 }
 
+export async function ensureGoogleDriveFolder(sql: Sql, input: { parentId?: string; name: string; appProperties?: Record<string, string> }) {
+  const runtime = await getGoogleDriveRuntime(sql);
+  const parentId = clean(input.parentId) || runtime.rootFolderId;
+  const name = folderName(input.name);
+  const q = `'${driveQueryText(parentId)}' in parents and mimeType='${FOLDER_MIME}' and trashed=false and name='${driveQueryText(name)}'`;
+  const listUrl = new URL("https://www.googleapis.com/drive/v3/files");
+  listUrl.searchParams.set("q", q);
+  listUrl.searchParams.set("spaces", "drive");
+  listUrl.searchParams.set("pageSize", "10");
+  listUrl.searchParams.set("fields", "files(id,name,mimeType,parents,webViewLink,appProperties,trashed)");
+  const list = await driveJson(runtime.accessToken, listUrl.toString());
+  const existing = Array.isArray(list.files) ? list.files.find((item: any) => clean(item?.id) && item?.trashed !== true) : null;
+  if (existing) return { ...existing, webViewLink: clean(existing.webViewLink) || googleDriveFolderUrl(existing.id) };
+
+  const created = await driveJson(runtime.accessToken, "https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,parents,webViewLink,appProperties", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({
+      name,
+      mimeType: FOLDER_MIME,
+      parents: [parentId],
+      appProperties: input.appProperties || undefined,
+    }),
+  });
+  return { ...created, webViewLink: clean(created.webViewLink) || googleDriveFolderUrl(created.id) };
+}
+
 export type GoogleDriveUploadInput = {
   fileId: string;
   fileName: string;
@@ -210,10 +246,12 @@ export type GoogleDriveUploadInput = {
   fileSize: number;
   category: string;
   storageKey: string;
+  parentFolderId?: string;
 };
 
 export async function createGoogleDriveResumableUpload(sql: Sql, input: GoogleDriveUploadInput) {
   const runtime = await getGoogleDriveRuntime(sql);
+  const parentFolderId = clean(input.parentFolderId) || runtime.rootFolderId;
   const url = new URL("https://www.googleapis.com/upload/drive/v3/files");
   url.searchParams.set("uploadType", "resumable");
   url.searchParams.set("fields", "id,name,mimeType,size,parents,webViewLink,webContentLink,appProperties");
@@ -228,7 +266,7 @@ export async function createGoogleDriveResumableUpload(sql: Sql, input: GoogleDr
     body: JSON.stringify({
       name: clean(input.fileName) || "file.bin",
       mimeType: clean(input.mimeType) || "application/octet-stream",
-      parents: [runtime.rootFolderId],
+      parents: [parentFolderId],
       appProperties: {
         mzjFileId: clean(input.fileId),
         mzjCategory: clean(input.category),
@@ -244,7 +282,7 @@ export async function createGoogleDriveResumableUpload(sql: Sql, input: GoogleDr
   }
   const uploadUrl = clean(response.headers.get("location"));
   if (!uploadUrl) throw new Error("Google Drive did not return a resumable upload URL");
-  return { uploadUrl, rootFolderId: runtime.rootFolderId };
+  return { uploadUrl, rootFolderId: runtime.rootFolderId, parentFolderId };
 }
 
 export async function getGoogleDriveFileInfo(sql: Sql, externalId: string) {
@@ -252,9 +290,31 @@ export async function getGoogleDriveFileInfo(sql: Sql, externalId: string) {
   return driveJson(runtime.accessToken, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(clean(externalId))}?fields=id,name,mimeType,size,parents,webViewLink,webContentLink,appProperties,trashed`);
 }
 
-export async function verifyGoogleDriveUploadedFile(sql: Sql, input: { externalId: string; fileId: string; expectedSize?: number | null }) {
-  const info = await getGoogleDriveFileInfo(sql, input.externalId);
-  if (!clean(info.id) || info.trashed === true) throw new Error("Uploaded Google Drive file is unavailable");
+export async function findGoogleDriveUploadedFile(sql: Sql, fileId: string) {
+  const runtime = await getGoogleDriveRuntime(sql);
+  const mzjFileId = clean(fileId);
+  if (!mzjFileId) return null;
+  const q = `appProperties has { key='mzjFileId' and value='${driveQueryText(mzjFileId)}' } and trashed=false`;
+  const url = new URL("https://www.googleapis.com/drive/v3/files");
+  url.searchParams.set("q", q);
+  url.searchParams.set("spaces", "drive");
+  url.searchParams.set("pageSize", "10");
+  url.searchParams.set("fields", "files(id,name,mimeType,size,parents,webViewLink,webContentLink,appProperties,trashed,createdTime)");
+  const payload = await driveJson(runtime.accessToken, url.toString());
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  return files.find((item: any) => clean(item?.appProperties?.mzjFileId) === mzjFileId && item?.trashed !== true) || null;
+}
+
+export async function verifyGoogleDriveUploadedFile(sql: Sql, input: { externalId?: string; fileId: string; expectedSize?: number | null }) {
+  const directId = clean(input.externalId);
+  let info = directId ? await getGoogleDriveFileInfo(sql, directId) : null;
+  if (!directId) {
+    for (let attempt = 0; attempt < 4 && !info; attempt += 1) {
+      info = await findGoogleDriveUploadedFile(sql, input.fileId);
+      if (!info && attempt < 3) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+    }
+  }
+  if (!info || !clean(info.id) || info.trashed === true) throw new Error("Uploaded Google Drive file is unavailable");
   if (clean(info.appProperties?.mzjFileId) !== clean(input.fileId)) throw new Error("Uploaded Google Drive file does not match the MZJ file record");
   const expected = Number(input.expectedSize || 0);
   const actual = Number(info.size || 0);
