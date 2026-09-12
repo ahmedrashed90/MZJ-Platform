@@ -98,9 +98,9 @@ export function PrivacyPolicyPage() {
             <h2>8. حقوق المستخدم والتواصل</h2>
             <p>
               يمكن للمستخدم المخول طلب الاستفسار عن بياناته أو تصحيحها أو حذفها وفق الصلاحيات والسياسات
-              المعمول بها داخل المنشأة. للاستفسارات المتعلقة بالخصوصية أو تكامل Google، يمكن التواصل عبر:
+              المعمول بها داخل المنشأة. للاستفسارات المتعلقة بالخصوصية أو تكامل Google، استخدم قنوات الدعم
+              الرسمية المرتبطة بـ MZJ Platform أو بيانات التواصل المعروضة في شاشة موافقة Google OAuth.
             </p>
-            <a className="legal-contact" href="mailto:mr.ahmed_rashed@outlook.sa">mr.ahmed_rashed@outlook.sa</a>
           </section>
 
           <section>

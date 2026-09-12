@@ -125,9 +125,9 @@ export function TermsOfServicePage() {
             <h2>12. التعديلات والتواصل</h2>
             <p>
               قد يتم تحديث هذه الشروط عند الحاجة، ويظهر تاريخ آخر تحديث أعلى الصفحة. للاستفسارات المتعلقة
-              باستخدام المنصة أو تكامل Google يمكن التواصل عبر:
+              باستخدام المنصة أو تكامل Google، استخدم قنوات الدعم الرسمية المرتبطة بـ MZJ Platform أو بيانات
+              التواصل المعروضة في شاشة موافقة Google OAuth.
             </p>
-            <a className="legal-contact" href="mailto:mr.ahmed_rashed@outlook.sa">mr.ahmed_rashed@outlook.sa</a>
           </section>
         </div>
 
