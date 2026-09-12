@@ -14,6 +14,8 @@ import { UnifiedReportsPage } from "./pages/UnifiedReportsPage";
 import { UnifiedDatabasePage } from "./pages/UnifiedDatabasePage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { HelpPage } from "./pages/HelpPage";
+import { PrivacyPolicyPage } from "./pages/PrivacyPolicyPage";
+import { TermsOfServicePage } from "./pages/TermsOfServicePage";
 import { canAccessSystem, canOpenSettings, defaultSystemPath, hasPermission, type PlatformSystem } from "./systemAccess";
 
 const CrmLayout = lazy(() => import("./crm/CrmLayout").then((module) => ({ default: module.CrmLayout })));
@@ -170,7 +172,16 @@ export default function App() {
   const isPublicTracking = ["/track", "/track.html", "/Test-Track.html"].includes(location.pathname);
   const isPublicOwners = ["/club", "/club/", "/owners", "/owners/"].includes(location.pathname) || location.pathname.startsWith("/club/invite/") || location.pathname.startsWith("/owners/invite/");
   const isPublicCashQr = location.pathname === "/cash-register" || location.pathname === "/cash-register/";
+  const isPublicLegal = ["/privacy", "/privacy/", "/terms", "/terms/"].includes(location.pathname);
 
+  if (isPublicLegal) {
+    return (
+      <Routes>
+        <Route path="/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/terms" element={<TermsOfServicePage />} />
+      </Routes>
+    );
+  }
   if (loading) return <PlatformLoadingPage />;
   if (isPublicTracking) {
     return (
