@@ -1,0 +1,13 @@
+NEXT ERP -> Operations -> Approvals clean-flow verification
+
+Source: MZJ-Platform-main-activity-help-check-view-clean(1).zip
+
+PASS: Operations eligibility is independent from CRM user mapping.
+PASS: CRM remains protected by platform-user mapping requirements.
+PASS: Operations uses VIN as the canonical inventory identity.
+PASS: Existing under-delivery vehicle guarantees an active approval cycle.
+PASS: New under-delivery transition starts a fresh approval cycle.
+PASS: Cancellation regression suite: 20/20.
+PASS: All repository check scripts: 37/37.
+PASS: TypeScript/TSX syntax transpile: 172/172.
+PASS: No database schema change and no new SQL migration.
