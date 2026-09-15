@@ -272,6 +272,22 @@ export async function resolveErpNextPlatformUser(erpUserId: string): Promise<Erp
   return { status: "linked", mapping: candidate, candidate };
 }
 
+async function resolveWebsiteCrmOwner(): Promise<PlatformUserMapping | null> {
+  await ensureAccessControlSchema();
+  const sql = getSql();
+  const [websiteOwner] = await sql<PlatformUserMapping[]>`
+    select u.id::text,u.full_name,u.email,u.next_erp_user_id,
+      d.code as department_code,d.name as department_name,
+      b.code as branch_code,b.name as branch_name
+    from core.users u
+    join core.departments d on d.code='cash_sales' and d.is_active=true
+    join core.branches b on b.code='website' and b.is_active=true
+    where u.employee_no='SYSTEM-WEBSITE' and u.is_active=true
+    limit 1
+  `;
+  return websiteOwner || null;
+}
+
 function erpCustomerIdentity(normalized: NormalizedErpNextSalesOrder) {
   const raw = clean(normalized.erpCustomerId)
     || clean(normalized.accountingCustomerName)
@@ -638,11 +654,16 @@ async function linkCrmCustomer(input: {
               then coalesce(source_history,'[]'::jsonb)||${tx.json([{ source: crmSourceCode, at: saleAt, orderNo: normalized.orderNo }])}::jsonb
             else source_history
           end,
-          -- Existing customer ownership is independent from the salesperson who made this sale.
-          -- Keep the customer's representative/department/branch untouched and store sale attribution
-          -- only on the sales order + canonical sales transaction.
-          service_key=coalesce(nullif(service_key,''),${serviceKey}),
-          status_code=null,status_label='تم البيع',payment_type=coalesce(nullif(payment_type,''),${paymentType(serviceKey)}),sold_at=${saleAt}::timestamptz,
+          -- The Sales Order owner is authoritative at sale time. Website checkout orders
+          -- move ownership to the virtual Website user; manual NEXT ERP orders move it
+          -- to the mapped salesperson who created the sale. Cancellation restores the
+          -- previous CRM state captured above.
+          service_key=${serviceKey},
+          department_code=${departmentCode},
+          branch_code=${branchCode},
+          assigned_to=${mapping.id}::uuid,
+          responsible_name_snapshot=${mapping.full_name},
+          status_code=null,status_label='تم البيع',payment_type=${paymentType(serviceKey)},sold_at=${saleAt}::timestamptz,
           car_name=coalesce(nullif(car_name,''),${clean(firstPayload.item?.type)||null}),
           car_category=coalesce(nullif(car_category,''),${clean(firstPayload.item?.category)||null}),
           car_model=coalesce(nullif(car_model,''),${clean(firstPayload.item?.model)||null}),
@@ -656,7 +677,7 @@ async function linkCrmCustomer(input: {
       if (existing.current_request_id) {
         await tx`
           update crm.service_requests set
-            service_key=coalesce(nullif(service_key,''),${serviceKey}),status_label='تم البيع',
+            service_key=${serviceKey},department_code=${departmentCode},branch_code=${branchCode},assigned_to=${mapping.id}::uuid,status_label='تم البيع',
             source_code=case
               when ${crmSourceCode}='website' and coalesce(nullif(source_code,''),'next_erp')='next_erp' then ${crmSourceCode}
               else source_code
@@ -679,8 +700,10 @@ async function linkCrmCustomer(input: {
             lead_id,event_type,old_status,new_status,old_department,new_department,old_branch,new_branch,
             actor_id,actor_name,actor_role,note,details,created_at
           ) values(
-            ${existing.id}::uuid,'status_change',${oldStatus||null},'تم البيع',${oldDepartment||null},${oldDepartment||null},${oldBranch||null},${oldBranch||null},
-            ${mapping.id}::uuid,${mapping.full_name},'NEXT ERP',${`تم تسجيل البيع ${normalized.orderNo} للمندوب ${mapping.full_name} بدون تغيير مسؤول أو قسم العميل`},
+            ${existing.id}::uuid,'status_change',${oldStatus||null},'تم البيع',${oldDepartment||null},${departmentCode||null},${oldBranch||null},${branchCode||null},
+            ${mapping.id}::uuid,${mapping.full_name},'NEXT ERP',${crmSourceCode === "website"
+              ? `تم تسجيل البيع ${normalized.orderNo} من طلب الشراء أونلاين وتحديث المسؤول إلى Website`
+              : `تم تسجيل البيع ${normalized.orderNo} وتحديث المسؤول إلى مندوب NEXT ERP ${mapping.full_name}`},
             ${tx.json(sourceMetadata)},${saleAt}::timestamptz
           )
         `;
@@ -1596,6 +1619,9 @@ export async function syncErpNextSalesOrder(input: {
 
   const userResolution = input.userResolution || await resolveErpNextPlatformUser(normalized.erpUserId);
   const mapping = userResolution.mapping;
+  const websiteOrder = normalizeComparable(normalized.crmSourceCode) === "website";
+  const websiteCrmOwner = websiteOrder ? await resolveWebsiteCrmOwner() : null;
+  const crmOwnerMapping = websiteOrder ? websiteCrmOwner : mapping;
   if (userResolution.status === "missing_user_id") {
     warnings.push({ code: "ERP_USER_ID_MISSING", message: "إيميل مندوب البيع في NEXT ERP غير موجود في بيانات طلب البيع" });
   } else if (userResolution.status === "user_not_mapped") {
@@ -1624,16 +1650,21 @@ export async function syncErpNextSalesOrder(input: {
     trackingOrderId,
     warnings,
   });
-  // CRM needs a mapped platform user because the lead must be assigned to a real
-  // platform account. Operations does not: the VIN is the canonical inventory
-  // identity, so a valid submitted sale must still reserve the vehicle and open
-  // its approval cycle even when the ERP user mapping is incomplete.
+  // Manual NEXT ERP sales use the mapped salesperson as the CRM owner. Website
+  // checkout Sales Orders use the dedicated virtual Website owner instead, so the
+  // online flow does not depend on mapping the technical ERP website user. Operations
+  // still follows the canonical VIN even when a manual ERP user mapping is incomplete.
   const canApplyOperationsLink = eligibleStatus && !order.is_cancelled;
   const canApplyCrmLink = canApplyOperationsLink
-    && userResolution.status === "linked"
-    && Boolean(mapping);
+    && Boolean(crmOwnerMapping)
+    && (websiteOrder || userResolution.status === "linked");
   if (order.is_cancelled) {
     warnings.push({ code: "ERP_INSTANCE_ALREADY_CANCELLED", message: "نسخة طلب البيع ملغاة بالفعل؛ لم يتم إعادة ربط CRM أو العمليات" });
+  } else if (websiteOrder && !websiteCrmOwner) {
+    warnings.push({
+      code: "WEBSITE_CRM_OWNER_MISSING",
+      message: "تعذر ربط طلب الشراء الأونلاين في CRM لأن مستخدم Website الافتراضي غير موجود أو غير مهيأ",
+    });
   } else if (canApplyOperationsLink && !canApplyCrmLink) {
     warnings.push({
       code: "CRM_LINK_SKIPPED_USER_MAPPING",
@@ -1642,17 +1673,23 @@ export async function syncErpNextSalesOrder(input: {
   }
 
   let crm = {
-    status: eligibleStatus ? userResolution.status : "skipped_status",
+    status: eligibleStatus
+      ? (websiteOrder ? (websiteCrmOwner ? "website_owner_ready" : "website_owner_missing") : userResolution.status)
+      : "skipped_status",
     leadId: null as string | null,
     created: false,
-    message: eligibleStatus ? "لم يتم ربط CRM لعدم اكتمال ربط مندوب البيع في NEXT ERP" : "لم يتم تشغيل ربط CRM بسبب حالة الطلب",
+    message: eligibleStatus
+      ? (websiteOrder
+        ? (websiteCrmOwner ? "طلب الشراء الأونلاين جاهز للربط على مسؤول Website" : "تعذر ربط CRM لعدم تهيئة مسؤول Website")
+        : "لم يتم ربط CRM لعدم اكتمال ربط مندوب البيع في NEXT ERP")
+      : "لم يتم تشغيل ربط CRM بسبب حالة الطلب",
   };
 
-  if (canApplyCrmLink && mapping) {
+  if (canApplyCrmLink && crmOwnerMapping) {
     crm = await linkCrmCustomer({
       orderId: order.id,
       normalized,
-      mapping,
+      mapping: crmOwnerMapping,
       firstPayload: normalized.payloads[0],
     });
     if (crm.status === "ambiguous_customer") {
@@ -1674,8 +1711,8 @@ export async function syncErpNextSalesOrder(input: {
           entityId: crm.leadId,
           actionUrl: `/crm?lead=${encodeURIComponent(crm.leadId)}`,
           severity: "success",
-          actorId: mapping.id,
-          actorName: mapping.full_name,
+          actorId: crmOwnerMapping.id,
+          actorName: crmOwnerMapping.full_name,
           audienceUserIds: [createdLead.assigned_to, createdLead.call_center_assigned_to],
           branchCodes: [createdLead.branch_code],
           departmentCodes: [createdLead.department_code],

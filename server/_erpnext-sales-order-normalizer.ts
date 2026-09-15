@@ -301,6 +301,18 @@ function resolveCrmBusinessSource(doc: JsonRecord, body: JsonRecord) {
   const rawSource = pickText(doc, ["source", "source_code", "sourceCode", "order_source", "orderSource"])
     || pickText(body, ["source", "source_code", "sourceCode", "order_source", "orderSource"]);
   const normalized = rawSource.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const purchaseOrderReference = pickText(doc, [
+    "po_no", "poNo", "customer_po_no", "customerPoNo", "purchase_order", "purchaseOrder",
+  ]) || pickText(body, [
+    "po_no", "poNo", "customer_po_no", "customerPoNo", "purchase_order", "purchaseOrder",
+  ]);
+
+  // Website checkout Sales Orders are stamped by the checkout worker as WC-<Woo order id>.
+  // Treat that stable ERP reference as authoritative even if the ERP webhook omits a
+  // separate source field. Manual NEXT ERP Sales Orders do not carry this marker.
+  if (/^WC-\d+$/i.test(purchaseOrderReference)) {
+    return { code: "website", name: "Website" };
+  }
 
   if (normalized === "website" || normalized === "web" || normalized === "الموقع" || normalized === "الموقعالالكتروني") {
     return { code: "website", name: "Website" };

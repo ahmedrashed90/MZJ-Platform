@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { clean } from "../_crm-utils.js";
+import { chooseAssignment, clean } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { ensureCrmSchema } from "../_crm-schema.js";
 import { normalizePhone } from "../_phone-utils.js";
@@ -10,9 +10,6 @@ import { queueLegacyOwnerWelcomeSms } from "../_owners-welcome.js";
 
 const WEBSITE_SOURCE_CODE = "website";
 const WEBSITE_SOURCE_NAME = "Website";
-const WEBSITE_BRANCH_CODE = "website";
-const WEBSITE_OWNER_EMPLOYEE_NO = "SYSTEM-WEBSITE";
-const WEBSITE_OWNER_NAME = "Website";
 const OWNERS_PORTAL_URL = "https://mzj-platform.vercel.app/club";
 const SOLD_STATUS = "تم البيع";
 
@@ -62,16 +59,57 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const sql = getSql();
   const [duplicate] = await sql<any[]>`
-    select id::text,customer_name,status_label,platform_code,source_code,phone_normalized
-    from crm.leads
-    where phone_normalized=${phone} and is_deleted=false
+    select l.id::text,l.customer_name,l.status_label,l.platform_code,l.source_code,l.phone_normalized,
+      l.assigned_to::text,l.responsible_name_snapshot,l.branch_code,assigned.employee_no as assigned_employee_no
+    from crm.leads l
+    left join core.users assigned on assigned.id=l.assigned_to
+    where l.phone_normalized=${phone} and l.is_deleted=false
     limit 1
   `;
   if (duplicate) {
-    // Self-heal QR registrations created by an older deployment where CRM committed
-    // before the MZJ Club customer-code step. Only our own cash_qr intake is recovered;
-    // every other existing CRM customer keeps the original duplicate protection.
+    // Self-heal QR registrations created by older deployments. A non-sold cash_qr
+    // lead that is still owned by the virtual Website user is redistributed once
+    // through the canonical cash assignment engine, then its MZJ Club code is reused.
     if (clean(duplicate.platform_code) === "cash_qr" && clean(duplicate.status_label) !== SOLD_STATUS) {
+      const needsRealSalesperson = !clean(duplicate.assigned_to)
+        || clean(duplicate.assigned_employee_no) === "SYSTEM-WEBSITE"
+        || clean(duplicate.responsible_name_snapshot).toLowerCase() === "website";
+
+      if (needsRealSalesperson) {
+        const reassignment = await chooseAssignment("cash", "", "branch");
+        if (!reassignment.assignedTo) {
+          return response.status(503).json({ ok: false, error: "لا يوجد مندوب مبيعات متاح حاليًا لتوزيع طلب QR" });
+        }
+        await sql.begin(async (tx) => {
+          await tx`
+            update crm.leads set
+              assigned_to=${reassignment.assignedTo}::uuid,
+              responsible_name_snapshot=${reassignment.assignedName||null},
+              branch_code=${reassignment.branchCode||null},
+              extra_data=coalesce(extra_data,'{}'::jsonb)||${tx.json({
+                cashQrIntake: true,
+                intakeChannel: "cash_qr",
+                routingMode: "automatic_distribution",
+                routingBranch: reassignment.branchCode || null,
+                routingOwner: reassignment.assignedName || null,
+                routingRuleId: reassignment.ruleId || null,
+                routingRuleName: reassignment.ruleName || null,
+              })}::jsonb,
+              updated_at=now()
+            where id=${duplicate.id}::uuid
+          `;
+          await tx`
+            insert into crm.lead_events(
+              lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note,details
+            ) values(
+              ${duplicate.id}::uuid,'ownership_change',${duplicate.status_label||'عميل جديد'},'cash_sales',${reassignment.branchCode||null},
+              'CRM Auto Distribution','automation',${`تم توزيع عميل QR تلقائيًا على ${reassignment.assignedName}`},
+              ${tx.json({ assignedTo: reassignment.assignedTo, assignedName: reassignment.assignedName, ruleId: reassignment.ruleId || null })}
+            )
+          `;
+        });
+      }
+
       const customerCode = await ensureLegacyCustomerCodeForLead(duplicate.id, { sd96: true });
       if (!customerCode?.id || !customerCode?.referral_code) {
         return response.status(500).json({ ok: false, error: "العميل موجود في CRM لكن تعذر استكمال تسجيله في MZJ Club Community" });
@@ -96,22 +134,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
     });
   }
 
-  const [websiteOwner] = await sql<any[]>`
-    select id::text,full_name
-    from core.users
-    where employee_no=${WEBSITE_OWNER_EMPLOYEE_NO} and is_active=true
-    limit 1
-  `;
-  if (!websiteOwner?.id) {
-    return response.status(500).json({ ok: false, error: "تعذر تهيئة مسؤول Website لتسجيل العميل" });
+  const assignment = await chooseAssignment("cash", "", "branch");
+  if (!assignment.assignedTo) {
+    return response.status(503).json({ ok: false, error: "لا يوجد مندوب مبيعات متاح حاليًا لتوزيع طلب QR" });
   }
 
   const extraData = {
     cashQrIntake: true,
     intakeChannel: "cash_qr",
-    routingMode: "fixed_website",
-    routingBranch: WEBSITE_BRANCH_CODE,
-    routingOwner: WEBSITE_OWNER_NAME,
+    routingMode: "automatic_distribution",
+    routingBranch: assignment.branchCode || null,
+    routingOwner: assignment.assignedName || null,
+    routingRuleId: assignment.ruleId || null,
+    routingRuleName: assignment.ruleName || null,
   };
   const preparedCustomerCode = await uniqueOwnerCode();
 
@@ -121,8 +156,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       intakeChannel: "cash_qr",
       sourceCode: WEBSITE_SOURCE_CODE,
       sourceName: WEBSITE_SOURCE_NAME,
-      branchCode: WEBSITE_BRANCH_CODE,
-      responsibleName: WEBSITE_OWNER_NAME,
+      branchCode: assignment.branchCode || null,
+      responsibleName: assignment.assignedName || null,
     };
 
     let [contact] = await tx<any[]>`
@@ -181,8 +216,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         assigned_to,responsible_name_snapshot,extra_data,registered_at,created_at,updated_at
       ) values(
         ${customerName},${phoneRaw || phone},${phone},${contact.id}::uuid,${WEBSITE_SOURCE_CODE},${WEBSITE_SOURCE_NAME},'cash_qr',
-        'cash','cash_sales',${WEBSITE_BRANCH_CODE},'عميل جديد','كاش',
-        ${websiteOwner.id}::uuid,${WEBSITE_OWNER_NAME},${tx.json(extraData)},now(),now(),now()
+        'cash','cash_sales',${assignment.branchCode||null},'عميل جديد','كاش',
+        ${assignment.assignedTo}::uuid,${assignment.assignedName||null},${tx.json(extraData)},now(),now(),now()
       )
       returning id::text,contact_id::text,customer_name,phone_normalized,branch_code,source_code,source_name,payment_type,status_label,department_code,assigned_to::text,responsible_name_snapshot,registered_at,updated_at
     `;
@@ -191,8 +226,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       insert into crm.lead_events(
         lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note
       ) values(
-        ${lead.id}::uuid,'lead_created','عميل جديد','cash_sales',${WEBSITE_BRANCH_CODE},
-        ${WEBSITE_OWNER_NAME},'public_qr','دخول العميل إلى CRM من رابط أو QR الموقع الإلكتروني'
+        ${lead.id}::uuid,'lead_created','عميل جديد','cash_sales',${assignment.branchCode||null},
+        'CRM Auto Distribution','automation',${`دخول العميل من رابط أو QR الموقع الإلكتروني وتوزيعه تلقائيًا على ${assignment.assignedName}`}
       )
     `;
 

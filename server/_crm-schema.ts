@@ -1819,8 +1819,9 @@ export async function ensureCrmSchema() {
       `;
       if (!percentageDistributionMigration) await runSqlScript(CRM_PERCENTAGE_DISTRIBUTION_20260901_SQL);
 
-      // Public cash-register / QR registrations are owned by the Website channel itself.
-      // They must never enter the sales-representative round-robin during initial registration.
+      // Keep the dedicated Website source/branch/user available for confirmed online
+      // checkout Sales Orders. Public cash-register / QR registrations are distributed
+      // by the canonical cash assignment engine and must not be forced to this user.
       await sql`
         insert into crm.sources(code,name,sort_order,is_active)
         values('website','Website',105,true)
@@ -1861,27 +1862,6 @@ export async function ensureCrmSchema() {
         join core.branches b on b.code='website' and b.is_active=true
         where u.employee_no='SYSTEM-WEBSITE'
         on conflict(user_id,branch_id) do update set is_primary=true
-      `;
-      await sql`
-        update crm.leads l
-        set
-          source_code='website',
-          source_name='Website',
-          branch_code='website',
-          assigned_to=u.id,
-          responsible_name_snapshot='Website',
-          extra_data=coalesce(l.extra_data,'{}'::jsonb)||jsonb_build_object(
-            'cashQrIntake',true,
-            'intakeChannel','cash_qr',
-            'routingMode','fixed_website',
-            'routingBranch','website',
-            'routingOwner','Website'
-          ),
-          updated_at=now()
-        from core.users u
-        where l.platform_code='cash_qr'
-          and u.employee_no='SYSTEM-WEBSITE'
-          and (l.source_code in ('qr','cash_qr') or l.source_name='QR')
       `;
     })().catch((error) => {
       schemaPromise = null;
