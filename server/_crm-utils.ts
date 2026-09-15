@@ -373,6 +373,105 @@ export async function chooseAssignment(serviceKey: string, requestedBranch = "",
   return configured || { assignedTo: null, assignedName: "", branchCode: branch };
 }
 
+/**
+ * Public cash-register / QR intake keeps Website as the CRM source, but Website
+ * is not a routing branch. Route the lead independently through cash sales:
+ * first honor an explicit/generic QR-compatible cash assignment rule, then fall
+ * back to one round-robin pool of active cash-sales representatives. The branch
+ * is always taken from the selected representative's real CRM branch.
+ */
+export async function chooseCashQrAssignment(): Promise<AssignmentResult> {
+  const configured = await chooseFromConfiguredRule("cash_sales", "", "qr");
+  if (configured?.assignedTo && clean(configured.branchCode) && clean(configured.branchCode) !== "website") {
+    return configured;
+  }
+
+  const sql = getSql();
+  const candidates = await sql<any[]>`
+    select u.id::text as user_id,u.full_name,
+      coalesce(
+        (
+          select b.code
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true and b.code<>'website'
+          where usb.user_id=u.id and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name
+          limit 1
+        ),
+        (
+          select b.code
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true and b.code<>'website'
+          where ub.user_id=u.id
+            and not exists (
+              select 1 from core.user_system_branches usb0
+              where usb0.user_id=u.id and usb0.system_code='crm'
+            )
+          order by ub.is_primary desc,b.sort_order,b.name
+          limit 1
+        )
+      ) as branch_code
+    from core.users u
+    where u.is_active=true
+      and u.can_receive_leads=true
+      and coalesce(u.employee_no,'')<>'SYSTEM-WEBSITE'
+      and (
+        exists (
+          select 1
+          from core.user_system_departments usd
+          join core.departments d on d.id=usd.department_id and d.system_code='crm' and d.is_active=true
+          where usd.user_id=u.id and usd.system_code='crm' and d.code='cash_sales'
+        )
+        or (
+          not exists (select 1 from core.user_system_departments usd0 where usd0.user_id=u.id and usd0.system_code='crm')
+          and exists (
+            select 1
+            from core.user_departments ud
+            join core.departments d on d.id=ud.department_id and d.is_active=true
+            where ud.user_id=u.id and d.code='cash_sales'
+          )
+        )
+      )
+    order by u.full_name,u.id::text
+  `;
+
+  const eligible = candidates.filter((candidate) => clean(candidate.branch_code));
+  if (!eligible.length) return { assignedTo: null, assignedName: "", branchCode: "" };
+
+  const poolKey = "cash_qr:cash_sales:all_branches";
+  const [state] = await sql<any[]>`
+    select last_user_id::text
+    from crm.assignment_state
+    where pool_key=${poolKey}
+    limit 1
+  `;
+  const lastIndex = eligible.findIndex((candidate) => candidate.user_id === state?.last_user_id);
+  const selected = eligible[(lastIndex + 1 + eligible.length) % eligible.length];
+  const selectedBranch = clean(selected.branch_code);
+
+  await sql`
+    insert into crm.assignment_state(pool_key,last_user_id,last_branch_code,updated_at)
+    values (${poolKey},${selected.user_id}::uuid,${selectedBranch},now())
+    on conflict (pool_key) do update set
+      last_user_id=excluded.last_user_id,last_branch_code=excluded.last_branch_code,updated_at=now()
+  `;
+  await sql`
+    insert into crm.assignment_logs(
+      rule_id,department_code,branch_code,source_code,assigned_to,assigned_name,assignment_mode,action
+    ) values (
+      null,'cash_sales',${selectedBranch},'website',${selected.user_id}::uuid,${selected.full_name},'round_robin','cash_qr_fallback'
+    )
+  `;
+
+  return {
+    assignedTo: selected.user_id,
+    assignedName: selected.full_name,
+    branchCode: selectedBranch,
+    ruleId: null,
+    ruleName: "Cash QR direct round robin",
+  };
+}
+
 export async function chooseCallCenterAssignment(sourceCode = "", requestedBranch = "online") {
   const configured = await chooseFromConfiguredRule("call_center", requestedBranch, sourceCode);
   return configured ? { assignedTo: configured.assignedTo, assignedName: configured.assignedName } : { assignedTo: null, assignedName: "" };

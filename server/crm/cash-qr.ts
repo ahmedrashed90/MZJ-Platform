@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { chooseAssignment, clean } from "../_crm-utils.js";
+import { chooseCashQrAssignment, clean } from "../_crm-utils.js";
 import { getSql } from "../_db.js";
 import { ensureCrmSchema } from "../_crm-schema.js";
 import { normalizePhone } from "../_phone-utils.js";
@@ -67,30 +67,36 @@ export default async function handler(request: VercelRequest, response: VercelRe
     limit 1
   `;
   if (duplicate) {
-    // Self-heal QR registrations created by older deployments. A non-sold cash_qr
-    // lead that is still owned by the virtual Website user is redistributed once
-    // through the canonical cash assignment engine, then its MZJ Club code is reused.
+    // Self-heal only an existing non-sold cash_qr record that is still unassigned
+    // or owned by the old virtual Website user/branch. Source stays Website; routing
+    // is independent and selects a real cash-sales representative + that rep's branch.
     if (clean(duplicate.platform_code) === "cash_qr" && clean(duplicate.status_label) !== SOLD_STATUS) {
       const needsRealSalesperson = !clean(duplicate.assigned_to)
         || clean(duplicate.assigned_employee_no) === "SYSTEM-WEBSITE"
-        || clean(duplicate.responsible_name_snapshot).toLowerCase() === "website";
+        || clean(duplicate.responsible_name_snapshot).toLowerCase() === "website"
+        || clean(duplicate.branch_code) === "website";
 
       if (needsRealSalesperson) {
-        const reassignment = await chooseAssignment("cash", "", "branch");
-        if (!reassignment.assignedTo) {
-          return response.status(503).json({ ok: false, error: "لا يوجد مندوب مبيعات متاح حاليًا لتوزيع طلب QR" });
+        const reassignment = await chooseCashQrAssignment();
+        if (!reassignment.assignedTo || !reassignment.branchCode) {
+          return response.status(503).json({ ok: false, error: "لا يوجد مندوب مبيعات كاش متاح حاليًا في الفروع لتوزيع طلب QR" });
         }
         await sql.begin(async (tx) => {
           await tx`
             update crm.leads set
+              source_code=${WEBSITE_SOURCE_CODE},
+              source_name=${WEBSITE_SOURCE_NAME},
               assigned_to=${reassignment.assignedTo}::uuid,
               responsible_name_snapshot=${reassignment.assignedName||null},
-              branch_code=${reassignment.branchCode||null},
+              branch_code=${reassignment.branchCode},
+              department_code='cash_sales',
+              service_key='cash',
               extra_data=coalesce(extra_data,'{}'::jsonb)||${tx.json({
                 cashQrIntake: true,
                 intakeChannel: "cash_qr",
-                routingMode: "automatic_distribution",
-                routingBranch: reassignment.branchCode || null,
+                routingMode: "cash_qr_distribution",
+                routingIndependentOfSource: true,
+                routingBranch: reassignment.branchCode,
                 routingOwner: reassignment.assignedName || null,
                 routingRuleId: reassignment.ruleId || null,
                 routingRuleName: reassignment.ruleName || null,
@@ -102,9 +108,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
             insert into crm.lead_events(
               lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note,details
             ) values(
-              ${duplicate.id}::uuid,'ownership_change',${duplicate.status_label||'عميل جديد'},'cash_sales',${reassignment.branchCode||null},
-              'CRM Auto Distribution','automation',${`تم توزيع عميل QR تلقائيًا على ${reassignment.assignedName}`},
-              ${tx.json({ assignedTo: reassignment.assignedTo, assignedName: reassignment.assignedName, ruleId: reassignment.ruleId || null })}
+              ${duplicate.id}::uuid,'ownership_change',${duplicate.status_label||'عميل جديد'},'cash_sales',${reassignment.branchCode},
+              'CRM Auto Distribution','automation',${`تم توزيع عميل QR تلقائيًا على ${reassignment.assignedName} في فرع ${reassignment.branchCode}`},
+              ${tx.json({ assignedTo: reassignment.assignedTo, assignedName: reassignment.assignedName, branchCode: reassignment.branchCode, ruleId: reassignment.ruleId || null })}
             )
           `;
         });
@@ -134,16 +140,17 @@ export default async function handler(request: VercelRequest, response: VercelRe
     });
   }
 
-  const assignment = await chooseAssignment("cash", "", "branch");
-  if (!assignment.assignedTo) {
-    return response.status(503).json({ ok: false, error: "لا يوجد مندوب مبيعات متاح حاليًا لتوزيع طلب QR" });
+  const assignment = await chooseCashQrAssignment();
+  if (!assignment.assignedTo || !assignment.branchCode) {
+    return response.status(503).json({ ok: false, error: "لا يوجد مندوب مبيعات كاش متاح حاليًا في الفروع لتوزيع طلب QR" });
   }
 
   const extraData = {
     cashQrIntake: true,
     intakeChannel: "cash_qr",
-    routingMode: "automatic_distribution",
-    routingBranch: assignment.branchCode || null,
+    routingMode: "cash_qr_distribution",
+    routingIndependentOfSource: true,
+    routingBranch: assignment.branchCode,
     routingOwner: assignment.assignedName || null,
     routingRuleId: assignment.ruleId || null,
     routingRuleName: assignment.ruleName || null,
@@ -156,7 +163,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       intakeChannel: "cash_qr",
       sourceCode: WEBSITE_SOURCE_CODE,
       sourceName: WEBSITE_SOURCE_NAME,
-      branchCode: assignment.branchCode || null,
+      branchCode: assignment.branchCode,
       responsibleName: assignment.assignedName || null,
     };
 
@@ -216,7 +223,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         assigned_to,responsible_name_snapshot,extra_data,registered_at,created_at,updated_at
       ) values(
         ${customerName},${phoneRaw || phone},${phone},${contact.id}::uuid,${WEBSITE_SOURCE_CODE},${WEBSITE_SOURCE_NAME},'cash_qr',
-        'cash','cash_sales',${assignment.branchCode||null},'عميل جديد','كاش',
+        'cash','cash_sales',${assignment.branchCode},'عميل جديد','كاش',
         ${assignment.assignedTo}::uuid,${assignment.assignedName||null},${tx.json(extraData)},now(),now(),now()
       )
       returning id::text,contact_id::text,customer_name,phone_normalized,branch_code,source_code,source_name,payment_type,status_label,department_code,assigned_to::text,responsible_name_snapshot,registered_at,updated_at
@@ -226,8 +233,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       insert into crm.lead_events(
         lead_id,event_type,new_status,new_department,new_branch,actor_name,actor_role,note
       ) values(
-        ${lead.id}::uuid,'lead_created','عميل جديد','cash_sales',${assignment.branchCode||null},
-        'CRM Auto Distribution','automation',${`دخول العميل من رابط أو QR الموقع الإلكتروني وتوزيعه تلقائيًا على ${assignment.assignedName}`}
+        ${lead.id}::uuid,'lead_created','عميل جديد','cash_sales',${assignment.branchCode},
+        'CRM Auto Distribution','automation',${`دخول العميل من رابط أو QR الموقع الإلكتروني وتوزيعه تلقائيًا على ${assignment.assignedName} في فرع ${assignment.branchCode}`}
       )
     `;
 

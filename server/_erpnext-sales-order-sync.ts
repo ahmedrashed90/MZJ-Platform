@@ -654,10 +654,10 @@ async function linkCrmCustomer(input: {
               then coalesce(source_history,'[]'::jsonb)||${tx.json([{ source: crmSourceCode, at: saleAt, orderNo: normalized.orderNo }])}::jsonb
             else source_history
           end,
-          -- The Sales Order owner is authoritative at sale time. Website checkout orders
-          -- move ownership to the virtual Website user; manual NEXT ERP orders move it
-          -- to the mapped salesperson who created the sale. Cancellation restores the
-          -- previous CRM state captured above.
+          -- Sale ownership is authoritative at sale time. Website checkout orders move
+          -- CRM ownership to the virtual Website user; manual NEXT ERP orders move it
+          -- to the mapped salesperson who made that Sales Order. Cancellation restores
+          -- the previous CRM state captured above.
           service_key=${serviceKey},
           department_code=${departmentCode},
           branch_code=${branchCode},
@@ -1651,9 +1651,8 @@ export async function syncErpNextSalesOrder(input: {
     warnings,
   });
   // Manual NEXT ERP sales use the mapped salesperson as the CRM owner. Website
-  // checkout Sales Orders use the dedicated virtual Website owner instead, so the
-  // online flow does not depend on mapping the technical ERP website user. Operations
-  // still follows the canonical VIN even when a manual ERP user mapping is incomplete.
+  // checkout Sales Orders use the dedicated virtual Website owner instead. Operations
+  // still follows the canonical VIN even if a manual ERP user mapping is incomplete.
   const canApplyOperationsLink = eligibleStatus && !order.is_cancelled;
   const canApplyCrmLink = canApplyOperationsLink
     && Boolean(crmOwnerMapping)

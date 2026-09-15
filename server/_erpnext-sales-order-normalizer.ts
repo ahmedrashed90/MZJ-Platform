@@ -308,8 +308,7 @@ function resolveCrmBusinessSource(doc: JsonRecord, body: JsonRecord) {
   ]);
 
   // Website checkout Sales Orders are stamped by the checkout worker as WC-<Woo order id>.
-  // Treat that stable ERP reference as authoritative even if the ERP webhook omits a
-  // separate source field. Manual NEXT ERP Sales Orders do not carry this marker.
+  // This stable ERP reference is authoritative even if a webhook omits its source field.
   if (/^WC-\d+$/i.test(purchaseOrderReference)) {
     return { code: "website", name: "Website" };
   }

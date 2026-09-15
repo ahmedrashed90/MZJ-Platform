@@ -1821,7 +1821,7 @@ export async function ensureCrmSchema() {
 
       // Keep the dedicated Website source/branch/user available for confirmed online
       // checkout Sales Orders. Public cash-register / QR registrations are distributed
-      // by the canonical cash assignment engine and must not be forced to this user.
+      // independently across real cash-sales representatives and their CRM branches.
       await sql`
         insert into crm.sources(code,name,sort_order,is_active)
         values('website','Website',105,true)
