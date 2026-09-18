@@ -109,7 +109,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     const map: Record<string, string> = {
       meta: "system.marketing.access", dashboard: "marketing.dashboard.view", dashboard_version: "marketing.dashboard.view", database: "marketing.database.view", entity: "marketing.database.view",
       task: "marketing.task.view_assigned", packages: "marketing.packages.view", publish_prep: "marketing.publish_prep.view", youtube_publish_options: "marketing.publish_prep.view", engagement: "marketing.engagement.view", monitoring: "marketing.monitoring.view",
-      calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", attendance: "marketing.attendance.view", stock: "marketing.stock.view",
+      calendar: "marketing.calendar.view", receipt_calendar: "marketing.receipt_calendar.view", stock: "marketing.stock.view",
       user_colors: "settings.marketing.view", platform_connections: "marketing.platforms.view", file: "marketing.file.download", campaign_code: "marketing.campaign.create",
     };
     return req(map[resource] || "system.marketing.access", "marketing", resource, "view");
@@ -120,7 +120,7 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
     upload_template: "system.marketing.access", review_template: "marketing.task_template.approve", toggle_task_action: "system.marketing.access", complete_task: "system.marketing.access",
     attach_final_file: "system.marketing.access", prepare_final_upload: "system.marketing.access", commit_final_file_upload: "system.marketing.access", cancel_final_upload: "system.marketing.access", attach_final_media_group: "system.marketing.access", delete_first_file: "marketing.task.final_file.upload",
     move_to_publishing: "system.marketing.access", save_publish_prep: "marketing.publish_prep.manage", create_manual_publish_entry: "marketing.publish_prep.manage", discard_manual_publish_entry: "marketing.publish_prep.manage", publish_now: "marketing.publish.now", save_result_file: "marketing.file.upload", refresh_engagement: "marketing.engagement.refresh", subscribe_engagement_webhooks: "marketing.engagement.subscribe", manage_engagement_item: "marketing.publish.now",
-    archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete", attendance: "marketing.attendance.view",
+    archive_entity: "marketing.campaign.archive", delete_entity: "marketing.campaign.delete",
     create_photo_request: "marketing.photo_request.create", delete_photo_request: "marketing.photo_request.create", complete_photo_request: "marketing.photo_request.complete", mark_stock_photographed: "marketing.photo_request.complete", create_raw_folders: "marketing.campaign.create",
     save_department: "settings.marketing.manage", save_assignment_action: "settings.marketing.manage", save_creative_type: "settings.marketing.manage",
     save_campaign_type: "settings.marketing.manage", save_platform: "settings.marketing.manage", delete_setting: "settings.marketing.manage", save_package: "settings.marketing.manage",
@@ -144,11 +144,6 @@ function marketingRequirement(request: VercelRequest): ApiPermissionRequirement 
   }
   if (action === "save_campaign_budgets") {
     return req("marketing.campaign.edit", "marketing", "database", action);
-  }
-  if (action === "attendance") {
-    const attendanceAction = clean(payload.attendanceAction);
-    if (["save_settings", "edit"].includes(attendanceAction)) return req("marketing.attendance.manage", "marketing", "attendance", "manage");
-    if (attendanceAction === "ping") return req("system.marketing.access", "marketing", "attendance", "presence_ping");
   }
   return req(map[action] || "system.marketing.access", "marketing", resource, action || "write");
 }

@@ -21,6 +21,32 @@ export type AuthUser = {
   permissionVersion: number;
 };
 
+
+export type AttendanceLoginRequirement = {
+  attendanceRequired: true;
+  locationRequired: boolean;
+  scheduleName?: string | null;
+  periodName?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  requiredLocationName?: string | null;
+};
+
+export class AttendanceLoginRequiredError extends Error {
+  requirement: AttendanceLoginRequirement;
+
+  constructor(message: string, requirement: AttendanceLoginRequirement) {
+    super(message);
+    this.name = "AttendanceLoginRequiredError";
+    this.requirement = requirement;
+  }
+}
+
+type LoginOptions = {
+  attendanceCheckIn?: boolean;
+  location?: { latitude: number; longitude: number; accuracy?: number | null } | null;
+};
+
 export type SetupStatus = {
   ok: boolean;
   databaseConfigured: boolean;
@@ -36,7 +62,7 @@ type AuthContextValue = {
   status: SetupStatus | null;
   user: AuthUser | null;
   refresh: () => Promise<void>;
-  login: (identifier: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string, options?: LoginOptions) => Promise<void>;
   initialize: (payload: Record<string, unknown>) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -84,15 +110,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const login = useCallback(async (identifier: string, password: string) => {
+  useEffect(() => {
+    if (!user?.id) return;
+    let stopped = false;
+    const verifySession = async () => {
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store", credentials: "include" });
+        const payload = await readJson(response);
+        if (stopped) return;
+        if (response.status === 401 || !payload?.ok) {
+          if (response.status === 401) setUser(null);
+          return;
+        }
+        if (payload.user) setUser(payload.user);
+      } catch {
+        // Temporary network errors must not sign the user out locally.
+      }
+    };
+    const interval = window.setInterval(() => { void verifySession(); }, 30000);
+    const onVisibility = () => { if (document.visibilityState === "visible") void verifySession(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [user?.id]);
+
+  const login = useCallback(async (identifier: string, password: string, options: LoginOptions = {}) => {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       credentials: "include",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ identifier, password }),
+      body: JSON.stringify({
+        identifier,
+        password,
+        attendanceCheckIn: options.attendanceCheckIn === true,
+        location: options.location || undefined,
+      }),
     });
     const payload = await readJson(response);
-    if (!response.ok || !payload.ok) throw new Error(payload.error || "تعذر تسجيل الدخول");
+    if (!response.ok || !payload.ok) {
+      if (payload?.code === "ATTENDANCE_REQUIRED" || payload?.code === "ATTENDANCE_LOCATION_REQUIRED") {
+        throw new AttendanceLoginRequiredError(payload.error || "سجل الحضور لإكمال الدخول", {
+          attendanceRequired: true,
+          locationRequired: Boolean(payload.locationRequired),
+          scheduleName: payload.scheduleName || null,
+          periodName: payload.periodName || null,
+          startTime: payload.startTime || null,
+          endTime: payload.endTime || null,
+          requiredLocationName: payload.requiredLocationName || null,
+        });
+      }
+      throw new Error(payload.error || "تعذر تسجيل الدخول");
+    }
     setUser(payload.user);
   }, []);
 

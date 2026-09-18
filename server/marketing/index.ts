@@ -4117,138 +4117,6 @@ async function receiptCalendar(sql:ReturnType<typeof getSql>,user:SessionUser){
   return{ok:true,rows};
 }
 
-async function attendanceData(sql:ReturnType<typeof getSql>,user:SessionUser,request:VercelRequest){
-  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
-  const value=(type:string)=>parts.find((part)=>part.type===type)?.value||'';
-  const todayKey=`${value('year')}-${value('month')}-${value('day')}`;
-  const from=isoDate(request.query.from)||todayKey;
-  const to=isoDate(request.query.to)||from;
-  const departmentId=clean(request.query.departmentId);
-  const requestedUserId=clean(request.query.userId);
-  const userId=hasPermission(user,"marketing.attendance.manage")?requestedUserId:user.id;
-  const status=clean(request.query.status);
-  const [settings]=await sql<any[]>`select * from marketing.attendance_settings where singleton=true`;
-  const today=await sql<any[]>`
-    select u.id::text,u.full_name,
-      string_agg(distinct d.name,'، ' order by d.name) as department_name,
-      r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status,
-      coalesce(max(p.last_activity_at)>now()-interval '5 minutes',false) as online,
-      max(p.last_activity_at) as last_activity_at,
-      max(p.last_activity_type) as last_activity_type
-    from core.users u
-    join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
-    join marketing.departments d on d.id=du.department_id and d.is_active=true
-    left join marketing.attendance_records r on r.user_id=u.id and r.attendance_date=(now() at time zone 'Asia/Riyadh')::date
-    left join marketing.presence_status p on p.user_id=u.id
-    where u.is_active=true and (${hasPermission(user,"marketing.attendance.manage")} or u.id=${user.id}::uuid)
-    group by u.id,u.full_name,r.check_in,r.check_out,r.delay_minutes,r.work_minutes,r.status
-    order by u.full_name`;
-  const reportUsers=await sql<any[]>`
-    select u.id::text,u.full_name,u.email,string_agg(distinct d.name,'، ' order by d.name) as department_name
-    from core.users u
-    join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
-    join marketing.departments d on d.id=du.department_id and d.is_active=true
-    where u.is_active=true
-      and (${departmentId}='' or exists(select 1 from core.user_system_departments fdu where fdu.user_id=u.id and fdu.system_code='marketing' and fdu.department_id=${departmentId||null}::uuid))
-      and (${userId}='' or u.id=${userId||null}::uuid)
-    group by u.id,u.full_name,u.email
-    order by u.full_name`;
-  const rawRows=await sql<any[]>`
-    select r.*,r.id::text,r.user_id::text,r.attendance_date::text as attendance_date,u.full_name,
-      string_agg(distinct d.name,'، ' order by d.name) as department_name
-    from marketing.attendance_records r
-    join core.users u on u.id=r.user_id
-    left join core.user_system_departments du on du.user_id=u.id and du.system_code='marketing'
-    left join marketing.departments d on d.id=du.department_id
-    where r.attendance_date between ${from}::date and ${to}::date
-      and (${departmentId}='' or exists(select 1 from core.user_system_departments fdu where fdu.user_id=u.id and fdu.system_code='marketing' and fdu.department_id=${departmentId||null}::uuid))
-      and (${userId}='' or u.id=${userId||null}::uuid)
-    group by r.id,u.id,u.full_name
-    order by r.attendance_date desc,u.full_name`;
-  const [effective]=await sql<any[]>`
-    select min(r.attendance_date)::text as effective_from
-    from marketing.attendance_records r
-    where r.attendance_date between ${from}::date and ${to}::date
-      and exists(select 1 from core.user_system_departments du where du.user_id=r.user_id and du.system_code='marketing')`;
-  const effectiveFrom=clean(effective?.effective_from);
-  const reportDays=effectiveFrom?datesBetween(effectiveFrom>from?effectiveFrom:from,to):[];
-  const recordsByUserDay=new Map<string,any>();
-  for(const row of rawRows)recordsByUserDay.set(`${row.user_id}:${clean(row.attendance_date).slice(0,10)}`,row);
-  let summary=reportUsers.map((employee:any)=>{
-    const records=reportDays.map((day)=>recordsByUserDay.get(`${employee.id}:${day}`)).filter(Boolean);
-    const present=records.length;
-    const absent=Math.max(0,reportDays.length-present);
-    const lateCount=records.filter((row:any)=>numberValue(row.delay_minutes)>0).length;
-    const lateTotal=records.reduce((sum:number,row:any)=>sum+numberValue(row.delay_minutes),0);
-    const noCheckout=records.filter((row:any)=>row.check_in&&!row.check_out).length;
-    const workTotal=records.reduce((sum:number,row:any)=>sum+numberValue(row.work_minutes),0);
-    const employeeStatus=lateCount?'late':present&&noCheckout?'no_checkout':present&&absent?'partial':present?'present':'absent';
-    return{user_id:employee.id,full_name:employee.full_name,email:employee.email,department_name:employee.department_name,status:employeeStatus,present,absent,late_count:lateCount,late_total:lateTotal,no_checkout:noCheckout,work_total:workTotal};
-  });
-  if(status==='present')summary=summary.filter((row:any)=>row.present>0);
-  if(status==='late')summary=summary.filter((row:any)=>row.late_count>0);
-  if(status==='absent')summary=summary.filter((row:any)=>row.absent>0);
-  if(status==='no_checkout')summary=summary.filter((row:any)=>row.no_checkout>0);
-  const includedUsers=new Set(summary.map((row:any)=>row.user_id));
-  const rows:any[]=[];
-  for(const employee of reportUsers){
-    if(!includedUsers.has(employee.id))continue;
-    for(const day of reportDays){
-      const record=recordsByUserDay.get(`${employee.id}:${day}`);
-      if(status==='absent'){
-        if(!record)rows.push({id:`${employee.id}:${day}`,user_id:employee.id,attendance_date:day,full_name:employee.full_name,department_name:employee.department_name,status:'absent',check_in:null,check_out:null,delay_minutes:0,work_minutes:0});
-        continue;
-      }
-      if(!record)continue;
-      if(status==='late'&&numberValue(record.delay_minutes)<=0)continue;
-      if(status==='no_checkout'&&(!record.check_in||record.check_out))continue;
-      rows.push({...record,status:record.check_in&&!record.check_out?'no_checkout':numberValue(record.delay_minutes)>0?'late':'present'});
-    }
-  }
-  rows.sort((a,b)=>String(b.attendance_date).localeCompare(String(a.attendance_date))||String(a.full_name).localeCompare(String(b.full_name),'ar'));
-  const totals=summary.reduce((acc:any,row:any)=>({present:acc.present+row.present,absent:acc.absent+row.absent,lateCount:acc.lateCount+row.late_count,lateTotal:acc.lateTotal+row.late_total,noCheckout:acc.noCheckout+row.no_checkout,workTotal:acc.workTotal+row.work_total}),{present:0,absent:0,lateCount:0,lateTotal:0,noCheckout:0,workTotal:0});
-  const [mine]=await sql<any[]>`select *,id::text from marketing.attendance_records where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date`;
-  return{ok:true,settings:settings||{},today,rows,summary,totals,effectiveFrom,mine:mine||null,canManage:hasPermission(user,"marketing.attendance.manage")};
-}
-async function attendanceAction(sql:ReturnType<typeof getSql>,body:any,user:SessionUser){
-  const action=clean(body.attendanceAction);
-  if(action==='ping'){
-    await sql`insert into marketing.presence_status(user_id,online,last_activity_at,last_activity_type,updated_at) values(${user.id}::uuid,true,now(),${clean(body.activityType)||'فتح سيستم التسويق'},now()) on conflict(user_id) do update set online=true,last_activity_at=now(),last_activity_type=excluded.last_activity_type,updated_at=now()`;
-    return{ok:true};
-  }
-  if(action==='save_settings'){
-    if(!hasPermission(user,"marketing.attendance.manage"))throw new Error("لا توجد صلاحية لإدارة إعدادات الدوام");
-    await sql`update marketing.attendance_settings set work_start=${clean(body.workStart)}::time,work_end=${clean(body.workEnd)}::time,grace_minutes=${Math.max(0,numberValue(body.graceMinutes))},updated_by=${user.id}::uuid,updated_at=now() where singleton=true`;
-    return{ok:true,message:"تم حفظ إعدادات الدوام"};
-  }
-  if(action==='check_in'){
-    const [row]=await sql<any[]>`
-      with settings as(
-        select
-          coalesce((select work_start from marketing.attendance_settings where singleton=true),'09:00'::time) as work_start,
-          coalesce((select grace_minutes from marketing.attendance_settings where singleton=true),15) as grace_minutes
-      ), calculated as(
-        select greatest(0,floor(extract(epoch from (((now() at time zone 'Asia/Riyadh')::time)-(work_start+(grace_minutes||' minutes')::interval)))/60))::int as delay_minutes from settings
-      )
-      insert into marketing.attendance_records(user_id,attendance_date,check_in,delay_minutes,status)
-      select ${user.id}::uuid,(now() at time zone 'Asia/Riyadh')::date,now(),delay_minutes,case when delay_minutes>0 then 'late' else 'present' end from calculated
-      on conflict(user_id,attendance_date) do update set
-        check_in=coalesce(marketing.attendance_records.check_in,excluded.check_in),
-        delay_minutes=case when marketing.attendance_records.check_in is null then excluded.delay_minutes else marketing.attendance_records.delay_minutes end,
-        status=case when marketing.attendance_records.check_in is null then excluded.status else marketing.attendance_records.status end,
-        updated_at=now()
-      returning *,id::text`;
-    if(!row?.id||!row?.check_in)throw new Error("تعذر تثبيت تسجيل الحضور، حاول مرة أخرى");
-    return{ok:true,row,message:"تم تسجيل الحضور"};
-  }
-  if(action==='check_out'){
-    const [row]=await sql<any[]>`update marketing.attendance_records set check_out=now(),work_minutes=greatest(0,floor(extract(epoch from (now()-check_in))/60))::int,status=case when status='late' then 'late' else 'present' end,updated_at=now() where user_id=${user.id}::uuid and attendance_date=(now() at time zone 'Asia/Riyadh')::date and check_in is not null returning *,id::text`;
-    if(!row)throw new Error("يجب تسجيل الحضور أولًا");
-    return{ok:true,row,message:"تم تسجيل الانصراف"};
-  }
-  throw new Error("إجراء الحضور غير صحيح");
-}
-
 async function stockData(sql:ReturnType<typeof getSql>,user:SessionUser){
   const canCompletePhotoRequest=hasPermission(user,"marketing.photo_request.complete");
   const canDeletePhotoRequest=hasPermission(user,"marketing.photo_request.create");
@@ -4563,7 +4431,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
       if(resource==='monitoring')return response.status(200).json(await monitoring(sql,user));
       if(resource==='calendar')return response.status(200).json(await calendarData(sql,user));
       if(resource==='receipt_calendar')return response.status(200).json(await receiptCalendar(sql,user));
-      if(resource==='attendance')return response.status(200).json(await attendanceData(sql,user,request));
       if(resource==='stock')return response.status(200).json(await stockData(sql,user));
       if(resource==='user_colors')return response.status(200).json(await userColors(sql));
       if(resource==='task_folder')return response.status(200).json(await taskFolderData(sql,request,user));
@@ -4625,7 +4492,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if(action==='save_links')result=await saveLinks(sql,body,user);
     else if(action==='archive_entity')result=await archiveEntity(sql,body,user);
     else if(action==='delete_entity')result=await deleteEntity(sql,body,user);
-    else if(action==='attendance')result=await attendanceAction(sql,body,user);
     else if(action==='create_photo_request')result=await createPhotoRequest(sql,body,user);
     else if(action==='delete_photo_request')result=await deleteMarketingPhotoRequest(sql,clean(body.id),user);
     else if(action==='mark_stock_photographed')result=await markStockPhotographed(sql,body,user);

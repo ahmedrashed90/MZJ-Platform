@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getSql } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 import { getEffectiveAccess, hasPermission, type EffectiveAccessSnapshot } from "./_access-control.js";
+import { isAttendanceSessionAllowed } from "./_attendance.js";
 
 export const SESSION_COOKIE = "mzj_session";
 const SESSION_HOURS = 12;
@@ -144,6 +145,13 @@ export async function getSessionUser(request: VercelRequest): Promise<SessionUse
       and s.permission_version=u.permission_version
   `;
   if (!session) {
+    requestWithCache[REQUEST_USER_KEY] = null;
+    return null;
+  }
+
+  const attendanceAllowed = await isAttendanceSessionAllowed(session.user_id);
+  if (!attendanceAllowed) {
+    await sql`delete from core.sessions where token_hash=${tokenHash(token)}`.catch(() => undefined);
     requestWithCache[REQUEST_USER_KEY] = null;
     return null;
   }

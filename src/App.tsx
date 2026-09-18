@@ -45,7 +45,7 @@ const MonitoringPage = lazy(() => import("./marketing/pages/MonitoringPage").the
 const MarketingCalendarPage = lazy(() => import("./marketing/pages/MarketingCalendarPage").then((module) => ({ default: module.MarketingCalendarPage })));
 const ReceiptCalendarPage = lazy(() => import("./marketing/pages/ReceiptCalendarPage").then((module) => ({ default: module.ReceiptCalendarPage })));
 const StockPage = lazy(() => import("./marketing/pages/StockPage").then((module) => ({ default: module.StockPage })));
-const AttendancePage = lazy(() => import("./marketing/pages/AttendancePage").then((module) => ({ default: module.AttendancePage })));
+const AttendancePage = lazy(() => import("./attendance/AttendancePage").then((module) => ({ default: module.AttendancePage })));
 const TaskFolderPage = lazy(() => import("./marketing/pages/TaskFolderPage").then((module) => ({ default: module.TaskFolderPage })));
 const OwnersCommunityPage = lazy(() => import("./owners/OwnersCommunityPage").then((module) => ({ default: module.OwnersCommunityPage })));
 const OwnersMemberPreviewPage = lazy(() => import("./owners/OwnersMemberPreviewPage").then((module) => ({ default: module.OwnersMemberPreviewPage })));
@@ -130,7 +130,7 @@ function PlatformRoutes() {
             <Route path="stock" element={<PermissionGuard permission="marketing.stock.view"><StockPage /></PermissionGuard>} />
             <Route path="task-folder" element={<TaskFolderPage />} />
             <Route path="departments" element={<Navigate to="/settings?section=marketing&tab=departments" replace />} />
-            <Route path="attendance" element={<PermissionGuard permission="marketing.attendance.view"><AttendancePage /></PermissionGuard>} />
+            <Route path="attendance" element={<Navigate to="/attendance" replace />} />
           </Route>
           <Route path="/operations" element={<SystemGuard system="operations"><OperationsLayout /></SystemGuard>}>
             <Route index element={<PermissionGuard permission="operations.inventory.view"><InventoryPage /></PermissionGuard>} />
@@ -155,6 +155,7 @@ function PlatformRoutes() {
           </Route>
           <Route path="/owners-community/member/:kind/:id" element={<PermissionGuard permission="owners.community.view"><OwnersMemberPreviewPage /></PermissionGuard>} />
           <Route path="/owners-community" element={<PermissionGuard permission="owners.community.view"><OwnersCommunityPage /></PermissionGuard>} />
+          <Route path="/attendance" element={<AttendancePage />} />
           <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
           <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />
           <Route path="/settings" element={<SettingsRoute />} />

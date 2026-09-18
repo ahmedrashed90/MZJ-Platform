@@ -25,5 +25,11 @@
     "api/meta-engagement-webhook.ts": {
       "maxDuration": 120
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/attendance-tick",
+      "schedule": "* * * * *"
+    }
+  ]
 }

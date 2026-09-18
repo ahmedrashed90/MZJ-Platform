@@ -75,6 +75,7 @@ export const SYSTEM_CATALOG: Array<{ code: PlatformSystem; name: string; sortOrd
 
 export const PAGE_CATALOG: CatalogPage[] = [
   { system: "core", code: "dashboard", name: "الداش بورد الموحد", route: "/", sortOrder: 10 },
+  { system: "core", code: "attendance", name: "الحضور والانصراف", route: "/attendance", sortOrder: 15 },
   { system: "core", code: "reports", name: "التقارير الموحدة", route: "/reports", sortOrder: 20 },
   { system: "core", code: "database", name: "قاعدة البيانات الموحدة", route: "/database", sortOrder: 30 },
   { system: "core", code: "settings", name: "الإعدادات", route: "/settings", sortOrder: 40 },
@@ -105,7 +106,6 @@ export const PAGE_CATALOG: CatalogPage[] = [
   { system: "marketing", code: "calendar", name: "التقويم", route: "/marketing/calendar", sortOrder: 90 },
   { system: "marketing", code: "receipt_calendar", name: "تقويم الاستلام", route: "/marketing/receipt-calendar", sortOrder: 100 },
   { system: "marketing", code: "stock", name: "الاستوك", route: "/marketing/stock", sortOrder: 110 },
-  { system: "marketing", code: "attendance", name: "الحضور والانصراف", route: "/marketing/attendance", sortOrder: 120 },
 
   { system: "operations", code: "inventory", name: "مخزون السيارات", route: "/operations", sortOrder: 10 },
   { system: "operations", code: "manage", name: "إدارة السيارات", route: "/operations/manage", sortOrder: 20 },
@@ -314,7 +314,6 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.calendar.view", "مشاهدة تقويم التسويق", "marketing", "calendar", "view", "page"),
   p("marketing.receipt_calendar.view", "مشاهدة تقويم الاستلام", "marketing", "receipt_calendar", "view", "page"),
   p("marketing.stock.view", "مشاهدة استوك التسويق", "marketing", "stock", "view", "page"),
-  p("marketing.attendance.view", "مشاهدة الحضور والانصراف", "marketing", "attendance", "view", "page"),
   p("marketing.campaign.create", "إنشاء حملة", "marketing", "create_campaign", "create", "action", "إنشاء حملة جديدة", true),
   p("marketing.campaign.edit", "تعديل حملة", "marketing", "database", "edit", "action", "تعديل بيانات حملة", true),
   p("marketing.campaign.delete", "حذف حملة", "marketing", "database", "delete", "action", "حذف حملة", true),
@@ -346,7 +345,6 @@ export const PERMISSION_CATALOG: CatalogPermission[] = [
   p("marketing.publish.now", "النشر الآن", "marketing", "publish_prep", "publish_now", "action", "تنفيذ النشر المباشر", true),
   p("marketing.photo_request.create", "إنشاء طلب تصوير", "marketing", "stock", "photo_request_create", "action", "إنشاء طلب تصوير مرتبط بالعمليات", true),
   p("marketing.photo_request.complete", "إنهاء طلب تصوير", "marketing", "stock", "photo_request_complete", "workflow"),
-  p("marketing.attendance.manage", "إدارة الحضور والانصراف", "marketing", "attendance", "manage", "action", "تعديل إعدادات وتقارير الحضور", true),
   p("marketing.connections.manage", "إدارة ربط المنصات", "marketing", "platforms", "manage", "settings", "حفظ وفصل التوكنات", true),
 ];
 

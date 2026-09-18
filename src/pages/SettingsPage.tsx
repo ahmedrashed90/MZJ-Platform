@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CaretDown, CaretUp, Crown, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
+import { Bell, CaretDown, CaretUp, Clock, Crown, Database, GearSix, MagnifyingGlass, Megaphone, Path, UsersThree, WarningCircle, Wrench } from "@phosphor-icons/react";
 import { useSearchParams } from "react-router-dom";
 import { UsersPermissionsPanel } from "../access-control/UsersPermissionsPanel";
 import { useAuth } from "../auth/AuthContext";
@@ -11,8 +11,9 @@ import { OperationsSettingsPanel } from "../operations/components/OperationsSett
 import { hasPermission } from "../systemAccess";
 import { TrackingSettingsPanel } from "../tracking/components/TrackingSettingsPanel";
 import { DataManagementPanel } from "../settings/DataManagementPanel";
+import { AttendanceSettingsPanel } from "../attendance/AttendanceSettingsPanel";
 
-type Section = "users" | "notifications" | "crm" | "marketing" | "operations" | "tracking" | "owners" | "data";
+type Section = "users" | "notifications" | "attendance" | "crm" | "marketing" | "operations" | "tracking" | "owners" | "data";
 
 type SectionDefinition = {
   key: Section;
@@ -27,6 +28,7 @@ type SectionDefinition = {
 const sectionDefinitions: SectionDefinition[] = [
   { key: "users", label: "المستخدمون والصلاحيات", description: "الحسابات والأدوار والفروع والأقسام والسجلات الأمنية", keywords: "المستخدمون الأدوار قوالب الصلاحيات الفروع الأقسام دليل سجل النشاط الأمني NEXT ERP", icon: UsersThree, permissions: ["settings.users.view","settings.users.create","settings.users.update","settings.users.disable","settings.roles.manage","settings.permissions.manage","settings.branches.manage","settings.departments.manage","settings.audit.view","settings.security.view"] },
   { key: "notifications", label: "إعدادات الإشعارات", description: "الصوت والكارت المؤقت ومدة الظهور وتنبيهات الأنظمة", keywords: "الإشعارات الجرس الصوت الكارت البادج التنبيه", icon: Bell, permissions: [], personal: true },
+  { key: "attendance", label: "إعدادات الحضور والانصراف", description: "جداول الفترات ومواعيد اليوزرات ومكان الحضور المطلوب", keywords: "الحضور الانصراف الفترات الدوام السماح اللوكيشن الموقع الموظفين", icon: Clock, permissions: ["platform.superadmin"] },
   { key: "operations", label: "إعدادات العمليات", description: "حالات السيارات والمواقع ومسارات العمل", keywords: "العمليات السيارات المواقع", icon: Wrench, permissions: ["settings.operations.view", "settings.operations.manage"] },
   { key: "tracking", label: "إعدادات التتبع", description: "المراحل والرسائل وإعدادات التراكينج", keywords: "التتبع التراكينج المراحل الرسائل", icon: Path, permissions: ["settings.tracking.view", "settings.tracking.manage"] },
   { key: "marketing", label: "إعدادات التسويق", description: "الأقسام واليوزرات والكرييتيفات والحملات والمنصات", keywords: "التسويق الأقسام اليوزرات الكرييتيف الحملات المنصات", icon: Megaphone, permissions: ["settings.marketing.view", "settings.marketing.manage", "marketing.platforms.view"] },
@@ -96,6 +98,7 @@ export function SettingsPage() {
           <div className="unified-settings-content">
             {section === "users" ? <UsersPermissionsPanel /> : null}
             {section === "notifications" ? <NotificationSettingsPanel /> : null}
+            {section === "attendance" ? <AttendanceSettingsPanel /> : null}
             {section === "crm" ? <CrmAdminPage embedded readOnly={!hasPermission(user, "settings.crm.manage")} /> : null}
             {section === "marketing" ? <MarketingSettingsPanel readOnly={!hasPermission(user, "settings.marketing.manage")} /> : null}
             {section === "operations" ? <OperationsSettingsPanel /> : null}

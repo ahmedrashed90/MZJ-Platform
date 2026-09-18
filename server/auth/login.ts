@@ -3,6 +3,7 @@ import { createSession, loadUserProfile, requestIp } from "../_auth.js";
 import { logSecurityEvent } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
+import { AttendanceError, requireAttendanceForLogin } from "../_attendance.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -67,6 +68,31 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!user) {
       await logSecurityEvent({ request, userEmail: identifier, systemCode: "core", pageCode: "login", action: "login_failed", result: "failure", reason: "INVALID_CREDENTIALS", ipAddress: requestIp(request) });
       return response.status(401).json({ ok: false, error: "بيانات تسجيل الدخول غير صحيحة" });
+    }
+
+    const coordinatePayload = body.location && typeof body.location === "object" ? body.location : {};
+    const latitude = Number(coordinatePayload.latitude);
+    const longitude = Number(coordinatePayload.longitude);
+    const accuracy = coordinatePayload.accuracy === null || coordinatePayload.accuracy === undefined ? null : Number(coordinatePayload.accuracy);
+    const coordinates = Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? { latitude, longitude, accuracy: Number.isFinite(accuracy) ? accuracy : null }
+      : null;
+
+    try {
+      await requireAttendanceForLogin(user.id, {
+        confirmCheckIn: body.attendanceCheckIn === true,
+        coordinates,
+      });
+    } catch (attendanceError) {
+      if (attendanceError instanceof AttendanceError) {
+        return response.status(attendanceError.status).json({
+          ok: false,
+          code: attendanceError.code,
+          error: attendanceError.message,
+          ...(attendanceError.details || {}),
+        });
+      }
+      throw attendanceError;
     }
 
     await sql`update core.users set last_login_at = now(), updated_at = now() where id = ${user.id}::uuid`;

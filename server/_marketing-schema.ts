@@ -622,39 +622,6 @@ create table if not exists marketing.publish_logs (
   created_at timestamptz not null default now()
 );
 
-create table if not exists marketing.attendance_settings (
-  singleton boolean primary key default true check(singleton),
-  work_start time not null default '09:00',
-  work_end time not null default '17:00',
-  grace_minutes integer not null default 15,
-  updated_by uuid references core.users(id),
-  updated_at timestamptz not null default now()
-);
-insert into marketing.attendance_settings(singleton) values(true) on conflict(singleton) do nothing;
-
-create table if not exists marketing.attendance_records (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references core.users(id) on delete cascade,
-  attendance_date date not null default current_date,
-  check_in timestamptz,
-  check_out timestamptz,
-  delay_minutes integer not null default 0,
-  work_minutes integer not null default 0,
-  status text not null default 'not_registered',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique(user_id,attendance_date)
-);
-
-create table if not exists marketing.presence_status (
-  user_id uuid primary key references core.users(id) on delete cascade,
-  online boolean not null default false,
-  last_activity_at timestamptz not null default now(),
-  last_activity_type text,
-  updated_at timestamptz not null default now()
-);
-alter table marketing.presence_status add column if not exists last_activity_type text;
-
 create table if not exists marketing.user_colors (
   user_id uuid primary key references core.users(id) on delete cascade,
   color text not null default '#c65f3c',
