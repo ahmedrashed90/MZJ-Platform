@@ -28,6 +28,7 @@ import crmSettingsHandler from "../server/crm/settings.js";
 import crmInboxAgentHandler from "../server/crm/inbox-agent.js";
 import crmUnreadHandler from "../server/crm/unread.js";
 import crmMersalTemplatesHandler from "../server/crm/mersal-templates.js";
+import crmMersalUsersHandler from "../server/crm/mersal-users.js";
 import crmEntryRoutingHandler from "../server/crm/entry-routing.js";
 import crmAutomationSettingsHandler from "../server/crm/automation-settings.js";
 import crmCashQrHandler from "../server/crm/cash-qr.js";
@@ -102,6 +103,7 @@ const routes = new Map<string, ApiHandler>([
   ["crm/inbox-agent", crmInboxAgentHandler],
   ["crm/unread", crmUnreadHandler],
   ["crm/mersal-templates", crmMersalTemplatesHandler],
+  ["crm/mersal-users", crmMersalUsersHandler],
   ["crm/entry-routing", crmEntryRoutingHandler],
   ["crm/automation-settings", crmAutomationSettingsHandler],
   ["crm/cash-qr", crmCashQrHandler],

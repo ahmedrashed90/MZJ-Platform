@@ -604,6 +604,7 @@ alter table crm.integration_endpoints add column if not exists template_send_url
 alter table crm.integration_endpoints add column if not exists media_send_url text;
 alter table crm.integration_endpoints add column if not exists templates_sync_url text;
 alter table crm.integration_endpoints add column if not exists inbound_webhook_url text;
+alter table crm.integration_endpoints add column if not exists mersal_token text;
 update crm.integration_endpoints set text_send_url=coalesce(text_send_url,send_url),inbound_webhook_url=coalesce(inbound_webhook_url,webhook_url)
 where text_send_url is null or inbound_webhook_url is null;
 

@@ -58,7 +58,7 @@ const blankCustomerField = { id: "", fieldKey: "", label: "", fieldType: "text",
 const blankSource = { code: "", name: "", sortOrder: 10, systemCodes: ["crm", "marketing"] as string[], deliveryRoute: "whatsapp", reportGroup: "other", allowFreeText: false, isActive: true };
 const blankTemplate = { id: "", displayName: "", name: "", content: "", templateType: "quick_message", provider: "manual", externalId: "", departments: [] as string[], isActive: true };
 const blankMapping = { id: "", departmentCode: "cash_sales", statusValue: "", statusLabel: "", templateId: "", messageType: "template", isActive: true };
-const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", isActive: true };
+const blankEndpoint = { sourceCode: "", displayName: "", sendUrl: "", mediaSendUrl: "", templatesSyncUrl: "", inboundWebhookUrl: "", healthUrl: "", secretName: "", mersalToken: "", mersalTokenConfigured: false, isActive: true };
 const blankRule = { id: "", name: "", departmentCode: "cash_sales", branchCodes: [] as string[], sourceCodes: [] as string[], memberIds: [] as string[], assignmentMode: "round_robin", memberPercentages: {} as Record<string, number>, sortOrder: 10, preventConsecutive: true, isActive: true };
 
 function dbToQuality(raw: any) {
@@ -173,6 +173,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncingMersal, setSyncingMersal] = useState(false);
+  const [syncingMersalUsers, setSyncingMersalUsers] = useState(false);
   const [bulkAgentIds, setBulkAgentIds] = useState<string[]>([]);
   const [bulkPreview, setBulkPreview] = useState<any | null>(null);
   const [bulkConfirmCount, setBulkConfirmCount] = useState("");
@@ -307,6 +308,31 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
       setNotice(error instanceof Error ? error.message : "فشل مزامنة قوالب مرسال");
     } finally {
       setSyncingMersal(false);
+    }
+  }
+
+  async function syncMersalUsers() {
+    if (!["whatsapp", "mersal"].includes(endpointForm.sourceCode)) {
+      setNotice("اختار واتساب أولاً");
+      return;
+    }
+    setSyncingMersalUsers(true);
+    setNotice("جاري الاتصال بمرسال وتحديث المستخدمين...");
+    try {
+      const result = await crmFetch<any>("/api/crm/mersal-users", {
+        method: "POST",
+        body: JSON.stringify({
+          sourceCode: endpointForm.sourceCode,
+          token: endpointForm.mersalToken || undefined,
+        }),
+      });
+      setEndpointForm((current) => ({ ...current, mersalToken: "", mersalTokenConfigured: true }));
+      setNotice(result.message || `تم تحديث ${result.count || 0} مستخدم من مرسال`);
+      await load();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "تعذر تحديث مستخدمي مرسال");
+    } finally {
+      setSyncingMersalUsers(false);
     }
   }
 
@@ -745,10 +771,14 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
                   mediaSendUrl: row.media_send_url || row.text_send_url || row.template_send_url || row.send_url || "",
                   templatesSyncUrl: row.templates_sync_url || "",
                   inboundWebhookUrl: row.inbound_webhook_url || row.webhook_url || "",
-                  healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active,
+                  healthUrl: row.health_url || "", secretName: row.secret_name || "", mersalToken: "", mersalTokenConfigured: row.mersal_token_configured === true, isActive: row.is_active,
                 } : { ...blankEndpoint, sourceCode: event.target.value, displayName: data.sources.find((item: any) => item.code === event.target.value)?.name || "" });
               }}><option value="">اختار المصدر</option>{endpointSources.map((row) => <option key={row.code} value={row.code}>{row.name}</option>)}</select></label>
               <label><span>الاسم الظاهر</span><input value={endpointForm.displayName} onChange={(event) => setEndpointForm((current) => ({ ...current, displayName: event.target.value }))} /></label>
+              {["whatsapp", "mersal"].includes(endpointForm.sourceCode) ? <>
+                <label className="crm-field-wide"><span>Mersal Token</span><input type="password" autoComplete="off" placeholder={endpointForm.mersalTokenConfigured ? "التوكن محفوظ — اكتب قيمة جديدة فقط للتغيير" : "أدخل Mersal Token"} value={endpointForm.mersalToken} onChange={(event) => setEndpointForm((current) => ({ ...current, mersalToken: event.target.value }))} /></label>
+                <div className="crm-field-wide crm-form-actions"><button type="button" className="crm-secondary-button" disabled={syncingMersalUsers || (!endpointForm.mersalToken.trim() && !endpointForm.mersalTokenConfigured)} onClick={() => void syncMersalUsers()}><ArrowClockwise size={18} className={syncingMersalUsers ? "crm-spin" : ""} />{syncingMersalUsers ? "جاري جلب المستخدمين..." : "GET المستخدمين"}</button>{endpointForm.mersalTokenConfigured ? <span className="crm-system-field-note">Mersal Token محفوظ. زر GET يحدث قائمة مستخدمي مرسال بدون إعادة إدخال التوكن.</span> : null}</div>
+              </> : null}
               <label className="crm-field-wide"><span>مسار إرسال النص والقوالب</span><input placeholder="https://worker.example.com/send/mersal" value={endpointForm.sendUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, sendUrl: event.target.value }))} /></label>
               <label className="crm-field-wide"><span>مسار إرسال المرفقات</span><input placeholder="https://worker.example.com/send/mersal" value={endpointForm.mediaSendUrl} onChange={(event) => setEndpointForm((current) => ({ ...current, mediaSendUrl: event.target.value }))} /></label>
               <div className="crm-field-wide crm-system-field-note">المرفق يُرفع أولًا إلى التخزين الآمن، ثم يرسله Worker مرسال إلى Endpoint <b>/api/wpbox/sendmessage</b> بصيغة multipart/form-data.</div>
@@ -766,7 +796,7 @@ export function CrmAdminPage({ embedded = false, readOnly = false }: Props) {
               sourceCode: row.source_code, displayName: row.display_name,
               sendUrl: row.text_send_url || row.template_send_url || row.send_url || "", mediaSendUrl: row.media_send_url || row.text_send_url || row.send_url || "",
               templatesSyncUrl: row.templates_sync_url || "", inboundWebhookUrl: row.inbound_webhook_url || row.webhook_url || "",
-              healthUrl: row.health_url || "", secretName: row.secret_name || "", isActive: row.is_active,
+              healthUrl: row.health_url || "", secretName: row.secret_name || "", mersalToken: "", mersalTokenConfigured: row.mersal_token_configured === true, isActive: row.is_active,
             })}><strong>{sourceLabel(row.source_code, row.display_name)}</strong><span>{row.text_send_url || row.template_send_url || row.send_url || "لم يتم إضافة مسار إرسال"}</span></button>)}</div>
           </section>
         </div>

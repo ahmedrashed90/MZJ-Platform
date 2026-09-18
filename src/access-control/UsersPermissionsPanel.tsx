@@ -10,7 +10,7 @@ import type { AccessSystemCode, DataScope, PlatformSystem } from "../../shared/a
 type Tab = "users" | "roles" | "org" | "catalog" | "permission-log" | "security-log";
 type UserSystemForm = { systemCode: PlatformSystem; isEnabled: boolean; roleId: string; dataScope: DataScope; branchIds: string[]; departmentIds: string[]; vehicleStatusCodes: string[]; primaryBranchId: string; primaryDepartmentId: string };
 type OverrideEffect = "inherit" | "allow" | "deny";
-type UserForm = { id: string; employeeNo: string; fullName: string; email: string; mobile: string; nextErpUserId: string; password: string; isActive: boolean; canReceiveLeads: boolean; canReceiveTasks: boolean; roleIds: string[]; systems: UserSystemForm[]; overrides: Record<string, OverrideEffect>; reason: string };
+type UserForm = { id: string; employeeNo: string; fullName: string; email: string; mobile: string; nextErpUserId: string; mersalUserId: string; password: string; isActive: boolean; canReceiveLeads: boolean; canReceiveTasks: boolean; roleIds: string[]; systems: UserSystemForm[]; overrides: Record<string, OverrideEffect>; reason: string };
 type RoleGroup = { key: string; name: string; canonical: RoleItem; roleIds: string[] };
 
 const systemOrder: PlatformSystem[] = ["operations", "tracking", "marketing", "crm", "website"];
@@ -26,7 +26,7 @@ const tabLabels: Record<Tab, string> = {
 function cleanArray(value: unknown): string[] { return Array.isArray(value) ? value.map(String) : []; }
 function emptyForm(bootstrap: BootstrapResponse | null): UserForm {
   return {
-    id: "", employeeNo: "", fullName: "", email: "", mobile: "", nextErpUserId: "", password: "", isActive: true,
+    id: "", employeeNo: "", fullName: "", email: "", mobile: "", nextErpUserId: "", mersalUserId: "", password: "", isActive: true,
     canReceiveLeads: false, canReceiveTasks: false, roleIds: [], reason: "",
     systems: systemOrder.map((systemCode) => ({ systemCode, isEnabled: false, roleId: "", dataScope: systemCode === "marketing" ? "workflow_assigned" : "assigned", branchIds: [], departmentIds: [], vehicleStatusCodes: [], primaryBranchId: "", primaryDepartmentId: "" })),
     overrides: Object.fromEntries((bootstrap?.permissions || []).map((permission) => [permission.code, "inherit"])),
@@ -213,7 +213,7 @@ export function UsersPermissionsPanel() {
         const row = detail.systems.find((item) => item.system_code === systemCode);
         return { systemCode, isEnabled: Boolean(row?.is_enabled), roleId: row?.role_id || "", dataScope: row?.data_scope || "assigned", branchIds: cleanArray(row?.branch_ids), departmentIds: cleanArray(row?.department_ids), vehicleStatusCodes: cleanArray(row?.vehicle_status_codes), primaryBranchId: row?.primary_branch_id || cleanArray(row?.branch_ids)[0] || "", primaryDepartmentId: row?.primary_department_id || cleanArray(row?.department_ids)[0] || "" } as UserSystemForm;
       });
-      setForm({ id: detail.user.id || id, employeeNo: detail.user.employee_no || "", fullName: detail.user.full_name || "", email: detail.user.email || "", mobile: detail.user.mobile || "", nextErpUserId: detail.user.next_erp_user_id || "", password: "", isActive: Boolean(detail.user.is_active), canReceiveLeads: Boolean(detail.user.can_receive_leads), canReceiveTasks: Boolean(detail.user.can_receive_tasks), roleIds: detail.roleIds || [], systems, overrides, reason: "" });
+      setForm({ id: detail.user.id || id, employeeNo: detail.user.employee_no || "", fullName: detail.user.full_name || "", email: detail.user.email || "", mobile: detail.user.mobile || "", nextErpUserId: detail.user.next_erp_user_id || "", mersalUserId: detail.user.mersal_user_id || "", password: "", isActive: Boolean(detail.user.is_active), canReceiveLeads: Boolean(detail.user.can_receive_leads), canReceiveTasks: Boolean(detail.user.can_receive_tasks), roleIds: detail.roleIds || [], systems, overrides, reason: "" });
       setSystemTab("operations"); setCopySourceId("");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر فتح المستخدم"); }
     finally { setLoading(false); }
@@ -262,7 +262,7 @@ export function UsersPermissionsPanel() {
     setSaving(true); setError(""); setMessage("");
     try {
       const overrides = Object.entries(form.overrides).filter(([, effect]) => effect !== "inherit").map(([permissionCode, effect]) => ({ permissionCode, effect }));
-      const payload = await accessAction<{ ok: true; message: string }>({ action: "save_user", user: { id: form.id || undefined, employeeNo: form.employeeNo, fullName: form.fullName, email: form.email, mobile: form.mobile, nextErpUserId: form.nextErpUserId, password: form.password, isActive: form.isActive, canReceiveLeads: form.canReceiveLeads, canReceiveTasks: form.canReceiveTasks }, roleIds: form.roleIds, systems: form.systems, overrides, reason: form.reason });
+      const payload = await accessAction<{ ok: true; message: string }>({ action: "save_user", user: { id: form.id || undefined, employeeNo: form.employeeNo, fullName: form.fullName, email: form.email, mobile: form.mobile, nextErpUserId: form.nextErpUserId, mersalUserId: form.mersalUserId, password: form.password, isActive: form.isActive, canReceiveLeads: form.canReceiveLeads, canReceiveTasks: form.canReceiveTasks }, roleIds: form.roleIds, systems: form.systems, overrides, reason: form.reason });
       setMessage(payload.message); setForm(emptyForm(bootstrap)); setCopySourceId(""); await loadBase(); await refresh();
     } catch (failure) { setError(failure instanceof Error ? failure.message : "تعذر حفظ المستخدم"); }
     finally { setSaving(false); }
@@ -340,6 +340,7 @@ export function UsersPermissionsPanel() {
               <label><span>البريد</span><input disabled={!canEditProfile} type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
               <label><span>الجوال</span><input disabled={!canEditProfile} value={form.mobile} onChange={(event) => setForm({ ...form, mobile: event.target.value })} /></label>
               <label><span>NEXT ERP User ID</span><input disabled={!canEditProfile} value={form.nextErpUserId} onChange={(event) => setForm({ ...form, nextErpUserId: event.target.value })} /></label>
+              <label><span>Mersal User / mersal_user_id</span><select disabled={!canEditProfile} value={form.mersalUserId} onChange={(event) => setForm({ ...form, mersalUserId: event.target.value })}><option value="">غير مرتبط</option>{(bootstrap?.mersalUsers || []).filter((item) => item.is_active || item.mersal_user_id === form.mersalUserId).map((item) => <option key={item.mersal_user_id} value={item.mersal_user_id}>{item.full_name} — {item.email || "بدون بريد"} — ID: {item.mersal_user_id}{!item.is_active ? " — غير متاح" : ""}</option>)}</select></label>
               <label><span>{form.id ? "كلمة مرور جديدة (اختياري)" : "كلمة مرور مؤقتة"}</span><input disabled={!canEditProfile} type="password" minLength={10} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
             </div>
             <div className="access-toggle-row"><label><input type="checkbox" checked={form.isActive} disabled={Boolean(form.id) ? !canDisableUsers || isEditingCurrentUser : !canEditProfile} onChange={(event) => setForm({ ...form, isActive: event.target.checked })} /> الحساب فعال</label><label><input type="checkbox" disabled={!canEditProfile} checked={form.canReceiveLeads} onChange={(event) => setForm({ ...form, canReceiveLeads: event.target.checked })} /> استقبال العملاء</label><label><input type="checkbox" disabled={!canEditProfile} checked={form.canReceiveTasks} onChange={(event) => setForm({ ...form, canReceiveTasks: event.target.checked })} /> استقبال التاسكات</label></div></div>

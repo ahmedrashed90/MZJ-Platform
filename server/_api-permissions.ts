@@ -197,6 +197,7 @@ export function resolveApiPermission(route: string, request: VercelRequest): Api
   if (route === "access-control" || route === "users" || route === "meta") return null;
   if (route === "dashboard") return req("platform.dashboard.view", "core", "dashboard", "view");
   if (route === "activity" && request.method === "GET") return req("platform.activity.view", "core", "activity", "view");
+  if (route === "crm/mersal-users") return null;
   if (route.startsWith("crm/")) return crmRequirement(route, request);
   if (route === "operations") return operationsRequirement(request);
   if (route === "marketing/instagram-media") return null;
