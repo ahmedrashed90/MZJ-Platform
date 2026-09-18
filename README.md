@@ -459,3 +459,7 @@ Before deploying, read:
 
 ## Global Attendance CLEAN v81
 راجع `DELIVERY-GLOBAL-ATTENDANCE-CLEAN-V81.md` لتفاصيل إصلاح اللوكيشن والجدول العادي وفلتر الموظفين المتعدد.
+
+
+## GLOBAL ATTENDANCE CLEAN v83
+Removed the legacy marketing migration label from attendance report period columns while preserving historical records.

@@ -624,7 +624,7 @@ async function reportData(request: VercelRequest) {
         work_date::text as work_date,period_name,period_sort_order,grace_minutes,
         scheduled_start_at,scheduled_end_at,check_in,check_out,checkout_source,
         delay_minutes,work_minutes,status,
-        required_location_name,
+        required_location_name,legacy_source_key,
         check_in_latitude::float8,check_in_longitude::float8,check_in_accuracy_m::float8,check_in_distance_m::float8,
         location_result
       from core.attendance_records
@@ -690,6 +690,11 @@ async function reportData(request: VercelRequest) {
       const userAssignments = assignmentMap.get(String(user.id)) || [];
       const assignment = userAssignments.find((item) => dateOnlyValue(item.effective_from) <= day && (!item.effective_to || dateOnlyValue(item.effective_to) >= day)) || null;
       const dayRecords = recordMap.get(`${user.id}:${day}`) || [];
+      const visibleDayRecords = dayRecords.filter((record) => {
+        const legacySourceKey = clean(record.legacy_source_key);
+        const periodName = clean(record.period_name);
+        return !legacySourceKey.startsWith("marketing:") && periodName !== "سجل التسويق السابق";
+      });
       const assignedPeriodIds = normalizedIdList(assignment?.period_ids);
       const schedulePeriods = assignment
         ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active) && (!assignedPeriodIds.length || assignedPeriodIds.includes(clean(period.id))))
@@ -699,7 +704,7 @@ async function reportData(request: VercelRequest) {
         && weekdayForDate(day) === parseWeeklyOffDay(assignment.weekly_off_day);
 
       const slots: any[] = schedulePeriods.map((period) => {
-        const record = dayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
+        const record = visibleDayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
         return {
           id: period.id,
           name: clean(period.name) || "فترة العمل",
@@ -711,7 +716,7 @@ async function reportData(request: VercelRequest) {
         };
       });
 
-      for (const record of dayRecords) {
+      for (const record of visibleDayRecords) {
         if (slots.some((slot) => slot.record?.id === record.id)) continue;
         slots.push({
           id: record.period_id || `record:${record.id}`,
