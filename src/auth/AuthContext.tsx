@@ -181,7 +181,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => undefined);
+    const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    const payload = await readJson(response);
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.error || "تعذر تسجيل الانصراف وتسجيل الخروج");
+    }
     setUser(null);
   }, []);
 

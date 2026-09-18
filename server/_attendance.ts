@@ -207,7 +207,6 @@ async function closeExpiredAttendanceForUser(userId: string) {
       and scheduled_end_at <= now()
     returning id::text
   `;
-  if (closed.length) await sql`delete from core.sessions where user_id=${userId}::uuid`;
   return closed.length;
 }
 
@@ -228,6 +227,80 @@ export async function getLoginAttendanceState(userId: string) {
   }
   const record = await recordForPeriod(userId, activePeriod);
   return { assigned: true, activePeriod, record, scheduleName: activePeriod.schedule_name, isDayOff: false, weeklyOffDay: null };
+}
+
+function isoOrNull(value: unknown) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export async function getSelfAttendanceState(userId: string) {
+  const [state, enforcementEnabled] = await Promise.all([
+    getLoginAttendanceState(userId),
+    isAttendanceEnforcementEnabled(),
+  ]);
+  const period = state.activePeriod;
+  const record = state.record;
+  const checkedIn = Boolean(record?.check_in);
+  const checkedOut = Boolean(record?.check_out);
+
+  return {
+    enforcementEnabled,
+    assigned: state.assigned,
+    scheduleName: state.scheduleName || null,
+    isDayOff: Boolean(state.isDayOff),
+    weeklyOffDay: state.weeklyOffDay,
+    activePeriod: period ? {
+      id: period.period_id,
+      name: period.period_name,
+      startTime: period.start_time,
+      endTime: period.end_time,
+      graceMinutes: period.grace_minutes,
+      workDate: period.work_date,
+      scheduledStartAt: period.scheduled_start_at,
+      scheduledEndAt: period.scheduled_end_at,
+    } : null,
+    record: record ? {
+      id: String(record.id || ""),
+      checkIn: isoOrNull(record.check_in),
+      checkOut: isoOrNull(record.check_out),
+      checkoutSource: record.checkout_source || null,
+      delayMinutes: Math.max(0, Number(record.delay_minutes || 0)),
+      workMinutes: Math.max(0, Number(record.work_minutes || 0)),
+      status: String(record.status || ""),
+      locationResult: String(record.location_result || ""),
+      latitude: numberOrNull(record.check_in_latitude),
+      longitude: numberOrNull(record.check_in_longitude),
+      accuracy: numberOrNull(record.check_in_accuracy_m),
+      distance: numberOrNull(record.check_in_distance_m),
+    } : null,
+    canCheckIn: Boolean(period && !checkedIn),
+    canCheckOut: Boolean(checkedIn && !checkedOut),
+    locationRequired: Boolean(period?.location_id),
+    requiredLocationName: period?.location_name || null,
+  };
+}
+
+export async function checkInCurrentAttendance(
+  userId: string,
+  coordinates: AttendanceCoordinates | null,
+) {
+  const state = await getLoginAttendanceState(userId);
+  if (!state.assigned) {
+    throw new AttendanceError("ATTENDANCE_NOT_ASSIGNED", "لم يتم تحديد جدول عمل لهذا المستخدم", 400);
+  }
+  if (!state.activePeriod) {
+    if (state.isDayOff) {
+      throw new AttendanceError("WEEKLY_DAY_OFF", "اليوم هو يوم الإجازة الأسبوعية المحدد لك", 400);
+    }
+    throw new AttendanceError("OUTSIDE_WORK_PERIOD", "لا توجد فترة عمل فعالة الآن لتسجيل الحضور", 400);
+  }
+  if (state.record?.check_in && !state.record?.check_out) return state.record;
+  if (state.record?.check_out) {
+    throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم تسجيل الانصراف لهذه الفترة بالفعل", 400);
+  }
+  return registerAttendanceCheckIn(userId, state.activePeriod, coordinates);
 }
 
 export async function requireAttendanceForLogin(
@@ -478,9 +551,7 @@ export async function checkoutCurrentAttendance(
 
 export async function runAttendanceTick() {
   await ensureAttendanceSchema();
-  if (!(await isAttendanceEnforcementEnabled())) {
-    return { ok: true, enforcementEnabled: false, closedRecords: 0, forcedLogoutUsers: 0 };
-  }
+  const enforcementEnabled = await isAttendanceEnforcementEnabled();
   const sql = getSql();
   const closed = await sql<{ user_id: string }[]>`
     update core.attendance_records
@@ -496,15 +567,15 @@ export async function runAttendanceTick() {
     returning user_id::text
   `;
   const closedUserIds = [...new Set(closed.map((row) => String(row.user_id)).filter(Boolean))];
-  if (closedUserIds.length) {
+
+  if (enforcementEnabled && closedUserIds.length) {
     await sql`delete from core.sessions where user_id::text in ${sql(closedUserIds)}`;
   }
 
-
   return {
     ok: true,
-    enforcementEnabled: true,
+    enforcementEnabled,
     closedRecords: closed.length,
-    forcedLogoutUsers: closedUserIds.length,
+    forcedLogoutUsers: enforcementEnabled ? closedUserIds.length : 0,
   };
 }

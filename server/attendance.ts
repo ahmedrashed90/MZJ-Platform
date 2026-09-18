@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
-import { AttendanceError, ATTENDANCE_TIME_ZONE, formatMinutes, isAttendanceEnforcementEnabled } from "./_attendance.js";
+import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -14,6 +14,20 @@ function bodyObject(request: VercelRequest) {
     try { return JSON.parse(request.body || "{}"); } catch { return {}; }
   }
   return {};
+}
+
+function attendanceCoordinates(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const latitude = Number(source.latitude);
+  const longitude = Number(source.longitude);
+  const accuracy = source.accuracy === null || source.accuracy === undefined ? null : Number(source.accuracy);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return {
+    latitude,
+    longitude,
+    accuracy: Number.isFinite(accuracy) ? accuracy : null,
+  };
 }
 
 function asArray(value: unknown): string[] {
@@ -581,7 +595,15 @@ async function reportData(request: VercelRequest) {
   const rawRows: any[] = [];
   const headerMeta = new Map<string, { key: string; label: string; sortOrder: number; firstSeen: number }>();
   let headerSequence = 0;
-  const periodKey = (name: unknown) => clean(name).toLocaleLowerCase("ar-SA") || "فترة العمل";
+  const periodKey = (name: unknown) => (
+    clean(name)
+      .normalize("NFKC")
+      .replace(/[\u200B-\u200F\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLocaleLowerCase("ar-SA")
+    || "فترة العمل"
+  );
 
   for (const day of days) {
     for (const user of users) {
@@ -624,8 +646,14 @@ async function reportData(request: VercelRequest) {
       slots.sort((a, b) => a.sortOrder - b.sortOrder);
 
       const checkedRecords = slots.map((slot) => slot.record).filter(Boolean);
-      const actualLocations = Array.from(new Set(checkedRecords
-        .filter((record) => record.check_in_latitude !== null && record.check_in_latitude !== undefined)
+      const locatedRecords = checkedRecords.filter((record) =>
+        record.check_in_latitude !== null
+        && record.check_in_latitude !== undefined
+        && record.check_in_longitude !== null
+        && record.check_in_longitude !== undefined
+      );
+      const primaryLocatedRecord = locatedRecords[0] || null;
+      const actualLocations = Array.from(new Set(locatedRecords
         .map((record) => `${Number(record.check_in_latitude).toFixed(6)}, ${Number(record.check_in_longitude).toFixed(6)}`)));
       const requiredLocations = Array.from(new Set(checkedRecords
         .map((record) => clean(record.required_location_name))
@@ -684,6 +712,15 @@ async function reportData(request: VercelRequest) {
           actual: actualLocations.length ? actualLocations.join(" / ") : "—",
           required: requiredLocations.length ? requiredLocations.join(" / ") : assignment?.location_name || "غير مطلوب",
           result: locationResult,
+          latitude: primaryLocatedRecord ? Number(primaryLocatedRecord.check_in_latitude) : null,
+          longitude: primaryLocatedRecord ? Number(primaryLocatedRecord.check_in_longitude) : null,
+          distanceM: primaryLocatedRecord?.check_in_distance_m === null || primaryLocatedRecord?.check_in_distance_m === undefined
+            ? null
+            : Number(primaryLocatedRecord.check_in_distance_m),
+          accuracyM: primaryLocatedRecord?.check_in_accuracy_m === null || primaryLocatedRecord?.check_in_accuracy_m === undefined
+            ? null
+            : Number(primaryLocatedRecord.check_in_accuracy_m),
+          captures: actualLocations.length,
         },
         scheduleName: assignment?.schedule_name || null,
         periodsByKey,
@@ -710,6 +747,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
     if (request.method === "GET") {
       const view = clean(request.query.view);
+      if (view === "self") {
+        return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
+      }
       if (view === "admin") {
         const admin = await requireAdmin(request, response);
         if (!admin) return;
@@ -726,6 +766,20 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
     const body = bodyObject(request);
     const action = clean(body.action);
+
+    if (action === "self_check_in") {
+      const coordinates = attendanceCoordinates(body.location);
+      const stateBefore = await getSelfAttendanceState(user.id);
+      if (stateBefore.locationRequired && !coordinates) {
+        throw new AttendanceError("ATTENDANCE_LOCATION_REQUIRED", "يجب تحديد الموقع لتسجيل الحضور", 409, {
+          locationRequired: true,
+          requiredLocationName: stateBefore.requiredLocationName,
+          periodName: stateBefore.activePeriod?.name || null,
+        });
+      }
+      await checkInCurrentAttendance(user.id, coordinates);
+      return response.status(200).json({ ok: true, state: await getSelfAttendanceState(user.id) });
+    }
 
     const admin = await requireAdmin(request, response);
     if (!admin) return;

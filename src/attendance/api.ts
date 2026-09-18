@@ -47,3 +47,13 @@ export function formatAttendanceDay(value: string) {
     weekday: "long",
   }).format(date);
 }
+
+
+export function formatAttendanceMinutes(value: number | null | undefined) {
+  const total = Math.max(0, Math.floor(Number(value) || 0));
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  if (!hours) return `${minutes} د`;
+  if (!minutes) return `${hours} س`;
+  return `${hours} س ${minutes} د`;
+}

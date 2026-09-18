@@ -1,24 +1,7 @@
 import { useState } from "react";
 import { LockKey, MapPin, SignIn, WarningCircle } from "@phosphor-icons/react";
 import { AttendanceLoginRequiredError, useAuth } from "../auth/AuthContext";
-
-function getBrowserLocation() {
-  return new Promise<{ latitude: number; longitude: number; accuracy: number | null }>((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error("المتصفح لا يدعم تحديد الموقع"));
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (position) => resolve({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null,
-      }),
-      () => reject(new Error("تعذر تحديد موقعك. اسمح للموقع بالوصول إلى اللوكيشن ثم حاول مرة أخرى.")),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    );
-  });
-}
+import { getBrowserAttendanceLocation } from "../attendance/location";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -46,7 +29,7 @@ export function LoginPage() {
           if (requirement.locationRequired) {
             setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}جاري تحديد موقع الحضور...`);
           }
-          const location = requirement.locationRequired ? await getBrowserLocation() : null;
+          const location = requirement.locationRequired ? await getBrowserAttendanceLocation() : null;
           await login(identifier, password, { attendanceCheckIn: true, location });
           return;
         } catch (attendanceError) {
