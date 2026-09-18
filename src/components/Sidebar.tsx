@@ -13,7 +13,7 @@ const items = [
   { href: "/tracking", label: "التراكينج", icon: MapPin, system: "tracking" },
   { href: "/website", label: "الموقع الإلكتروني", icon: Globe, system: "website" },
   { href: "/owners-community", label: "MZJ Club Community", icon: Crown, permission: "owners.community.view" },
-  { href: "/attendance", label: "الحضور والانصراف", icon: UserSwitch, permission: "" },
+  { href: "/attendance", label: "الحضور والانصراف", icon: UserSwitch, permission: "platform.superadmin" },
 ] as const;
 const supportItems = [
   { href: "/reports", label: "التقارير", icon: ChartBar, permission: "platform.reports.view" },

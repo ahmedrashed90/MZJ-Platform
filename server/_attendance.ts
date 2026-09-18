@@ -79,7 +79,7 @@ async function currentAssignment(userId: string) {
   const [row] = await sql<any[]>`
     select
       a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
-      a.location_id::text as location_id,l.name as location_name,a.weekly_off_day,
+      a.location_id::text as location_id,l.name as location_name,a.weekly_off_day,a.period_ids,
       l.latitude::float8 as required_latitude,l.longitude::float8 as required_longitude,l.radius_m as required_radius_m,
       a.effective_from::text,a.effective_to::text,
       (a.weekly_off_day is not null and extract(dow from (now() at time zone ${ATTENDANCE_TIME_ZONE})::date)::int=a.weekly_off_day) as is_day_off
@@ -107,7 +107,7 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
     candidates as (
       select
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
-        a.location_id::text as location_id,l.name as location_name,a.weekly_off_day,
+        a.location_id::text as location_id,l.name as location_name,a.weekly_off_day,a.period_ids,
         l.latitude::float8 as required_latitude,l.longitude::float8 as required_longitude,l.radius_m as required_radius_m,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
         p.start_time::text as start_time,p.end_time::text as end_time,p.grace_minutes,
@@ -124,6 +124,7 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
        and (a.effective_to is null or a.effective_to >= c.local_date - 1)
       join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
       join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
+       and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
       left join core.attendance_locations l on l.id=a.location_id
     ),
     timed as (
@@ -226,7 +227,7 @@ export async function requireAttendanceForLogin(
   if (!state.activePeriod && state.isDayOff) {
     throw new AttendanceError(
       "WEEKLY_DAY_OFF",
-      "اليوم هو يوم العطلة الأسبوعية المحدد لك",
+      "اليوم هو يوم الإجازة الأسبوعية المحدد لك",
       403,
       { scheduleName: state.scheduleName, weeklyOffDay: state.weeklyOffDay },
     );
@@ -385,6 +386,7 @@ export async function isAttendanceSessionAllowed(userId: string) {
        and (a.effective_to is null or a.effective_to >= c.local_date - 1)
       join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
       join core.attendance_periods p on p.schedule_id=s.id and p.is_active=true
+       and (a.period_ids is null or cardinality(a.period_ids)=0 or p.id=any(a.period_ids))
     ),
     active_period as (
       select pc.*
@@ -470,32 +472,5 @@ export async function runAttendanceTick() {
     ok: true,
     closedRecords: closed.length,
     forcedLogoutUsers: closedUserIds.length,
-  };
-}
-
-export async function getSelfAttendance(userId: string) {
-  await ensureAttendanceSchema();
-  const sql = getSql();
-  const state = await getLoginAttendanceState(userId);
-  const rows = await sql<any[]>`
-    select
-      r.id::text,r.work_date::text as work_date,r.period_name,r.period_sort_order,
-      r.scheduled_start_at,r.scheduled_end_at,r.check_in,r.check_out,r.checkout_source,
-      r.delay_minutes,r.work_minutes,r.status,r.required_location_name,r.check_in_distance_m::float8,
-      r.location_result
-    from core.attendance_records r
-    where r.user_id=${userId}::uuid
-      and r.work_date between ((now() at time zone ${ATTENDANCE_TIME_ZONE})::date - 1)
-                          and (now() at time zone ${ATTENDANCE_TIME_ZONE})::date
-    order by r.work_date desc,r.period_sort_order nulls last,r.check_in
-  `;
-  return {
-    ok: true,
-    assigned: state.assigned,
-    isDayOff: state.isDayOff,
-    weeklyOffDay: state.weeklyOffDay,
-    activePeriod: state.activePeriod,
-    currentRecord: state.record || null,
-    recent: rows,
   };
 }

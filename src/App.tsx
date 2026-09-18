@@ -155,7 +155,7 @@ function PlatformRoutes() {
           </Route>
           <Route path="/owners-community/member/:kind/:id" element={<PermissionGuard permission="owners.community.view"><OwnersMemberPreviewPage /></PermissionGuard>} />
           <Route path="/owners-community" element={<PermissionGuard permission="owners.community.view"><OwnersCommunityPage /></PermissionGuard>} />
-          <Route path="/attendance" element={<AttendancePage />} />
+          <Route path="/attendance" element={<PermissionGuard permission="platform.superadmin"><AttendancePage /></PermissionGuard>} />
           <Route path="/reports" element={<PermissionGuard permission="platform.reports.view"><UnifiedReportsPage /></PermissionGuard>} />
           <Route path="/database" element={<PermissionGuard permission="platform.database.view"><UnifiedDatabasePage /></PermissionGuard>} />
           <Route path="/settings" element={<SettingsRoute />} />

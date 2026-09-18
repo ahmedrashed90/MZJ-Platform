@@ -1237,7 +1237,6 @@
 .marketing-filter-grid.stock { grid-template-columns: repeat(4,minmax(0,1fr)); }
 .vin-stack { display: grid; gap: 3px; }
 .vin-stack button { min-height: auto !important; padding: 0 !important; justify-content: flex-start !important; color: var(--brand) !important; background: transparent !important; border: 0 !important; }
-.attendance-actions-card { display: flex; justify-content: space-between; align-items: center; }
 .marketing-color-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 14px 0; }
 .marketing-color-list label { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
 .marketing-color-list label div { display: grid; flex: 1; }
@@ -1272,8 +1271,7 @@
   .marketing-schedule-platforms { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 760px) {
-  .marketing-page-head,
-  .attendance-actions-card { align-items: stretch; flex-direction: column; }
+  .marketing-page-head { align-items: stretch; flex-direction: column; }
   .marketing-form-grid,
   .marketing-form-grid.compact,
   .marketing-form-row,

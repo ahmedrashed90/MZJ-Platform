@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
-import { AttendanceError, ATTENDANCE_TIME_ZONE, checkoutCurrentAttendance, formatMinutes, getSelfAttendance } from "./_attendance.js";
+import { AttendanceError, ATTENDANCE_TIME_ZONE, formatMinutes } from "./_attendance.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -45,7 +45,7 @@ function timeMinutes(value: string) {
 
 function validatePeriods(periods: any[]) {
   if (!periods.length) throw new AttendanceError("SCHEDULE_PERIODS_REQUIRED", "أضف فترة عمل واحدة على الأقل");
-  const normalized = periods.map((period, index) => {
+  return periods.map((period, index) => {
     const startTime = clean(period.startTime).slice(0, 5);
     const endTime = clean(period.endTime).slice(0, 5);
     if (!validTime(startTime) || !validTime(endTime)) throw new AttendanceError("INVALID_PERIOD_TIME", "تأكد من وقت بداية ونهاية كل فترة");
@@ -60,12 +60,26 @@ function validatePeriods(periods: any[]) {
       sortOrder: index + 1,
     };
   });
+}
 
-  const intervals = normalized.map((period) => {
-    const start = timeMinutes(period.startTime);
-    let end = timeMinutes(period.endTime);
+function normalizedIdList(value: unknown) {
+  return Array.from(new Set(asArray(value).filter(validUuid))).sort();
+}
+
+function sameIdList(a: unknown, b: unknown) {
+  const left = normalizedIdList(a);
+  const right = normalizedIdList(b);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function assertSelectedPeriodsDoNotOverlap(periods: any[]) {
+  const intervals = periods.map((period) => {
+    const startTime = clean(period.start_time).slice(0, 5);
+    const endTime = clean(period.end_time).slice(0, 5);
+    const start = timeMinutes(startTime);
+    let end = timeMinutes(endTime);
     if (end <= start) end += 1440;
-    return { start, end, name: period.name };
+    return { start, end, name: clean(period.name) || "فترة العمل" };
   });
   for (let i = 0; i < intervals.length; i += 1) {
     for (let j = i + 1; j < intervals.length; j += 1) {
@@ -73,12 +87,14 @@ function validatePeriods(periods: any[]) {
         const bStart = intervals[j].start + offset;
         const bEnd = intervals[j].end + offset;
         if (Math.max(intervals[i].start, bStart) < Math.min(intervals[i].end, bEnd)) {
-          throw new AttendanceError("OVERLAPPING_PERIODS", `يوجد تداخل بين ${intervals[i].name} و ${intervals[j].name}`);
+          throw new AttendanceError(
+            "OVERLAPPING_USER_PERIODS",
+            `لا يمكن تعيين ${intervals[i].name} و ${intervals[j].name} لنفس الموظف لأن مواعيدهما متداخلة`,
+          );
         }
       }
     }
   }
-  return normalized;
 }
 
 function dateRange(from: string, to: string) {
@@ -123,16 +139,12 @@ async function adminBootstrap() {
     sql<any[]>`
       select
         u.id::text,u.employee_no,u.full_name,u.email,u.mobile,
-        coalesce(pb.name,'—') as branch_name,
+        coalesce(ab.id::text,crm_branch.id,global_branch.id) as branch_id,
+        coalesce(ab.name,crm_branch.name,global_branch.name,'—') as branch_name,
         a.id::text as assignment_id,a.schedule_id::text,a.location_id::text,a.weekly_off_day,
+        coalesce(a.period_ids,'{}'::uuid[]) as period_ids,
         s.name as schedule_name,l.name as location_name
       from core.users u
-      left join lateral (
-        select b.name
-        from core.user_branches ub join core.branches b on b.id=ub.branch_id
-        where ub.user_id=u.id and b.is_active=true
-        order by ub.is_primary desc,b.sort_order,b.name limit 1
-      ) pb on true
       left join lateral (
         select ax.*
         from core.attendance_user_schedules ax
@@ -143,6 +155,23 @@ async function adminBootstrap() {
       ) a on true
       left join core.attendance_schedules s on s.id=a.schedule_id
       left join core.attendance_locations l on l.id=a.location_id
+      left join core.branches ab on ab.id=a.branch_id and ab.is_active=true
+      left join lateral (
+        select b.id::text,b.name
+        from core.user_system_branches usb
+        join core.branches b on b.id=usb.branch_id and b.is_active=true
+        where usb.user_id=u.id and usb.system_code='crm'
+        order by usb.is_primary desc,b.sort_order,b.name
+        limit 1
+      ) crm_branch on true
+      left join lateral (
+        select b.id::text,b.name
+        from core.user_branches ub
+        join core.branches b on b.id=ub.branch_id and b.is_active=true
+        where ub.user_id=u.id
+        order by ub.is_primary desc,b.sort_order,b.name
+        limit 1
+      ) global_branch on true
       where u.is_active=true
       order by u.full_name
     `,
@@ -295,7 +324,9 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const sql = getSql();
   const userIds = asArray(body.userIds).filter(validUuid);
   const scheduleId = validUuid(clean(body.scheduleId)) ? clean(body.scheduleId) : "";
+  const periodIds = normalizedIdList(body.periodIds);
   const locationId = validUuid(clean(body.locationId)) ? clean(body.locationId) : null;
+  const requestedBranchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
   const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
   if (!userIds.length) throw new AttendanceError("USERS_REQUIRED", "اختر موظفًا واحدًا على الأقل");
 
@@ -303,13 +334,25 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
     const [schedule] = await sql<any[]>`
       select id::text from core.attendance_schedules
       where id=${scheduleId}::uuid and is_active=true
-        and exists(select 1 from core.attendance_periods p where p.schedule_id=core.attendance_schedules.id and p.is_active=true)
     `;
-    if (!schedule) throw new AttendanceError("INVALID_SCHEDULE", "جدول العمل غير متاح أو لا يحتوي على فترات");
+    if (!schedule) throw new AttendanceError("INVALID_SCHEDULE", "جدول العمل غير متاح");
+    if (!periodIds.length) throw new AttendanceError("PERIODS_REQUIRED", "اختر فترة عمل واحدة على الأقل للموظف");
+    const selectedPeriods = await sql<any[]>`
+      select id::text,name,start_time::text,end_time::text,sort_order
+      from core.attendance_periods
+      where schedule_id=${scheduleId}::uuid and is_active=true and id::text in ${sql(periodIds)}
+      order by sort_order,start_time
+    `;
+    if (selectedPeriods.length !== periodIds.length) throw new AttendanceError("INVALID_PERIOD_SELECTION", "بعض فترات العمل المختارة لا تتبع جدول العمل الحالي");
+    assertSelectedPeriodsDoNotOverlap(selectedPeriods);
   }
   if (locationId) {
     const [location] = await sql<any[]>`select id::text from core.attendance_locations where id=${locationId}::uuid and is_active=true`;
     if (!location) throw new AttendanceError("INVALID_LOCATION", "مكان الحضور غير متاح");
+  }
+  if (requestedBranchId) {
+    const [branch] = await sql<any[]>`select id::text from core.branches where id=${requestedBranchId}::uuid and is_active=true`;
+    if (!branch) throw new AttendanceError("INVALID_BRANCH", "الفرع المختار غير متاح");
   }
 
   await sql.begin(async (tx) => {
@@ -317,7 +360,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
       const [user] = await tx<any[]>`select id::text from core.users where id=${userId}::uuid and is_active=true`;
       if (!user) continue;
       const [current] = await tx<any[]>`
-        select id::text,schedule_id::text,location_id::text,weekly_off_day,effective_from::text
+        select id::text,schedule_id::text,location_id::text,branch_id::text,period_ids,weekly_off_day,effective_from::text
         from core.attendance_user_schedules
         where user_id=${userId}::uuid and effective_to is null
         order by effective_from desc,created_at desc limit 1
@@ -338,16 +381,42 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
         continue;
       }
 
+      let effectiveBranchId = requestedBranchId || (validUuid(clean(current?.branch_id)) ? clean(current.branch_id) : null);
+      if (!effectiveBranchId) {
+        const [preferredBranch] = await tx<any[]>`
+          select coalesce(
+            (
+              select b.id::text
+              from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+              where usb.user_id=${userId}::uuid and usb.system_code='crm'
+              order by usb.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            (
+              select b.id::text
+              from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=${userId}::uuid
+              order by ub.is_primary desc,b.sort_order,b.name limit 1
+            )
+          ) as branch_id
+        `;
+        effectiveBranchId = validUuid(clean(preferredBranch?.branch_id)) ? clean(preferredBranch.branch_id) : null;
+      }
+
       const same = current
         && clean(current.schedule_id) === scheduleId
         && clean(current.location_id) === clean(locationId)
+        && clean(current.branch_id) === clean(effectiveBranchId)
+        && sameIdList(current.period_ids, periodIds)
         && parseWeeklyOffDay(current.weekly_off_day) === weeklyOffDay;
       if (same) continue;
 
       if (current && dateOnlyValue(current.effective_from) === currentRiyadhDate()) {
         await tx`
           update core.attendance_user_schedules
-          set schedule_id=${scheduleId}::uuid,location_id=${locationId}::uuid,weekly_off_day=${weeklyOffDay}
+          set schedule_id=${scheduleId}::uuid,location_id=${locationId}::uuid,branch_id=${effectiveBranchId}::uuid,
+              period_ids=${periodIds}::uuid[],weekly_off_day=${weeklyOffDay}
           where id=${current.id}::uuid
         `;
       } else {
@@ -359,8 +428,8 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
           `;
         }
         await tx`
-          insert into core.attendance_user_schedules(user_id,schedule_id,location_id,weekly_off_day,effective_from,created_by)
-          values(${userId}::uuid,${scheduleId}::uuid,${locationId}::uuid,${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
+          insert into core.attendance_user_schedules(user_id,schedule_id,location_id,branch_id,period_ids,weekly_off_day,effective_from,created_by)
+          values(${userId}::uuid,${scheduleId}::uuid,${locationId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
         `;
       }
       await tx`delete from core.sessions where user_id=${userId}::uuid`;
@@ -394,11 +463,23 @@ async function reportData(request: VercelRequest) {
   const users = await sql<any[]>`
     select
       u.id::text,u.full_name,u.employee_no,
-      coalesce((
-        select b.name from core.user_branches ub join core.branches b on b.id=ub.branch_id
-        where ub.user_id=u.id and b.is_active=true
-        order by ub.is_primary desc,b.sort_order,b.name limit 1
-      ),'—') as branch_name
+      coalesce(
+        (
+          select b.name
+          from core.user_system_branches usb
+          join core.branches b on b.id=usb.branch_id and b.is_active=true
+          where usb.user_id=u.id and usb.system_code='crm'
+          order by usb.is_primary desc,b.sort_order,b.name limit 1
+        ),
+        (
+          select b.name
+          from core.user_branches ub
+          join core.branches b on b.id=ub.branch_id and b.is_active=true
+          where ub.user_id=u.id
+          order by ub.is_primary desc,b.sort_order,b.name limit 1
+        ),
+        '—'
+      ) as branch_name
     from core.users u
     where u.is_active=true
       and (${employeeId}='' or u.id=${employeeId || null}::uuid)
@@ -407,20 +488,21 @@ async function reportData(request: VercelRequest) {
   const userIds = users.map((user) => String(user.id));
   if (!userIds.length) return { ok: true, from, to, rows: [], periodHeaders: [] };
 
-  const [assignments, schedules, periods, records] = await Promise.all([
+  const [assignments, periods, records] = await Promise.all([
     sql<any[]>`
       select
-        a.id::text,a.user_id::text,a.schedule_id::text,a.location_id::text,a.weekly_off_day,
-        a.effective_from::text,a.effective_to::text,s.name as schedule_name,l.name as location_name
+        a.id::text,a.user_id::text,a.schedule_id::text,a.location_id::text,a.branch_id::text,
+        coalesce(a.period_ids,'{}'::uuid[]) as period_ids,a.weekly_off_day,
+        a.effective_from::text,a.effective_to::text,s.name as schedule_name,l.name as location_name,b.name as branch_name
       from core.attendance_user_schedules a
       join core.attendance_schedules s on s.id=a.schedule_id
       left join core.attendance_locations l on l.id=a.location_id
+      left join core.branches b on b.id=a.branch_id
       where a.user_id::text in ${sql(userIds)}
         and a.effective_from <= ${to}::date
         and (a.effective_to is null or a.effective_to >= ${from}::date)
       order by a.user_id,a.effective_from desc
     `,
-    sql<any[]>`select id::text,name,is_active from core.attendance_schedules`,
     sql<any[]>`
       select id::text,schedule_id::text,name,start_time::text,end_time::text,grace_minutes,sort_order,is_active
       from core.attendance_periods
@@ -429,7 +511,7 @@ async function reportData(request: VercelRequest) {
     sql<any[]>`
       select
         id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,
-        work_date::text as work_date,period_name,period_sort_order,
+        work_date::text as work_date,period_name,period_sort_order,grace_minutes,
         scheduled_start_at,scheduled_end_at,check_in,check_out,checkout_source,
         delay_minutes,work_minutes,status,
         required_location_name,
@@ -462,17 +544,19 @@ async function reportData(request: VercelRequest) {
     recordMap.get(key)!.push(record);
   }
 
-  const rows: any[] = [];
-  let maxPeriods = 0;
-  const slotTimes = new Map<number, Set<string>>();
+  const rawRows: any[] = [];
+  const headerMeta = new Map<string, { key: string; label: string; sortOrder: number; firstSeen: number }>();
+  let headerSequence = 0;
+  const periodKey = (name: unknown) => clean(name).toLocaleLowerCase("ar-SA") || "فترة العمل";
 
   for (const day of days) {
     for (const user of users) {
       const userAssignments = assignmentMap.get(String(user.id)) || [];
       const assignment = userAssignments.find((item) => dateOnlyValue(item.effective_from) <= day && (!item.effective_to || dateOnlyValue(item.effective_to) >= day)) || null;
       const dayRecords = recordMap.get(`${user.id}:${day}`) || [];
+      const assignedPeriodIds = normalizedIdList(assignment?.period_ids);
       const schedulePeriods = assignment
-        ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active))
+        ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active) && (!assignedPeriodIds.length || assignedPeriodIds.includes(clean(period.id))))
         : [];
       const isDayOff = Boolean(assignment)
         && parseWeeklyOffDay(assignment.weekly_off_day) !== null
@@ -482,7 +566,7 @@ async function reportData(request: VercelRequest) {
         const record = dayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
         return {
           id: period.id,
-          name: period.name,
+          name: clean(period.name) || "فترة العمل",
           startTime: clean(period.start_time).slice(0, 5),
           endTime: clean(period.end_time).slice(0, 5),
           graceMinutes: Number(period.grace_minutes || 0),
@@ -495,7 +579,7 @@ async function reportData(request: VercelRequest) {
         if (slots.some((slot) => slot.record?.id === record.id)) continue;
         slots.push({
           id: record.period_id || `record:${record.id}`,
-          name: record.period_name || `الفترة ${slots.length + 1}`,
+          name: clean(record.period_name) || `فترة العمل ${slots.length + 1}`,
           startTime: record.scheduled_start_at ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_start_at)) : "",
           endTime: record.scheduled_end_at ? new Intl.DateTimeFormat("en-GB", { timeZone: ATTENDANCE_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(record.scheduled_end_at)) : "",
           graceMinutes: Number(record.grace_minutes || 0),
@@ -504,11 +588,6 @@ async function reportData(request: VercelRequest) {
         });
       }
       slots.sort((a, b) => a.sortOrder - b.sortOrder);
-      maxPeriods = Math.max(maxPeriods, slots.length);
-      slots.forEach((slot, index) => {
-        if (!slotTimes.has(index)) slotTimes.set(index, new Set());
-        if (slot.startTime && slot.endTime) slotTimes.get(index)!.add(`${slot.startTime}|${slot.endTime}`);
-      });
 
       const checkedRecords = slots.map((slot) => slot.record).filter(Boolean);
       const actualLocations = Array.from(new Set(checkedRecords
@@ -525,7 +604,8 @@ async function reportData(request: VercelRequest) {
           : "—";
       }
 
-      const periodRows = slots.map((slot) => {
+      const periodsByKey = new Map<string, any>();
+      for (const slot of slots) {
         const record = slot.record;
         let result = "—";
         if (record?.check_in) {
@@ -534,13 +614,20 @@ async function reportData(request: VercelRequest) {
           const delayText = Number(record.delay_minutes || 0) > 0 ? `تأخير ${Number(record.delay_minutes)} د` : "بدون تأخير";
           result = `${statusText} • ${workText} • ${delayText}`;
         } else if (isDayOff) {
-          result = "عطلة";
+          result = "إجازة";
         } else if (day < today) {
           result = "غائب";
         } else if (day === today) {
           result = "لم يسجل";
         }
-        return {
+        const key = periodKey(slot.name);
+        if (!headerMeta.has(key)) {
+          headerMeta.set(key, { key, label: slot.name, sortOrder: slot.sortOrder, firstSeen: headerSequence++ });
+        } else {
+          const meta = headerMeta.get(key)!;
+          meta.sortOrder = Math.min(meta.sortOrder, slot.sortOrder);
+        }
+        periodsByKey.set(key, {
           name: slot.name,
           startTime: slot.startTime,
           endTime: slot.endTime,
@@ -550,12 +637,12 @@ async function reportData(request: VercelRequest) {
           result,
           delayMinutes: Number(record?.delay_minutes || 0),
           workMinutes: Number(record?.work_minutes || 0),
-        };
-      });
+        });
+      }
 
-      rows.push({
+      rawRows.push({
         date: day,
-        branch: user.branch_name || "—",
+        branch: assignment?.branch_name || user.branch_name || "—",
         userId: user.id,
         employeeNo: user.employee_no,
         name: user.full_name,
@@ -565,16 +652,18 @@ async function reportData(request: VercelRequest) {
           result: locationResult,
         },
         scheduleName: assignment?.schedule_name || null,
-        periods: periodRows,
+        periodsByKey,
       });
     }
   }
 
-  const periodHeaders = Array.from({ length: maxPeriods }, (_, index) => {
-    const times = Array.from(slotTimes.get(index) || []);
-    const suffix = times.length === 1 ? ` (${times[0].replace("|", " - ")})` : "";
-    return `الفترة ${index + 1}${suffix}`;
-  });
+  const orderedHeaders = Array.from(headerMeta.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.firstSeen - b.firstSeen || a.label.localeCompare(b.label, "ar"));
+  const periodHeaders = orderedHeaders.map((header) => header.label);
+  const rows = rawRows.map((row) => ({
+    ...row,
+    periods: orderedHeaders.map((header) => row.periodsByKey.get(header.key) || null),
+    periodsByKey: undefined,
+  }));
 
   return { ok: true, from, to, rows, periodHeaders, users: users.map((user) => ({ id: user.id, fullName: user.full_name })) };
 }
@@ -586,8 +675,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (!user) return;
 
     if (request.method === "GET") {
-      const view = clean(request.query.view) || "self";
-      if (view === "self") return response.status(200).json(await getSelfAttendance(user.id));
+      const view = clean(request.query.view);
       if (view === "admin") {
         const admin = await requireAdmin(request, response);
         if (!admin) return;
@@ -604,11 +692,6 @@ export default async function handler(request: VercelRequest, response: VercelRe
     if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
     const body = bodyObject(request);
     const action = clean(body.action);
-
-    if (action === "check_out") {
-      const record = await checkoutCurrentAttendance(user.id);
-      return response.status(200).json({ ok: true, record });
-    }
 
     const admin = await requireAdmin(request, response);
     if (!admin) return;

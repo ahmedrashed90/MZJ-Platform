@@ -42,9 +42,11 @@ type UserRow = {
   full_name: string;
   email: string | null;
   mobile: string | null;
+  branch_id: string | null;
   branch_name: string;
   assignment_id: string | null;
   schedule_id: string | null;
+  period_ids: string[];
   location_id: string | null;
   weekly_off_day: number | null;
   schedule_name: string | null;
@@ -72,9 +74,9 @@ const WEEKLY_OFF_DAYS = [
 ] as const;
 
 function weeklyOffDayLabel(value: number | null | undefined) {
-  if (value === null || value === undefined) return "بدون عطلة أسبوعية";
+  if (value === null || value === undefined) return "بدون إجازة أسبوعية";
   const option = WEEKLY_OFF_DAYS.find((day) => Number(day.value) === Number(value));
-  return option?.label || "بدون عطلة أسبوعية";
+  return option?.label || "بدون إجازة أسبوعية";
 }
 
 const blankLocation = { id: "", branchId: "", name: "", latitude: "", longitude: "", radiusM: "150" };
@@ -94,8 +96,11 @@ export function AttendanceSettingsPanel() {
   const [scheduleForm, setScheduleForm] = useState(blankSchedule);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [assignmentScheduleId, setAssignmentScheduleId] = useState("");
+  const [assignmentPeriodIds, setAssignmentPeriodIds] = useState<string[]>([]);
+  const [assignmentBranchId, setAssignmentBranchId] = useState("");
   const [assignmentLocationId, setAssignmentLocationId] = useState("");
   const [assignmentWeeklyOffDay, setAssignmentWeeklyOffDay] = useState("");
+  const [editingUserId, setEditingUserId] = useState("");
   const [userSearch, setUserSearch] = useState("");
 
   async function load() {
@@ -117,9 +122,24 @@ export function AttendanceSettingsPanel() {
     return (data?.users || []).filter((user) => !term || `${user.full_name} ${user.employee_no || ""} ${user.branch_name || ""} ${user.schedule_name || ""} ${weeklyOffDayLabel(user.weekly_off_day)}`.toLowerCase().includes(term));
   }, [data?.users, userSearch]);
 
+  const assignmentSchedule = useMemo(
+    () => (data?.schedules || []).find((schedule) => schedule.id === assignmentScheduleId) || null,
+    [data?.schedules, assignmentScheduleId],
+  );
+
   function resetMessages() {
     setError("");
     setMessage("");
+  }
+
+  function resetAssignmentEditor() {
+    setSelectedUsers([]);
+    setAssignmentScheduleId("");
+    setAssignmentPeriodIds([]);
+    setAssignmentBranchId("");
+    setAssignmentLocationId("");
+    setAssignmentWeeklyOffDay("");
+    setEditingUserId("");
   }
 
   async function saveLocation(event: React.FormEvent) {
@@ -250,13 +270,47 @@ export function AttendanceSettingsPanel() {
   }
 
   function toggleUser(id: string) {
+    setEditingUserId("");
     setSelectedUsers((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   }
 
   function toggleAllVisible() {
+    setEditingUserId("");
     const visible = filteredUsers.map((user) => user.id);
     const allSelected = visible.length > 0 && visible.every((id) => selectedUsers.includes(id));
     setSelectedUsers((current) => allSelected ? current.filter((id) => !visible.includes(id)) : Array.from(new Set([...current, ...visible])));
+  }
+
+  function changeAssignmentSchedule(scheduleId: string) {
+    setAssignmentScheduleId(scheduleId);
+    const schedule = (data?.schedules || []).find((item) => item.id === scheduleId);
+    setAssignmentPeriodIds(schedule?.periods.length === 1 && schedule.periods[0]?.id ? [schedule.periods[0].id] : []);
+  }
+
+  function toggleAssignmentPeriod(periodId: string) {
+    setAssignmentPeriodIds((current) => current.includes(periodId) ? current.filter((id) => id !== periodId) : [...current, periodId]);
+  }
+
+  function userPeriodNames(user: UserRow) {
+    const schedule = (data?.schedules || []).find((item) => item.id === user.schedule_id);
+    if (!schedule) return "—";
+    const selected = Array.isArray(user.period_ids) && user.period_ids.length ? user.period_ids : schedule.periods.map((period) => period.id).filter(Boolean) as string[];
+    const names = schedule.periods.filter((period) => period.id && selected.includes(period.id)).map((period) => period.name);
+    return names.length ? names.join("، ") : "—";
+  }
+
+  function editUserAssignment(user: UserRow) {
+    resetMessages();
+    setSelectedUsers([user.id]);
+    setEditingUserId(user.id);
+    setAssignmentScheduleId(user.schedule_id || "");
+    const schedule = (data?.schedules || []).find((item) => item.id === user.schedule_id);
+    const fallbackPeriods = schedule?.periods.map((period) => period.id).filter(Boolean) as string[] | undefined;
+    setAssignmentPeriodIds(user.period_ids?.length ? user.period_ids : fallbackPeriods || []);
+    setAssignmentBranchId(user.branch_id || "");
+    setAssignmentLocationId(user.location_id || "");
+    setAssignmentWeeklyOffDay(user.weekly_off_day === null || user.weekly_off_day === undefined ? "" : String(user.weekly_off_day));
+    window.setTimeout(() => document.getElementById("attendance-assignment-editor")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
   }
 
   async function applyAssignment(unassign = false) {
@@ -269,6 +323,10 @@ export function AttendanceSettingsPanel() {
       setError("اختر جدول العمل");
       return;
     }
+    if (!unassign && !assignmentPeriodIds.length) {
+      setError("اختر فترة عمل واحدة على الأقل");
+      return;
+    }
     setBusy("assignment");
     try {
       await attendanceFetch("/api/attendance", {
@@ -277,12 +335,14 @@ export function AttendanceSettingsPanel() {
           action: "assign_users",
           userIds: selectedUsers,
           scheduleId: unassign ? "" : assignmentScheduleId,
+          periodIds: unassign ? [] : assignmentPeriodIds,
+          branchId: unassign ? "" : assignmentBranchId,
           locationId: unassign ? "" : assignmentLocationId,
           weeklyOffDay: unassign ? "" : assignmentWeeklyOffDay,
         }),
       });
-      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : "تم تطبيق جدول العمل والمكان المطلوب ويوم العطلة على اليوزرات المحددين");
-      setSelectedUsers([]);
+      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : editingUserId ? "تم تعديل بيانات دوام الموظف" : "تم تطبيق جدول العمل والفترات والفرع والمكان المطلوب ويوم الإجازة على اليوزرات المحددين");
+      resetAssignmentEditor();
       await load();
     } catch (assignError) {
       setError(assignError instanceof Error ? assignError.message : "تعذر تطبيق جدول العمل");
@@ -296,7 +356,7 @@ export function AttendanceSettingsPanel() {
   return (
     <div className="attendance-settings">
       <div className="attendance-settings-intro">
-        <div><Clock size={25} weight="duotone" /><span><strong>إعدادات الحضور والانصراف</strong><small>مدير النظام فقط — جداول العمل والفترات ومكان الحضور المطلوب ويوم العطلة لكل يوزر.</small></span></div>
+        <div><Clock size={25} weight="duotone" /><span><strong>إعدادات الحضور والانصراف</strong><small>مدير النظام فقط — جداول العمل والفترات والفرع ومكان الحضور المطلوب ويوم الإجازة لكل يوزر.</small></span></div>
       </div>
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
@@ -330,15 +390,15 @@ export function AttendanceSettingsPanel() {
       </section>
 
       <section className="attendance-settings-card panel">
-        <header><div><Clock size={22} weight="duotone" /><span><h2>جداول وفترات العمل</h2><p>كل جدول يمكن أن يحتوي على فترة واحدة أو أكثر، ولكل فترة بداية ونهاية ودقائق سماح مستقلة.</p></span></div></header>
+        <header><div><Clock size={22} weight="duotone" /><span><h2>جداول وفترات العمل</h2><p>يمكن أن يحتوي الجدول على فترات بديلة ومتداخلة مثل «متواصل». عند تعيين الموظف تختار فقط الفترة أو الفترات الخاصة به.</p></span></div></header>
         <div className="attendance-settings-two-columns schedules">
           <form className="attendance-schedule-form" onSubmit={saveSchedule}>
-            <label className="attendance-wide-field"><span>اسم جدول العمل</span><input required value={scheduleForm.name} onChange={(event) => setScheduleForm((current) => ({ ...current, name: event.target.value }))} placeholder="مثال: دوام التسويق" /></label>
+            <label className="attendance-wide-field"><span>اسم جدول العمل</span><input required value={scheduleForm.name} onChange={(event) => setScheduleForm((current) => ({ ...current, name: event.target.value }))} placeholder="مثال: المعارض" /></label>
             <div className="attendance-period-editor">
               {scheduleForm.periods.map((period, index) => (
                 <div className="attendance-period-row" key={period.id || `new-${index}`}>
                   <div className="attendance-period-title"><strong>الفترة {index + 1}</strong>{scheduleForm.periods.length > 1 ? <button type="button" onClick={() => removePeriod(index)}><Trash size={16} /></button> : null}</div>
-                  <label><span>اسم الفترة</span><input value={period.name} onChange={(event) => updatePeriod(index, "name", event.target.value)} /></label>
+                  <label><span>اسم الفترة</span><input value={period.name} onChange={(event) => updatePeriod(index, "name", event.target.value)} placeholder="مثال: الفترة المسائية أو متواصل" /></label>
                   <label><span>بداية الدوام</span><input required type="time" value={period.startTime} onChange={(event) => updatePeriod(index, "startTime", event.target.value)} /></label>
                   <label><span>نهاية الدوام</span><input required type="time" value={period.endTime} onChange={(event) => updatePeriod(index, "endTime", event.target.value)} /></label>
                   <label><span>دقائق السماح للحضور</span><input required type="number" min={0} max={360} value={period.graceMinutes} onChange={(event) => updatePeriod(index, "graceMinutes", Number(event.target.value))} /></label>
@@ -356,7 +416,7 @@ export function AttendanceSettingsPanel() {
             {(data?.schedules || []).map((schedule) => (
               <article key={schedule.id}>
                 <header><div><strong>{schedule.name}</strong><span>{schedule.periods.length} فترة</span></div><div><button type="button" onClick={() => editSchedule(schedule)}><PencilSimple size={17} /></button><button type="button" onClick={() => void deleteSchedule(schedule.id)} disabled={busy === `delete-schedule:${schedule.id}`}><Trash size={17} /></button></div></header>
-                <div>{schedule.periods.map((period, index) => <p key={period.id || index}><b>الفترة {index + 1}</b><span>{period.startTime} → {period.endTime}</span><small>سماح {period.graceMinutes} د</small></p>)}</div>
+                <div>{schedule.periods.map((period, index) => <p key={period.id || index}><b>{period.name || `الفترة ${index + 1}`}</b><span>{period.startTime} → {period.endTime}</span><small>سماح {period.graceMinutes} د</small></p>)}</div>
               </article>
             ))}
             {!data?.schedules?.length ? <p className="attendance-empty">لم يتم إنشاء جداول عمل بعد.</p> : null}
@@ -365,13 +425,32 @@ export function AttendanceSettingsPanel() {
       </section>
 
       <section className="attendance-settings-card panel">
-        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول الفترات والمكان المطلوب ويوم العطلة الأسبوعية. المكان اختياري لليوزرات الريموت أو خارج السعودية.</p></span></div></header>
-        <div className="attendance-assignment-toolbar">
-          <label><span>جدول العمل</span><select value={assignmentScheduleId} onChange={(event) => setAssignmentScheduleId(event.target.value)}><option value="">اختر جدول العمل</option>{(data?.schedules || []).map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name}</option>)}</select></label>
+        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول العمل والفترات الفعلية والفرع والمكان المطلوب ويوم الإجازة. يمكن تعديل كل يوزر منفردًا بعد الحفظ.</p></span></div></header>
+        <div className="attendance-assignment-toolbar" id="attendance-assignment-editor">
+          <label><span>جدول العمل</span><select value={assignmentScheduleId} onChange={(event) => changeAssignmentSchedule(event.target.value)}><option value="">اختر جدول العمل</option>{(data?.schedules || []).map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name}</option>)}</select></label>
+          <label><span>الفرع</span><select value={assignmentBranchId} onChange={(event) => setAssignmentBranchId(event.target.value)}><option value="">استخدام الفرع الحالي للموظف</option>{(data?.branches || []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
           <label><span>المكان المطلوب</span><select value={assignmentLocationId} onChange={(event) => setAssignmentLocationId(event.target.value)}><option value="">غير محدد — بدون طلب لوكيشن</option>{(data?.locations || []).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
-          <label><span>يوم العطلة</span><select value={assignmentWeeklyOffDay} onChange={(event) => setAssignmentWeeklyOffDay(event.target.value)}><option value="">بدون عطلة أسبوعية</option>{WEEKLY_OFF_DAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label>
-          <button className="attendance-save-button" type="button" onClick={() => void applyAssignment(false)} disabled={busy === "assignment" || !selectedUsers.length}><FloppyDisk size={18} /> تطبيق على المحدد ({selectedUsers.length})</button>
-          <button className="secondary-button danger" type="button" onClick={() => void applyAssignment(true)} disabled={busy === "assignment" || !selectedUsers.length}>إلغاء جدول المحدد</button>
+          <label><span>يوم الإجازة</span><select value={assignmentWeeklyOffDay} onChange={(event) => setAssignmentWeeklyOffDay(event.target.value)}><option value="">بدون إجازة أسبوعية</option>{WEEKLY_OFF_DAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label>
+          <div className="attendance-assignment-actions">
+            <button className="attendance-save-button" type="button" onClick={() => void applyAssignment(false)} disabled={busy === "assignment" || !selectedUsers.length}><FloppyDisk size={18} /> {editingUserId ? "حفظ تعديل اليوزر" : `تطبيق على المحدد (${selectedUsers.length})`}</button>
+            <button className="secondary-button danger" type="button" onClick={() => void applyAssignment(true)} disabled={busy === "assignment" || !selectedUsers.length}>إلغاء جدول المحدد</button>
+            {editingUserId ? <button className="secondary-button" type="button" onClick={resetAssignmentEditor}>إلغاء التعديل</button> : null}
+          </div>
+          {assignmentSchedule ? (
+            <div className="attendance-period-selector">
+              <span>فترات العمل لهذا التعيين</span>
+              <div>
+                {assignmentSchedule.periods.map((period) => (
+                  <label key={period.id || period.name} className={period.id && assignmentPeriodIds.includes(period.id) ? "selected" : ""}>
+                    <input type="checkbox" checked={Boolean(period.id && assignmentPeriodIds.includes(period.id))} disabled={!period.id} onChange={() => period.id && toggleAssignmentPeriod(period.id)} />
+                    <strong>{period.name}</strong>
+                    <small>{period.startTime} - {period.endTime}</small>
+                  </label>
+                ))}
+              </div>
+              <small>الفترات المتداخلة مسموحة داخل الجدول، لكن لا يمكن تعيين فترتين متداخلتين لنفس اليوزر.</small>
+            </div>
+          ) : null}
         </div>
 
         <div className="attendance-user-search">
@@ -382,7 +461,7 @@ export function AttendanceSettingsPanel() {
 
         <div className="unified-table-wrap attendance-users-table-wrap">
           <table>
-            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>المكان المطلوب</th><th>يوم العطلة</th></tr></thead>
+            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>المكان المطلوب</th><th>يوم الإجازة</th><th>تعديل</th></tr></thead>
             <tbody>
               {filteredUsers.map((user) => (
                 <tr key={user.id} className={selectedUsers.includes(user.id) ? "selected" : ""}>
@@ -390,11 +469,13 @@ export function AttendanceSettingsPanel() {
                   <td><strong>{user.full_name}</strong><small>{user.employee_no || user.email || "—"}</small></td>
                   <td>{user.branch_name || "—"}</td>
                   <td>{user.schedule_name || <span className="attendance-muted">غير محدد</span>}</td>
+                  <td>{user.schedule_id ? userPeriodNames(user) : <span className="attendance-muted">غير محدد</span>}</td>
                   <td>{user.location_name || <span className="attendance-muted">غير مطلوب</span>}</td>
-                  <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون عطلة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
+                  <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون إجازة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
+                  <td><button className="attendance-row-edit" type="button" onClick={() => editUserAssignment(user)}><PencilSimple size={16} /> تعديل</button></td>
                 </tr>
               ))}
-              {!filteredUsers.length ? <tr><td colSpan={6}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
+              {!filteredUsers.length ? <tr><td colSpan={8}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
             </tbody>
           </table>
         </div>
