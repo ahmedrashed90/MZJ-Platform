@@ -16,6 +16,8 @@ import { attendanceFetch, formatAttendanceDate, formatAttendanceDay, formatAtten
 type SelfPayload = {
   ok: true;
   assigned: boolean;
+  isDayOff?: boolean;
+  weeklyOffDay?: number | null;
   activePeriod: null | {
     schedule_name: string;
     period_name: string;
@@ -85,7 +87,8 @@ type ReportPayload = {
   periodHeaders: string[];
 };
 
-function statusLabel(record: SelfPayload["currentRecord"]) {
+function statusLabel(record: SelfPayload["currentRecord"] | undefined, isDayOff = false) {
+  if (isDayOff) return "عطلة";
   if (!record?.check_in) return "لم يسجل";
   if (record.check_out) return "تم الانصراف";
   return Number(record.delay_minutes || 0) > 0 ? "حاضر - متأخر" : "حاضر";
@@ -241,8 +244,8 @@ export function AttendancePage() {
             <header>
               <div>
                 <span className="attendance-kicker">حالتك الآن</span>
-                <h2>{loading ? "جاري التحقق..." : statusLabel(current)}</h2>
-                <p>{active ? `تنتهي الفترة ${formatAttendanceTime(active.scheduled_end_at)}` : self?.assigned ? "لا توجد فترة عمل فعالة في الوقت الحالي." : "لم يتم تعيين جدول حضور لهذا المستخدم."}</p>
+                <h2>{loading ? "جاري التحقق..." : statusLabel(current, Boolean(self?.isDayOff))}</h2>
+                <p>{active ? `تنتهي الفترة ${formatAttendanceTime(active.scheduled_end_at)}` : self?.isDayOff ? "اليوم هو يوم العطلة الأسبوعية المحدد لك." : self?.assigned ? "لا توجد فترة عمل فعالة في الوقت الحالي." : "لم يتم تعيين جدول حضور لهذا المستخدم."}</p>
               </div>
               <div className={`attendance-state-orb ${current?.check_in && !current?.check_out ? "online" : ""}`}><Clock size={31} weight="duotone" /></div>
             </header>
@@ -301,7 +304,7 @@ export function AttendancePage() {
 
           <div className="attendance-report-hint">
             <MapPin size={17} />
-            <span>لو لم تحدد تاريخًا يظهر كل اليوزرات لليوم الحالي. اللوكيشن يظهر مطابق أو غير مطابق، ولو لا يوجد مكان مطلوب يظهر غير مطلوب.</span>
+            <span>لو لم تحدد تاريخًا يظهر كل اليوزرات لليوم الحالي. اللوكيشن يظهر مطابق أو غير مطابق، ولو لا يوجد مكان مطلوب يظهر غير مطلوب، ويوم العطلة يظهر في نتيجة الفترة باسم عطلة.</span>
           </div>
 
           <div className="unified-table-wrap attendance-report-table-wrap">

@@ -49,12 +49,27 @@ create table if not exists core.attendance_user_schedules (
   user_id uuid not null references core.users(id) on delete cascade,
   schedule_id uuid not null references core.attendance_schedules(id) on delete restrict,
   location_id uuid references core.attendance_locations(id) on delete set null,
+  weekly_off_day smallint,
   effective_from date not null,
   effective_to date,
   created_by uuid references core.users(id) on delete set null,
   created_at timestamptz not null default now(),
+  constraint attendance_user_schedules_weekly_off_day_check check (weekly_off_day is null or weekly_off_day between 0 and 6),
   check (effective_to is null or effective_to >= effective_from)
 );
+alter table core.attendance_user_schedules add column if not exists weekly_off_day smallint;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='attendance_user_schedules_weekly_off_day_check'
+      and conrelid='core.attendance_user_schedules'::regclass
+  ) then
+    alter table core.attendance_user_schedules
+      add constraint attendance_user_schedules_weekly_off_day_check
+      check (weekly_off_day is null or weekly_off_day between 0 and 6);
+  end if;
+end $$;
 create index if not exists attendance_user_schedules_user_dates_idx
   on core.attendance_user_schedules(user_id,effective_from desc,effective_to);
 create unique index if not exists attendance_user_schedules_current_unique

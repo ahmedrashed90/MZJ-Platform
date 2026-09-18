@@ -35,6 +35,10 @@ check("cron runs attendance tick", cron.includes("runAttendanceTick") && vercel.
 check("admin settings are superadmin-only", settings.includes('permissions: ["platform.superadmin"]') && api.includes("requireAdmin"));
 check("user assignments include optional required location", attendanceSettings.includes("assignmentLocationId") && attendanceSettings.includes("locationId"));
 check("location is optional for remote users", attendanceSettings.includes("\u063a\u064a\u0631 \u0645\u062d\u062f\u062f") && service.includes("locationRequired"));
+check("per-user weekly day off stored in assignment", schema.includes("weekly_off_day") && attendanceSettings.includes("assignmentWeeklyOffDay") && api.includes("weeklyOffDay"));
+check("weekly day off excludes work periods", service.includes("extract(dow from work_date)") && service.includes("WEEKLY_DAY_OFF"));
+check("report marks weekly day off as holiday", api.includes('result = "عطلة"'));
+check("attendance page accepts undefined current record", report.includes('SelfPayload["currentRecord"] | undefined'));
 check("report has requested filters", report.includes("\u0645\u0646 \u062a\u0627\u0631\u064a\u062e") && report.includes("\u0625\u0644\u0649 \u062a\u0627\u0631\u064a\u062e") && report.includes("\u0627\u0644\u0645\u0648\u0638\u0641"));
 check("report has requested grouped labels", report.includes("\u0627\u0644\u0644\u0648\u0643\u064a\u0634\u0646") && report.includes("\u0645\u0643\u0627\u0646 \u0627\u0644\u062d\u0636\u0648\u0631") && report.includes("\u0627\u0644\u0645\u0643\u0627\u0646 \u0627\u0644\u0645\u0637\u0644\u0648\u0628"));
 check("report periods are dynamic", report.includes("periodHeaders") && api.includes("maxPeriods") && api.includes("slotTimes"));

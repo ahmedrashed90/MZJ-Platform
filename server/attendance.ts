@@ -32,6 +32,12 @@ function validTime(value: string) {
   return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
+function parseWeeklyOffDay(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const day = Number(value);
+  return Number.isInteger(day) && day >= 0 && day <= 6 ? day : null;
+}
+
 function timeMinutes(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
   return hours * 60 + minutes;
@@ -118,7 +124,7 @@ async function adminBootstrap() {
       select
         u.id::text,u.employee_no,u.full_name,u.email,u.mobile,
         coalesce(pb.name,'—') as branch_name,
-        a.id::text as assignment_id,a.schedule_id::text,a.location_id::text,
+        a.id::text as assignment_id,a.schedule_id::text,a.location_id::text,a.weekly_off_day,
         s.name as schedule_name,l.name as location_name
       from core.users u
       left join lateral (
@@ -290,6 +296,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const userIds = asArray(body.userIds).filter(validUuid);
   const scheduleId = validUuid(clean(body.scheduleId)) ? clean(body.scheduleId) : "";
   const locationId = validUuid(clean(body.locationId)) ? clean(body.locationId) : null;
+  const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
   if (!userIds.length) throw new AttendanceError("USERS_REQUIRED", "اختر موظفًا واحدًا على الأقل");
 
   if (scheduleId) {
@@ -310,7 +317,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
       const [user] = await tx<any[]>`select id::text from core.users where id=${userId}::uuid and is_active=true`;
       if (!user) continue;
       const [current] = await tx<any[]>`
-        select id::text,schedule_id::text,location_id::text,effective_from::text
+        select id::text,schedule_id::text,location_id::text,weekly_off_day,effective_from::text
         from core.attendance_user_schedules
         where user_id=${userId}::uuid and effective_to is null
         order by effective_from desc,created_at desc limit 1
@@ -333,13 +340,14 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
 
       const same = current
         && clean(current.schedule_id) === scheduleId
-        && clean(current.location_id) === clean(locationId);
+        && clean(current.location_id) === clean(locationId)
+        && parseWeeklyOffDay(current.weekly_off_day) === weeklyOffDay;
       if (same) continue;
 
       if (current && dateOnlyValue(current.effective_from) === currentRiyadhDate()) {
         await tx`
           update core.attendance_user_schedules
-          set schedule_id=${scheduleId}::uuid,location_id=${locationId}::uuid
+          set schedule_id=${scheduleId}::uuid,location_id=${locationId}::uuid,weekly_off_day=${weeklyOffDay}
           where id=${current.id}::uuid
         `;
       } else {
@@ -351,8 +359,8 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
           `;
         }
         await tx`
-          insert into core.attendance_user_schedules(user_id,schedule_id,location_id,effective_from,created_by)
-          values(${userId}::uuid,${scheduleId}::uuid,${locationId}::uuid,(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
+          insert into core.attendance_user_schedules(user_id,schedule_id,location_id,weekly_off_day,effective_from,created_by)
+          values(${userId}::uuid,${scheduleId}::uuid,${locationId}::uuid,${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
         `;
       }
       await tx`delete from core.sessions where user_id=${userId}::uuid`;
@@ -363,6 +371,10 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
 
 function dateOnlyValue(value: unknown) {
   return clean(value).slice(0, 10);
+}
+
+function weekdayForDate(value: string) {
+  return new Date(`${value}T00:00:00Z`).getUTCDay();
 }
 
 async function reportData(request: VercelRequest) {
@@ -398,7 +410,7 @@ async function reportData(request: VercelRequest) {
   const [assignments, schedules, periods, records] = await Promise.all([
     sql<any[]>`
       select
-        a.id::text,a.user_id::text,a.schedule_id::text,a.location_id::text,
+        a.id::text,a.user_id::text,a.schedule_id::text,a.location_id::text,a.weekly_off_day,
         a.effective_from::text,a.effective_to::text,s.name as schedule_name,l.name as location_name
       from core.attendance_user_schedules a
       join core.attendance_schedules s on s.id=a.schedule_id
@@ -462,6 +474,9 @@ async function reportData(request: VercelRequest) {
       const schedulePeriods = assignment
         ? (periodMap.get(String(assignment.schedule_id)) || []).filter((period) => Boolean(period.is_active))
         : [];
+      const isDayOff = Boolean(assignment)
+        && parseWeeklyOffDay(assignment.weekly_off_day) !== null
+        && weekdayForDate(day) === parseWeeklyOffDay(assignment.weekly_off_day);
 
       const slots: any[] = schedulePeriods.map((period) => {
         const record = dayRecords.find((item) => clean(item.period_id) === clean(period.id)) || null;
@@ -518,6 +533,8 @@ async function reportData(request: VercelRequest) {
           const workText = record.check_out ? `العمل ${formatMinutes(Number(record.work_minutes || 0))}` : "الفترة مفتوحة";
           const delayText = Number(record.delay_minutes || 0) > 0 ? `تأخير ${Number(record.delay_minutes)} د` : "بدون تأخير";
           result = `${statusText} • ${workText} • ${delayText}`;
+        } else if (isDayOff) {
+          result = "عطلة";
         } else if (day < today) {
           result = "غائب";
         } else if (day === today) {

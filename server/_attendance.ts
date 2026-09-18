@@ -79,9 +79,10 @@ async function currentAssignment(userId: string) {
   const [row] = await sql<any[]>`
     select
       a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
-      a.location_id::text as location_id,l.name as location_name,
+      a.location_id::text as location_id,l.name as location_name,a.weekly_off_day,
       l.latitude::float8 as required_latitude,l.longitude::float8 as required_longitude,l.radius_m as required_radius_m,
-      a.effective_from::text,a.effective_to::text
+      a.effective_from::text,a.effective_to::text,
+      (a.weekly_off_day is not null and extract(dow from (now() at time zone ${ATTENDANCE_TIME_ZONE})::date)::int=a.weekly_off_day) as is_day_off
     from core.attendance_user_schedules a
     join core.attendance_schedules s on s.id=a.schedule_id and s.is_active=true
     left join core.attendance_locations l on l.id=a.location_id
@@ -106,7 +107,7 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
     candidates as (
       select
         a.id::text as assignment_id,a.user_id::text,a.schedule_id::text,s.name as schedule_name,
-        a.location_id::text as location_id,l.name as location_name,
+        a.location_id::text as location_id,l.name as location_name,a.weekly_off_day,
         l.latitude::float8 as required_latitude,l.longitude::float8 as required_longitude,l.radius_m as required_radius_m,
         p.id::text as period_id,p.name as period_name,p.sort_order as period_sort_order,
         p.start_time::text as start_time,p.end_time::text as end_time,p.grace_minutes,
@@ -131,6 +132,7 @@ export async function getActiveAttendancePeriod(userId: string): Promise<ActiveA
         (((work_date + case when end_time::time <= start_time::time then 1 else 0 end) + end_time::time) at time zone ${ATTENDANCE_TIME_ZONE}) as scheduled_end_at
       from candidates
       where effective_from <= work_date and (effective_to is null or effective_to >= work_date)
+        and (weekly_off_day is null or extract(dow from work_date)::int <> weekly_off_day)
     )
     select *
     from timed
@@ -207,10 +209,12 @@ export async function getLoginAttendanceState(userId: string) {
       activePeriod: null,
       record: null,
       scheduleName: assignment?.schedule_name || null,
+      isDayOff: Boolean(assignment?.is_day_off),
+      weeklyOffDay: assignment?.weekly_off_day === null || assignment?.weekly_off_day === undefined ? null : Number(assignment.weekly_off_day),
     };
   }
   const record = await recordForPeriod(userId, activePeriod);
-  return { assigned: true, activePeriod, record, scheduleName: activePeriod.schedule_name };
+  return { assigned: true, activePeriod, record, scheduleName: activePeriod.schedule_name, isDayOff: false, weeklyOffDay: null };
 }
 
 export async function requireAttendanceForLogin(
@@ -219,6 +223,14 @@ export async function requireAttendanceForLogin(
 ) {
   const state = await getLoginAttendanceState(userId);
   if (!state.assigned) return { enforced: false, checkedIn: false, state };
+  if (!state.activePeriod && state.isDayOff) {
+    throw new AttendanceError(
+      "WEEKLY_DAY_OFF",
+      "اليوم هو يوم العطلة الأسبوعية المحدد لك",
+      403,
+      { scheduleName: state.scheduleName, weeklyOffDay: state.weeklyOffDay },
+    );
+  }
   if (!state.activePeriod) {
     throw new AttendanceError(
       "OUTSIDE_WORK_PERIOD",
@@ -360,7 +372,7 @@ export async function isAttendanceSessionAllowed(userId: string) {
     ),
     period_candidates as (
       select
-        a.id as assignment_id,a.schedule_id,p.id as period_id,p.start_time,p.end_time,
+        a.id as assignment_id,a.schedule_id,a.weekly_off_day,p.id as period_id,p.start_time,p.end_time,
         case
           when p.end_time <= p.start_time and c.local_time < p.end_time then c.local_date - 1
           else c.local_date
@@ -384,6 +396,7 @@ export async function isAttendanceSessionAllowed(userId: string) {
           and a.effective_from <= pc.work_date
           and (a.effective_to is null or a.effective_to >= pc.work_date)
       )
+        and (pc.weekly_off_day is null or extract(dow from pc.work_date)::int <> pc.weekly_off_day)
         and pc.current_at >= ((pc.work_date + pc.start_time) at time zone ${ATTENDANCE_TIME_ZONE})
         and pc.current_at < (((pc.work_date + case when pc.end_time <= pc.start_time then 1 else 0 end) + pc.end_time) at time zone ${ATTENDANCE_TIME_ZONE})
       limit 1
@@ -479,6 +492,8 @@ export async function getSelfAttendance(userId: string) {
   return {
     ok: true,
     assigned: state.assigned,
+    isDayOff: state.isDayOff,
+    weeklyOffDay: state.weeklyOffDay,
     activePeriod: state.activePeriod,
     currentRecord: state.record || null,
     recent: rows,

@@ -46,6 +46,7 @@ type UserRow = {
   assignment_id: string | null;
   schedule_id: string | null;
   location_id: string | null;
+  weekly_off_day: number | null;
   schedule_name: string | null;
   location_name: string | null;
 };
@@ -59,6 +60,22 @@ type AdminPayload = {
   users: UserRow[];
   branches: BranchRow[];
 };
+
+const WEEKLY_OFF_DAYS = [
+  { value: "0", label: "الأحد" },
+  { value: "1", label: "الاثنين" },
+  { value: "2", label: "الثلاثاء" },
+  { value: "3", label: "الأربعاء" },
+  { value: "4", label: "الخميس" },
+  { value: "5", label: "الجمعة" },
+  { value: "6", label: "السبت" },
+] as const;
+
+function weeklyOffDayLabel(value: number | null | undefined) {
+  if (value === null || value === undefined) return "بدون عطلة أسبوعية";
+  const option = WEEKLY_OFF_DAYS.find((day) => Number(day.value) === Number(value));
+  return option?.label || "بدون عطلة أسبوعية";
+}
 
 const blankLocation = { id: "", branchId: "", name: "", latitude: "", longitude: "", radiusM: "150" };
 const blankSchedule = (): { id: string; name: string; periods: PeriodRow[] } => ({
@@ -78,6 +95,7 @@ export function AttendanceSettingsPanel() {
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [assignmentScheduleId, setAssignmentScheduleId] = useState("");
   const [assignmentLocationId, setAssignmentLocationId] = useState("");
+  const [assignmentWeeklyOffDay, setAssignmentWeeklyOffDay] = useState("");
   const [userSearch, setUserSearch] = useState("");
 
   async function load() {
@@ -96,7 +114,7 @@ export function AttendanceSettingsPanel() {
 
   const filteredUsers = useMemo(() => {
     const term = userSearch.trim().toLowerCase();
-    return (data?.users || []).filter((user) => !term || `${user.full_name} ${user.employee_no || ""} ${user.branch_name || ""} ${user.schedule_name || ""}`.toLowerCase().includes(term));
+    return (data?.users || []).filter((user) => !term || `${user.full_name} ${user.employee_no || ""} ${user.branch_name || ""} ${user.schedule_name || ""} ${weeklyOffDayLabel(user.weekly_off_day)}`.toLowerCase().includes(term));
   }, [data?.users, userSearch]);
 
   function resetMessages() {
@@ -260,9 +278,10 @@ export function AttendanceSettingsPanel() {
           userIds: selectedUsers,
           scheduleId: unassign ? "" : assignmentScheduleId,
           locationId: unassign ? "" : assignmentLocationId,
+          weeklyOffDay: unassign ? "" : assignmentWeeklyOffDay,
         }),
       });
-      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : "تم تطبيق جدول العمل والمكان المطلوب على اليوزرات المحددين");
+      setMessage(unassign ? "تم إلغاء جدول العمل من اليوزرات المحددين" : "تم تطبيق جدول العمل والمكان المطلوب ويوم العطلة على اليوزرات المحددين");
       setSelectedUsers([]);
       await load();
     } catch (assignError) {
@@ -277,7 +296,7 @@ export function AttendanceSettingsPanel() {
   return (
     <div className="attendance-settings">
       <div className="attendance-settings-intro">
-        <div><Clock size={25} weight="duotone" /><span><strong>إعدادات الحضور والانصراف</strong><small>مدير النظام فقط — جداول العمل والفترات ومكان الحضور المطلوب لكل يوزر.</small></span></div>
+        <div><Clock size={25} weight="duotone" /><span><strong>إعدادات الحضور والانصراف</strong><small>مدير النظام فقط — جداول العمل والفترات ومكان الحضور المطلوب ويوم العطلة لكل يوزر.</small></span></div>
       </div>
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
@@ -346,10 +365,11 @@ export function AttendanceSettingsPanel() {
       </section>
 
       <section className="attendance-settings-card panel">
-        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول الفترات والمكان المطلوب. المكان اختياري لليوزرات الريموت أو خارج السعودية.</p></span></div></header>
+        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول الفترات والمكان المطلوب ويوم العطلة الأسبوعية. المكان اختياري لليوزرات الريموت أو خارج السعودية.</p></span></div></header>
         <div className="attendance-assignment-toolbar">
           <label><span>جدول العمل</span><select value={assignmentScheduleId} onChange={(event) => setAssignmentScheduleId(event.target.value)}><option value="">اختر جدول العمل</option>{(data?.schedules || []).map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name}</option>)}</select></label>
           <label><span>المكان المطلوب</span><select value={assignmentLocationId} onChange={(event) => setAssignmentLocationId(event.target.value)}><option value="">غير محدد — بدون طلب لوكيشن</option>{(data?.locations || []).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
+          <label><span>يوم العطلة</span><select value={assignmentWeeklyOffDay} onChange={(event) => setAssignmentWeeklyOffDay(event.target.value)}><option value="">بدون عطلة أسبوعية</option>{WEEKLY_OFF_DAYS.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}</select></label>
           <button className="attendance-save-button" type="button" onClick={() => void applyAssignment(false)} disabled={busy === "assignment" || !selectedUsers.length}><FloppyDisk size={18} /> تطبيق على المحدد ({selectedUsers.length})</button>
           <button className="secondary-button danger" type="button" onClick={() => void applyAssignment(true)} disabled={busy === "assignment" || !selectedUsers.length}>إلغاء جدول المحدد</button>
         </div>
@@ -362,7 +382,7 @@ export function AttendanceSettingsPanel() {
 
         <div className="unified-table-wrap attendance-users-table-wrap">
           <table>
-            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>المكان المطلوب</th></tr></thead>
+            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>المكان المطلوب</th><th>يوم العطلة</th></tr></thead>
             <tbody>
               {filteredUsers.map((user) => (
                 <tr key={user.id} className={selectedUsers.includes(user.id) ? "selected" : ""}>
@@ -371,9 +391,10 @@ export function AttendanceSettingsPanel() {
                   <td>{user.branch_name || "—"}</td>
                   <td>{user.schedule_name || <span className="attendance-muted">غير محدد</span>}</td>
                   <td>{user.location_name || <span className="attendance-muted">غير مطلوب</span>}</td>
+                  <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون عطلة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
                 </tr>
               ))}
-              {!filteredUsers.length ? <tr><td colSpan={5}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
+              {!filteredUsers.length ? <tr><td colSpan={6}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
             </tbody>
           </table>
         </div>
