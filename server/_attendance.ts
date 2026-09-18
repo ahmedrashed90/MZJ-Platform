@@ -234,20 +234,21 @@ export async function requireAttendanceForLogin(
   userId: string,
   options: { confirmCheckIn?: boolean; coordinates?: AttendanceCoordinates | null } = {},
 ) {
-  if (!(await isAttendanceEnforcementEnabled())) {
-    return { enforced: false, checkedIn: false, state: null };
-  }
+  const enforcementEnabled = await isAttendanceEnforcementEnabled();
   const state = await getLoginAttendanceState(userId);
+
   if (!state.assigned) return { enforced: false, checkedIn: false, state };
-  if (!state.activePeriod && state.isDayOff) {
-    throw new AttendanceError(
-      "WEEKLY_DAY_OFF",
-      "اليوم هو يوم الإجازة الأسبوعية المحدد لك",
-      403,
-      { scheduleName: state.scheduleName, weeklyOffDay: state.weeklyOffDay },
-    );
-  }
+
   if (!state.activePeriod) {
+    if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
+    if (state.isDayOff) {
+      throw new AttendanceError(
+        "WEEKLY_DAY_OFF",
+        "اليوم هو يوم الإجازة الأسبوعية المحدد لك",
+        403,
+        { scheduleName: state.scheduleName, weeklyOffDay: state.weeklyOffDay },
+      );
+    }
     throw new AttendanceError(
       "OUTSIDE_WORK_PERIOD",
       state.scheduleName ? `لا توجد فترة عمل فعالة الآن ضمن جدول ${state.scheduleName}` : "لا توجد فترة عمل فعالة الآن",
@@ -256,44 +257,49 @@ export async function requireAttendanceForLogin(
     );
   }
 
-  if (state.record?.check_in && !state.record?.check_out) return { enforced: true, checkedIn: true, state };
+  if (state.record?.check_in && !state.record?.check_out) {
+    return { enforced: enforcementEnabled, checkedIn: true, state };
+  }
   if (state.record?.check_out) {
+    if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
     throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم إنهاء هذه الفترة بالفعل. انتظر فترة العمل التالية.", 403);
   }
 
   const locationRequired = Boolean(state.activePeriod.location_id);
-  if (!options.confirmCheckIn) {
+  const attendanceDetails = {
+    attendanceRequired: true,
+    locationRequired,
+    scheduleName: state.activePeriod.schedule_name,
+    periodName: state.activePeriod.period_name,
+    startTime: state.activePeriod.start_time,
+    endTime: state.activePeriod.end_time,
+    requiredLocationName: state.activePeriod.location_name,
+  };
+
+  if (options.confirmCheckIn) {
+    if (locationRequired && !options.coordinates) {
+      throw new AttendanceError(
+        "ATTENDANCE_LOCATION_REQUIRED",
+        "يجب السماح بالوصول إلى الموقع لتسجيل الحضور",
+        409,
+        attendanceDetails,
+      );
+    }
+
+    const record = await registerAttendanceCheckIn(userId, state.activePeriod, options.coordinates || null);
+    return { enforced: enforcementEnabled, checkedIn: true, state: { ...state, record } };
+  }
+
+  if (enforcementEnabled) {
     throw new AttendanceError(
       "ATTENDANCE_REQUIRED",
       "سجل الحضور لإكمال الدخول إلى المنصة",
       409,
-      {
-        attendanceRequired: true,
-        locationRequired,
-        scheduleName: state.activePeriod.schedule_name,
-        periodName: state.activePeriod.period_name,
-        startTime: state.activePeriod.start_time,
-        endTime: state.activePeriod.end_time,
-        requiredLocationName: state.activePeriod.location_name,
-      },
+      attendanceDetails,
     );
   }
 
-  if (locationRequired && !options.coordinates) {
-    throw new AttendanceError(
-      "ATTENDANCE_LOCATION_REQUIRED",
-      "يجب السماح بالوصول إلى الموقع لتسجيل الحضور",
-      409,
-      {
-        attendanceRequired: true,
-        locationRequired: true,
-        requiredLocationName: state.activePeriod.location_name,
-      },
-    );
-  }
-
-  const record = await registerAttendanceCheckIn(userId, state.activePeriod, options.coordinates || null);
-  return { enforced: true, checkedIn: true, state: { ...state, record } };
+  return { enforced: false, checkedIn: false, state };
 }
 
 export async function registerAttendanceCheckIn(
@@ -436,7 +442,10 @@ export async function isAttendanceSessionAllowed(userId: string) {
   return Boolean(row?.allowed);
 }
 
-export async function checkoutCurrentAttendance(userId: string) {
+export async function checkoutCurrentAttendance(
+  userId: string,
+  options: { allowMissing?: boolean; revokeSessions?: boolean } = {},
+) {
   await ensureAttendanceSchema();
   return withDatabaseAdvisoryLock(`mzj:attendance-check-out:${userId}`, async () => {
     const sql = getSql();
@@ -456,8 +465,13 @@ export async function checkoutCurrentAttendance(userId: string) {
       )
       returning *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
     `;
-    if (!row) throw new AttendanceError("NO_OPEN_ATTENDANCE", "لا توجد فترة حضور مفتوحة لتسجيل الانصراف", 400);
-    await sql`delete from core.sessions where user_id=${userId}::uuid`;
+    if (!row) {
+      if (options.allowMissing) return null;
+      throw new AttendanceError("NO_OPEN_ATTENDANCE", "لا توجد فترة حضور مفتوحة لتسجيل الانصراف", 400);
+    }
+    if (options.revokeSessions !== false) {
+      await sql`delete from core.sessions where user_id=${userId}::uuid`;
+    }
     return row;
   });
 }

@@ -74,7 +74,7 @@ a { color: inherit; text-decoration: none; }
 }
 .nav-separator { height: 1px; background: var(--line); margin: 14px 0; }
 .sidebar-account {
-  min-height: 72px;
+  min-height: 106px;
   border-top: 1px solid var(--line);
   padding: 10px 2px 0;
   display: grid;
@@ -91,7 +91,7 @@ a { color: inherit; text-decoration: none; }
   place-items: center;
   font-weight: 800;
 }
-.account-details { min-width: 0; display: grid; gap: 4px; }
+.account-details { min-width: 0; display: grid; gap: 5px; }
 .account-row {
   min-width: 0;
   min-height: 30px;
@@ -111,8 +111,27 @@ a { color: inherit; text-decoration: none; }
 }
 .account-name { font-size: 13px; font-weight: 800; }
 .account-role { color: var(--muted); font-size: 11px; font-weight: 700; }
-.sidebar-account .notification-bell-button,
-.sidebar-account .logout-button { width: 30px; height: 30px; border-radius: 8px; }
+.sidebar-account .notification-bell-button { width: 30px; height: 30px; border-radius: 8px; }
+.attendance-logout-button {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #e1c9bf;
+  border-radius: 9px;
+  background: #fff8f4;
+  color: #8c4435;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: .16s ease;
+}
+.attendance-logout-button:hover { background: #fceee8; border-color: #c98d78; }
+.attendance-logout-button:disabled { opacity: .6; cursor: wait; }
 
 .page-shell {
   min-height: 100vh;
@@ -452,8 +471,11 @@ button.small-metric { cursor: pointer; }
   .brand-block img { width: 100px; }
   .brand-block span, .nav-separator { display: none; }
   .sidebar-account { position: absolute; top: 13px; left: 13px; min-height: auto; padding: 0; border: 0; display: flex; }
-  .sidebar-account .account-avatar, .sidebar-account .account-name, .sidebar-account .account-secondary { display: none; }
-  .sidebar-account .account-details, .sidebar-account .account-primary { display: block; min-height: auto; }
+  .sidebar-account .account-avatar, .sidebar-account .account-name, .sidebar-account .account-role { display: none; }
+  .sidebar-account .account-details { display: flex; align-items: center; gap: 6px; min-height: auto; }
+  .sidebar-account .account-primary { display: block; min-height: auto; }
+  .sidebar-account .attendance-logout-button { width: 34px; min-width: 34px; height: 34px; min-height: 34px; padding: 0; }
+  .sidebar-account .attendance-logout-button span { display: none; }
   .sidebar-nav { overflow-x: auto; }
   .nav-group { display: flex; gap: 6px; min-width: max-content; }
   .nav-link { min-width: 112px; min-height: 42px; justify-content: center; padding: 0 10px; }
@@ -7825,7 +7847,8 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 25px;
+  min-width: 76px;
+  min-height: 28px;
   padding: 0 8px;
   border: 1px solid #ddd;
   border-radius: 999px;
@@ -7912,37 +7935,199 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
   font-size: 10px;
   font-weight: 700;
 }
+.attendance-report-card-v2 {
+  border-radius: 18px;
+  border-color: #e6d8d2;
+  box-shadow: 0 14px 34px rgba(83,53,43,.07);
+}
 .attendance-report-table-wrap {
-  max-height: calc(100vh - 330px);
+  max-height: calc(100vh - 320px);
 }
-.attendance-report-table {
-  min-width: 1250px !important;
+.attendance-report-table-wrap-v2 {
+  overflow: auto;
+  background: #fff;
+  scrollbar-gutter: stable both-edges;
 }
-.attendance-report-table thead tr:first-child th {
-  border-inline-end: 1px solid #e4d5ce;
+.attendance-report-table-v2 {
+  width: max-content;
+  min-width: 100% !important;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+.attendance-report-table-v2 th,
+.attendance-report-table-v2 td {
+  border-inline-end: 1px solid #eadfda;
+  border-bottom: 1px solid #eee5e1;
+  padding: 11px 12px;
+  vertical-align: middle;
   text-align: center;
-  background: #efe2dc;
-  color: #5f4037;
+  color: #513a33;
   font-size: 10px;
 }
-.attendance-report-table thead tr:nth-child(2) th {
-  text-align: center;
-  background: #f8f1ed;
+.attendance-report-table-v2 th:last-child,
+.attendance-report-table-v2 td:last-child {
+  border-inline-end: 0;
 }
-.attendance-report-table td {
-  white-space: nowrap;
+.attendance-report-table-v2 thead th {
+  position: sticky;
+  z-index: 5;
+  font-weight: 900;
 }
-.attendance-report-table .attendance-result-cell {
-  min-width: 180px;
-  white-space: normal;
-  line-height: 1.65;
+.attendance-report-table-v2 thead tr:first-child th {
+  top: 0;
+  height: 44px;
+  background: #f3e8e3;
+  color: #5d3b32;
+  font-size: 10px;
+  letter-spacing: .01em;
+}
+.attendance-report-table-v2 thead tr:nth-child(2) th {
+  top: 44px;
+  height: 40px;
+  background: #fbf6f3;
+  color: #76574d;
+  font-size: 9px;
+}
+.attendance-report-table-v2 thead .attendance-location-group {
+  background: #eee0da;
+}
+.attendance-report-table-v2 thead .attendance-period-group {
+  background: #f5e7e0;
+  min-width: 360px;
+}
+.attendance-report-table-v2 thead .attendance-period-group.alt {
+  background: #efe4df;
+}
+.attendance-report-table-v2 thead .attendance-period-subhead {
+  background: #fff8f4;
+}
+.attendance-report-table-v2 thead .attendance-period-subhead.alt {
+  background: #f9f3f0;
+}
+.attendance-report-table-v2 tbody tr:nth-child(even) td {
+  background: #fffdfc;
+}
+.attendance-report-table-v2 tbody tr:hover td {
+  background: #fff8f4;
+}
+.attendance-report-table-v2 tbody tr:last-child td {
+  border-bottom: 0;
+}
+.attendance-seq-col,
+.attendance-seq-cell {
+  width: 54px;
+  min-width: 54px;
+}
+.attendance-date-col,
+.attendance-date-cell {
+  min-width: 112px;
+}
+.attendance-day-col,
+.attendance-day-cell {
+  min-width: 88px;
+}
+.attendance-branch-col,
+.attendance-branch-cell {
+  min-width: 132px;
+}
+.attendance-name-col,
+.attendance-name-cell {
+  min-width: 170px;
+  text-align: right !important;
+}
+.attendance-name-cell strong {
+  display: block;
+  color: #402a24;
+  font-size: 11px;
+}
+.attendance-name-cell small {
+  display: block;
+  margin-top: 3px;
+  color: #9a7b70;
+  font-size: 8px;
+  direction: ltr;
 }
 .attendance-location-cell {
-  font-family: ui-monospace,SFMono-Regular,Consolas,monospace;
+  min-width: 190px;
+  max-width: 240px;
   direction: ltr;
-  text-align: center !important;
+  font-family: ui-monospace,SFMono-Regular,Consolas,monospace;
   font-size: 9px !important;
 }
+.attendance-location-value {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attendance-required-location-cell {
+  min-width: 125px;
+  font-weight: 800;
+}
+.attendance-location-result-cell {
+  min-width: 100px;
+}
+.attendance-time-cell {
+  min-width: 104px;
+  white-space: nowrap;
+}
+.attendance-time-cell strong {
+  color: #4f352e;
+  font-size: 10px;
+}
+.attendance-time-cell .attendance-auto-tag {
+  display: block;
+  width: max-content;
+  margin: 4px auto 0;
+}
+.attendance-report-table-v2 .attendance-result-cell {
+  min-width: 205px;
+  max-width: 235px;
+  white-space: normal;
+}
+.attendance-period-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  width: 100%;
+  border: 1px solid #e0d6d1;
+  border-radius: 9px;
+  padding: 5px 8px;
+  background: #faf8f7;
+  color: #75645d;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+.attendance-period-status.present {
+  border-color: #c8ddcc;
+  background: #f3faf4;
+  color: #4f7657;
+}
+.attendance-period-status.late {
+  border-color: #e8d19e;
+  background: #fff9ea;
+  color: #806421;
+}
+.attendance-period-status.missing {
+  border-color: #e7c1b9;
+  background: #fff5f2;
+  color: #974c3d;
+}
+.attendance-period-status.leave {
+  border-color: #d8d0e6;
+  background: #f8f5fb;
+  color: #6f6082;
+}
+.attendance-empty-report {
+  min-height: 90px;
+  display: grid;
+  place-items: center;
+}
+
 
 /* Attendance settings - superadmin only */
 .attendance-settings {

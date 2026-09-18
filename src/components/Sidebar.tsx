@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { ChartBar, Crown, Database, Gear, Globe, House, MapPin, Megaphone, Pulse, Question, SignOut, SuitcaseSimple, UserSwitch, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
@@ -30,12 +31,23 @@ function Item({ href, label, icon: Icon }: NavItem) {
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const [loggingOut, setLoggingOut] = useState(false);
   const systemAllowed: Record<string, boolean> = { crm: canAccessCrm(user), marketing: canAccessMarketing(user), operations: canAccessOperations(user), tracking: canAccessTracking(user), website: canAccessWebsite(user) };
   const visibleItems = items.filter((item) => "permission" in item ? !item.permission || hasPermission(user, item.permission) : systemAllowed[item.system]);
   const resolvedItems = visibleItems.map((item) => "system" in item ? { ...item, href: firstAllowedPage(user, item.system) } : item);
   const visibleSupport = supportItems.filter((item) => item.href === "/settings" ? canOpenSettings(user) : !item.permission || hasPermission(user, item.permission));
   const fullName = user?.fullName?.trim() || "مستخدم المنصة";
   const roleText = user?.roles.join("، ") || user?.departments.join("، ") || "مستخدم المنصة";
+
+  async function handleAttendanceLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await logout();
+    } finally {
+      setLoggingOut(false);
+    }
+  }
 
   return <aside className="sidebar">
     <div className="brand-block"><img src="/logo.png" alt="MZJ" /><span>مجموعة محمد بن ذعار العجمي</span></div>
@@ -47,10 +59,18 @@ export function Sidebar() {
           <strong className="account-name" title={fullName}>{fullName}</strong>
           <NotificationBell />
         </div>
-        <div className="account-row account-secondary">
-          <span className="account-role" title={roleText}>{roleText}</span>
-          <button type="button" className="logout-button" onClick={() => void logout()} aria-label="تسجيل الخروج" title="تسجيل الخروج"><SignOut size={17} /></button>
-        </div>
+        <span className="account-role" title={roleText}>{roleText}</span>
+        <button
+          type="button"
+          className="attendance-logout-button"
+          onClick={() => void handleAttendanceLogout()}
+          disabled={loggingOut}
+          aria-label="تسجيل انصراف وتسجيل خروج"
+          title="تسجيل انصراف وتسجيل خروج"
+        >
+          <SignOut size={17} />
+          <span>{loggingOut ? "جاري تسجيل الانصراف..." : "تسجيل انصراف وتسجيل خروج"}</span>
+        </button>
       </div>
     </div>
   </aside>;

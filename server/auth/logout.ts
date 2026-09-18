@@ -6,10 +6,16 @@ import { checkoutCurrentAttendance } from "../_attendance.js";
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
   const user = await getSessionUser(request).catch(() => null);
-  if (user) {
-    await checkoutCurrentAttendance(user.id).catch(() => null);
-  }
+  const attendanceRecord = user
+    ? await checkoutCurrentAttendance(user.id, { allowMissing: true, revokeSessions: false }).catch(() => null)
+    : null;
+
   await clearSession(request, response);
   if (user) await logSecurityEvent({ request, user, systemCode: "core", pageCode: "login", action: "logout", result: "success", ipAddress: requestIp(request) });
-  return response.status(200).json({ ok: true });
+  return response.status(200).json({
+    ok: true,
+    attendanceCheckedOut: Boolean(attendanceRecord),
+    periodName: attendanceRecord?.period_name || null,
+    checkOut: attendanceRecord?.check_out || null,
+  });
 }

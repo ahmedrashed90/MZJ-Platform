@@ -34,13 +34,18 @@ export function LoginPage() {
     setError("");
     setAttendanceMessage("");
     try {
-      await login(identifier, password);
+      await login(identifier, password, { attendanceCheckIn: true });
     } catch (loginError) {
       if (loginError instanceof AttendanceLoginRequiredError) {
         const requirement = loginError.requirement;
         const periodText = [requirement.periodName, requirement.startTime && requirement.endTime ? `${requirement.startTime} - ${requirement.endTime}` : ""].filter(Boolean).join(" • ");
-        setAttendanceMessage(periodText ? `الفترة الحالية: ${periodText}` : "جاري تسجيل الحضور للفترة الحالية");
+        const requiredLocationText = requirement.requiredLocationName ? `المكان المطلوب: ${requirement.requiredLocationName}` : "";
+        const attendanceContext = [periodText ? `الفترة الحالية: ${periodText}` : "", requiredLocationText].filter(Boolean).join(" • ");
+        setAttendanceMessage(attendanceContext || "جاري تسجيل الحضور للفترة الحالية");
         try {
+          if (requirement.locationRequired) {
+            setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}جاري تحديد موقع الحضور...`);
+          }
           const location = requirement.locationRequired ? await getBrowserLocation() : null;
           await login(identifier, password, { attendanceCheckIn: true, location });
           return;
