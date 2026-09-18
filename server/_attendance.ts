@@ -86,6 +86,73 @@ function haversineMeters(aLat: number, aLng: number, bLat: number, bLng: number)
   return radius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+function hasAttendanceCoordinates(record: any) {
+  return numberOrNull(record?.check_in_latitude) !== null && numberOrNull(record?.check_in_longitude) !== null;
+}
+
+function resolveAttendanceLocation(period: ActiveAttendancePeriod, coordinates: AttendanceCoordinates | null) {
+  let latitude: number | null = null;
+  let longitude: number | null = null;
+  let accuracy: number | null = null;
+  let distance: number | null = null;
+  let locationResult: "matched" | "mismatched" | "not_required" | "unknown" = period.location_id ? "unknown" : "not_required";
+
+  if (coordinates) {
+    const lat = Number(coordinates.latitude);
+    const lng = Number(coordinates.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      throw new AttendanceError("INVALID_ATTENDANCE_LOCATION", "إحداثيات الموقع غير صالحة", 400);
+    }
+    latitude = lat;
+    longitude = lng;
+    accuracy = numberOrNull(coordinates.accuracy);
+    if (period.location_id && period.required_latitude !== null && period.required_longitude !== null && period.required_radius_m !== null) {
+      distance = haversineMeters(lat, lng, period.required_latitude, period.required_longitude);
+      locationResult = distance <= period.required_radius_m ? "matched" : "mismatched";
+    }
+  } else if (period.location_id) {
+    throw new AttendanceError("ATTENDANCE_LOCATION_REQUIRED", "يجب تحديد الموقع لتسجيل الحضور", 409, {
+      locationRequired: true,
+      requiredLocationName: period.location_name,
+      periodName: period.period_name,
+    });
+  }
+
+  return { latitude, longitude, accuracy, distance, locationResult };
+}
+
+async function attachAttendanceLocationToRecord(
+  userId: string,
+  period: ActiveAttendancePeriod,
+  record: any,
+  coordinates: AttendanceCoordinates,
+) {
+  if (hasAttendanceCoordinates(record)) return record;
+  const sql = getSql();
+  const snapshot = resolveAttendanceLocation(period, coordinates);
+  const [updated] = await sql<any[]>`
+    update core.attendance_records
+    set
+      required_location_id=coalesce(required_location_id,${period.location_id || null}::uuid),
+      required_location_name=coalesce(required_location_name,${period.location_name || null}),
+      required_latitude=coalesce(required_latitude,${period.required_latitude}),
+      required_longitude=coalesce(required_longitude,${period.required_longitude}),
+      required_radius_m=coalesce(required_radius_m,${period.required_radius_m}),
+      check_in_latitude=${snapshot.latitude},
+      check_in_longitude=${snapshot.longitude},
+      check_in_accuracy_m=${snapshot.accuracy},
+      check_in_distance_m=${snapshot.distance},
+      location_result=${snapshot.locationResult},
+      updated_at=now()
+    where id=${String(record.id)}::uuid and user_id=${userId}::uuid
+    returning *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
+  `;
+  if (!updated || !hasAttendanceCoordinates(updated)) {
+    throw new AttendanceError("ATTENDANCE_LOCATION_NOT_SAVED", "تعذر حفظ لوكيشن الحضور. حاول مرة أخرى.", 500);
+  }
+  return updated;
+}
+
 async function currentAssignment(userId: string) {
   const sql = getSql();
   const [row] = await sql<any[]>`
@@ -244,6 +311,8 @@ export async function getSelfAttendanceState(userId: string) {
   const record = state.record;
   const checkedIn = Boolean(record?.check_in);
   const checkedOut = Boolean(record?.check_out);
+  const locationCaptured = hasAttendanceCoordinates(record);
+  const needsLocationCapture = Boolean(period?.location_id && checkedIn && !checkedOut && !locationCaptured);
 
   return {
     enforcementEnabled,
@@ -278,6 +347,8 @@ export async function getSelfAttendanceState(userId: string) {
     canCheckIn: Boolean(period && !checkedIn),
     canCheckOut: Boolean(checkedIn && !checkedOut),
     locationRequired: Boolean(period?.location_id),
+    locationCaptured,
+    needsLocationCapture,
     requiredLocationName: period?.location_name || null,
   };
 }
@@ -296,7 +367,19 @@ export async function checkInCurrentAttendance(
     }
     throw new AttendanceError("OUTSIDE_WORK_PERIOD", "لا توجد فترة عمل فعالة الآن لتسجيل الحضور", 400);
   }
-  if (state.record?.check_in && !state.record?.check_out) return state.record;
+  if (state.record?.check_in && !state.record?.check_out) {
+    if (state.activePeriod.location_id && !hasAttendanceCoordinates(state.record)) {
+      if (!coordinates) {
+        throw new AttendanceError("ATTENDANCE_LOCATION_REQUIRED", "يجب تحديد الموقع وحفظه لهذه الفترة قبل المتابعة", 409, {
+          locationRequired: true,
+          requiredLocationName: state.activePeriod.location_name,
+          periodName: state.activePeriod.period_name,
+        });
+      }
+      return attachAttendanceLocationToRecord(userId, state.activePeriod, state.record, coordinates);
+    }
+    return state.record;
+  }
   if (state.record?.check_out) {
     throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم تسجيل الانصراف لهذه الفترة بالفعل", 400);
   }
@@ -330,14 +413,6 @@ export async function requireAttendanceForLogin(
     );
   }
 
-  if (state.record?.check_in && !state.record?.check_out) {
-    return { enforced: enforcementEnabled, checkedIn: true, state };
-  }
-  if (state.record?.check_out) {
-    if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
-    throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم إنهاء هذه الفترة بالفعل. انتظر فترة العمل التالية.", 403);
-  }
-
   const locationRequired = Boolean(state.activePeriod.location_id);
   const attendanceDetails = {
     attendanceRequired: true,
@@ -348,6 +423,26 @@ export async function requireAttendanceForLogin(
     endTime: state.activePeriod.end_time,
     requiredLocationName: state.activePeriod.location_name,
   };
+
+  if (state.record?.check_in && !state.record?.check_out) {
+    if (locationRequired && !hasAttendanceCoordinates(state.record)) {
+      if (options.confirmCheckIn && options.coordinates) {
+        const record = await attachAttendanceLocationToRecord(userId, state.activePeriod, state.record, options.coordinates);
+        return { enforced: enforcementEnabled, checkedIn: true, state: { ...state, record } };
+      }
+      throw new AttendanceError(
+        "ATTENDANCE_LOCATION_REQUIRED",
+        "يجب تحديد موقع الحضور لهذه الفترة قبل الدخول إلى المنصة",
+        409,
+        attendanceDetails,
+      );
+    }
+    return { enforced: enforcementEnabled, checkedIn: true, state };
+  }
+  if (state.record?.check_out) {
+    if (!enforcementEnabled) return { enforced: false, checkedIn: false, state };
+    throw new AttendanceError("ATTENDANCE_PERIOD_CLOSED", "تم إنهاء هذه الفترة بالفعل. انتظر فترة العمل التالية.", 403);
+  }
 
   if (options.confirmCheckIn) {
     if (locationRequired && !options.coordinates) {
@@ -384,25 +479,21 @@ export async function registerAttendanceCheckIn(
   return withDatabaseAdvisoryLock(`mzj:attendance-check-in:${userId}`, async () => {
     const sql = getSql();
     const existing = await recordForPeriod(userId, period);
-    if (existing?.check_in) return existing;
-
-    let locationResult: "matched" | "mismatched" | "not_required" | "unknown" = "not_required";
-    let distance: number | null = null;
-    if (period.location_id) {
-      if (!coordinates) throw new AttendanceError("ATTENDANCE_LOCATION_REQUIRED", "يجب تحديد الموقع لتسجيل الحضور", 409);
-      const lat = Number(coordinates.latitude);
-      const lng = Number(coordinates.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
-        throw new AttendanceError("INVALID_ATTENDANCE_LOCATION", "إحداثيات الموقع غير صالحة", 400);
+    if (existing?.check_in) {
+      if (period.location_id && !hasAttendanceCoordinates(existing)) {
+        if (!coordinates) {
+          throw new AttendanceError("ATTENDANCE_LOCATION_REQUIRED", "يجب تحديد الموقع وحفظه لهذه الفترة قبل المتابعة", 409, {
+            locationRequired: true,
+            requiredLocationName: period.location_name,
+            periodName: period.period_name,
+          });
+        }
+        return attachAttendanceLocationToRecord(userId, period, existing, coordinates);
       }
-      if (period.required_latitude === null || period.required_longitude === null || period.required_radius_m === null) {
-        locationResult = "unknown";
-      } else {
-        distance = haversineMeters(lat, lng, period.required_latitude, period.required_longitude);
-        locationResult = distance <= period.required_radius_m ? "matched" : "mismatched";
-      }
+      return existing;
     }
 
+    const locationSnapshot = resolveAttendanceLocation(period, coordinates);
     const scheduledStart = new Date(period.scheduled_start_at).getTime();
     const lateAfter = scheduledStart + period.grace_minutes * 60000;
     const delayMinutes = Math.max(0, Math.floor((Date.now() - lateAfter) / 60000));
@@ -421,7 +512,7 @@ export async function registerAttendanceCheckIn(
         ${period.period_name},${period.period_sort_order},${period.scheduled_start_at}::timestamptz,${period.scheduled_end_at}::timestamptz,${period.grace_minutes},
         now(),${delayMinutes},0,${status},
         ${period.location_id || null}::uuid,${period.location_name || null},${period.required_latitude},${period.required_longitude},${period.required_radius_m},
-        ${coordinates?.latitude ?? null},${coordinates?.longitude ?? null},${coordinates?.accuracy ?? null},${distance},${locationResult},
+        ${locationSnapshot.latitude},${locationSnapshot.longitude},${locationSnapshot.accuracy},${locationSnapshot.distance},${locationSnapshot.locationResult},
         now(),now()
       )
       on conflict(user_id,period_id,work_date) where period_id is not null
@@ -442,6 +533,12 @@ export async function registerAttendanceCheckIn(
         updated_at=now()
       returning *,id::text,user_id::text,assignment_id::text,schedule_id::text,period_id::text,work_date::text as work_date
     `;
+    if (!row?.check_in) {
+      throw new AttendanceError("ATTENDANCE_CHECK_IN_NOT_SAVED", "تعذر حفظ وقت الحضور. حاول مرة أخرى.", 500);
+    }
+    if (period.location_id && !hasAttendanceCoordinates(row)) {
+      throw new AttendanceError("ATTENDANCE_LOCATION_NOT_SAVED", "تم تسجيل الحضور لكن لم يتم حفظ اللوكيشن. حاول مرة أخرى.", 500);
+    }
     return row;
   });
 }

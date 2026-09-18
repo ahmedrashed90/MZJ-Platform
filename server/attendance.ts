@@ -129,6 +129,18 @@ function currentRiyadhDate() {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+function reportClock(value: unknown) {
+  if (!value) return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", {
+    timeZone: ATTENDANCE_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
 async function adminBootstrap() {
   const sql = getSql();
   const [settings] = await sql<{ enforcement_enabled: boolean }[]>`
@@ -659,6 +671,8 @@ async function reportData(request: VercelRequest) {
         .map((record) => clean(record.required_location_name))
         .filter(Boolean)));
       const hasRequiredLocation = requiredLocations.length > 0 || Boolean(assignment?.location_id);
+      const hasRecordedCheckIn = checkedRecords.some((record) => Boolean(record.check_in));
+      const missingRequiredLocationCapture = hasRequiredLocation && hasRecordedCheckIn && locatedRecords.length === 0;
       let locationResult = hasRequiredLocation ? "—" : "غير مطلوب";
       if (hasRequiredLocation && checkedRecords.length) {
         locationResult = checkedRecords.some((record) => record.location_result === "mismatched") ? "غير مطابق"
@@ -695,6 +709,8 @@ async function reportData(request: VercelRequest) {
           endTime: slot.endTime,
           checkIn: record?.check_in || null,
           checkOut: record?.check_out || null,
+          checkInText: reportClock(record?.check_in),
+          checkOutText: reportClock(record?.check_out),
           checkoutSource: record?.checkout_source || null,
           result,
           delayMinutes: Number(record?.delay_minutes || 0),
@@ -709,9 +725,10 @@ async function reportData(request: VercelRequest) {
         employeeNo: user.employee_no,
         name: user.full_name,
         location: {
-          actual: actualLocations.length ? actualLocations.join(" / ") : "—",
+          actual: actualLocations.length ? actualLocations.join(" / ") : missingRequiredLocationCapture ? "لم يتم حفظ اللوكيشن" : "—",
           required: requiredLocations.length ? requiredLocations.join(" / ") : assignment?.location_name || "غير مطلوب",
           result: locationResult,
+          missingRequiredCapture: missingRequiredLocationCapture,
           latitude: primaryLocatedRecord ? Number(primaryLocatedRecord.check_in_latitude) : null,
           longitude: primaryLocatedRecord ? Number(primaryLocatedRecord.check_in_longitude) : null,
           distanceM: primaryLocatedRecord?.check_in_distance_m === null || primaryLocatedRecord?.check_in_distance_m === undefined

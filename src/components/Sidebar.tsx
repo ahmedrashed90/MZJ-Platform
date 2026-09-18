@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { ChartBar, Crown, Database, Gear, Globe, House, MapPin, Megaphone, Pulse, Question, SignIn, SignOut, SuitcaseSimple, UserSwitch, UsersThree } from "@phosphor-icons/react";
 import { useAuth } from "../auth/AuthContext";
@@ -47,10 +47,16 @@ type SelfAttendanceState = {
     delayMinutes: number;
     workMinutes: number;
     locationResult: string;
+    latitude: number | null;
+    longitude: number | null;
+    accuracy: number | null;
+    distance: number | null;
   } | null;
   canCheckIn: boolean;
   canCheckOut: boolean;
   locationRequired: boolean;
+  locationCaptured: boolean;
+  needsLocationCapture: boolean;
   requiredLocationName: string | null;
 };
 
@@ -71,7 +77,8 @@ function attendanceStateLabel(state: SelfAttendanceState | null) {
   if (state.isDayOff) return "اليوم إجازة";
   if (!state.activePeriod) return "خارج فترة العمل";
   if (state.canCheckOut && state.record?.checkIn) {
-    return `${state.activePeriod.name} • حضور ${formatAttendanceTime(state.record.checkIn)}`;
+    const locationText = state.locationRequired ? (state.locationCaptured ? " • اللوكيشن محفوظ" : " • اللوكيشن غير محفوظ") : "";
+    return `${state.activePeriod.name} • حضور ${formatAttendanceTime(state.record.checkIn)}${locationText}`;
   }
   if (state.canCheckIn) return `${state.activePeriod.name} • لم يسجل الحضور`;
   if (state.record?.checkOut) return `${state.activePeriod.name} • تم الانصراف`;
@@ -81,8 +88,9 @@ function attendanceStateLabel(state: SelfAttendanceState | null) {
 export function Sidebar() {
   const { user, logout } = useAuth();
   const [attendanceState, setAttendanceState] = useState<SelfAttendanceState | null>(null);
-  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "logout">("");
+  const [attendanceBusy, setAttendanceBusy] = useState<"" | "checkin" | "location" | "logout">("");
   const [attendanceError, setAttendanceError] = useState("");
+  const locationRecoveryAttempt = useRef("");
 
   const systemAllowed: Record<string, boolean> = {
     crm: canAccessCrm(user),
@@ -121,6 +129,35 @@ export function Sidebar() {
     };
   }, [user?.id]);
 
+  async function captureMissingAttendanceLocation() {
+    if (!attendanceState?.needsLocationCapture || !attendanceState.locationRequired) return attendanceState;
+    setAttendanceBusy("location");
+    setAttendanceError("");
+    try {
+      const location = await getBrowserAttendanceLocation();
+      const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "self_check_in", location }),
+      });
+      setAttendanceState(payload.state);
+      return payload.state;
+    } catch (error) {
+      setAttendanceError(error instanceof Error ? error.message : "تعذر حفظ لوكيشن الحضور");
+      throw error;
+    } finally {
+      setAttendanceBusy("");
+    }
+  }
+
+  useEffect(() => {
+    const key = attendanceState?.needsLocationCapture && attendanceState.record?.checkIn
+      ? `${user?.id || ""}:${attendanceState.record.checkIn}`
+      : "";
+    if (!key || locationRecoveryAttempt.current === key) return;
+    locationRecoveryAttempt.current = key;
+    void captureMissingAttendanceLocation().catch(() => undefined);
+  }, [attendanceState?.needsLocationCapture, attendanceState?.record?.checkIn, user?.id]);
+
   async function handleCheckIn() {
     if (attendanceBusy) return;
     setAttendanceBusy("checkin");
@@ -141,9 +178,12 @@ export function Sidebar() {
 
   async function handleLogout() {
     if (attendanceBusy) return;
-    setAttendanceBusy("logout");
     setAttendanceError("");
     try {
+      if (attendanceState?.needsLocationCapture) {
+        await captureMissingAttendanceLocation();
+      }
+      setAttendanceBusy("logout");
       await logout();
     } catch (error) {
       setAttendanceError(error instanceof Error ? error.message : "تعذر تسجيل الانصراف وتسجيل الخروج");
@@ -157,7 +197,7 @@ export function Sidebar() {
   const actionLabel = needsCheckIn
     ? attendanceBusy === "checkin" ? "جاري تسجيل الحضور..." : "تسجيل حضور"
     : hasOpenAttendance
-      ? attendanceBusy === "logout" ? "جاري تسجيل الانصراف..." : "تسجيل انصراف وتسجيل خروج"
+      ? attendanceBusy === "location" ? "جاري حفظ اللوكيشن..." : attendanceBusy === "logout" ? "جاري تسجيل الانصراف..." : "تسجيل انصراف وتسجيل خروج"
       : attendanceBusy === "logout" ? "جاري تسجيل الخروج..." : "تسجيل خروج";
   const ActionIcon = needsCheckIn ? SignIn : SignOut;
   const stateLabel = attendanceStateLabel(attendanceState);

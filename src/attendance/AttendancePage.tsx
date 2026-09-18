@@ -26,6 +26,8 @@ type ReportPeriod = {
   endTime: string;
   checkIn: string | null;
   checkOut: string | null;
+  checkInText: string;
+  checkOutText: string;
   checkoutSource: string | null;
   result: string;
   delayMinutes: number;
@@ -41,6 +43,7 @@ type ReportLocation = {
   distanceM: number | null;
   accuracyM: number | null;
   captures: number;
+  missingRequiredCapture: boolean;
 };
 
 type ReportRow = {
@@ -129,6 +132,14 @@ export function AttendancePage() {
     void loadAdminUsers();
     void loadReport("", "", "");
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const interval = window.setInterval(() => {
+      void loadReport(from, to, employeeId);
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [isAdmin, from, to, employeeId]);
 
   function exportExcel() {
     const table = document.getElementById("attendance-report-table") as HTMLTableElement | null;
@@ -262,11 +273,13 @@ export function AttendancePage() {
                         <div className="attendance-location-reading">
                           <a href={mapHref} target="_blank" rel="noreferrer" className="attendance-location-link">
                             <MapPin size={14} weight="fill" />
-                            <span>عرض الموقع</span>
+                            <span>فتح اللوكيشن</span>
                           </a>
-                          <small>{Number(row.location.latitude).toFixed(5)}, {Number(row.location.longitude).toFixed(5)}</small>
-                          {row.location.distanceM !== null ? <small>المسافة: {Math.round(row.location.distanceM)} م</small> : null}
+                          <strong className="attendance-location-coordinates">{Number(row.location.latitude).toFixed(6)}, {Number(row.location.longitude).toFixed(6)}</strong>
+                          <small>{row.location.distanceM !== null ? `المسافة ${Math.round(row.location.distanceM)} م` : "GPS محفوظ"}</small>
                         </div>
+                      ) : row.location.missingRequiredCapture ? (
+                        <span className="attendance-location-missing">لم يتم حفظ اللوكيشن</span>
                       ) : <span className="attendance-empty-value">—</span>}
                     </td>
                     <td className="attendance-required-location-cell">{row.location.required}</td>
@@ -281,11 +294,17 @@ export function AttendancePage() {
                       const tone = resultTone(period?.result);
                       return [
                         <td key={`${row.userId}:${row.date}:${periodIndex}:in`} className="attendance-time-cell">
-                          <strong>{period ? formatAttendanceTime(period.checkIn) : "—"}</strong>
+                          <div className={`attendance-time-stamp ${period?.checkIn ? "recorded" : "empty"}`}>
+                            <small>وقت الحضور</small>
+                            <strong>{period ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"}</strong>
+                          </div>
                         </td>,
                         <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell">
-                          <strong>{period ? formatAttendanceTime(period.checkOut) : "—"}</strong>
-                          {period?.checkoutSource === "auto" ? <small className="attendance-auto-tag">تلقائي</small> : null}
+                          <div className={`attendance-time-stamp ${period?.checkOut ? "recorded" : "empty"}`}>
+                            <small>وقت الانصراف</small>
+                            <strong>{period ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}</strong>
+                            {period?.checkoutSource === "auto" ? <em className="attendance-auto-tag">تلقائي</em> : null}
+                          </div>
                         </td>,
                         <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className="attendance-result-cell">
                           <span className={`attendance-period-status ${tone}`}>{label}</span>
