@@ -1,9 +1,18 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20260918-global-attendance-v3";
+export const ATTENDANCE_SCHEMA_VERSION = "20260918-global-attendance-v4";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
+create table if not exists core.attendance_settings (
+  id smallint primary key default 1 check (id = 1),
+  enforcement_enabled boolean not null default false,
+  updated_by uuid references core.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+insert into core.attendance_settings(id,enforcement_enabled) values(1,false)
+on conflict(id) do nothing;
+
 create table if not exists core.attendance_locations (
   id uuid primary key default gen_random_uuid(),
   branch_id uuid references core.branches(id) on delete set null,
@@ -147,7 +156,8 @@ async function attendanceSchemaReady() {
   const sql = getSql();
   const [state] = await sql<{ ready: boolean }[]>`
     select (
-      to_regclass('core.attendance_locations') is not null
+      to_regclass('core.attendance_settings') is not null
+      and to_regclass('core.attendance_locations') is not null
       and to_regclass('core.attendance_schedules') is not null
       and to_regclass('core.attendance_periods') is not null
       and to_regclass('core.attendance_user_schedules') is not null
@@ -216,6 +226,14 @@ export function ensureAttendanceSchema() {
       } else {
         // Keep the core page registration current on older deployments.
         await runSqlScript(String.raw`
+          create table if not exists core.attendance_settings (
+            id smallint primary key default 1 check (id = 1),
+            enforcement_enabled boolean not null default false,
+            updated_by uuid references core.users(id) on delete set null,
+            updated_at timestamptz not null default now()
+          );
+          insert into core.attendance_settings(id,enforcement_enabled) values(1,false)
+          on conflict(id) do nothing;
           insert into core.system_pages(system_code,code,name_ar,route,sort_order,is_active) values
           ('core','attendance','الحضور والانصراف','/attendance',15,true)
           on conflict(system_code,code) do update

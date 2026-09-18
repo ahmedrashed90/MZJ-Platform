@@ -57,6 +57,7 @@ type BranchRow = { id: string; code: string; name: string };
 
 type AdminPayload = {
   ok: true;
+  settings: { enforcementEnabled: boolean };
   locations: LocationRow[];
   schedules: ScheduleRow[];
   users: UserRow[];
@@ -140,6 +141,26 @@ export function AttendanceSettingsPanel() {
     setAssignmentLocationId("");
     setAssignmentWeeklyOffDay("");
     setEditingUserId("");
+  }
+
+  async function saveEnforcement(enforcementEnabled: boolean) {
+    resetMessages();
+    if (enforcementEnabled && !window.confirm("تفعيل إلزام الحضور سيُنهي جلسات اليوزرات المعيّن لهم جداول عمل، وبعدها سيطلب منهم تسجيل الحضور حسب فتراتهم. هل تريد المتابعة؟")) return;
+    setBusy("settings");
+    try {
+      const result = await attendanceFetch<{ ok: true; enforcementEnabled: boolean; forcedLogoutUsers?: number }>("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "save_settings", enforcementEnabled }),
+      });
+      setMessage(result.enforcementEnabled
+        ? `تم تفعيل إلزام الحضور${result.forcedLogoutUsers ? ` وإنهاء جلسات ${result.forcedLogoutUsers} يوزر لبدء دورة حضور جديدة` : ""}`
+        : "تم تفعيل الوضع الآمن — الدخول متاح للجميع بدون إلزام حضور أو خروج تلقائي");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ إعداد تطبيق الحضور");
+    } finally {
+      setBusy("");
+    }
   }
 
   async function saveLocation(event: React.FormEvent) {
@@ -361,6 +382,26 @@ export function AttendanceSettingsPanel() {
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
       {message ? <div className="attendance-alert success"><FloppyDisk size={19} /><span>{message}</span></div> : null}
+
+      <section className="attendance-settings-card panel attendance-enforcement-card">
+        <header><div><WarningCircle size={22} weight="duotone" /><span><h2>تطبيق الحضور على تسجيل الدخول</h2><p>ابدأ بالوضع الآمن أثناء تجهيز جداول اليوزرات، ثم فعّل الإلزام بعد التأكد من الجداول والفترات.</p></span></div></header>
+        <div className={`attendance-enforcement-control ${data?.settings?.enforcementEnabled ? "enabled" : "safe"}`}>
+          <div>
+            <strong>{data?.settings?.enforcementEnabled ? "الإلزام مفعل" : "الوضع الآمن مفعل"}</strong>
+            <span>{data?.settings?.enforcementEnabled
+              ? "اليوزر المعيّن له جدول يجب أن يسجل الحضور داخل فترته، والانصراف والخروج التلقائي يعملان عند نهاية الفترة."
+              : "كل اليوزرات يستطيعون تسجيل الدخول حتى لو لم تكتمل الجداول. لا يتم منع الدخول أو إنهاء الجلسات تلقائيًا بسبب الحضور."}</span>
+          </div>
+          <button
+            className={data?.settings?.enforcementEnabled ? "secondary-button danger" : "attendance-save-button"}
+            type="button"
+            disabled={busy === "settings"}
+            onClick={() => void saveEnforcement(!Boolean(data?.settings?.enforcementEnabled))}
+          >
+            {busy === "settings" ? "جاري الحفظ..." : data?.settings?.enforcementEnabled ? "إيقاف الإلزام" : "تفعيل الإلزام"}
+          </button>
+        </div>
+      </section>
 
       <section className="attendance-settings-card panel">
         <header><div><MapPin size={22} weight="duotone" /><span><h2>أماكن الحضور المطلوبة</h2><p>حدد لوكيشن الفرع ونطاق السماح بالمتر. لو لم تختَر مكانًا للموظف لن يتم طلب اللوكيشن منه.</p></span></div></header>

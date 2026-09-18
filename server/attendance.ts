@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
-import { AttendanceError, ATTENDANCE_TIME_ZONE, formatMinutes } from "./_attendance.js";
+import { AttendanceError, ATTENDANCE_TIME_ZONE, formatMinutes, isAttendanceEnforcementEnabled } from "./_attendance.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -117,6 +117,9 @@ function currentRiyadhDate() {
 
 async function adminBootstrap() {
   const sql = getSql();
+  const [settings] = await sql<{ enforcement_enabled: boolean }[]>`
+    select enforcement_enabled from core.attendance_settings where id=1 limit 1
+  `;
   const [locations, schedules, periods, users, branches] = await Promise.all([
     sql<any[]>`
       select id::text,branch_id::text,name,latitude::float8,longitude::float8,radius_m,is_active
@@ -194,11 +197,41 @@ async function adminBootstrap() {
 
   return {
     ok: true,
+    settings: { enforcementEnabled: Boolean(settings?.enforcement_enabled) },
     locations,
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
     users,
     branches,
   };
+}
+
+async function saveSettings(body: Record<string, any>, adminId: string) {
+  const sql = getSql();
+  const enforcementEnabled = body.enforcementEnabled === true;
+  const [current] = await sql<{ enforcement_enabled: boolean }[]>`
+    select enforcement_enabled from core.attendance_settings where id=1 limit 1
+  `;
+  await sql`
+    insert into core.attendance_settings(id,enforcement_enabled,updated_by,updated_at)
+    values(1,${enforcementEnabled},${adminId}::uuid,now())
+    on conflict(id) do update
+    set enforcement_enabled=excluded.enforcement_enabled,updated_by=excluded.updated_by,updated_at=now()
+  `;
+
+  let forcedLogoutUsers = 0;
+  if (enforcementEnabled && !Boolean(current?.enforcement_enabled)) {
+    const expired = await sql<{ user_id: string }[]>`
+      delete from core.sessions s
+      using core.attendance_user_schedules a
+      where s.user_id=a.user_id
+        and a.effective_from <= (now() at time zone ${ATTENDANCE_TIME_ZONE})::date
+        and (a.effective_to is null or a.effective_to >= (now() at time zone ${ATTENDANCE_TIME_ZONE})::date)
+      returning s.user_id::text
+    `;
+    forcedLogoutUsers = new Set(expired.map((row) => row.user_id)).size;
+  }
+
+  return { ok: true, enforcementEnabled, forcedLogoutUsers };
 }
 
 async function saveLocation(body: Record<string, any>, adminId: string) {
@@ -328,6 +361,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
   const locationId = validUuid(clean(body.locationId)) ? clean(body.locationId) : null;
   const requestedBranchId = validUuid(clean(body.branchId)) ? clean(body.branchId) : null;
   const weeklyOffDay = parseWeeklyOffDay(body.weeklyOffDay);
+  const enforcementEnabled = await isAttendanceEnforcementEnabled();
   if (!userIds.length) throw new AttendanceError("USERS_REQUIRED", "اختر موظفًا واحدًا على الأقل");
 
   if (scheduleId) {
@@ -377,7 +411,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
             where id=${current.id}::uuid
           `;
         }
-        await tx`delete from core.sessions where user_id=${userId}::uuid`;
+        if (enforcementEnabled) await tx`delete from core.sessions where user_id=${userId}::uuid`;
         continue;
       }
 
@@ -432,7 +466,7 @@ async function assignUsers(body: Record<string, any>, adminId: string) {
           values(${userId}::uuid,${scheduleId}::uuid,${locationId}::uuid,${effectiveBranchId}::uuid,${periodIds}::uuid[],${weeklyOffDay},(now() at time zone ${ATTENDANCE_TIME_ZONE})::date,${adminId}::uuid)
         `;
       }
-      await tx`delete from core.sessions where user_id=${userId}::uuid`;
+      if (enforcementEnabled) await tx`delete from core.sessions where user_id=${userId}::uuid`;
     }
   });
   return { ok: true, count: userIds.length };
@@ -696,7 +730,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const admin = await requireAdmin(request, response);
     if (!admin) return;
     let result: any;
-    if (action === "save_location") result = await saveLocation(body, admin.id);
+    if (action === "save_settings") result = await saveSettings(body, admin.id);
+    else if (action === "save_location") result = await saveLocation(body, admin.id);
     else if (action === "delete_location") result = await deleteLocation(body, admin.id);
     else if (action === "save_schedule") result = await saveSchedule(body, admin.id);
     else if (action === "delete_schedule") result = await deleteSchedule(body, admin.id);

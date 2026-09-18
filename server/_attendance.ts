@@ -63,6 +63,18 @@ export function formatMinutes(minutes: number) {
   return `${hours} س ${rest} د`;
 }
 
+export async function isAttendanceEnforcementEnabled() {
+  await ensureAttendanceSchema();
+  const sql = getSql();
+  const [row] = await sql<{ enforcement_enabled: boolean }[]>`
+    select enforcement_enabled
+    from core.attendance_settings
+    where id=1
+    limit 1
+  `;
+  return Boolean(row?.enforcement_enabled);
+}
+
 function haversineMeters(aLat: number, aLng: number, bLat: number, bLng: number) {
   const radius = 6371000;
   const toRad = (value: number) => value * Math.PI / 180;
@@ -222,6 +234,9 @@ export async function requireAttendanceForLogin(
   userId: string,
   options: { confirmCheckIn?: boolean; coordinates?: AttendanceCoordinates | null } = {},
 ) {
+  if (!(await isAttendanceEnforcementEnabled())) {
+    return { enforced: false, checkedIn: false, state: null };
+  }
   const state = await getLoginAttendanceState(userId);
   if (!state.assigned) return { enforced: false, checkedIn: false, state };
   if (!state.activePeriod && state.isDayOff) {
@@ -354,6 +369,7 @@ export async function registerAttendanceCheckIn(
 
 export async function isAttendanceSessionAllowed(userId: string) {
   await ensureAttendanceSchema();
+  if (!(await isAttendanceEnforcementEnabled())) return true;
   const sql = getSql();
   const [row] = await sql<{ allowed: boolean }[]>`
     with clock as (
@@ -448,6 +464,9 @@ export async function checkoutCurrentAttendance(userId: string) {
 
 export async function runAttendanceTick() {
   await ensureAttendanceSchema();
+  if (!(await isAttendanceEnforcementEnabled())) {
+    return { ok: true, enforcementEnabled: false, closedRecords: 0, forcedLogoutUsers: 0 };
+  }
   const sql = getSql();
   const closed = await sql<{ user_id: string }[]>`
     update core.attendance_records
@@ -470,6 +489,7 @@ export async function runAttendanceTick() {
 
   return {
     ok: true,
+    enforcementEnabled: true,
     closedRecords: closed.length,
     forcedLogoutUsers: closedUserIds.length,
   };

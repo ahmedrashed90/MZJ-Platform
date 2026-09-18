@@ -7985,6 +7985,33 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .attendance-settings-card > header span {
   display: grid;
 }
+.attendance-enforcement-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border-top: 1px solid #f3e9e4;
+}
+.attendance-enforcement-control > div {
+  display: grid;
+  gap: 5px;
+}
+.attendance-enforcement-control strong {
+  color: #4d3028;
+  font-size: 13px;
+}
+.attendance-enforcement-control span {
+  color: #80685f;
+  font-size: 10px;
+  line-height: 1.7;
+}
+.attendance-enforcement-control.safe {
+  background: #f7fbf7;
+}
+.attendance-enforcement-control.enabled {
+  background: #fff8f4;
+}
 .attendance-settings-two-columns {
   display: grid;
   grid-template-columns: minmax(320px,.75fr) minmax(0,1.25fr);
