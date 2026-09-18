@@ -50,23 +50,8 @@ alter table core.users add column if not exists permission_version bigint not nu
 alter table core.users add column if not exists disabled_at timestamptz;
 alter table core.users add column if not exists disabled_by uuid references core.users(id);
 alter table core.users add column if not exists disabled_reason text;
-alter table core.users add column if not exists mersal_user_id text;
-create unique index if not exists core_users_mersal_user_id_unique
-  on core.users(lower(trim(mersal_user_id)))
-  where nullif(trim(mersal_user_id),'') is not null;
 alter table core.sessions add column if not exists permission_version bigint not null default 1;
 update core.sessions s set permission_version=u.permission_version from core.users u where u.id=s.user_id;
-
-create table if not exists core.mersal_users (
-  mersal_user_id text primary key,
-  full_name text not null,
-  email text,
-  role_name text,
-  status text,
-  is_active boolean not null default true,
-  synced_at timestamptz not null default now()
-);
-create index if not exists core_mersal_users_email_idx on core.mersal_users(lower(email));
 
 create table if not exists core.user_systems (
   user_id uuid not null references core.users(id) on delete cascade,
@@ -639,6 +624,28 @@ on conflict(user_id,system_code) do update set is_enabled=true,data_scope='all',
 `;
 
 
+const MERSAL_USER_LINK_SQL = String.raw`
+begin;
+
+alter table core.users add column if not exists mersal_user_id text;
+create unique index if not exists core_users_mersal_user_id_unique
+  on core.users(lower(trim(mersal_user_id)))
+  where nullif(trim(mersal_user_id),'') is not null;
+
+create table if not exists core.mersal_users (
+  mersal_user_id text primary key,
+  full_name text not null,
+  email text,
+  role_name text,
+  status text,
+  is_active boolean not null default true,
+  synced_at timestamptz not null default now()
+);
+create index if not exists core_mersal_users_email_idx on core.mersal_users(lower(email));
+
+commit;
+`;
+
 const ACCESS_CONTROL_SCHEMA_VERSION = 1192;
 let accessControlSchemaPromise: Promise<void> | null = null;
 
@@ -659,6 +666,38 @@ async function accessControlSchemaReady() {
     select version::int from core.access_control_schema_state where id=1
   `;
   return Number(state?.version || 0) >= ACCESS_CONTROL_SCHEMA_VERSION;
+}
+
+
+async function mersalUserLinkSchemaReady() {
+  const sql = getSql();
+  const [state] = await sql<{ ready: boolean }[]>`
+    select
+      exists(
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='users' and column_name='mersal_user_id'
+      )
+      and exists(
+        select 1 from information_schema.tables
+        where table_schema='core' and table_name='mersal_users'
+      )
+      as ready
+  `;
+  return Boolean(state?.ready);
+}
+
+async function ensureMersalUserLinkSchema() {
+  if (await mersalUserLinkSchemaReady()) return;
+  await withDatabaseAdvisoryLock(
+    'mzj:access-control-mersal-user-link:v1',
+    async () => {
+      if (await mersalUserLinkSchemaReady()) return;
+      await runSqlScript(MERSAL_USER_LINK_SQL);
+      if (!(await mersalUserLinkSchemaReady())) {
+        throw new Error('ACCESS_CONTROL_MERSAL_USER_LINK_SCHEMA_NOT_READY');
+      }
+    },
+  );
 }
 
 
@@ -773,6 +812,7 @@ export function ensureAccessControlSchema() {
           },
         );
       }
+      await ensureMersalUserLinkSchema();
       await ensureRequiredPagePermissionCatalog();
     })().catch((error) => {
       accessControlSchemaPromise = null;

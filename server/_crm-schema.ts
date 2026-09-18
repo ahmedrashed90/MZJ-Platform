@@ -604,7 +604,6 @@ alter table crm.integration_endpoints add column if not exists template_send_url
 alter table crm.integration_endpoints add column if not exists media_send_url text;
 alter table crm.integration_endpoints add column if not exists templates_sync_url text;
 alter table crm.integration_endpoints add column if not exists inbound_webhook_url text;
-alter table crm.integration_endpoints add column if not exists mersal_token text;
 update crm.integration_endpoints set text_send_url=coalesce(text_send_url,send_url),inbound_webhook_url=coalesce(inbound_webhook_url,webhook_url)
 where text_send_url is null or inbound_webhook_url is null;
 
@@ -1725,6 +1724,19 @@ on conflict(version) do nothing;
 commit;
 `;
 
+const CRM_MERSAL_USER_LINK_20260918_SQL = String.raw`
+begin;
+
+alter table crm.integration_endpoints
+  add column if not exists mersal_token text;
+
+insert into core.schema_migrations(version)
+values('crm-mersal-user-link-20260918')
+on conflict(version) do nothing;
+
+commit;
+`;
+
 export async function ensureCrmSchema() {
   if (!schemaPromise) {
     schemaPromise = (async () => {
@@ -1739,6 +1751,10 @@ export async function ensureCrmSchema() {
         select version from core.schema_migrations where version = 'crm-v1.3'
       `;
       if (!baseMigration) await runSqlScript(CRM_SCHEMA_SQL);
+      const [mersalUserLinkMigration] = await sql<{ version: string }[]>`
+        select version from core.schema_migrations where version = 'crm-mersal-user-link-20260918'
+      `;
+      if (!mersalUserLinkMigration) await runSqlScript(CRM_MERSAL_USER_LINK_20260918_SQL);
       const [settingsMigration] = await sql<{ version: string }[]>`
         select version from core.schema_migrations where version = 'platform-settings-v1.5'
       `;
