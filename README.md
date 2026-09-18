@@ -456,3 +456,6 @@ Before deploying, read:
 
 ## Global Attendance CLEAN v80
 تم تثبيت حفظ GPS ووقت الحضور/الانصراف في سجل الحضور والتقرير، مع استرجاع اللوكيشن للسجلات المفتوحة القديمة وتحسين تصميم التقرير من المصدر.
+
+## Global Attendance CLEAN v81
+راجع `DELIVERY-GLOBAL-ATTENDANCE-CLEAN-V81.md` لتفاصيل إصلاح اللوكيشن والجدول العادي وفلتر الموظفين المتعدد.

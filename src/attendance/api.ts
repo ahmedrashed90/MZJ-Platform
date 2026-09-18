@@ -31,13 +31,9 @@ export function formatAttendanceTime(value: string | null | undefined) {
 }
 
 export function formatAttendanceDate(value: string) {
-  const date = new Date(`${value}T12:00:00Z`);
-  return new Intl.DateTimeFormat("ar-SA-u-ca-gregory-nu-latn", {
-    timeZone: "Asia/Riyadh",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return String(value || "—");
+  return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
 export function formatAttendanceDay(value: string) {

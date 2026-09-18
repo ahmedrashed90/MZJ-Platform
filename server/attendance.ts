@@ -518,33 +518,68 @@ async function reportData(request: VercelRequest) {
   else if (!from && to) from = to;
   if (from > to) [from, to] = [to, from];
   const days = dateRange(from, to);
-  const employeeId = validUuid(clean(request.query.employeeId)) ? clean(request.query.employeeId) : "";
+  const rawEmployeeValues = Array.isArray(request.query.employeeIds)
+    ? request.query.employeeIds
+    : [request.query.employeeIds];
+  const employeeIds = Array.from(new Set(
+    rawEmployeeValues
+      .flatMap((value) => String(value ?? "").split(","))
+      .map(clean)
+      .filter(validUuid),
+  ));
+  const legacyEmployeeId = validUuid(clean(request.query.employeeId)) ? clean(request.query.employeeId) : "";
+  if (!employeeIds.length && legacyEmployeeId) employeeIds.push(legacyEmployeeId);
 
-  const users = await sql<any[]>`
-    select
-      u.id::text,u.full_name,u.employee_no,
-      coalesce(
-        (
-          select b.name
-          from core.user_system_branches usb
-          join core.branches b on b.id=usb.branch_id and b.is_active=true
-          where usb.user_id=u.id and usb.system_code='crm'
-          order by usb.is_primary desc,b.sort_order,b.name limit 1
-        ),
-        (
-          select b.name
-          from core.user_branches ub
-          join core.branches b on b.id=ub.branch_id and b.is_active=true
-          where ub.user_id=u.id
-          order by ub.is_primary desc,b.sort_order,b.name limit 1
-        ),
-        '—'
-      ) as branch_name
-    from core.users u
-    where u.is_active=true
-      and (${employeeId}='' or u.id=${employeeId || null}::uuid)
-    order by u.full_name
-  `;
+  const users = employeeIds.length
+    ? await sql<any[]>`
+        select
+          u.id::text,u.full_name,u.employee_no,
+          coalesce(
+            (
+              select b.name
+              from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+              where usb.user_id=u.id and usb.system_code='crm'
+              order by usb.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            (
+              select b.name
+              from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=u.id
+              order by ub.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            '—'
+          ) as branch_name
+        from core.users u
+        where u.is_active=true
+          and u.id::text in ${sql(employeeIds)}
+        order by u.full_name
+      `
+    : await sql<any[]>`
+        select
+          u.id::text,u.full_name,u.employee_no,
+          coalesce(
+            (
+              select b.name
+              from core.user_system_branches usb
+              join core.branches b on b.id=usb.branch_id and b.is_active=true
+              where usb.user_id=u.id and usb.system_code='crm'
+              order by usb.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            (
+              select b.name
+              from core.user_branches ub
+              join core.branches b on b.id=ub.branch_id and b.is_active=true
+              where ub.user_id=u.id
+              order by ub.is_primary desc,b.sort_order,b.name limit 1
+            ),
+            '—'
+          ) as branch_name
+        from core.users u
+        where u.is_active=true
+        order by u.full_name
+      `;
   const userIds = users.map((user) => String(user.id));
   if (!userIds.length) return { ok: true, from, to, rows: [], periodHeaders: [] };
 

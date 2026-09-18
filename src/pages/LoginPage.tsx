@@ -30,6 +30,10 @@ export function LoginPage() {
             setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}جاري تحديد موقع الحضور...`);
           }
           const location = requirement.locationRequired ? await getBrowserAttendanceLocation() : null;
+          if (location) {
+            const accuracyText = location.accuracy !== null ? ` ±${Math.round(location.accuracy)}م` : "";
+            setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}تم تحديد اللوكيشن${accuracyText} • جاري حفظ الحضور...`);
+          }
           await login(identifier, password, { attendanceCheckIn: true, location });
           return;
         } catch (attendanceError) {
