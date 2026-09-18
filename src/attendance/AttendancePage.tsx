@@ -258,22 +258,41 @@ export function AttendancePage() {
           <span>مكان الحضور هو الإحداثيات المحفوظة فعليًا وقت تسجيل الحضور. اضغط الإحداثيات لفتحها على الخريطة.</span>
         </div>
 
-        <div className="attendance-report-table-wrap">
-          <table id="attendance-report-table" className="attendance-report-table attendance-report-table-plain">
+        <div className="attendance-report-table-wrap attendance-report-table-fit">
+          <table id="attendance-report-table" className={`attendance-report-table attendance-report-table-compact periods-${Math.min(periodHeaders.length, 4)}`}>
+            <colgroup>
+              <col className="attendance-col-index" />
+              <col className="attendance-col-date" />
+              <col className="attendance-col-day" />
+              <col className="attendance-col-branch" />
+              <col className="attendance-col-name" />
+              <col className="attendance-col-location" />
+              <col className="attendance-col-required" />
+              <col className="attendance-col-location-result" />
+              {periodHeaders.flatMap((header) => [
+                <col key={`${header}-col-in`} className="attendance-col-period-time" />,
+                <col key={`${header}-col-out`} className="attendance-col-period-time" />,
+                <col key={`${header}-col-result`} className="attendance-col-period-result" />,
+              ])}
+            </colgroup>
             <thead>
-              <tr>
-                <th>م</th>
-                <th>التاريخ</th>
-                <th>اليوم</th>
-                <th>الفرع</th>
-                <th>الاسم</th>
+              <tr className="attendance-main-head-row">
+                <th rowSpan={2}>م</th>
+                <th rowSpan={2}>التاريخ</th>
+                <th rowSpan={2}>اليوم</th>
+                <th rowSpan={2}>الفرع</th>
+                <th rowSpan={2}>الاسم</th>
+                <th colSpan={3}>اللوكيشن</th>
+                {periodHeaders.map((header) => <th key={`${header}-group`} colSpan={3}>{header}</th>)}
+              </tr>
+              <tr className="attendance-sub-head-row">
                 <th>مكان الحضور</th>
                 <th>المكان المطلوب</th>
                 <th>النتيجة</th>
                 {periodHeaders.flatMap((header) => [
-                  <th key={`${header}-in`}>{header} - الحضور</th>,
-                  <th key={`${header}-out`}>{header} - الانصراف</th>,
-                  <th key={`${header}-result`}>{header} - النتيجة</th>,
+                  <th key={`${header}-in`}>الحضور</th>,
+                  <th key={`${header}-out`}>الانصراف</th>,
+                  <th key={`${header}-result`}>النتيجة</th>,
                 ])}
               </tr>
             </thead>
@@ -293,10 +312,11 @@ export function AttendancePage() {
                     <td className="attendance-location-cell">
                       {mapHref ? (
                         <>
-                          <a href={mapHref} target="_blank" rel="noreferrer" className="attendance-plain-location-link">
-                            {Number(row.location.latitude).toFixed(6)}, {Number(row.location.longitude).toFixed(6)}
+                          <a href={mapHref} target="_blank" rel="noreferrer" className="attendance-plain-location-link" title={`${Number(row.location.latitude).toFixed(6)}, ${Number(row.location.longitude).toFixed(6)}`}>
+                            <bdi dir="ltr">{Number(row.location.latitude).toFixed(5)}</bdi>
+                            <bdi dir="ltr">{Number(row.location.longitude).toFixed(5)}</bdi>
                           </a>
-                          {row.location.distanceM !== null ? <small>المسافة {Math.round(row.location.distanceM)} م</small> : null}
+                          {row.location.distanceM !== null ? <small>{Math.round(row.location.distanceM)} م</small> : null}
                         </>
                       ) : row.location.missingRequiredCapture ? (
                         <span className="attendance-location-missing-text">لم يتم حفظ اللوكيشن</span>

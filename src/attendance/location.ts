@@ -13,6 +13,9 @@ function positionFromBrowser(position: GeolocationPosition): BrowserAttendanceLo
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
     throw new Error("المتصفح لم يرجع إحداثيات صالحة للموقع");
   }
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+    throw new Error("المتصفح رجع إحداثيات غير صالحة للموقع");
+  }
   return {
     latitude,
     longitude,
@@ -35,13 +38,13 @@ function geolocationErrorMessage(error: GeolocationPositionError | null, permiss
     return "صلاحية الموقع مرفوضة لهذا الموقع. اسمح للمنصة بالوصول إلى اللوكيشن ثم أعد المحاولة.";
   }
   if (error?.code === 2) {
-    return "خدمة الموقع مفعلة لكن الجهاز لم يرجع إحداثيات. تأكد من تشغيل Location Services ثم أعد المحاولة.";
+    return "المتصفح لديه إذن الموقع لكن الجهاز لم يرجع إحداثيات. تأكد من تشغيل خدمة Location في ويندوز ثم أعد المحاولة.";
   }
   if (error?.code === 3) {
-    return "انتهت مهلة تحديد الموقع بدون إحداثيات. أعد المحاولة بعد التأكد من تشغيل خدمة الموقع.";
+    return "انتهت مهلة تحديد الموقع بدون إحداثيات. أعد المحاولة بعد التأكد من تشغيل خدمة Location.";
   }
   if (permission === "granted") {
-    return "المتصفح لديه إذن الموقع لكن لم يستطع الحصول على الإحداثيات. أعد المحاولة بعد تحديث الصفحة.";
+    return "إذن اللوكيشن مفتوح لكن الجهاز لم يرسل إحداثيات للمتصفح. جرّب تحديث الصفحة ثم أعد تسجيل الحضور.";
   }
   return "تعذر تحديد موقع الحضور من الجهاز. تأكد من السماح بالموقع وتشغيل خدمة Location ثم أعد المحاولة.";
 }
@@ -60,26 +63,30 @@ export async function getBrowserAttendanceLocation() {
   }
 
   const permission = await readGeolocationPermission();
-  if (permission === "denied") {
-    throw new Error(geolocationErrorMessage(null, permission));
-  }
+  if (permission === "denied") throw new Error(geolocationErrorMessage(null, permission));
 
   return new Promise<BrowserAttendanceLocation>((resolve, reject) => {
     let settled = false;
     let failedAttempts = 0;
     let lastError: GeolocationPositionError | null = null;
     let hardTimeout = 0;
+    let watchId: number | null = null;
+
+    const cleanup = () => {
+      window.clearTimeout(hardTimeout);
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    };
 
     const finishSuccess = (position: GeolocationPosition) => {
       if (settled) return;
       try {
         const normalized = positionFromBrowser(position);
         settled = true;
-        window.clearTimeout(hardTimeout);
+        cleanup();
         resolve(normalized);
       } catch (error) {
         settled = true;
-        window.clearTimeout(hardTimeout);
+        cleanup();
         reject(error);
       }
     };
@@ -88,32 +95,38 @@ export async function getBrowserAttendanceLocation() {
       if (settled) return;
       lastError = error;
       failedAttempts += 1;
-      if (error.code === 1 || failedAttempts >= 2) {
+      if (error.code === 1) {
         settled = true;
-        window.clearTimeout(hardTimeout);
+        cleanup();
         reject(new Error(geolocationErrorMessage(error, permission)));
       }
     };
 
-    // Two independent requests are intentional: on Windows/desktop Chromium the
-    // high-accuracy request can stall while the standard provider is already able
-    // to return a valid system location. The first valid position wins.
+    // Chromium on Windows can resolve from different providers at different speeds.
+    // Run standard, high-accuracy and a watch in parallel; first valid position wins.
     navigator.geolocation.getCurrentPosition(
       finishSuccess,
       finishFailure,
-      { enableHighAccuracy: false, timeout: 7000, maximumAge: 120000 },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 },
     );
 
     navigator.geolocation.getCurrentPosition(
       finishSuccess,
       finishFailure,
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+    );
+
+    watchId = navigator.geolocation.watchPosition(
+      finishSuccess,
+      finishFailure,
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 30000 },
     );
 
     hardTimeout = window.setTimeout(() => {
       if (settled) return;
       settled = true;
+      cleanup();
       reject(new Error(geolocationErrorMessage(lastError, permission)));
-    }, 12000);
+    }, 16000);
   });
 }

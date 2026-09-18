@@ -141,6 +141,21 @@ function reportClock(value: unknown) {
   }).format(date);
 }
 
+function reportDateFromTimestamp(value: unknown) {
+  if (!value) return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ATTENDANCE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  const result = `${part("year")}-${part("month")}-${part("day")}`;
+  return validDate(result) ? result : "";
+}
+
 async function adminBootstrap() {
   const sql = getSql();
   const [settings] = await sql<{ enforcement_enabled: boolean }[]>`
@@ -614,8 +629,12 @@ async function reportData(request: VercelRequest) {
         location_result
       from core.attendance_records
       where user_id::text in ${sql(userIds)}
-        and work_date between ${from}::date and ${to}::date
-      order by work_date,user_id,period_sort_order nulls last,check_in
+        and (
+          work_date between ${from}::date and ${to}::date
+          or (check_in is not null and (check_in at time zone ${ATTENDANCE_TIME_ZONE})::date between ${from}::date and ${to}::date)
+          or (check_out is not null and (check_out at time zone ${ATTENDANCE_TIME_ZONE})::date between ${from}::date and ${to}::date)
+        )
+      order by coalesce(check_in,scheduled_start_at),user_id,period_sort_order nulls last
     `,
   ]);
 
@@ -632,9 +651,23 @@ async function reportData(request: VercelRequest) {
     if (!periodMap.has(key)) periodMap.set(key, []);
     periodMap.get(key)!.push(period);
   }
+  const reportDays = new Set(days);
   const recordMap = new Map<string, any[]>();
   for (const record of records) {
-    const key = `${record.user_id}:${dateOnlyValue(record.work_date)}`;
+    const storedWorkDate = dateOnlyValue(record.work_date);
+    const checkInDate = reportDateFromTimestamp(record.check_in);
+    const checkOutDate = reportDateFromTimestamp(record.check_out);
+    // work_date is the business-day source of truth. The timestamp fallbacks keep
+    // records visible if an older deployment saved a malformed/out-of-range work_date.
+    const reportDate = reportDays.has(storedWorkDate)
+      ? storedWorkDate
+      : reportDays.has(checkInDate)
+        ? checkInDate
+        : reportDays.has(checkOutDate)
+          ? checkOutDate
+          : storedWorkDate || checkInDate || checkOutDate;
+    if (!reportDate || !reportDays.has(reportDate)) continue;
+    const key = `${record.user_id}:${reportDate}`;
     if (!recordMap.has(key)) recordMap.set(key, []);
     recordMap.get(key)!.push(record);
   }
