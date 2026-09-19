@@ -1,3 +1,13 @@
+# MZJ Platform — Device Agent + Attendance Report CLEAN v90
+
+- Windows Device Agent مدمج مع Login للمستخدمين المحددين كـ **مطلوب**، وباقي المستخدمين **مستثنى**.
+- اعتماد جهاز واحد نشط لكل مستخدم مطلوب، مع Challenge/Signature في كل Login.
+- تقرير الحضور بدون Refresh تلقائي، ومقسم إلى Block مستقل لكل يوم، ودقائق التأخير تظهر باللون الأحمر.
+- اللوكيشن يظل ملغيًا بالكامل من الحضور.
+- تفاصيل التسليم: `DELIVERY-GLOBAL-ATTENDANCE-DEVICE-AGENT-REPORT-CLEAN-V90.md`.
+
+---
+
 # MZJ Platform — Global Attendance CLEAN V78
 
 - تسجيل الدخول ينفذ **تسجيل حضور فعلي** عند وجود فترة عمل فعالة حتى أثناء وضع الإعداد الآمن، بدون تفعيل منع الدخول على باقي اليوزرات.

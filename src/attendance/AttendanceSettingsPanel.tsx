@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  CheckCircle,
   Clock,
+  Desktop,
   FloppyDisk,
   MagnifyingGlass,
   PencilSimple,
   Plus,
   Trash,
+  ShieldCheck,
+  ShieldSlash,
   UsersThree,
   WarningCircle,
+  XCircle,
 } from "@phosphor-icons/react";
 import { attendanceFetch } from "./api";
 
@@ -26,6 +31,20 @@ type ScheduleRow = {
   periods: PeriodRow[];
 };
 
+
+type DeviceRow = {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+  agentVersion: string | null;
+  status: "pending" | "approved" | "revoked";
+  approvedAt: string | null;
+  revokedAt: string | null;
+  lastVerifiedAt: string | null;
+  createdAt: string;
+};
+
 type UserRow = {
   id: string;
   employee_no: string | null;
@@ -39,6 +58,8 @@ type UserRow = {
   period_ids: string[];
   weekly_off_day: number | null;
   schedule_name: string | null;
+  device_verification_required: boolean;
+  devices: DeviceRow[];
 };
 
 type BranchRow = { id: string; code: string; name: string };
@@ -87,6 +108,7 @@ export function AttendanceSettingsPanel() {
   const [assignmentWeeklyOffDay, setAssignmentWeeklyOffDay] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
   const [userSearch, setUserSearch] = useState("");
+  const [deviceUserId, setDeviceUserId] = useState("");
 
   async function load() {
     setLoading(true);
@@ -299,6 +321,60 @@ export function AttendanceSettingsPanel() {
     }
   }
 
+  async function saveDevicePolicy(userId: string, required: boolean) {
+    resetMessages();
+    setBusy(`device-policy:${userId}`);
+    try {
+      await attendanceFetch("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "set_device_policy", userIds: [userId], required }),
+      });
+      setMessage(required ? "تم تفعيل التحقق من جهاز العمل" : "تم استثناء اليوزر من التحقق من الجهاز");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر حفظ إعداد التحقق من الجهاز");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function approveDevice(deviceRecordId: string) {
+    resetMessages();
+    setBusy(`approve-device:${deviceRecordId}`);
+    try {
+      await attendanceFetch("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "approve_device", deviceRecordId }),
+      });
+      setMessage("تم اعتماد جهاز العمل");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر اعتماد الجهاز");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function revokeDevice(deviceRecordId: string) {
+    resetMessages();
+    if (!window.confirm("إلغاء اعتماد هذا الجهاز؟")) return;
+    setBusy(`revoke-device:${deviceRecordId}`);
+    try {
+      await attendanceFetch("/api/attendance", {
+        method: "POST",
+        body: JSON.stringify({ action: "revoke_device", deviceRecordId }),
+      });
+      setMessage("تم إلغاء اعتماد الجهاز");
+      await load();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "تعذر إلغاء اعتماد الجهاز");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const deviceUser = (data?.users || []).find((user) => user.id === deviceUserId) || null;
+
   if (loading && !data) return <div className="crm-loading-panel">جاري تحميل إعدادات الحضور والانصراف...</div>;
 
   return (
@@ -366,7 +442,7 @@ export function AttendanceSettingsPanel() {
       </section>
 
       <section className="attendance-settings-card panel">
-        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>اختر اليوزرات ثم جدول العمل والفترات الفعلية والفرع ويوم الإجازة. يمكن تعديل كل يوزر منفردًا بعد الحفظ.</p></span></div></header>
+        <header><div><UsersThree size={22} weight="duotone" /><span><h2>تحديد مواعيد العمل لليوزرات</h2><p>جداول العمل والفترات والفرع ويوم الإجازة والتحقق من جهاز العمل لكل يوزر.</p></span></div></header>
         <div className="attendance-assignment-toolbar" id="attendance-assignment-editor">
           <label><span>جدول العمل</span><select value={assignmentScheduleId} onChange={(event) => changeAssignmentSchedule(event.target.value)}><option value="">اختر جدول العمل</option>{(data?.schedules || []).map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name}</option>)}</select></label>
           <label><span>الفرع</span><select value={assignmentBranchId} onChange={(event) => setAssignmentBranchId(event.target.value)}><option value="">استخدام الفرع الحالي للموظف</option>{(data?.branches || []).map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
@@ -399,22 +475,75 @@ export function AttendanceSettingsPanel() {
           <button className="secondary-button" type="button" onClick={toggleAllVisible}>تحديد / إلغاء الكل الظاهر</button>
         </div>
 
+        {deviceUser ? (
+          <div className="attendance-device-panel">
+            <div className="attendance-device-panel-head">
+              <div><Desktop size={20} weight="duotone" /><strong>{deviceUser.full_name}</strong></div>
+              <button className="secondary-button" type="button" onClick={() => setDeviceUserId("")}>إغلاق</button>
+            </div>
+            <div className="attendance-device-list">
+              {(deviceUser.devices || []).map((device) => (
+                <article key={device.id} className={`attendance-device-item ${device.status}`}>
+                  <div className="attendance-device-icon"><Desktop size={20} weight="duotone" /></div>
+                  <div className="attendance-device-info">
+                    <strong>{device.deviceName}</strong>
+                    <span dir="ltr">{device.deviceId}</span>
+                    <small>{device.lastVerifiedAt ? `آخر تحقق ${new Date(device.lastVerifiedAt).toLocaleString("ar-SA")}` : "لم يسجل دخول بعد"}</small>
+                  </div>
+                  <div className={`attendance-device-status ${device.status}`}>
+                    {device.status === "approved" ? <><CheckCircle size={16} weight="fill" /> معتمد</> : device.status === "pending" ? <><WarningCircle size={16} weight="fill" /> بانتظار الاعتماد</> : <><XCircle size={16} weight="fill" /> ملغي</>}
+                  </div>
+                  <div className="attendance-device-actions">
+                    {device.status !== "approved" ? (
+                      <button className="attendance-save-button" type="button" disabled={busy === `approve-device:${device.id}`} onClick={() => void approveDevice(device.id)}><ShieldCheck size={17} /> اعتماد</button>
+                    ) : (
+                      <button className="secondary-button danger" type="button" disabled={busy === `revoke-device:${device.id}`} onClick={() => void revokeDevice(device.id)}><ShieldSlash size={17} /> إلغاء الاعتماد</button>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {!deviceUser.devices?.length ? <div className="attendance-device-empty">لا يوجد جهاز مسجل لهذا اليوزر.</div> : null}
+            </div>
+          </div>
+        ) : null}
+
         <div className="unified-table-wrap attendance-users-table-wrap">
           <table>
-            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>يوم الإجازة</th><th>تعديل</th></tr></thead>
+            <thead><tr><th>اختيار</th><th>الموظف</th><th>الفرع</th><th>جدول العمل الحالي</th><th>الفترات الحالية</th><th>يوم الإجازة</th><th>التحقق من الجهاز</th><th>أجهزة العمل</th><th>تعديل</th></tr></thead>
             <tbody>
-              {filteredUsers.map((user) => (
-                <tr key={user.id} className={selectedUsers.includes(user.id) ? "selected" : ""}>
-                  <td><input type="checkbox" checked={selectedUsers.includes(user.id)} onChange={() => toggleUser(user.id)} aria-label={`اختيار ${user.full_name}`} /></td>
-                  <td><strong>{user.full_name}</strong><small>{user.employee_no || user.email || "—"}</small></td>
-                  <td>{user.branch_name || "—"}</td>
-                  <td>{user.schedule_name || <span className="attendance-muted">غير محدد</span>}</td>
-                  <td>{user.schedule_id ? userPeriodNames(user) : <span className="attendance-muted">غير محدد</span>}</td>
-                  <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون إجازة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
-                  <td><button className="attendance-row-edit" type="button" onClick={() => editUserAssignment(user)}><PencilSimple size={16} /> تعديل</button></td>
-                </tr>
-              ))}
-              {!filteredUsers.length ? <tr><td colSpan={7}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
+              {filteredUsers.map((user) => {
+                const approvedDevices = (user.devices || []).filter((device) => device.status === "approved");
+                const pendingDevices = (user.devices || []).filter((device) => device.status === "pending");
+                return (
+                  <tr key={user.id} className={selectedUsers.includes(user.id) ? "selected" : ""}>
+                    <td><input type="checkbox" checked={selectedUsers.includes(user.id)} onChange={() => toggleUser(user.id)} aria-label={`اختيار ${user.full_name}`} /></td>
+                    <td><strong>{user.full_name}</strong><small>{user.employee_no || user.email || "—"}</small></td>
+                    <td>{user.branch_name || "—"}</td>
+                    <td>{user.schedule_name || <span className="attendance-muted">غير محدد</span>}</td>
+                    <td>{user.schedule_id ? userPeriodNames(user) : <span className="attendance-muted">غير محدد</span>}</td>
+                    <td>{user.weekly_off_day === null || user.weekly_off_day === undefined ? <span className="attendance-muted">بدون إجازة</span> : weeklyOffDayLabel(user.weekly_off_day)}</td>
+                    <td>
+                      <select
+                        className={`attendance-device-policy-select ${user.device_verification_required ? "required" : "exempt"}`}
+                        value={user.device_verification_required ? "required" : "exempt"}
+                        disabled={busy === `device-policy:${user.id}`}
+                        onChange={(event) => void saveDevicePolicy(user.id, event.target.value === "required")}
+                      >
+                        <option value="required">مطلوب</option>
+                        <option value="exempt">مستثنى</option>
+                      </select>
+                    </td>
+                    <td>
+                      <button className="attendance-device-manage-button" type="button" onClick={() => setDeviceUserId(user.id)}>
+                        <Desktop size={16} />
+                        {approvedDevices.length ? `${approvedDevices.length} معتمد` : pendingDevices.length ? `${pendingDevices.length} بانتظار الاعتماد` : "الأجهزة"}
+                      </button>
+                    </td>
+                    <td><button className="attendance-row-edit" type="button" onClick={() => editUserAssignment(user)}><PencilSimple size={16} /> تعديل</button></td>
+                  </tr>
+                );
+              })}
+              {!filteredUsers.length ? <tr><td colSpan={9}><div className="unified-empty-row">لا يوجد يوزرات مطابقون للبحث.</div></td></tr> : null}
             </tbody>
           </table>
         </div>

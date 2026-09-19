@@ -3,6 +3,7 @@ import { requireAdmin, requireUser } from "./_auth.js";
 import { getSql } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 import { AttendanceError, ATTENDANCE_TIME_ZONE, checkInCurrentAttendance, formatMinutes, getSelfAttendanceState, isAttendanceEnforcementEnabled } from "./_attendance.js";
+import { adminDeviceSnapshot, approveUserDevice, revokeUserDevice, setUserDevicePolicy } from "./_device-agent.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -215,11 +216,16 @@ async function adminBootstrap() {
     });
   }
 
+  const deviceSnapshot = await adminDeviceSnapshot();
   return {
     ok: true,
     settings: { enforcementEnabled: Boolean(settings?.enforcement_enabled) },
     schedules: schedules.map((schedule) => ({ ...schedule, periods: periodMap.get(String(schedule.id)) || [] })),
-    users,
+    users: users.map((user) => ({
+      ...user,
+      device_verification_required: deviceSnapshot.policyMap.get(String(user.id)) === true,
+      devices: deviceSnapshot.deviceMap.get(String(user.id)) || [],
+    })),
     branches,
   };
 }
@@ -753,7 +759,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
     else if (action === "save_schedule") result = await saveSchedule(body, admin.id);
     else if (action === "delete_schedule") result = await deleteSchedule(body, admin.id);
     else if (action === "assign_users") result = await assignUsers(body, admin.id);
-    else throw new AttendanceError("UNSUPPORTED_ACTION", "الإجراء غير مدعوم", 400);
+    else if (action === "set_device_policy") {
+      const userIds = asArray(body.userIds).filter(validUuid);
+      if (!userIds.length) throw new AttendanceError("USERS_REQUIRED", "اختر موظفًا واحدًا على الأقل");
+      result = await setUserDevicePolicy(userIds, body.required === true, admin.id);
+    } else if (action === "approve_device") {
+      const deviceRecordId = clean(body.deviceRecordId);
+      if (!validUuid(deviceRecordId)) throw new AttendanceError("DEVICE_NOT_FOUND", "الجهاز غير موجود", 404);
+      result = await approveUserDevice(deviceRecordId, admin.id);
+    } else if (action === "revoke_device") {
+      const deviceRecordId = clean(body.deviceRecordId);
+      if (!validUuid(deviceRecordId)) throw new AttendanceError("DEVICE_NOT_FOUND", "الجهاز غير موجود", 404);
+      result = await revokeUserDevice(deviceRecordId, admin.id);
+    } else throw new AttendanceError("UNSUPPORTED_ACTION", "الإجراء غير مدعوم", 400);
     return response.status(200).json(result);
   } catch (error: any) {
     console.error("Attendance API failed", error);

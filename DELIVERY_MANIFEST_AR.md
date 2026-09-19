@@ -1,3 +1,11 @@
+## CLEAN v90 — Device Agent + تقرير الحضور
+- المصدر: CLEAN v89 بدون Location.
+- إضافة Windows Device Agent مع Required/Exempt لكل مستخدم واعتماد/إلغاء جهاز العمل.
+- Challenge/Signature مشفر عند كل Login للمستخدم المطلوب.
+- جهاز Approved واحد نشط لكل مستخدم؛ اعتماد البديل يلغي القديم.
+- إعادة تصميم التقرير: Block لكل يوم، بدون Refresh كل 10 ثوانٍ، ودقائق التأخير باللون الأحمر.
+- الملف: `DELIVERY-GLOBAL-ATTENDANCE-DEVICE-AGENT-REPORT-CLEAN-V90.md`.
+
 # بيان التسليم — MZJ Platform v1.19.15
 
 ## قسم الجملة في تعديل عميل CRM وإصلاح TypeScript للنشر

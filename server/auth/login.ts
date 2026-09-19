@@ -4,22 +4,94 @@ import { logSecurityEvent } from "../_access-control.js";
 import { getSql } from "../_db.js";
 import { ensureAccessControlSchema } from "../_access-control-schema.js";
 import { AttendanceError, requireAttendanceForLogin } from "../_attendance.js";
+import {
+  consumeApprovedDeviceChallenge,
+  createDeviceLoginChallenge,
+  isDeviceVerificationRequired,
+} from "../_device-agent.js";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function bodyObject(request: VercelRequest) {
+  if (request.body && typeof request.body === "object") return request.body as Record<string, any>;
+  if (typeof request.body === "string") {
+    try { return JSON.parse(request.body || "{}"); } catch { return {}; }
+  }
+  return {};
+}
+
+async function finishAttendanceLogin(
+  request: VercelRequest,
+  response: VercelResponse,
+  userId: string,
+  confirmCheckIn: boolean,
+  verifiedDeviceId?: string | null,
+) {
+  try {
+    await requireAttendanceForLogin(userId, { confirmCheckIn });
+  } catch (attendanceError) {
+    if (attendanceError instanceof AttendanceError) {
+      return response.status(attendanceError.status).json({
+        ok: false,
+        code: attendanceError.code,
+        error: attendanceError.message,
+        ...(attendanceError.details || {}),
+      });
+    }
+    throw attendanceError;
+  }
+
+  const sql = getSql();
+  await sql`update core.users set last_login_at = now(), updated_at = now() where id = ${userId}::uuid`;
+  await createSession(request, response, userId, { verifiedDeviceId });
+  const profile = await loadUserProfile(userId);
+  await logSecurityEvent({
+    request,
+    user: profile,
+    systemCode: "core",
+    pageCode: "login",
+    action: "login",
+    result: "success",
+    reason: verifiedDeviceId ? "DEVICE_VERIFIED" : undefined,
+    ipAddress: requestIp(request),
+  });
+  return response.status(200).json({ ok: true, user: profile });
+}
+
 export default async function handler(request: VercelRequest, response: VercelResponse) {
   if (request.method !== "POST") return response.status(405).json({ ok: false, error: "Method not allowed" });
 
-  const body = typeof request.body === "string" ? JSON.parse(request.body || "{}") : request.body || {};
-  const identifier = clean(body.identifier);
-  const password = clean(body.password);
-
-  if (!identifier || !password) return response.status(400).json({ ok: false, error: "أدخل بيانات تسجيل الدخول" });
+  const body = bodyObject(request);
+  const stage = clean(body.stage);
 
   try {
     await ensureAccessControlSchema();
+
+    if (stage === "complete_device") {
+      const challengeId = clean(body.challengeId);
+      const pollToken = clean(body.pollToken);
+      if (!challengeId || !pollToken) {
+        return response.status(400).json({ ok: false, code: "DEVICE_CHALLENGE_REQUIRED", error: "بيانات التحقق من الجهاز غير مكتملة" });
+      }
+      const verified = await consumeApprovedDeviceChallenge(challengeId, pollToken);
+      if (!verified) {
+        return response.status(409).json({ ok: false, code: "DEVICE_NOT_VERIFIED", error: "لم يتم اعتماد جهاز العمل أو انتهت مهلة التحقق" });
+      }
+      return finishAttendanceLogin(
+        request,
+        response,
+        verified.user_id,
+        Boolean(verified.attendance_check_in),
+        verified.device_id,
+      );
+    }
+
+    const identifier = clean(body.identifier);
+    const password = clean(body.password);
+    if (!identifier || !password) return response.status(400).json({ ok: false, error: "أدخل بيانات تسجيل الدخول" });
+
     const sql = getSql();
     const [user] = await sql<{
       id: string;
@@ -70,31 +142,36 @@ export default async function handler(request: VercelRequest, response: VercelRe
       return response.status(401).json({ ok: false, error: "بيانات تسجيل الدخول غير صحيحة" });
     }
 
-    try {
-      await requireAttendanceForLogin(user.id, {
-        confirmCheckIn: body.attendanceCheckIn === true,
+    if (await isDeviceVerificationRequired(user.id)) {
+      const challenge = await createDeviceLoginChallenge({
+        userId: user.id,
+        attendanceCheckIn: body.attendanceCheckIn === true,
+        request,
       });
-    } catch (attendanceError) {
-      if (attendanceError instanceof AttendanceError) {
-        return response.status(attendanceError.status).json({
-          ok: false,
-          code: attendanceError.code,
-          error: attendanceError.message,
-          ...(attendanceError.details || {}),
-        });
-      }
-      throw attendanceError;
+      await logSecurityEvent({
+        request,
+        userEmail: user.email || identifier,
+        systemCode: "core",
+        pageCode: "login",
+        action: "device_verification_required",
+        result: "success",
+        reason: "DEVICE_AGENT_REQUIRED",
+        ipAddress: requestIp(request),
+      });
+      return response.status(428).json({
+        ok: false,
+        code: "DEVICE_AGENT_REQUIRED",
+        error: "جارٍ التحقق من جهاز العمل",
+        ...challenge,
+      });
     }
 
-    await sql`update core.users set last_login_at = now(), updated_at = now() where id = ${user.id}::uuid`;
-    await createSession(request, response, user.id);
-    const profile = await loadUserProfile(user.id);
-    await logSecurityEvent({ request, user: profile, systemCode: "core", pageCode: "login", action: "login", result: "success", ipAddress: requestIp(request) });
-    return response.status(200).json({ ok: true, user: profile });
+    return finishAttendanceLogin(request, response, user.id, body.attendanceCheckIn === true, null);
   } catch (error: any) {
     console.error("Login failed", error);
+    const identifier = clean(body.identifier);
     await logSecurityEvent({ request, userEmail: identifier, systemCode: "core", pageCode: "login", action: "login_failed", result: "failure", reason: "LOGIN_ERROR", ipAddress: requestIp(request) });
-    const schemaError = error?.message === "ACCESS_CONTROL_SCHEMA_NOT_READY" || error?.code === "42501" || error?.code === "42P01" || error?.code === "42703";
+    const schemaError = error?.message === "ACCESS_CONTROL_SCHEMA_NOT_READY" || error?.message === "DEVICE_AGENT_SCHEMA_NOT_READY" || error?.code === "42501" || error?.code === "42P01" || error?.code === "42703";
     return response.status(500).json({
       ok: false,
       error: schemaError ? "تعذر تجهيز قاعدة بيانات الصلاحيات. تحقق من صلاحيات مستخدم PostgreSQL ثم أعد المحاولة" : "تعذر تسجيل الدخول",

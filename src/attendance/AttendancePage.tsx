@@ -7,7 +7,6 @@ import {
   attendanceFetch,
   formatAttendanceDate,
   formatAttendanceDay,
-  formatAttendanceMinutes,
   formatAttendanceTime,
 } from "./api";
 
@@ -52,23 +51,12 @@ type ReportPayload = {
   periodHeaders: string[];
 };
 
-function resultTone(result: string | null | undefined) {
-  const value = String(result || "");
-  if (value.includes("إجازة")) return "leave";
-  if (value.includes("غائب") || value.includes("لم يسجل")) return "missing";
-  if (value.includes("متأخر")) return "late";
-  if (value.includes("حاضر")) return "present";
-  return "neutral";
-}
-
-function resultLabel(result: string | null | undefined) {
+function missingResultLabel(result: string | null | undefined) {
   const value = String(result || "");
   if (value.includes("إجازة")) return "إجازة";
   if (value.includes("غائب")) return "غائب";
   if (value.includes("لم يسجل")) return "لم يسجل";
-  if (value.includes("متأخر")) return "متأخر";
-  if (value.includes("حاضر")) return "حاضر";
-  return value || "—";
+  return "—";
 }
 
 export function AttendancePage() {
@@ -83,13 +71,21 @@ export function AttendancePage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const selectedEmployeeKey = employeeIds.join(",");
   const filteredEmployees = useMemo(() => {
     const search = employeeSearch.trim().toLocaleLowerCase("ar-SA");
     if (!search) return adminUsers;
     return adminUsers.filter((employee) => [employee.full_name, employee.employee_no, employee.branch_name]
       .some((value) => String(value || "").toLocaleLowerCase("ar-SA").includes(search)));
   }, [adminUsers, employeeSearch]);
+
+  const groupedRows = useMemo(() => {
+    const groups = new Map<string, ReportRow[]>();
+    for (const row of report?.rows || []) {
+      if (!groups.has(row.date)) groups.set(row.date, []);
+      groups.get(row.date)!.push(row);
+    }
+    return Array.from(groups.entries()).map(([date, rows]) => ({ date, rows }));
+  }, [report?.rows]);
 
   async function loadAdminUsers() {
     if (!isAdmin) return;
@@ -124,18 +120,10 @@ export function AttendancePage() {
     void loadReport("", "", []);
   }, [isAdmin]);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    const interval = window.setInterval(() => {
-      void loadReport(from, to, employeeIds);
-    }, 15000);
-    return () => window.clearInterval(interval);
-  }, [isAdmin, from, to, selectedEmployeeKey]);
-
   function exportExcel() {
-    const table = document.getElementById("attendance-report-table") as HTMLTableElement | null;
-    if (!table) return;
-    const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"></head><body>${table.outerHTML}</body></html>`;
+    const content = document.getElementById("attendance-report-export");
+    if (!content) return;
+    const html = `<!doctype html><html dir="rtl"><head><meta charset="utf-8"></head><body>${content.outerHTML}</body></html>`;
     const blob = new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -155,7 +143,6 @@ export function AttendancePage() {
   if (!isAdmin) return <Navigate to="/" replace />;
 
   const periodHeaders = report?.periodHeaders || [];
-  const totalColumns = 5 + periodHeaders.length * 3;
   const employeeSummary = employeeIds.length
     ? employeeIds.length === 1
       ? adminUsers.find((employee) => employee.id === employeeIds[0])?.full_name || "موظف واحد"
@@ -173,14 +160,11 @@ export function AttendancePage() {
 
       {error ? <div className="attendance-alert error"><WarningCircle size={19} /><span>{error}</span></div> : null}
 
-      <section className="panel attendance-report-card">
+      <section className="panel attendance-report-card attendance-report-card-v90">
         <header className="attendance-report-head attendance-report-head-centered">
           <div>
             <UsersThree size={21} weight="duotone" />
-            <span>
-              <h2>تقارير الحضور والانصراف</h2>
-              <p>أسماء الفترات تظهر تلقائيًا من إعدادات الحضور والانصراف.</p>
-            </span>
+            <span><h2>تقارير الحضور والانصراف</h2></span>
           </div>
           <button className="secondary-button" type="button" onClick={exportExcel} disabled={!report?.rows?.length}>
             <Export size={18} /> تصدير Excel
@@ -230,80 +214,78 @@ export function AttendancePage() {
               </div>
             </details>
           </label>
-          <button className="attendance-view-button" type="submit" disabled={reportLoading}>
-            {reportLoading ? "جاري العرض..." : "عرض"}
-          </button>
+          <button className="attendance-view-button" type="submit" disabled={reportLoading}>عرض</button>
         </form>
 
-        <div className="attendance-report-table-wrap attendance-report-table-fit">
-          <table id="attendance-report-table" className={`attendance-report-table attendance-report-table-compact periods-${Math.min(periodHeaders.length, 4)}`}>
-            <colgroup>
-              <col className="attendance-col-index" />
-              <col className="attendance-col-date" />
-              <col className="attendance-col-day" />
-              <col className="attendance-col-branch" />
-              <col className="attendance-col-name" />
-              {periodHeaders.flatMap((header) => [
-                <col key={`${header}-col-in`} className="attendance-col-period-time" />,
-                <col key={`${header}-col-out`} className="attendance-col-period-time" />,
-                <col key={`${header}-col-result`} className="attendance-col-period-result" />,
-              ])}
-            </colgroup>
-            <thead>
-              <tr className="attendance-main-head-row">
-                <th rowSpan={2}>م</th>
-                <th rowSpan={2}>التاريخ</th>
-                <th rowSpan={2}>اليوم</th>
-                <th rowSpan={2}>الفرع</th>
-                <th rowSpan={2}>الاسم</th>
-                {periodHeaders.map((header) => <th key={`${header}-group`} colSpan={3}>{header}</th>)}
-              </tr>
-              <tr className="attendance-sub-head-row">
-                {periodHeaders.flatMap((header) => [
-                  <th key={`${header}-in`}>الحضور</th>,
-                  <th key={`${header}-out`}>الانصراف</th>,
-                  <th key={`${header}-result`}>النتيجة</th>,
-                ])}
-              </tr>
-            </thead>
-            <tbody>
-              {(report?.rows || []).map((row, index) => (
-                  <tr key={`${row.userId}:${row.date}`}>
-                    <td>{index + 1}</td>
-                    <td className="attendance-date-cell"><bdi dir="ltr">{formatAttendanceDate(row.date)}</bdi></td>
-                    <td>{formatAttendanceDay(row.date)}</td>
-                    <td>{row.branch}</td>
-                    <td className="attendance-name-cell">
-                      <strong>{row.name}</strong>
-                      {row.employeeNo ? <small>{row.employeeNo}</small> : null}
-                    </td>
-                    {periodHeaders.flatMap((_, periodIndex) => {
-                      const period = row.periods[periodIndex];
-                      const tone = resultTone(period?.result);
-                      const label = resultLabel(period?.result);
-                      return [
-                        <td key={`${row.userId}:${row.date}:${periodIndex}:in`} className="attendance-time-cell-plain">
-                          {period?.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"}
-                        </td>,
-                        <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell-plain">
-                          {period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}
-                          {period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
-                        </td>,
-                        <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-text-result ${tone}`}>
-                          <strong>{label}</strong>
-                          {period?.checkIn ? <small>{period.checkOut ? `العمل ${formatAttendanceMinutes(period.workMinutes)}` : "الفترة مفتوحة"}{period.delayMinutes > 0 ? ` • تأخير ${period.delayMinutes} د` : " • بدون تأخير"}</small> : null}
-                        </td>,
-                      ];
-                    })}
-                  </tr>
-              ))}
-              {!reportLoading && !report?.rows?.length ? (
-                <tr>
-                  <td colSpan={totalColumns} className="attendance-empty-table-cell">لا توجد نتائج مطابقة للفلاتر.</td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div id="attendance-report-export" className="attendance-day-groups">
+          {groupedRows.map((group, groupIndex) => (
+            <section className={`attendance-day-block day-tone-${groupIndex % 2}`} key={group.date}>
+              <header className="attendance-day-title">
+                <strong>{formatAttendanceDay(group.date)} {formatAttendanceDate(group.date)}</strong>
+              </header>
+              <div className="attendance-day-table-wrap">
+                <table className={`attendance-report-table attendance-report-table-compact attendance-day-table periods-${Math.min(periodHeaders.length, 4)}`}>
+                  <colgroup>
+                    <col className="attendance-col-index" />
+                    <col className="attendance-col-branch" />
+                    <col className="attendance-col-name" />
+                    {periodHeaders.flatMap((header) => [
+                      <col key={`${group.date}-${header}-col-in`} className="attendance-col-period-time" />,
+                      <col key={`${group.date}-${header}-col-out`} className="attendance-col-period-time" />,
+                      <col key={`${group.date}-${header}-col-result`} className="attendance-col-period-result" />,
+                    ])}
+                  </colgroup>
+                  <thead>
+                    <tr className="attendance-main-head-row">
+                      <th rowSpan={2}>م</th>
+                      <th rowSpan={2}>الفرع</th>
+                      <th rowSpan={2}>الاسم</th>
+                      {periodHeaders.map((header) => <th key={`${group.date}-${header}-group`} colSpan={3}>{header}</th>)}
+                    </tr>
+                    <tr className="attendance-sub-head-row">
+                      {periodHeaders.flatMap((header) => [
+                        <th key={`${group.date}-${header}-in`}>الحضور</th>,
+                        <th key={`${group.date}-${header}-out`}>الانصراف</th>,
+                        <th key={`${group.date}-${header}-result`}>النتيجة</th>,
+                      ])}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.rows.map((row, index) => (
+                      <tr key={`${row.userId}:${row.date}`}>
+                        <td>{index + 1}</td>
+                        <td>{row.branch}</td>
+                        <td className="attendance-name-cell">
+                          <strong>{row.name}</strong>
+                          {row.employeeNo ? <small>{row.employeeNo}</small> : null}
+                        </td>
+                        {periodHeaders.flatMap((_, periodIndex) => {
+                          const period = row.periods[periodIndex];
+                          const delay = Math.max(0, Number(period?.delayMinutes || 0));
+                          const hasCheckIn = Boolean(period?.checkIn);
+                          return [
+                            <td key={`${row.userId}:${row.date}:${periodIndex}:in`} className="attendance-time-cell-plain">
+                              {period?.checkIn ? (period.checkInText || formatAttendanceTime(period.checkIn)) : "—"}
+                            </td>,
+                            <td key={`${row.userId}:${row.date}:${periodIndex}:out`} className="attendance-time-cell-plain">
+                              {period?.checkOut ? (period.checkOutText || formatAttendanceTime(period.checkOut)) : "—"}
+                              {period?.checkoutSource === "auto" ? <small>تلقائي</small> : null}
+                            </td>,
+                            <td key={`${row.userId}:${row.date}:${periodIndex}:result`} className={`attendance-delay-result ${hasCheckIn ? (delay > 0 ? "late" : "on-time") : "status"}`}>
+                              {hasCheckIn ? <strong>{delay} دقيقة</strong> : <strong>{missingResultLabel(period?.result)}</strong>}
+                            </td>,
+                          ];
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ))}
+          {!reportLoading && !report?.rows?.length ? (
+            <div className="attendance-empty-report" style={{ gridColumn: "1 / -1" }}>لا توجد نتائج مطابقة للفلاتر.</div>
+          ) : null}
         </div>
       </section>
     </div>
