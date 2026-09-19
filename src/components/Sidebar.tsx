@@ -51,12 +51,15 @@ type SelfAttendanceState = {
     longitude: number | null;
     accuracy: number | null;
     distance: number | null;
+    checkInIp: string | null;
+    verificationMethod: string;
   } | null;
   canCheckIn: boolean;
   canCheckOut: boolean;
   locationRequired: boolean;
   locationCaptured: boolean;
   needsLocationCapture: boolean;
+  networkFallbackConfigured: boolean;
   requiredLocationName: string | null;
 };
 
@@ -77,7 +80,12 @@ function attendanceStateLabel(state: SelfAttendanceState | null) {
   if (state.isDayOff) return "اليوم إجازة";
   if (!state.activePeriod) return "خارج فترة العمل";
   if (state.canCheckOut && state.record?.checkIn) {
-    const locationText = state.locationRequired ? (state.locationCaptured ? " • اللوكيشن محفوظ" : " • اللوكيشن غير محفوظ") : "";
+    const verificationText = state.record.verificationMethod === "network"
+      ? " • شبكة الفرع"
+      : state.record.verificationMethod === "gps_and_network"
+        ? " • GPS + شبكة الفرع"
+        : " • اللوكيشن محفوظ";
+    const locationText = state.locationRequired ? (state.locationCaptured ? verificationText : " • إثبات المكان غير محفوظ") : "";
     return `${state.activePeriod.name} • حضور ${formatAttendanceTime(state.record.checkIn)}${locationText}`;
   }
   if (state.canCheckIn) return `${state.activePeriod.name} • لم يسجل الحضور`;
@@ -134,10 +142,19 @@ export function Sidebar() {
     setAttendanceBusy("location");
     setAttendanceError("");
     try {
-      const location = await getBrowserAttendanceLocation();
+      let location = null;
+      try {
+        location = await getBrowserAttendanceLocation();
+      } catch (locationError) {
+        if (!attendanceState.networkFallbackConfigured) throw locationError;
+      }
       const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
         method: "POST",
-        body: JSON.stringify({ action: "self_check_in", location }),
+        body: JSON.stringify({
+          action: "self_check_in",
+          location,
+          allowNetworkFallback: attendanceState.networkFallbackConfigured,
+        }),
       });
       setAttendanceState(payload.state);
       return payload.state;
@@ -163,10 +180,21 @@ export function Sidebar() {
     setAttendanceBusy("checkin");
     setAttendanceError("");
     try {
-      const location = attendanceState?.locationRequired ? await getBrowserAttendanceLocation() : null;
+      let location = null;
+      if (attendanceState?.locationRequired) {
+        try {
+          location = await getBrowserAttendanceLocation();
+        } catch (locationError) {
+          if (!attendanceState.networkFallbackConfigured) throw locationError;
+        }
+      }
       const payload = await attendanceFetch<SelfAttendancePayload>("/api/attendance", {
         method: "POST",
-        body: JSON.stringify({ action: "self_check_in", location }),
+        body: JSON.stringify({
+          action: "self_check_in",
+          location,
+          allowNetworkFallback: Boolean(attendanceState?.networkFallbackConfigured),
+        }),
       });
       setAttendanceState(payload.state);
     } catch (error) {

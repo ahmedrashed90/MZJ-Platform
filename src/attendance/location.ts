@@ -7,8 +7,9 @@ export type BrowserAttendanceLocation = {
 type PermissionStateLike = PermissionState | "unknown";
 
 const TARGET_ATTENDANCE_ACCURACY_M = 15;
-const MAX_DESKTOP_ATTENDANCE_ACCURACY_M = 75;
-const LOCATION_CAPTURE_TIMEOUT_MS = 15000;
+const GOOD_DESKTOP_ACCURACY_M = 75;
+const LOCATION_CAPTURE_TIMEOUT_MS = 20000;
+const GOOD_READING_SETTLE_MS = 5000;
 
 function positionFromBrowser(position: GeolocationPosition): BrowserAttendanceLocation {
   const latitude = Number(position.coords.latitude);
@@ -38,29 +39,20 @@ async function readGeolocationPermission(): Promise<PermissionStateLike> {
   }
 }
 
-function geolocationErrorMessage(
-  error: GeolocationPositionError | null,
-  permission: PermissionStateLike,
-  bestAccuracy: number | null,
-) {
+function geolocationErrorMessage(error: GeolocationPositionError | null, permission: PermissionStateLike) {
   if (permission === "denied" || error?.code === 1) {
     return "صلاحية الموقع مرفوضة لهذا الموقع. اسمح للمنصة بالوصول إلى اللوكيشن ثم أعد المحاولة.";
   }
-
-  if (bestAccuracy !== null && bestAccuracy > MAX_DESKTOP_ATTENDANCE_ACCURACY_M) {
-    return `أفضل دقة رجعها الكمبيوتر ±${Math.round(bestAccuracy)}م، وهي أضعف من الحد المقبول ±75م. تأكد من تشغيل Location وWi-Fi ثم أعد المحاولة.`;
-  }
-
   if (error?.code === 2) {
-    return "المتصفح لديه إذن الموقع لكن الجهاز لم يرجع إحداثيات دقيقة. تأكد من تشغيل خدمة Location ثم أعد المحاولة.";
+    return "خدمة الموقع في الكمبيوتر لم ترجع إحداثيات. سيتم استخدام شبكة الفرع تلقائيًا إذا كانت مفعلة في إعدادات الحضور.";
   }
   if (error?.code === 3) {
-    return "انتهت مهلة تحديد الموقع ولم يرجع الكمبيوتر قراءة موثوقة بما يكفي. تأكد من تشغيل Location وWi-Fi ثم أعد المحاولة.";
+    return "انتهت مهلة تحديد الموقع من الكمبيوتر. سيتم استخدام شبكة الفرع تلقائيًا إذا كانت مفعلة في إعدادات الحضور.";
   }
   if (permission === "granted") {
-    return "إذن اللوكيشن مفتوح لكن الكمبيوتر لم يرسل قراءة موثوقة بما يكفي. تأكد من تشغيل Location وWi-Fi ثم أعد المحاولة.";
+    return "إذن اللوكيشن مفتوح لكن الكمبيوتر لم يرسل إحداثيات. سيتم استخدام شبكة الفرع تلقائيًا إذا كانت مفعلة.";
   }
-  return "تعذر تحديد موقع الحضور من الكمبيوتر بدقة مقبولة. تأكد من السماح بالموقع وتشغيل Location وWi-Fi ثم أعد المحاولة.";
+  return "تعذر تحديد موقع الحضور من الكمبيوتر. سيتم استخدام شبكة الفرع تلقائيًا إذا كانت مفعلة.";
 }
 
 export async function getBrowserAttendanceLocation() {
@@ -77,19 +69,19 @@ export async function getBrowserAttendanceLocation() {
   }
 
   const permission = await readGeolocationPermission();
-  if (permission === "denied") {
-    throw new Error(geolocationErrorMessage(null, permission, null));
-  }
+  if (permission === "denied") throw new Error(geolocationErrorMessage(null, permission));
 
   return new Promise<BrowserAttendanceLocation>((resolve, reject) => {
     let settled = false;
     let lastError: GeolocationPositionError | null = null;
     let bestLocation: BrowserAttendanceLocation | null = null;
     let hardTimeout = 0;
+    let goodReadingTimer = 0;
     let watchId: number | null = null;
 
     const cleanup = () => {
       window.clearTimeout(hardTimeout);
+      window.clearTimeout(goodReadingTimer);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     };
 
@@ -104,12 +96,11 @@ export async function getBrowserAttendanceLocation() {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error(geolocationErrorMessage(error, permission, bestLocation?.accuracy ?? null)));
+      reject(new Error(geolocationErrorMessage(error, permission)));
     };
 
     const considerPosition = (position: GeolocationPosition) => {
       if (settled) return;
-
       let location: BrowserAttendanceLocation;
       try {
         location = positionFromBrowser(position);
@@ -117,16 +108,18 @@ export async function getBrowserAttendanceLocation() {
         return;
       }
 
-      if (!bestLocation || location.accuracy < bestLocation.accuracy) {
-        bestLocation = location;
-      }
+      if (!bestLocation || location.accuracy < bestLocation.accuracy) bestLocation = location;
 
-      // 15 m or better is excellent even on desktop, so use it immediately.
       if (location.accuracy <= TARGET_ATTENDANCE_ACCURACY_M) {
         resolveLocation(location);
+        return;
       }
-      // For normal desktop readings (15–75 m), keep sampling until the hard timeout
-      // so we save the best fresh reading instead of the first reading returned.
+
+      if (location.accuracy <= GOOD_DESKTOP_ACCURACY_M && !goodReadingTimer) {
+        goodReadingTimer = window.setTimeout(() => {
+          if (bestLocation) resolveLocation(bestLocation);
+        }, GOOD_READING_SETTLE_MS);
+      }
     };
 
     const handleError = (error: GeolocationPositionError) => {
@@ -135,18 +128,26 @@ export async function getBrowserAttendanceLocation() {
       if (error.code === 1) rejectLocation(error);
     };
 
-    const options: PositionOptions = {
-      enableHighAccuracy: true,
-      timeout: LOCATION_CAPTURE_TIMEOUT_MS,
-      maximumAge: 0,
-    };
+    navigator.geolocation.getCurrentPosition(
+      considerPosition,
+      handleError,
+      { enableHighAccuracy: true, timeout: LOCATION_CAPTURE_TIMEOUT_MS, maximumAge: 0 },
+    );
 
-    // Only fresh high-accuracy providers are used. Never accept a fast cached/standard reading.
-    navigator.geolocation.getCurrentPosition(considerPosition, handleError, options);
-    watchId = navigator.geolocation.watchPosition(considerPosition, handleError, options);
+    navigator.geolocation.getCurrentPosition(
+      considerPosition,
+      handleError,
+      { enableHighAccuracy: false, timeout: Math.min(8000, LOCATION_CAPTURE_TIMEOUT_MS), maximumAge: 0 },
+    );
+
+    watchId = navigator.geolocation.watchPosition(
+      considerPosition,
+      handleError,
+      { enableHighAccuracy: true, timeout: LOCATION_CAPTURE_TIMEOUT_MS, maximumAge: 0 },
+    );
 
     hardTimeout = window.setTimeout(() => {
-      if (bestLocation && bestLocation.accuracy <= MAX_DESKTOP_ATTENDANCE_ACCURACY_M) {
+      if (bestLocation) {
         resolveLocation(bestLocation);
         return;
       }

@@ -1,7 +1,7 @@
 import { getSql, runSqlScript, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAccessControlSchema } from "./_access-control-schema.js";
 
-export const ATTENDANCE_SCHEMA_VERSION = "20260918-global-attendance-v4";
+export const ATTENDANCE_SCHEMA_VERSION = "20260919-global-attendance-v5";
 
 export const ATTENDANCE_SCHEMA_SQL = String.raw`
 create table if not exists core.attendance_settings (
@@ -20,12 +20,14 @@ create table if not exists core.attendance_locations (
   latitude numeric(10,7) not null,
   longitude numeric(10,7) not null,
   radius_m integer not null default 150 check (radius_m between 10 and 50000),
+  allowed_public_ips text[] not null default '{}'::text[],
   is_active boolean not null default true,
   created_by uuid references core.users(id) on delete set null,
   updated_by uuid references core.users(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table core.attendance_locations add column if not exists allowed_public_ips text[] not null default '{}'::text[];
 create index if not exists attendance_locations_active_idx on core.attendance_locations(is_active,name);
 
 create table if not exists core.attendance_schedules (
@@ -120,16 +122,31 @@ create table if not exists core.attendance_records (
   required_latitude numeric(10,7),
   required_longitude numeric(10,7),
   required_radius_m integer,
+  required_public_ips text[] not null default '{}'::text[],
   check_in_latitude numeric(10,7),
   check_in_longitude numeric(10,7),
   check_in_accuracy_m numeric(10,2),
   check_in_distance_m numeric(12,2),
+  check_in_ip text,
+  location_verification_method text not null default 'unknown'
+    check (location_verification_method in ('gps','network','gps_and_network','not_required','unknown')),
   location_result text not null default 'not_required'
     check (location_result in ('matched','mismatched','not_required','unknown')),
   legacy_source_key text unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table core.attendance_records add column if not exists required_public_ips text[] not null default '{}'::text[];
+alter table core.attendance_records add column if not exists check_in_ip text;
+alter table core.attendance_records add column if not exists location_verification_method text not null default 'unknown';
+update core.attendance_records
+set location_verification_method='gps'
+where check_in_latitude is not null and check_in_longitude is not null
+  and coalesce(location_verification_method,'unknown')='unknown';
+update core.attendance_records
+set location_verification_method='not_required'
+where required_location_id is null
+  and coalesce(location_verification_method,'unknown')='unknown';
 create unique index if not exists attendance_records_user_period_day_unique
   on core.attendance_records(user_id,period_id,work_date) where period_id is not null;
 create index if not exists attendance_records_user_date_idx
@@ -173,6 +190,22 @@ async function attendanceSchemaReady() {
       and exists (
         select 1 from information_schema.columns
         where table_schema='core' and table_name='attendance_user_schedules' and column_name='period_ids'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_locations' and column_name='allowed_public_ips'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='required_public_ips'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='check_in_ip'
+      )
+      and exists (
+        select 1 from information_schema.columns
+        where table_schema='core' and table_name='attendance_records' and column_name='location_verification_method'
       )
     ) as ready
   `;

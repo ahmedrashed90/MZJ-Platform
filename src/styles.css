@@ -7911,6 +7911,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .attendance-report-filters select,
 .attendance-location-form input,
 .attendance-location-form select,
+.attendance-location-form textarea,
 .attendance-schedule-form input,
 .attendance-schedule-form select,
 .attendance-assignment-toolbar select {
@@ -7929,6 +7930,7 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .attendance-report-filters select:focus,
 .attendance-location-form input:focus,
 .attendance-location-form select:focus,
+.attendance-location-form textarea:focus,
 .attendance-schedule-form input:focus,
 .attendance-schedule-form select:focus,
 .attendance-assignment-toolbar select:focus {
@@ -8201,6 +8203,52 @@ body.operations-column-resizing, body.operations-column-resizing * { cursor: col
 .attendance-enforcement-control.enabled {
   background: #fff8f4;
 }
+
+.attendance-location-form textarea {
+  width: 100%;
+  min-height: 86px;
+  border: 1px solid #dfcec6;
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: #fff;
+  color: #523b34;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  outline: 0;
+  resize: vertical;
+  direction: ltr;
+  text-align: left;
+}
+.attendance-location-network-field {
+  grid-column: 1/-1;
+}
+.attendance-location-network-field > small {
+  color: #8a746b;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.attendance-current-ip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  color: #62473d;
+  font-size: 10px;
+  font-weight: 800;
+}
+.attendance-current-ip button {
+  border: 1px solid #d7c4bb;
+  border-radius: 8px;
+  background: #fff;
+  color: #6c3329;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 .attendance-settings-two-columns {
   display: grid;
   grid-template-columns: minmax(320px,.75fr) minmax(0,1.25fr);

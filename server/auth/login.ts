@@ -82,6 +82,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       await requireAttendanceForLogin(user.id, {
         confirmCheckIn: body.attendanceCheckIn === true,
         coordinates,
+        requestIp: requestIp(request),
+        allowNetworkFallback: body.allowNetworkFallback === true,
       });
     } catch (attendanceError) {
       if (attendanceError instanceof AttendanceError) {

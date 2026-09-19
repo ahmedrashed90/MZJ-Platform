@@ -30,6 +30,7 @@ export type AttendanceLoginRequirement = {
   startTime?: string | null;
   endTime?: string | null;
   requiredLocationName?: string | null;
+  networkFallbackConfigured?: boolean;
 };
 
 export class AttendanceLoginRequiredError extends Error {
@@ -45,6 +46,7 @@ export class AttendanceLoginRequiredError extends Error {
 type LoginOptions = {
   attendanceCheckIn?: boolean;
   location?: { latitude: number; longitude: number; accuracy?: number | null } | null;
+  allowNetworkFallback?: boolean;
 };
 
 export type SetupStatus = {
@@ -147,6 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         password,
         attendanceCheckIn: options.attendanceCheckIn === true,
         location: options.location || undefined,
+        allowNetworkFallback: options.allowNetworkFallback === true,
       }),
     });
     const payload = await readJson(response);
@@ -160,6 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           startTime: payload.startTime || null,
           endTime: payload.endTime || null,
           requiredLocationName: payload.requiredLocationName || null,
+          networkFallbackConfigured: Boolean(payload.networkFallbackConfigured),
         });
       }
       throw new Error(payload.error || "تعذر تسجيل الدخول");

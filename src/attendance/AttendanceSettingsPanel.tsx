@@ -19,6 +19,7 @@ type LocationRow = {
   latitude: number;
   longitude: number;
   radius_m: number;
+  allowed_public_ips: string[];
 };
 
 type PeriodRow = {
@@ -62,6 +63,7 @@ type AdminPayload = {
   schedules: ScheduleRow[];
   users: UserRow[];
   branches: BranchRow[];
+  currentPublicIp: string;
 };
 
 const WEEKLY_OFF_DAYS = [
@@ -80,7 +82,7 @@ function weeklyOffDayLabel(value: number | null | undefined) {
   return option?.label || "بدون إجازة أسبوعية";
 }
 
-const blankLocation = { id: "", branchId: "", name: "", latitude: "", longitude: "", radiusM: "150" };
+const blankLocation = { id: "", branchId: "", name: "", latitude: "", longitude: "", radiusM: "150", publicIps: "" };
 const blankSchedule = (): { id: string; name: string; periods: PeriodRow[] } => ({
   id: "",
   name: "",
@@ -178,6 +180,7 @@ export function AttendanceSettingsPanel() {
           latitude: Number(locationForm.latitude),
           longitude: Number(locationForm.longitude),
           radiusM: Number(locationForm.radiusM),
+          allowedPublicIps: locationForm.publicIps,
         }),
       });
       setLocationForm(blankLocation);
@@ -199,6 +202,7 @@ export function AttendanceSettingsPanel() {
       latitude: String(location.latitude),
       longitude: String(location.longitude),
       radiusM: String(location.radius_m),
+      publicIps: (location.allowed_public_ips || []).join("\n"),
     });
   }
 
@@ -412,6 +416,28 @@ export function AttendanceSettingsPanel() {
             <label><span>Latitude</span><input required inputMode="decimal" value={locationForm.latitude} onChange={(event) => setLocationForm((current) => ({ ...current, latitude: event.target.value }))} placeholder="24.000000" /></label>
             <label><span>Longitude</span><input required inputMode="decimal" value={locationForm.longitude} onChange={(event) => setLocationForm((current) => ({ ...current, longitude: event.target.value }))} placeholder="46.000000" /></label>
             <label><span>نطاق السماح بالمتر</span><input required type="number" min={10} max={50000} value={locationForm.radiusM} onChange={(event) => setLocationForm((current) => ({ ...current, radiusM: event.target.value }))} /></label>
+            <label className="attendance-location-network-field">
+              <span>Public IP لشبكة الفرع</span>
+              <textarea
+                value={locationForm.publicIps}
+                onChange={(event) => setLocationForm((current) => ({ ...current, publicIps: event.target.value }))}
+                placeholder="IP واحد أو أكثر — كل IP في سطر"
+                rows={3}
+              />
+              <small>يُستخدم كتحقق بديل لأجهزة الكمبيوتر إذا لم يرجع المتصفح GPS. يمكن إضافة أكثر من Public IP.</small>
+              {data?.currentPublicIp ? (
+                <span className="attendance-current-ip">
+                  IP الحالي: <bdi dir="ltr">{data.currentPublicIp}</bdi>
+                  <button
+                    type="button"
+                    onClick={() => setLocationForm((current) => ({
+                      ...current,
+                      publicIps: Array.from(new Set([...current.publicIps.split(/\s+/).filter(Boolean), data.currentPublicIp])).join("\n"),
+                    }))}
+                  >استخدم IP الحالي</button>
+                </span>
+              ) : null}
+            </label>
             <div className="attendance-form-actions">
               <button className="attendance-save-button" type="submit" disabled={busy === "location"}><FloppyDisk size={18} /> {locationForm.id ? "حفظ التعديل" : "إضافة المكان"}</button>
               {locationForm.id ? <button className="secondary-button" type="button" onClick={() => setLocationForm(blankLocation)}>إلغاء</button> : null}
@@ -421,7 +447,7 @@ export function AttendanceSettingsPanel() {
           <div className="attendance-compact-list">
             {(data?.locations || []).map((location) => (
               <article key={location.id}>
-                <div><strong>{location.name}</strong><span>{Number(location.latitude).toFixed(6)}, {Number(location.longitude).toFixed(6)} • {location.radius_m} م</span></div>
+                <div><strong>{location.name}</strong><span>{Number(location.latitude).toFixed(6)}, {Number(location.longitude).toFixed(6)} • {location.radius_m} م{location.allowed_public_ips?.length ? ` • شبكة ${location.allowed_public_ips.length} IP` : ""}</span></div>
                 <div><button type="button" onClick={() => editLocation(location)} title="تعديل"><PencilSimple size={17} /></button><button type="button" onClick={() => void deleteLocation(location.id)} disabled={busy === `delete-location:${location.id}`} title="حذف"><Trash size={17} /></button></div>
               </article>
             ))}

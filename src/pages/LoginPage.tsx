@@ -26,15 +26,29 @@ export function LoginPage() {
         const attendanceContext = [periodText ? `الفترة الحالية: ${periodText}` : "", requiredLocationText].filter(Boolean).join(" • ");
         setAttendanceMessage(attendanceContext || "جاري تسجيل الحضور للفترة الحالية");
         try {
+          let location = null;
+          let locationError: Error | null = null;
           if (requirement.locationRequired) {
             setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}جاري تحديد موقع الحضور...`);
+            try {
+              location = await getBrowserAttendanceLocation();
+            } catch (error) {
+              locationError = error instanceof Error ? error : new Error("تعذر تحديد اللوكيشن");
+            }
           }
-          const location = requirement.locationRequired ? await getBrowserAttendanceLocation() : null;
           if (location) {
-            const accuracyText = location.accuracy !== null ? ` ±${Math.round(location.accuracy)}م` : "";
+            const accuracyText = ` ±${Math.round(location.accuracy)}م`;
             setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}تم تحديد اللوكيشن${accuracyText} • جاري حفظ الحضور...`);
+          } else if (requirement.locationRequired && requirement.networkFallbackConfigured) {
+            setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}تعذر GPS من الكمبيوتر • جاري التحقق من شبكة الفرع...`);
+          } else if (locationError) {
+            throw locationError;
           }
-          await login(identifier, password, { attendanceCheckIn: true, location });
+          await login(identifier, password, {
+            attendanceCheckIn: true,
+            location,
+            allowNetworkFallback: Boolean(requirement.locationRequired && requirement.networkFallbackConfigured),
+          });
           return;
         } catch (attendanceError) {
           setAttendanceMessage("");

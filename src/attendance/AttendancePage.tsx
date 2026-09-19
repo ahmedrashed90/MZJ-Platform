@@ -42,6 +42,8 @@ type ReportLocation = {
   longitude: number | null;
   distanceM: number | null;
   accuracyM: number | null;
+  verificationMethod: string;
+  checkInIp: string | null;
   captures: number;
   missingRequiredCapture: boolean;
 };
@@ -319,8 +321,13 @@ export function AttendancePage() {
                           {row.location.accuracyM !== null ? <small>دقة ±{Math.round(row.location.accuracyM)} م</small> : null}
                           {row.location.distanceM !== null ? <small>بعد {Math.round(row.location.distanceM)} م</small> : null}
                         </>
+                      ) : row.location.verificationMethod === "network" || row.location.verificationMethod === "gps_and_network" ? (
+                        <>
+                          <strong>{row.location.verificationMethod === "gps_and_network" ? "GPS + شبكة الفرع" : "شبكة الفرع"}</strong>
+                          {row.location.checkInIp ? <small><bdi dir="ltr">{row.location.checkInIp}</bdi></small> : null}
+                        </>
                       ) : row.location.missingRequiredCapture ? (
-                        <span className="attendance-location-missing-text">لم يتم حفظ اللوكيشن</span>
+                        <span className="attendance-location-missing-text">لم يتم حفظ إثبات المكان</span>
                       ) : "—"}
                     </td>
                     <td>{row.location.required}</td>
