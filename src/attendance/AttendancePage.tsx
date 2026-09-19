@@ -41,6 +41,7 @@ type ReportLocation = {
   latitude: number | null;
   longitude: number | null;
   distanceM: number | null;
+  nearestDistanceM: number | null;
   accuracyM: number | null;
   verificationMethod: string;
   checkInIp: string | null;
@@ -319,7 +320,8 @@ export function AttendancePage() {
                             <bdi dir="ltr">{Number(row.location.longitude).toFixed(5)}</bdi>
                           </a>
                           {row.location.accuracyM !== null ? <small>دقة ±{Math.round(row.location.accuracyM)} م</small> : null}
-                          {row.location.distanceM !== null ? <small>بعد {Math.round(row.location.distanceM)} م</small> : null}
+                          {row.location.distanceM !== null ? <small>مركز القراءة {Math.round(row.location.distanceM)} م</small> : null}
+                          {row.location.nearestDistanceM !== null ? <small>أقرب نقطة {Math.round(row.location.nearestDistanceM)} م</small> : null}
                         </>
                       ) : row.location.verificationMethod === "network" || row.location.verificationMethod === "gps_and_network" ? (
                         <>

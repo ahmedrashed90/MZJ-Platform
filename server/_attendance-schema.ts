@@ -127,6 +127,7 @@ create table if not exists core.attendance_records (
   check_in_longitude numeric(10,7),
   check_in_accuracy_m numeric(10,2),
   check_in_distance_m numeric(12,2),
+  check_in_nearest_distance_m numeric(12,2),
   check_in_ip text,
   location_verification_method text not null default 'unknown'
     check (location_verification_method in ('gps','network','gps_and_network','not_required','unknown')),
@@ -137,7 +138,11 @@ create table if not exists core.attendance_records (
   updated_at timestamptz not null default now()
 );
 alter table core.attendance_records add column if not exists required_public_ips text[] not null default '{}'::text[];
+alter table core.attendance_records add column if not exists check_in_nearest_distance_m numeric(12,2);
 alter table core.attendance_records add column if not exists check_in_ip text;
+update core.attendance_records
+set check_in_nearest_distance_m=greatest(0,check_in_distance_m-coalesce(check_in_accuracy_m,0))
+where check_in_distance_m is not null and check_in_nearest_distance_m is null;
 alter table core.attendance_records add column if not exists location_verification_method text not null default 'unknown';
 update core.attendance_records
 set location_verification_method='gps'

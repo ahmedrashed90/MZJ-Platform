@@ -38,7 +38,7 @@ export function LoginPage() {
           }
           if (location) {
             const accuracyText = ` ±${Math.round(location.accuracy)}م`;
-            setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}تم تحديد اللوكيشن${accuracyText} • جاري حفظ الحضور...`);
+            setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}تم تحديد أقرب لوكيشن متاح${accuracyText} • جاري حفظ الحضور...`);
           } else if (requirement.locationRequired && requirement.networkFallbackConfigured) {
             setAttendanceMessage(`${attendanceContext ? `${attendanceContext} • ` : ""}تعذر GPS من الكمبيوتر • جاري التحقق من شبكة الفرع...`);
           } else if (locationError) {

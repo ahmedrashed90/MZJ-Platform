@@ -2,7 +2,6 @@ import { getSql, withDatabaseAdvisoryLock } from "./_db.js";
 import { ensureAttendanceSchema } from "./_attendance-schema.js";
 
 export const ATTENDANCE_TIME_ZONE = "Asia/Riyadh";
-const MAX_ATTENDANCE_ACCURACY_M = 75;
 
 export type AttendanceCoordinates = {
   latitude: number;
@@ -132,6 +131,7 @@ function resolveAttendanceLocation(
   let longitude: number | null = null;
   let accuracy: number | null = null;
   let distance: number | null = null;
+  let nearestDistance: number | null = null;
   let locationResult: "matched" | "mismatched" | "not_required" | "unknown" = period.location_id ? "unknown" : "not_required";
   let verificationMethod: "gps" | "network" | "gps_and_network" | "not_required" | "unknown" = period.location_id ? "unknown" : "not_required";
   const requestIp = normalizeAttendanceIp(options.requestIp);
@@ -152,30 +152,13 @@ function resolveAttendanceLocation(
     }
 
     if (period.location_id) {
-      const gpsReliable = accuracy !== null && accuracy > 0 && accuracy <= MAX_ATTENDANCE_ACCURACY_M;
-      if (gpsReliable) {
-        const gpsResult = distance === null ? "unknown" : distance <= Number(period.required_radius_m) ? "matched" : "mismatched";
-        locationResult = gpsResult;
-        verificationMethod = gpsResult === "matched" && matchedNetworkIp ? "gps_and_network" : "gps";
-      } else if (matchedNetworkIp) {
-        locationResult = "matched";
-        verificationMethod = "network";
-      } else {
-        const accuracyText = accuracy === null ? "غير معروفة" : `±${Math.round(accuracy)}م`;
-        throw new AttendanceError(
-          "ATTENDANCE_LOCATION_ACCURACY_LOW",
-          `دقة الموقع ${accuracyText}. لم يتم التحقق من شبكة الفرع كبديل.`,
-          409,
-          {
-            locationRequired: true,
-            requiredLocationName: period.location_name,
-            periodName: period.period_name,
-            accuracy,
-            maxAccuracyM: MAX_ATTENDANCE_ACCURACY_M,
-            networkFallbackConfigured: period.allowed_public_ips.length > 0,
-          },
-        );
-      }
+      const accuracyRadius = accuracy !== null && accuracy > 0 ? accuracy : 0;
+      nearestDistance = distance === null ? null : Math.max(0, distance - accuracyRadius);
+      const gpsResult = nearestDistance === null
+        ? "unknown"
+        : nearestDistance <= Number(period.required_radius_m) ? "matched" : "mismatched";
+      locationResult = gpsResult;
+      verificationMethod = gpsResult === "matched" && matchedNetworkIp ? "gps_and_network" : "gps";
     }
   } else if (period.location_id) {
     if (matchedNetworkIp) {
@@ -204,6 +187,7 @@ function resolveAttendanceLocation(
     longitude,
     accuracy,
     distance,
+    nearestDistance,
     checkInIp: requestIp || null,
     verificationMethod,
     locationResult,
@@ -233,6 +217,7 @@ async function attachAttendanceLocationToRecord(
       check_in_longitude=${snapshot.longitude},
       check_in_accuracy_m=${snapshot.accuracy},
       check_in_distance_m=${snapshot.distance},
+      check_in_nearest_distance_m=${snapshot.nearestDistance},
       check_in_ip=${snapshot.checkInIp},
       location_verification_method=${snapshot.verificationMethod},
       location_result=${snapshot.locationResult},
@@ -439,6 +424,7 @@ export async function getSelfAttendanceState(userId: string) {
       longitude: numberOrNull(record.check_in_longitude),
       accuracy: numberOrNull(record.check_in_accuracy_m),
       distance: numberOrNull(record.check_in_distance_m),
+      nearestDistance: numberOrNull(record.check_in_nearest_distance_m),
       checkInIp: record.check_in_ip ? String(record.check_in_ip) : null,
       verificationMethod: String(record.location_verification_method || "unknown"),
     } : null,
@@ -619,14 +605,14 @@ export async function registerAttendanceCheckIn(
         period_name,period_sort_order,scheduled_start_at,scheduled_end_at,grace_minutes,
         check_in,delay_minutes,work_minutes,status,
         required_location_id,required_location_name,required_latitude,required_longitude,required_radius_m,required_public_ips,
-        check_in_latitude,check_in_longitude,check_in_accuracy_m,check_in_distance_m,check_in_ip,location_verification_method,location_result,
+        check_in_latitude,check_in_longitude,check_in_accuracy_m,check_in_distance_m,check_in_nearest_distance_m,check_in_ip,location_verification_method,location_result,
         created_at,updated_at
       ) values (
         ${userId}::uuid,${period.assignment_id}::uuid,${period.schedule_id}::uuid,${period.period_id}::uuid,${period.work_date}::date,
         ${period.period_name},${period.period_sort_order},${period.scheduled_start_at}::timestamptz,${period.scheduled_end_at}::timestamptz,${period.grace_minutes},
         now(),${delayMinutes},0,${status},
         ${period.location_id || null}::uuid,${period.location_name || null},${period.required_latitude},${period.required_longitude},${period.required_radius_m},${period.allowed_public_ips}::text[],
-        ${locationSnapshot.latitude},${locationSnapshot.longitude},${locationSnapshot.accuracy},${locationSnapshot.distance},${locationSnapshot.checkInIp},${locationSnapshot.verificationMethod},${locationSnapshot.locationResult},
+        ${locationSnapshot.latitude},${locationSnapshot.longitude},${locationSnapshot.accuracy},${locationSnapshot.distance},${locationSnapshot.nearestDistance},${locationSnapshot.checkInIp},${locationSnapshot.verificationMethod},${locationSnapshot.locationResult},
         now(),now()
       )
       on conflict(user_id,period_id,work_date) where period_id is not null
@@ -644,6 +630,7 @@ export async function registerAttendanceCheckIn(
         check_in_longitude=coalesce(core.attendance_records.check_in_longitude,excluded.check_in_longitude),
         check_in_accuracy_m=coalesce(core.attendance_records.check_in_accuracy_m,excluded.check_in_accuracy_m),
         check_in_distance_m=coalesce(core.attendance_records.check_in_distance_m,excluded.check_in_distance_m),
+        check_in_nearest_distance_m=coalesce(core.attendance_records.check_in_nearest_distance_m,excluded.check_in_nearest_distance_m),
         check_in_ip=coalesce(core.attendance_records.check_in_ip,excluded.check_in_ip),
         location_verification_method=case when core.attendance_records.check_in is null then excluded.location_verification_method else core.attendance_records.location_verification_method end,
         location_result=case when core.attendance_records.check_in is null then excluded.location_result else core.attendance_records.location_result end,

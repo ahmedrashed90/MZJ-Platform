@@ -7,9 +7,8 @@ export type BrowserAttendanceLocation = {
 type PermissionStateLike = PermissionState | "unknown";
 
 const TARGET_ATTENDANCE_ACCURACY_M = 15;
-const GOOD_DESKTOP_ACCURACY_M = 75;
-const LOCATION_CAPTURE_TIMEOUT_MS = 20000;
-const GOOD_READING_SETTLE_MS = 5000;
+const LOCATION_CAPTURE_TIMEOUT_MS = 12000;
+const BEST_READING_SETTLE_MS = 4000;
 
 function positionFromBrowser(position: GeolocationPosition): BrowserAttendanceLocation {
   const latitude = Number(position.coords.latitude);
@@ -76,12 +75,12 @@ export async function getBrowserAttendanceLocation() {
     let lastError: GeolocationPositionError | null = null;
     let bestLocation: BrowserAttendanceLocation | null = null;
     let hardTimeout = 0;
-    let goodReadingTimer = 0;
+    let bestReadingTimer = 0;
     let watchId: number | null = null;
 
     const cleanup = () => {
       window.clearTimeout(hardTimeout);
-      window.clearTimeout(goodReadingTimer);
+      window.clearTimeout(bestReadingTimer);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     };
 
@@ -115,10 +114,10 @@ export async function getBrowserAttendanceLocation() {
         return;
       }
 
-      if (location.accuracy <= GOOD_DESKTOP_ACCURACY_M && !goodReadingTimer) {
-        goodReadingTimer = window.setTimeout(() => {
+      if (!bestReadingTimer) {
+        bestReadingTimer = window.setTimeout(() => {
           if (bestLocation) resolveLocation(bestLocation);
-        }, GOOD_READING_SETTLE_MS);
+        }, BEST_READING_SETTLE_MS);
       }
     };
 
@@ -137,7 +136,7 @@ export async function getBrowserAttendanceLocation() {
     navigator.geolocation.getCurrentPosition(
       considerPosition,
       handleError,
-      { enableHighAccuracy: false, timeout: Math.min(8000, LOCATION_CAPTURE_TIMEOUT_MS), maximumAge: 0 },
+      { enableHighAccuracy: false, timeout: Math.min(6000, LOCATION_CAPTURE_TIMEOUT_MS), maximumAge: 0 },
     );
 
     watchId = navigator.geolocation.watchPosition(

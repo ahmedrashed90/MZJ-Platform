@@ -645,7 +645,7 @@ async function reportData(request: VercelRequest) {
         scheduled_start_at,scheduled_end_at,check_in,check_out,checkout_source,
         delay_minutes,work_minutes,status,
         required_location_name,legacy_source_key,
-        check_in_latitude::float8,check_in_longitude::float8,check_in_accuracy_m::float8,check_in_distance_m::float8,
+        check_in_latitude::float8,check_in_longitude::float8,check_in_accuracy_m::float8,check_in_distance_m::float8,check_in_nearest_distance_m::float8,
         check_in_ip,location_verification_method,location_result
       from core.attendance_records
       where user_id::text in ${sql(userIds)}
@@ -841,6 +841,9 @@ async function reportData(request: VercelRequest) {
           accuracyM: primaryLocatedRecord?.check_in_accuracy_m === null || primaryLocatedRecord?.check_in_accuracy_m === undefined
             ? null
             : Number(primaryLocatedRecord.check_in_accuracy_m),
+          nearestDistanceM: primaryLocatedRecord?.check_in_nearest_distance_m === null || primaryLocatedRecord?.check_in_nearest_distance_m === undefined
+            ? null
+            : Number(primaryLocatedRecord.check_in_nearest_distance_m),
           verificationMethod: primaryVerificationRecord ? clean(primaryVerificationRecord.location_verification_method) : "unknown",
           checkInIp: primaryVerificationRecord ? clean(primaryVerificationRecord.check_in_ip) || null : null,
           captures: actualLocations.length + networkLocations.length,

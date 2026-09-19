@@ -51,6 +51,7 @@ type SelfAttendanceState = {
     longitude: number | null;
     accuracy: number | null;
     distance: number | null;
+    nearestDistance: number | null;
     checkInIp: string | null;
     verificationMethod: string;
   } | null;
